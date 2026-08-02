@@ -2,6 +2,7 @@
 { mkEval, lib, pkgs, ... }:
 
 let
+  resourceBundle = import ../../../../nixos-modules/resources-bundle.nix { inherit lib; };
   providerIds = [
     "audio-pipewire"
     "device-usbip"
@@ -19,6 +20,41 @@ let
     spec = {
       inherit artifactId;
       config = { };
+    };
+  };
+
+  providerValidationFailures = resources:
+    lib.filter (record: !record.assertion)
+      (resourceBundle.validateBundle "work" resources).assertions;
+
+  safeProviderConfig = {
+    provider = {
+      type = "Provider";
+      spec = {
+        artifactId = "provider-safe";
+        config = {
+          selfMetrics.enable = true;
+          timeoutMs = 1500;
+          mode = "bounded";
+          endpointRef = "Endpoint/provider";
+        };
+      };
+    };
+  };
+
+  inlineProviderSecrets = {
+    provider = {
+      type = "Provider";
+      spec = {
+        artifactId = "provider-unsafe";
+        config = {
+          token = "inline-token";
+          password = "inline-password";
+          privateKey = "inline-private-key";
+          path = "/nix/store/not-a-secret";
+          argv = [ "provider" ];
+        };
+      };
     };
   };
 
@@ -119,6 +155,36 @@ let
     };
   };
 
+  providerSchema = {
+    configSchema = {
+      type = "object";
+      additionalProperties = true;
+      properties = {
+        timeoutMs = {
+          type = "integer";
+          minimum = 1;
+          maximum = 5000;
+        };
+      };
+    };
+  };
+  providerSchemas = lib.listToAttrs (map
+    (id: lib.nameValuePair id providerSchema)
+    providerIds);
+  providerValidationRecords = providerConfig:
+    let
+      evaluated = (mkEval [
+        base
+        ({ ... }: {
+          d2b._providerSettingsValidation.enable = true;
+          d2b._providerSettingsValidation.schemas = providerSchemas;
+          d2b.zones.local-root.resources.audio-pipewire.spec.config =
+            providerConfig;
+        })
+      ]).config;
+    in
+    evaluated.d2b._resourceCompiler.providerSettingsValidation.assertions;
+
   cfg = (mkEval [ base ]).config;
   failures = configuration:
     map (assertion: assertion.message)
@@ -182,6 +248,42 @@ in
           "Guest/workstation";
       });
     expected = true;
+  };
+
+  "resource-sharing/provider-config-secret-lint-uses-canonical-record" = {
+    expr = {
+      safe = providerValidationFailures safeProviderConfig == [ ];
+      unsafe = lib.any
+        (record:
+          lib.hasInfix
+            "contains a secret, path, argv, PID, or UID-shaped value"
+            record.message)
+        (providerValidationFailures inlineProviderSecrets);
+    };
+    expected = {
+      safe = true;
+      unsafe = true;
+    };
+  };
+
+  "resource-sharing/provider-settings-validation-sees-full-config" = {
+    expr = {
+      safe = lib.all (record: record.assertion)
+        (providerValidationRecords {
+          timeoutMs = 1500;
+          mode = "bounded";
+        });
+      unsafe = lib.any
+        (record:
+          !record.assertion
+          && lib.hasInfix "spec.config contains secret-shaped key/value material"
+            record.message)
+        (providerValidationRecords { token = "inline-token"; });
+    };
+    expected = {
+      safe = true;
+      unsafe = true;
+    };
   };
 
   "resource-sharing/security-key-backing-fails-closed" = {

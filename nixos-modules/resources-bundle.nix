@@ -41,7 +41,6 @@ let
   ];
   resourceFields = [ "type" "metadata" "spec" ];
   metadataFields = [ "ownerRef" "labels" "annotations" ];
-  providerConfigFields = [ "selfMetrics" ];
   telemetryFields = [ "emitter" ];
   emitterFields = [ "ringCapacityBytes" ];
   auditFields = [ "retentionDays" "maxSegmentBytes" ];
@@ -60,9 +59,11 @@ let
     "exe"
     "realm"
     "workload_id"
+    "accessToken"
+    "apiKey"
   ];
   forbiddenKeyPattern =
-    ".*(Path|Socket|Argv|CommandLine|Pid|Uid|Env|Exe|WorkloadId)$";
+    ".*(Secret|Password|Token|PrivateKey|Path|Socket|Argv|CommandLine|Pid|Uid|Env|Exe|WorkloadId)$";
 
   attrOr = attrs: name: fallback:
     if builtins.isAttrs attrs && builtins.hasAttr name attrs
@@ -88,7 +89,8 @@ let
   secretShapedValue = value:
     builtins.isString value
     && (
-      builtins.match ".*-----BEGIN [A-Z0-9 ]+-----.*" value != null
+      lib.hasInfix "/nix/store/" value
+      || lib.hasInfix "-----BEGIN" value
       || builtins.match
         "eyJ[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+"
         value
@@ -96,7 +98,29 @@ let
     );
 
   forbiddenKey = key:
+    let
+      normalized = lib.replaceStrings [ "-" "_" "." ] [ "" "" "" ]
+        (lib.toLower key);
+    in
     builtins.elem key forbiddenKeyNames
+    || builtins.elem normalized [
+      "secret"
+      "password"
+      "token"
+      "privatekey"
+      "argv"
+      "commandline"
+      "socket"
+      "path"
+      "pid"
+      "uid"
+      "env"
+      "exe"
+      "realm"
+      "workloadid"
+      "accesstoken"
+      "apikey"
+    ]
     || builtins.match forbiddenKeyPattern key != null;
 
   forbiddenRows = value:
@@ -162,6 +186,7 @@ let
       spec = attrOr resource "spec" { };
       providerConfigPresent = builtins.isAttrs spec && builtins.hasAttr "config" spec;
       providerConfig = attrOr spec "config" { };
+      providerArtifactId = attrOr spec "artifactId" null;
       selfMetricsPresent =
         builtins.isAttrs providerConfig && builtins.hasAttr "selfMetrics" providerConfig;
       selfMetrics = attrOr providerConfig "selfMetrics" { };
@@ -217,10 +242,17 @@ let
           || !providerConfigPresent
           || builtins.isAttrs providerConfig)
         "${path}.spec.config must be an attribute set for Provider resources.")
+      # Provider config vocabulary belongs to the selected Provider's signed
+      # schema. A Provider without an artifact selector has no authoritative
+      # vocabulary, so retain the common selfMetrics-only shape in that case.
+      # Once artifactId selects the schema, keep the complete object visible
+      # to the secret-shaped key and value lint above.
       (check
         (resourceType != "Provider"
           || !providerConfigPresent
-          || validKeys providerConfig providerConfigFields)
+          || builtins.isString providerArtifactId
+          && validName providerArtifactId
+          || validKeys providerConfig [ "selfMetrics" ])
         "${path}.spec.config contains an unknown Provider field.")
       (check
         (!selfMetricsPresent
@@ -373,6 +405,7 @@ in
     canonical
     canonicalResource
     compileBundle
+    forbiddenRows
     sortResources
     validateBundle
     validateResource

@@ -726,6 +726,8 @@ resource-sharing/authority-service-and-binding-are-local
 resource-sharing/binding-target-must-be-same-zone
 resource-sharing/export-is-service-only
 resource-sharing/no-authored-projection-service
+resource-sharing/provider-config-secret-lint-uses-canonical-record
+resource-sharing/provider-settings-validation-sees-full-config
 resource-sharing/security-key-backing-fails-closed
 resource-sharing/usb-export-needs-all-policy-opt-ins
 resources/types-accept-bounded-telemetry
@@ -808,6 +810,9 @@ usb-security-key/device-security-key-requires-hidraw-exclusive-physical
 usb-security-key/device-selector-rejects-unsafe-serial-filter
 usb-security-key/device-settings-cannot-carry-store-material
 usb-security-key/device-settings-range-is-enforced
+usb-security-key/device-signed-schema-bounds-are-enforced
+usb-security-key/device-signed-schema-rejects-unknown-setting
+usb-security-key/device-signed-schema-version-must-match
 usb-security-key/device-valid-config-has-no-device-failures
 usb-security-key/duplicate-label-rejected
 usb-security-key/host-default-devices-empty

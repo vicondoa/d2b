@@ -140,11 +140,43 @@ let
     };
     provider = {
       schemaId = "device-security-key.d2bus.org/Device/spec";
-      schemaVersion = "v1";
+      schemaVersion = "v1.0";
       settings = {
         vsockPort = 14320;
         sessionRingSize = 32;
         leaseTimeoutSecs = 300;
+        boundedBurst = 2;
+      };
+    };
+  };
+
+  deviceSettingsSchema = {
+    schemaId = "device-security-key.d2bus.org/Device/spec";
+    schemaVersion = "v1.0";
+    settingsSchema = {
+      type = "object";
+      additionalProperties = false;
+      properties = {
+        vsockPort = {
+          type = "integer";
+          minimum = 1;
+          maximum = 65535;
+        };
+        sessionRingSize = {
+          type = "integer";
+          minimum = 8;
+          maximum = 256;
+        };
+        leaseTimeoutSecs = {
+          type = "integer";
+          minimum = 30;
+          maximum = 3600;
+        };
+        boundedBurst = {
+          type = "integer";
+          minimum = 1;
+          maximum = 4;
+        };
       };
     };
   };
@@ -154,6 +186,8 @@ let
       package = deviceProviderArtifact;
       type = "provider";
     };
+    d2b._providerSettingsValidation.schemas =
+      { "device-security-key.d2bus.org/Device/spec" = deviceSettingsSchema; };
     d2b.zones.local-root.resources = {
       device-security-key = {
         type = "Provider";
@@ -332,6 +366,33 @@ in
       (deviceEvalWith [{
         d2b.zones.local-root.resources.security-key.spec.provider.settings.path =
           "/nix/store/not-a-backing-set";
+      }]);
+    expected = true;
+  };
+
+  "usb-security-key/device-signed-schema-rejects-unknown-setting" = {
+    expr = deviceHasFailure "invalid-provider-settings"
+      (deviceEvalWith [{
+        d2b.zones.local-root.resources.security-key.spec.provider.settings.notDeclared =
+          true;
+      }]);
+    expected = true;
+  };
+
+  "usb-security-key/device-signed-schema-bounds-are-enforced" = {
+    expr = deviceHasFailure "invalid-provider-settings"
+      (deviceEvalWith [{
+        d2b.zones.local-root.resources.security-key.spec.provider.settings.boundedBurst =
+          0;
+      }]);
+    expected = true;
+  };
+
+  "usb-security-key/device-signed-schema-version-must-match" = {
+    expr = deviceHasFailure "spec-provider-schema-invalid"
+      (deviceEvalWith [{
+        d2b._providerSettingsValidation.schemas."device-security-key.d2bus.org/Device/spec".schemaVersion =
+          lib.mkForce "v2.0";
       }]);
     expected = true;
   };

@@ -9,6 +9,8 @@ let
   cfg = config.d2b;
   tokenPattern = "^[a-z][a-z0-9-]{0,62}$";
   providerRefPattern = "^Provider/[a-z][a-z0-9-]{0,62}$";
+  providerSchemaVersionMinLength = 3;
+  providerSchemaVersionMaxLength = 32;
   resourceRefPattern =
     "^([A-Z][A-Za-z0-9]{0,62}|[a-z][a-z0-9-]{0,62}\\.d2bus\\.org\\.[A-Z][A-Za-z0-9]{0,62})/[a-z][a-z0-9-]{0,62}$";
   hexIdPattern = "^[0-9a-f]{4}$";
@@ -91,6 +93,69 @@ let
     let extension = attrOr device.spec "provider" { };
     in attrOr extension "schemaId" null;
 
+  providerSchemaMetadata = device:
+    let
+      extension = attrOr device.spec "provider" { };
+      schemaId = attrOr extension "schemaId" null;
+      provider = providerFor device.zone.resources
+        (attrOr device.spec "providerRef" null);
+      providerSpec = if provider == null then { } else provider.spec or { };
+      artifactId = providerSpec.artifactId or null;
+      catalogEntry =
+        if builtins.isString artifactId
+        then lib.findFirst
+          (entry: (entry.id or null) == artifactId)
+          null
+          (cfg._providerCatalog.entries or [ ])
+        else null;
+      catalogMetadata =
+        if catalogEntry != null && catalogEntry ? entry
+        then catalogEntry.entry
+        else if catalogEntry != null
+        then catalogEntry
+        else { };
+      digest =
+        if builtins.isAttrs catalogMetadata
+          && builtins.hasAttr "settingsSchemaDigest" catalogMetadata
+        then catalogMetadata.settingsSchemaDigest
+        else null;
+      schemas = cfg._providerSettingsValidation.schemas or { };
+      direct =
+        if builtins.isString schemaId && builtins.hasAttr schemaId schemas
+        then schemas.${schemaId}
+        else null;
+      byDigest =
+        if builtins.isString digest && builtins.hasAttr digest schemas
+        then schemas.${digest}
+        else null;
+      candidate = if direct != null then direct else byDigest;
+      candidateAttrs = builtins.isAttrs candidate;
+      schema =
+        if candidateAttrs && candidate ? settingsSchema
+        then candidate.settingsSchema
+        else if candidateAttrs && candidate ? schema
+        then candidate.schema
+        else candidate;
+      hasSchemaShape =
+        builtins.isAttrs schema
+        && ((schema ? type)
+          || (schema ? properties)
+          || (schema ? required)
+          || (schema ? additionalProperties));
+      declaredSchemaId = attrOr candidate "schemaId" null;
+      declaredSchemaVersion = attrOr candidate "schemaVersion" null;
+      schemaIdMatches =
+        declaredSchemaId == null || declaredSchemaId == schemaId;
+      schemaVersionMatches =
+        declaredSchemaVersion == null
+        || declaredSchemaVersion == attrOr extension "schemaVersion" null;
+    in
+    {
+      present = schema != null && hasSchemaShape;
+      inherit schema;
+      metadataMatches = schemaIdMatches && schemaVersionMatches;
+    };
+
   selector = device:
     let inventory = attrOr device.spec "inventory" { };
     in attrOr inventory "selector" { };
@@ -161,6 +226,8 @@ let
     let
       name = providerName device;
       settings = providerSettings device;
+      schemaMetadata = providerSchemaMetadata device;
+      hasSignedSchema = schemaMetadata.present;
       renderNodeOnly = attrOr settings "renderNodeOnly" false;
       videoSidecar = attrOr settings "videoSidecar" false;
       virglVideo = attrOr settings "virglVideo" false;
@@ -169,7 +236,10 @@ let
       executionRef = attrOr settings "executionRef" null;
     in
     builtins.isAttrs settings
-    && exactKeys (providerSettingsFields name) settings
+    && (hasSignedSchema || exactKeys (providerSettingsFields name) settings)
+    && (!hasSignedSchema
+      || signedSchemaErrors schemaMetadata.schema settings
+        "${device.path}.spec.provider.settings" == [ ])
     && (name != "device-tpm"
       || (builtins.isInt (attrOr settings "logLevel" 20)
         && attrOr settings "logLevel" 20 >= 1
@@ -205,6 +275,59 @@ let
         && builtins.isBool (attrOr settings "crossDomainTrusted" false)
         && builtins.isBool virglVideo
         && !(videoSidecar && virglVideo)));
+
+  signedSchemaErrors = schema: value: path:
+    let
+      schemaAttrs = builtins.isAttrs schema;
+      schemaType = if schemaAttrs then schema.type or null else null;
+      typeOk =
+        schemaType == null
+        || (schemaType == "object" && builtins.isAttrs value)
+        || (schemaType == "array" && builtins.isList value)
+        || (schemaType == "string" && builtins.isString value)
+        || (schemaType == "integer" && builtins.isInt value)
+        || (schemaType == "boolean" && builtins.isBool value)
+        || (schemaType == "null" && value == null);
+      enumOk = !schemaAttrs || !(schema ? enum) || builtins.elem value schema.enum;
+      numericOk =
+        !schemaAttrs
+        || !(builtins.isInt value)
+        || (!(schema ? minimum) || value >= schema.minimum)
+        && (!(schema ? maximum) || value <= schema.maximum);
+      objectErrors =
+        if !schemaAttrs || !builtins.isAttrs value
+        then [ ]
+        else
+          let
+            properties = schema.properties or { };
+            required = schema.required or [ ];
+            missing = lib.filter (name: !(builtins.hasAttr name value)) required;
+            unknown =
+              if (schema.additionalProperties or true) == false
+              then lib.filter (name: !(builtins.hasAttr name properties))
+                (builtins.attrNames value)
+              else [ ];
+          in
+          map (name: "${path}.${name} is required by the signed Device schema") missing
+          ++ map (name: "${path}.${name} is not declared by the signed Device schema") unknown
+          ++ lib.concatLists (map
+            (name:
+              if builtins.hasAttr name properties
+              then signedSchemaErrors properties.${name} value.${name} "${path}.${name}"
+              else [ ])
+            (builtins.attrNames value));
+      arrayErrors =
+        if !schemaAttrs || !builtins.isList value || !(schema ? items)
+        then [ ]
+        else lib.concatLists (lib.imap0
+          (index: item:
+            signedSchemaErrors schema.items item "${path}.${toString index}")
+          value);
+    in
+    lib.optional (!typeOk) "${path} has the wrong JSON type"
+    ++ lib.optional (!enumOk) "${path} is outside the signed Device schema enum"
+    ++ lib.optional (!numericOk) "${path} is outside the signed Device schema bounds"
+    ++ objectErrors ++ arrayErrors;
 
   stringsIn = value:
     if builtins.isString value then [ value ]
@@ -326,6 +449,8 @@ let
         provider = providerFor resources (attrOr spec "providerRef" null);
         name = providerName device;
         extension = attrOr spec "provider" null;
+        schemaMetadata = providerSchemaMetadata device;
+        schemaVersion = attrOr extension "schemaVersion" null;
         settings = providerSettings device;
         arbitration = attrOr spec "arbitration" null;
         deviceClass = attrOr spec "deviceClass" null;
@@ -456,9 +581,22 @@ let
         }
         {
           assertion = extension == null
+            || (builtins.isString schemaVersion
+              && builtins.stringLength schemaVersion >= providerSchemaVersionMinLength
+              && builtins.stringLength schemaVersion <= providerSchemaVersionMaxLength);
+          message = "${device.path}.spec.provider.schemaVersion must use the bounded signed schema version shape.";
+        }
+        {
+          assertion = extension == null
             || (name != null
               && providerSchemaId device == "${name}.d2bus.org/Device/spec");
           message = "${device.path}.spec.provider.schemaId must bind to the selected Provider (spec-provider-schema-invalid).";
+        }
+        {
+          assertion = extension == null
+            || !schemaMetadata.present
+            || schemaMetadata.metadataMatches;
+          message = "${device.path}.spec.provider schema metadata does not match the authored signed schema envelope (spec-provider-schema-invalid).";
         }
         {
           assertion = extension == null || providerSettingsValid device;

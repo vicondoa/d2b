@@ -1,15 +1,16 @@
 # Provider-owned schema validation for Provider.config and spec.provider.settings.
 #
 # Provider packages publish their signed schemas through the internal
-# `_providerSettingsSchemas` table. This module deliberately has no fallback
-# vocabulary: when validation is enabled, a missing digest-to-schema entry is
-# an error instead of an invented Provider-specific field set.
+# `_providerSettingsValidation.schemas` table. This module deliberately has no
+# fallback vocabulary: when validation is enabled, a missing digest-to-schema
+# entry is an error instead of an invented Provider-specific field set.
 { config, lib, ... }:
 
 let
   cfg = config.d2b;
   validation = cfg._providerSettingsValidation;
   schemas = validation.schemas;
+  resourceBundle = import ./resources-bundle.nix { inherit lib; };
 
   providerRows = lib.concatMap
     (zoneName:
@@ -130,6 +131,10 @@ let
       in
       [
         {
+          assertion = resourceBundle.forbiddenRows config == [ ];
+          message = "${row.path}.spec.config contains secret-shaped key/value material; use a Provider reference or a bounded non-secret setting.";
+        }
+        {
           assertion = configSchema != null;
           message = "${row.path}: no signed Provider schema is available for config validation.";
         }
@@ -141,6 +146,10 @@ let
             else lib.concatStringsSep "; " (schemaErrors configSchema config "${row.path}.spec.config");
         }
       ]
+      ++ lib.optional (providerExtension != null) {
+        assertion = resourceBundle.forbiddenRows settings == [ ];
+        message = "${row.path}.spec.provider.settings contains secret-shaped key/value material; use a Provider reference or a bounded non-secret setting.";
+      }
       ++ lib.optional (providerExtension != null) {
         assertion = settingsSchema != null;
         message = "${row.path}.spec.provider.settings has no signed schema.";
@@ -170,7 +179,11 @@ in
     };
   };
 
-  config = lib.mkIf validation.enable {
-    assertions = settingsRows;
+  config = {
+    assertions = lib.mkIf validation.enable settingsRows;
+    d2b._resourceCompiler.providerSettingsValidation = {
+      assertions = settingsRows;
+      enabled = validation.enable;
+    };
   };
 }
