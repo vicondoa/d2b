@@ -75,15 +75,21 @@ repository merely made available for discovery.
 ### Validation rules
 
 - The manifest is deterministic after sorting.
-- A target acquires an exclusive lock on a separate persistent
-  `<manifest>.lock` file before invalidating prior evidence. The lockfile is
-  mode `0600`, current-user-owned, opened with `O_CLOEXEC`, and protected by a
-  non-blocking `F_OFD_SETLK` lock. It is never unlinked as part of manifest
-  replacement. Contention fails with an error naming `<manifest>.lock` and
-  directing the operator to wait for the active run to finish.
-- The manifest parent and cleanup candidates are opened with anchored
-  resolution equivalent to `openat2` `RESOLVE_NO_SYMLINKS` and
-  `RESOLVE_NO_MAGICLINKS`. Fragment storage is created adjacent to the
+- The manifest parent is opened first with `O_CLOEXEC` and anchored resolution
+  equivalent to `openat2` `RESOLVE_NO_SYMLINKS` and
+  `RESOLVE_NO_MAGICLINKS`. Every later evidence file or directory descriptor
+  is also opened with `O_CLOEXEC`.
+- Relative to the anchored parent, a target opens the separate persistent
+  `<manifest>.lock` file with `O_CLOEXEC` and `O_NOFOLLOW`, verifies mode
+  `0600` and current-user ownership, and acquires a non-blocking
+  `F_OFD_SETLK` lock before invalidating prior evidence. The lockfile is never
+  unlinked as part of manifest replacement.
+- Lock contention emits the fixed status code `manifest-lock-contended` for
+  telemetry. Console diagnostics may additionally name `<manifest>.lock` and
+  direct the operator to wait for the active run to finish; the path is never
+  used as a metric or span label.
+- Cleanup candidates use the same anchored no-symlink/no-magiclink and
+  `O_CLOEXEC` open boundary. Fragment storage is created adjacent to the
   requested manifest on the same filesystem, with mode `0700` and the current
   effective uid, so final publication cannot fail with cross-filesystem
   `EXDEV`. The finalizer rejects owner mismatches or broader permissions.

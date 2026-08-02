@@ -28,7 +28,8 @@ All three commands:
   `docs/reference/schemas/test-execution-manifest-v1.json`.
 - If `<manifest>.lock` is held by another invocation, fail with an actionable
   message naming the lock and directing the contributor to wait for the active
-  run to finish.
+  run to finish. Observability uses the fixed status code
+  `manifest-lock-contended`; the dynamic path remains console-only.
 
 ## `make test-rust`
 
