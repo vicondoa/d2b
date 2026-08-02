@@ -927,10 +927,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "d2b-audit"
+version = "0.0.0-bootstrap"
+dependencies = [
+ "d2b-telemetry",
+ "libc",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "d2b-bus"
 version = "0.0.0-bootstrap"
 dependencies = [
  "async-trait",
+ "d2b-audit",
  "d2b-contracts",
  "d2b-resource-api",
  "d2b-resource-store",
@@ -1310,6 +1321,7 @@ version = "0.0.0-bootstrap"
 dependencies = [
  "d2b-contracts",
  "d2b-process-conformance",
+ "d2b-session",
 ]
 
 [[package]]
@@ -1317,6 +1329,7 @@ name = "d2b-provider-toolkit"
 version = "0.0.0-bootstrap"
 dependencies = [
  "d2b-contracts",
+ "d2b-session",
 ]
 
 [[package]]
@@ -1421,6 +1434,7 @@ name = "d2b-resource-client"
 version = "0.0.0-bootstrap"
 dependencies = [
  "d2b-contracts",
+ "tokio",
 ]
 
 [[package]]
@@ -1451,10 +1465,13 @@ name = "d2b-session"
 version = "0.0.0-bootstrap"
 dependencies = [
  "async-trait",
+ "d2b-audit",
  "d2b-contracts",
  "d2b-resource-api",
+ "d2b-telemetry",
  "futures-util",
  "protobuf",
+ "serde_json",
  "sha2",
  "snow",
  "tokio",
@@ -1485,6 +1502,15 @@ dependencies = [
  "libc",
  "tokio",
  "tokio-vsock",
+]
+
+[[package]]
+name = "d2b-telemetry"
+version = "0.0.0-bootstrap"
+dependencies = [
+ "serde",
+ "serde_json",
+ "sha2",
 ]
 
 [[package]]
