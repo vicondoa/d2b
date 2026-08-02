@@ -101,7 +101,7 @@ impl ProcessMetric {
                 self.name(),
                 [
                     label("provider", PROVIDERS),
-                    label("outcome", &["ok", "quarantine", "error"]),
+                    label("outcome", &["ok", "degraded", "error"]),
                 ],
             ),
             Self::PidfdActive => MetricDescriptor::new(self.name(), []),
