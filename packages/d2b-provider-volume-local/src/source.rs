@@ -66,9 +66,7 @@ pub struct SourcePolicyCatalog {
 
 impl SourcePolicyCatalog {
     /// Build a catalog and reject duplicate opaque IDs.
-    pub fn new(
-        policies: impl IntoIterator<Item = SourcePolicy>,
-    ) -> Result<Self, VolumeLocalError> {
+    pub fn new(policies: impl IntoIterator<Item = SourcePolicy>) -> Result<Self, VolumeLocalError> {
         let mut catalog = Self::default();
         for policy in policies {
             if catalog
@@ -96,9 +94,7 @@ impl SourcePolicyCatalog {
             .policies
             .get(policy_id.as_str())
             .ok_or(VolumeLocalError::SourcePolicyNotFound)?;
-        if policy.class() != spec.source().settings().kind()
-            || !policy.permits_kind(spec.kind())
-        {
+        if policy.class() != spec.source().settings().kind() || !policy.permits_kind(spec.kind()) {
             return Err(VolumeLocalError::SourcePolicyMismatch);
         }
         Ok(())
@@ -158,8 +154,7 @@ pub fn validate_source_spec(spec: &VolumeSpec) -> Result<(), VolumeLocalError> {
                     .cloned()
                     .and_then(|value| serde_json::from_value(value).ok());
                 if create_policy == Some(CreatePolicy::CreateIfNeverProvisioned)
-                    || restart_policy
-                        == Some(EntryRestartPolicy::PreserveAcrossControllerRestart)
+                    || restart_policy == Some(EntryRestartPolicy::PreserveAcrossControllerRestart)
                 {
                     return Err(VolumeLocalError::InvalidSpec);
                 }
@@ -263,8 +258,8 @@ mod tests {
 
     #[test]
     fn policy_catalog_matches_opaque_id_class_and_volume_kind() {
-        let spec: VolumeSpec = serde_json::from_value(source("local-path", Some("state-root")))
-            .expect("valid source");
+        let spec: VolumeSpec =
+            serde_json::from_value(source("local-path", Some("state-root"))).expect("valid source");
         let catalog = SourcePolicyCatalog::new([SourcePolicy::new(
             "state-root",
             SourceKind::LocalPath,
@@ -301,8 +296,7 @@ mod tests {
     fn tmpfs_limits_render_to_kernel_options() {
         let mut value = source("tmpfs", None);
         value["kind"] = json!("tmp");
-        value["quota"] =
-            json!({ "maxBytes": 4096, "maxInodes": 32, "enforcement": "hard" });
+        value["quota"] = json!({ "maxBytes": 4096, "maxInodes": 32, "enforcement": "hard" });
         let spec: VolumeSpec = serde_json::from_value(value).expect("valid tmpfs");
         let options = TmpfsMountOptions::from_spec(&spec)
             .expect("limits")

@@ -22,8 +22,8 @@
 
 #![deny(missing_docs)]
 
-mod controller;
 mod acl;
+mod controller;
 mod error;
 mod exports;
 mod identity;
@@ -49,11 +49,11 @@ pub mod sealing;
 pub mod snapshot;
 pub mod testing;
 
-pub use controller::{VolumeLocalController, VolumeLocalProfile};
 pub use acl::{
     AclAction, AclBinding, AclGrantSummary, AclObservation, plan_acl_reconciliation,
     user_revision_changed,
 };
+pub use controller::{VolumeLocalController, VolumeLocalProfile};
 pub use error::VolumeLocalError;
 pub use exports::{EXPORT_RESOURCE_TYPE, ExportIntent, desired_export_intents};
 pub use identity::{EntryDigest, MarkerState, OwnerProof, VolumeRootHandle};

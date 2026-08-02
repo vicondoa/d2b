@@ -123,7 +123,13 @@ pub const fn validate_clone3_flags(flags: u64) -> Result<(), UserNamespaceError>
 
 /// Check the required parent-side map-write sequence.
 pub fn validate_mapping_order(steps: &[MappingStep]) -> Result<(), UserNamespaceError> {
-    if steps == [MappingStep::UidMap, MappingStep::SetgroupsDeny, MappingStep::GidMap] {
+    if steps
+        == [
+            MappingStep::UidMap,
+            MappingStep::SetgroupsDeny,
+            MappingStep::GidMap,
+        ]
+    {
         Ok(())
     } else {
         Err(UserNamespaceError::MappingOrderInvalid)
@@ -136,7 +142,11 @@ mod tests {
 
     #[test]
     fn conformant_template_covers_the_full_adr0021_posture() {
-        assert!(UserNamespaceTemplate::conformant().assert_conformant().is_ok());
+        assert!(
+            UserNamespaceTemplate::conformant()
+                .assert_conformant()
+                .is_ok()
+        );
         assert!(validate_clone3_flags(CLONE_NEWUSER_FLAG).is_ok());
         assert_eq!(
             validate_mapping_order(&[

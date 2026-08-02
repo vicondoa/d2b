@@ -106,9 +106,7 @@ impl std::error::Error for VirtiofsdArgvError {}
 pub fn generate_virtiofsd_argv(
     input: &VirtiofsdArgvInput,
 ) -> Result<Vec<String>, VirtiofsdArgvError> {
-    if input.virtiofsd_binary_path.is_empty()
-        || !input.virtiofsd_binary_path.starts_with('/')
-    {
+    if input.virtiofsd_binary_path.is_empty() || !input.virtiofsd_binary_path.starts_with('/') {
         return Err(VirtiofsdArgvError::InvalidBinaryPath);
     }
     if input.shared_dir_fd < 0 {
@@ -128,7 +126,10 @@ pub fn generate_virtiofsd_argv(
     if let Some(group) = input.socket_group {
         argv.push(format!("--socket-group={}", group.get()));
     }
-    argv.push(format!("--shared-dir=/proc/self/fd/{}", input.shared_dir_fd));
+    argv.push(format!(
+        "--shared-dir=/proc/self/fd/{}",
+        input.shared_dir_fd
+    ));
     argv.push(format!("--thread-pool-size={}", input.thread_pool_size));
     if input.posix_acl {
         argv.push("--posix-acl".to_owned());
@@ -175,7 +176,10 @@ mod tests {
     #[test]
     fn argv_uses_the_inherited_volume_fd_and_fixed_sandbox_flags() {
         let argv = generate_virtiofsd_argv(&input()).unwrap();
-        assert!(argv.iter().any(|arg| arg == "--shared-dir=/proc/self/fd/17"));
+        assert!(
+            argv.iter()
+                .any(|arg| arg == "--shared-dir=/proc/self/fd/17")
+        );
         assert!(argv.iter().any(|arg| arg == "--sandbox=chroot"));
         assert!(argv.iter().any(|arg| arg == "--inode-file-handles=never"));
         assert!(argv.iter().any(|arg| arg == "--readonly"));
@@ -202,8 +206,10 @@ mod tests {
             "--inode-file-handles=never",
             "--readonly",
         ];
-        assert!(argv.iter().skip(1).all(|arg| {
-            known.iter().any(|prefix| arg.starts_with(prefix))
-        }));
+        assert!(
+            argv.iter()
+                .skip(1)
+                .all(|arg| { known.iter().any(|prefix| arg.starts_with(prefix)) })
+        );
     }
 }

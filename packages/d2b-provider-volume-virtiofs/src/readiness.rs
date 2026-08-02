@@ -81,21 +81,20 @@ mod tests {
             )
         );
         assert_eq!(
-            classify_readiness(
-                SocketObservation::Ready,
-                Some(GuestMountObservation::Ready)
-            ),
+            classify_readiness(SocketObservation::Ready, Some(GuestMountObservation::Ready)),
             (ExportPhase::Ready, None)
         );
     }
 
     #[test]
     fn store_view_marker_requires_zero_length_presence() {
-        assert!(require_store_view_marker(StoreViewMarkerObservation {
-            present: true,
-            zero_length: true,
-        })
-        .is_ok());
+        assert!(
+            require_store_view_marker(StoreViewMarkerObservation {
+                present: true,
+                zero_length: true,
+            })
+            .is_ok()
+        );
         assert_eq!(
             require_store_view_marker(StoreViewMarkerObservation {
                 present: true,

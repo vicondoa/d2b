@@ -47,8 +47,8 @@ pub use readiness::{
 };
 pub use socket_path::{MAX_SOCKET_PATH_BYTES, PrivateSocketPath, SocketPathError};
 pub use user_ns::{
-    CLONE_NEWNS_FLAG, CLONE_NEWUSER_FLAG, MappingStep, UserNamespaceError,
-    UserNamespaceTemplate, validate_clone3_flags, validate_mapping_order,
+    CLONE_NEWNS_FLAG, CLONE_NEWUSER_FLAG, MappingStep, UserNamespaceError, UserNamespaceTemplate,
+    validate_clone3_flags, validate_mapping_order,
 };
 pub use virtiofsd_argv::{
     SocketGroup, VirtiofsdArgvError, VirtiofsdArgvInput, VirtiofsdCacheMode,

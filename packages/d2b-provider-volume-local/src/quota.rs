@@ -35,8 +35,7 @@ pub fn admit_quota(
     let Some(quota) = quota else {
         return Ok(());
     };
-    if quota.enforcement() == QuotaEnforcement::Hard
-        && capability == QuotaCapability::Unenforceable
+    if quota.enforcement() == QuotaEnforcement::Hard && capability == QuotaCapability::Unenforceable
     {
         return Err(VolumeLocalError::QuotaUnenforceable);
     }

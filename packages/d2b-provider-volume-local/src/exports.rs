@@ -130,8 +130,7 @@ fn derive_export_name(
         suffix.push(char::from_digit(u32::from(byte >> 4), 16).unwrap_or('0'));
         suffix.push(char::from_digit(u32::from(byte & 0x0f), 16).unwrap_or('0'));
     }
-    BoundedToken::parse(format!("vol-export-{suffix}"))
-        .map_err(|_| VolumeLocalError::InvalidSpec)
+    BoundedToken::parse(format!("vol-export-{suffix}")).map_err(|_| VolumeLocalError::InvalidSpec)
 }
 
 #[cfg(test)]
@@ -142,23 +141,18 @@ mod tests {
     #[test]
     fn every_virtiofs_attachment_becomes_a_stable_owned_intent() {
         let volume = ResourceRef::parse("Volume/work-state").unwrap();
-        let intents = desired_export_intents(
-            volume.clone(),
-            &fixtures::attached_state_volume(),
-            false,
-        )
-        .expect("intent");
+        let intents =
+            desired_export_intents(volume.clone(), &fixtures::attached_state_volume(), false)
+                .expect("intent");
         assert_eq!(intents.len(), 1);
         assert_eq!(intents[0].owner_ref(), &volume);
         assert_eq!(intents[0].mount_path(), "/state");
         assert!(intents[0].name().as_str().starts_with("vol-export-"));
-        assert_eq!(intents[0].name(), desired_export_intents(
-            volume,
-            &fixtures::attached_state_volume(),
-            false,
-        )
-        .unwrap()[0]
-        .name());
+        assert_eq!(
+            intents[0].name(),
+            desired_export_intents(volume, &fixtures::attached_state_volume(), false,).unwrap()[0]
+                .name()
+        );
     }
 
     #[test]
@@ -172,12 +166,14 @@ mod tests {
             "mountPath": "/disk"
         }]);
         let spec: VolumeSpec = serde_json::from_value(value).unwrap();
-        assert!(desired_export_intents(
-            ResourceRef::parse("Volume/work-state").unwrap(),
-            &spec,
-            false,
-        )
-        .unwrap()
-        .is_empty());
+        assert!(
+            desired_export_intents(
+                ResourceRef::parse("Volume/work-state").unwrap(),
+                &spec,
+                false,
+            )
+            .unwrap()
+            .is_empty()
+        );
     }
 }

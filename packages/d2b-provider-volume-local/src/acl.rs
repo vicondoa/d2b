@@ -148,10 +148,7 @@ pub struct AclObservation {
 }
 
 /// Plan one continuous ACL reconciliation cycle.
-pub fn plan_acl_reconciliation(
-    binding: &AclBinding,
-    observation: AclObservation,
-) -> AclAction {
+pub fn plan_acl_reconciliation(binding: &AclBinding, observation: AclObservation) -> AclAction {
     if observation.foreign_children {
         match binding.foreign_child_policy() {
             ForeignChildPolicy::Preserve => {
