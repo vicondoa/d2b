@@ -1,11 +1,14 @@
 //! Production redb backend for one Zone resource store.
 
 pub mod actor;
+pub mod audit;
 pub mod backup;
 pub mod keys;
+pub mod metrics;
 pub mod ownership;
 pub mod revision_log;
 pub mod schema;
+pub mod tracing;
 mod transaction;
 pub mod values;
 

@@ -36,6 +36,9 @@
 mod bootstrap;
 mod error;
 mod host;
+mod host_process_audit;
+mod host_reconciler;
+mod host_status;
 mod nss;
 mod user;
 

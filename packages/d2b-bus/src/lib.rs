@@ -17,6 +17,8 @@ pub mod operations;
 pub mod registry;
 pub mod relay;
 pub mod router;
+pub mod routing;
+pub mod service_router;
 pub mod session;
 pub mod streams;
 pub mod transport;

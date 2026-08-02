@@ -11,9 +11,11 @@ pub mod emergency_gate;
 pub mod error;
 pub mod generated;
 mod identity;
+pub mod metrics;
 pub mod quota_gate;
 pub mod service;
 mod store;
+pub mod watch;
 pub mod zone_service;
 
 pub use adapter::{
