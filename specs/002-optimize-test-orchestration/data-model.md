@@ -48,25 +48,54 @@ Represents the smallest independently schedulable unit.
 - Leaves sharing a mutable Cargo target directory do not overlap.
 - Broker feature leaves remain in one serial chain.
 - Every required coverage id is owned by exactly one leaf in a local run.
-- A leaf cannot allocate more than the aggregate host budget.
+- The summed CPU weights of every runnable DAG frontier are no greater than
+  the aggregate host budget.
+- Heavy-lane Cargo and nextest quotas equal the leaf CPU weight.
 
-## Nix Installable Set
+## Execution Manifest
 
-Represents derivations addressed in one native Nix invocation.
+Represents what the aggregate target actually completed, rather than what the
+repository merely made available for discovery.
 
 | Field | Meaning |
 |---|---|
-| `system` | Native Nix system |
-| `flake_ref` | `git+file://` repository reference |
-| `installables` | Ordered flake attribute references |
-| `mode` | Instantiate-only or realized |
-| `keep_going` | Whether independent failures continue |
-| `max_jobs` | Native Nix build concurrency |
+| `target` | Owning Test Target |
+| `commit` | Exact Git commit |
+| `completed_leaves` | Stable leaf identifiers written only after required commands succeed |
+| `installables` | Nix attrs actually submitted by the target |
+| `realized_checks` | Flake checks actually realized |
+| `source_inventory_digest` | Digest of the matching source census |
 
 ### Validation rules
 
-- Nix unit installables contain every discovered `nix-unit*` check.
-- The realized flake set contains only checks in the committed realized class.
+- The manifest is deterministic after sorting.
+- A required leaf is absent when its command did not complete successfully.
+- Every baseline execution leaf remains represented after optimization.
+- A source inventory comparison without an execution-manifest comparison is
+  insufficient acceptance evidence.
+
+## Nix Candidate Run
+
+Represents one committed Nix-unit runner or evaluator experiment.
+
+| Field | Meaning |
+|---|---|
+| `candidate` | Tuned pool, pure aggregate, lix-unit, nix-eval-jobs, consolidated flake check, or conditional nix-fast-build |
+| `system` | Native Nix system |
+| `flake_ref` | `git+file://` repository reference |
+| `command` | Exact candidate command |
+| `selected_attrs` | Tests, checks, or derivations submitted |
+| `workers` | Evaluator or runner concurrency, when applicable |
+| `memory_limit` | Per-worker or aggregate bound, when applicable |
+| `failure_set` | Every failing case or shard reported by the probe |
+| `realized_outputs` | Outputs realized by the candidate |
+
+### Validation rules
+
+- Every candidate covers the complete baseline Nix-unit inventory.
+- A candidate reports simultaneous failures without a discovery rerun.
+- Candidate branches start from the same committed base.
+- Tool acquisition time and steady warm execution are reported separately.
 - No bare-path flake reference is accepted.
 
 ## Coverage Inventory

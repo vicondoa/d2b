@@ -15,8 +15,10 @@ process-per-shard topology:
 - GNU Make will own the Rust dependency graph and bounded parallel lanes.
   Existing shell code will be reduced to leaf execution and environment setup,
   not scheduling.
-- `test-nix-unit` will replace its Bash worker pool with one native Nix
-  multi-installable invocation over the complete corpus.
+- `test-nix-unit` will run a measured candidate matrix covering a pure
+  aggregate, `lix-unit`, `nix-eval-jobs`, consolidated flake evaluation, and
+  the tuned current runner, then implement the fastest contract-preserving
+  result.
 - `test-flake` will use one native `nix flake check --no-build --keep-going`
   evaluation locally, followed only by the narrow checks that must be realized.
 - The Nix unit corpus will be loaded once per evaluator and shared by the
@@ -182,12 +184,12 @@ The initial DAG is:
 test-rust
 ├── rust-api-surface
 ├── rust-main-workspace
+│   └── rust-schema-reproducibility
+│       └── rust-inventory-and-stub
 ├── rust-broker
 ├── rust-guest-shell-runner
 ├── rust-no-bash-ast
-├── rust-schema-reproducibility
-├── rust-supply-chain
-└── rust-inventory-and-stub
+└── rust-supply-chain
 ```
 
 Required ordering inside lanes remains:
@@ -198,11 +200,23 @@ Required ordering inside lanes remains:
 - schema: two generations followed by the reproducibility comparison;
 - supply chain: the three workspace policies with existing retry semantics.
 
-The aggregate CPU budget defaults to detected logical CPUs. Concurrent
-CPU-heavy lanes divide that budget and pass it through Cargo's native
-`--jobs`/`CARGO_BUILD_JOBS` and nextest's native test-thread setting. GNU Make
-is invoked as a recursive Make command so its jobserver remains available to
-Cargo. Lanes that share a target directory never overlap.
+The public override is `D2B_RUST_BUDGET`. Its default is the smaller of
+detected logical CPUs and a Linux `MemAvailable` cap that reserves 2 GiB for
+the host and budgets 3 GiB per heavy Rust job. Invalid or non-positive values
+fail with exit status 2.
+
+GNU Make's jobserver schedules eligible workspace lanes. Each CPU-heavy lane
+has a static weight and receives that explicit Cargo `--jobs` and nextest
+test-thread quota. The DAG and weights are valid only when the sum of every
+runnable frontier is no greater than `D2B_RUST_BUDGET`; this is asserted by a
+policy test. This preserves the intended per-workspace Cargo limits while
+preventing overlapping quotas from oversubscribing the host. Same-target
+leaves are dependency-ordered as shown above.
+
+Recursive Make recipe lines use `+$(MAKE)` so Make owns jobserver propagation.
+The Bash leaf dispatcher neither parses `MAKEFLAGS` nor redirects inherited
+jobserver descriptors. Cargo concurrency is controlled by the explicit lane
+quota, not by assuming Bash can allocate weighted jobserver tokens.
 
 `tests/test-rust.sh` becomes a leaf dispatcher and environment provider. Its
 serial `all` scheduler is removed. `tests/static.sh` and other callers use the
@@ -221,31 +235,57 @@ improves total target time on the representative host without changing
 coverage. "Materially" means at least a 10% improvement in the three-run
 whole-target warm median, with no supported-platform build regression.
 
-### 3. Nix unit execution uses one native invocation
+### 3. Nix unit execution is selected by an experiment gate
 
-The full-corpus path discovers the same `nix-unit*` attr names but passes all
-installables to one `nix build --no-link --keep-going` invocation. Nix owns
-evaluation reuse, build scheduling, and failure aggregation. The Bash PID pool,
-per-shard logs, and `D2B_NIX_UNIT_JOBS` local scheduler are removed.
+The plan does not assume that fewer evaluator processes are faster. Nix
+evaluation is single-threaded on the representative Lix 2.94.2 host, while
+multiple evaluators repeat shared flake work and consume more memory. US2
+therefore starts with isolated, committed experiments from one common base:
+
+1. the tuned current process pool as control;
+2. one pure-Nix whole-corpus aggregate using the existing non-throwing case
+   result data;
+3. a `lix-unit --flake` adapter over the fully injected corpus;
+4. `nix-eval-jobs` over a dedicated Nix-unit attrset with bounded workers and
+   memory;
+5. one Lix `nix flake check --no-build --keep-going` that may consolidate the
+   Nix-unit and flake evaluation paths;
+6. `nix-fast-build` only if parallel realization or log rendering remains
+   material after the evaluator experiment.
+
+Candidates may be revised and benchmarked more than once. Each receives the
+same source inventory, executed-surface evidence, one priming run, three warm
+runs, a cold observation, peak CPU/RSS sampling, empty-discovery failure, and
+simultaneous failures in separate shards. Tool acquisition/build time is
+reported separately from steady warm execution.
+
+The selected design must be an established external runner/evaluator or a
+native Nix expression; no new Bash or custom-code scheduler is permitted. It
+must meet the 50% warm target, report all observed failures in one invocation,
+retain CI single-shard selection, preserve evaluation-time fail-closed checks,
+and avoid unrelated output realization. If no candidate meets all conditions,
+retain the current runner and continue the experiment loop rather than landing
+a slower or weaker architecture.
 
 The CI selector `D2B_NIX_UNIT_CHECK` remains supported and evaluates exactly
 one discovered shard. CI may continue to dispatch one shard per runner.
 
-The flake's Nix unit data graph is also normalized:
+Shared-corpus normalization is itself measured, not assumed. Candidate
+implementations may:
 
 - import each case file once per evaluator;
 - derive the complete corpus and each shard as selections from that shared
   case-file map;
+- expose result data separately from the final throwing check so the aggregate
+  can collect every failing shard;
 - evaluate integrity pins and shard coverage from the same shared map;
 - keep evaluation-time throws so `--no-build` validation remains fail-closed.
 
-This avoids reconstructing the complete corpus for the integrity check and
-again for every shard.
-
-The upstream `nix-unit` CLI remains useful for focused author iteration but is
-not the enforcing aggregate because the current corpus requires d2b's injected
-flake/module context and separate pin/shard integrity guarantees. No new
-`nix-unit` wrapper is introduced.
+The normalized graph is retained only if the winning candidate demonstrates a
+measured benefit. `lix-unit`, unlike upstream `nix-unit`, matches the host's
+evaluator and can consume a flake output adapter carrying d2b's injected
+module, package, and helper context. Pin and shard integrity remain separate
+enforcing checks unless the selected runner proves equivalent coverage.
 
 ### 4. Flake validation uses one local evaluator
 
@@ -280,14 +320,18 @@ the baseline before proceeding. A target is accepted only when:
   non-regression envelope;
 - every baseline enforcing surface remains present and every added test is
   classified separately;
+- an execution manifest from the actual aggregate run proves every required
+  leaf or Nix check class completed, so static discovery alone cannot mask a
+  dropped lane;
 - failures from multiple independent lanes are visible in one invocation;
 - no lane causes out-of-memory termination or sustained oversubscription;
 - cold-cache behavior is recorded and any regression is explained, although
   cold-cache reduction is not a merge blocker.
 
-If a consolidated Nix evaluator exceeds the representative memory envelope,
-restore bounded external evaluation for that target using `nix-eval-jobs`
-rather than reintroducing a Bash worker pool.
+If a candidate exceeds the representative memory envelope, reduce its worker
+count or reject it. The experiment continues until one candidate meets the
+contract or the evidence shows that the hard target is not achievable without
+weakening an invariant.
 
 ## Validation Strategy
 
@@ -326,7 +370,7 @@ This plan uses strict phase ordering rather than pipelined dispatch.
 
 | Category | Phase | Impact | Status |
 |---|---|---|---|
-| None | None | None | Open set is empty |
+| Tooling | Plan panel round 1 | The research subagent returned no usable output, so the Nix tool survey was repeated directly against upstream documentation and repositories. | Resolved |
 
 ## Post-Design Constitution Check
 

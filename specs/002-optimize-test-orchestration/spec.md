@@ -136,7 +136,7 @@ As a maintainer, I can review reproducible before-and-after evidence showing whe
 - **FR-021**: The feature MUST provide a documented, repeatable method for comparing elapsed time, executed test inventory, and duplicate or unnecessary work before and after optimization.
 - **FR-022**: The selected design MUST explain how it increases useful parallel work, reuses expensive prerequisites, and limits memory or I/O contention.
 - **FR-023**: The optimized targets MUST remain compatible with the repository's existing public Make target names and enforcing gate classifications.
-- **FR-024**: The feature MUST distinguish performance improvements from skipped validation by comparing the before-and-after required test inventory.
+- **FR-024**: The feature MUST distinguish performance improvements from skipped validation by comparing both the before-and-after source inventory and an executed-surface manifest produced by the actual aggregate target runs.
 - **FR-025**: The feature MUST record any required test surface that cannot participate in the consolidated execution and justify how it is scheduled without serializing unrelated work.
 - **FR-026**: The feature MUST not weaken failure handling, enforcement status, or coverage to meet the elapsed-time goal.
 

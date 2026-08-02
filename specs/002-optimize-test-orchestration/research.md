@@ -11,13 +11,17 @@ represent directly.
 
 - Make is already d2b's stable public test interface and adds no dependency.
 - GNU Make provides bounded parallel execution, keep-going behavior, grouped
-  output, and a jobserver that Cargo can participate in when recursive recipes
-  preserve the jobserver file descriptors.
+  output, and a jobserver for scheduling eligible workspace lanes.
 - CI already proves that the API census, main workspace, and remaining suites
   are independent enough to run on separate runners.
 - A Make DAG can encode the important safety edges: broker feature passes stay
   serial, same-target-directory operations do not overlap, and independent
-  workspaces may overlap under one CPU budget.
+  workspaces may overlap under one CPU and memory budget.
+- Each heavy Cargo workspace receives an explicit `--jobs` quota. The static
+  lane weights are chosen so every runnable Make frontier sums to no more than
+  the aggregate budget; Cargo is not expected to acquire weighted Make tokens.
+- Recursive Make recipes use `+$(MAKE)` and preserve the inherited jobserver.
+  Bash leaf dispatchers do not interpret or redirect jobserver descriptors.
 
 **Alternatives considered**:
 
@@ -124,49 +128,109 @@ solve.
 - cargo-hakari:
   https://docs.rs/cargo-hakari/
 
-## Decision 4: Batch all Nix unit installables in one Nix process
+## Decision 4: Select the Nix unit runner through measured experiments
 
-**Decision**: Replace the local Bash process pool with one multi-installable
-`nix build --no-link --keep-going` invocation. Keep the single-check selector
-for CI.
+**Decision**: Do not preselect the Nix unit implementation. Build and benchmark
+several committed candidate branches against the same corpus, failure probes,
+and warm/cold procedure. Select the fastest candidate that preserves complete
+failure attribution, pin and shard integrity, `git+file://` path safety, and
+bounded memory. More than one iteration is expected.
 
 **Rationale**:
 
-- `nix build` accepts multiple installables in one invocation, allowing the
-  evaluator to reuse the shared flake prelude.
-- Native `--keep-going` preserves the current requirement to report independent
-  failures without cancelling all remaining work.
-- Nix's own daemon settings and `--max-jobs`/`--cores` are the correct resource
-  controls; a Bash PID count does not coordinate actual evaluator or builder
-  resources.
-- The current checks fail at evaluation time and realize only trivial
-  derivations, so process startup and repeated evaluation dominate avoidable
-  work.
+- The current corpus already converts each case into a non-throwing result with
+  `builtins.tryEval`, then throws only after collecting failures within a
+  shard. A whole-corpus aggregate can therefore be tested without redesigning
+  case semantics, but one evaluator may leave most CPUs idle.
+- Lix 2.94.2 on the representative host exposes `cores` and `max-jobs`, but no
+  `eval-cores` setting. Native parallel evaluation must not be assumed.
+- `lix-unit` is the Lix-compatible fork of `nix-unit`. It uses the evaluator
+  C++ API, catches per-test evaluation errors, supports error type/message
+  matching, and accepts flake outputs through
+  `lix-unit --flake '<ref>#<attr>'`. d2b can expose an adapter attr with the
+  already-injected corpus context.
+- `nix-eval-jobs` evaluates attrsets in parallel, isolates per-attribute
+  failures, emits JSON Lines, and provides worker and per-worker memory
+  controls. Multiple workers can repeat shared dependencies, so its advantage
+  must be measured rather than assumed.
+- `nix-fast-build` builds on `nix-eval-jobs` and adds parallel realization and
+  log rendering. It is relevant only if realization or diagnostics are a
+  measured part of the critical path; its broader default check scope is not
+  accepted without a narrow selector.
+- `nix flake check --no-build --keep-going` on Lix continues evaluation after
+  errors, but validates the whole flake output schema. It is a candidate for
+  consolidating the Nix-unit and flake paths, not automatically the focused
+  Nix-unit implementation.
 
-**Alternatives considered**:
+**Required candidate matrix**:
 
-- **Use the upstream nix-unit CLI as the enforcing aggregate**: rejected for
-  this change because the corpus requires injected d2b flake/module context and
-  the gate must also enforce pin and shard integrity. The CLI remains useful
-  for focused development.
-- **Keep one process per shard**: rejected because it repeats the entire flake
-  prelude.
-- **Add a Nix aggregate derivation**: rejected because it does not remove
-  per-process evaluation and adds a builder whose only job is aggregation.
+- **N0 - tuned existing pool**: Retain the current process-per-shard runner as
+  the control and tune only its worker count. It is not the preferred final
+  architecture, but it prevents a slower replacement from winning by theory.
+- **N1 - one pure-Nix aggregate**: Evaluate the complete existing result list
+  once and throw once with all case failures. This maximizes graph sharing and
+  minimizes process startup, but evaluation is expected to be single-core.
+- **N2 - lix-unit adapter**: Expose the injected full corpus as a flake output
+  and run `lix-unit --flake`. Measure tool build/startup separately from steady
+  warm runs and verify pin/shard integrity remains an enforcing companion.
+- **N3 - nix-eval-jobs**: Expose a dedicated attrset of Nix-unit jobs and run a
+  bounded worker count with a measured memory cap. Verify that selected attrs
+  do not broaden realization or bypass flake schema checks.
+- **N4 - consolidated Lix flake check**: Measure whether one local
+  `nix flake check --no-build --keep-going` can discharge both the focused
+  Nix-unit and flake evaluation work without making focused iteration slower.
+- **N5 - nix-fast-build**: Evaluate only if N3 wins evaluation but the required
+  narrow realization and grouped diagnostics still dominate.
+
+Each candidate is committed in an isolated experiment branch or worktree from
+the same base. It receives one priming run, three warm runs, a cold observation,
+peak memory and CPU sampling, an empty-discovery probe, and at least two
+simultaneous failing cases in different shards. Candidates may be refined and
+rerun. The winner is recorded only after it meets the contract; if none does,
+the plan retains the current runner and records the unmet speed target rather
+than landing a regression.
+
+**Tools surveyed but not primary candidates**:
+
+- **nix-unit**: Purpose-built and fast, but upstream states that modern Lix
+  requires the separate `lix-unit` fork.
+- **lib.debug.runTests**: Already compatible with the corpus shape, but does
+  not isolate raw evaluation errors by itself.
+- **Nixt and NixTest**: Pure/simple unit frameworks, but no evaluation-failure
+  support according to the nix-unit/lix-unit comparison and therefore weaker
+  than the current contract.
+- **Namaka**: Snapshot testing, valuable for golden output workflows but not a
+  replacement for d2b's value/error corpus.
+- **NixOS VM tests and nix-vm-test**: Integration tiers, not substitutes for
+  hermetic eval cases.
 
 **Sources**:
 
-- `nix build` multi-installable interface:
-  https://nix.dev/manual/nix/latest/command-ref/new-cli/nix3-build
+- lix-unit:
+  https://github.com/adisbladis/lix-unit
+- nix-unit:
+  https://github.com/nix-community/nix-unit
+- nix-eval-jobs:
+  https://github.com/NixOS/nix-eval-jobs
+- nix-fast-build:
+  https://github.com/Mic92/nix-fast-build
+- Lix flake check keep-going semantics:
+  https://docs.lix.systems/manual/lix/stable/command-ref/new-cli/nix3-flake-check.html
+- Namaka:
+  https://github.com/nix-community/namaka
+- NixTest:
+  https://github.com/jetify-com/nixtest
 - Nix keep-going and job controls:
   https://nix.dev/manual/nix/latest/command-ref/opt-common
 - nix-unit design:
   https://github.com/nix-community/nix-unit
 
-## Decision 5: Share one Nix unit corpus graph per evaluator
+## Decision 5: Treat shared-corpus normalization as a measured optimization
 
-**Decision**: Import every case file once and derive the full corpus, shards,
-pin checks, and shard coverage from that shared map.
+**Decision**: Prototype importing every case file once and deriving the full
+corpus, shards, pin checks, and shard coverage from that shared map. Retain it
+only when it improves at least one viable candidate without worsening
+correctness, failure reporting, or memory.
 
 **Rationale**:
 

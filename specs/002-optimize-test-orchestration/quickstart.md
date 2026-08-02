@@ -5,7 +5,7 @@
 Run from the feature worktree:
 
 ```bash
-cd /home/paydro/projects/d2b-test-speedup
+cd /path/to/d2b-test-speedup
 nix develop
 ```
 
@@ -38,6 +38,8 @@ The target contracts are documented in
 Rust:
 
 ```bash
+set -euo pipefail
+
 (
   cd packages
   cargo nextest list --workspace --message-format oneline
@@ -72,6 +74,8 @@ libtest case listing.
 Nix unit and flake checks:
 
 ```bash
+set -euo pipefail
+
 system=$(nix eval --raw --impure --expr builtins.currentSystem)
 flake_ref="git+file://$(git rev-parse --show-toplevel)"
 
@@ -83,6 +87,24 @@ nix eval --json "${flake_ref}#checks.${system}" \
   --apply builtins.attrNames \
   > "$D2B_EVIDENCE_DIR/test-flake-inventory.json"
 ```
+
+Static discovery proves that required tests still exist, but it does not prove
+that the aggregate target executed them. Capture an execution manifest from
+each optimized aggregate run:
+
+```bash
+D2B_EXECUTION_MANIFEST="$D2B_EVIDENCE_DIR/test-rust-executed.json" \
+  make test-rust
+D2B_EXECUTION_MANIFEST="$D2B_EVIDENCE_DIR/test-nix-unit-executed.json" \
+  make test-nix-unit
+D2B_EXECUTION_MANIFEST="$D2B_EVIDENCE_DIR/test-flake-executed.json" \
+  make test-flake
+```
+
+For the baseline commit, retain the full command traces from the actual public
+target runs and record the completed baseline leaves in the corresponding
+`*-executed.json` files. Each entry must cite the trace line proving that the
+leaf completed. The optimized manifests must contain every baseline leaf.
 
 ## Warm-cache benchmark
 
@@ -150,9 +172,11 @@ For Nix evaluation, use a fresh evaluator cache directory:
 
 ```bash
 cache_dir=$(mktemp -d)
+trap 'rm -rf -- "$cache_dir"' EXIT
 XDG_CACHE_HOME="$cache_dir" make test-nix-unit
 XDG_CACHE_HOME="$cache_dir" make test-flake
 rm -rf -- "$cache_dir"
+trap - EXIT
 ```
 
 Repeat as required by the benchmark record. Remove only the explicitly created
@@ -175,6 +199,8 @@ Do not retain the intentional failure in the implementation branch.
 Confirm that every baseline item remains present:
 
 ```bash
+set -euo pipefail
+
 comm -23 \
   .scratch/test-speedup-baseline/test-rust-inventory.txt \
   .scratch/test-speedup-optimized/test-rust-inventory.txt
@@ -194,10 +220,21 @@ jq -r '.[]' .scratch/test-speedup-optimized/test-flake-inventory.json \
 comm -23 \
   .scratch/test-speedup-baseline/test-flake-inventory.txt \
   .scratch/test-speedup-optimized/test-flake-inventory.txt
+
+jq -r '.completed_leaves[]' \
+  .scratch/test-speedup-baseline/test-rust-executed.json | LC_ALL=C sort \
+  > .scratch/test-speedup-baseline/test-rust-executed.txt
+jq -r '.completed_leaves[]' \
+  .scratch/test-speedup-optimized/test-rust-executed.json | LC_ALL=C sort \
+  > .scratch/test-speedup-optimized/test-rust-executed.txt
+comm -23 \
+  .scratch/test-speedup-baseline/test-rust-executed.txt \
+  .scratch/test-speedup-optimized/test-rust-executed.txt
 ```
 
-Each command must produce no missing baseline items. Use `comm -13` on the
-same pairs to list and classify newly added orchestration tests.
+Repeat the executed-manifest comparison for Nix unit and flake manifests. Each
+command must produce no missing baseline items. Use `comm -13` on the same
+pairs to list and classify newly added orchestration tests or leaves.
 
 Then run the targeted infrastructure checks named in
 [plan.md](./plan.md#validation-strategy).
