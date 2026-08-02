@@ -89,7 +89,7 @@ for leaf in "${baseline_leaf_ids[@]}"; do
     rc=1
   fi
 done
-if grep -qF -- '--leaf "$rust_mode"' "$test_script"; then
+if grep -qF -- "--leaf \"\$rust_mode\"" "$test_script"; then
   log "FAIL: Rust execution manifest still emits a coarse mode instead of sub-surface IDs"
   rc=1
 fi
