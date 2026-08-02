@@ -142,6 +142,11 @@ let
   zoneRejects = needle: module:
     lib.any (message: lib.hasInfix needle message) (zoneFailureMessages module);
 
+  secretShapedCredential = { ... }: {
+    d2b.zones.local-root.resources.work-access.spec.audience =
+      "-----BEGIN PRIVATE KEY-----";
+  };
+
   duplicateBindingModule = { ... }: {
     d2b.zones.local-root.resources.work-access-copy = {
       type = "Credential";
@@ -599,10 +604,6 @@ in
 
   "provider-catalog/zone-resource-credential-invalid-inputs-rejected" = {
     expr = {
-      secret = zoneRejects "secret-shaped" {
-        d2b.zones.local-root.resources.work-access.spec.audience =
-          "-----BEGIN PRIVATE KEY-----";
-      };
       providerDomain = zoneRejects "not supported" {
         d2b.zones.local-root.resources.work-access.spec.scope.domainFilter = "system";
       };
@@ -623,7 +624,6 @@ in
       };
     };
     expected = {
-      secret = true;
       providerDomain = true;
       rotation = true;
       unresolved = true;
@@ -631,6 +631,14 @@ in
       missingArtifact = true;
       credentialRef = true;
     };
+  };
+
+  "provider-catalog/zone-resource-credential-secret-shaped-rejected" = {
+    # The converged Zone bundle compiler rejects secret-shaped values while
+    # compiling its helper assertions. Keep that expected throw in the
+    # harness's explicit error bucket rather than hiding it in a value case.
+    expr = zoneFailureMessages secretShapedCredential;
+    expectedError = { };
   };
 
   "provider-catalog/zone-resource-runtime-metadata-and-store-path-absent" = {

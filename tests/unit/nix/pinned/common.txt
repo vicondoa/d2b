@@ -385,9 +385,13 @@ ifname-rendered-host-json/ifname-mappings-non-empty
 index/allow-east-west-metadata
 index/component-and-usbip-subsets
 index/computed-net-vms-remain-reachable
+index/empty-resource-name-rejected-at-eval
+index/empty-zone-name-rejected-at-eval
 index/env-meta-compat-alias
 index/guest-journal-bounded
 index/home-lan-metadata
+index/invalid-resource-name-rejected-at-eval
+index/invalid-zone-name-rejected-at-eval
 index/observability-and-shell-subsets
 index/qemu-media-and-runtime-subsets
 index/shape-and-sorting
@@ -618,6 +622,7 @@ provider-catalog/v3-user-only-host-posture-is-not-optional
 provider-catalog/v3-user-only-host-process-posture
 provider-catalog/zone-resource-bundle-credential-envelope-and-digest
 provider-catalog/zone-resource-credential-invalid-inputs-rejected
+provider-catalog/zone-resource-credential-secret-shaped-rejected
 provider-catalog/zone-resource-runtime-metadata-and-store-path-absent
 readiness-waves/daemon-auto-default
 readiness-waves/has-p0

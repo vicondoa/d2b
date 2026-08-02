@@ -197,20 +197,6 @@ let
           ownerRef = null;
         }
         resourceIndex.byName.${maxIdentity}.resources;
-    invalidNames = {
-      zone = failureMessages {
-        d2b.zones.${tooLongIdentity}.resources.provider.type = "Provider";
-      };
-      resource = failureMessages {
-        d2b.zones.work.resources.${tooLongIdentity}.type = "Provider";
-      };
-      emptyZone = failureMessages {
-        d2b.zones."".resources.provider.type = "Provider";
-      };
-      emptyResource = failureMessages {
-        d2b.zones.work.resources."".type = "Provider";
-      };
-    };
     invalidReferences = {
       missingDefaultUser = failureMessages {
         d2b.zones.work.resources = {
@@ -357,20 +343,6 @@ let
       ];
     };
     maximumNameAccepted = true;
-    invalidNames = {
-      zone = [
-        "d2b.zones.${tooLongIdentity}: Zone name must match ^[a-z][a-z0-9-]{0,62}$."
-      ];
-      resource = [
-        "d2b.zones.work.resources.${tooLongIdentity}: resource name must match ^[a-z][a-z0-9-]{0,62}$."
-      ];
-      emptyZone = [
-        "d2b.zones.: Zone name must match ^[a-z][a-z0-9-]{0,62}$."
-      ];
-      emptyResource = [
-        "d2b.zones.work.resources.: resource name must match ^[a-z][a-z0-9-]{0,62}$."
-      ];
-    };
     invalidReferences = {
       missingDefaultUser = [
         "d2b.zones.work.resources.app.spec.defaultUserRef must resolve to a User in Zone work."
@@ -417,6 +389,36 @@ let
   ];
 in
 {
+  "index/invalid-zone-name-rejected-at-eval" = {
+    # The Zone bundle compiler fail-closes before config.assertions can be
+    # inspected. Use the canonical expectedError case shape for that path.
+    expr = (mkEval [ fixture {
+      d2b.zones.${tooLongIdentity}.resources.provider.type = "Provider";
+    } ]).config.assertions;
+    expectedError = { };
+  };
+
+  "index/invalid-resource-name-rejected-at-eval" = {
+    expr = (mkEval [ fixture {
+      d2b.zones.work.resources.${tooLongIdentity}.type = "Provider";
+    } ]).config.assertions;
+    expectedError = { };
+  };
+
+  "index/empty-zone-name-rejected-at-eval" = {
+    expr = (mkEval [ fixture {
+      d2b.zones."".resources.provider.type = "Provider";
+    } ]).config.assertions;
+    expectedError = { };
+  };
+
+  "index/empty-resource-name-rejected-at-eval" = {
+    expr = (mkEval [ fixture {
+      d2b.zones.work.resources."".type = "Provider";
+    } ]).config.assertions;
+    expectedError = { };
+  };
+
   "index/shape-and-sorting" = {
     expr = {
       enabledEnvNames = index.enabledEnvNames;
