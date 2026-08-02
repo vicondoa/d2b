@@ -102,11 +102,11 @@ D2B_EXECUTION_MANIFEST="$D2B_EVIDENCE_DIR/test-nix-unit-executed.json" \
 D2B_EXECUTION_MANIFEST="$D2B_EVIDENCE_DIR/test-flake-executed.json" \
   make test-flake
 
-jq -e '.run_status == "passed"' \
+jq -e '.version == 1 and .run_status == "passed"' \
   "$D2B_EVIDENCE_DIR/test-rust-executed.json"
-jq -e '.run_status == "passed"' \
+jq -e '.version == 1 and .run_status == "passed"' \
   "$D2B_EVIDENCE_DIR/test-nix-unit-executed.json"
-jq -e '.run_status == "passed"' \
+jq -e '.version == 1 and .run_status == "passed"' \
   "$D2B_EVIDENCE_DIR/test-flake-executed.json"
 ```
 

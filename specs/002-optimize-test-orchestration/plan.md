@@ -348,10 +348,10 @@ the baseline before proceeding. A target is accepted only when:
 - every baseline enforcing surface remains present and every added test is
   classified separately;
 - an execution manifest from the actual aggregate run proves every required
-  leaf or Nix check class completed with `run_status = "passed"`, so static
-  discovery alone cannot mask a dropped lane. Failed and handled-interruption
-  runs atomically publish partial diagnostic manifests after removing prior
-  success evidence before dispatch;
+  leaf or Nix check class completed with schema `version = 1` and
+  `run_status = "passed"`, so static discovery alone cannot mask a dropped
+  lane. Failed and handled-interruption runs atomically publish partial
+  diagnostic manifests after removing prior success evidence before dispatch;
 - failures from multiple independent lanes are visible in one invocation;
 - the target process tree consumes at least 80% of its effective CPU budget
   over the CPU-heavy interval for Rust; Nix measurements combine client
@@ -426,6 +426,7 @@ This plan uses strict phase ordering rather than pipelined dispatch.
 | Counter semantics | Plan panel round 7 | CPU interval units and hierarchical task counts needed explicit microsecond and `pids.current` definitions. | Resolved |
 | Failure evidence | Plan panel round 7 | A failed or interrupted run must remove the prior requested execution manifest before dispatch so stale success cannot survive. | Resolved |
 | Partial evidence | Plan panel round 8 | Failure paths needed atomic partial manifests, pre-evaluation invalidation, zero-interval handling, and explicit PSI composite rejection tests. | Resolved |
+| Signal lifecycle | Plan panel round 9 | Partial finalization needed bounded process-group shutdown, secure atomic fragments, temporary cleanup, schema versioning, and explicit interruption tests. | Resolved |
 
 ## Post-Design Constitution Check
 

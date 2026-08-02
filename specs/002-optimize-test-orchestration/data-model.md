@@ -61,6 +61,7 @@ repository merely made available for discovery.
 
 | Field | Meaning |
 |---|---|
+| `version` | Execution-manifest schema version, initially `1` |
 | `target` | Owning Test Target |
 | `commit` | Exact Git commit |
 | `run_status` | `passed`, `failed`, or `interrupted` |
@@ -69,18 +70,29 @@ repository merely made available for discovery.
 | `installables` | Nix attrs actually submitted by the target |
 | `realized_checks` | Flake checks actually realized |
 | `source_inventory_digest` | Digest of the matching source census |
+| `external_contention` | `not-measured`, `none`, `nix-daemon-shared`, or `host-busy` |
 
 ### Validation rules
 
 - The manifest is deterministic after sorting.
+- A target acquires exclusive ownership of the requested manifest path before
+  invalidating prior evidence. Fragment storage is created with `mktemp -d`,
+  mode `0700`, and the current effective uid; the finalizer rejects symlinks,
+  owner mismatches, or broader permissions.
 - The top-level target removes the requested prior manifest and only its own
   prior temporary fragment directory before any evaluation or dispatch.
-  Concurrent leaves write one uniquely named fragment each. An idempotent
-  finalizer runs after the scheduler returns and from handled `INT` or `TERM`,
-  sorts the available fragments, records `run_status`, and atomically replaces
-  the requested manifest before preserving the original exit status.
+  Concurrent leaves write one uniquely named temporary fragment each and
+  rename it atomically to the final fragment name. The finalizer reads only
+  renamed fragments.
+- The scheduler runs in a dedicated process group. Handled `INT` or `TERM`
+  forwards the signal to that group, waits at most 10 seconds, sends `SIGKILL`
+  to survivors, reaps the group, then invokes the idempotent finalizer. The
+  finalizer also runs after normal scheduler return, sorts available fragments,
+  records `run_status`, atomically replaces the requested manifest, removes
+  run-specific temporary state, and preserves the original exit status.
 - An uncatchable termination may leave no manifest, but the prior success
-  manifest has already been removed.
+  manifest has already been removed. A later invocation removes only stale
+  temporary state that passes the same type, ownership, and permission checks.
 - A required leaf is absent when its command did not complete successfully.
 - A failed or interrupted manifest is diagnostic partial evidence and cannot
   satisfy coverage acceptance; acceptance requires `run_status = "passed"`.
