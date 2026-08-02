@@ -169,15 +169,12 @@ test-drift:
 ## test-policy - meta gates that guard the test architecture + cross-cutting
 ## invariants (ci-coverage, adr-index, deliverable-gate, etc.).
 ##
-## The Provider crate layout policy runs here as
-## `cargo xtask check-provider-crate-layout`, not as a shell gate: the drift and
-## meta gate set is closed. Its dispatch arm is landed and returns an error
-## until the policy is implemented, so the recipe line below is added by the
-## change that implements it rather than now, which would red this lane for
-## every concurrent branch.
+## The Provider crate layout policies run here as xtask commands, not as
+## shell gates: the drift and meta gate set is closed.
 test-policy:
 	bash tests/test-policy.sh
 	cd packages && cargo run --quiet -p xtask -- check-provider-crate-layout
+	cd packages && cargo run --quiet -p xtask -- check-provider-layout
 
 ## test-performance-budgets - execute the self-gating performance canary.
 ## Hosted runners take the cheap skip path; pinned stable runners enforce it.

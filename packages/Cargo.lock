@@ -1246,6 +1246,33 @@ dependencies = [
 ]
 
 [[package]]
+name = "d2b-provider-device-gpu"
+version = "0.0.0-bootstrap"
+dependencies = [
+ "d2b-contracts",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "d2b-provider-device-security-key"
+version = "0.0.0-bootstrap"
+dependencies = [
+ "d2b-contracts",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "d2b-provider-device-tpm"
+version = "0.0.0-bootstrap"
+dependencies = [
+ "d2b-contracts",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "d2b-provider-device-usbip"
 version = "0.0.0-bootstrap"
 dependencies = [
@@ -1257,6 +1284,16 @@ name = "d2b-provider-network-local"
 version = "0.0.0-bootstrap"
 dependencies = [
  "d2b-contracts",
+]
+
+[[package]]
+name = "d2b-provider-observability-otel"
+version = "0.0.0-bootstrap"
+dependencies = [
+ "d2b-audit",
+ "d2b-telemetry",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

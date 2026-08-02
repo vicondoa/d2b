@@ -14,7 +14,7 @@ use std::{
     time::Duration,
 };
 
-use clap::{Args, CommandFactory, Parser, Subcommand, ValueEnum};
+use clap::{Args, CommandFactory, Subcommand, ValueEnum};
 use d2b_contracts::{
     Hello as IpcHello, HelloOk as IpcHelloOk, HelloRejected as IpcHelloRejected, KnownFeatureFlag,
     SemverRange,
@@ -63,6 +63,7 @@ mod exec_client;
 mod guest;
 mod host;
 mod host_validate;
+mod legacy;
 mod provider;
 mod resource;
 mod share;
@@ -72,6 +73,8 @@ mod target_routing;
 mod terminal_client;
 mod zone;
 
+#[allow(unused_imports)]
+use legacy::NativeCli;
 use status_read_model::{
     booted_symlink, build_vm_status_output, build_vm_status_output_from_public, current_symlink,
     list_output_from_manifest, list_output_from_public_entries, public_lifecycle_status_label,
@@ -121,20 +124,6 @@ pub const EXIT_API_TIMEOUT: i32 = 33;
 const DEFAULT_GUEST_CONFIG_PATH: &str = "/var/lib/d2b-guest/guest-config.nix";
 /// Exit code surfaced for every guest-control config-read failure on the CLI.
 const EXIT_GUEST_CONTROL_CONFIG: i32 = 70;
-#[derive(Debug, Parser)]
-#[command(
-    version,
-    about = "d2b - opinionated NixOS desktop microVM CLI.",
-    long_about = "d2b - daemon-native CLI for d2b microVMs.\n\nMutating verbs dispatch through d2bd; privileged host mutations additionally use d2b-priv-broker. \
-        Read-only verbs (list, status, audit, host check) prefer d2bd's \
-        public socket and fall back to static/local sources where documented. \
-        See `d2b <COMMAND> --help` for per-verb usage."
-)]
-struct NativeCli {
-    #[command(subcommand)]
-    command: NativeCommand,
-}
-
 #[derive(Debug, Subcommand)]
 enum NativeCommand {
     /// List declared VMs with daemon runtime state when d2bd is reachable.
@@ -2487,97 +2476,6 @@ fn parse_host_shutdown_hook_args(
         ));
     }
     Ok(args)
-}
-
-fn dispatch(
-    context: &LegacyContext,
-    cli: &NativeCli,
-    original_args: &[OsString],
-) -> Result<i32, CliFailure> {
-    match &cli.command {
-        NativeCommand::List(args) => cmd_list(context, args),
-        NativeCommand::Status(args) => cmd_status(context, args),
-        NativeCommand::Launch(args) => cmd_launch(context, args),
-        NativeCommand::Usb(args) => match &args.command {
-            UsbCommand::Attach(args) => cmd_usb_attach(context, args),
-            UsbCommand::Detach(args) => cmd_usb_detach(context, args),
-            UsbCommand::Probe(args) => cmd_usb_probe(context, args),
-            UsbCommand::SecurityKey(args) => match &args.command {
-                UsbSecurityKeyCommand::Status(args) => cmd_usb_sk_status(context, args),
-                UsbSecurityKeyCommand::Sessions(args) => cmd_usb_sk_sessions(context, args),
-                UsbSecurityKeyCommand::Cancel(args) => cmd_usb_sk_cancel(context, args),
-                UsbSecurityKeyCommand::Test(args) => cmd_usb_sk_test(context, args),
-            },
-        },
-        NativeCommand::Console(args) => cmd_console(context, args, original_args),
-        NativeCommand::Audio(args) => cmd_audio(context, args, original_args),
-        NativeCommand::Audit(args) => cmd_audit(context, args, original_args),
-        NativeCommand::Host(args) => match &args.command {
-            HostCommand::Check(args) => cmd_host_check(context, args),
-            HostCommand::Prepare(args) => cmd_host_prepare(context, args),
-            HostCommand::Destroy(args) => cmd_host_destroy(context, args),
-            HostCommand::Doctor(args) => cmd_host_doctor(context, args),
-            HostCommand::MigrateStorage(args) => cmd_host_migrate_storage(context, args),
-            HostCommand::Install(args) => cmd_host_install(context, args, original_args),
-            HostCommand::Reconcile(args) => cmd_host_reconcile(context, args, original_args),
-            HostCommand::Validate(args) => cmd_host_validate(context, args),
-        },
-        NativeCommand::Auth(args) => match &args.command {
-            AuthCommand::Status(args) => cmd_auth_status(context, args),
-        },
-        NativeCommand::Realm(args) => match &args.command {
-            RealmCommand::List(args) => cmd_realm_list(context, args),
-            RealmCommand::Inspect(args) => cmd_realm_inspect(context, args),
-            RealmCommand::Enter(args) => cmd_realm_enter(context, args),
-            RealmCommand::Run(args) => cmd_realm_run(context, args),
-        },
-        NativeCommand::Shell(args) => cmd_shell(context, args),
-        NativeCommand::Op(args) => match &args.command {
-            OpCommand::Inspect(args) => cmd_op_inspect(context, args),
-        },
-        NativeCommand::Vm(args) => match &args.command {
-            VmCommand::Start(args) => cmd_vm_start(context, args),
-            VmCommand::Stop(args) => cmd_vm_stop(context, args),
-            VmCommand::Restart(args) => cmd_vm_restart(context, args),
-            VmCommand::List(args) => cmd_vm_list(context, args),
-            VmCommand::Status(args) => cmd_vm_status(context, args),
-            VmCommand::Exec(args) => cmd_vm_exec(context, args),
-            VmCommand::Display(args) => cmd_vm_display(context, args),
-        },
-        NativeCommand::Up(args) => cmd_vm_start(context, args),
-        NativeCommand::Down(args) => cmd_vm_stop(context, args),
-        NativeCommand::Restart(args) => cmd_vm_restart(context, args),
-        NativeCommand::Build(args) => cmd_build(context, args),
-        NativeCommand::Generations(args) => cmd_generations(context, args),
-        NativeCommand::Switch(args) => cmd_switch(context, args, original_args),
-        NativeCommand::Boot(args) => cmd_boot(context, args, original_args),
-        NativeCommand::Test(args) => cmd_test(context, args, original_args),
-        NativeCommand::Rollback(args) => cmd_rollback(context, args, original_args),
-        NativeCommand::Gc(args) => cmd_gc(context, args, original_args),
-        NativeCommand::Store(args) => match &args.command {
-            StoreCommand::Verify(args) => cmd_store_verify(context, args),
-        },
-        NativeCommand::Keys(args) => match &args.command {
-            KeysCommand::List(args) => cmd_keys_list(context, args, original_args),
-            KeysCommand::Show(args) => cmd_keys_show(context, args, original_args),
-            KeysCommand::Rotate(args) => cmd_keys_rotate(context, args, original_args),
-        },
-        NativeCommand::Trust(args) => cmd_keys_trust(context, args, original_args),
-        NativeCommand::RotateKnownHost(args) => {
-            cmd_keys_rotate_known_host(context, args, original_args)
-        }
-        NativeCommand::Migrate(args) => cmd_migrate(context, args, original_args),
-        NativeCommand::Config(args) => match &args.command {
-            ConfigCommand::Sync(args) => cmd_config_sync(context, args),
-            ConfigCommand::Diff(args) => cmd_config_diff(args),
-            ConfigCommand::Approve(args) => cmd_config_approve(args),
-            ConfigCommand::Reject(args) => cmd_config_reject(args),
-            ConfigCommand::Status(args) => cmd_config_status(args),
-        },
-        NativeCommand::Clipboard(args) => match &args.command {
-            ClipboardCommand::Arm(args) => cmd_clipboard_arm(context, args),
-        },
-    }
 }
 
 // ============================================================

@@ -920,6 +920,8 @@ in
     ./bundle-zones.nix
     ./resources-zones-processes.nix
     ./resources-zones-volumes.nix
+    ./resources-device.nix
+    ./resources-volume.nix
 
     # Region: Network ResourceType emitter (ADR046-network-004).
     ./resources-network.nix
