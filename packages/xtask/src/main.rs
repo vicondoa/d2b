@@ -363,7 +363,7 @@ fn main() -> std::process::ExitCode {
             zone_schema::gen_zone_nix_options(repo_root()?)
         }),
         [command] if command == "gen-resource-schemas" => run_task("gen-resource-schemas", || {
-            gen_resource_schemas::generate(&repo_root()?)
+            gen_resource_schemas::generate(repo_root()?)
         }),
         [command] if command == "gen-error-codes" => run_task("gen-error-codes", gen_error_codes),
         [command] if command == "gen-provider-packaging" => {
@@ -455,7 +455,7 @@ fn run_provider_crate_layout() -> std::process::ExitCode {
 fn run_provider_layout() -> std::process::ExitCode {
     let result = repo_root()
         .map_err(|error| error.to_string())
-        .and_then(|root| check_provider_layout(&root));
+        .and_then(check_provider_layout);
     match result {
         Ok(()) => std::process::ExitCode::SUCCESS,
         Err(error) => {
@@ -521,55 +521,6 @@ fn check_provider_layout(repo_root: &Path) -> Result<(), String> {
     } else {
         violations.sort();
         Err(violations.join("\n"))
-    }
-}
-
-#[cfg(test)]
-mod provider_layout_tests {
-    use super::check_provider_layout;
-    use std::{
-        fs,
-        sync::atomic::{AtomicUsize, Ordering},
-    };
-
-    static FIXTURE_COUNTER: AtomicUsize = AtomicUsize::new(0);
-
-    fn fixture() -> std::path::PathBuf {
-        let serial = FIXTURE_COUNTER.fetch_add(1, Ordering::Relaxed);
-        let root = std::env::temp_dir().join(format!(
-            "d2b-provider-layout-command-{}-{serial}",
-            std::process::id()
-        ));
-        let crate_dir = root.join("packages/d2b-provider-device-fixture");
-        let _ = fs::remove_dir_all(&root);
-        fs::create_dir_all(crate_dir.join("src")).unwrap();
-        fs::create_dir_all(crate_dir.join("tests")).unwrap();
-        fs::create_dir_all(crate_dir.join("integration")).unwrap();
-        fs::write(
-            root.join("packages/Cargo.toml"),
-            "[workspace]\nmembers = [\n    \"d2b-provider-device-fixture\",\n]\n",
-        )
-        .unwrap();
-        fs::write(crate_dir.join("README.md"), "# fixture\n").unwrap();
-        root
-    }
-
-    #[test]
-    fn accepts_all_four_required_paths() {
-        let root = fixture();
-        assert_eq!(check_provider_layout(&root), Ok(()));
-        fs::remove_dir_all(root).unwrap();
-    }
-
-    #[test]
-    fn names_each_missing_required_path() {
-        let root = fixture();
-        let missing = root.join("packages/d2b-provider-device-fixture/integration");
-        fs::remove_dir_all(missing).unwrap();
-        let error = check_provider_layout(&root).unwrap_err();
-        assert!(error.contains("\"crate\":\"d2b-provider-device-fixture\""));
-        assert!(error.contains("\"missing\":[\"integration\"]"));
-        fs::remove_dir_all(root).unwrap();
     }
 }
 
@@ -1763,4 +1714,53 @@ fn civil_from_days(z: i64) -> (i32, u32, u32) {
     let m = if mp < 10 { mp + 3 } else { mp - 9 };
     let y = if m <= 2 { y + 1 } else { y };
     (y, m, d)
+}
+
+#[cfg(test)]
+mod provider_layout_tests {
+    use super::check_provider_layout;
+    use std::{
+        fs,
+        sync::atomic::{AtomicUsize, Ordering},
+    };
+
+    static FIXTURE_COUNTER: AtomicUsize = AtomicUsize::new(0);
+
+    fn fixture() -> std::path::PathBuf {
+        let serial = FIXTURE_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let root = std::env::temp_dir().join(format!(
+            "d2b-provider-layout-command-{}-{serial}",
+            std::process::id()
+        ));
+        let crate_dir = root.join("packages/d2b-provider-device-fixture");
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(crate_dir.join("src")).unwrap();
+        fs::create_dir_all(crate_dir.join("tests")).unwrap();
+        fs::create_dir_all(crate_dir.join("integration")).unwrap();
+        fs::write(
+            root.join("packages/Cargo.toml"),
+            "[workspace]\nmembers = [\n    \"d2b-provider-device-fixture\",\n]\n",
+        )
+        .unwrap();
+        fs::write(crate_dir.join("README.md"), "# fixture\n").unwrap();
+        root
+    }
+
+    #[test]
+    fn accepts_all_four_required_paths() {
+        let root = fixture();
+        assert_eq!(check_provider_layout(&root), Ok(()));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn names_each_missing_required_path() {
+        let root = fixture();
+        let missing = root.join("packages/d2b-provider-device-fixture/integration");
+        fs::remove_dir_all(missing).unwrap();
+        let error = check_provider_layout(&root).unwrap_err();
+        assert!(error.contains("\"crate\":\"d2b-provider-device-fixture\""));
+        assert!(error.contains("\"missing\":[\"integration\"]"));
+        fs::remove_dir_all(root).unwrap();
+    }
 }
