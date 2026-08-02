@@ -70,6 +70,12 @@ impl<P: VirtiofsExportEffectPort> VirtiofsExportController<P> {
         if export.access() == d2b_contracts::v3::volume::AttachmentAccess::SharedWrite {
             return Ok(failed(VirtiofsExportError::SharedWriteUnsupported));
         }
+        WorkerSandbox::conformant().assert_conformant()?;
+        let view = resolve_view(volume, export)?;
+        let plan = match VirtiofsdWorkerPlan::for_export(export, view, vcpu_count, principal) {
+            Ok(plan) => plan,
+            Err(error) => return Ok(failed(error)),
+        };
         if export.view().as_str() == "ro-store"
             && !self.port.observe_store_view_marker(export).await?
         {
@@ -83,12 +89,6 @@ impl<P: VirtiofsExportEffectPort> VirtiofsExportController<P> {
                 reason: Some(VirtiofsExportError::StoreViewMarkerMissing),
             });
         }
-        WorkerSandbox::conformant().assert_conformant()?;
-        let view = resolve_view(volume, export)?;
-        let plan = match VirtiofsdWorkerPlan::for_export(export, view, vcpu_count, principal) {
-            Ok(plan) => plan,
-            Err(error) => return Ok(failed(error)),
-        };
 
         let worker = match self.port.launch_worker(export, &plan).await {
             Ok(worker) => worker,
