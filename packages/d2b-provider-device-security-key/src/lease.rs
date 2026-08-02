@@ -132,17 +132,29 @@ impl SecurityKeyLease {
                 return Err(SecurityKeyLeaseError::Effect(error));
             }
         };
+        self.authority_lease = Some(authority_lease);
         let intent = SecurityKeyOpenIntent::from_core(device_uid, session, self.backing.clone());
         let relay_ticket = match port.open_hidraw(&intent) {
             Ok(ticket) => ticket,
             Err(error) => {
-                let _ = port.release_physical_backing(authority_lease);
+                let authority = self
+                    .authority_lease
+                    .as_ref()
+                    .cloned()
+                    .ok_or(SecurityKeyLeaseError::InvalidTransition)?;
+                if let Err(release_error) = port.release_physical_backing(authority) {
+                    // Keep the authority lease and remain non-reacquirable
+                    // until Core confirms its release. Reacquiring here
+                    // would permit two owners after a partial cleanup.
+                    self.state = LeaseState::AwaitingLease;
+                    return Err(SecurityKeyLeaseError::Effect(release_error));
+                }
+                self.authority_lease = None;
                 self.state = LeaseState::Idle;
                 return Err(SecurityKeyLeaseError::Effect(error));
             }
         };
         self.session = Some(session);
-        self.authority_lease = Some(authority_lease);
         self.relay_ticket = Some(relay_ticket);
         self.state = LeaseState::Active;
         Ok(())
@@ -182,10 +194,12 @@ impl SecurityKeyLease {
         }
         let authority = self
             .authority_lease
-            .take()
+            .as_ref()
+            .cloned()
             .ok_or(SecurityKeyLeaseError::InvalidTransition)?;
         port.release_physical_backing(authority)
             .map_err(SecurityKeyLeaseError::Effect)?;
+        self.authority_lease = None;
         self.relay_ticket = None;
         self.session = None;
         self.state = terminal;

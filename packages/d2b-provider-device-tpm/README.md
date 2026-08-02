@@ -7,7 +7,8 @@ This crate implements `Provider/device-tpm`, which manages the emulated TPM
 
 The Device extension is
 `device-tpm.d2bus.org/Device/spec` version `1.0`. Its bounded settings are
-`logLevel` (1-20, default 20) and `startupClear` (default true). Nix authors
+`logLevel` (1-20, default 20); the pre-start flush is mandatory and has no
+configuration toggle. Nix authors
 declare a `Device` under `d2b.zones.<zone>.resources.<name>` with
 `providerRef = "Provider/device-tpm"`, `deviceClass = "emulated"`, and an
 exclusive arbitration. State directories and Provider artifacts are never
@@ -50,4 +51,3 @@ existing container or Host integration lane.
 The crate boundary intentionally depends on `d2b-contracts` plus serde only.
 An extracted repository would retain the Provider identity, signed component
 descriptor, and Core effect-port adapter while replacing workspace packaging.
-

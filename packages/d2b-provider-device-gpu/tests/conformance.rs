@@ -18,3 +18,30 @@ fn settings_round_trip_and_unknown_fields_are_closed() {
         Err(GpuSettingsError::VideoRequiresFullGpu)
     );
 }
+
+#[test]
+fn nvidia_decode_requires_the_video_sidecar() {
+    let settings = GpuSettings {
+        video_nvidia_decode: true,
+        ..GpuSettings::default()
+    };
+    assert_eq!(
+        settings.validate(DeviceArbitration::Exclusive),
+        Err(GpuSettingsError::NvidiaDecodeRequiresVideoSidecar)
+    );
+}
+
+#[test]
+fn context_types_are_unique() {
+    let settings = GpuSettings {
+        context_types: vec![
+            d2b_provider_device_gpu::ContextType::Virgl,
+            d2b_provider_device_gpu::ContextType::Virgl,
+        ],
+        ..GpuSettings::default()
+    };
+    assert_eq!(
+        settings.validate(DeviceArbitration::Exclusive),
+        Err(GpuSettingsError::DuplicateContextType)
+    );
+}

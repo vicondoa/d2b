@@ -221,11 +221,9 @@ impl TpmController {
             self.phase = TpmPhase::Failed;
             return Err(TpmControllerError::StateValidation(error));
         }
-        if self.settings.startup_clear {
-            self.phase = TpmPhase::Flushing;
-            if let Err(error) = port.flush(&prepared.flush_ticket) {
-                return self.effect_failed(error);
-            }
+        self.phase = TpmPhase::Flushing;
+        if let Err(error) = port.flush(&prepared.flush_ticket) {
+            return self.effect_failed(error);
         }
         self.phase = TpmPhase::Starting;
         if let Err(error) = port.start(&prepared.swtpm_ticket, self.settings, &self.binary) {
