@@ -10,10 +10,12 @@ import json
 import os
 import pathlib
 import re
+import signal
 import shlex
 import shutil
 import subprocess
 import tempfile
+import time
 import types
 import unittest
 from unittest import mock
@@ -995,7 +997,7 @@ set -euo pipefail
         self.assertNotIn("exit", fatal_region)
         self.assertIn("ExecutionManifest::Fatal", helper)
         self.assertIn("unless (caller)", helper)
-        self.assertIn("execution-manifest: operation failed", helper)
+        self.assertIn("safe_error_message", helper)
         perl = shutil.which("perl")
         self.assertIsNotNone(perl, "Perl is required for execution-manifest coverage")
         assert perl is not None
@@ -1025,7 +1027,10 @@ set -euo pipefail
                 check=False,
             )
             self.assertEqual(result.returncode, 1)
-            self.assertEqual(result.stderr, "execution-manifest: operation failed\n")
+            self.assertEqual(
+                result.stderr,
+                "execution-manifest: D2B_EXECUTION_MANIFEST rejects parent traversal\n",
+            )
             self.assertNotIn(str(raw_dir), result.stderr)
 
     def test_execution_manifest_injected_lifecycle_boundaries_are_executable(self) -> None:
@@ -1060,9 +1065,17 @@ set -euo pipefail
                 "finalization failed after scheduler success",
                 results["success-finalization"].stderr,
             )
+            self.assertIn(
+                "synthetic publication failure",
+                results["success-finalization"].stderr,
+            )
             self.assertEqual(results["success-finalization"].stderr.count("\n"), 1)
             self.assertIn(
                 "preserving the scheduler status",
+                results["failure-finalization"].stderr,
+            )
+            self.assertIn(
+                "synthetic publication failure",
                 results["failure-finalization"].stderr,
             )
             self.assertEqual(results["failure-finalization"].stderr.count("\n"), 1)
@@ -1075,6 +1088,85 @@ set -euo pipefail
             self.assertEqual(evidence["version"], 1)
             self.assertTrue((temp_dir / "term.json.lock").is_file())
             self.assertFalse((temp_dir / ".term.json.fragments").exists())
+
+    def test_execution_manifest_lock_contention_is_executable_and_path_free(self) -> None:
+        perl = shutil.which("perl")
+        self.assertIsNotNone(perl, "Perl is required for execution-manifest coverage")
+        assert perl is not None
+        with tempfile.TemporaryDirectory(prefix="execution-manifest-lock.") as raw_dir:
+            temp_dir = pathlib.Path(raw_dir)
+            manifest = temp_dir / "evidence.json"
+            holder = subprocess.Popen(
+                [
+                    perl,
+                    str(EXECUTION_MANIFEST_HELPER),
+                    "run",
+                    "--manifest",
+                    str(manifest),
+                    "--target",
+                    "test-rust",
+                    "--commit",
+                    "deadbeef",
+                    "--",
+                    perl,
+                    "-e",
+                    "sleep 30",
+                ],
+                cwd=ROOT,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+            try:
+                deadline = time.monotonic() + 5
+                fragment_dir = temp_dir / ".evidence.json.fragments"
+                while time.monotonic() < deadline and not fragment_dir.is_dir():
+                    self.assertIsNone(holder.poll(), "lock holder exited before acquiring the lock")
+                    time.sleep(0.02)
+                self.assertTrue(fragment_dir.is_dir(), "lock holder did not acquire the manifest lock")
+
+                contender = subprocess.run(
+                    [
+                        perl,
+                        str(EXECUTION_MANIFEST_HELPER),
+                        "run",
+                        "--manifest",
+                        str(manifest),
+                        "--target",
+                        "test-rust",
+                        "--commit",
+                        "deadbeef",
+                        "--",
+                        perl,
+                        "-e",
+                        "exit 0",
+                    ],
+                    cwd=ROOT,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    check=False,
+                )
+                self.assertEqual(contender.returncode, 73)
+                self.assertEqual(
+                    contender.stderr,
+                    "manifest-lock-contended: execution-manifest lock is active; "
+                    "wait for the active run to finish and retry.\n",
+                )
+                self.assertNotIn(str(temp_dir), contender.stderr)
+            finally:
+                if holder.poll() is None:
+                    holder.send_signal(signal.SIGTERM)
+                try:
+                    holder_stdout, holder_stderr = holder.communicate(timeout=15)
+                except subprocess.TimeoutExpired:
+                    holder.kill()
+                    holder_stdout, holder_stderr = holder.communicate(timeout=5)
+                    self.fail(
+                        "lock holder did not terminate after SIGTERM\n"
+                        f"stdout:\n{holder_stdout}\nstderr:\n{holder_stderr}"
+                    )
+            self.assertEqual(holder.returncode, 143)
 
     def test_rust_budget_validation_is_actionable_static_and_redacted(self) -> None:
         source = "\n".join(
@@ -1189,6 +1281,15 @@ set -euo pipefail
         self.assertEqual(api_quotas[1], 1)
         self.assertEqual(api_quotas[9], 1)
         self.assertEqual(api_quotas[12], 4)
+
+    def test_rust_nextest_quota_naming_is_consistent(self) -> None:
+        makefile = MAKEFILE.read_text(encoding="utf-8")
+        driver = RUST_DRIVER.read_text(encoding="utf-8")
+        self.assertIn("D2B_RUST_NEXTEST_THREADS", makefile)
+        self.assertIn("D2B_RUST_NEXTEST_THREADS", driver)
+        self.assertNotIn("D2B_RUST_NEXTTEST_THREADS", makefile + driver)
+        self.assertNotIn("D2B_RUST_NEXTEST_QUOTA_FLAG", makefile)
+        self.assertNotIn("D2B_RUST_CARGO_QUOTA_FLAG", makefile)
 
     def test_rust_leaf_recipes_are_ordinary_and_drop_make_metadata_immediately(self) -> None:
         makefile = MAKEFILE.read_text(encoding="utf-8")
@@ -1563,6 +1664,21 @@ set -euo pipefail
         )
         pre_fork = helper.split("my $pid = $process_control->{fork}->();", 1)[0]
         self.assertNotIn("$process_control->{subreaper}->();", pre_fork)
+
+    def test_manifest_interrupt_retries_are_bounded(self) -> None:
+        helper = EXECUTION_MANIFEST_HELPER.read_text(encoding="utf-8")
+        self.assertIn("MAX_INTERRUPT_RETRIES => 16", helper)
+        for operation in ("sys_getdents", "syswrite", "sysread", "waitpid"):
+            self.assertIn(operation, helper)
+        for diagnostic in (
+            "directory enumeration exceeded the interrupt retry limit",
+            "evidence write exceeded the interrupt retry limit",
+            "fragment read exceeded the interrupt retry limit",
+            "descendant reap exceeded the interrupt retry limit",
+        ):
+            self.assertIn(diagnostic, helper)
+        self.assertGreaterEqual(helper.count("$! == EINTR"), 4)
+        self.assertGreaterEqual(helper.count("$! == EAGAIN"), 3)
 
     def test_diagnostic_redaction_normalizes_ansi_before_matching(self) -> None:
         layer1_jobs = load_layer1_jobs()

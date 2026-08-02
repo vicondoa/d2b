@@ -137,9 +137,6 @@ D2B_RUST_QUOTA_BROKER ?= 1
 D2B_RUST_QUOTA_GUEST ?= 1
 D2B_RUST_QUOTA_AST ?= 1
 D2B_RUST_QUOTA_SUPPLY ?= 1
-D2B_RUST_CARGO_QUOTA_FLAG := --jobs
-D2B_RUST_NEXTEST_QUOTA_FLAG := --test-threads
-
 # Execution-manifest v1 evidence is opt-in and starts before the recursive
 # scheduler. The helper anchors the manifest parent first with openat2
 # RESOLVE_NO_SYMLINKS and RESOLVE_NO_MAGICLINKS, then opens the persistent
@@ -333,16 +330,16 @@ test-rust-remaining:
 ## prerequisites of the outer test-rust declaration they intentionally do no
 ## work; the recursive child owns the real leaf dispatch.
 rust-api-surface:
-	@if [ "$(D2B_RUST_ROOT_PREREQS)" = 1 ]; then exit 0; fi; D2B_RUST_CARGO_JOBS="$(D2B_RUST_QUOTA_API)" D2B_RUST_NEXTTEST_THREADS="$(D2B_RUST_QUOTA_API)" bash tests/test-rust.sh api-surface
+	@if [ "$(D2B_RUST_ROOT_PREREQS)" = 1 ]; then exit 0; fi; D2B_RUST_CARGO_JOBS="$(D2B_RUST_QUOTA_API)" D2B_RUST_NEXTEST_THREADS="$(D2B_RUST_QUOTA_API)" bash tests/test-rust.sh api-surface
 
 rust-main-workspace: rust-schema-reproducibility
-	@if [ "$(D2B_RUST_ROOT_PREREQS)" = 1 ]; then exit 0; fi; D2B_RUST_CARGO_JOBS="$(D2B_RUST_QUOTA_MAIN)" D2B_RUST_NEXTTEST_THREADS="$(D2B_RUST_QUOTA_MAIN)" bash tests/test-rust.sh main-workspace
+	@if [ "$(D2B_RUST_ROOT_PREREQS)" = 1 ]; then exit 0; fi; D2B_RUST_CARGO_JOBS="$(D2B_RUST_QUOTA_MAIN)" D2B_RUST_NEXTEST_THREADS="$(D2B_RUST_QUOTA_MAIN)" bash tests/test-rust.sh main-workspace
 
 rust-schema-reproducibility: rust-inventory-and-stub
-	@if [ "$(D2B_RUST_ROOT_PREREQS)" = 1 ]; then exit 0; fi; D2B_RUST_CARGO_JOBS="$(D2B_RUST_QUOTA_SCHEMA)" D2B_RUST_NEXTTEST_THREADS="$(D2B_RUST_QUOTA_SCHEMA)" bash tests/test-rust.sh schema-reproducibility
+	@if [ "$(D2B_RUST_ROOT_PREREQS)" = 1 ]; then exit 0; fi; D2B_RUST_CARGO_JOBS="$(D2B_RUST_QUOTA_SCHEMA)" D2B_RUST_NEXTEST_THREADS="$(D2B_RUST_QUOTA_SCHEMA)" bash tests/test-rust.sh schema-reproducibility
 
 rust-inventory-and-stub:
-	@if [ "$(D2B_RUST_ROOT_PREREQS)" = 1 ]; then exit 0; fi; D2B_RUST_CARGO_JOBS="$(D2B_RUST_QUOTA_INVENTORY)" D2B_RUST_NEXTTEST_THREADS="$(D2B_RUST_QUOTA_INVENTORY)" bash tests/test-rust.sh inventory-stub
+	@if [ "$(D2B_RUST_ROOT_PREREQS)" = 1 ]; then exit 0; fi; D2B_RUST_CARGO_JOBS="$(D2B_RUST_QUOTA_INVENTORY)" D2B_RUST_NEXTEST_THREADS="$(D2B_RUST_QUOTA_INVENTORY)" bash tests/test-rust.sh inventory-stub
 
 ## Fixture and CLI surfaces use a stable isolated target directory under
 ## .scratch/rust-test-cache, so their Nix and Cargo work can overlap the main
@@ -352,22 +349,22 @@ rust-fixture-contracts:
 	if [ "$(D2B_SKIP_FIXTURE_BUILD)" = 1 ]; then \
 	  echo "Rust fixture/CLI surfaces skipped (D2B_SKIP_FIXTURE_BUILD=1; run the enforcing fixture lane separately)."; \
 	elif command -v nix >/dev/null 2>&1; then \
-	  D2B_ENABLE_FIXTURE_BUILD=1 D2B_RUST_CARGO_JOBS="$(D2B_RUST_QUOTA_FIXTURE)" D2B_RUST_NEXTTEST_THREADS="$(D2B_RUST_QUOTA_FIXTURE)" bash tests/test-rust.sh fixture-contracts; \
+	  D2B_ENABLE_FIXTURE_BUILD=1 D2B_RUST_CARGO_JOBS="$(D2B_RUST_QUOTA_FIXTURE)" D2B_RUST_NEXTEST_THREADS="$(D2B_RUST_QUOTA_FIXTURE)" bash tests/test-rust.sh fixture-contracts; \
 	else \
 	  echo "Rust fixture/CLI surfaces skipped (nix unavailable)."; \
 	fi
 
 rust-broker: rust-inventory-and-stub
-	@if [ "$(D2B_RUST_ROOT_PREREQS)" = 1 ]; then exit 0; fi; D2B_RUST_CARGO_JOBS="$(D2B_RUST_QUOTA_BROKER)" D2B_RUST_NEXTTEST_THREADS="$(D2B_RUST_QUOTA_BROKER)" bash tests/test-rust.sh broker
+	@if [ "$(D2B_RUST_ROOT_PREREQS)" = 1 ]; then exit 0; fi; D2B_RUST_CARGO_JOBS="$(D2B_RUST_QUOTA_BROKER)" D2B_RUST_NEXTEST_THREADS="$(D2B_RUST_QUOTA_BROKER)" bash tests/test-rust.sh broker
 
 rust-guest-shell-runner:
-	@if [ "$(D2B_RUST_ROOT_PREREQS)" = 1 ]; then exit 0; fi; D2B_RUST_CARGO_JOBS="$(D2B_RUST_QUOTA_GUEST)" D2B_RUST_NEXTTEST_THREADS="$(D2B_RUST_QUOTA_GUEST)" bash tests/test-rust.sh guest-shell-runner
+	@if [ "$(D2B_RUST_ROOT_PREREQS)" = 1 ]; then exit 0; fi; D2B_RUST_CARGO_JOBS="$(D2B_RUST_QUOTA_GUEST)" D2B_RUST_NEXTEST_THREADS="$(D2B_RUST_QUOTA_GUEST)" bash tests/test-rust.sh guest-shell-runner
 
 rust-no-bash-ast:
-	@if [ "$(D2B_RUST_ROOT_PREREQS)" = 1 ]; then exit 0; fi; D2B_RUST_CARGO_JOBS="$(D2B_RUST_QUOTA_AST)" D2B_RUST_NEXTTEST_THREADS="$(D2B_RUST_QUOTA_AST)" bash tests/test-rust.sh no-bash-ast
+	@if [ "$(D2B_RUST_ROOT_PREREQS)" = 1 ]; then exit 0; fi; D2B_RUST_CARGO_JOBS="$(D2B_RUST_QUOTA_AST)" D2B_RUST_NEXTEST_THREADS="$(D2B_RUST_QUOTA_AST)" bash tests/test-rust.sh no-bash-ast
 
 rust-supply-chain:
-	@if [ "$(D2B_RUST_ROOT_PREREQS)" = 1 ]; then exit 0; fi; D2B_RUST_CARGO_JOBS="$(D2B_RUST_QUOTA_SUPPLY)" D2B_RUST_NEXTTEST_THREADS="$(D2B_RUST_QUOTA_SUPPLY)" bash tests/test-rust.sh supply-chain
+	@if [ "$(D2B_RUST_ROOT_PREREQS)" = 1 ]; then exit 0; fi; D2B_RUST_CARGO_JOBS="$(D2B_RUST_QUOTA_SUPPLY)" D2B_RUST_NEXTEST_THREADS="$(D2B_RUST_QUOTA_SUPPLY)" bash tests/test-rust.sh supply-chain
 
 
 

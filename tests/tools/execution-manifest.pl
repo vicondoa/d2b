@@ -34,6 +34,7 @@ use constant {
     O_RDWR      => 0x2,
     O_WRONLY   => 0x1,
     PR_SET_CHILD_SUBREAPER => 36,
+    MAX_INTERRUPT_RETRIES => 16,
     SEEK_SET    => 0,
     SHUTDOWN_GRACE_SECONDS => 10,
 };
@@ -73,6 +74,13 @@ sub sys_prctl     { syscall_number(157, 167) }
 sub fatal {
     my ($message) = @_;
     die ExecutionManifest::Fatal->new($message);
+}
+
+sub safe_error_message {
+    my ($error) = @_;
+    return "$error"
+        if ref($error) && eval { $error->isa("ExecutionManifest::Fatal") };
+    return "operation failed";
 }
 
 sub close_handle {
@@ -222,13 +230,23 @@ sub open_readable_directory {
 sub directory_entries {
     my ($dirfh) = @_;
     my @names;
+    my $interrupt_retries = 0;
     my $offset = 0;
     my $whence = SEEK_SET;
     syscall(sys_lseek(), fileno($dirfh), $offset, $whence);
     my $buffer = "\0" x 32768;
     while (1) {
         my $n = syscall(sys_getdents(), fileno($dirfh), $buffer, length($buffer));
-        fatal("fd-relative directory enumeration failed") if $n < 0;
+        if ($n < 0) {
+            if ($! == EINTR || $! == EAGAIN) {
+                ++$interrupt_retries;
+                fatal("fd-relative directory enumeration exceeded the interrupt retry limit")
+                    if $interrupt_retries > MAX_INTERRUPT_RETRIES;
+                next;
+            }
+            fatal("fd-relative directory enumeration failed");
+        }
+        $interrupt_retries = 0;
         last if $n == 0;
         $offset = 0;
         while ($offset < $n) {
@@ -298,32 +316,57 @@ sub establish_child_subreaper {
 sub write_all {
     my ($fh, $data) = @_;
     my $offset = 0;
+    my $interrupt_retries = 0;
     while ($offset < length($data)) {
         my $written = syswrite($fh, $data, length($data) - $offset, $offset);
-        fatal("could not write an execution-manifest evidence file")
-            unless defined($written) && $written > 0;
+        if (!defined($written)) {
+            if ($! == EINTR || $! == EAGAIN) {
+                ++$interrupt_retries;
+                fatal("execution-manifest evidence write exceeded the interrupt retry limit")
+                    if $interrupt_retries > MAX_INTERRUPT_RETRIES;
+                next;
+            }
+            fatal("could not write an execution-manifest evidence file");
+        }
+        fatal("could not write an execution-manifest evidence file") if $written == 0;
+        $interrupt_retries = 0;
         $offset += $written;
     }
 }
 
 sub drain_adopted_descendants {
     my ($process_control) = @_;
+    my $interrupt_retries = 0;
     while (1) {
         # Drain every adopted child already waiting. If one is still alive,
         # wait for it after process-group termination rather than publishing
         # evidence while a scheduler descendant remains unreaped.
         my $adopted = $process_control->{waitpid}->(-1, WNOHANG);
         if ($adopted > 0) {
+            $interrupt_retries = 0;
             next;
         }
         if ($adopted == 0) {
             my $reaped = $process_control->{waitpid}->(-1, 0);
-            next if $reaped > 0;
-            next if $reaped < 0 && $! == EINTR;
+            if ($reaped > 0) {
+                $interrupt_retries = 0;
+                next;
+            }
+            if ($reaped < 0 && $! == EINTR) {
+                ++$interrupt_retries;
+                fatal("scheduler descendant reap exceeded the interrupt retry limit")
+                    if $interrupt_retries > MAX_INTERRUPT_RETRIES;
+                next;
+            }
             last if $reaped < 0 && $! == ECHILD;
             last;
         }
-        next if $! == EINTR;
+        if ($! == EINTR) {
+            ++$interrupt_retries;
+            fatal("scheduler descendant reap exceeded the interrupt retry limit")
+                if $interrupt_retries > MAX_INTERRUPT_RETRIES;
+            next;
+        }
         last if $! == ECHILD;
         fatal("could not drain adopted scheduler descendants");
     }
@@ -489,10 +532,20 @@ sub read_fragment {
     fatal("could not open an execution-manifest fragment") unless defined($fh);
     verify_owner_mode($fh, "file", 0600, "execution-manifest fragment");
     my $data = "";
+    my $interrupt_retries = 0;
     while (1) {
         my $chunk = "";
         my $n = sysread($fh, $chunk, 65536);
-        fatal("could not read an execution-manifest fragment") unless defined($n);
+        if (!defined($n)) {
+            if ($! == EINTR || $! == EAGAIN) {
+                ++$interrupt_retries;
+                fatal("execution-manifest fragment read exceeded the interrupt retry limit")
+                    if $interrupt_retries > MAX_INTERRUPT_RETRIES;
+                next;
+            }
+            fatal("could not read an execution-manifest fragment");
+        }
+        $interrupt_retries = 0;
         last if $n == 0;
         $data .= $chunk;
     }
@@ -686,14 +739,16 @@ sub run_manifest_lifecycle {
         # far.
         close_handle($dirfh);
         close_handle($parent);
+        my $detail = safe_error_message($finalize_error);
         if ($status == 0) {
             print STDERR
-                "execution-manifest: finalization failed after scheduler success; "
+                "execution-manifest: $detail; finalization failed after scheduler success; "
                 . "execution evidence is unavailable; retry the target.\n";
             return 74;
         }
         print STDERR
-            "execution-manifest: finalization failed; preserving the scheduler status.\n";
+            "execution-manifest: $detail; finalization failed; "
+            . "preserving the scheduler status.\n";
     }
     return $status;
 }
@@ -747,7 +802,7 @@ sub main {
 unless (caller) {
     my $status = eval { main() };
     if ($@) {
-        print STDERR "execution-manifest: operation failed\n";
+        print STDERR "execution-manifest: " . safe_error_message($@) . "\n";
         exit 1;
     }
     exit $status;

@@ -43,11 +43,11 @@ fixture_contracts_only=0
 [ "$rust_mode" = fixture-contracts ] && fixture_contracts_only=1
 
 D2B_RUST_CARGO_JOBS=${D2B_RUST_CARGO_JOBS:-1}
-D2B_RUST_NEXTTEST_THREADS=${D2B_RUST_NEXTTEST_THREADS:-1}
+D2B_RUST_NEXTEST_THREADS=${D2B_RUST_NEXTEST_THREADS:-1}
 case "$D2B_RUST_CARGO_JOBS" in ''|*[!0-9]*) D2B_RUST_CARGO_JOBS=1 ;; esac
-case "$D2B_RUST_NEXTTEST_THREADS" in ''|*[!0-9]*) D2B_RUST_NEXTTEST_THREADS=1 ;; esac
+case "$D2B_RUST_NEXTEST_THREADS" in ''|*[!0-9]*) D2B_RUST_NEXTEST_THREADS=1 ;; esac
 [ "$D2B_RUST_CARGO_JOBS" -ge 1 ] || D2B_RUST_CARGO_JOBS=1
-[ "$D2B_RUST_NEXTTEST_THREADS" -ge 1 ] || D2B_RUST_NEXTTEST_THREADS=1
+[ "$D2B_RUST_NEXTEST_THREADS" -ge 1 ] || D2B_RUST_NEXTEST_THREADS=1
 export CARGO_BUILD_JOBS="$D2B_RUST_CARGO_JOBS"
 
 rust_current_surface="rust-$rust_mode"
@@ -440,7 +440,7 @@ run_nextest_companions() {
   local label="$1" manifest_path="$2"
   shift 2
   log "  --> cargo test --doc ($label)"
-  cargo test --jobs "$D2B_RUST_CARGO_JOBS" --doc --manifest-path "$manifest_path" "$@" -- --test-threads "$D2B_RUST_NEXTTEST_THREADS"
+  cargo test --jobs "$D2B_RUST_CARGO_JOBS" --doc --manifest-path "$manifest_path" "$@" -- --test-threads "$D2B_RUST_NEXTEST_THREADS"
   # Capture before looping. A process substitution hides its exit status from
   # `set -e`, so discovering through `done < <(...)` would let a failed listing
   # look like an empty one.
@@ -455,7 +455,7 @@ run_nextest_companions() {
     log "  --> cargo test -p $pkg --test $bin ($label; harness=false, not a nextest surface)"
     # Forward the same selectors the listing used, so the companion runs the
     # configuration that produced it rather than a default-feature rebuild.
-    cargo test --jobs "$D2B_RUST_CARGO_JOBS" --manifest-path "$manifest_path" "$@" -p "$pkg" --test "$bin" -- --test-threads "$D2B_RUST_NEXTTEST_THREADS"
+    cargo test --jobs "$D2B_RUST_CARGO_JOBS" --manifest-path "$manifest_path" "$@" -p "$pkg" --test "$bin" -- --test-threads "$D2B_RUST_NEXTEST_THREADS"
     ran=$((ran + 1))
   done <<<"$targets"
   if [ "$ran" -eq 0 ] && [ "$label" = "main workspace" ]; then
@@ -498,13 +498,13 @@ run_nextest_companions() {
 broker_stream_default() {
   cargo metadata --format-version 1 --manifest-path "$broker_manifest" >/dev/null
   rm -f -- "$broker_target_dir"/debug/deps/socket_activation-* 2>/dev/null || true
-  CARGO_TARGET_DIR="$broker_target_dir" cargo test --jobs "$D2B_RUST_CARGO_JOBS" --workspace --manifest-path "$broker_manifest" -- --test-threads "$D2B_RUST_NEXTTEST_THREADS"
+  CARGO_TARGET_DIR="$broker_target_dir" cargo test --jobs "$D2B_RUST_CARGO_JOBS" --workspace --manifest-path "$broker_manifest" -- --test-threads "$D2B_RUST_NEXTEST_THREADS"
 }
 broker_stream_layer1() {
-  CARGO_TARGET_DIR="$broker_layer1_target_dir" cargo test --jobs "$D2B_RUST_CARGO_JOBS" --workspace --manifest-path "$broker_manifest" --features layer1-bootstrap -- --test-threads "$D2B_RUST_NEXTTEST_THREADS"
+  CARGO_TARGET_DIR="$broker_layer1_target_dir" cargo test --jobs "$D2B_RUST_CARGO_JOBS" --workspace --manifest-path "$broker_manifest" --features layer1-bootstrap -- --test-threads "$D2B_RUST_NEXTEST_THREADS"
 }
 broker_stream_fakebackends() {
-  CARGO_TARGET_DIR="$broker_fakebackends_target_dir" cargo test --jobs "$D2B_RUST_CARGO_JOBS" --workspace --manifest-path "$broker_manifest" --features fake-backends -- --test-threads "$D2B_RUST_NEXTTEST_THREADS"
+  CARGO_TARGET_DIR="$broker_fakebackends_target_dir" cargo test --jobs "$D2B_RUST_CARGO_JOBS" --workspace --manifest-path "$broker_manifest" --features fake-backends -- --test-threads "$D2B_RUST_NEXTEST_THREADS"
 }
 broker_streams=(default layer1 fakebackends)
 
@@ -512,7 +512,7 @@ guest_shell_runner_gate() {
   cargo metadata --format-version 1 --manifest-path "$guest_shell_runner_manifest" >/dev/null
   CARGO_TARGET_DIR="$guest_shell_runner_target_dir" cargo fmt --manifest-path "$guest_shell_runner_manifest" --all --check
   CARGO_TARGET_DIR="$guest_shell_runner_target_dir" cargo clippy --jobs "$D2B_RUST_CARGO_JOBS" --manifest-path "$guest_shell_runner_manifest" --workspace --all-targets --features real-libshpool -- -D warnings
-  CARGO_TARGET_DIR="$guest_shell_runner_target_dir" cargo nextest run --test-threads "$D2B_RUST_NEXTTEST_THREADS" --manifest-path "$guest_shell_runner_manifest" --workspace --features real-libshpool
+  CARGO_TARGET_DIR="$guest_shell_runner_target_dir" cargo nextest run --test-threads "$D2B_RUST_NEXTEST_THREADS" --manifest-path "$guest_shell_runner_manifest" --workspace --features real-libshpool
   CARGO_TARGET_DIR="$guest_shell_runner_target_dir" run_nextest_companions \
     "guest shell runner" "$guest_shell_runner_manifest" --workspace --features real-libshpool
 }
@@ -543,7 +543,7 @@ run_fixture_contract_tests() {
   log "--> cargo nextest run -p d2b-contract-tests (realized minimal + eval-rendered full artifacts)"
   D2B_FIXTURES="$contract_fixtures" D2B_FIXTURES_FULL="$contract_fixtures_full" \
   CARGO_TARGET_DIR="$fixture_target_dir" \
-    cargo nextest run --test-threads "$D2B_RUST_NEXTTEST_THREADS" --manifest-path "$manifest" -p d2b-contract-tests \
+    cargo nextest run --test-threads "$D2B_RUST_NEXTEST_THREADS" --manifest-path "$manifest" -p d2b-contract-tests \
       -E 'not binary(video_binary_contract)'
   D2B_FIXTURES="$contract_fixtures" D2B_FIXTURES_FULL="$contract_fixtures_full" \
   CARGO_TARGET_DIR="$fixture_target_dir" \
@@ -580,7 +580,7 @@ run_cli_contract_tests() {
   D2B_FIXTURES="$fixture_path" \
   D2B_TEST_D2BD_BIN="$d2bd_bin" \
   CARGO_TARGET_DIR="$fixture_target_dir" \
-    cargo nextest run --test-threads "$D2B_RUST_NEXTTEST_THREADS" --manifest-path "$manifest" -p d2b --tests
+    cargo nextest run --test-threads "$D2B_RUST_NEXTEST_THREADS" --manifest-path "$manifest" -p d2b --tests
   rust_surface_success rust-cli-contract-tests
   ok "d2b --tests (CLI-contract layer)"
 }
@@ -637,7 +637,7 @@ ok "cargo clippy"
 rust_surface_start rust-main-workspace-tests
 log "--> cargo nextest run --workspace ${workspace_test_excludes[*]}"
 workspace_test_started=$SECONDS
-CARGO_TARGET_DIR="$workspace_target_dir" cargo nextest run --test-threads "$D2B_RUST_NEXTTEST_THREADS" --locked --manifest-path "$manifest" --workspace "${workspace_test_excludes[@]}"
+CARGO_TARGET_DIR="$workspace_target_dir" cargo nextest run --test-threads "$D2B_RUST_NEXTEST_THREADS" --locked --manifest-path "$manifest" --workspace "${workspace_test_excludes[@]}"
 CARGO_TARGET_DIR="$workspace_target_dir" run_nextest_companions \
   "main workspace" "$manifest" --locked --workspace "${workspace_test_excludes[@]}"
 ok "workspace tests (duration: $((SECONDS - workspace_test_started))s)"
