@@ -64,6 +64,11 @@ pub fn opaque_digest(value: &str) -> String {
 
 /// A durable-audit callback used by the store transaction boundary.
 pub trait DurableMutationAudit: Send + Sync {
+    /// Whether this port owns a durable sink rather than an intentional no-op.
+    fn enabled(&self) -> bool {
+        true
+    }
+
     /// Return the predecessor hash for the next record.
     fn previous_hash(&self) -> Result<AuditHash, AuditRecordError> {
         Ok(genesis_hash())
@@ -78,6 +83,10 @@ pub trait DurableMutationAudit: Send + Sync {
 pub struct NoopMutationAudit;
 
 impl DurableMutationAudit for NoopMutationAudit {
+    fn enabled(&self) -> bool {
+        false
+    }
+
     fn append_before_commit(&self, _record: &AuditRecord) -> Result<(), AuditRecordError> {
         Ok(())
     }

@@ -878,6 +878,9 @@ impl WriterActor {
     }
 
     fn append_mutation_audits(&self, requests: &[WriteRequest]) -> Result<(), StoreError> {
+        if !self.audit.enabled() {
+            return Ok(());
+        }
         let meta = current_meta(&self.database)?;
         let resulting_revision = meta
             .current_revision
