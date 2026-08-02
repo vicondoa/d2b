@@ -16,6 +16,9 @@ _d2b() {
             ",$1")
                 cmd="d2b"
                 ;;
+            d2b,activation)
+                cmd="d2b__subcmd__activation"
+                ;;
             d2b,audio)
                 cmd="d2b__subcmd__audio"
                 ;;
@@ -25,62 +28,74 @@ _d2b() {
             d2b,auth)
                 cmd="d2b__subcmd__auth"
                 ;;
-            d2b,boot)
-                cmd="d2b__subcmd__boot"
-                ;;
-            d2b,build)
-                cmd="d2b__subcmd__build"
-                ;;
             d2b,clipboard)
                 cmd="d2b__subcmd__clipboard"
                 ;;
-            d2b,config)
-                cmd="d2b__subcmd__config"
+            d2b,complete)
+                cmd="d2b__subcmd__complete"
                 ;;
-            d2b,console)
-                cmd="d2b__subcmd__console"
+            d2b,create)
+                cmd="d2b__subcmd__create"
                 ;;
-            d2b,down)
-                cmd="d2b__subcmd__down"
+            d2b,credential)
+                cmd="d2b__subcmd__credential"
                 ;;
-            d2b,gc)
-                cmd="d2b__subcmd__gc"
+            d2b,delete)
+                cmd="d2b__subcmd__delete"
                 ;;
-            d2b,generations)
-                cmd="d2b__subcmd__generations"
+            d2b,device)
+                cmd="d2b__subcmd__device"
                 ;;
-            d2b,help)
-                cmd="d2b__subcmd__help"
+            d2b,display)
+                cmd="d2b__subcmd__display"
+                ;;
+            d2b,emergency-policy)
+                cmd="d2b__subcmd__emergency__subcmd__policy"
+                ;;
+            d2b,endpoint)
+                cmd="d2b__subcmd__endpoint"
+                ;;
+            d2b,exec)
+                cmd="d2b__subcmd__exec"
+                ;;
+            d2b,export)
+                cmd="d2b__subcmd__export"
+                ;;
+            d2b,get)
+                cmd="d2b__subcmd__get"
+                ;;
+            d2b,guest)
+                cmd="d2b__subcmd__guest"
                 ;;
             d2b,host)
                 cmd="d2b__subcmd__host"
                 ;;
-            d2b,keys)
-                cmd="d2b__subcmd__keys"
-                ;;
-            d2b,launch)
-                cmd="d2b__subcmd__launch"
+            d2b,import)
+                cmd="d2b__subcmd__import"
                 ;;
             d2b,list)
                 cmd="d2b__subcmd__list"
                 ;;
-            d2b,migrate)
-                cmd="d2b__subcmd__migrate"
+            d2b,network)
+                cmd="d2b__subcmd__network"
                 ;;
             d2b,op)
                 cmd="d2b__subcmd__op"
                 ;;
-            d2b,realm)
-                cmd="d2b__subcmd__realm"
+            d2b,process)
+                cmd="d2b__subcmd__process"
                 ;;
-            d2b,restart)
-                cmd="d2b__subcmd__restart"
+            d2b,provider)
+                cmd="d2b__subcmd__provider"
                 ;;
-            d2b,rollback)
-                cmd="d2b__subcmd__rollback"
+            d2b,quota)
+                cmd="d2b__subcmd__quota"
                 ;;
-            d2b,rotate-known-host)
-                cmd="d2b__subcmd__rotate__subcmd__known__subcmd__host"
+            d2b,reconcile)
+                cmd="d2b__subcmd__reconcile"
+                ;;
+            d2b,resource)
+                cmd="d2b__subcmd__resource"
                 ;;
             d2b,shell)
                 cmd="d2b__subcmd__shell"
@@ -88,344 +103,347 @@ _d2b() {
             d2b,status)
                 cmd="d2b__subcmd__status"
                 ;;
-            d2b,store)
-                cmd="d2b__subcmd__store"
+            d2b,update-spec)
+                cmd="d2b__subcmd__update__subcmd__spec"
                 ;;
-            d2b,switch)
-                cmd="d2b__subcmd__switch"
+            d2b,upgrade)
+                cmd="d2b__subcmd__upgrade"
                 ;;
-            d2b,test)
-                cmd="d2b__subcmd__test"
+            d2b,user)
+                cmd="d2b__subcmd__user"
                 ;;
-            d2b,trust)
-                cmd="d2b__subcmd__trust"
+            d2b,volume)
+                cmd="d2b__subcmd__volume"
                 ;;
-            d2b,up)
-                cmd="d2b__subcmd__up"
+            d2b,watch)
+                cmd="d2b__subcmd__watch"
                 ;;
-            d2b,usb)
-                cmd="d2b__subcmd__usb"
+            d2b,zone)
+                cmd="d2b__subcmd__zone"
                 ;;
-            d2b,vm)
-                cmd="d2b__subcmd__vm"
+            d2b__subcmd__activation,apply)
+                cmd="d2b__subcmd__activation__subcmd__apply"
                 ;;
-            d2b__subcmd__audio,help)
-                cmd="d2b__subcmd__audio__subcmd__help"
+            d2b__subcmd__activation,boot)
+                cmd="d2b__subcmd__activation__subcmd__boot"
                 ;;
-            d2b__subcmd__audio,mic)
-                cmd="d2b__subcmd__audio__subcmd__mic"
+            d2b__subcmd__activation,build)
+                cmd="d2b__subcmd__activation__subcmd__build"
                 ;;
-            d2b__subcmd__audio,off)
-                cmd="d2b__subcmd__audio__subcmd__off"
+            d2b__subcmd__activation,config)
+                cmd="d2b__subcmd__activation__subcmd__config"
                 ;;
-            d2b__subcmd__audio,speaker)
-                cmd="d2b__subcmd__audio__subcmd__speaker"
+            d2b__subcmd__activation,gc)
+                cmd="d2b__subcmd__activation__subcmd__gc"
                 ;;
-            d2b__subcmd__audio,status)
-                cmd="d2b__subcmd__audio__subcmd__status"
+            d2b__subcmd__activation,generations)
+                cmd="d2b__subcmd__activation__subcmd__generations"
                 ;;
-            d2b__subcmd__audio__subcmd__help,help)
-                cmd="d2b__subcmd__audio__subcmd__help__subcmd__help"
+            d2b__subcmd__activation,keys)
+                cmd="d2b__subcmd__activation__subcmd__keys"
                 ;;
-            d2b__subcmd__audio__subcmd__help,mic)
-                cmd="d2b__subcmd__audio__subcmd__help__subcmd__mic"
+            d2b__subcmd__activation,migrate)
+                cmd="d2b__subcmd__activation__subcmd__migrate"
                 ;;
-            d2b__subcmd__audio__subcmd__help,off)
-                cmd="d2b__subcmd__audio__subcmd__help__subcmd__off"
+            d2b__subcmd__activation,rollback)
+                cmd="d2b__subcmd__activation__subcmd__rollback"
                 ;;
-            d2b__subcmd__audio__subcmd__help,speaker)
-                cmd="d2b__subcmd__audio__subcmd__help__subcmd__speaker"
+            d2b__subcmd__activation,rotate-known-host)
+                cmd="d2b__subcmd__activation__subcmd__rotate__subcmd__known__subcmd__host"
                 ;;
-            d2b__subcmd__audio__subcmd__help,status)
-                cmd="d2b__subcmd__audio__subcmd__help__subcmd__status"
+            d2b__subcmd__activation,switch)
+                cmd="d2b__subcmd__activation__subcmd__switch"
                 ;;
-            d2b__subcmd__auth,help)
-                cmd="d2b__subcmd__auth__subcmd__help"
+            d2b__subcmd__activation,test)
+                cmd="d2b__subcmd__activation__subcmd__test"
+                ;;
+            d2b__subcmd__activation,trust)
+                cmd="d2b__subcmd__activation__subcmd__trust"
+                ;;
+            d2b__subcmd__activation__subcmd__config,approve)
+                cmd="d2b__subcmd__activation__subcmd__config__subcmd__approve"
+                ;;
+            d2b__subcmd__activation__subcmd__config,diff)
+                cmd="d2b__subcmd__activation__subcmd__config__subcmd__diff"
+                ;;
+            d2b__subcmd__activation__subcmd__config,reject)
+                cmd="d2b__subcmd__activation__subcmd__config__subcmd__reject"
+                ;;
+            d2b__subcmd__activation__subcmd__config,status)
+                cmd="d2b__subcmd__activation__subcmd__config__subcmd__status"
+                ;;
+            d2b__subcmd__activation__subcmd__config,sync)
+                cmd="d2b__subcmd__activation__subcmd__config__subcmd__sync"
+                ;;
+            d2b__subcmd__activation__subcmd__keys,list)
+                cmd="d2b__subcmd__activation__subcmd__keys__subcmd__list"
+                ;;
+            d2b__subcmd__activation__subcmd__keys,rotate)
+                cmd="d2b__subcmd__activation__subcmd__keys__subcmd__rotate"
+                ;;
+            d2b__subcmd__activation__subcmd__keys,show)
+                cmd="d2b__subcmd__activation__subcmd__keys__subcmd__show"
                 ;;
             d2b__subcmd__auth,status)
                 cmd="d2b__subcmd__auth__subcmd__status"
                 ;;
-            d2b__subcmd__auth__subcmd__help,help)
-                cmd="d2b__subcmd__auth__subcmd__help__subcmd__help"
+            d2b__subcmd__credential,create)
+                cmd="d2b__subcmd__credential__subcmd__create"
                 ;;
-            d2b__subcmd__auth__subcmd__help,status)
-                cmd="d2b__subcmd__auth__subcmd__help__subcmd__status"
+            d2b__subcmd__credential,delete)
+                cmd="d2b__subcmd__credential__subcmd__delete"
                 ;;
-            d2b__subcmd__clipboard,arm)
-                cmd="d2b__subcmd__clipboard__subcmd__arm"
+            d2b__subcmd__credential,get)
+                cmd="d2b__subcmd__credential__subcmd__get"
                 ;;
-            d2b__subcmd__clipboard,help)
-                cmd="d2b__subcmd__clipboard__subcmd__help"
+            d2b__subcmd__credential,list)
+                cmd="d2b__subcmd__credential__subcmd__list"
                 ;;
-            d2b__subcmd__clipboard__subcmd__help,arm)
-                cmd="d2b__subcmd__clipboard__subcmd__help__subcmd__arm"
+            d2b__subcmd__credential,reconcile)
+                cmd="d2b__subcmd__credential__subcmd__reconcile"
                 ;;
-            d2b__subcmd__clipboard__subcmd__help,help)
-                cmd="d2b__subcmd__clipboard__subcmd__help__subcmd__help"
+            d2b__subcmd__credential,security-key)
+                cmd="d2b__subcmd__credential__subcmd__security__subcmd__key"
                 ;;
-            d2b__subcmd__config,approve)
-                cmd="d2b__subcmd__config__subcmd__approve"
+            d2b__subcmd__credential,status)
+                cmd="d2b__subcmd__credential__subcmd__status"
                 ;;
-            d2b__subcmd__config,diff)
-                cmd="d2b__subcmd__config__subcmd__diff"
+            d2b__subcmd__credential,update-spec)
+                cmd="d2b__subcmd__credential__subcmd__update__subcmd__spec"
                 ;;
-            d2b__subcmd__config,help)
-                cmd="d2b__subcmd__config__subcmd__help"
+            d2b__subcmd__credential,upgrade)
+                cmd="d2b__subcmd__credential__subcmd__upgrade"
                 ;;
-            d2b__subcmd__config,reject)
-                cmd="d2b__subcmd__config__subcmd__reject"
+            d2b__subcmd__credential,usb)
+                cmd="d2b__subcmd__credential__subcmd__usb"
                 ;;
-            d2b__subcmd__config,status)
-                cmd="d2b__subcmd__config__subcmd__status"
+            d2b__subcmd__credential,verify)
+                cmd="d2b__subcmd__credential__subcmd__verify"
                 ;;
-            d2b__subcmd__config,sync)
-                cmd="d2b__subcmd__config__subcmd__sync"
+            d2b__subcmd__credential,watch)
+                cmd="d2b__subcmd__credential__subcmd__watch"
                 ;;
-            d2b__subcmd__config__subcmd__help,approve)
-                cmd="d2b__subcmd__config__subcmd__help__subcmd__approve"
+            d2b__subcmd__credential__subcmd__security__subcmd__key,cancel)
+                cmd="d2b__subcmd__credential__subcmd__security__subcmd__key__subcmd__cancel"
                 ;;
-            d2b__subcmd__config__subcmd__help,diff)
-                cmd="d2b__subcmd__config__subcmd__help__subcmd__diff"
+            d2b__subcmd__credential__subcmd__security__subcmd__key,sessions)
+                cmd="d2b__subcmd__credential__subcmd__security__subcmd__key__subcmd__sessions"
                 ;;
-            d2b__subcmd__config__subcmd__help,help)
-                cmd="d2b__subcmd__config__subcmd__help__subcmd__help"
+            d2b__subcmd__credential__subcmd__security__subcmd__key,status)
+                cmd="d2b__subcmd__credential__subcmd__security__subcmd__key__subcmd__status"
                 ;;
-            d2b__subcmd__config__subcmd__help,reject)
-                cmd="d2b__subcmd__config__subcmd__help__subcmd__reject"
+            d2b__subcmd__credential__subcmd__security__subcmd__key,test)
+                cmd="d2b__subcmd__credential__subcmd__security__subcmd__key__subcmd__test"
                 ;;
-            d2b__subcmd__config__subcmd__help,status)
-                cmd="d2b__subcmd__config__subcmd__help__subcmd__status"
+            d2b__subcmd__credential__subcmd__usb,attach)
+                cmd="d2b__subcmd__credential__subcmd__usb__subcmd__attach"
                 ;;
-            d2b__subcmd__config__subcmd__help,sync)
-                cmd="d2b__subcmd__config__subcmd__help__subcmd__sync"
+            d2b__subcmd__credential__subcmd__usb,detach)
+                cmd="d2b__subcmd__credential__subcmd__usb__subcmd__detach"
                 ;;
-            d2b__subcmd__help,audio)
-                cmd="d2b__subcmd__help__subcmd__audio"
+            d2b__subcmd__credential__subcmd__usb,probe)
+                cmd="d2b__subcmd__credential__subcmd__usb__subcmd__probe"
                 ;;
-            d2b__subcmd__help,audit)
-                cmd="d2b__subcmd__help__subcmd__audit"
+            d2b__subcmd__device,create)
+                cmd="d2b__subcmd__device__subcmd__create"
                 ;;
-            d2b__subcmd__help,auth)
-                cmd="d2b__subcmd__help__subcmd__auth"
+            d2b__subcmd__device,delete)
+                cmd="d2b__subcmd__device__subcmd__delete"
                 ;;
-            d2b__subcmd__help,boot)
-                cmd="d2b__subcmd__help__subcmd__boot"
+            d2b__subcmd__device,get)
+                cmd="d2b__subcmd__device__subcmd__get"
                 ;;
-            d2b__subcmd__help,build)
-                cmd="d2b__subcmd__help__subcmd__build"
+            d2b__subcmd__device,list)
+                cmd="d2b__subcmd__device__subcmd__list"
                 ;;
-            d2b__subcmd__help,clipboard)
-                cmd="d2b__subcmd__help__subcmd__clipboard"
+            d2b__subcmd__device,reconcile)
+                cmd="d2b__subcmd__device__subcmd__reconcile"
                 ;;
-            d2b__subcmd__help,config)
-                cmd="d2b__subcmd__help__subcmd__config"
+            d2b__subcmd__device,security-key)
+                cmd="d2b__subcmd__device__subcmd__security__subcmd__key"
                 ;;
-            d2b__subcmd__help,console)
-                cmd="d2b__subcmd__help__subcmd__console"
+            d2b__subcmd__device,status)
+                cmd="d2b__subcmd__device__subcmd__status"
                 ;;
-            d2b__subcmd__help,down)
-                cmd="d2b__subcmd__help__subcmd__down"
+            d2b__subcmd__device,update-spec)
+                cmd="d2b__subcmd__device__subcmd__update__subcmd__spec"
                 ;;
-            d2b__subcmd__help,gc)
-                cmd="d2b__subcmd__help__subcmd__gc"
+            d2b__subcmd__device,upgrade)
+                cmd="d2b__subcmd__device__subcmd__upgrade"
                 ;;
-            d2b__subcmd__help,generations)
-                cmd="d2b__subcmd__help__subcmd__generations"
+            d2b__subcmd__device,usb)
+                cmd="d2b__subcmd__device__subcmd__usb"
                 ;;
-            d2b__subcmd__help,help)
-                cmd="d2b__subcmd__help__subcmd__help"
+            d2b__subcmd__device,verify)
+                cmd="d2b__subcmd__device__subcmd__verify"
                 ;;
-            d2b__subcmd__help,host)
-                cmd="d2b__subcmd__help__subcmd__host"
+            d2b__subcmd__device,watch)
+                cmd="d2b__subcmd__device__subcmd__watch"
                 ;;
-            d2b__subcmd__help,keys)
-                cmd="d2b__subcmd__help__subcmd__keys"
+            d2b__subcmd__device__subcmd__security__subcmd__key,cancel)
+                cmd="d2b__subcmd__device__subcmd__security__subcmd__key__subcmd__cancel"
                 ;;
-            d2b__subcmd__help,launch)
-                cmd="d2b__subcmd__help__subcmd__launch"
+            d2b__subcmd__device__subcmd__security__subcmd__key,sessions)
+                cmd="d2b__subcmd__device__subcmd__security__subcmd__key__subcmd__sessions"
                 ;;
-            d2b__subcmd__help,list)
-                cmd="d2b__subcmd__help__subcmd__list"
+            d2b__subcmd__device__subcmd__security__subcmd__key,status)
+                cmd="d2b__subcmd__device__subcmd__security__subcmd__key__subcmd__status"
                 ;;
-            d2b__subcmd__help,migrate)
-                cmd="d2b__subcmd__help__subcmd__migrate"
+            d2b__subcmd__device__subcmd__security__subcmd__key,test)
+                cmd="d2b__subcmd__device__subcmd__security__subcmd__key__subcmd__test"
                 ;;
-            d2b__subcmd__help,op)
-                cmd="d2b__subcmd__help__subcmd__op"
+            d2b__subcmd__device__subcmd__usb,attach)
+                cmd="d2b__subcmd__device__subcmd__usb__subcmd__attach"
                 ;;
-            d2b__subcmd__help,realm)
-                cmd="d2b__subcmd__help__subcmd__realm"
+            d2b__subcmd__device__subcmd__usb,detach)
+                cmd="d2b__subcmd__device__subcmd__usb__subcmd__detach"
                 ;;
-            d2b__subcmd__help,restart)
-                cmd="d2b__subcmd__help__subcmd__restart"
+            d2b__subcmd__device__subcmd__usb,probe)
+                cmd="d2b__subcmd__device__subcmd__usb__subcmd__probe"
                 ;;
-            d2b__subcmd__help,rollback)
-                cmd="d2b__subcmd__help__subcmd__rollback"
+            d2b__subcmd__emergency__subcmd__policy,create)
+                cmd="d2b__subcmd__emergency__subcmd__policy__subcmd__create"
                 ;;
-            d2b__subcmd__help,rotate-known-host)
-                cmd="d2b__subcmd__help__subcmd__rotate__subcmd__known__subcmd__host"
+            d2b__subcmd__emergency__subcmd__policy,delete)
+                cmd="d2b__subcmd__emergency__subcmd__policy__subcmd__delete"
                 ;;
-            d2b__subcmd__help,shell)
-                cmd="d2b__subcmd__help__subcmd__shell"
+            d2b__subcmd__emergency__subcmd__policy,get)
+                cmd="d2b__subcmd__emergency__subcmd__policy__subcmd__get"
                 ;;
-            d2b__subcmd__help,status)
-                cmd="d2b__subcmd__help__subcmd__status"
+            d2b__subcmd__emergency__subcmd__policy,list)
+                cmd="d2b__subcmd__emergency__subcmd__policy__subcmd__list"
                 ;;
-            d2b__subcmd__help,store)
-                cmd="d2b__subcmd__help__subcmd__store"
+            d2b__subcmd__emergency__subcmd__policy,reconcile)
+                cmd="d2b__subcmd__emergency__subcmd__policy__subcmd__reconcile"
                 ;;
-            d2b__subcmd__help,switch)
-                cmd="d2b__subcmd__help__subcmd__switch"
+            d2b__subcmd__emergency__subcmd__policy,security-key)
+                cmd="d2b__subcmd__emergency__subcmd__policy__subcmd__security__subcmd__key"
                 ;;
-            d2b__subcmd__help,test)
-                cmd="d2b__subcmd__help__subcmd__test"
+            d2b__subcmd__emergency__subcmd__policy,status)
+                cmd="d2b__subcmd__emergency__subcmd__policy__subcmd__status"
                 ;;
-            d2b__subcmd__help,trust)
-                cmd="d2b__subcmd__help__subcmd__trust"
+            d2b__subcmd__emergency__subcmd__policy,update-spec)
+                cmd="d2b__subcmd__emergency__subcmd__policy__subcmd__update__subcmd__spec"
                 ;;
-            d2b__subcmd__help,up)
-                cmd="d2b__subcmd__help__subcmd__up"
+            d2b__subcmd__emergency__subcmd__policy,upgrade)
+                cmd="d2b__subcmd__emergency__subcmd__policy__subcmd__upgrade"
                 ;;
-            d2b__subcmd__help,usb)
-                cmd="d2b__subcmd__help__subcmd__usb"
+            d2b__subcmd__emergency__subcmd__policy,usb)
+                cmd="d2b__subcmd__emergency__subcmd__policy__subcmd__usb"
                 ;;
-            d2b__subcmd__help,vm)
-                cmd="d2b__subcmd__help__subcmd__vm"
+            d2b__subcmd__emergency__subcmd__policy,verify)
+                cmd="d2b__subcmd__emergency__subcmd__policy__subcmd__verify"
                 ;;
-            d2b__subcmd__help__subcmd__audio,mic)
-                cmd="d2b__subcmd__help__subcmd__audio__subcmd__mic"
+            d2b__subcmd__emergency__subcmd__policy,watch)
+                cmd="d2b__subcmd__emergency__subcmd__policy__subcmd__watch"
                 ;;
-            d2b__subcmd__help__subcmd__audio,off)
-                cmd="d2b__subcmd__help__subcmd__audio__subcmd__off"
+            d2b__subcmd__emergency__subcmd__policy__subcmd__security__subcmd__key,cancel)
+                cmd="d2b__subcmd__emergency__subcmd__policy__subcmd__security__subcmd__key__subcmd__cancel"
                 ;;
-            d2b__subcmd__help__subcmd__audio,speaker)
-                cmd="d2b__subcmd__help__subcmd__audio__subcmd__speaker"
+            d2b__subcmd__emergency__subcmd__policy__subcmd__security__subcmd__key,sessions)
+                cmd="d2b__subcmd__emergency__subcmd__policy__subcmd__security__subcmd__key__subcmd__sessions"
                 ;;
-            d2b__subcmd__help__subcmd__audio,status)
-                cmd="d2b__subcmd__help__subcmd__audio__subcmd__status"
+            d2b__subcmd__emergency__subcmd__policy__subcmd__security__subcmd__key,status)
+                cmd="d2b__subcmd__emergency__subcmd__policy__subcmd__security__subcmd__key__subcmd__status"
                 ;;
-            d2b__subcmd__help__subcmd__auth,status)
-                cmd="d2b__subcmd__help__subcmd__auth__subcmd__status"
+            d2b__subcmd__emergency__subcmd__policy__subcmd__security__subcmd__key,test)
+                cmd="d2b__subcmd__emergency__subcmd__policy__subcmd__security__subcmd__key__subcmd__test"
                 ;;
-            d2b__subcmd__help__subcmd__clipboard,arm)
-                cmd="d2b__subcmd__help__subcmd__clipboard__subcmd__arm"
+            d2b__subcmd__emergency__subcmd__policy__subcmd__usb,attach)
+                cmd="d2b__subcmd__emergency__subcmd__policy__subcmd__usb__subcmd__attach"
                 ;;
-            d2b__subcmd__help__subcmd__config,approve)
-                cmd="d2b__subcmd__help__subcmd__config__subcmd__approve"
+            d2b__subcmd__emergency__subcmd__policy__subcmd__usb,detach)
+                cmd="d2b__subcmd__emergency__subcmd__policy__subcmd__usb__subcmd__detach"
                 ;;
-            d2b__subcmd__help__subcmd__config,diff)
-                cmd="d2b__subcmd__help__subcmd__config__subcmd__diff"
+            d2b__subcmd__emergency__subcmd__policy__subcmd__usb,probe)
+                cmd="d2b__subcmd__emergency__subcmd__policy__subcmd__usb__subcmd__probe"
                 ;;
-            d2b__subcmd__help__subcmd__config,reject)
-                cmd="d2b__subcmd__help__subcmd__config__subcmd__reject"
+            d2b__subcmd__endpoint,get)
+                cmd="d2b__subcmd__endpoint__subcmd__get"
                 ;;
-            d2b__subcmd__help__subcmd__config,status)
-                cmd="d2b__subcmd__help__subcmd__config__subcmd__status"
+            d2b__subcmd__endpoint,list)
+                cmd="d2b__subcmd__endpoint__subcmd__list"
                 ;;
-            d2b__subcmd__help__subcmd__config,sync)
-                cmd="d2b__subcmd__help__subcmd__config__subcmd__sync"
+            d2b__subcmd__endpoint,resolve)
+                cmd="d2b__subcmd__endpoint__subcmd__resolve"
                 ;;
-            d2b__subcmd__help__subcmd__host,check)
-                cmd="d2b__subcmd__help__subcmd__host__subcmd__check"
+            d2b__subcmd__endpoint,status)
+                cmd="d2b__subcmd__endpoint__subcmd__status"
                 ;;
-            d2b__subcmd__help__subcmd__host,destroy)
-                cmd="d2b__subcmd__help__subcmd__host__subcmd__destroy"
+            d2b__subcmd__endpoint,watch)
+                cmd="d2b__subcmd__endpoint__subcmd__watch"
                 ;;
-            d2b__subcmd__help__subcmd__host,doctor)
-                cmd="d2b__subcmd__help__subcmd__host__subcmd__doctor"
+            d2b__subcmd__exec,attach)
+                cmd="d2b__subcmd__exec__subcmd__attach"
                 ;;
-            d2b__subcmd__help__subcmd__host,install)
-                cmd="d2b__subcmd__help__subcmd__host__subcmd__install"
+            d2b__subcmd__exec,kill)
+                cmd="d2b__subcmd__exec__subcmd__kill"
                 ;;
-            d2b__subcmd__help__subcmd__host,migrate-storage)
-                cmd="d2b__subcmd__help__subcmd__host__subcmd__migrate__subcmd__storage"
+            d2b__subcmd__exec,list)
+                cmd="d2b__subcmd__exec__subcmd__list"
                 ;;
-            d2b__subcmd__help__subcmd__host,prepare)
-                cmd="d2b__subcmd__help__subcmd__host__subcmd__prepare"
+            d2b__subcmd__exec,logs)
+                cmd="d2b__subcmd__exec__subcmd__logs"
                 ;;
-            d2b__subcmd__help__subcmd__host,reconcile)
-                cmd="d2b__subcmd__help__subcmd__host__subcmd__reconcile"
+            d2b__subcmd__exec,run)
+                cmd="d2b__subcmd__exec__subcmd__run"
                 ;;
-            d2b__subcmd__help__subcmd__host,validate)
-                cmd="d2b__subcmd__help__subcmd__host__subcmd__validate"
+            d2b__subcmd__exec,status)
+                cmd="d2b__subcmd__exec__subcmd__status"
                 ;;
-            d2b__subcmd__help__subcmd__keys,list)
-                cmd="d2b__subcmd__help__subcmd__keys__subcmd__list"
+            d2b__subcmd__exec,wait)
+                cmd="d2b__subcmd__exec__subcmd__wait"
                 ;;
-            d2b__subcmd__help__subcmd__keys,rotate)
-                cmd="d2b__subcmd__help__subcmd__keys__subcmd__rotate"
+            d2b__subcmd__export,create)
+                cmd="d2b__subcmd__export__subcmd__create"
                 ;;
-            d2b__subcmd__help__subcmd__keys,show)
-                cmd="d2b__subcmd__help__subcmd__keys__subcmd__show"
+            d2b__subcmd__export,delete)
+                cmd="d2b__subcmd__export__subcmd__delete"
                 ;;
-            d2b__subcmd__help__subcmd__op,inspect)
-                cmd="d2b__subcmd__help__subcmd__op__subcmd__inspect"
+            d2b__subcmd__export,get)
+                cmd="d2b__subcmd__export__subcmd__get"
                 ;;
-            d2b__subcmd__help__subcmd__realm,enter)
-                cmd="d2b__subcmd__help__subcmd__realm__subcmd__enter"
+            d2b__subcmd__export,list)
+                cmd="d2b__subcmd__export__subcmd__list"
                 ;;
-            d2b__subcmd__help__subcmd__realm,inspect)
-                cmd="d2b__subcmd__help__subcmd__realm__subcmd__inspect"
+            d2b__subcmd__export,status)
+                cmd="d2b__subcmd__export__subcmd__status"
                 ;;
-            d2b__subcmd__help__subcmd__realm,list)
-                cmd="d2b__subcmd__help__subcmd__realm__subcmd__list"
+            d2b__subcmd__export,update-spec)
+                cmd="d2b__subcmd__export__subcmd__update__subcmd__spec"
                 ;;
-            d2b__subcmd__help__subcmd__realm,run)
-                cmd="d2b__subcmd__help__subcmd__realm__subcmd__run"
+            d2b__subcmd__export,watch)
+                cmd="d2b__subcmd__export__subcmd__watch"
                 ;;
-            d2b__subcmd__help__subcmd__store,verify)
-                cmd="d2b__subcmd__help__subcmd__store__subcmd__verify"
+            d2b__subcmd__guest,console)
+                cmd="d2b__subcmd__guest__subcmd__console"
                 ;;
-            d2b__subcmd__help__subcmd__usb,attach)
-                cmd="d2b__subcmd__help__subcmd__usb__subcmd__attach"
+            d2b__subcmd__guest,create)
+                cmd="d2b__subcmd__guest__subcmd__create"
                 ;;
-            d2b__subcmd__help__subcmd__usb,detach)
-                cmd="d2b__subcmd__help__subcmd__usb__subcmd__detach"
+            d2b__subcmd__guest,delete)
+                cmd="d2b__subcmd__guest__subcmd__delete"
                 ;;
-            d2b__subcmd__help__subcmd__usb,probe)
-                cmd="d2b__subcmd__help__subcmd__usb__subcmd__probe"
+            d2b__subcmd__guest,get)
+                cmd="d2b__subcmd__guest__subcmd__get"
                 ;;
-            d2b__subcmd__help__subcmd__usb,security-key)
-                cmd="d2b__subcmd__help__subcmd__usb__subcmd__security__subcmd__key"
+            d2b__subcmd__guest,list)
+                cmd="d2b__subcmd__guest__subcmd__list"
                 ;;
-            d2b__subcmd__help__subcmd__usb__subcmd__security__subcmd__key,cancel)
-                cmd="d2b__subcmd__help__subcmd__usb__subcmd__security__subcmd__key__subcmd__cancel"
+            d2b__subcmd__guest,restart)
+                cmd="d2b__subcmd__guest__subcmd__restart"
                 ;;
-            d2b__subcmd__help__subcmd__usb__subcmd__security__subcmd__key,sessions)
-                cmd="d2b__subcmd__help__subcmd__usb__subcmd__security__subcmd__key__subcmd__sessions"
+            d2b__subcmd__guest,start)
+                cmd="d2b__subcmd__guest__subcmd__start"
                 ;;
-            d2b__subcmd__help__subcmd__usb__subcmd__security__subcmd__key,status)
-                cmd="d2b__subcmd__help__subcmd__usb__subcmd__security__subcmd__key__subcmd__status"
+            d2b__subcmd__guest,status)
+                cmd="d2b__subcmd__guest__subcmd__status"
                 ;;
-            d2b__subcmd__help__subcmd__usb__subcmd__security__subcmd__key,test)
-                cmd="d2b__subcmd__help__subcmd__usb__subcmd__security__subcmd__key__subcmd__test"
+            d2b__subcmd__guest,stop)
+                cmd="d2b__subcmd__guest__subcmd__stop"
                 ;;
-            d2b__subcmd__help__subcmd__vm,display)
-                cmd="d2b__subcmd__help__subcmd__vm__subcmd__display"
-                ;;
-            d2b__subcmd__help__subcmd__vm,exec)
-                cmd="d2b__subcmd__help__subcmd__vm__subcmd__exec"
-                ;;
-            d2b__subcmd__help__subcmd__vm,list)
-                cmd="d2b__subcmd__help__subcmd__vm__subcmd__list"
-                ;;
-            d2b__subcmd__help__subcmd__vm,restart)
-                cmd="d2b__subcmd__help__subcmd__vm__subcmd__restart"
-                ;;
-            d2b__subcmd__help__subcmd__vm,start)
-                cmd="d2b__subcmd__help__subcmd__vm__subcmd__start"
-                ;;
-            d2b__subcmd__help__subcmd__vm,status)
-                cmd="d2b__subcmd__help__subcmd__vm__subcmd__status"
-                ;;
-            d2b__subcmd__help__subcmd__vm,stop)
-                cmd="d2b__subcmd__help__subcmd__vm__subcmd__stop"
-                ;;
-            d2b__subcmd__help__subcmd__vm__subcmd__display,close)
-                cmd="d2b__subcmd__help__subcmd__vm__subcmd__display__subcmd__close"
-                ;;
-            d2b__subcmd__help__subcmd__vm__subcmd__display,list)
-                cmd="d2b__subcmd__help__subcmd__vm__subcmd__display__subcmd__list"
+            d2b__subcmd__guest,update-spec)
+                cmd="d2b__subcmd__guest__subcmd__update__subcmd__spec"
                 ;;
             d2b__subcmd__host,check)
                 cmd="d2b__subcmd__host__subcmd__check"
@@ -436,14 +454,14 @@ _d2b() {
             d2b__subcmd__host,doctor)
                 cmd="d2b__subcmd__host__subcmd__doctor"
                 ;;
-            d2b__subcmd__host,help)
-                cmd="d2b__subcmd__host__subcmd__help"
+            d2b__subcmd__host,get)
+                cmd="d2b__subcmd__host__subcmd__get"
                 ;;
             d2b__subcmd__host,install)
                 cmd="d2b__subcmd__host__subcmd__install"
                 ;;
-            d2b__subcmd__host,migrate-storage)
-                cmd="d2b__subcmd__host__subcmd__migrate__subcmd__storage"
+            d2b__subcmd__host,list)
+                cmd="d2b__subcmd__host__subcmd__list"
                 ;;
             d2b__subcmd__host,prepare)
                 cmd="d2b__subcmd__host__subcmd__prepare"
@@ -451,257 +469,368 @@ _d2b() {
             d2b__subcmd__host,reconcile)
                 cmd="d2b__subcmd__host__subcmd__reconcile"
                 ;;
+            d2b__subcmd__host,status)
+                cmd="d2b__subcmd__host__subcmd__status"
+                ;;
             d2b__subcmd__host,validate)
                 cmd="d2b__subcmd__host__subcmd__validate"
                 ;;
-            d2b__subcmd__host__subcmd__help,check)
-                cmd="d2b__subcmd__host__subcmd__help__subcmd__check"
+            d2b__subcmd__import,create)
+                cmd="d2b__subcmd__import__subcmd__create"
                 ;;
-            d2b__subcmd__host__subcmd__help,destroy)
-                cmd="d2b__subcmd__host__subcmd__help__subcmd__destroy"
+            d2b__subcmd__import,delete)
+                cmd="d2b__subcmd__import__subcmd__delete"
                 ;;
-            d2b__subcmd__host__subcmd__help,doctor)
-                cmd="d2b__subcmd__host__subcmd__help__subcmd__doctor"
+            d2b__subcmd__import,get)
+                cmd="d2b__subcmd__import__subcmd__get"
                 ;;
-            d2b__subcmd__host__subcmd__help,help)
-                cmd="d2b__subcmd__host__subcmd__help__subcmd__help"
+            d2b__subcmd__import,graph)
+                cmd="d2b__subcmd__import__subcmd__graph"
                 ;;
-            d2b__subcmd__host__subcmd__help,install)
-                cmd="d2b__subcmd__host__subcmd__help__subcmd__install"
+            d2b__subcmd__import,list)
+                cmd="d2b__subcmd__import__subcmd__list"
                 ;;
-            d2b__subcmd__host__subcmd__help,migrate-storage)
-                cmd="d2b__subcmd__host__subcmd__help__subcmd__migrate__subcmd__storage"
+            d2b__subcmd__import,projection)
+                cmd="d2b__subcmd__import__subcmd__projection"
                 ;;
-            d2b__subcmd__host__subcmd__help,prepare)
-                cmd="d2b__subcmd__host__subcmd__help__subcmd__prepare"
+            d2b__subcmd__import,status)
+                cmd="d2b__subcmd__import__subcmd__status"
                 ;;
-            d2b__subcmd__host__subcmd__help,reconcile)
-                cmd="d2b__subcmd__host__subcmd__help__subcmd__reconcile"
+            d2b__subcmd__import,update-spec)
+                cmd="d2b__subcmd__import__subcmd__update__subcmd__spec"
                 ;;
-            d2b__subcmd__host__subcmd__help,validate)
-                cmd="d2b__subcmd__host__subcmd__help__subcmd__validate"
+            d2b__subcmd__import,watch)
+                cmd="d2b__subcmd__import__subcmd__watch"
                 ;;
-            d2b__subcmd__keys,help)
-                cmd="d2b__subcmd__keys__subcmd__help"
+            d2b__subcmd__network,create)
+                cmd="d2b__subcmd__network__subcmd__create"
                 ;;
-            d2b__subcmd__keys,list)
-                cmd="d2b__subcmd__keys__subcmd__list"
+            d2b__subcmd__network,delete)
+                cmd="d2b__subcmd__network__subcmd__delete"
                 ;;
-            d2b__subcmd__keys,rotate)
-                cmd="d2b__subcmd__keys__subcmd__rotate"
+            d2b__subcmd__network,get)
+                cmd="d2b__subcmd__network__subcmd__get"
                 ;;
-            d2b__subcmd__keys,show)
-                cmd="d2b__subcmd__keys__subcmd__show"
+            d2b__subcmd__network,list)
+                cmd="d2b__subcmd__network__subcmd__list"
                 ;;
-            d2b__subcmd__keys__subcmd__help,help)
-                cmd="d2b__subcmd__keys__subcmd__help__subcmd__help"
+            d2b__subcmd__network,reconcile)
+                cmd="d2b__subcmd__network__subcmd__reconcile"
                 ;;
-            d2b__subcmd__keys__subcmd__help,list)
-                cmd="d2b__subcmd__keys__subcmd__help__subcmd__list"
+            d2b__subcmd__network,security-key)
+                cmd="d2b__subcmd__network__subcmd__security__subcmd__key"
                 ;;
-            d2b__subcmd__keys__subcmd__help,rotate)
-                cmd="d2b__subcmd__keys__subcmd__help__subcmd__rotate"
+            d2b__subcmd__network,status)
+                cmd="d2b__subcmd__network__subcmd__status"
                 ;;
-            d2b__subcmd__keys__subcmd__help,show)
-                cmd="d2b__subcmd__keys__subcmd__help__subcmd__show"
+            d2b__subcmd__network,update-spec)
+                cmd="d2b__subcmd__network__subcmd__update__subcmd__spec"
                 ;;
-            d2b__subcmd__op,help)
-                cmd="d2b__subcmd__op__subcmd__help"
+            d2b__subcmd__network,upgrade)
+                cmd="d2b__subcmd__network__subcmd__upgrade"
+                ;;
+            d2b__subcmd__network,usb)
+                cmd="d2b__subcmd__network__subcmd__usb"
+                ;;
+            d2b__subcmd__network,verify)
+                cmd="d2b__subcmd__network__subcmd__verify"
+                ;;
+            d2b__subcmd__network,watch)
+                cmd="d2b__subcmd__network__subcmd__watch"
+                ;;
+            d2b__subcmd__network__subcmd__security__subcmd__key,cancel)
+                cmd="d2b__subcmd__network__subcmd__security__subcmd__key__subcmd__cancel"
+                ;;
+            d2b__subcmd__network__subcmd__security__subcmd__key,sessions)
+                cmd="d2b__subcmd__network__subcmd__security__subcmd__key__subcmd__sessions"
+                ;;
+            d2b__subcmd__network__subcmd__security__subcmd__key,status)
+                cmd="d2b__subcmd__network__subcmd__security__subcmd__key__subcmd__status"
+                ;;
+            d2b__subcmd__network__subcmd__security__subcmd__key,test)
+                cmd="d2b__subcmd__network__subcmd__security__subcmd__key__subcmd__test"
+                ;;
+            d2b__subcmd__network__subcmd__usb,attach)
+                cmd="d2b__subcmd__network__subcmd__usb__subcmd__attach"
+                ;;
+            d2b__subcmd__network__subcmd__usb,detach)
+                cmd="d2b__subcmd__network__subcmd__usb__subcmd__detach"
+                ;;
+            d2b__subcmd__network__subcmd__usb,probe)
+                cmd="d2b__subcmd__network__subcmd__usb__subcmd__probe"
                 ;;
             d2b__subcmd__op,inspect)
                 cmd="d2b__subcmd__op__subcmd__inspect"
                 ;;
-            d2b__subcmd__op__subcmd__help,help)
-                cmd="d2b__subcmd__op__subcmd__help__subcmd__help"
+            d2b__subcmd__process,create)
+                cmd="d2b__subcmd__process__subcmd__create"
                 ;;
-            d2b__subcmd__op__subcmd__help,inspect)
-                cmd="d2b__subcmd__op__subcmd__help__subcmd__inspect"
+            d2b__subcmd__process,delete)
+                cmd="d2b__subcmd__process__subcmd__delete"
                 ;;
-            d2b__subcmd__realm,enter)
-                cmd="d2b__subcmd__realm__subcmd__enter"
+            d2b__subcmd__process,get)
+                cmd="d2b__subcmd__process__subcmd__get"
                 ;;
-            d2b__subcmd__realm,help)
-                cmd="d2b__subcmd__realm__subcmd__help"
+            d2b__subcmd__process,list)
+                cmd="d2b__subcmd__process__subcmd__list"
                 ;;
-            d2b__subcmd__realm,inspect)
-                cmd="d2b__subcmd__realm__subcmd__inspect"
+            d2b__subcmd__process,start)
+                cmd="d2b__subcmd__process__subcmd__start"
                 ;;
-            d2b__subcmd__realm,list)
-                cmd="d2b__subcmd__realm__subcmd__list"
+            d2b__subcmd__process,status)
+                cmd="d2b__subcmd__process__subcmd__status"
                 ;;
-            d2b__subcmd__realm,run)
-                cmd="d2b__subcmd__realm__subcmd__run"
+            d2b__subcmd__process,stop)
+                cmd="d2b__subcmd__process__subcmd__stop"
                 ;;
-            d2b__subcmd__realm__subcmd__help,enter)
-                cmd="d2b__subcmd__realm__subcmd__help__subcmd__enter"
+            d2b__subcmd__process,update-spec)
+                cmd="d2b__subcmd__process__subcmd__update__subcmd__spec"
                 ;;
-            d2b__subcmd__realm__subcmd__help,help)
-                cmd="d2b__subcmd__realm__subcmd__help__subcmd__help"
+            d2b__subcmd__provider,get)
+                cmd="d2b__subcmd__provider__subcmd__get"
                 ;;
-            d2b__subcmd__realm__subcmd__help,inspect)
-                cmd="d2b__subcmd__realm__subcmd__help__subcmd__inspect"
+            d2b__subcmd__provider,inspect)
+                cmd="d2b__subcmd__provider__subcmd__inspect"
                 ;;
-            d2b__subcmd__realm__subcmd__help,list)
-                cmd="d2b__subcmd__realm__subcmd__help__subcmd__list"
+            d2b__subcmd__provider,list)
+                cmd="d2b__subcmd__provider__subcmd__list"
                 ;;
-            d2b__subcmd__realm__subcmd__help,run)
-                cmd="d2b__subcmd__realm__subcmd__help__subcmd__run"
+            d2b__subcmd__provider,status)
+                cmd="d2b__subcmd__provider__subcmd__status"
                 ;;
-            d2b__subcmd__store,help)
-                cmd="d2b__subcmd__store__subcmd__help"
+            d2b__subcmd__quota,create)
+                cmd="d2b__subcmd__quota__subcmd__create"
                 ;;
-            d2b__subcmd__store,verify)
-                cmd="d2b__subcmd__store__subcmd__verify"
+            d2b__subcmd__quota,delete)
+                cmd="d2b__subcmd__quota__subcmd__delete"
                 ;;
-            d2b__subcmd__store__subcmd__help,help)
-                cmd="d2b__subcmd__store__subcmd__help__subcmd__help"
+            d2b__subcmd__quota,get)
+                cmd="d2b__subcmd__quota__subcmd__get"
                 ;;
-            d2b__subcmd__store__subcmd__help,verify)
-                cmd="d2b__subcmd__store__subcmd__help__subcmd__verify"
+            d2b__subcmd__quota,list)
+                cmd="d2b__subcmd__quota__subcmd__list"
                 ;;
-            d2b__subcmd__usb,attach)
-                cmd="d2b__subcmd__usb__subcmd__attach"
+            d2b__subcmd__quota,reconcile)
+                cmd="d2b__subcmd__quota__subcmd__reconcile"
                 ;;
-            d2b__subcmd__usb,detach)
-                cmd="d2b__subcmd__usb__subcmd__detach"
+            d2b__subcmd__quota,security-key)
+                cmd="d2b__subcmd__quota__subcmd__security__subcmd__key"
                 ;;
-            d2b__subcmd__usb,help)
-                cmd="d2b__subcmd__usb__subcmd__help"
+            d2b__subcmd__quota,status)
+                cmd="d2b__subcmd__quota__subcmd__status"
                 ;;
-            d2b__subcmd__usb,probe)
-                cmd="d2b__subcmd__usb__subcmd__probe"
+            d2b__subcmd__quota,update-spec)
+                cmd="d2b__subcmd__quota__subcmd__update__subcmd__spec"
                 ;;
-            d2b__subcmd__usb,security-key)
-                cmd="d2b__subcmd__usb__subcmd__security__subcmd__key"
+            d2b__subcmd__quota,upgrade)
+                cmd="d2b__subcmd__quota__subcmd__upgrade"
                 ;;
-            d2b__subcmd__usb__subcmd__help,attach)
-                cmd="d2b__subcmd__usb__subcmd__help__subcmd__attach"
+            d2b__subcmd__quota,usb)
+                cmd="d2b__subcmd__quota__subcmd__usb"
                 ;;
-            d2b__subcmd__usb__subcmd__help,detach)
-                cmd="d2b__subcmd__usb__subcmd__help__subcmd__detach"
+            d2b__subcmd__quota,verify)
+                cmd="d2b__subcmd__quota__subcmd__verify"
                 ;;
-            d2b__subcmd__usb__subcmd__help,help)
-                cmd="d2b__subcmd__usb__subcmd__help__subcmd__help"
+            d2b__subcmd__quota,watch)
+                cmd="d2b__subcmd__quota__subcmd__watch"
                 ;;
-            d2b__subcmd__usb__subcmd__help,probe)
-                cmd="d2b__subcmd__usb__subcmd__help__subcmd__probe"
+            d2b__subcmd__quota__subcmd__security__subcmd__key,cancel)
+                cmd="d2b__subcmd__quota__subcmd__security__subcmd__key__subcmd__cancel"
                 ;;
-            d2b__subcmd__usb__subcmd__help,security-key)
-                cmd="d2b__subcmd__usb__subcmd__help__subcmd__security__subcmd__key"
+            d2b__subcmd__quota__subcmd__security__subcmd__key,sessions)
+                cmd="d2b__subcmd__quota__subcmd__security__subcmd__key__subcmd__sessions"
                 ;;
-            d2b__subcmd__usb__subcmd__help__subcmd__security__subcmd__key,cancel)
-                cmd="d2b__subcmd__usb__subcmd__help__subcmd__security__subcmd__key__subcmd__cancel"
+            d2b__subcmd__quota__subcmd__security__subcmd__key,status)
+                cmd="d2b__subcmd__quota__subcmd__security__subcmd__key__subcmd__status"
                 ;;
-            d2b__subcmd__usb__subcmd__help__subcmd__security__subcmd__key,sessions)
-                cmd="d2b__subcmd__usb__subcmd__help__subcmd__security__subcmd__key__subcmd__sessions"
+            d2b__subcmd__quota__subcmd__security__subcmd__key,test)
+                cmd="d2b__subcmd__quota__subcmd__security__subcmd__key__subcmd__test"
                 ;;
-            d2b__subcmd__usb__subcmd__help__subcmd__security__subcmd__key,status)
-                cmd="d2b__subcmd__usb__subcmd__help__subcmd__security__subcmd__key__subcmd__status"
+            d2b__subcmd__quota__subcmd__usb,attach)
+                cmd="d2b__subcmd__quota__subcmd__usb__subcmd__attach"
                 ;;
-            d2b__subcmd__usb__subcmd__help__subcmd__security__subcmd__key,test)
-                cmd="d2b__subcmd__usb__subcmd__help__subcmd__security__subcmd__key__subcmd__test"
+            d2b__subcmd__quota__subcmd__usb,detach)
+                cmd="d2b__subcmd__quota__subcmd__usb__subcmd__detach"
                 ;;
-            d2b__subcmd__usb__subcmd__security__subcmd__key,cancel)
-                cmd="d2b__subcmd__usb__subcmd__security__subcmd__key__subcmd__cancel"
+            d2b__subcmd__quota__subcmd__usb,probe)
+                cmd="d2b__subcmd__quota__subcmd__usb__subcmd__probe"
                 ;;
-            d2b__subcmd__usb__subcmd__security__subcmd__key,help)
-                cmd="d2b__subcmd__usb__subcmd__security__subcmd__key__subcmd__help"
+            d2b__subcmd__resource,authorities)
+                cmd="d2b__subcmd__resource__subcmd__authorities"
                 ;;
-            d2b__subcmd__usb__subcmd__security__subcmd__key,sessions)
-                cmd="d2b__subcmd__usb__subcmd__security__subcmd__key__subcmd__sessions"
+            d2b__subcmd__resource,create)
+                cmd="d2b__subcmd__resource__subcmd__create"
                 ;;
-            d2b__subcmd__usb__subcmd__security__subcmd__key,status)
-                cmd="d2b__subcmd__usb__subcmd__security__subcmd__key__subcmd__status"
+            d2b__subcmd__resource,delete)
+                cmd="d2b__subcmd__resource__subcmd__delete"
                 ;;
-            d2b__subcmd__usb__subcmd__security__subcmd__key,test)
-                cmd="d2b__subcmd__usb__subcmd__security__subcmd__key__subcmd__test"
+            d2b__subcmd__resource,get)
+                cmd="d2b__subcmd__resource__subcmd__get"
                 ;;
-            d2b__subcmd__usb__subcmd__security__subcmd__key__subcmd__help,cancel)
-                cmd="d2b__subcmd__usb__subcmd__security__subcmd__key__subcmd__help__subcmd__cancel"
+            d2b__subcmd__resource,list)
+                cmd="d2b__subcmd__resource__subcmd__list"
                 ;;
-            d2b__subcmd__usb__subcmd__security__subcmd__key__subcmd__help,help)
-                cmd="d2b__subcmd__usb__subcmd__security__subcmd__key__subcmd__help__subcmd__help"
+            d2b__subcmd__resource,reconcile)
+                cmd="d2b__subcmd__resource__subcmd__reconcile"
                 ;;
-            d2b__subcmd__usb__subcmd__security__subcmd__key__subcmd__help,sessions)
-                cmd="d2b__subcmd__usb__subcmd__security__subcmd__key__subcmd__help__subcmd__sessions"
+            d2b__subcmd__resource,status)
+                cmd="d2b__subcmd__resource__subcmd__status"
                 ;;
-            d2b__subcmd__usb__subcmd__security__subcmd__key__subcmd__help,status)
-                cmd="d2b__subcmd__usb__subcmd__security__subcmd__key__subcmd__help__subcmd__status"
+            d2b__subcmd__resource,update-spec)
+                cmd="d2b__subcmd__resource__subcmd__update__subcmd__spec"
                 ;;
-            d2b__subcmd__usb__subcmd__security__subcmd__key__subcmd__help,test)
-                cmd="d2b__subcmd__usb__subcmd__security__subcmd__key__subcmd__help__subcmd__test"
+            d2b__subcmd__resource,upgrade)
+                cmd="d2b__subcmd__resource__subcmd__upgrade"
                 ;;
-            d2b__subcmd__vm,display)
-                cmd="d2b__subcmd__vm__subcmd__display"
+            d2b__subcmd__resource,watch)
+                cmd="d2b__subcmd__resource__subcmd__watch"
                 ;;
-            d2b__subcmd__vm,exec)
-                cmd="d2b__subcmd__vm__subcmd__exec"
+            d2b__subcmd__resource__subcmd__authorities,conflict)
+                cmd="d2b__subcmd__resource__subcmd__authorities__subcmd__conflict"
                 ;;
-            d2b__subcmd__vm,help)
-                cmd="d2b__subcmd__vm__subcmd__help"
+            d2b__subcmd__resource__subcmd__authorities,holders)
+                cmd="d2b__subcmd__resource__subcmd__authorities__subcmd__holders"
                 ;;
-            d2b__subcmd__vm,list)
-                cmd="d2b__subcmd__vm__subcmd__list"
+            d2b__subcmd__shell,attach)
+                cmd="d2b__subcmd__shell__subcmd__attach"
                 ;;
-            d2b__subcmd__vm,restart)
-                cmd="d2b__subcmd__vm__subcmd__restart"
+            d2b__subcmd__shell,detach)
+                cmd="d2b__subcmd__shell__subcmd__detach"
                 ;;
-            d2b__subcmd__vm,start)
-                cmd="d2b__subcmd__vm__subcmd__start"
+            d2b__subcmd__shell,kill)
+                cmd="d2b__subcmd__shell__subcmd__kill"
                 ;;
-            d2b__subcmd__vm,status)
-                cmd="d2b__subcmd__vm__subcmd__status"
+            d2b__subcmd__shell,list)
+                cmd="d2b__subcmd__shell__subcmd__list"
                 ;;
-            d2b__subcmd__vm,stop)
-                cmd="d2b__subcmd__vm__subcmd__stop"
+            d2b__subcmd__shell,open)
+                cmd="d2b__subcmd__shell__subcmd__open"
                 ;;
-            d2b__subcmd__vm__subcmd__display,close)
-                cmd="d2b__subcmd__vm__subcmd__display__subcmd__close"
+            d2b__subcmd__shell,status)
+                cmd="d2b__subcmd__shell__subcmd__status"
                 ;;
-            d2b__subcmd__vm__subcmd__display,help)
-                cmd="d2b__subcmd__vm__subcmd__display__subcmd__help"
+            d2b__subcmd__user,create)
+                cmd="d2b__subcmd__user__subcmd__create"
                 ;;
-            d2b__subcmd__vm__subcmd__display,list)
-                cmd="d2b__subcmd__vm__subcmd__display__subcmd__list"
+            d2b__subcmd__user,delete)
+                cmd="d2b__subcmd__user__subcmd__delete"
                 ;;
-            d2b__subcmd__vm__subcmd__display__subcmd__help,close)
-                cmd="d2b__subcmd__vm__subcmd__display__subcmd__help__subcmd__close"
+            d2b__subcmd__user,get)
+                cmd="d2b__subcmd__user__subcmd__get"
                 ;;
-            d2b__subcmd__vm__subcmd__display__subcmd__help,help)
-                cmd="d2b__subcmd__vm__subcmd__display__subcmd__help__subcmd__help"
+            d2b__subcmd__user,list)
+                cmd="d2b__subcmd__user__subcmd__list"
                 ;;
-            d2b__subcmd__vm__subcmd__display__subcmd__help,list)
-                cmd="d2b__subcmd__vm__subcmd__display__subcmd__help__subcmd__list"
+            d2b__subcmd__user,reconcile)
+                cmd="d2b__subcmd__user__subcmd__reconcile"
                 ;;
-            d2b__subcmd__vm__subcmd__help,display)
-                cmd="d2b__subcmd__vm__subcmd__help__subcmd__display"
+            d2b__subcmd__user,security-key)
+                cmd="d2b__subcmd__user__subcmd__security__subcmd__key"
                 ;;
-            d2b__subcmd__vm__subcmd__help,exec)
-                cmd="d2b__subcmd__vm__subcmd__help__subcmd__exec"
+            d2b__subcmd__user,status)
+                cmd="d2b__subcmd__user__subcmd__status"
                 ;;
-            d2b__subcmd__vm__subcmd__help,help)
-                cmd="d2b__subcmd__vm__subcmd__help__subcmd__help"
+            d2b__subcmd__user,update-spec)
+                cmd="d2b__subcmd__user__subcmd__update__subcmd__spec"
                 ;;
-            d2b__subcmd__vm__subcmd__help,list)
-                cmd="d2b__subcmd__vm__subcmd__help__subcmd__list"
+            d2b__subcmd__user,upgrade)
+                cmd="d2b__subcmd__user__subcmd__upgrade"
                 ;;
-            d2b__subcmd__vm__subcmd__help,restart)
-                cmd="d2b__subcmd__vm__subcmd__help__subcmd__restart"
+            d2b__subcmd__user,usb)
+                cmd="d2b__subcmd__user__subcmd__usb"
                 ;;
-            d2b__subcmd__vm__subcmd__help,start)
-                cmd="d2b__subcmd__vm__subcmd__help__subcmd__start"
+            d2b__subcmd__user,verify)
+                cmd="d2b__subcmd__user__subcmd__verify"
                 ;;
-            d2b__subcmd__vm__subcmd__help,status)
-                cmd="d2b__subcmd__vm__subcmd__help__subcmd__status"
+            d2b__subcmd__user,watch)
+                cmd="d2b__subcmd__user__subcmd__watch"
                 ;;
-            d2b__subcmd__vm__subcmd__help,stop)
-                cmd="d2b__subcmd__vm__subcmd__help__subcmd__stop"
+            d2b__subcmd__user__subcmd__security__subcmd__key,cancel)
+                cmd="d2b__subcmd__user__subcmd__security__subcmd__key__subcmd__cancel"
                 ;;
-            d2b__subcmd__vm__subcmd__help__subcmd__display,close)
-                cmd="d2b__subcmd__vm__subcmd__help__subcmd__display__subcmd__close"
+            d2b__subcmd__user__subcmd__security__subcmd__key,sessions)
+                cmd="d2b__subcmd__user__subcmd__security__subcmd__key__subcmd__sessions"
                 ;;
-            d2b__subcmd__vm__subcmd__help__subcmd__display,list)
-                cmd="d2b__subcmd__vm__subcmd__help__subcmd__display__subcmd__list"
+            d2b__subcmd__user__subcmd__security__subcmd__key,status)
+                cmd="d2b__subcmd__user__subcmd__security__subcmd__key__subcmd__status"
+                ;;
+            d2b__subcmd__user__subcmd__security__subcmd__key,test)
+                cmd="d2b__subcmd__user__subcmd__security__subcmd__key__subcmd__test"
+                ;;
+            d2b__subcmd__user__subcmd__usb,attach)
+                cmd="d2b__subcmd__user__subcmd__usb__subcmd__attach"
+                ;;
+            d2b__subcmd__user__subcmd__usb,detach)
+                cmd="d2b__subcmd__user__subcmd__usb__subcmd__detach"
+                ;;
+            d2b__subcmd__user__subcmd__usb,probe)
+                cmd="d2b__subcmd__user__subcmd__usb__subcmd__probe"
+                ;;
+            d2b__subcmd__volume,create)
+                cmd="d2b__subcmd__volume__subcmd__create"
+                ;;
+            d2b__subcmd__volume,delete)
+                cmd="d2b__subcmd__volume__subcmd__delete"
+                ;;
+            d2b__subcmd__volume,get)
+                cmd="d2b__subcmd__volume__subcmd__get"
+                ;;
+            d2b__subcmd__volume,list)
+                cmd="d2b__subcmd__volume__subcmd__list"
+                ;;
+            d2b__subcmd__volume,reconcile)
+                cmd="d2b__subcmd__volume__subcmd__reconcile"
+                ;;
+            d2b__subcmd__volume,security-key)
+                cmd="d2b__subcmd__volume__subcmd__security__subcmd__key"
+                ;;
+            d2b__subcmd__volume,status)
+                cmd="d2b__subcmd__volume__subcmd__status"
+                ;;
+            d2b__subcmd__volume,update-spec)
+                cmd="d2b__subcmd__volume__subcmd__update__subcmd__spec"
+                ;;
+            d2b__subcmd__volume,upgrade)
+                cmd="d2b__subcmd__volume__subcmd__upgrade"
+                ;;
+            d2b__subcmd__volume,usb)
+                cmd="d2b__subcmd__volume__subcmd__usb"
+                ;;
+            d2b__subcmd__volume,verify)
+                cmd="d2b__subcmd__volume__subcmd__verify"
+                ;;
+            d2b__subcmd__volume,watch)
+                cmd="d2b__subcmd__volume__subcmd__watch"
+                ;;
+            d2b__subcmd__volume__subcmd__security__subcmd__key,cancel)
+                cmd="d2b__subcmd__volume__subcmd__security__subcmd__key__subcmd__cancel"
+                ;;
+            d2b__subcmd__volume__subcmd__security__subcmd__key,sessions)
+                cmd="d2b__subcmd__volume__subcmd__security__subcmd__key__subcmd__sessions"
+                ;;
+            d2b__subcmd__volume__subcmd__security__subcmd__key,status)
+                cmd="d2b__subcmd__volume__subcmd__security__subcmd__key__subcmd__status"
+                ;;
+            d2b__subcmd__volume__subcmd__security__subcmd__key,test)
+                cmd="d2b__subcmd__volume__subcmd__security__subcmd__key__subcmd__test"
+                ;;
+            d2b__subcmd__volume__subcmd__usb,attach)
+                cmd="d2b__subcmd__volume__subcmd__usb__subcmd__attach"
+                ;;
+            d2b__subcmd__volume__subcmd__usb,detach)
+                cmd="d2b__subcmd__volume__subcmd__usb__subcmd__detach"
+                ;;
+            d2b__subcmd__volume__subcmd__usb,probe)
+                cmd="d2b__subcmd__volume__subcmd__usb__subcmd__probe"
+                ;;
+            d2b__subcmd__zone,get)
+                cmd="d2b__subcmd__zone__subcmd__get"
+                ;;
+            d2b__subcmd__zone,list)
+                cmd="d2b__subcmd__zone__subcmd__list"
+                ;;
+            d2b__subcmd__zone,status)
+                cmd="d2b__subcmd__zone__subcmd__status"
                 ;;
             *)
                 ;;
@@ -710,251 +839,17 @@ _d2b() {
 
     case "${cmd}" in
         d2b)
-            opts="-h -V --help --version list status launch usb console audio audit host auth realm shell op vm up down restart build generations switch boot test rollback gc store keys trust rotate-known-host migrate config clipboard help"
+            opts="-h -V --zone --json --human --deadline --no-deadline --help --version get list watch create update-spec delete status upgrade reconcile host guest process exec shell volume network device endpoint export import resource user credential provider zone quota emergency-policy activation audit op auth complete audio clipboard display"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 1 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
             fi
             case "${prev}" in
-                *)
-                    COMPREPLY=()
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
                     ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        d2b__subcmd__audio)
-            opts="-h --json --help status mic speaker off help"
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        d2b__subcmd__audio__subcmd__help)
-            opts="status mic speaker off help"
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        d2b__subcmd__audio__subcmd__help__subcmd__help)
-            opts=""
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        d2b__subcmd__audio__subcmd__help__subcmd__mic)
-            opts=""
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        d2b__subcmd__audio__subcmd__help__subcmd__off)
-            opts=""
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        d2b__subcmd__audio__subcmd__help__subcmd__speaker)
-            opts=""
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        d2b__subcmd__audio__subcmd__help__subcmd__status)
-            opts=""
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        d2b__subcmd__audio__subcmd__mic)
-            opts="-h --json --help on off <VM>"
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        d2b__subcmd__audio__subcmd__off)
-            opts="-h --json --help <VM>"
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        d2b__subcmd__audio__subcmd__speaker)
-            opts="-h --json --help on off <VM>"
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        d2b__subcmd__audio__subcmd__status)
-            opts="-h --json --help [VM]"
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        d2b__subcmd__audit)
-            opts="-h --strict --json --human --help"
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        d2b__subcmd__auth)
-            opts="-h --help status help"
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        d2b__subcmd__auth__subcmd__help)
-            opts="status help"
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        d2b__subcmd__auth__subcmd__help__subcmd__help)
-            opts=""
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        d2b__subcmd__auth__subcmd__help__subcmd__status)
-            opts=""
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        d2b__subcmd__auth__subcmd__status)
-            opts="-h --json --human --test-uid --help"
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                --test-uid)
+                --deadline)
                     COMPREPLY=($(compgen -f "${cur}"))
                     return 0
                     ;;
@@ -965,13 +860,21 @@ _d2b() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        d2b__subcmd__boot)
-            opts="-h --dry-run --apply --json --human --help <VM>"
+        d2b__subcmd__activation)
+            opts="-h --zone --json --human --deadline --no-deadline --help apply build generations switch boot test rollback gc migrate keys trust rotate-known-host config"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
             fi
             case "${prev}" in
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
                 *)
                     COMPREPLY=()
                     ;;
@@ -979,41 +882,21 @@ _d2b() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        d2b__subcmd__build)
-            opts="-h --json --human --help <VM>"
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        d2b__subcmd__clipboard)
-            opts="-h --help arm help"
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        d2b__subcmd__clipboard__subcmd__arm)
-            opts="-h --json --human --help"
+        d2b__subcmd__activation__subcmd__apply)
+            opts="-h --dry-run --zone --json --human --deadline --no-deadline --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
             fi
             case "${prev}" in
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
                 *)
                     COMPREPLY=()
                     ;;
@@ -1021,13 +904,25 @@ _d2b() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        d2b__subcmd__clipboard__subcmd__help)
-            opts="arm help"
+        d2b__subcmd__activation__subcmd__boot)
+            opts="-h --dry-run --apply --to-generation --zone --json --human --deadline --no-deadline --help <GUEST_REF>"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
             fi
             case "${prev}" in
+                --to-generation)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
                 *)
                     COMPREPLY=()
                     ;;
@@ -1035,51 +930,53 @@ _d2b() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        d2b__subcmd__clipboard__subcmd__help__subcmd__arm)
-            opts=""
+        d2b__subcmd__activation__subcmd__build)
+            opts="-h --zone --json --human --deadline --no-deadline --help <GUEST_REF>"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__activation__subcmd__config)
+            opts="-h --zone --json --human --deadline --no-deadline --help sync diff approve reject status"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__activation__subcmd__config__subcmd__approve)
+            opts="-h --to --zone --json --human --deadline --no-deadline --help <GUEST_REF>"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        d2b__subcmd__clipboard__subcmd__help__subcmd__help)
-            opts=""
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        d2b__subcmd__config)
-            opts="-h --help sync diff approve reject status help"
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        d2b__subcmd__config__subcmd__approve)
-            opts="-h --to --json --help <VM>"
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
             fi
@@ -1088,6 +985,14 @@ _d2b() {
                     COMPREPLY=($(compgen -f "${cur}"))
                     return 0
                     ;;
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
                 *)
                     COMPREPLY=()
                     ;;
@@ -1095,9 +1000,9 @@ _d2b() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        d2b__subcmd__config__subcmd__diff)
-            opts="-h --against --json --help <VM>"
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+        d2b__subcmd__activation__subcmd__config__subcmd__diff)
+            opts="-h --against --zone --json --human --deadline --no-deadline --help <GUEST_REF>"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
             fi
@@ -1106,151 +1011,2403 @@ _d2b() {
                     COMPREPLY=($(compgen -f "${cur}"))
                     return 0
                     ;;
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        d2b__subcmd__config__subcmd__help)
-            opts="sync diff approve reject status help"
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        d2b__subcmd__config__subcmd__help__subcmd__approve)
-            opts=""
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        d2b__subcmd__config__subcmd__help__subcmd__diff)
-            opts=""
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        d2b__subcmd__config__subcmd__help__subcmd__help)
-            opts=""
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        d2b__subcmd__config__subcmd__help__subcmd__reject)
-            opts=""
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        d2b__subcmd__config__subcmd__help__subcmd__status)
-            opts=""
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        d2b__subcmd__config__subcmd__help__subcmd__sync)
-            opts=""
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        d2b__subcmd__config__subcmd__reject)
-            opts="-h --json --help <VM>"
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        d2b__subcmd__config__subcmd__status)
-            opts="-h --all --json --help [VM]"
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        d2b__subcmd__config__subcmd__sync)
-            opts="-h --guest-path --host --user --key --known-hosts --dry-run --json --help <VM>"
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                --guest-path)
+                --zone)
                     COMPREPLY=($(compgen -f "${cur}"))
                     return 0
                     ;;
-                --host)
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__activation__subcmd__config__subcmd__reject)
+            opts="-h --dry-run --zone --json --human --deadline --no-deadline --help <GUEST_REF>"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__activation__subcmd__config__subcmd__status)
+            opts="-h --dry-run --zone --json --human --deadline --no-deadline --help <GUEST_REF>"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__activation__subcmd__config__subcmd__sync)
+            opts="-h --dry-run --zone --json --human --deadline --no-deadline --help <GUEST_REF>"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__activation__subcmd__gc)
+            opts="-h --dry-run --apply --zone --json --human --deadline --no-deadline --help"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__activation__subcmd__generations)
+            opts="-h --zone --json --human --deadline --no-deadline --help <GUEST_REF>"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__activation__subcmd__keys)
+            opts="-h --zone --json --human --deadline --no-deadline --help list show rotate"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__activation__subcmd__keys__subcmd__list)
+            opts="-h --zone --json --human --deadline --no-deadline --help"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__activation__subcmd__keys__subcmd__rotate)
+            opts="-h --dry-run --apply --to-generation --zone --json --human --deadline --no-deadline --help <GUEST_REF>"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --to-generation)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__activation__subcmd__keys__subcmd__show)
+            opts="-h --zone --json --human --deadline --no-deadline --help <NAME>"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__activation__subcmd__migrate)
+            opts="-h --dry-run --apply --zone --json --human --deadline --no-deadline --help"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__activation__subcmd__rollback)
+            opts="-h --dry-run --apply --to-generation --zone --json --human --deadline --no-deadline --help <GUEST_REF>"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --to-generation)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__activation__subcmd__rotate__subcmd__known__subcmd__host)
+            opts="-h --zone --json --human --deadline --no-deadline --help <NAME>"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__activation__subcmd__switch)
+            opts="-h --dry-run --apply --to-generation --zone --json --human --deadline --no-deadline --help <GUEST_REF>"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --to-generation)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__activation__subcmd__test)
+            opts="-h --dry-run --apply --to-generation --zone --json --human --deadline --no-deadline --help <GUEST_REF>"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --to-generation)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__activation__subcmd__trust)
+            opts="-h --zone --json --human --deadline --no-deadline --help <NAME>"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__audio)
+            opts="-h --zone --json --human --deadline --no-deadline --help <VERB> [ARGS]..."
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__audit)
+            opts="-h --strict --zone --json --human --deadline --no-deadline --help"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__auth)
+            opts="-h --test-uid --zone --json --human --deadline --no-deadline --help status"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --test-uid)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__auth__subcmd__status)
+            opts="-h --zone --json --human --deadline --no-deadline --help"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__clipboard)
+            opts="-h --zone --json --human --deadline --no-deadline --help <VERB> [ARGS]..."
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__complete)
+            opts="-h --list-commands --zone --json --human --deadline --no-deadline --help bash zsh fish"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__create)
+            opts="-h --spec-file --spec-stdin --wait-for-reconcile --reconcile-deadline --zone --json --human --deadline --no-deadline --help <RESOURCE_TYPE>"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --spec-file)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --reconcile-deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__credential)
+            opts="-h --zone --json --human --deadline --no-deadline --help get list watch create update-spec delete status upgrade reconcile verify usb security-key"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__credential__subcmd__create)
+            opts="-h --spec-file --spec-stdin --wait-for-reconcile --reconcile-deadline --zone --json --human --deadline --no-deadline --help"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --spec-file)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --reconcile-deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__credential__subcmd__delete)
+            opts="-h --revision --wait-for-reconcile --reconcile-deadline --zone --json --human --deadline --no-deadline --help <NAME>"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --revision)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --reconcile-deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__credential__subcmd__get)
+            opts="-h --zone --json --human --deadline --no-deadline --help <NAME>"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__credential__subcmd__list)
+            opts="-h --execution-ref --domain --phase --label-selector --updates --page-token --limit --zone --json --human --deadline --no-deadline --help"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --execution-ref)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --domain)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --phase)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --label-selector)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --page-token)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --limit)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__credential__subcmd__reconcile)
+            opts="-h --reconcile-deadline --zone --json --human --deadline --no-deadline --help <NAME>"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --reconcile-deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__credential__subcmd__security__subcmd__key)
+            opts="-h --zone --json --human --deadline --no-deadline --help status sessions cancel test"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__credential__subcmd__security__subcmd__key__subcmd__cancel)
+            opts="-h --current --dry-run --apply --zone --json --human --deadline --no-deadline --help [SESSION_ID]"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__credential__subcmd__security__subcmd__key__subcmd__sessions)
+            opts="-h --zone --json --human --deadline --no-deadline --help"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__credential__subcmd__security__subcmd__key__subcmd__status)
+            opts="-h --zone --json --human --deadline --no-deadline --help"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__credential__subcmd__security__subcmd__key__subcmd__test)
+            opts="-h --dry-run --zone --json --human --deadline --no-deadline --help <NAME>"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__credential__subcmd__status)
+            opts="-h --watch --zone --json --human --deadline --no-deadline --help <NAME>"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__credential__subcmd__update__subcmd__spec)
+            opts="-h --revision --spec-file --spec-stdin --wait-for-reconcile --reconcile-deadline --zone --json --human --deadline --no-deadline --help <NAME>"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --revision)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --spec-file)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --reconcile-deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__credential__subcmd__upgrade)
+            opts="-h --recursive --apply --reconcile-deadline --zone --json --human --deadline --no-deadline --help <NAME>"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --reconcile-deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__credential__subcmd__usb)
+            opts="-h --zone --json --human --deadline --no-deadline --help attach detach probe"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__credential__subcmd__usb__subcmd__attach)
+            opts="-h --dry-run --apply --zone --json --human --deadline --no-deadline --help <NAME> <BUSID>"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__credential__subcmd__usb__subcmd__detach)
+            opts="-h --dry-run --apply --zone --json --human --deadline --no-deadline --help <NAME> <BUSID>"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__credential__subcmd__usb__subcmd__probe)
+            opts="-h --zone --json --human --deadline --no-deadline --help"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__credential__subcmd__verify)
+            opts="-h --repair --zone --json --human --deadline --no-deadline --help <NAME>"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__credential__subcmd__watch)
+            opts="-h --since-revision --phase --label-selector --zone --json --human --deadline --no-deadline --help"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --since-revision)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --phase)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --label-selector)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__delete)
+            opts="-h --revision --wait-for-reconcile --reconcile-deadline --zone --json --human --deadline --no-deadline --help <RESOURCE_REF>"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --revision)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --reconcile-deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__device)
+            opts="-h --zone --json --human --deadline --no-deadline --help get list watch create update-spec delete status upgrade reconcile verify usb security-key"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__device__subcmd__create)
+            opts="-h --spec-file --spec-stdin --wait-for-reconcile --reconcile-deadline --zone --json --human --deadline --no-deadline --help"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --spec-file)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --reconcile-deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__device__subcmd__delete)
+            opts="-h --revision --wait-for-reconcile --reconcile-deadline --zone --json --human --deadline --no-deadline --help <NAME>"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --revision)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --reconcile-deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__device__subcmd__get)
+            opts="-h --zone --json --human --deadline --no-deadline --help <NAME>"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__device__subcmd__list)
+            opts="-h --execution-ref --domain --phase --label-selector --updates --page-token --limit --zone --json --human --deadline --no-deadline --help"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --execution-ref)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --domain)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --phase)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --label-selector)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --page-token)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --limit)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__device__subcmd__reconcile)
+            opts="-h --reconcile-deadline --zone --json --human --deadline --no-deadline --help <NAME>"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --reconcile-deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__device__subcmd__security__subcmd__key)
+            opts="-h --zone --json --human --deadline --no-deadline --help status sessions cancel test"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__device__subcmd__security__subcmd__key__subcmd__cancel)
+            opts="-h --current --dry-run --apply --zone --json --human --deadline --no-deadline --help [SESSION_ID]"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__device__subcmd__security__subcmd__key__subcmd__sessions)
+            opts="-h --zone --json --human --deadline --no-deadline --help"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__device__subcmd__security__subcmd__key__subcmd__status)
+            opts="-h --zone --json --human --deadline --no-deadline --help"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__device__subcmd__security__subcmd__key__subcmd__test)
+            opts="-h --dry-run --zone --json --human --deadline --no-deadline --help <NAME>"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__device__subcmd__status)
+            opts="-h --watch --zone --json --human --deadline --no-deadline --help <NAME>"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__device__subcmd__update__subcmd__spec)
+            opts="-h --revision --spec-file --spec-stdin --wait-for-reconcile --reconcile-deadline --zone --json --human --deadline --no-deadline --help <NAME>"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --revision)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --spec-file)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --reconcile-deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__device__subcmd__upgrade)
+            opts="-h --recursive --apply --reconcile-deadline --zone --json --human --deadline --no-deadline --help <NAME>"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --reconcile-deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__device__subcmd__usb)
+            opts="-h --zone --json --human --deadline --no-deadline --help attach detach probe"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__device__subcmd__usb__subcmd__attach)
+            opts="-h --dry-run --apply --zone --json --human --deadline --no-deadline --help <NAME> <BUSID>"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__device__subcmd__usb__subcmd__detach)
+            opts="-h --dry-run --apply --zone --json --human --deadline --no-deadline --help <NAME> <BUSID>"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__device__subcmd__usb__subcmd__probe)
+            opts="-h --zone --json --human --deadline --no-deadline --help"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__device__subcmd__verify)
+            opts="-h --repair --zone --json --human --deadline --no-deadline --help <NAME>"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__device__subcmd__watch)
+            opts="-h --since-revision --phase --label-selector --zone --json --human --deadline --no-deadline --help"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --since-revision)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --phase)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --label-selector)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__display)
+            opts="-h --zone --json --human --deadline --no-deadline --help <VERB> [ARGS]..."
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__emergency__subcmd__policy)
+            opts="-h --zone --json --human --deadline --no-deadline --help get list watch create update-spec delete status upgrade reconcile verify usb security-key"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__emergency__subcmd__policy__subcmd__create)
+            opts="-h --spec-file --spec-stdin --wait-for-reconcile --reconcile-deadline --zone --json --human --deadline --no-deadline --help"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --spec-file)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --reconcile-deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__emergency__subcmd__policy__subcmd__delete)
+            opts="-h --revision --wait-for-reconcile --reconcile-deadline --zone --json --human --deadline --no-deadline --help <NAME>"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --revision)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --reconcile-deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__emergency__subcmd__policy__subcmd__get)
+            opts="-h --zone --json --human --deadline --no-deadline --help <NAME>"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__emergency__subcmd__policy__subcmd__list)
+            opts="-h --execution-ref --domain --phase --label-selector --updates --page-token --limit --zone --json --human --deadline --no-deadline --help"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --execution-ref)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --domain)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --phase)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --label-selector)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --page-token)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --limit)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__emergency__subcmd__policy__subcmd__reconcile)
+            opts="-h --reconcile-deadline --zone --json --human --deadline --no-deadline --help <NAME>"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --reconcile-deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__emergency__subcmd__policy__subcmd__security__subcmd__key)
+            opts="-h --zone --json --human --deadline --no-deadline --help status sessions cancel test"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__emergency__subcmd__policy__subcmd__security__subcmd__key__subcmd__cancel)
+            opts="-h --current --dry-run --apply --zone --json --human --deadline --no-deadline --help [SESSION_ID]"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__emergency__subcmd__policy__subcmd__security__subcmd__key__subcmd__sessions)
+            opts="-h --zone --json --human --deadline --no-deadline --help"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__emergency__subcmd__policy__subcmd__security__subcmd__key__subcmd__status)
+            opts="-h --zone --json --human --deadline --no-deadline --help"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__emergency__subcmd__policy__subcmd__security__subcmd__key__subcmd__test)
+            opts="-h --dry-run --zone --json --human --deadline --no-deadline --help <NAME>"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__emergency__subcmd__policy__subcmd__status)
+            opts="-h --watch --zone --json --human --deadline --no-deadline --help <NAME>"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__emergency__subcmd__policy__subcmd__update__subcmd__spec)
+            opts="-h --revision --spec-file --spec-stdin --wait-for-reconcile --reconcile-deadline --zone --json --human --deadline --no-deadline --help <NAME>"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --revision)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --spec-file)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --reconcile-deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__emergency__subcmd__policy__subcmd__upgrade)
+            opts="-h --recursive --apply --reconcile-deadline --zone --json --human --deadline --no-deadline --help <NAME>"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --reconcile-deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__emergency__subcmd__policy__subcmd__usb)
+            opts="-h --zone --json --human --deadline --no-deadline --help attach detach probe"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__emergency__subcmd__policy__subcmd__usb__subcmd__attach)
+            opts="-h --dry-run --apply --zone --json --human --deadline --no-deadline --help <NAME> <BUSID>"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__emergency__subcmd__policy__subcmd__usb__subcmd__detach)
+            opts="-h --dry-run --apply --zone --json --human --deadline --no-deadline --help <NAME> <BUSID>"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__emergency__subcmd__policy__subcmd__usb__subcmd__probe)
+            opts="-h --zone --json --human --deadline --no-deadline --help"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__emergency__subcmd__policy__subcmd__verify)
+            opts="-h --repair --zone --json --human --deadline --no-deadline --help <NAME>"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__emergency__subcmd__policy__subcmd__watch)
+            opts="-h --since-revision --phase --label-selector --zone --json --human --deadline --no-deadline --help"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --since-revision)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --phase)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --label-selector)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__endpoint)
+            opts="-h --zone --json --human --deadline --no-deadline --help get list watch status resolve"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__endpoint__subcmd__get)
+            opts="-h --zone --json --human --deadline --no-deadline --help <NAME>"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__endpoint__subcmd__list)
+            opts="-h --endpoint-class --updates --zone --json --human --deadline --no-deadline --help"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --endpoint-class)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__endpoint__subcmd__resolve)
+            opts="-h --zone --json --human --deadline --no-deadline --help <NAME>"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__endpoint__subcmd__status)
+            opts="-h --watch --zone --json --human --deadline --no-deadline --help <NAME>"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__endpoint__subcmd__watch)
+            opts="-h --endpoint-class --zone --json --human --deadline --no-deadline --help"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --endpoint-class)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__exec)
+            opts="-h --zone --json --human --deadline --no-deadline --help run attach wait status list logs kill"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__exec__subcmd__attach)
+            opts="-i -t -h --interactive --tty --zone --json --human --deadline --no-deadline --help <RESOURCE_REF>"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__exec__subcmd__kill)
+            opts="-h --signal --zone --json --human --deadline --no-deadline --help <RESOURCE_REF>"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --signal)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__exec__subcmd__list)
+            opts="-h --phase --zone --json --human --deadline --no-deadline --help [EXECUTION_REF]"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --phase)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__exec__subcmd__logs)
+            opts="-h --stdout-offset --stderr-offset --max-len --zone --json --human --deadline --no-deadline --help <RESOURCE_REF>"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --stdout-offset)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --stderr-offset)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --max-len)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__exec__subcmd__run)
+            opts="-h --name --domain --user --provider --env --cwd --zone --json --human --deadline --no-deadline --help <EXECUTION_REF> <COMMAND>..."
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --name)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --domain)
                     COMPREPLY=($(compgen -f "${cur}"))
                     return 0
                     ;;
@@ -1258,11 +3415,23 @@ _d2b() {
                     COMPREPLY=($(compgen -f "${cur}"))
                     return 0
                     ;;
-                --key)
+                --provider)
                     COMPREPLY=($(compgen -f "${cur}"))
                     return 0
                     ;;
-                --known-hosts)
+                --env)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --cwd)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
                     COMPREPLY=($(compgen -f "${cur}"))
                     return 0
                     ;;
@@ -1273,13 +3442,65 @@ _d2b() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        d2b__subcmd__console)
-            opts="-h --help <VM>"
+        d2b__subcmd__exec__subcmd__status)
+            opts="-h --watch --zone --json --human --deadline --no-deadline --help <RESOURCE_REF>"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__exec__subcmd__wait)
+            opts="-h --zone --json --human --deadline --no-deadline --help <RESOURCE_REF>"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__export)
+            opts="-h --zone --json --human --deadline --no-deadline --help get list watch status create update-spec delete"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
             fi
             case "${prev}" in
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
                 *)
                     COMPREPLY=()
                     ;;
@@ -1287,13 +3508,199 @@ _d2b() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        d2b__subcmd__down)
-            opts="-f -h --dry-run --apply --force --json --human --help <VM>"
+        d2b__subcmd__export__subcmd__create)
+            opts="-h --spec-file --spec-stdin --zone --json --human --deadline --no-deadline --help"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --spec-file)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__export__subcmd__delete)
+            opts="-h --revision --zone --json --human --deadline --no-deadline --help <NAME>"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --revision)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__export__subcmd__get)
+            opts="-h --zone --json --human --deadline --no-deadline --help <NAME>"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__export__subcmd__list)
+            opts="-h --exported-type --zone --json --human --deadline --no-deadline --help"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --exported-type)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__export__subcmd__status)
+            opts="-h --watch --zone --json --human --deadline --no-deadline --help <NAME>"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__export__subcmd__update__subcmd__spec)
+            opts="-h --revision --spec-file --spec-stdin --zone --json --human --deadline --no-deadline --help <NAME>"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --revision)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --spec-file)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__export__subcmd__watch)
+            opts="-h --exported-type --zone --json --human --deadline --no-deadline --help"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --exported-type)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__get)
+            opts="-h --zone --json --human --deadline --no-deadline --help <RESOURCE_REF>"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
             fi
             case "${prev}" in
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
                 *)
                     COMPREPLY=()
                     ;;
@@ -1301,13 +3708,21 @@ _d2b() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        d2b__subcmd__gc)
-            opts="-h --dry-run --apply --json --human --help"
+        d2b__subcmd__guest)
+            opts="-h --zone --json --human --deadline --no-deadline --help get list status start stop restart create update-spec delete console"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
             fi
             case "${prev}" in
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
                 *)
                     COMPREPLY=()
                     ;;
@@ -1315,41 +3730,21 @@ _d2b() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        d2b__subcmd__generations)
-            opts="-h --json --human --help <VM>"
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        d2b__subcmd__help)
-            opts="list status launch usb console audio audit host auth realm shell op vm up down restart build generations switch boot test rollback gc store keys trust rotate-known-host migrate config clipboard help"
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        d2b__subcmd__help__subcmd__audio)
-            opts="status mic speaker off"
+        d2b__subcmd__guest__subcmd__console)
+            opts="-h --zone --json --human --deadline --no-deadline --help <NAME>"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
             fi
             case "${prev}" in
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
                 *)
                     COMPREPLY=()
                     ;;
@@ -1357,69 +3752,29 @@ _d2b() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        d2b__subcmd__help__subcmd__audio__subcmd__mic)
-            opts=""
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        d2b__subcmd__help__subcmd__audio__subcmd__off)
-            opts=""
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        d2b__subcmd__help__subcmd__audio__subcmd__speaker)
-            opts=""
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        d2b__subcmd__help__subcmd__audio__subcmd__status)
-            opts=""
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        d2b__subcmd__help__subcmd__audit)
-            opts=""
+        d2b__subcmd__guest__subcmd__create)
+            opts="-h --spec-file --spec-stdin --wait-for-reconcile --reconcile-deadline --zone --json --human --deadline --no-deadline --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
             fi
             case "${prev}" in
+                --spec-file)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --reconcile-deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
                 *)
                     COMPREPLY=()
                     ;;
@@ -1427,13 +3782,29 @@ _d2b() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        d2b__subcmd__help__subcmd__auth)
-            opts="status"
+        d2b__subcmd__guest__subcmd__delete)
+            opts="-h --revision --wait-for-reconcile --reconcile-deadline --zone --json --human --deadline --no-deadline --help <NAME>"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
             fi
             case "${prev}" in
+                --revision)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --reconcile-deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
                 *)
                     COMPREPLY=()
                     ;;
@@ -1441,27 +3812,21 @@ _d2b() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        d2b__subcmd__help__subcmd__auth__subcmd__status)
-            opts=""
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        d2b__subcmd__help__subcmd__boot)
-            opts=""
+        d2b__subcmd__guest__subcmd__get)
+            opts="-h --zone --json --human --deadline --no-deadline --help <NAME>"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
             fi
             case "${prev}" in
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
                 *)
                     COMPREPLY=()
                     ;;
@@ -1469,13 +3834,45 @@ _d2b() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        d2b__subcmd__help__subcmd__build)
-            opts=""
+        d2b__subcmd__guest__subcmd__list)
+            opts="-h --execution-ref --domain --phase --label-selector --updates --page-token --limit --zone --json --human --deadline --no-deadline --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
             fi
             case "${prev}" in
+                --execution-ref)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --domain)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --phase)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --label-selector)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --page-token)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --limit)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
                 *)
                     COMPREPLY=()
                     ;;
@@ -1483,13 +3880,21 @@ _d2b() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        d2b__subcmd__help__subcmd__clipboard)
-            opts="arm"
+        d2b__subcmd__guest__subcmd__restart)
+            opts="-f -h --dry-run --apply --no-wait-ready --force --zone --json --human --deadline --no-deadline --help <NAME>"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
             fi
             case "${prev}" in
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
                 *)
                     COMPREPLY=()
                     ;;
@@ -1497,27 +3902,21 @@ _d2b() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        d2b__subcmd__help__subcmd__clipboard__subcmd__arm)
-            opts=""
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        d2b__subcmd__help__subcmd__config)
-            opts="sync diff approve reject status"
+        d2b__subcmd__guest__subcmd__start)
+            opts="-f -h --dry-run --apply --no-wait-ready --force --zone --json --human --deadline --no-deadline --help <NAME>"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
             fi
             case "${prev}" in
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
                 *)
                     COMPREPLY=()
                     ;;
@@ -1525,83 +3924,21 @@ _d2b() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        d2b__subcmd__help__subcmd__config__subcmd__approve)
-            opts=""
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        d2b__subcmd__help__subcmd__config__subcmd__diff)
-            opts=""
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        d2b__subcmd__help__subcmd__config__subcmd__reject)
-            opts=""
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        d2b__subcmd__help__subcmd__config__subcmd__status)
-            opts=""
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        d2b__subcmd__help__subcmd__config__subcmd__sync)
-            opts=""
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        d2b__subcmd__help__subcmd__console)
-            opts=""
+        d2b__subcmd__guest__subcmd__status)
+            opts="-h --watch --zone --json --human --deadline --no-deadline --help <NAME>"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
             fi
             case "${prev}" in
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
                 *)
                     COMPREPLY=()
                     ;;
@@ -1609,13 +3946,21 @@ _d2b() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        d2b__subcmd__help__subcmd__down)
-            opts=""
+        d2b__subcmd__guest__subcmd__stop)
+            opts="-f -h --dry-run --apply --no-wait-ready --force --zone --json --human --deadline --no-deadline --help <NAME>"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
             fi
             case "${prev}" in
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
                 *)
                     COMPREPLY=()
                     ;;
@@ -1623,783 +3968,33 @@ _d2b() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        d2b__subcmd__help__subcmd__gc)
-            opts=""
+        d2b__subcmd__guest__subcmd__update__subcmd__spec)
+            opts="-h --revision --spec-file --spec-stdin --wait-for-reconcile --reconcile-deadline --zone --json --human --deadline --no-deadline --help <NAME>"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
             fi
             case "${prev}" in
-                *)
-                    COMPREPLY=()
+                --revision)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
                     ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        d2b__subcmd__help__subcmd__generations)
-            opts=""
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
+                --spec-file)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
                     ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        d2b__subcmd__help__subcmd__help)
-            opts=""
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
+                --reconcile-deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
                     ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        d2b__subcmd__help__subcmd__host)
-            opts="check prepare destroy doctor migrate-storage install reconcile validate"
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
                     ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        d2b__subcmd__help__subcmd__host__subcmd__check)
-            opts=""
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
                     ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        d2b__subcmd__help__subcmd__host__subcmd__destroy)
-            opts=""
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        d2b__subcmd__help__subcmd__host__subcmd__doctor)
-            opts=""
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        d2b__subcmd__help__subcmd__host__subcmd__install)
-            opts=""
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        d2b__subcmd__help__subcmd__host__subcmd__migrate__subcmd__storage)
-            opts=""
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        d2b__subcmd__help__subcmd__host__subcmd__prepare)
-            opts=""
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        d2b__subcmd__help__subcmd__host__subcmd__reconcile)
-            opts=""
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        d2b__subcmd__help__subcmd__host__subcmd__validate)
-            opts=""
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        d2b__subcmd__help__subcmd__keys)
-            opts="list show rotate"
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        d2b__subcmd__help__subcmd__keys__subcmd__list)
-            opts=""
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        d2b__subcmd__help__subcmd__keys__subcmd__rotate)
-            opts=""
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        d2b__subcmd__help__subcmd__keys__subcmd__show)
-            opts=""
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        d2b__subcmd__help__subcmd__launch)
-            opts=""
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        d2b__subcmd__help__subcmd__list)
-            opts=""
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        d2b__subcmd__help__subcmd__migrate)
-            opts=""
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        d2b__subcmd__help__subcmd__op)
-            opts="inspect"
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        d2b__subcmd__help__subcmd__op__subcmd__inspect)
-            opts=""
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        d2b__subcmd__help__subcmd__realm)
-            opts="list inspect enter run"
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        d2b__subcmd__help__subcmd__realm__subcmd__enter)
-            opts=""
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        d2b__subcmd__help__subcmd__realm__subcmd__inspect)
-            opts=""
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        d2b__subcmd__help__subcmd__realm__subcmd__list)
-            opts=""
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        d2b__subcmd__help__subcmd__realm__subcmd__run)
-            opts=""
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        d2b__subcmd__help__subcmd__restart)
-            opts=""
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        d2b__subcmd__help__subcmd__rollback)
-            opts=""
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        d2b__subcmd__help__subcmd__rotate__subcmd__known__subcmd__host)
-            opts=""
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        d2b__subcmd__help__subcmd__shell)
-            opts=""
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        d2b__subcmd__help__subcmd__status)
-            opts=""
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        d2b__subcmd__help__subcmd__store)
-            opts="verify"
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        d2b__subcmd__help__subcmd__store__subcmd__verify)
-            opts=""
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        d2b__subcmd__help__subcmd__switch)
-            opts=""
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        d2b__subcmd__help__subcmd__test)
-            opts=""
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        d2b__subcmd__help__subcmd__trust)
-            opts=""
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        d2b__subcmd__help__subcmd__up)
-            opts=""
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        d2b__subcmd__help__subcmd__usb)
-            opts="attach detach probe security-key"
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        d2b__subcmd__help__subcmd__usb__subcmd__attach)
-            opts=""
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        d2b__subcmd__help__subcmd__usb__subcmd__detach)
-            opts=""
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        d2b__subcmd__help__subcmd__usb__subcmd__probe)
-            opts=""
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        d2b__subcmd__help__subcmd__usb__subcmd__security__subcmd__key)
-            opts="status sessions cancel test"
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        d2b__subcmd__help__subcmd__usb__subcmd__security__subcmd__key__subcmd__cancel)
-            opts=""
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 5 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        d2b__subcmd__help__subcmd__usb__subcmd__security__subcmd__key__subcmd__sessions)
-            opts=""
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 5 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        d2b__subcmd__help__subcmd__usb__subcmd__security__subcmd__key__subcmd__status)
-            opts=""
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 5 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        d2b__subcmd__help__subcmd__usb__subcmd__security__subcmd__key__subcmd__test)
-            opts=""
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 5 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        d2b__subcmd__help__subcmd__vm)
-            opts="start stop restart list status exec display"
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        d2b__subcmd__help__subcmd__vm__subcmd__display)
-            opts="list close"
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        d2b__subcmd__help__subcmd__vm__subcmd__display__subcmd__close)
-            opts=""
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 5 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        d2b__subcmd__help__subcmd__vm__subcmd__display__subcmd__list)
-            opts=""
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 5 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        d2b__subcmd__help__subcmd__vm__subcmd__exec)
-            opts=""
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        d2b__subcmd__help__subcmd__vm__subcmd__list)
-            opts=""
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        d2b__subcmd__help__subcmd__vm__subcmd__restart)
-            opts=""
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        d2b__subcmd__help__subcmd__vm__subcmd__start)
-            opts=""
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        d2b__subcmd__help__subcmd__vm__subcmd__status)
-            opts=""
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        d2b__subcmd__help__subcmd__vm__subcmd__stop)
-            opts=""
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
                 *)
                     COMPREPLY=()
                     ;;
@@ -2408,12 +4003,20 @@ _d2b() {
             return 0
             ;;
         d2b__subcmd__host)
-            opts="-h --help check prepare destroy doctor migrate-storage install reconcile validate help"
+            opts="-h --zone --json --human --deadline --no-deadline --help get list status check prepare destroy doctor install reconcile validate"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
             fi
             case "${prev}" in
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
                 *)
                     COMPREPLY=()
                     ;;
@@ -2422,12 +4025,20 @@ _d2b() {
             return 0
             ;;
         d2b__subcmd__host__subcmd__check)
-            opts="-h --read-only --strict --json --human --help"
+            opts="-h --read-only --strict --zone --json --human --deadline --no-deadline --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
             fi
             case "${prev}" in
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
                 *)
                     COMPREPLY=()
                     ;;
@@ -2436,12 +4047,20 @@ _d2b() {
             return 0
             ;;
         d2b__subcmd__host__subcmd__destroy)
-            opts="-h --dry-run --apply --json --human --help"
+            opts="-h --dry-run --apply --zone --json --human --deadline --no-deadline --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
             fi
             case "${prev}" in
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
                 *)
                     COMPREPLY=()
                     ;;
@@ -2450,12 +4069,20 @@ _d2b() {
             return 0
             ;;
         d2b__subcmd__host__subcmd__doctor)
-            opts="-h --read-only --json --human --help"
+            opts="-h --read-only --zone --json --human --deadline --no-deadline --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
             fi
             case "${prev}" in
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
                 *)
                     COMPREPLY=()
                     ;;
@@ -2463,139 +4090,21 @@ _d2b() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        d2b__subcmd__host__subcmd__help)
-            opts="check prepare destroy doctor migrate-storage install reconcile validate help"
+        d2b__subcmd__host__subcmd__get)
+            opts="-h --zone --json --human --deadline --no-deadline --help <NAME>"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
             fi
             case "${prev}" in
-                *)
-                    COMPREPLY=()
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
                     ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        d2b__subcmd__host__subcmd__help__subcmd__check)
-            opts=""
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
                     ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        d2b__subcmd__host__subcmd__help__subcmd__destroy)
-            opts=""
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        d2b__subcmd__host__subcmd__help__subcmd__doctor)
-            opts=""
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        d2b__subcmd__host__subcmd__help__subcmd__help)
-            opts=""
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        d2b__subcmd__host__subcmd__help__subcmd__install)
-            opts=""
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        d2b__subcmd__host__subcmd__help__subcmd__migrate__subcmd__storage)
-            opts=""
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        d2b__subcmd__host__subcmd__help__subcmd__prepare)
-            opts=""
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        d2b__subcmd__host__subcmd__help__subcmd__reconcile)
-            opts=""
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        d2b__subcmd__host__subcmd__help__subcmd__validate)
-            opts=""
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
                 *)
                     COMPREPLY=()
                     ;;
@@ -2604,12 +4113,20 @@ _d2b() {
             return 0
             ;;
         d2b__subcmd__host__subcmd__install)
-            opts="-h --dry-run --apply --enable --start --no-start --json --human --help"
+            opts="-h --dry-run --apply --enable --start --no-start --zone --json --human --deadline --no-deadline --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
             fi
             case "${prev}" in
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
                 *)
                     COMPREPLY=()
                     ;;
@@ -2617,14 +4134,42 @@ _d2b() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        d2b__subcmd__host__subcmd__migrate__subcmd__storage)
-            opts="-h --dry-run --apply --rollback --from-checkpoint --json --human --help"
+        d2b__subcmd__host__subcmd__list)
+            opts="-h --execution-ref --domain --phase --label-selector --updates --page-token --limit --zone --json --human --deadline --no-deadline --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
             fi
             case "${prev}" in
-                --from-checkpoint)
+                --execution-ref)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --domain)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --phase)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --label-selector)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --page-token)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --limit)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
                     COMPREPLY=($(compgen -f "${cur}"))
                     return 0
                     ;;
@@ -2636,12 +4181,20 @@ _d2b() {
             return 0
             ;;
         d2b__subcmd__host__subcmd__prepare)
-            opts="-h --dry-run --apply --json --human --help"
+            opts="-h --dry-run --apply --zone --json --human --deadline --no-deadline --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
             fi
             case "${prev}" in
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
                 *)
                     COMPREPLY=()
                     ;;
@@ -2650,12 +4203,42 @@ _d2b() {
             return 0
             ;;
         d2b__subcmd__host__subcmd__reconcile)
-            opts="-h --network --dry-run --apply --json --human --help"
+            opts="-h --network --dry-run --apply --zone --json --human --deadline --no-deadline --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
             fi
             case "${prev}" in
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__host__subcmd__status)
+            opts="-h --watch --zone --json --human --deadline --no-deadline --help <NAME>"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
                 *)
                     COMPREPLY=()
                     ;;
@@ -2664,17 +4247,13 @@ _d2b() {
             return 0
             ;;
         d2b__subcmd__host__subcmd__validate)
-            opts="-h --dry-run --apply --wave --operator-signature --evidence-dir --scripts-dir --json --human --help"
+            opts="-h --dry-run --apply --wave --evidence-dir --scripts-dir --operator-signature --zone --json --human --deadline --no-deadline --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
             fi
             case "${prev}" in
                 --wave)
-                    COMPREPLY=($(compgen -f "${cur}"))
-                    return 0
-                    ;;
-                --operator-signature)
                     COMPREPLY=($(compgen -f "${cur}"))
                     return 0
                     ;;
@@ -2686,6 +4265,18 @@ _d2b() {
                     COMPREPLY=($(compgen -f "${cur}"))
                     return 0
                     ;;
+                --operator-signature)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
                 *)
                     COMPREPLY=()
                     ;;
@@ -2693,13 +4284,21 @@ _d2b() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        d2b__subcmd__keys)
-            opts="-h --help list show rotate help"
+        d2b__subcmd__import)
+            opts="-h --zone --json --human --deadline --no-deadline --help get list watch status projection graph create update-spec delete"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
             fi
             case "${prev}" in
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
                 *)
                     COMPREPLY=()
                     ;;
@@ -2707,13 +4306,25 @@ _d2b() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        d2b__subcmd__keys__subcmd__help)
-            opts="list show rotate help"
+        d2b__subcmd__import__subcmd__create)
+            opts="-h --spec-file --spec-stdin --zone --json --human --deadline --no-deadline --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
             fi
             case "${prev}" in
+                --spec-file)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
                 *)
                     COMPREPLY=()
                     ;;
@@ -2721,69 +4332,25 @@ _d2b() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        d2b__subcmd__keys__subcmd__help__subcmd__help)
-            opts=""
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        d2b__subcmd__keys__subcmd__help__subcmd__list)
-            opts=""
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        d2b__subcmd__keys__subcmd__help__subcmd__rotate)
-            opts=""
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        d2b__subcmd__keys__subcmd__help__subcmd__show)
-            opts=""
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        d2b__subcmd__keys__subcmd__list)
-            opts="-h --json --human --help"
+        d2b__subcmd__import__subcmd__delete)
+            opts="-h --revision --zone --json --human --deadline --no-deadline --help <NAME>"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
             fi
             case "${prev}" in
+                --revision)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
                 *)
                     COMPREPLY=()
                     ;;
@@ -2791,13 +4358,21 @@ _d2b() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        d2b__subcmd__keys__subcmd__rotate)
-            opts="-h --dry-run --apply --json --human --help <VM>"
+        d2b__subcmd__import__subcmd__get)
+            opts="-h --zone --json --human --deadline --no-deadline --help <NAME>"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
             fi
             case "${prev}" in
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
                 *)
                     COMPREPLY=()
                     ;;
@@ -2805,13 +4380,21 @@ _d2b() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        d2b__subcmd__keys__subcmd__show)
-            opts="-h --json --human --help <VM>"
+        d2b__subcmd__import__subcmd__graph)
+            opts="-h --zone --json --human --deadline --no-deadline --help <NAME>"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
             fi
             case "${prev}" in
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
                 *)
                     COMPREPLY=()
                     ;;
@@ -2819,14 +4402,122 @@ _d2b() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        d2b__subcmd__launch)
-            opts="-h --item --json --human --help <TARGET>"
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
+        d2b__subcmd__import__subcmd__list)
+            opts="-h --expected-type --zone --json --human --deadline --no-deadline --help"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
             fi
             case "${prev}" in
-                --item)
+                --expected-type)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__import__subcmd__projection)
+            opts="-h --zone --json --human --deadline --no-deadline --help <NAME>"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__import__subcmd__status)
+            opts="-h --watch --zone --json --human --deadline --no-deadline --help <NAME>"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__import__subcmd__update__subcmd__spec)
+            opts="-h --revision --spec-file --spec-stdin --zone --json --human --deadline --no-deadline --help <NAME>"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --revision)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --spec-file)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__import__subcmd__watch)
+            opts="-h --expected-type --zone --json --human --deadline --no-deadline --help"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --expected-type)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
                     COMPREPLY=($(compgen -f "${cur}"))
                     return 0
                     ;;
@@ -2838,12 +4529,44 @@ _d2b() {
             return 0
             ;;
         d2b__subcmd__list)
-            opts="-h --json --human --help"
+            opts="-h --execution-ref --domain --phase --label-selector --updates --page-token --limit --zone --json --human --deadline --no-deadline --help <RESOURCE_TYPE>"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
             fi
             case "${prev}" in
+                --execution-ref)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --domain)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --phase)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --label-selector)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --page-token)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --limit)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
                 *)
                     COMPREPLY=()
                     ;;
@@ -2851,13 +4574,511 @@ _d2b() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        d2b__subcmd__migrate)
-            opts="-h --dry-run --apply --json --human --help"
+        d2b__subcmd__network)
+            opts="-h --zone --json --human --deadline --no-deadline --help get list watch create update-spec delete status upgrade reconcile verify usb security-key"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
             fi
             case "${prev}" in
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__network__subcmd__create)
+            opts="-h --spec-file --spec-stdin --wait-for-reconcile --reconcile-deadline --zone --json --human --deadline --no-deadline --help"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --spec-file)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --reconcile-deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__network__subcmd__delete)
+            opts="-h --revision --wait-for-reconcile --reconcile-deadline --zone --json --human --deadline --no-deadline --help <NAME>"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --revision)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --reconcile-deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__network__subcmd__get)
+            opts="-h --zone --json --human --deadline --no-deadline --help <NAME>"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__network__subcmd__list)
+            opts="-h --execution-ref --domain --phase --label-selector --updates --page-token --limit --zone --json --human --deadline --no-deadline --help"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --execution-ref)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --domain)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --phase)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --label-selector)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --page-token)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --limit)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__network__subcmd__reconcile)
+            opts="-h --reconcile-deadline --zone --json --human --deadline --no-deadline --help <NAME>"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --reconcile-deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__network__subcmd__security__subcmd__key)
+            opts="-h --zone --json --human --deadline --no-deadline --help status sessions cancel test"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__network__subcmd__security__subcmd__key__subcmd__cancel)
+            opts="-h --current --dry-run --apply --zone --json --human --deadline --no-deadline --help [SESSION_ID]"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__network__subcmd__security__subcmd__key__subcmd__sessions)
+            opts="-h --zone --json --human --deadline --no-deadline --help"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__network__subcmd__security__subcmd__key__subcmd__status)
+            opts="-h --zone --json --human --deadline --no-deadline --help"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__network__subcmd__security__subcmd__key__subcmd__test)
+            opts="-h --dry-run --zone --json --human --deadline --no-deadline --help <NAME>"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__network__subcmd__status)
+            opts="-h --watch --zone --json --human --deadline --no-deadline --help <NAME>"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__network__subcmd__update__subcmd__spec)
+            opts="-h --revision --spec-file --spec-stdin --wait-for-reconcile --reconcile-deadline --zone --json --human --deadline --no-deadline --help <NAME>"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --revision)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --spec-file)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --reconcile-deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__network__subcmd__upgrade)
+            opts="-h --recursive --apply --reconcile-deadline --zone --json --human --deadline --no-deadline --help <NAME>"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --reconcile-deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__network__subcmd__usb)
+            opts="-h --zone --json --human --deadline --no-deadline --help attach detach probe"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__network__subcmd__usb__subcmd__attach)
+            opts="-h --dry-run --apply --zone --json --human --deadline --no-deadline --help <NAME> <BUSID>"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__network__subcmd__usb__subcmd__detach)
+            opts="-h --dry-run --apply --zone --json --human --deadline --no-deadline --help <NAME> <BUSID>"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__network__subcmd__usb__subcmd__probe)
+            opts="-h --zone --json --human --deadline --no-deadline --help"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__network__subcmd__verify)
+            opts="-h --repair --zone --json --human --deadline --no-deadline --help <NAME>"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__network__subcmd__watch)
+            opts="-h --since-revision --phase --label-selector --zone --json --human --deadline --no-deadline --help"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --since-revision)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --phase)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --label-selector)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
                 *)
                     COMPREPLY=()
                     ;;
@@ -2866,54 +5087,20 @@ _d2b() {
             return 0
             ;;
         d2b__subcmd__op)
-            opts="-h --help inspect help"
+            opts="-h --zone --json --human --deadline --no-deadline --help inspect"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
             fi
             case "${prev}" in
-                *)
-                    COMPREPLY=()
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
                     ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        d2b__subcmd__op__subcmd__help)
-            opts="inspect help"
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
                     ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        d2b__subcmd__op__subcmd__help__subcmd__help)
-            opts=""
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        d2b__subcmd__op__subcmd__help__subcmd__inspect)
-            opts=""
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
                 *)
                     COMPREPLY=()
                     ;;
@@ -2922,12 +5109,16 @@ _d2b() {
             return 0
             ;;
         d2b__subcmd__op__subcmd__inspect)
-            opts="-h --trace-id --span-id --json --human --help"
+            opts="-h --operation-id --trace-id --span-id --watch --zone --json --human --deadline --no-deadline --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
             fi
             case "${prev}" in
+                --operation-id)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
                 --trace-id)
                     COMPREPLY=($(compgen -f "${cur}"))
                     return 0
@@ -2936,6 +5127,14 @@ _d2b() {
                     COMPREPLY=($(compgen -f "${cur}"))
                     return 0
                     ;;
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
                 *)
                     COMPREPLY=()
                     ;;
@@ -2943,13 +5142,21 @@ _d2b() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        d2b__subcmd__realm)
-            opts="-h --help list inspect enter run help"
+        d2b__subcmd__process)
+            opts="-h --zone --json --human --deadline --no-deadline --help get list status start stop create update-spec delete"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
             fi
             case "${prev}" in
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
                 *)
                     COMPREPLY=()
                     ;;
@@ -2957,13 +5164,29 @@ _d2b() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        d2b__subcmd__realm__subcmd__enter)
-            opts="-h --help <REALM>"
+        d2b__subcmd__process__subcmd__create)
+            opts="-h --spec-file --spec-stdin --wait-for-reconcile --reconcile-deadline --zone --json --human --deadline --no-deadline --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
             fi
             case "${prev}" in
+                --spec-file)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --reconcile-deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
                 *)
                     COMPREPLY=()
                     ;;
@@ -2971,13 +5194,29 @@ _d2b() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        d2b__subcmd__realm__subcmd__help)
-            opts="list inspect enter run help"
+        d2b__subcmd__process__subcmd__delete)
+            opts="-h --revision --wait-for-reconcile --reconcile-deadline --zone --json --human --deadline --no-deadline --help <NAME>"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
             fi
             case "${prev}" in
+                --revision)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --reconcile-deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
                 *)
                     COMPREPLY=()
                     ;;
@@ -2985,83 +5224,21 @@ _d2b() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        d2b__subcmd__realm__subcmd__help__subcmd__enter)
-            opts=""
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        d2b__subcmd__realm__subcmd__help__subcmd__help)
-            opts=""
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        d2b__subcmd__realm__subcmd__help__subcmd__inspect)
-            opts=""
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        d2b__subcmd__realm__subcmd__help__subcmd__list)
-            opts=""
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        d2b__subcmd__realm__subcmd__help__subcmd__run)
-            opts=""
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        d2b__subcmd__realm__subcmd__inspect)
-            opts="-h --json --human --help <REALM>"
+        d2b__subcmd__process__subcmd__get)
+            opts="-h --zone --json --human --deadline --no-deadline --help <NAME>"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
             fi
             case "${prev}" in
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
                 *)
                     COMPREPLY=()
                     ;;
@@ -3069,13 +5246,45 @@ _d2b() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        d2b__subcmd__realm__subcmd__list)
-            opts="-h --json --human --help"
+        d2b__subcmd__process__subcmd__list)
+            opts="-h --execution-ref --domain --phase --label-selector --updates --page-token --limit --zone --json --human --deadline --no-deadline --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
             fi
             case "${prev}" in
+                --execution-ref)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --domain)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --phase)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --label-selector)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --page-token)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --limit)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
                 *)
                     COMPREPLY=()
                     ;;
@@ -3083,13 +5292,21 @@ _d2b() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        d2b__subcmd__realm__subcmd__run)
-            opts="-h --json --human --help <REALM> <ARGV>..."
+        d2b__subcmd__process__subcmd__start)
+            opts="-f -h --dry-run --apply --no-wait-ready --force --zone --json --human --deadline --no-deadline --help <NAME>"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
             fi
             case "${prev}" in
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
                 *)
                     COMPREPLY=()
                     ;;
@@ -3097,13 +5314,99 @@ _d2b() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        d2b__subcmd__restart)
-            opts="-f -h --dry-run --apply --force --json --human --help <VM>"
+        d2b__subcmd__process__subcmd__status)
+            opts="-h --watch --zone --json --human --deadline --no-deadline --help <NAME>"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__process__subcmd__stop)
+            opts="-f -h --dry-run --apply --no-wait-ready --force --zone --json --human --deadline --no-deadline --help <NAME>"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__process__subcmd__update__subcmd__spec)
+            opts="-h --revision --spec-file --spec-stdin --wait-for-reconcile --reconcile-deadline --zone --json --human --deadline --no-deadline --help <NAME>"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --revision)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --spec-file)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --reconcile-deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__provider)
+            opts="-h --zone --json --human --deadline --no-deadline --help list get status inspect"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
             fi
             case "${prev}" in
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
                 *)
                     COMPREPLY=()
                     ;;
@@ -3111,13 +5414,21 @@ _d2b() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        d2b__subcmd__rollback)
-            opts="-h --dry-run --apply --json --human --help <VM>"
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
+        d2b__subcmd__provider__subcmd__get)
+            opts="-h --zone --json --human --deadline --no-deadline --help <NAME>"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
             fi
             case "${prev}" in
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
                 *)
                     COMPREPLY=()
                     ;;
@@ -3125,13 +5436,965 @@ _d2b() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        d2b__subcmd__rotate__subcmd__known__subcmd__host)
-            opts="-h --dry-run --apply --json --human --help <VM>"
+        d2b__subcmd__provider__subcmd__inspect)
+            opts="-h --zone --json --human --deadline --no-deadline --help <NAME>"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__provider__subcmd__list)
+            opts="-h --package-only --zone --json --human --deadline --no-deadline --help"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__provider__subcmd__status)
+            opts="-h --watch --zone --json --human --deadline --no-deadline --help <NAME>"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__quota)
+            opts="-h --zone --json --human --deadline --no-deadline --help get list watch create update-spec delete status upgrade reconcile verify usb security-key"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
             fi
             case "${prev}" in
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__quota__subcmd__create)
+            opts="-h --spec-file --spec-stdin --wait-for-reconcile --reconcile-deadline --zone --json --human --deadline --no-deadline --help"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --spec-file)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --reconcile-deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__quota__subcmd__delete)
+            opts="-h --revision --wait-for-reconcile --reconcile-deadline --zone --json --human --deadline --no-deadline --help <NAME>"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --revision)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --reconcile-deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__quota__subcmd__get)
+            opts="-h --zone --json --human --deadline --no-deadline --help <NAME>"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__quota__subcmd__list)
+            opts="-h --execution-ref --domain --phase --label-selector --updates --page-token --limit --zone --json --human --deadline --no-deadline --help"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --execution-ref)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --domain)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --phase)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --label-selector)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --page-token)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --limit)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__quota__subcmd__reconcile)
+            opts="-h --reconcile-deadline --zone --json --human --deadline --no-deadline --help <NAME>"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --reconcile-deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__quota__subcmd__security__subcmd__key)
+            opts="-h --zone --json --human --deadline --no-deadline --help status sessions cancel test"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__quota__subcmd__security__subcmd__key__subcmd__cancel)
+            opts="-h --current --dry-run --apply --zone --json --human --deadline --no-deadline --help [SESSION_ID]"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__quota__subcmd__security__subcmd__key__subcmd__sessions)
+            opts="-h --zone --json --human --deadline --no-deadline --help"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__quota__subcmd__security__subcmd__key__subcmd__status)
+            opts="-h --zone --json --human --deadline --no-deadline --help"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__quota__subcmd__security__subcmd__key__subcmd__test)
+            opts="-h --dry-run --zone --json --human --deadline --no-deadline --help <NAME>"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__quota__subcmd__status)
+            opts="-h --watch --zone --json --human --deadline --no-deadline --help <NAME>"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__quota__subcmd__update__subcmd__spec)
+            opts="-h --revision --spec-file --spec-stdin --wait-for-reconcile --reconcile-deadline --zone --json --human --deadline --no-deadline --help <NAME>"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --revision)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --spec-file)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --reconcile-deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__quota__subcmd__upgrade)
+            opts="-h --recursive --apply --reconcile-deadline --zone --json --human --deadline --no-deadline --help <NAME>"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --reconcile-deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__quota__subcmd__usb)
+            opts="-h --zone --json --human --deadline --no-deadline --help attach detach probe"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__quota__subcmd__usb__subcmd__attach)
+            opts="-h --dry-run --apply --zone --json --human --deadline --no-deadline --help <NAME> <BUSID>"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__quota__subcmd__usb__subcmd__detach)
+            opts="-h --dry-run --apply --zone --json --human --deadline --no-deadline --help <NAME> <BUSID>"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__quota__subcmd__usb__subcmd__probe)
+            opts="-h --zone --json --human --deadline --no-deadline --help"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__quota__subcmd__verify)
+            opts="-h --repair --zone --json --human --deadline --no-deadline --help <NAME>"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__quota__subcmd__watch)
+            opts="-h --since-revision --phase --label-selector --zone --json --human --deadline --no-deadline --help"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --since-revision)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --phase)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --label-selector)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__reconcile)
+            opts="-h --reconcile-deadline --zone --json --human --deadline --no-deadline --help <RESOURCE_REF>"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --reconcile-deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__resource)
+            opts="-h --zone --json --human --deadline --no-deadline --help get list watch create update-spec delete status upgrade reconcile authorities"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__resource__subcmd__authorities)
+            opts="-h --scope --zone --json --human --deadline --no-deadline --help holders conflict"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --scope)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__resource__subcmd__authorities__subcmd__conflict)
+            opts="-h --zone --json --human --deadline --no-deadline --help <RESOURCE_REF>"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__resource__subcmd__authorities__subcmd__holders)
+            opts="-h --zone --json --human --deadline --no-deadline --help <RESOURCE_REF>"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__resource__subcmd__create)
+            opts="-h --spec-file --spec-stdin --wait-for-reconcile --reconcile-deadline --zone --json --human --deadline --no-deadline --help <RESOURCE_TYPE>"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --spec-file)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --reconcile-deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__resource__subcmd__delete)
+            opts="-h --revision --wait-for-reconcile --reconcile-deadline --zone --json --human --deadline --no-deadline --help <RESOURCE_REF>"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --revision)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --reconcile-deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__resource__subcmd__get)
+            opts="-h --zone --json --human --deadline --no-deadline --help <RESOURCE_REF>"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__resource__subcmd__list)
+            opts="-h --execution-ref --domain --phase --label-selector --updates --page-token --limit --zone --json --human --deadline --no-deadline --help <RESOURCE_TYPE>"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --execution-ref)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --domain)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --phase)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --label-selector)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --page-token)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --limit)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__resource__subcmd__reconcile)
+            opts="-h --reconcile-deadline --zone --json --human --deadline --no-deadline --help <RESOURCE_REF>"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --reconcile-deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__resource__subcmd__status)
+            opts="-h --watch --zone --json --human --deadline --no-deadline --help <RESOURCE_REF>"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__resource__subcmd__update__subcmd__spec)
+            opts="-h --revision --spec-file --spec-stdin --wait-for-reconcile --reconcile-deadline --zone --json --human --deadline --no-deadline --help <RESOURCE_REF>"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --revision)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --spec-file)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --reconcile-deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__resource__subcmd__upgrade)
+            opts="-h --recursive --apply --reconcile-deadline --zone --json --human --deadline --no-deadline --help <RESOURCE_REF>"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --reconcile-deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__resource__subcmd__watch)
+            opts="-h --since-revision --phase --label-selector --zone --json --human --deadline --no-deadline --help <RESOURCE_TYPE>"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --since-revision)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --phase)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --label-selector)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
                 *)
                     COMPREPLY=()
                     ;;
@@ -3140,13 +6403,153 @@ _d2b() {
             return 0
             ;;
         d2b__subcmd__shell)
-            opts="-h --name --force --json --human --help <TARGET> attach list detach kill"
+            opts="-h --zone --json --human --deadline --no-deadline --help open attach list detach kill status"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
             fi
             case "${prev}" in
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__shell__subcmd__attach)
+            opts="-h --force --zone --json --human --deadline --no-deadline --help <RESOURCE_REF>"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__shell__subcmd__detach)
+            opts="-h --zone --json --human --deadline --no-deadline --help <RESOURCE_REF>"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__shell__subcmd__kill)
+            opts="-h --zone --json --human --deadline --no-deadline --help <RESOURCE_REF>"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__shell__subcmd__list)
+            opts="-h --zone --json --human --deadline --no-deadline --help [EXECUTION_REF]"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__shell__subcmd__open)
+            opts="-h --name --force --zone --json --human --deadline --no-deadline --help <EXECUTION_REF>"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
                 --name)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__shell__subcmd__status)
+            opts="-h --watch --zone --json --human --deadline --no-deadline --help <RESOURCE_REF>"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
                     COMPREPLY=($(compgen -f "${cur}"))
                     return 0
                     ;;
@@ -3158,13 +6561,17 @@ _d2b() {
             return 0
             ;;
         d2b__subcmd__status)
-            opts="-h --json --human --check-bridges --vm --help [VM]"
+            opts="-h --watch --zone --json --human --deadline --no-deadline --help <RESOURCE_REF>"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
             fi
             case "${prev}" in
-                --vm)
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
                     COMPREPLY=($(compgen -f "${cur}"))
                     return 0
                     ;;
@@ -3175,588 +6582,30 @@ _d2b() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        d2b__subcmd__store)
-            opts="-h --help verify help"
+        d2b__subcmd__update__subcmd__spec)
+            opts="-h --revision --spec-file --spec-stdin --wait-for-reconcile --reconcile-deadline --zone --json --human --deadline --no-deadline --help <RESOURCE_REF>"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
             fi
             case "${prev}" in
-                *)
-                    COMPREPLY=()
+                --revision)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
                     ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        d2b__subcmd__store__subcmd__help)
-            opts="verify help"
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
+                --spec-file)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
                     ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        d2b__subcmd__store__subcmd__help__subcmd__help)
-            opts=""
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
+                --reconcile-deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
                     ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        d2b__subcmd__store__subcmd__help__subcmd__verify)
-            opts=""
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
                     ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        d2b__subcmd__store__subcmd__verify)
-            opts="-h --repair --json --human --help <VM>"
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        d2b__subcmd__switch)
-            opts="-h --dry-run --apply --json --human --help <VM>"
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        d2b__subcmd__test)
-            opts="-h --dry-run --apply --json --human --help <VM>"
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        d2b__subcmd__trust)
-            opts="-h --dry-run --apply --json --human --help <VM>"
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        d2b__subcmd__up)
-            opts="-h --dry-run --apply --no-wait-api --json --human --help <VM>"
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        d2b__subcmd__usb)
-            opts="-h --help attach detach probe security-key help"
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        d2b__subcmd__usb__subcmd__attach)
-            opts="-h --dry-run --apply --json --human --help <VM> <BUSID>"
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        d2b__subcmd__usb__subcmd__detach)
-            opts="-h --dry-run --apply --json --human --help <VM> <BUSID>"
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        d2b__subcmd__usb__subcmd__help)
-            opts="attach detach probe security-key help"
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        d2b__subcmd__usb__subcmd__help__subcmd__attach)
-            opts=""
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        d2b__subcmd__usb__subcmd__help__subcmd__detach)
-            opts=""
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        d2b__subcmd__usb__subcmd__help__subcmd__help)
-            opts=""
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        d2b__subcmd__usb__subcmd__help__subcmd__probe)
-            opts=""
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        d2b__subcmd__usb__subcmd__help__subcmd__security__subcmd__key)
-            opts="status sessions cancel test"
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        d2b__subcmd__usb__subcmd__help__subcmd__security__subcmd__key__subcmd__cancel)
-            opts=""
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 5 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        d2b__subcmd__usb__subcmd__help__subcmd__security__subcmd__key__subcmd__sessions)
-            opts=""
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 5 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        d2b__subcmd__usb__subcmd__help__subcmd__security__subcmd__key__subcmd__status)
-            opts=""
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 5 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        d2b__subcmd__usb__subcmd__help__subcmd__security__subcmd__key__subcmd__test)
-            opts=""
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 5 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        d2b__subcmd__usb__subcmd__probe)
-            opts="-h --json --human --help"
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        d2b__subcmd__usb__subcmd__security__subcmd__key)
-            opts="-h --help status sessions cancel test help"
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        d2b__subcmd__usb__subcmd__security__subcmd__key__subcmd__cancel)
-            opts="-h --current --dry-run --apply --json --human --help [SESSION_ID]"
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        d2b__subcmd__usb__subcmd__security__subcmd__key__subcmd__help)
-            opts="status sessions cancel test help"
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        d2b__subcmd__usb__subcmd__security__subcmd__key__subcmd__help__subcmd__cancel)
-            opts=""
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 5 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        d2b__subcmd__usb__subcmd__security__subcmd__key__subcmd__help__subcmd__help)
-            opts=""
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 5 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        d2b__subcmd__usb__subcmd__security__subcmd__key__subcmd__help__subcmd__sessions)
-            opts=""
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 5 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        d2b__subcmd__usb__subcmd__security__subcmd__key__subcmd__help__subcmd__status)
-            opts=""
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 5 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        d2b__subcmd__usb__subcmd__security__subcmd__key__subcmd__help__subcmd__test)
-            opts=""
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 5 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        d2b__subcmd__usb__subcmd__security__subcmd__key__subcmd__sessions)
-            opts="-h --json --human --help"
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        d2b__subcmd__usb__subcmd__security__subcmd__key__subcmd__status)
-            opts="-h --json --human --help"
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        d2b__subcmd__usb__subcmd__security__subcmd__key__subcmd__test)
-            opts="-h --dry-run --json --human --help <VM>"
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        d2b__subcmd__vm)
-            opts="-h --help start stop restart list status exec display help"
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        d2b__subcmd__vm__subcmd__display)
-            opts="-h --help list close help"
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        d2b__subcmd__vm__subcmd__display__subcmd__close)
-            opts="-h --json --human --help <SESSION_ID>"
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        d2b__subcmd__vm__subcmd__display__subcmd__help)
-            opts="list close help"
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        d2b__subcmd__vm__subcmd__display__subcmd__help__subcmd__close)
-            opts=""
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 5 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        d2b__subcmd__vm__subcmd__display__subcmd__help__subcmd__help)
-            opts=""
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 5 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        d2b__subcmd__vm__subcmd__display__subcmd__help__subcmd__list)
-            opts=""
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 5 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        d2b__subcmd__vm__subcmd__display__subcmd__list)
-            opts="-h --target --json --human --help"
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                --target)
+                --deadline)
                     COMPREPLY=($(compgen -f "${cur}"))
                     return 0
                     ;;
@@ -3767,197 +6616,22 @@ _d2b() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        d2b__subcmd__vm__subcmd__exec)
-            opts="-d -i -t -h --detach --interactive --tty --env --cwd --json --human --help <VM> [MANAGEMENT]... [COMMAND]..."
-            if [[ " ${COMP_WORDS[*]} " == *" logs "* ]] ; then
-                opts="${opts} --stdout-offset --stderr-offset --max-len"
-            fi
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+        d2b__subcmd__upgrade)
+            opts="-h --recursive --apply --reconcile-deadline --zone --json --human --deadline --no-deadline --help <RESOURCE_REF>"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
             fi
             case "${prev}" in
-                --env)
+                --reconcile-deadline)
                     COMPREPLY=($(compgen -f "${cur}"))
                     return 0
                     ;;
-                --cwd)
+                --zone)
                     COMPREPLY=($(compgen -f "${cur}"))
                     return 0
                     ;;
-                --stdout-offset|--stderr-offset|--max-len)
-                    COMPREPLY=()
-                    return 0
-                    ;;
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        d2b__subcmd__vm__subcmd__help)
-            opts="start stop restart list status exec display help"
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        d2b__subcmd__vm__subcmd__help__subcmd__display)
-            opts="list close"
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        d2b__subcmd__vm__subcmd__help__subcmd__display__subcmd__close)
-            opts=""
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 5 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        d2b__subcmd__vm__subcmd__help__subcmd__display__subcmd__list)
-            opts=""
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 5 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        d2b__subcmd__vm__subcmd__help__subcmd__exec)
-            opts=""
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        d2b__subcmd__vm__subcmd__help__subcmd__help)
-            opts=""
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        d2b__subcmd__vm__subcmd__help__subcmd__list)
-            opts=""
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        d2b__subcmd__vm__subcmd__help__subcmd__restart)
-            opts=""
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        d2b__subcmd__vm__subcmd__help__subcmd__start)
-            opts=""
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        d2b__subcmd__vm__subcmd__help__subcmd__status)
-            opts=""
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        d2b__subcmd__vm__subcmd__help__subcmd__stop)
-            opts=""
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        d2b__subcmd__vm__subcmd__list)
-            opts="-h --json --human --realm --all --help"
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                --realm)
+                --deadline)
                     COMPREPLY=($(compgen -f "${cur}"))
                     return 0
                     ;;
@@ -3968,13 +6642,21 @@ _d2b() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        d2b__subcmd__vm__subcmd__restart)
-            opts="-f -h --dry-run --apply --force --json --human --help <VM>"
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+        d2b__subcmd__user)
+            opts="-h --zone --json --human --deadline --no-deadline --help get list watch create update-spec delete status upgrade reconcile verify usb security-key"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
             fi
             case "${prev}" in
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
                 *)
                     COMPREPLY=()
                     ;;
@@ -3982,13 +6664,29 @@ _d2b() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        d2b__subcmd__vm__subcmd__start)
-            opts="-h --dry-run --apply --no-wait-api --json --human --help <VM>"
+        d2b__subcmd__user__subcmd__create)
+            opts="-h --spec-file --spec-stdin --wait-for-reconcile --reconcile-deadline --zone --json --human --deadline --no-deadline --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
             fi
             case "${prev}" in
+                --spec-file)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --reconcile-deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
                 *)
                     COMPREPLY=()
                     ;;
@@ -3996,13 +6694,29 @@ _d2b() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        d2b__subcmd__vm__subcmd__status)
-            opts="-h --json --human --help <VM>"
+        d2b__subcmd__user__subcmd__delete)
+            opts="-h --revision --wait-for-reconcile --reconcile-deadline --zone --json --human --deadline --no-deadline --help <NAME>"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
             fi
             case "${prev}" in
+                --revision)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --reconcile-deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
                 *)
                     COMPREPLY=()
                     ;;
@@ -4010,13 +6724,1063 @@ _d2b() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        d2b__subcmd__vm__subcmd__stop)
-            opts="-f -h --dry-run --apply --force --json --human --help <VM>"
+        d2b__subcmd__user__subcmd__get)
+            opts="-h --zone --json --human --deadline --no-deadline --help <NAME>"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
             fi
             case "${prev}" in
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__user__subcmd__list)
+            opts="-h --execution-ref --domain --phase --label-selector --updates --page-token --limit --zone --json --human --deadline --no-deadline --help"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --execution-ref)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --domain)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --phase)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --label-selector)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --page-token)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --limit)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__user__subcmd__reconcile)
+            opts="-h --reconcile-deadline --zone --json --human --deadline --no-deadline --help <NAME>"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --reconcile-deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__user__subcmd__security__subcmd__key)
+            opts="-h --zone --json --human --deadline --no-deadline --help status sessions cancel test"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__user__subcmd__security__subcmd__key__subcmd__cancel)
+            opts="-h --current --dry-run --apply --zone --json --human --deadline --no-deadline --help [SESSION_ID]"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__user__subcmd__security__subcmd__key__subcmd__sessions)
+            opts="-h --zone --json --human --deadline --no-deadline --help"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__user__subcmd__security__subcmd__key__subcmd__status)
+            opts="-h --zone --json --human --deadline --no-deadline --help"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__user__subcmd__security__subcmd__key__subcmd__test)
+            opts="-h --dry-run --zone --json --human --deadline --no-deadline --help <NAME>"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__user__subcmd__status)
+            opts="-h --watch --zone --json --human --deadline --no-deadline --help <NAME>"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__user__subcmd__update__subcmd__spec)
+            opts="-h --revision --spec-file --spec-stdin --wait-for-reconcile --reconcile-deadline --zone --json --human --deadline --no-deadline --help <NAME>"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --revision)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --spec-file)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --reconcile-deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__user__subcmd__upgrade)
+            opts="-h --recursive --apply --reconcile-deadline --zone --json --human --deadline --no-deadline --help <NAME>"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --reconcile-deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__user__subcmd__usb)
+            opts="-h --zone --json --human --deadline --no-deadline --help attach detach probe"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__user__subcmd__usb__subcmd__attach)
+            opts="-h --dry-run --apply --zone --json --human --deadline --no-deadline --help <NAME> <BUSID>"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__user__subcmd__usb__subcmd__detach)
+            opts="-h --dry-run --apply --zone --json --human --deadline --no-deadline --help <NAME> <BUSID>"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__user__subcmd__usb__subcmd__probe)
+            opts="-h --zone --json --human --deadline --no-deadline --help"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__user__subcmd__verify)
+            opts="-h --repair --zone --json --human --deadline --no-deadline --help <NAME>"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__user__subcmd__watch)
+            opts="-h --since-revision --phase --label-selector --zone --json --human --deadline --no-deadline --help"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --since-revision)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --phase)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --label-selector)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__volume)
+            opts="-h --zone --json --human --deadline --no-deadline --help get list watch create update-spec delete status upgrade reconcile verify usb security-key"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__volume__subcmd__create)
+            opts="-h --spec-file --spec-stdin --wait-for-reconcile --reconcile-deadline --zone --json --human --deadline --no-deadline --help"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --spec-file)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --reconcile-deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__volume__subcmd__delete)
+            opts="-h --revision --wait-for-reconcile --reconcile-deadline --zone --json --human --deadline --no-deadline --help <NAME>"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --revision)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --reconcile-deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__volume__subcmd__get)
+            opts="-h --zone --json --human --deadline --no-deadline --help <NAME>"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__volume__subcmd__list)
+            opts="-h --execution-ref --domain --phase --label-selector --updates --page-token --limit --zone --json --human --deadline --no-deadline --help"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --execution-ref)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --domain)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --phase)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --label-selector)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --page-token)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --limit)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__volume__subcmd__reconcile)
+            opts="-h --reconcile-deadline --zone --json --human --deadline --no-deadline --help <NAME>"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --reconcile-deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__volume__subcmd__security__subcmd__key)
+            opts="-h --zone --json --human --deadline --no-deadline --help status sessions cancel test"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__volume__subcmd__security__subcmd__key__subcmd__cancel)
+            opts="-h --current --dry-run --apply --zone --json --human --deadline --no-deadline --help [SESSION_ID]"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__volume__subcmd__security__subcmd__key__subcmd__sessions)
+            opts="-h --zone --json --human --deadline --no-deadline --help"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__volume__subcmd__security__subcmd__key__subcmd__status)
+            opts="-h --zone --json --human --deadline --no-deadline --help"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__volume__subcmd__security__subcmd__key__subcmd__test)
+            opts="-h --dry-run --zone --json --human --deadline --no-deadline --help <NAME>"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__volume__subcmd__status)
+            opts="-h --watch --zone --json --human --deadline --no-deadline --help <NAME>"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__volume__subcmd__update__subcmd__spec)
+            opts="-h --revision --spec-file --spec-stdin --wait-for-reconcile --reconcile-deadline --zone --json --human --deadline --no-deadline --help <NAME>"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --revision)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --spec-file)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --reconcile-deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__volume__subcmd__upgrade)
+            opts="-h --recursive --apply --reconcile-deadline --zone --json --human --deadline --no-deadline --help <NAME>"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --reconcile-deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__volume__subcmd__usb)
+            opts="-h --zone --json --human --deadline --no-deadline --help attach detach probe"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__volume__subcmd__usb__subcmd__attach)
+            opts="-h --dry-run --apply --zone --json --human --deadline --no-deadline --help <NAME> <BUSID>"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__volume__subcmd__usb__subcmd__detach)
+            opts="-h --dry-run --apply --zone --json --human --deadline --no-deadline --help <NAME> <BUSID>"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__volume__subcmd__usb__subcmd__probe)
+            opts="-h --zone --json --human --deadline --no-deadline --help"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__volume__subcmd__verify)
+            opts="-h --repair --zone --json --human --deadline --no-deadline --help <NAME>"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__volume__subcmd__watch)
+            opts="-h --since-revision --phase --label-selector --zone --json --human --deadline --no-deadline --help"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --since-revision)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --phase)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --label-selector)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__watch)
+            opts="-h --since-revision --phase --label-selector --zone --json --human --deadline --no-deadline --help <RESOURCE_TYPE>"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --since-revision)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --phase)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --label-selector)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__zone)
+            opts="-h --zone --json --human --deadline --no-deadline --help get list status"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__zone__subcmd__get)
+            opts="-h --zone --json --human --deadline --no-deadline --help [NAME]"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__zone__subcmd__list)
+            opts="-h --zone --json --human --deadline --no-deadline --help"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__zone__subcmd__status)
+            opts="-h --watch --zone --json --human --deadline --no-deadline --help [NAME]"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
                 *)
                     COMPREPLY=()
                     ;;

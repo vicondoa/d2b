@@ -1,6 +1,6 @@
 # Print an optspec for argparse to handle cmd's options that are independent of any subcommand.
 function __fish_d2b_global_optspecs
-	string join \n h/help V/version
+	string join \n zone= json human deadline= no-deadline h/help V/version
 end
 
 function __fish_d2b_needs_command
@@ -24,477 +24,1967 @@ function __fish_d2b_using_subcommand
 	contains -- $cmd[1] $argv
 end
 
-complete -c d2b -n "__fish_d2b_needs_command" -s h -l help -d 'Print help (see more with \'--help\')'
+complete -c d2b -n "__fish_d2b_needs_command" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_needs_command" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_needs_command" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_needs_command" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_needs_command" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_needs_command" -s h -l help -d 'Print help'
 complete -c d2b -n "__fish_d2b_needs_command" -s V -l version -d 'Print version'
-complete -c d2b -n "__fish_d2b_needs_command" -f -a "list" -d 'List declared VMs with daemon runtime state when d2bd is reachable'
-complete -c d2b -n "__fish_d2b_needs_command" -f -a "status" -d 'Show per-VM runtime status plus bridge health'
-complete -c d2b -n "__fish_d2b_needs_command" -f -a "launch" -d 'Launch a trusted configured workload item through its runtime provider'
-complete -c d2b -n "__fish_d2b_needs_command" -f -a "usb" -d 'USB attach / detach / probe'
-complete -c d2b -n "__fish_d2b_needs_command" -f -a "console" -d 'Foreground serial console bridge for headless VMs'
-complete -c d2b -n "__fish_d2b_needs_command" -f -a "audio" -d 'Per-VM audio status and grant controls'
-complete -c d2b -n "__fish_d2b_needs_command" -f -a "audit" -d 'Tail the broker audit log'
-complete -c d2b -n "__fish_d2b_needs_command" -f -a "host" -d 'Host-side preflight, install, doctor, and reconcile verbs'
-complete -c d2b -n "__fish_d2b_needs_command" -f -a "auth" -d 'Authorisation introspection'
-complete -c d2b -n "__fish_d2b_needs_command" -f -a "realm" -d 'Low-level realm gateway helpers'
-complete -c d2b -n "__fish_d2b_needs_command" -f -a "shell" -d 'Attach to or manage persistent named guest shells'
-complete -c d2b -n "__fish_d2b_needs_command" -f -a "op" -d 'Inspect current constellation operation and trace state'
-complete -c d2b -n "__fish_d2b_needs_command" -f -a "vm" -d 'Per-VM lifecycle verbs (start / stop / restart / list / status) plus the admin-only guest-control sub-verb `exec`, which runs commands or an interactive session inside a VM over the authenticated guest-control transport (no SSH)'
-complete -c d2b -n "__fish_d2b_needs_command" -f -a "up" -d 'Alias for `vm start <vm>`'
-complete -c d2b -n "__fish_d2b_needs_command" -f -a "down" -d 'Alias for `vm stop <vm>`'
-complete -c d2b -n "__fish_d2b_needs_command" -f -a "restart" -d 'Alias for `vm restart <vm>`'
-complete -c d2b -n "__fish_d2b_needs_command" -f -a "build" -d 'Non-destructive eval + build of the per-VM toplevel'
-complete -c d2b -n "__fish_d2b_needs_command" -f -a "generations" -d 'List current / booted / numbered generations for a VM'
-complete -c d2b -n "__fish_d2b_needs_command" -f -a "switch" -d 'Atomically activate a new per-VM closure'
-complete -c d2b -n "__fish_d2b_needs_command" -f -a "boot" -d 'Stage a per-VM closure for the next boot only'
-complete -c d2b -n "__fish_d2b_needs_command" -f -a "test" -d 'Activate a per-VM closure with rollback on reboot'
-complete -c d2b -n "__fish_d2b_needs_command" -f -a "rollback" -d 'Roll a VM back to its previous generation'
-complete -c d2b -n "__fish_d2b_needs_command" -f -a "gc" -d 'Garbage-collect the per-VM /nix/store hardlink farm'
-complete -c d2b -n "__fish_d2b_needs_command" -f -a "store" -d 'Store-view maintenance and verification'
-complete -c d2b -n "__fish_d2b_needs_command" -f -a "keys" -d 'Managed-key lifecycle (list / show / rotate)'
-complete -c d2b -n "__fish_d2b_needs_command" -f -a "trust" -d 'Trust a VM\'s host key on first use (TOFU)'
-complete -c d2b -n "__fish_d2b_needs_command" -f -a "rotate-known-host" -d 'Rotate the consumer\'s recorded known-host entry for a VM'
-complete -c d2b -n "__fish_d2b_needs_command" -f -a "migrate" -d 'Analyse the host config and emit a migration plan'
-complete -c d2b -n "__fish_d2b_needs_command" -f -a "config" -d 'Sync / review / approve a VM\'s guest-editable config (`guestConfigFile`): pull the operator\'s in-VM edits to a host-side staging file, diff them, and approve them'
-complete -c d2b -n "__fish_d2b_needs_command" -f -a "clipboard" -d 'Clipboard authority operations (picker-driven paste replay via d2b-clipd)'
-complete -c d2b -n "__fish_d2b_needs_command" -f -a "help" -d 'Print this message or the help of the given subcommand(s)'
-complete -c d2b -n "__fish_d2b_using_subcommand list" -l json
-complete -c d2b -n "__fish_d2b_using_subcommand list" -l human
+complete -c d2b -n "__fish_d2b_needs_command" -f -a "get"
+complete -c d2b -n "__fish_d2b_needs_command" -f -a "list"
+complete -c d2b -n "__fish_d2b_needs_command" -f -a "watch"
+complete -c d2b -n "__fish_d2b_needs_command" -f -a "create"
+complete -c d2b -n "__fish_d2b_needs_command" -f -a "update-spec"
+complete -c d2b -n "__fish_d2b_needs_command" -f -a "delete"
+complete -c d2b -n "__fish_d2b_needs_command" -f -a "status"
+complete -c d2b -n "__fish_d2b_needs_command" -f -a "upgrade"
+complete -c d2b -n "__fish_d2b_needs_command" -f -a "reconcile"
+complete -c d2b -n "__fish_d2b_needs_command" -f -a "host"
+complete -c d2b -n "__fish_d2b_needs_command" -f -a "guest"
+complete -c d2b -n "__fish_d2b_needs_command" -f -a "process"
+complete -c d2b -n "__fish_d2b_needs_command" -f -a "exec"
+complete -c d2b -n "__fish_d2b_needs_command" -f -a "shell"
+complete -c d2b -n "__fish_d2b_needs_command" -f -a "volume" -d 'Typed noun commands reuse the generic resource verbs while documenting the noun\'s default ResourceType in clap help'
+complete -c d2b -n "__fish_d2b_needs_command" -f -a "network" -d 'Typed noun commands reuse the generic resource verbs while documenting the noun\'s default ResourceType in clap help'
+complete -c d2b -n "__fish_d2b_needs_command" -f -a "device" -d 'Typed noun commands reuse the generic resource verbs while documenting the noun\'s default ResourceType in clap help'
+complete -c d2b -n "__fish_d2b_needs_command" -f -a "endpoint"
+complete -c d2b -n "__fish_d2b_needs_command" -f -a "export"
+complete -c d2b -n "__fish_d2b_needs_command" -f -a "import"
+complete -c d2b -n "__fish_d2b_needs_command" -f -a "resource" -d 'The `d2b resource` namespace also carries the generic authority read projection. It never creates or mutates an authority'
+complete -c d2b -n "__fish_d2b_needs_command" -f -a "user" -d 'Typed noun commands reuse the generic resource verbs while documenting the noun\'s default ResourceType in clap help'
+complete -c d2b -n "__fish_d2b_needs_command" -f -a "credential" -d 'Typed noun commands reuse the generic resource verbs while documenting the noun\'s default ResourceType in clap help'
+complete -c d2b -n "__fish_d2b_needs_command" -f -a "provider"
+complete -c d2b -n "__fish_d2b_needs_command" -f -a "zone"
+complete -c d2b -n "__fish_d2b_needs_command" -f -a "quota" -d 'Typed noun commands reuse the generic resource verbs while documenting the noun\'s default ResourceType in clap help'
+complete -c d2b -n "__fish_d2b_needs_command" -f -a "emergency-policy" -d 'Typed noun commands reuse the generic resource verbs while documenting the noun\'s default ResourceType in clap help'
+complete -c d2b -n "__fish_d2b_needs_command" -f -a "activation"
+complete -c d2b -n "__fish_d2b_needs_command" -f -a "audit"
+complete -c d2b -n "__fish_d2b_needs_command" -f -a "op"
+complete -c d2b -n "__fish_d2b_needs_command" -f -a "auth"
+complete -c d2b -n "__fish_d2b_needs_command" -f -a "complete"
+complete -c d2b -n "__fish_d2b_needs_command" -f -a "audio"
+complete -c d2b -n "__fish_d2b_needs_command" -f -a "clipboard"
+complete -c d2b -n "__fish_d2b_needs_command" -f -a "display"
+complete -c d2b -n "__fish_d2b_using_subcommand get" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand get" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand get" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand get" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand get" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand get" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand list" -l execution-ref -r
+complete -c d2b -n "__fish_d2b_using_subcommand list" -l domain -r
+complete -c d2b -n "__fish_d2b_using_subcommand list" -l phase -r
+complete -c d2b -n "__fish_d2b_using_subcommand list" -l label-selector -r
+complete -c d2b -n "__fish_d2b_using_subcommand list" -l page-token -r
+complete -c d2b -n "__fish_d2b_using_subcommand list" -l limit -r
+complete -c d2b -n "__fish_d2b_using_subcommand list" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand list" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand list" -l updates
+complete -c d2b -n "__fish_d2b_using_subcommand list" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand list" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand list" -l no-deadline -d 'Suppress the command default deadline'
 complete -c d2b -n "__fish_d2b_using_subcommand list" -s h -l help -d 'Print help'
-complete -c d2b -n "__fish_d2b_using_subcommand status" -l vm -r
-complete -c d2b -n "__fish_d2b_using_subcommand status" -l json
-complete -c d2b -n "__fish_d2b_using_subcommand status" -l human
-complete -c d2b -n "__fish_d2b_using_subcommand status" -l check-bridges
+complete -c d2b -n "__fish_d2b_using_subcommand watch" -l since-revision -r
+complete -c d2b -n "__fish_d2b_using_subcommand watch" -l phase -r
+complete -c d2b -n "__fish_d2b_using_subcommand watch" -l label-selector -r
+complete -c d2b -n "__fish_d2b_using_subcommand watch" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand watch" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand watch" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand watch" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand watch" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand watch" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand create" -l spec-file -r -F
+complete -c d2b -n "__fish_d2b_using_subcommand create" -l reconcile-deadline -r
+complete -c d2b -n "__fish_d2b_using_subcommand create" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand create" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand create" -l spec-stdin
+complete -c d2b -n "__fish_d2b_using_subcommand create" -l wait-for-reconcile
+complete -c d2b -n "__fish_d2b_using_subcommand create" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand create" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand create" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand create" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand update-spec" -l revision -r
+complete -c d2b -n "__fish_d2b_using_subcommand update-spec" -l spec-file -r -F
+complete -c d2b -n "__fish_d2b_using_subcommand update-spec" -l reconcile-deadline -r
+complete -c d2b -n "__fish_d2b_using_subcommand update-spec" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand update-spec" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand update-spec" -l spec-stdin
+complete -c d2b -n "__fish_d2b_using_subcommand update-spec" -l wait-for-reconcile
+complete -c d2b -n "__fish_d2b_using_subcommand update-spec" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand update-spec" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand update-spec" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand update-spec" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand delete" -l revision -r
+complete -c d2b -n "__fish_d2b_using_subcommand delete" -l reconcile-deadline -r
+complete -c d2b -n "__fish_d2b_using_subcommand delete" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand delete" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand delete" -l wait-for-reconcile
+complete -c d2b -n "__fish_d2b_using_subcommand delete" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand delete" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand delete" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand delete" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand status" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand status" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand status" -l watch
+complete -c d2b -n "__fish_d2b_using_subcommand status" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand status" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand status" -l no-deadline -d 'Suppress the command default deadline'
 complete -c d2b -n "__fish_d2b_using_subcommand status" -s h -l help -d 'Print help'
-complete -c d2b -n "__fish_d2b_using_subcommand launch" -l item -d 'Configured launcher item id. Omit to use the declared default or sole item' -r
-complete -c d2b -n "__fish_d2b_using_subcommand launch" -l json -d 'Emit a structured JSON result'
-complete -c d2b -n "__fish_d2b_using_subcommand launch" -l human -d 'Force human-readable output'
-complete -c d2b -n "__fish_d2b_using_subcommand launch" -s h -l help -d 'Print help'
-complete -c d2b -n "__fish_d2b_using_subcommand usb; and not __fish_seen_subcommand_from attach detach probe security-key help" -s h -l help -d 'Print help'
-complete -c d2b -n "__fish_d2b_using_subcommand usb; and not __fish_seen_subcommand_from attach detach probe security-key help" -f -a "attach" -d 'Bind a host USB busid to a VM via the native daemon path'
-complete -c d2b -n "__fish_d2b_using_subcommand usb; and not __fish_seen_subcommand_from attach detach probe security-key help" -f -a "detach" -d 'Unbind a host USB busid from a VM via the native daemon path'
-complete -c d2b -n "__fish_d2b_using_subcommand usb; and not __fish_seen_subcommand_from attach detach probe security-key help" -f -a "probe" -d 'List daemon-declared USBIP session claims and qemu-media USB candidates'
-complete -c d2b -n "__fish_d2b_using_subcommand usb; and not __fish_seen_subcommand_from attach detach probe security-key help" -f -a "security-key" -d 'CTAP/WebAuthn security-key proxy status, sessions, and diagnostics'
-complete -c d2b -n "__fish_d2b_using_subcommand usb; and not __fish_seen_subcommand_from attach detach probe security-key help" -f -a "help" -d 'Print this message or the help of the given subcommand(s)'
-complete -c d2b -n "__fish_d2b_using_subcommand usb; and __fish_seen_subcommand_from attach" -l dry-run
-complete -c d2b -n "__fish_d2b_using_subcommand usb; and __fish_seen_subcommand_from attach" -l apply
-complete -c d2b -n "__fish_d2b_using_subcommand usb; and __fish_seen_subcommand_from attach" -l json
-complete -c d2b -n "__fish_d2b_using_subcommand usb; and __fish_seen_subcommand_from attach" -l human
-complete -c d2b -n "__fish_d2b_using_subcommand usb; and __fish_seen_subcommand_from attach" -s h -l help -d 'Print help'
-complete -c d2b -n "__fish_d2b_using_subcommand usb; and __fish_seen_subcommand_from detach" -l dry-run
-complete -c d2b -n "__fish_d2b_using_subcommand usb; and __fish_seen_subcommand_from detach" -l apply
-complete -c d2b -n "__fish_d2b_using_subcommand usb; and __fish_seen_subcommand_from detach" -l json
-complete -c d2b -n "__fish_d2b_using_subcommand usb; and __fish_seen_subcommand_from detach" -l human
-complete -c d2b -n "__fish_d2b_using_subcommand usb; and __fish_seen_subcommand_from detach" -s h -l help -d 'Print help'
-complete -c d2b -n "__fish_d2b_using_subcommand usb; and __fish_seen_subcommand_from probe" -l json
-complete -c d2b -n "__fish_d2b_using_subcommand usb; and __fish_seen_subcommand_from probe" -l human
-complete -c d2b -n "__fish_d2b_using_subcommand usb; and __fish_seen_subcommand_from probe" -s h -l help -d 'Print help'
-complete -c d2b -n "__fish_d2b_using_subcommand usb; and __fish_seen_subcommand_from security-key" -s h -l help -d 'Print help'
-complete -c d2b -n "__fish_d2b_using_subcommand usb; and __fish_seen_subcommand_from security-key" -f -a "status" -d 'Show security-key proxy health, configured keys, and current lease'
-complete -c d2b -n "__fish_d2b_using_subcommand usb; and __fish_seen_subcommand_from security-key" -f -a "sessions" -d 'Show recent and active security-key request sessions'
-complete -c d2b -n "__fish_d2b_using_subcommand usb; and __fish_seen_subcommand_from security-key" -f -a "cancel" -d 'Cancel a security-key request session'
-complete -c d2b -n "__fish_d2b_using_subcommand usb; and __fish_seen_subcommand_from security-key" -f -a "test" -d 'Smoke-check that a VM\'s virtual security-key device and host broker are healthy'
-complete -c d2b -n "__fish_d2b_using_subcommand usb; and __fish_seen_subcommand_from security-key" -f -a "help" -d 'Print this message or the help of the given subcommand(s)'
-complete -c d2b -n "__fish_d2b_using_subcommand usb; and __fish_seen_subcommand_from help" -f -a "attach" -d 'Bind a host USB busid to a VM via the native daemon path'
-complete -c d2b -n "__fish_d2b_using_subcommand usb; and __fish_seen_subcommand_from help" -f -a "detach" -d 'Unbind a host USB busid from a VM via the native daemon path'
-complete -c d2b -n "__fish_d2b_using_subcommand usb; and __fish_seen_subcommand_from help" -f -a "probe" -d 'List daemon-declared USBIP session claims and qemu-media USB candidates'
-complete -c d2b -n "__fish_d2b_using_subcommand usb; and __fish_seen_subcommand_from help" -f -a "security-key" -d 'CTAP/WebAuthn security-key proxy status, sessions, and diagnostics'
-complete -c d2b -n "__fish_d2b_using_subcommand usb; and __fish_seen_subcommand_from help" -f -a "help" -d 'Print this message or the help of the given subcommand(s)'
-complete -c d2b -n "__fish_d2b_using_subcommand console" -s h -l help -d 'Print help'
-complete -c d2b -n "__fish_d2b_using_subcommand audio; and not __fish_seen_subcommand_from status mic speaker off help" -l json -d 'Emit machine-readable JSON output'
-complete -c d2b -n "__fish_d2b_using_subcommand audio; and not __fish_seen_subcommand_from status mic speaker off help" -s h -l help -d 'Print help'
-complete -c d2b -n "__fish_d2b_using_subcommand audio; and not __fish_seen_subcommand_from status mic speaker off help" -f -a "status" -d 'Show current grant state. With no VM, lists every audio-enabled VM'
-complete -c d2b -n "__fish_d2b_using_subcommand audio; and not __fish_seen_subcommand_from status mic speaker off help" -f -a "mic" -d 'Grant or revoke microphone access'
-complete -c d2b -n "__fish_d2b_using_subcommand audio; and not __fish_seen_subcommand_from status mic speaker off help" -f -a "speaker" -d 'Grant or revoke speaker access'
-complete -c d2b -n "__fish_d2b_using_subcommand audio; and not __fish_seen_subcommand_from status mic speaker off help" -f -a "off" -d 'Revoke both mic and speaker access'
-complete -c d2b -n "__fish_d2b_using_subcommand audio; and not __fish_seen_subcommand_from status mic speaker off help" -f -a "help" -d 'Print this message or the help of the given subcommand(s)'
-complete -c d2b -n "__fish_d2b_using_subcommand audio; and __fish_seen_subcommand_from status" -l json -d 'Emit machine-readable JSON output'
-complete -c d2b -n "__fish_d2b_using_subcommand audio; and __fish_seen_subcommand_from status" -s h -l help -d 'Print help'
-complete -c d2b -n "__fish_d2b_using_subcommand audio; and __fish_seen_subcommand_from mic" -l json -d 'Emit machine-readable JSON output'
-complete -c d2b -n "__fish_d2b_using_subcommand audio; and __fish_seen_subcommand_from mic" -s h -l help -d 'Print help (see more with \'--help\')'
-complete -c d2b -n "__fish_d2b_using_subcommand audio; and __fish_seen_subcommand_from speaker" -l json -d 'Emit machine-readable JSON output'
-complete -c d2b -n "__fish_d2b_using_subcommand audio; and __fish_seen_subcommand_from speaker" -s h -l help -d 'Print help (see more with \'--help\')'
-complete -c d2b -n "__fish_d2b_using_subcommand audio; and __fish_seen_subcommand_from off" -l json -d 'Emit machine-readable JSON output'
-complete -c d2b -n "__fish_d2b_using_subcommand audio; and __fish_seen_subcommand_from off" -s h -l help -d 'Print help'
-complete -c d2b -n "__fish_d2b_using_subcommand audio; and __fish_seen_subcommand_from help" -f -a "status" -d 'Show current grant state. With no VM, lists every audio-enabled VM'
-complete -c d2b -n "__fish_d2b_using_subcommand audio; and __fish_seen_subcommand_from help" -f -a "mic" -d 'Grant or revoke microphone access'
-complete -c d2b -n "__fish_d2b_using_subcommand audio; and __fish_seen_subcommand_from help" -f -a "speaker" -d 'Grant or revoke speaker access'
-complete -c d2b -n "__fish_d2b_using_subcommand audio; and __fish_seen_subcommand_from help" -f -a "off" -d 'Revoke both mic and speaker access'
-complete -c d2b -n "__fish_d2b_using_subcommand audio; and __fish_seen_subcommand_from help" -f -a "help" -d 'Print this message or the help of the given subcommand(s)'
-complete -c d2b -n "__fish_d2b_using_subcommand audit" -l strict
-complete -c d2b -n "__fish_d2b_using_subcommand audit" -l json
-complete -c d2b -n "__fish_d2b_using_subcommand audit" -l human
-complete -c d2b -n "__fish_d2b_using_subcommand audit" -s h -l help -d 'Print help'
-complete -c d2b -n "__fish_d2b_using_subcommand host; and not __fish_seen_subcommand_from check prepare destroy doctor migrate-storage install reconcile validate help" -s h -l help -d 'Print help'
-complete -c d2b -n "__fish_d2b_using_subcommand host; and not __fish_seen_subcommand_from check prepare destroy doctor migrate-storage install reconcile validate help" -f -a "check" -d 'Read-only preflight: inventories host posture without mutation'
-complete -c d2b -n "__fish_d2b_using_subcommand host; and not __fish_seen_subcommand_from check prepare destroy doctor migrate-storage install reconcile validate help" -f -a "prepare" -d 'Reconcile host-side state (bridges, nftables, sysctls). --apply mutates'
-complete -c d2b -n "__fish_d2b_using_subcommand host; and not __fish_seen_subcommand_from check prepare destroy doctor migrate-storage install reconcile validate help" -f -a "destroy" -d 'Tear down host-side state owned by d2b. --apply mutates'
-complete -c d2b -n "__fish_d2b_using_subcommand host; and not __fish_seen_subcommand_from check prepare destroy doctor migrate-storage install reconcile validate help" -f -a "doctor" -d 'Read-only deep diagnostics for the daemon + broker state'
-complete -c d2b -n "__fish_d2b_using_subcommand host; and not __fish_seen_subcommand_from check prepare destroy doctor migrate-storage install reconcile validate help" -f -a "migrate-storage" -d 'Plan the one-time storage layout cutover. --apply is fail-closed until broker support lands'
-complete -c d2b -n "__fish_d2b_using_subcommand host; and not __fish_seen_subcommand_from check prepare destroy doctor migrate-storage install reconcile validate help" -f -a "install" -d 'Install d2bd + broker units onto the host. --apply mutates'
-complete -c d2b -n "__fish_d2b_using_subcommand host; and not __fish_seen_subcommand_from check prepare destroy doctor migrate-storage install reconcile validate help" -f -a "reconcile" -d 'Reconcile host network state (re-run bridge/route/nftables reconcile without starting any VM)'
-complete -c d2b -n "__fish_d2b_using_subcommand host; and not __fish_seen_subcommand_from check prepare destroy doctor migrate-storage install reconcile validate help" -f -a "validate" -d 'Run the host-side validator suite and write evidence records'
-complete -c d2b -n "__fish_d2b_using_subcommand host; and not __fish_seen_subcommand_from check prepare destroy doctor migrate-storage install reconcile validate help" -f -a "help" -d 'Print this message or the help of the given subcommand(s)'
+complete -c d2b -n "__fish_d2b_using_subcommand upgrade" -l reconcile-deadline -r
+complete -c d2b -n "__fish_d2b_using_subcommand upgrade" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand upgrade" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand upgrade" -l recursive
+complete -c d2b -n "__fish_d2b_using_subcommand upgrade" -l apply
+complete -c d2b -n "__fish_d2b_using_subcommand upgrade" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand upgrade" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand upgrade" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand upgrade" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand reconcile" -l reconcile-deadline -r
+complete -c d2b -n "__fish_d2b_using_subcommand reconcile" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand reconcile" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand reconcile" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand reconcile" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand reconcile" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand reconcile" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand host; and not __fish_seen_subcommand_from get list status check prepare destroy doctor install reconcile validate" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand host; and not __fish_seen_subcommand_from get list status check prepare destroy doctor install reconcile validate" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand host; and not __fish_seen_subcommand_from get list status check prepare destroy doctor install reconcile validate" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand host; and not __fish_seen_subcommand_from get list status check prepare destroy doctor install reconcile validate" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand host; and not __fish_seen_subcommand_from get list status check prepare destroy doctor install reconcile validate" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand host; and not __fish_seen_subcommand_from get list status check prepare destroy doctor install reconcile validate" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand host; and not __fish_seen_subcommand_from get list status check prepare destroy doctor install reconcile validate" -f -a "get"
+complete -c d2b -n "__fish_d2b_using_subcommand host; and not __fish_seen_subcommand_from get list status check prepare destroy doctor install reconcile validate" -f -a "list"
+complete -c d2b -n "__fish_d2b_using_subcommand host; and not __fish_seen_subcommand_from get list status check prepare destroy doctor install reconcile validate" -f -a "status"
+complete -c d2b -n "__fish_d2b_using_subcommand host; and not __fish_seen_subcommand_from get list status check prepare destroy doctor install reconcile validate" -f -a "check"
+complete -c d2b -n "__fish_d2b_using_subcommand host; and not __fish_seen_subcommand_from get list status check prepare destroy doctor install reconcile validate" -f -a "prepare"
+complete -c d2b -n "__fish_d2b_using_subcommand host; and not __fish_seen_subcommand_from get list status check prepare destroy doctor install reconcile validate" -f -a "destroy"
+complete -c d2b -n "__fish_d2b_using_subcommand host; and not __fish_seen_subcommand_from get list status check prepare destroy doctor install reconcile validate" -f -a "doctor"
+complete -c d2b -n "__fish_d2b_using_subcommand host; and not __fish_seen_subcommand_from get list status check prepare destroy doctor install reconcile validate" -f -a "install"
+complete -c d2b -n "__fish_d2b_using_subcommand host; and not __fish_seen_subcommand_from get list status check prepare destroy doctor install reconcile validate" -f -a "reconcile"
+complete -c d2b -n "__fish_d2b_using_subcommand host; and not __fish_seen_subcommand_from get list status check prepare destroy doctor install reconcile validate" -f -a "validate"
+complete -c d2b -n "__fish_d2b_using_subcommand host; and __fish_seen_subcommand_from get" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand host; and __fish_seen_subcommand_from get" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand host; and __fish_seen_subcommand_from get" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand host; and __fish_seen_subcommand_from get" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand host; and __fish_seen_subcommand_from get" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand host; and __fish_seen_subcommand_from get" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand host; and __fish_seen_subcommand_from list" -l execution-ref -r
+complete -c d2b -n "__fish_d2b_using_subcommand host; and __fish_seen_subcommand_from list" -l domain -r
+complete -c d2b -n "__fish_d2b_using_subcommand host; and __fish_seen_subcommand_from list" -l phase -r
+complete -c d2b -n "__fish_d2b_using_subcommand host; and __fish_seen_subcommand_from list" -l label-selector -r
+complete -c d2b -n "__fish_d2b_using_subcommand host; and __fish_seen_subcommand_from list" -l page-token -r
+complete -c d2b -n "__fish_d2b_using_subcommand host; and __fish_seen_subcommand_from list" -l limit -r
+complete -c d2b -n "__fish_d2b_using_subcommand host; and __fish_seen_subcommand_from list" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand host; and __fish_seen_subcommand_from list" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand host; and __fish_seen_subcommand_from list" -l updates
+complete -c d2b -n "__fish_d2b_using_subcommand host; and __fish_seen_subcommand_from list" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand host; and __fish_seen_subcommand_from list" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand host; and __fish_seen_subcommand_from list" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand host; and __fish_seen_subcommand_from list" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand host; and __fish_seen_subcommand_from status" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand host; and __fish_seen_subcommand_from status" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand host; and __fish_seen_subcommand_from status" -l watch
+complete -c d2b -n "__fish_d2b_using_subcommand host; and __fish_seen_subcommand_from status" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand host; and __fish_seen_subcommand_from status" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand host; and __fish_seen_subcommand_from status" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand host; and __fish_seen_subcommand_from status" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand host; and __fish_seen_subcommand_from check" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand host; and __fish_seen_subcommand_from check" -l deadline -d 'Bound all Zone requests and streams' -r
 complete -c d2b -n "__fish_d2b_using_subcommand host; and __fish_seen_subcommand_from check" -l read-only
 complete -c d2b -n "__fish_d2b_using_subcommand host; and __fish_seen_subcommand_from check" -l strict
-complete -c d2b -n "__fish_d2b_using_subcommand host; and __fish_seen_subcommand_from check" -l json
-complete -c d2b -n "__fish_d2b_using_subcommand host; and __fish_seen_subcommand_from check" -l human
+complete -c d2b -n "__fish_d2b_using_subcommand host; and __fish_seen_subcommand_from check" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand host; and __fish_seen_subcommand_from check" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand host; and __fish_seen_subcommand_from check" -l no-deadline -d 'Suppress the command default deadline'
 complete -c d2b -n "__fish_d2b_using_subcommand host; and __fish_seen_subcommand_from check" -s h -l help -d 'Print help'
-complete -c d2b -n "__fish_d2b_using_subcommand host; and __fish_seen_subcommand_from prepare" -l dry-run -d 'Plan the reconcile without mutating host state'
-complete -c d2b -n "__fish_d2b_using_subcommand host; and __fish_seen_subcommand_from prepare" -l apply -d 'Apply the reconcile (mutates host state)'
-complete -c d2b -n "__fish_d2b_using_subcommand host; and __fish_seen_subcommand_from prepare" -l json
-complete -c d2b -n "__fish_d2b_using_subcommand host; and __fish_seen_subcommand_from prepare" -l human
+complete -c d2b -n "__fish_d2b_using_subcommand host; and __fish_seen_subcommand_from prepare" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand host; and __fish_seen_subcommand_from prepare" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand host; and __fish_seen_subcommand_from prepare" -l dry-run
+complete -c d2b -n "__fish_d2b_using_subcommand host; and __fish_seen_subcommand_from prepare" -l apply
+complete -c d2b -n "__fish_d2b_using_subcommand host; and __fish_seen_subcommand_from prepare" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand host; and __fish_seen_subcommand_from prepare" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand host; and __fish_seen_subcommand_from prepare" -l no-deadline -d 'Suppress the command default deadline'
 complete -c d2b -n "__fish_d2b_using_subcommand host; and __fish_seen_subcommand_from prepare" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand host; and __fish_seen_subcommand_from destroy" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand host; and __fish_seen_subcommand_from destroy" -l deadline -d 'Bound all Zone requests and streams' -r
 complete -c d2b -n "__fish_d2b_using_subcommand host; and __fish_seen_subcommand_from destroy" -l dry-run
 complete -c d2b -n "__fish_d2b_using_subcommand host; and __fish_seen_subcommand_from destroy" -l apply
-complete -c d2b -n "__fish_d2b_using_subcommand host; and __fish_seen_subcommand_from destroy" -l json
-complete -c d2b -n "__fish_d2b_using_subcommand host; and __fish_seen_subcommand_from destroy" -l human
+complete -c d2b -n "__fish_d2b_using_subcommand host; and __fish_seen_subcommand_from destroy" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand host; and __fish_seen_subcommand_from destroy" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand host; and __fish_seen_subcommand_from destroy" -l no-deadline -d 'Suppress the command default deadline'
 complete -c d2b -n "__fish_d2b_using_subcommand host; and __fish_seen_subcommand_from destroy" -s h -l help -d 'Print help'
-complete -c d2b -n "__fish_d2b_using_subcommand host; and __fish_seen_subcommand_from doctor" -l read-only -d 'Mandatory: doctor is read-only. Mutating forms are separate verbs'
-complete -c d2b -n "__fish_d2b_using_subcommand host; and __fish_seen_subcommand_from doctor" -l json
-complete -c d2b -n "__fish_d2b_using_subcommand host; and __fish_seen_subcommand_from doctor" -l human
+complete -c d2b -n "__fish_d2b_using_subcommand host; and __fish_seen_subcommand_from doctor" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand host; and __fish_seen_subcommand_from doctor" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand host; and __fish_seen_subcommand_from doctor" -l read-only
+complete -c d2b -n "__fish_d2b_using_subcommand host; and __fish_seen_subcommand_from doctor" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand host; and __fish_seen_subcommand_from doctor" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand host; and __fish_seen_subcommand_from doctor" -l no-deadline -d 'Suppress the command default deadline'
 complete -c d2b -n "__fish_d2b_using_subcommand host; and __fish_seen_subcommand_from doctor" -s h -l help -d 'Print help'
-complete -c d2b -n "__fish_d2b_using_subcommand host; and __fish_seen_subcommand_from migrate-storage" -l from-checkpoint -d 'Checkpoint ID to roll back' -r
-complete -c d2b -n "__fish_d2b_using_subcommand host; and __fish_seen_subcommand_from migrate-storage" -l dry-run -d 'Plan the storage cutover without mutating host state'
-complete -c d2b -n "__fish_d2b_using_subcommand host; and __fish_seen_subcommand_from migrate-storage" -l apply -d 'Apply the storage cutover. Currently fails closed until broker support lands'
-complete -c d2b -n "__fish_d2b_using_subcommand host; and __fish_seen_subcommand_from migrate-storage" -l rollback -d 'Roll back from a named storage cutover checkpoint'
-complete -c d2b -n "__fish_d2b_using_subcommand host; and __fish_seen_subcommand_from migrate-storage" -l json
-complete -c d2b -n "__fish_d2b_using_subcommand host; and __fish_seen_subcommand_from migrate-storage" -l human
-complete -c d2b -n "__fish_d2b_using_subcommand host; and __fish_seen_subcommand_from migrate-storage" -s h -l help -d 'Print help'
-complete -c d2b -n "__fish_d2b_using_subcommand host; and __fish_seen_subcommand_from install" -l dry-run -d 'Report the planned install steps without mutating'
-complete -c d2b -n "__fish_d2b_using_subcommand host; and __fish_seen_subcommand_from install" -l apply -d 'Perform the install through the daemon → broker `RunHostInstall` path'
-complete -c d2b -n "__fish_d2b_using_subcommand host; and __fish_seen_subcommand_from install" -l enable -d 'After `--apply`, enable d2bd.service via systemctl'
-complete -c d2b -n "__fish_d2b_using_subcommand host; and __fish_seen_subcommand_from install" -l start -d 'After `--apply --enable`, start d2bd.service'
-complete -c d2b -n "__fish_d2b_using_subcommand host; and __fish_seen_subcommand_from install" -l no-start -d 'Explicitly do NOT start d2bd.service post-install'
-complete -c d2b -n "__fish_d2b_using_subcommand host; and __fish_seen_subcommand_from install" -l json
-complete -c d2b -n "__fish_d2b_using_subcommand host; and __fish_seen_subcommand_from install" -l human
+complete -c d2b -n "__fish_d2b_using_subcommand host; and __fish_seen_subcommand_from install" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand host; and __fish_seen_subcommand_from install" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand host; and __fish_seen_subcommand_from install" -l dry-run
+complete -c d2b -n "__fish_d2b_using_subcommand host; and __fish_seen_subcommand_from install" -l apply
+complete -c d2b -n "__fish_d2b_using_subcommand host; and __fish_seen_subcommand_from install" -l enable
+complete -c d2b -n "__fish_d2b_using_subcommand host; and __fish_seen_subcommand_from install" -l start
+complete -c d2b -n "__fish_d2b_using_subcommand host; and __fish_seen_subcommand_from install" -l no-start
+complete -c d2b -n "__fish_d2b_using_subcommand host; and __fish_seen_subcommand_from install" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand host; and __fish_seen_subcommand_from install" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand host; and __fish_seen_subcommand_from install" -l no-deadline -d 'Suppress the command default deadline'
 complete -c d2b -n "__fish_d2b_using_subcommand host; and __fish_seen_subcommand_from install" -s h -l help -d 'Print help'
-complete -c d2b -n "__fish_d2b_using_subcommand host; and __fish_seen_subcommand_from reconcile" -l network -d 'Re-run the network slice of `host prepare` (bridge/route/nftables reconcile without starting any VM). Currently the only available scope'
-complete -c d2b -n "__fish_d2b_using_subcommand host; and __fish_seen_subcommand_from reconcile" -l dry-run -d 'Plan the reconcile without mutating host state'
-complete -c d2b -n "__fish_d2b_using_subcommand host; and __fish_seen_subcommand_from reconcile" -l apply -d 'Apply the reconcile (mutates host state)'
-complete -c d2b -n "__fish_d2b_using_subcommand host; and __fish_seen_subcommand_from reconcile" -l json
-complete -c d2b -n "__fish_d2b_using_subcommand host; and __fish_seen_subcommand_from reconcile" -l human
+complete -c d2b -n "__fish_d2b_using_subcommand host; and __fish_seen_subcommand_from reconcile" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand host; and __fish_seen_subcommand_from reconcile" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand host; and __fish_seen_subcommand_from reconcile" -l network
+complete -c d2b -n "__fish_d2b_using_subcommand host; and __fish_seen_subcommand_from reconcile" -l dry-run
+complete -c d2b -n "__fish_d2b_using_subcommand host; and __fish_seen_subcommand_from reconcile" -l apply
+complete -c d2b -n "__fish_d2b_using_subcommand host; and __fish_seen_subcommand_from reconcile" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand host; and __fish_seen_subcommand_from reconcile" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand host; and __fish_seen_subcommand_from reconcile" -l no-deadline -d 'Suppress the command default deadline'
 complete -c d2b -n "__fish_d2b_using_subcommand host; and __fish_seen_subcommand_from reconcile" -s h -l help -d 'Print help'
-complete -c d2b -n "__fish_d2b_using_subcommand host; and __fish_seen_subcommand_from validate" -l wave -d 'Restrict to a single wave. Other waves are reported as `skipped`' -r
-complete -c d2b -n "__fish_d2b_using_subcommand host; and __fish_seen_subcommand_from validate" -l operator-signature -d 'Override the per-wave operator signature. When unset, the verb derives a deterministic sha256 signature from `hostname|wave|scripts_dir|timestamp`' -r
-complete -c d2b -n "__fish_d2b_using_subcommand host; and __fish_seen_subcommand_from validate" -l evidence-dir -d 'Override the evidence directory. Default: `/var/lib/d2b/validated`' -r -F
-complete -c d2b -n "__fish_d2b_using_subcommand host; and __fish_seen_subcommand_from validate" -l scripts-dir -d 'Override the scripts directory. Default: best-effort discovery of the installed `tests/` share, then `./tests`' -r -F
-complete -c d2b -n "__fish_d2b_using_subcommand host; and __fish_seen_subcommand_from validate" -l dry-run -d 'Plan: report which readiness validators WOULD be attested. No evidence is written'
-complete -c d2b -n "__fish_d2b_using_subcommand host; and __fish_seen_subcommand_from validate" -l apply -d 'Apply: write `/var/lib/d2b/validated/<wave>.json` for every wave whose declared validators are present on disk'
-complete -c d2b -n "__fish_d2b_using_subcommand host; and __fish_seen_subcommand_from validate" -l json
-complete -c d2b -n "__fish_d2b_using_subcommand host; and __fish_seen_subcommand_from validate" -l human
+complete -c d2b -n "__fish_d2b_using_subcommand host; and __fish_seen_subcommand_from validate" -l wave -r
+complete -c d2b -n "__fish_d2b_using_subcommand host; and __fish_seen_subcommand_from validate" -l evidence-dir -r -F
+complete -c d2b -n "__fish_d2b_using_subcommand host; and __fish_seen_subcommand_from validate" -l scripts-dir -r -F
+complete -c d2b -n "__fish_d2b_using_subcommand host; and __fish_seen_subcommand_from validate" -l operator-signature -r
+complete -c d2b -n "__fish_d2b_using_subcommand host; and __fish_seen_subcommand_from validate" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand host; and __fish_seen_subcommand_from validate" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand host; and __fish_seen_subcommand_from validate" -l dry-run
+complete -c d2b -n "__fish_d2b_using_subcommand host; and __fish_seen_subcommand_from validate" -l apply
+complete -c d2b -n "__fish_d2b_using_subcommand host; and __fish_seen_subcommand_from validate" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand host; and __fish_seen_subcommand_from validate" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand host; and __fish_seen_subcommand_from validate" -l no-deadline -d 'Suppress the command default deadline'
 complete -c d2b -n "__fish_d2b_using_subcommand host; and __fish_seen_subcommand_from validate" -s h -l help -d 'Print help'
-complete -c d2b -n "__fish_d2b_using_subcommand host; and __fish_seen_subcommand_from help" -f -a "check" -d 'Read-only preflight: inventories host posture without mutation'
-complete -c d2b -n "__fish_d2b_using_subcommand host; and __fish_seen_subcommand_from help" -f -a "prepare" -d 'Reconcile host-side state (bridges, nftables, sysctls). --apply mutates'
-complete -c d2b -n "__fish_d2b_using_subcommand host; and __fish_seen_subcommand_from help" -f -a "destroy" -d 'Tear down host-side state owned by d2b. --apply mutates'
-complete -c d2b -n "__fish_d2b_using_subcommand host; and __fish_seen_subcommand_from help" -f -a "doctor" -d 'Read-only deep diagnostics for the daemon + broker state'
-complete -c d2b -n "__fish_d2b_using_subcommand host; and __fish_seen_subcommand_from help" -f -a "migrate-storage" -d 'Plan the one-time storage layout cutover. --apply is fail-closed until broker support lands'
-complete -c d2b -n "__fish_d2b_using_subcommand host; and __fish_seen_subcommand_from help" -f -a "install" -d 'Install d2bd + broker units onto the host. --apply mutates'
-complete -c d2b -n "__fish_d2b_using_subcommand host; and __fish_seen_subcommand_from help" -f -a "reconcile" -d 'Reconcile host network state (re-run bridge/route/nftables reconcile without starting any VM)'
-complete -c d2b -n "__fish_d2b_using_subcommand host; and __fish_seen_subcommand_from help" -f -a "validate" -d 'Run the host-side validator suite and write evidence records'
-complete -c d2b -n "__fish_d2b_using_subcommand host; and __fish_seen_subcommand_from help" -f -a "help" -d 'Print this message or the help of the given subcommand(s)'
-complete -c d2b -n "__fish_d2b_using_subcommand auth; and not __fish_seen_subcommand_from status help" -s h -l help -d 'Print help'
-complete -c d2b -n "__fish_d2b_using_subcommand auth; and not __fish_seen_subcommand_from status help" -f -a "status"
-complete -c d2b -n "__fish_d2b_using_subcommand auth; and not __fish_seen_subcommand_from status help" -f -a "help" -d 'Print this message or the help of the given subcommand(s)'
-complete -c d2b -n "__fish_d2b_using_subcommand auth; and __fish_seen_subcommand_from status" -l test-uid -r
-complete -c d2b -n "__fish_d2b_using_subcommand auth; and __fish_seen_subcommand_from status" -l json
-complete -c d2b -n "__fish_d2b_using_subcommand auth; and __fish_seen_subcommand_from status" -l human
-complete -c d2b -n "__fish_d2b_using_subcommand auth; and __fish_seen_subcommand_from status" -s h -l help -d 'Print help'
-complete -c d2b -n "__fish_d2b_using_subcommand auth; and __fish_seen_subcommand_from help" -f -a "status"
-complete -c d2b -n "__fish_d2b_using_subcommand auth; and __fish_seen_subcommand_from help" -f -a "help" -d 'Print this message or the help of the given subcommand(s)'
-complete -c d2b -n "__fish_d2b_using_subcommand realm; and not __fish_seen_subcommand_from list inspect enter run help" -s h -l help -d 'Print help'
-complete -c d2b -n "__fish_d2b_using_subcommand realm; and not __fish_seen_subcommand_from list inspect enter run help" -f -a "list" -d 'List local realm policy entrypoints'
-complete -c d2b -n "__fish_d2b_using_subcommand realm; and not __fish_seen_subcommand_from list inspect enter run help" -f -a "inspect" -d 'Inspect one local realm policy entrypoint'
-complete -c d2b -n "__fish_d2b_using_subcommand realm; and not __fish_seen_subcommand_from list inspect enter run help" -f -a "enter" -d 'Open an interactive shell inside the realm gateway VM'
-complete -c d2b -n "__fish_d2b_using_subcommand realm; and not __fish_seen_subcommand_from list inspect enter run help" -f -a "run" -d 'Run a one-shot command inside the realm gateway VM'
-complete -c d2b -n "__fish_d2b_using_subcommand realm; and not __fish_seen_subcommand_from list inspect enter run help" -f -a "help" -d 'Print this message or the help of the given subcommand(s)'
-complete -c d2b -n "__fish_d2b_using_subcommand realm; and __fish_seen_subcommand_from list" -l json
-complete -c d2b -n "__fish_d2b_using_subcommand realm; and __fish_seen_subcommand_from list" -l human
-complete -c d2b -n "__fish_d2b_using_subcommand realm; and __fish_seen_subcommand_from list" -s h -l help -d 'Print help'
-complete -c d2b -n "__fish_d2b_using_subcommand realm; and __fish_seen_subcommand_from inspect" -l json
-complete -c d2b -n "__fish_d2b_using_subcommand realm; and __fish_seen_subcommand_from inspect" -l human
-complete -c d2b -n "__fish_d2b_using_subcommand realm; and __fish_seen_subcommand_from inspect" -s h -l help -d 'Print help'
-complete -c d2b -n "__fish_d2b_using_subcommand realm; and __fish_seen_subcommand_from enter" -s h -l help -d 'Print help'
-complete -c d2b -n "__fish_d2b_using_subcommand realm; and __fish_seen_subcommand_from run" -l json -d 'Emit the outer `vm exec` result as JSON'
-complete -c d2b -n "__fish_d2b_using_subcommand realm; and __fish_seen_subcommand_from run" -l human -d 'Force human output'
-complete -c d2b -n "__fish_d2b_using_subcommand realm; and __fish_seen_subcommand_from run" -s h -l help -d 'Print help'
-complete -c d2b -n "__fish_d2b_using_subcommand realm; and __fish_seen_subcommand_from help" -f -a "list" -d 'List local realm policy entrypoints'
-complete -c d2b -n "__fish_d2b_using_subcommand realm; and __fish_seen_subcommand_from help" -f -a "inspect" -d 'Inspect one local realm policy entrypoint'
-complete -c d2b -n "__fish_d2b_using_subcommand realm; and __fish_seen_subcommand_from help" -f -a "enter" -d 'Open an interactive shell inside the realm gateway VM'
-complete -c d2b -n "__fish_d2b_using_subcommand realm; and __fish_seen_subcommand_from help" -f -a "run" -d 'Run a one-shot command inside the realm gateway VM'
-complete -c d2b -n "__fish_d2b_using_subcommand realm; and __fish_seen_subcommand_from help" -f -a "help" -d 'Print this message or the help of the given subcommand(s)'
-complete -c d2b -n "__fish_d2b_using_subcommand shell" -l name -d 'Persistent shell session name. Omit to use the target\'s configured default' -r
-complete -c d2b -n "__fish_d2b_using_subcommand shell" -l force -d 'Detach an existing attached client before attaching to this session'
-complete -c d2b -n "__fish_d2b_using_subcommand shell" -l json -d 'Render machine-readable JSON'
-complete -c d2b -n "__fish_d2b_using_subcommand shell" -l human -d 'Render human-readable output'
-complete -c d2b -n "__fish_d2b_using_subcommand shell" -s h -l help -d 'Print help (see more with \'--help\')'
-complete -c d2b -n "__fish_d2b_using_subcommand op; and not __fish_seen_subcommand_from inspect help" -s h -l help -d 'Print help'
-complete -c d2b -n "__fish_d2b_using_subcommand op; and not __fish_seen_subcommand_from inspect help" -f -a "inspect" -d 'Inspect current operation/trace state with bounded partial results'
-complete -c d2b -n "__fish_d2b_using_subcommand op; and not __fish_seen_subcommand_from inspect help" -f -a "help" -d 'Print this message or the help of the given subcommand(s)'
-complete -c d2b -n "__fish_d2b_using_subcommand op; and __fish_seen_subcommand_from inspect" -l trace-id -d 'Optional trace id to include in the inspection envelope' -r
-complete -c d2b -n "__fish_d2b_using_subcommand op; and __fish_seen_subcommand_from inspect" -l span-id -d 'Optional span id to include in the inspection envelope' -r
-complete -c d2b -n "__fish_d2b_using_subcommand op; and __fish_seen_subcommand_from inspect" -l json
-complete -c d2b -n "__fish_d2b_using_subcommand op; and __fish_seen_subcommand_from inspect" -l human
+complete -c d2b -n "__fish_d2b_using_subcommand guest; and not __fish_seen_subcommand_from get list status start stop restart create update-spec delete console" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand guest; and not __fish_seen_subcommand_from get list status start stop restart create update-spec delete console" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand guest; and not __fish_seen_subcommand_from get list status start stop restart create update-spec delete console" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand guest; and not __fish_seen_subcommand_from get list status start stop restart create update-spec delete console" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand guest; and not __fish_seen_subcommand_from get list status start stop restart create update-spec delete console" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand guest; and not __fish_seen_subcommand_from get list status start stop restart create update-spec delete console" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand guest; and not __fish_seen_subcommand_from get list status start stop restart create update-spec delete console" -f -a "get"
+complete -c d2b -n "__fish_d2b_using_subcommand guest; and not __fish_seen_subcommand_from get list status start stop restart create update-spec delete console" -f -a "list"
+complete -c d2b -n "__fish_d2b_using_subcommand guest; and not __fish_seen_subcommand_from get list status start stop restart create update-spec delete console" -f -a "status"
+complete -c d2b -n "__fish_d2b_using_subcommand guest; and not __fish_seen_subcommand_from get list status start stop restart create update-spec delete console" -f -a "start"
+complete -c d2b -n "__fish_d2b_using_subcommand guest; and not __fish_seen_subcommand_from get list status start stop restart create update-spec delete console" -f -a "stop"
+complete -c d2b -n "__fish_d2b_using_subcommand guest; and not __fish_seen_subcommand_from get list status start stop restart create update-spec delete console" -f -a "restart"
+complete -c d2b -n "__fish_d2b_using_subcommand guest; and not __fish_seen_subcommand_from get list status start stop restart create update-spec delete console" -f -a "create"
+complete -c d2b -n "__fish_d2b_using_subcommand guest; and not __fish_seen_subcommand_from get list status start stop restart create update-spec delete console" -f -a "update-spec"
+complete -c d2b -n "__fish_d2b_using_subcommand guest; and not __fish_seen_subcommand_from get list status start stop restart create update-spec delete console" -f -a "delete"
+complete -c d2b -n "__fish_d2b_using_subcommand guest; and not __fish_seen_subcommand_from get list status start stop restart create update-spec delete console" -f -a "console"
+complete -c d2b -n "__fish_d2b_using_subcommand guest; and __fish_seen_subcommand_from get" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand guest; and __fish_seen_subcommand_from get" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand guest; and __fish_seen_subcommand_from get" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand guest; and __fish_seen_subcommand_from get" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand guest; and __fish_seen_subcommand_from get" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand guest; and __fish_seen_subcommand_from get" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand guest; and __fish_seen_subcommand_from list" -l execution-ref -r
+complete -c d2b -n "__fish_d2b_using_subcommand guest; and __fish_seen_subcommand_from list" -l domain -r
+complete -c d2b -n "__fish_d2b_using_subcommand guest; and __fish_seen_subcommand_from list" -l phase -r
+complete -c d2b -n "__fish_d2b_using_subcommand guest; and __fish_seen_subcommand_from list" -l label-selector -r
+complete -c d2b -n "__fish_d2b_using_subcommand guest; and __fish_seen_subcommand_from list" -l page-token -r
+complete -c d2b -n "__fish_d2b_using_subcommand guest; and __fish_seen_subcommand_from list" -l limit -r
+complete -c d2b -n "__fish_d2b_using_subcommand guest; and __fish_seen_subcommand_from list" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand guest; and __fish_seen_subcommand_from list" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand guest; and __fish_seen_subcommand_from list" -l updates
+complete -c d2b -n "__fish_d2b_using_subcommand guest; and __fish_seen_subcommand_from list" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand guest; and __fish_seen_subcommand_from list" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand guest; and __fish_seen_subcommand_from list" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand guest; and __fish_seen_subcommand_from list" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand guest; and __fish_seen_subcommand_from status" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand guest; and __fish_seen_subcommand_from status" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand guest; and __fish_seen_subcommand_from status" -l watch
+complete -c d2b -n "__fish_d2b_using_subcommand guest; and __fish_seen_subcommand_from status" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand guest; and __fish_seen_subcommand_from status" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand guest; and __fish_seen_subcommand_from status" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand guest; and __fish_seen_subcommand_from status" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand guest; and __fish_seen_subcommand_from start" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand guest; and __fish_seen_subcommand_from start" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand guest; and __fish_seen_subcommand_from start" -l dry-run
+complete -c d2b -n "__fish_d2b_using_subcommand guest; and __fish_seen_subcommand_from start" -l apply
+complete -c d2b -n "__fish_d2b_using_subcommand guest; and __fish_seen_subcommand_from start" -l no-wait-ready
+complete -c d2b -n "__fish_d2b_using_subcommand guest; and __fish_seen_subcommand_from start" -s f -l force
+complete -c d2b -n "__fish_d2b_using_subcommand guest; and __fish_seen_subcommand_from start" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand guest; and __fish_seen_subcommand_from start" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand guest; and __fish_seen_subcommand_from start" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand guest; and __fish_seen_subcommand_from start" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand guest; and __fish_seen_subcommand_from stop" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand guest; and __fish_seen_subcommand_from stop" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand guest; and __fish_seen_subcommand_from stop" -l dry-run
+complete -c d2b -n "__fish_d2b_using_subcommand guest; and __fish_seen_subcommand_from stop" -l apply
+complete -c d2b -n "__fish_d2b_using_subcommand guest; and __fish_seen_subcommand_from stop" -l no-wait-ready
+complete -c d2b -n "__fish_d2b_using_subcommand guest; and __fish_seen_subcommand_from stop" -s f -l force
+complete -c d2b -n "__fish_d2b_using_subcommand guest; and __fish_seen_subcommand_from stop" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand guest; and __fish_seen_subcommand_from stop" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand guest; and __fish_seen_subcommand_from stop" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand guest; and __fish_seen_subcommand_from stop" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand guest; and __fish_seen_subcommand_from restart" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand guest; and __fish_seen_subcommand_from restart" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand guest; and __fish_seen_subcommand_from restart" -l dry-run
+complete -c d2b -n "__fish_d2b_using_subcommand guest; and __fish_seen_subcommand_from restart" -l apply
+complete -c d2b -n "__fish_d2b_using_subcommand guest; and __fish_seen_subcommand_from restart" -l no-wait-ready
+complete -c d2b -n "__fish_d2b_using_subcommand guest; and __fish_seen_subcommand_from restart" -s f -l force
+complete -c d2b -n "__fish_d2b_using_subcommand guest; and __fish_seen_subcommand_from restart" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand guest; and __fish_seen_subcommand_from restart" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand guest; and __fish_seen_subcommand_from restart" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand guest; and __fish_seen_subcommand_from restart" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand guest; and __fish_seen_subcommand_from create" -l spec-file -r -F
+complete -c d2b -n "__fish_d2b_using_subcommand guest; and __fish_seen_subcommand_from create" -l reconcile-deadline -r
+complete -c d2b -n "__fish_d2b_using_subcommand guest; and __fish_seen_subcommand_from create" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand guest; and __fish_seen_subcommand_from create" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand guest; and __fish_seen_subcommand_from create" -l spec-stdin
+complete -c d2b -n "__fish_d2b_using_subcommand guest; and __fish_seen_subcommand_from create" -l wait-for-reconcile
+complete -c d2b -n "__fish_d2b_using_subcommand guest; and __fish_seen_subcommand_from create" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand guest; and __fish_seen_subcommand_from create" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand guest; and __fish_seen_subcommand_from create" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand guest; and __fish_seen_subcommand_from create" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand guest; and __fish_seen_subcommand_from update-spec" -l revision -r
+complete -c d2b -n "__fish_d2b_using_subcommand guest; and __fish_seen_subcommand_from update-spec" -l spec-file -r -F
+complete -c d2b -n "__fish_d2b_using_subcommand guest; and __fish_seen_subcommand_from update-spec" -l reconcile-deadline -r
+complete -c d2b -n "__fish_d2b_using_subcommand guest; and __fish_seen_subcommand_from update-spec" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand guest; and __fish_seen_subcommand_from update-spec" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand guest; and __fish_seen_subcommand_from update-spec" -l spec-stdin
+complete -c d2b -n "__fish_d2b_using_subcommand guest; and __fish_seen_subcommand_from update-spec" -l wait-for-reconcile
+complete -c d2b -n "__fish_d2b_using_subcommand guest; and __fish_seen_subcommand_from update-spec" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand guest; and __fish_seen_subcommand_from update-spec" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand guest; and __fish_seen_subcommand_from update-spec" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand guest; and __fish_seen_subcommand_from update-spec" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand guest; and __fish_seen_subcommand_from delete" -l revision -r
+complete -c d2b -n "__fish_d2b_using_subcommand guest; and __fish_seen_subcommand_from delete" -l reconcile-deadline -r
+complete -c d2b -n "__fish_d2b_using_subcommand guest; and __fish_seen_subcommand_from delete" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand guest; and __fish_seen_subcommand_from delete" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand guest; and __fish_seen_subcommand_from delete" -l wait-for-reconcile
+complete -c d2b -n "__fish_d2b_using_subcommand guest; and __fish_seen_subcommand_from delete" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand guest; and __fish_seen_subcommand_from delete" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand guest; and __fish_seen_subcommand_from delete" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand guest; and __fish_seen_subcommand_from delete" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand guest; and __fish_seen_subcommand_from console" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand guest; and __fish_seen_subcommand_from console" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand guest; and __fish_seen_subcommand_from console" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand guest; and __fish_seen_subcommand_from console" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand guest; and __fish_seen_subcommand_from console" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand guest; and __fish_seen_subcommand_from console" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand process; and not __fish_seen_subcommand_from get list status start stop create update-spec delete" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand process; and not __fish_seen_subcommand_from get list status start stop create update-spec delete" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand process; and not __fish_seen_subcommand_from get list status start stop create update-spec delete" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand process; and not __fish_seen_subcommand_from get list status start stop create update-spec delete" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand process; and not __fish_seen_subcommand_from get list status start stop create update-spec delete" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand process; and not __fish_seen_subcommand_from get list status start stop create update-spec delete" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand process; and not __fish_seen_subcommand_from get list status start stop create update-spec delete" -f -a "get"
+complete -c d2b -n "__fish_d2b_using_subcommand process; and not __fish_seen_subcommand_from get list status start stop create update-spec delete" -f -a "list"
+complete -c d2b -n "__fish_d2b_using_subcommand process; and not __fish_seen_subcommand_from get list status start stop create update-spec delete" -f -a "status"
+complete -c d2b -n "__fish_d2b_using_subcommand process; and not __fish_seen_subcommand_from get list status start stop create update-spec delete" -f -a "start"
+complete -c d2b -n "__fish_d2b_using_subcommand process; and not __fish_seen_subcommand_from get list status start stop create update-spec delete" -f -a "stop"
+complete -c d2b -n "__fish_d2b_using_subcommand process; and not __fish_seen_subcommand_from get list status start stop create update-spec delete" -f -a "create"
+complete -c d2b -n "__fish_d2b_using_subcommand process; and not __fish_seen_subcommand_from get list status start stop create update-spec delete" -f -a "update-spec"
+complete -c d2b -n "__fish_d2b_using_subcommand process; and not __fish_seen_subcommand_from get list status start stop create update-spec delete" -f -a "delete"
+complete -c d2b -n "__fish_d2b_using_subcommand process; and __fish_seen_subcommand_from get" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand process; and __fish_seen_subcommand_from get" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand process; and __fish_seen_subcommand_from get" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand process; and __fish_seen_subcommand_from get" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand process; and __fish_seen_subcommand_from get" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand process; and __fish_seen_subcommand_from get" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand process; and __fish_seen_subcommand_from list" -l execution-ref -r
+complete -c d2b -n "__fish_d2b_using_subcommand process; and __fish_seen_subcommand_from list" -l domain -r
+complete -c d2b -n "__fish_d2b_using_subcommand process; and __fish_seen_subcommand_from list" -l phase -r
+complete -c d2b -n "__fish_d2b_using_subcommand process; and __fish_seen_subcommand_from list" -l label-selector -r
+complete -c d2b -n "__fish_d2b_using_subcommand process; and __fish_seen_subcommand_from list" -l page-token -r
+complete -c d2b -n "__fish_d2b_using_subcommand process; and __fish_seen_subcommand_from list" -l limit -r
+complete -c d2b -n "__fish_d2b_using_subcommand process; and __fish_seen_subcommand_from list" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand process; and __fish_seen_subcommand_from list" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand process; and __fish_seen_subcommand_from list" -l updates
+complete -c d2b -n "__fish_d2b_using_subcommand process; and __fish_seen_subcommand_from list" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand process; and __fish_seen_subcommand_from list" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand process; and __fish_seen_subcommand_from list" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand process; and __fish_seen_subcommand_from list" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand process; and __fish_seen_subcommand_from status" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand process; and __fish_seen_subcommand_from status" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand process; and __fish_seen_subcommand_from status" -l watch
+complete -c d2b -n "__fish_d2b_using_subcommand process; and __fish_seen_subcommand_from status" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand process; and __fish_seen_subcommand_from status" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand process; and __fish_seen_subcommand_from status" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand process; and __fish_seen_subcommand_from status" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand process; and __fish_seen_subcommand_from start" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand process; and __fish_seen_subcommand_from start" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand process; and __fish_seen_subcommand_from start" -l dry-run
+complete -c d2b -n "__fish_d2b_using_subcommand process; and __fish_seen_subcommand_from start" -l apply
+complete -c d2b -n "__fish_d2b_using_subcommand process; and __fish_seen_subcommand_from start" -l no-wait-ready
+complete -c d2b -n "__fish_d2b_using_subcommand process; and __fish_seen_subcommand_from start" -s f -l force
+complete -c d2b -n "__fish_d2b_using_subcommand process; and __fish_seen_subcommand_from start" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand process; and __fish_seen_subcommand_from start" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand process; and __fish_seen_subcommand_from start" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand process; and __fish_seen_subcommand_from start" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand process; and __fish_seen_subcommand_from stop" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand process; and __fish_seen_subcommand_from stop" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand process; and __fish_seen_subcommand_from stop" -l dry-run
+complete -c d2b -n "__fish_d2b_using_subcommand process; and __fish_seen_subcommand_from stop" -l apply
+complete -c d2b -n "__fish_d2b_using_subcommand process; and __fish_seen_subcommand_from stop" -l no-wait-ready
+complete -c d2b -n "__fish_d2b_using_subcommand process; and __fish_seen_subcommand_from stop" -s f -l force
+complete -c d2b -n "__fish_d2b_using_subcommand process; and __fish_seen_subcommand_from stop" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand process; and __fish_seen_subcommand_from stop" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand process; and __fish_seen_subcommand_from stop" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand process; and __fish_seen_subcommand_from stop" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand process; and __fish_seen_subcommand_from create" -l spec-file -r -F
+complete -c d2b -n "__fish_d2b_using_subcommand process; and __fish_seen_subcommand_from create" -l reconcile-deadline -r
+complete -c d2b -n "__fish_d2b_using_subcommand process; and __fish_seen_subcommand_from create" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand process; and __fish_seen_subcommand_from create" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand process; and __fish_seen_subcommand_from create" -l spec-stdin
+complete -c d2b -n "__fish_d2b_using_subcommand process; and __fish_seen_subcommand_from create" -l wait-for-reconcile
+complete -c d2b -n "__fish_d2b_using_subcommand process; and __fish_seen_subcommand_from create" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand process; and __fish_seen_subcommand_from create" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand process; and __fish_seen_subcommand_from create" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand process; and __fish_seen_subcommand_from create" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand process; and __fish_seen_subcommand_from update-spec" -l revision -r
+complete -c d2b -n "__fish_d2b_using_subcommand process; and __fish_seen_subcommand_from update-spec" -l spec-file -r -F
+complete -c d2b -n "__fish_d2b_using_subcommand process; and __fish_seen_subcommand_from update-spec" -l reconcile-deadline -r
+complete -c d2b -n "__fish_d2b_using_subcommand process; and __fish_seen_subcommand_from update-spec" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand process; and __fish_seen_subcommand_from update-spec" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand process; and __fish_seen_subcommand_from update-spec" -l spec-stdin
+complete -c d2b -n "__fish_d2b_using_subcommand process; and __fish_seen_subcommand_from update-spec" -l wait-for-reconcile
+complete -c d2b -n "__fish_d2b_using_subcommand process; and __fish_seen_subcommand_from update-spec" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand process; and __fish_seen_subcommand_from update-spec" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand process; and __fish_seen_subcommand_from update-spec" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand process; and __fish_seen_subcommand_from update-spec" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand process; and __fish_seen_subcommand_from delete" -l revision -r
+complete -c d2b -n "__fish_d2b_using_subcommand process; and __fish_seen_subcommand_from delete" -l reconcile-deadline -r
+complete -c d2b -n "__fish_d2b_using_subcommand process; and __fish_seen_subcommand_from delete" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand process; and __fish_seen_subcommand_from delete" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand process; and __fish_seen_subcommand_from delete" -l wait-for-reconcile
+complete -c d2b -n "__fish_d2b_using_subcommand process; and __fish_seen_subcommand_from delete" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand process; and __fish_seen_subcommand_from delete" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand process; and __fish_seen_subcommand_from delete" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand process; and __fish_seen_subcommand_from delete" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand exec; and not __fish_seen_subcommand_from run attach wait status list logs kill" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand exec; and not __fish_seen_subcommand_from run attach wait status list logs kill" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand exec; and not __fish_seen_subcommand_from run attach wait status list logs kill" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand exec; and not __fish_seen_subcommand_from run attach wait status list logs kill" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand exec; and not __fish_seen_subcommand_from run attach wait status list logs kill" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand exec; and not __fish_seen_subcommand_from run attach wait status list logs kill" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand exec; and not __fish_seen_subcommand_from run attach wait status list logs kill" -f -a "run"
+complete -c d2b -n "__fish_d2b_using_subcommand exec; and not __fish_seen_subcommand_from run attach wait status list logs kill" -f -a "attach"
+complete -c d2b -n "__fish_d2b_using_subcommand exec; and not __fish_seen_subcommand_from run attach wait status list logs kill" -f -a "wait"
+complete -c d2b -n "__fish_d2b_using_subcommand exec; and not __fish_seen_subcommand_from run attach wait status list logs kill" -f -a "status"
+complete -c d2b -n "__fish_d2b_using_subcommand exec; and not __fish_seen_subcommand_from run attach wait status list logs kill" -f -a "list"
+complete -c d2b -n "__fish_d2b_using_subcommand exec; and not __fish_seen_subcommand_from run attach wait status list logs kill" -f -a "logs"
+complete -c d2b -n "__fish_d2b_using_subcommand exec; and not __fish_seen_subcommand_from run attach wait status list logs kill" -f -a "kill"
+complete -c d2b -n "__fish_d2b_using_subcommand exec; and __fish_seen_subcommand_from run" -l name -r
+complete -c d2b -n "__fish_d2b_using_subcommand exec; and __fish_seen_subcommand_from run" -l domain -r
+complete -c d2b -n "__fish_d2b_using_subcommand exec; and __fish_seen_subcommand_from run" -l user -r
+complete -c d2b -n "__fish_d2b_using_subcommand exec; and __fish_seen_subcommand_from run" -l provider -r
+complete -c d2b -n "__fish_d2b_using_subcommand exec; and __fish_seen_subcommand_from run" -l env -r
+complete -c d2b -n "__fish_d2b_using_subcommand exec; and __fish_seen_subcommand_from run" -l cwd -r
+complete -c d2b -n "__fish_d2b_using_subcommand exec; and __fish_seen_subcommand_from run" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand exec; and __fish_seen_subcommand_from run" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand exec; and __fish_seen_subcommand_from run" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand exec; and __fish_seen_subcommand_from run" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand exec; and __fish_seen_subcommand_from run" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand exec; and __fish_seen_subcommand_from run" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand exec; and __fish_seen_subcommand_from attach" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand exec; and __fish_seen_subcommand_from attach" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand exec; and __fish_seen_subcommand_from attach" -s i -l interactive
+complete -c d2b -n "__fish_d2b_using_subcommand exec; and __fish_seen_subcommand_from attach" -s t -l tty
+complete -c d2b -n "__fish_d2b_using_subcommand exec; and __fish_seen_subcommand_from attach" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand exec; and __fish_seen_subcommand_from attach" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand exec; and __fish_seen_subcommand_from attach" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand exec; and __fish_seen_subcommand_from attach" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand exec; and __fish_seen_subcommand_from wait" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand exec; and __fish_seen_subcommand_from wait" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand exec; and __fish_seen_subcommand_from wait" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand exec; and __fish_seen_subcommand_from wait" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand exec; and __fish_seen_subcommand_from wait" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand exec; and __fish_seen_subcommand_from wait" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand exec; and __fish_seen_subcommand_from status" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand exec; and __fish_seen_subcommand_from status" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand exec; and __fish_seen_subcommand_from status" -l watch
+complete -c d2b -n "__fish_d2b_using_subcommand exec; and __fish_seen_subcommand_from status" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand exec; and __fish_seen_subcommand_from status" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand exec; and __fish_seen_subcommand_from status" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand exec; and __fish_seen_subcommand_from status" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand exec; and __fish_seen_subcommand_from list" -l phase -r
+complete -c d2b -n "__fish_d2b_using_subcommand exec; and __fish_seen_subcommand_from list" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand exec; and __fish_seen_subcommand_from list" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand exec; and __fish_seen_subcommand_from list" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand exec; and __fish_seen_subcommand_from list" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand exec; and __fish_seen_subcommand_from list" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand exec; and __fish_seen_subcommand_from list" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand exec; and __fish_seen_subcommand_from logs" -l stdout-offset -r
+complete -c d2b -n "__fish_d2b_using_subcommand exec; and __fish_seen_subcommand_from logs" -l stderr-offset -r
+complete -c d2b -n "__fish_d2b_using_subcommand exec; and __fish_seen_subcommand_from logs" -l max-len -r
+complete -c d2b -n "__fish_d2b_using_subcommand exec; and __fish_seen_subcommand_from logs" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand exec; and __fish_seen_subcommand_from logs" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand exec; and __fish_seen_subcommand_from logs" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand exec; and __fish_seen_subcommand_from logs" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand exec; and __fish_seen_subcommand_from logs" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand exec; and __fish_seen_subcommand_from logs" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand exec; and __fish_seen_subcommand_from kill" -l signal -r
+complete -c d2b -n "__fish_d2b_using_subcommand exec; and __fish_seen_subcommand_from kill" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand exec; and __fish_seen_subcommand_from kill" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand exec; and __fish_seen_subcommand_from kill" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand exec; and __fish_seen_subcommand_from kill" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand exec; and __fish_seen_subcommand_from kill" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand exec; and __fish_seen_subcommand_from kill" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand shell; and not __fish_seen_subcommand_from open attach list detach kill status" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand shell; and not __fish_seen_subcommand_from open attach list detach kill status" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand shell; and not __fish_seen_subcommand_from open attach list detach kill status" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand shell; and not __fish_seen_subcommand_from open attach list detach kill status" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand shell; and not __fish_seen_subcommand_from open attach list detach kill status" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand shell; and not __fish_seen_subcommand_from open attach list detach kill status" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand shell; and not __fish_seen_subcommand_from open attach list detach kill status" -f -a "open"
+complete -c d2b -n "__fish_d2b_using_subcommand shell; and not __fish_seen_subcommand_from open attach list detach kill status" -f -a "attach"
+complete -c d2b -n "__fish_d2b_using_subcommand shell; and not __fish_seen_subcommand_from open attach list detach kill status" -f -a "list"
+complete -c d2b -n "__fish_d2b_using_subcommand shell; and not __fish_seen_subcommand_from open attach list detach kill status" -f -a "detach"
+complete -c d2b -n "__fish_d2b_using_subcommand shell; and not __fish_seen_subcommand_from open attach list detach kill status" -f -a "kill"
+complete -c d2b -n "__fish_d2b_using_subcommand shell; and not __fish_seen_subcommand_from open attach list detach kill status" -f -a "status"
+complete -c d2b -n "__fish_d2b_using_subcommand shell; and __fish_seen_subcommand_from open" -l name -r
+complete -c d2b -n "__fish_d2b_using_subcommand shell; and __fish_seen_subcommand_from open" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand shell; and __fish_seen_subcommand_from open" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand shell; and __fish_seen_subcommand_from open" -l force
+complete -c d2b -n "__fish_d2b_using_subcommand shell; and __fish_seen_subcommand_from open" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand shell; and __fish_seen_subcommand_from open" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand shell; and __fish_seen_subcommand_from open" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand shell; and __fish_seen_subcommand_from open" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand shell; and __fish_seen_subcommand_from attach" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand shell; and __fish_seen_subcommand_from attach" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand shell; and __fish_seen_subcommand_from attach" -l force
+complete -c d2b -n "__fish_d2b_using_subcommand shell; and __fish_seen_subcommand_from attach" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand shell; and __fish_seen_subcommand_from attach" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand shell; and __fish_seen_subcommand_from attach" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand shell; and __fish_seen_subcommand_from attach" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand shell; and __fish_seen_subcommand_from list" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand shell; and __fish_seen_subcommand_from list" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand shell; and __fish_seen_subcommand_from list" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand shell; and __fish_seen_subcommand_from list" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand shell; and __fish_seen_subcommand_from list" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand shell; and __fish_seen_subcommand_from list" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand shell; and __fish_seen_subcommand_from detach" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand shell; and __fish_seen_subcommand_from detach" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand shell; and __fish_seen_subcommand_from detach" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand shell; and __fish_seen_subcommand_from detach" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand shell; and __fish_seen_subcommand_from detach" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand shell; and __fish_seen_subcommand_from detach" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand shell; and __fish_seen_subcommand_from kill" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand shell; and __fish_seen_subcommand_from kill" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand shell; and __fish_seen_subcommand_from kill" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand shell; and __fish_seen_subcommand_from kill" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand shell; and __fish_seen_subcommand_from kill" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand shell; and __fish_seen_subcommand_from kill" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand shell; and __fish_seen_subcommand_from status" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand shell; and __fish_seen_subcommand_from status" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand shell; and __fish_seen_subcommand_from status" -l watch
+complete -c d2b -n "__fish_d2b_using_subcommand shell; and __fish_seen_subcommand_from status" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand shell; and __fish_seen_subcommand_from status" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand shell; and __fish_seen_subcommand_from status" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand shell; and __fish_seen_subcommand_from status" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand volume; and not __fish_seen_subcommand_from get list watch create update-spec delete status upgrade reconcile verify usb security-key" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand volume; and not __fish_seen_subcommand_from get list watch create update-spec delete status upgrade reconcile verify usb security-key" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand volume; and not __fish_seen_subcommand_from get list watch create update-spec delete status upgrade reconcile verify usb security-key" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand volume; and not __fish_seen_subcommand_from get list watch create update-spec delete status upgrade reconcile verify usb security-key" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand volume; and not __fish_seen_subcommand_from get list watch create update-spec delete status upgrade reconcile verify usb security-key" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand volume; and not __fish_seen_subcommand_from get list watch create update-spec delete status upgrade reconcile verify usb security-key" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand volume; and not __fish_seen_subcommand_from get list watch create update-spec delete status upgrade reconcile verify usb security-key" -f -a "get"
+complete -c d2b -n "__fish_d2b_using_subcommand volume; and not __fish_seen_subcommand_from get list watch create update-spec delete status upgrade reconcile verify usb security-key" -f -a "list"
+complete -c d2b -n "__fish_d2b_using_subcommand volume; and not __fish_seen_subcommand_from get list watch create update-spec delete status upgrade reconcile verify usb security-key" -f -a "watch"
+complete -c d2b -n "__fish_d2b_using_subcommand volume; and not __fish_seen_subcommand_from get list watch create update-spec delete status upgrade reconcile verify usb security-key" -f -a "create"
+complete -c d2b -n "__fish_d2b_using_subcommand volume; and not __fish_seen_subcommand_from get list watch create update-spec delete status upgrade reconcile verify usb security-key" -f -a "update-spec"
+complete -c d2b -n "__fish_d2b_using_subcommand volume; and not __fish_seen_subcommand_from get list watch create update-spec delete status upgrade reconcile verify usb security-key" -f -a "delete"
+complete -c d2b -n "__fish_d2b_using_subcommand volume; and not __fish_seen_subcommand_from get list watch create update-spec delete status upgrade reconcile verify usb security-key" -f -a "status"
+complete -c d2b -n "__fish_d2b_using_subcommand volume; and not __fish_seen_subcommand_from get list watch create update-spec delete status upgrade reconcile verify usb security-key" -f -a "upgrade"
+complete -c d2b -n "__fish_d2b_using_subcommand volume; and not __fish_seen_subcommand_from get list watch create update-spec delete status upgrade reconcile verify usb security-key" -f -a "reconcile"
+complete -c d2b -n "__fish_d2b_using_subcommand volume; and not __fish_seen_subcommand_from get list watch create update-spec delete status upgrade reconcile verify usb security-key" -f -a "verify"
+complete -c d2b -n "__fish_d2b_using_subcommand volume; and not __fish_seen_subcommand_from get list watch create update-spec delete status upgrade reconcile verify usb security-key" -f -a "usb"
+complete -c d2b -n "__fish_d2b_using_subcommand volume; and not __fish_seen_subcommand_from get list watch create update-spec delete status upgrade reconcile verify usb security-key" -f -a "security-key"
+complete -c d2b -n "__fish_d2b_using_subcommand volume; and __fish_seen_subcommand_from get" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand volume; and __fish_seen_subcommand_from get" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand volume; and __fish_seen_subcommand_from get" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand volume; and __fish_seen_subcommand_from get" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand volume; and __fish_seen_subcommand_from get" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand volume; and __fish_seen_subcommand_from get" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand volume; and __fish_seen_subcommand_from list" -l execution-ref -r
+complete -c d2b -n "__fish_d2b_using_subcommand volume; and __fish_seen_subcommand_from list" -l domain -r
+complete -c d2b -n "__fish_d2b_using_subcommand volume; and __fish_seen_subcommand_from list" -l phase -r
+complete -c d2b -n "__fish_d2b_using_subcommand volume; and __fish_seen_subcommand_from list" -l label-selector -r
+complete -c d2b -n "__fish_d2b_using_subcommand volume; and __fish_seen_subcommand_from list" -l page-token -r
+complete -c d2b -n "__fish_d2b_using_subcommand volume; and __fish_seen_subcommand_from list" -l limit -r
+complete -c d2b -n "__fish_d2b_using_subcommand volume; and __fish_seen_subcommand_from list" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand volume; and __fish_seen_subcommand_from list" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand volume; and __fish_seen_subcommand_from list" -l updates
+complete -c d2b -n "__fish_d2b_using_subcommand volume; and __fish_seen_subcommand_from list" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand volume; and __fish_seen_subcommand_from list" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand volume; and __fish_seen_subcommand_from list" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand volume; and __fish_seen_subcommand_from list" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand volume; and __fish_seen_subcommand_from watch" -l since-revision -r
+complete -c d2b -n "__fish_d2b_using_subcommand volume; and __fish_seen_subcommand_from watch" -l phase -r
+complete -c d2b -n "__fish_d2b_using_subcommand volume; and __fish_seen_subcommand_from watch" -l label-selector -r
+complete -c d2b -n "__fish_d2b_using_subcommand volume; and __fish_seen_subcommand_from watch" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand volume; and __fish_seen_subcommand_from watch" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand volume; and __fish_seen_subcommand_from watch" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand volume; and __fish_seen_subcommand_from watch" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand volume; and __fish_seen_subcommand_from watch" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand volume; and __fish_seen_subcommand_from watch" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand volume; and __fish_seen_subcommand_from create" -l spec-file -r -F
+complete -c d2b -n "__fish_d2b_using_subcommand volume; and __fish_seen_subcommand_from create" -l reconcile-deadline -r
+complete -c d2b -n "__fish_d2b_using_subcommand volume; and __fish_seen_subcommand_from create" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand volume; and __fish_seen_subcommand_from create" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand volume; and __fish_seen_subcommand_from create" -l spec-stdin
+complete -c d2b -n "__fish_d2b_using_subcommand volume; and __fish_seen_subcommand_from create" -l wait-for-reconcile
+complete -c d2b -n "__fish_d2b_using_subcommand volume; and __fish_seen_subcommand_from create" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand volume; and __fish_seen_subcommand_from create" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand volume; and __fish_seen_subcommand_from create" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand volume; and __fish_seen_subcommand_from create" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand volume; and __fish_seen_subcommand_from update-spec" -l revision -r
+complete -c d2b -n "__fish_d2b_using_subcommand volume; and __fish_seen_subcommand_from update-spec" -l spec-file -r -F
+complete -c d2b -n "__fish_d2b_using_subcommand volume; and __fish_seen_subcommand_from update-spec" -l reconcile-deadline -r
+complete -c d2b -n "__fish_d2b_using_subcommand volume; and __fish_seen_subcommand_from update-spec" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand volume; and __fish_seen_subcommand_from update-spec" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand volume; and __fish_seen_subcommand_from update-spec" -l spec-stdin
+complete -c d2b -n "__fish_d2b_using_subcommand volume; and __fish_seen_subcommand_from update-spec" -l wait-for-reconcile
+complete -c d2b -n "__fish_d2b_using_subcommand volume; and __fish_seen_subcommand_from update-spec" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand volume; and __fish_seen_subcommand_from update-spec" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand volume; and __fish_seen_subcommand_from update-spec" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand volume; and __fish_seen_subcommand_from update-spec" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand volume; and __fish_seen_subcommand_from delete" -l revision -r
+complete -c d2b -n "__fish_d2b_using_subcommand volume; and __fish_seen_subcommand_from delete" -l reconcile-deadline -r
+complete -c d2b -n "__fish_d2b_using_subcommand volume; and __fish_seen_subcommand_from delete" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand volume; and __fish_seen_subcommand_from delete" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand volume; and __fish_seen_subcommand_from delete" -l wait-for-reconcile
+complete -c d2b -n "__fish_d2b_using_subcommand volume; and __fish_seen_subcommand_from delete" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand volume; and __fish_seen_subcommand_from delete" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand volume; and __fish_seen_subcommand_from delete" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand volume; and __fish_seen_subcommand_from delete" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand volume; and __fish_seen_subcommand_from status" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand volume; and __fish_seen_subcommand_from status" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand volume; and __fish_seen_subcommand_from status" -l watch
+complete -c d2b -n "__fish_d2b_using_subcommand volume; and __fish_seen_subcommand_from status" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand volume; and __fish_seen_subcommand_from status" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand volume; and __fish_seen_subcommand_from status" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand volume; and __fish_seen_subcommand_from status" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand volume; and __fish_seen_subcommand_from upgrade" -l reconcile-deadline -r
+complete -c d2b -n "__fish_d2b_using_subcommand volume; and __fish_seen_subcommand_from upgrade" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand volume; and __fish_seen_subcommand_from upgrade" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand volume; and __fish_seen_subcommand_from upgrade" -l recursive
+complete -c d2b -n "__fish_d2b_using_subcommand volume; and __fish_seen_subcommand_from upgrade" -l apply
+complete -c d2b -n "__fish_d2b_using_subcommand volume; and __fish_seen_subcommand_from upgrade" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand volume; and __fish_seen_subcommand_from upgrade" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand volume; and __fish_seen_subcommand_from upgrade" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand volume; and __fish_seen_subcommand_from upgrade" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand volume; and __fish_seen_subcommand_from reconcile" -l reconcile-deadline -r
+complete -c d2b -n "__fish_d2b_using_subcommand volume; and __fish_seen_subcommand_from reconcile" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand volume; and __fish_seen_subcommand_from reconcile" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand volume; and __fish_seen_subcommand_from reconcile" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand volume; and __fish_seen_subcommand_from reconcile" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand volume; and __fish_seen_subcommand_from reconcile" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand volume; and __fish_seen_subcommand_from reconcile" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand volume; and __fish_seen_subcommand_from verify" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand volume; and __fish_seen_subcommand_from verify" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand volume; and __fish_seen_subcommand_from verify" -l repair
+complete -c d2b -n "__fish_d2b_using_subcommand volume; and __fish_seen_subcommand_from verify" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand volume; and __fish_seen_subcommand_from verify" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand volume; and __fish_seen_subcommand_from verify" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand volume; and __fish_seen_subcommand_from verify" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand volume; and __fish_seen_subcommand_from usb" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand volume; and __fish_seen_subcommand_from usb" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand volume; and __fish_seen_subcommand_from usb" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand volume; and __fish_seen_subcommand_from usb" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand volume; and __fish_seen_subcommand_from usb" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand volume; and __fish_seen_subcommand_from usb" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand volume; and __fish_seen_subcommand_from usb" -f -a "attach"
+complete -c d2b -n "__fish_d2b_using_subcommand volume; and __fish_seen_subcommand_from usb" -f -a "detach"
+complete -c d2b -n "__fish_d2b_using_subcommand volume; and __fish_seen_subcommand_from usb" -f -a "probe"
+complete -c d2b -n "__fish_d2b_using_subcommand volume; and __fish_seen_subcommand_from security-key" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand volume; and __fish_seen_subcommand_from security-key" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand volume; and __fish_seen_subcommand_from security-key" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand volume; and __fish_seen_subcommand_from security-key" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand volume; and __fish_seen_subcommand_from security-key" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand volume; and __fish_seen_subcommand_from security-key" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand volume; and __fish_seen_subcommand_from security-key" -f -a "status"
+complete -c d2b -n "__fish_d2b_using_subcommand volume; and __fish_seen_subcommand_from security-key" -f -a "sessions"
+complete -c d2b -n "__fish_d2b_using_subcommand volume; and __fish_seen_subcommand_from security-key" -f -a "cancel"
+complete -c d2b -n "__fish_d2b_using_subcommand volume; and __fish_seen_subcommand_from security-key" -f -a "test"
+complete -c d2b -n "__fish_d2b_using_subcommand network; and not __fish_seen_subcommand_from get list watch create update-spec delete status upgrade reconcile verify usb security-key" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand network; and not __fish_seen_subcommand_from get list watch create update-spec delete status upgrade reconcile verify usb security-key" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand network; and not __fish_seen_subcommand_from get list watch create update-spec delete status upgrade reconcile verify usb security-key" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand network; and not __fish_seen_subcommand_from get list watch create update-spec delete status upgrade reconcile verify usb security-key" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand network; and not __fish_seen_subcommand_from get list watch create update-spec delete status upgrade reconcile verify usb security-key" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand network; and not __fish_seen_subcommand_from get list watch create update-spec delete status upgrade reconcile verify usb security-key" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand network; and not __fish_seen_subcommand_from get list watch create update-spec delete status upgrade reconcile verify usb security-key" -f -a "get"
+complete -c d2b -n "__fish_d2b_using_subcommand network; and not __fish_seen_subcommand_from get list watch create update-spec delete status upgrade reconcile verify usb security-key" -f -a "list"
+complete -c d2b -n "__fish_d2b_using_subcommand network; and not __fish_seen_subcommand_from get list watch create update-spec delete status upgrade reconcile verify usb security-key" -f -a "watch"
+complete -c d2b -n "__fish_d2b_using_subcommand network; and not __fish_seen_subcommand_from get list watch create update-spec delete status upgrade reconcile verify usb security-key" -f -a "create"
+complete -c d2b -n "__fish_d2b_using_subcommand network; and not __fish_seen_subcommand_from get list watch create update-spec delete status upgrade reconcile verify usb security-key" -f -a "update-spec"
+complete -c d2b -n "__fish_d2b_using_subcommand network; and not __fish_seen_subcommand_from get list watch create update-spec delete status upgrade reconcile verify usb security-key" -f -a "delete"
+complete -c d2b -n "__fish_d2b_using_subcommand network; and not __fish_seen_subcommand_from get list watch create update-spec delete status upgrade reconcile verify usb security-key" -f -a "status"
+complete -c d2b -n "__fish_d2b_using_subcommand network; and not __fish_seen_subcommand_from get list watch create update-spec delete status upgrade reconcile verify usb security-key" -f -a "upgrade"
+complete -c d2b -n "__fish_d2b_using_subcommand network; and not __fish_seen_subcommand_from get list watch create update-spec delete status upgrade reconcile verify usb security-key" -f -a "reconcile"
+complete -c d2b -n "__fish_d2b_using_subcommand network; and not __fish_seen_subcommand_from get list watch create update-spec delete status upgrade reconcile verify usb security-key" -f -a "verify"
+complete -c d2b -n "__fish_d2b_using_subcommand network; and not __fish_seen_subcommand_from get list watch create update-spec delete status upgrade reconcile verify usb security-key" -f -a "usb"
+complete -c d2b -n "__fish_d2b_using_subcommand network; and not __fish_seen_subcommand_from get list watch create update-spec delete status upgrade reconcile verify usb security-key" -f -a "security-key"
+complete -c d2b -n "__fish_d2b_using_subcommand network; and __fish_seen_subcommand_from get" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand network; and __fish_seen_subcommand_from get" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand network; and __fish_seen_subcommand_from get" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand network; and __fish_seen_subcommand_from get" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand network; and __fish_seen_subcommand_from get" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand network; and __fish_seen_subcommand_from get" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand network; and __fish_seen_subcommand_from list" -l execution-ref -r
+complete -c d2b -n "__fish_d2b_using_subcommand network; and __fish_seen_subcommand_from list" -l domain -r
+complete -c d2b -n "__fish_d2b_using_subcommand network; and __fish_seen_subcommand_from list" -l phase -r
+complete -c d2b -n "__fish_d2b_using_subcommand network; and __fish_seen_subcommand_from list" -l label-selector -r
+complete -c d2b -n "__fish_d2b_using_subcommand network; and __fish_seen_subcommand_from list" -l page-token -r
+complete -c d2b -n "__fish_d2b_using_subcommand network; and __fish_seen_subcommand_from list" -l limit -r
+complete -c d2b -n "__fish_d2b_using_subcommand network; and __fish_seen_subcommand_from list" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand network; and __fish_seen_subcommand_from list" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand network; and __fish_seen_subcommand_from list" -l updates
+complete -c d2b -n "__fish_d2b_using_subcommand network; and __fish_seen_subcommand_from list" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand network; and __fish_seen_subcommand_from list" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand network; and __fish_seen_subcommand_from list" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand network; and __fish_seen_subcommand_from list" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand network; and __fish_seen_subcommand_from watch" -l since-revision -r
+complete -c d2b -n "__fish_d2b_using_subcommand network; and __fish_seen_subcommand_from watch" -l phase -r
+complete -c d2b -n "__fish_d2b_using_subcommand network; and __fish_seen_subcommand_from watch" -l label-selector -r
+complete -c d2b -n "__fish_d2b_using_subcommand network; and __fish_seen_subcommand_from watch" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand network; and __fish_seen_subcommand_from watch" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand network; and __fish_seen_subcommand_from watch" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand network; and __fish_seen_subcommand_from watch" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand network; and __fish_seen_subcommand_from watch" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand network; and __fish_seen_subcommand_from watch" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand network; and __fish_seen_subcommand_from create" -l spec-file -r -F
+complete -c d2b -n "__fish_d2b_using_subcommand network; and __fish_seen_subcommand_from create" -l reconcile-deadline -r
+complete -c d2b -n "__fish_d2b_using_subcommand network; and __fish_seen_subcommand_from create" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand network; and __fish_seen_subcommand_from create" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand network; and __fish_seen_subcommand_from create" -l spec-stdin
+complete -c d2b -n "__fish_d2b_using_subcommand network; and __fish_seen_subcommand_from create" -l wait-for-reconcile
+complete -c d2b -n "__fish_d2b_using_subcommand network; and __fish_seen_subcommand_from create" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand network; and __fish_seen_subcommand_from create" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand network; and __fish_seen_subcommand_from create" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand network; and __fish_seen_subcommand_from create" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand network; and __fish_seen_subcommand_from update-spec" -l revision -r
+complete -c d2b -n "__fish_d2b_using_subcommand network; and __fish_seen_subcommand_from update-spec" -l spec-file -r -F
+complete -c d2b -n "__fish_d2b_using_subcommand network; and __fish_seen_subcommand_from update-spec" -l reconcile-deadline -r
+complete -c d2b -n "__fish_d2b_using_subcommand network; and __fish_seen_subcommand_from update-spec" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand network; and __fish_seen_subcommand_from update-spec" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand network; and __fish_seen_subcommand_from update-spec" -l spec-stdin
+complete -c d2b -n "__fish_d2b_using_subcommand network; and __fish_seen_subcommand_from update-spec" -l wait-for-reconcile
+complete -c d2b -n "__fish_d2b_using_subcommand network; and __fish_seen_subcommand_from update-spec" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand network; and __fish_seen_subcommand_from update-spec" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand network; and __fish_seen_subcommand_from update-spec" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand network; and __fish_seen_subcommand_from update-spec" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand network; and __fish_seen_subcommand_from delete" -l revision -r
+complete -c d2b -n "__fish_d2b_using_subcommand network; and __fish_seen_subcommand_from delete" -l reconcile-deadline -r
+complete -c d2b -n "__fish_d2b_using_subcommand network; and __fish_seen_subcommand_from delete" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand network; and __fish_seen_subcommand_from delete" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand network; and __fish_seen_subcommand_from delete" -l wait-for-reconcile
+complete -c d2b -n "__fish_d2b_using_subcommand network; and __fish_seen_subcommand_from delete" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand network; and __fish_seen_subcommand_from delete" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand network; and __fish_seen_subcommand_from delete" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand network; and __fish_seen_subcommand_from delete" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand network; and __fish_seen_subcommand_from status" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand network; and __fish_seen_subcommand_from status" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand network; and __fish_seen_subcommand_from status" -l watch
+complete -c d2b -n "__fish_d2b_using_subcommand network; and __fish_seen_subcommand_from status" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand network; and __fish_seen_subcommand_from status" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand network; and __fish_seen_subcommand_from status" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand network; and __fish_seen_subcommand_from status" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand network; and __fish_seen_subcommand_from upgrade" -l reconcile-deadline -r
+complete -c d2b -n "__fish_d2b_using_subcommand network; and __fish_seen_subcommand_from upgrade" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand network; and __fish_seen_subcommand_from upgrade" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand network; and __fish_seen_subcommand_from upgrade" -l recursive
+complete -c d2b -n "__fish_d2b_using_subcommand network; and __fish_seen_subcommand_from upgrade" -l apply
+complete -c d2b -n "__fish_d2b_using_subcommand network; and __fish_seen_subcommand_from upgrade" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand network; and __fish_seen_subcommand_from upgrade" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand network; and __fish_seen_subcommand_from upgrade" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand network; and __fish_seen_subcommand_from upgrade" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand network; and __fish_seen_subcommand_from reconcile" -l reconcile-deadline -r
+complete -c d2b -n "__fish_d2b_using_subcommand network; and __fish_seen_subcommand_from reconcile" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand network; and __fish_seen_subcommand_from reconcile" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand network; and __fish_seen_subcommand_from reconcile" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand network; and __fish_seen_subcommand_from reconcile" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand network; and __fish_seen_subcommand_from reconcile" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand network; and __fish_seen_subcommand_from reconcile" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand network; and __fish_seen_subcommand_from verify" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand network; and __fish_seen_subcommand_from verify" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand network; and __fish_seen_subcommand_from verify" -l repair
+complete -c d2b -n "__fish_d2b_using_subcommand network; and __fish_seen_subcommand_from verify" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand network; and __fish_seen_subcommand_from verify" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand network; and __fish_seen_subcommand_from verify" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand network; and __fish_seen_subcommand_from verify" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand network; and __fish_seen_subcommand_from usb" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand network; and __fish_seen_subcommand_from usb" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand network; and __fish_seen_subcommand_from usb" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand network; and __fish_seen_subcommand_from usb" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand network; and __fish_seen_subcommand_from usb" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand network; and __fish_seen_subcommand_from usb" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand network; and __fish_seen_subcommand_from usb" -f -a "attach"
+complete -c d2b -n "__fish_d2b_using_subcommand network; and __fish_seen_subcommand_from usb" -f -a "detach"
+complete -c d2b -n "__fish_d2b_using_subcommand network; and __fish_seen_subcommand_from usb" -f -a "probe"
+complete -c d2b -n "__fish_d2b_using_subcommand network; and __fish_seen_subcommand_from security-key" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand network; and __fish_seen_subcommand_from security-key" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand network; and __fish_seen_subcommand_from security-key" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand network; and __fish_seen_subcommand_from security-key" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand network; and __fish_seen_subcommand_from security-key" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand network; and __fish_seen_subcommand_from security-key" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand network; and __fish_seen_subcommand_from security-key" -f -a "status"
+complete -c d2b -n "__fish_d2b_using_subcommand network; and __fish_seen_subcommand_from security-key" -f -a "sessions"
+complete -c d2b -n "__fish_d2b_using_subcommand network; and __fish_seen_subcommand_from security-key" -f -a "cancel"
+complete -c d2b -n "__fish_d2b_using_subcommand network; and __fish_seen_subcommand_from security-key" -f -a "test"
+complete -c d2b -n "__fish_d2b_using_subcommand device; and not __fish_seen_subcommand_from get list watch create update-spec delete status upgrade reconcile verify usb security-key" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand device; and not __fish_seen_subcommand_from get list watch create update-spec delete status upgrade reconcile verify usb security-key" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand device; and not __fish_seen_subcommand_from get list watch create update-spec delete status upgrade reconcile verify usb security-key" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand device; and not __fish_seen_subcommand_from get list watch create update-spec delete status upgrade reconcile verify usb security-key" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand device; and not __fish_seen_subcommand_from get list watch create update-spec delete status upgrade reconcile verify usb security-key" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand device; and not __fish_seen_subcommand_from get list watch create update-spec delete status upgrade reconcile verify usb security-key" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand device; and not __fish_seen_subcommand_from get list watch create update-spec delete status upgrade reconcile verify usb security-key" -f -a "get"
+complete -c d2b -n "__fish_d2b_using_subcommand device; and not __fish_seen_subcommand_from get list watch create update-spec delete status upgrade reconcile verify usb security-key" -f -a "list"
+complete -c d2b -n "__fish_d2b_using_subcommand device; and not __fish_seen_subcommand_from get list watch create update-spec delete status upgrade reconcile verify usb security-key" -f -a "watch"
+complete -c d2b -n "__fish_d2b_using_subcommand device; and not __fish_seen_subcommand_from get list watch create update-spec delete status upgrade reconcile verify usb security-key" -f -a "create"
+complete -c d2b -n "__fish_d2b_using_subcommand device; and not __fish_seen_subcommand_from get list watch create update-spec delete status upgrade reconcile verify usb security-key" -f -a "update-spec"
+complete -c d2b -n "__fish_d2b_using_subcommand device; and not __fish_seen_subcommand_from get list watch create update-spec delete status upgrade reconcile verify usb security-key" -f -a "delete"
+complete -c d2b -n "__fish_d2b_using_subcommand device; and not __fish_seen_subcommand_from get list watch create update-spec delete status upgrade reconcile verify usb security-key" -f -a "status"
+complete -c d2b -n "__fish_d2b_using_subcommand device; and not __fish_seen_subcommand_from get list watch create update-spec delete status upgrade reconcile verify usb security-key" -f -a "upgrade"
+complete -c d2b -n "__fish_d2b_using_subcommand device; and not __fish_seen_subcommand_from get list watch create update-spec delete status upgrade reconcile verify usb security-key" -f -a "reconcile"
+complete -c d2b -n "__fish_d2b_using_subcommand device; and not __fish_seen_subcommand_from get list watch create update-spec delete status upgrade reconcile verify usb security-key" -f -a "verify"
+complete -c d2b -n "__fish_d2b_using_subcommand device; and not __fish_seen_subcommand_from get list watch create update-spec delete status upgrade reconcile verify usb security-key" -f -a "usb"
+complete -c d2b -n "__fish_d2b_using_subcommand device; and not __fish_seen_subcommand_from get list watch create update-spec delete status upgrade reconcile verify usb security-key" -f -a "security-key"
+complete -c d2b -n "__fish_d2b_using_subcommand device; and __fish_seen_subcommand_from get" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand device; and __fish_seen_subcommand_from get" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand device; and __fish_seen_subcommand_from get" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand device; and __fish_seen_subcommand_from get" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand device; and __fish_seen_subcommand_from get" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand device; and __fish_seen_subcommand_from get" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand device; and __fish_seen_subcommand_from list" -l execution-ref -r
+complete -c d2b -n "__fish_d2b_using_subcommand device; and __fish_seen_subcommand_from list" -l domain -r
+complete -c d2b -n "__fish_d2b_using_subcommand device; and __fish_seen_subcommand_from list" -l phase -r
+complete -c d2b -n "__fish_d2b_using_subcommand device; and __fish_seen_subcommand_from list" -l label-selector -r
+complete -c d2b -n "__fish_d2b_using_subcommand device; and __fish_seen_subcommand_from list" -l page-token -r
+complete -c d2b -n "__fish_d2b_using_subcommand device; and __fish_seen_subcommand_from list" -l limit -r
+complete -c d2b -n "__fish_d2b_using_subcommand device; and __fish_seen_subcommand_from list" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand device; and __fish_seen_subcommand_from list" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand device; and __fish_seen_subcommand_from list" -l updates
+complete -c d2b -n "__fish_d2b_using_subcommand device; and __fish_seen_subcommand_from list" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand device; and __fish_seen_subcommand_from list" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand device; and __fish_seen_subcommand_from list" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand device; and __fish_seen_subcommand_from list" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand device; and __fish_seen_subcommand_from watch" -l since-revision -r
+complete -c d2b -n "__fish_d2b_using_subcommand device; and __fish_seen_subcommand_from watch" -l phase -r
+complete -c d2b -n "__fish_d2b_using_subcommand device; and __fish_seen_subcommand_from watch" -l label-selector -r
+complete -c d2b -n "__fish_d2b_using_subcommand device; and __fish_seen_subcommand_from watch" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand device; and __fish_seen_subcommand_from watch" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand device; and __fish_seen_subcommand_from watch" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand device; and __fish_seen_subcommand_from watch" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand device; and __fish_seen_subcommand_from watch" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand device; and __fish_seen_subcommand_from watch" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand device; and __fish_seen_subcommand_from create" -l spec-file -r -F
+complete -c d2b -n "__fish_d2b_using_subcommand device; and __fish_seen_subcommand_from create" -l reconcile-deadline -r
+complete -c d2b -n "__fish_d2b_using_subcommand device; and __fish_seen_subcommand_from create" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand device; and __fish_seen_subcommand_from create" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand device; and __fish_seen_subcommand_from create" -l spec-stdin
+complete -c d2b -n "__fish_d2b_using_subcommand device; and __fish_seen_subcommand_from create" -l wait-for-reconcile
+complete -c d2b -n "__fish_d2b_using_subcommand device; and __fish_seen_subcommand_from create" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand device; and __fish_seen_subcommand_from create" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand device; and __fish_seen_subcommand_from create" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand device; and __fish_seen_subcommand_from create" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand device; and __fish_seen_subcommand_from update-spec" -l revision -r
+complete -c d2b -n "__fish_d2b_using_subcommand device; and __fish_seen_subcommand_from update-spec" -l spec-file -r -F
+complete -c d2b -n "__fish_d2b_using_subcommand device; and __fish_seen_subcommand_from update-spec" -l reconcile-deadline -r
+complete -c d2b -n "__fish_d2b_using_subcommand device; and __fish_seen_subcommand_from update-spec" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand device; and __fish_seen_subcommand_from update-spec" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand device; and __fish_seen_subcommand_from update-spec" -l spec-stdin
+complete -c d2b -n "__fish_d2b_using_subcommand device; and __fish_seen_subcommand_from update-spec" -l wait-for-reconcile
+complete -c d2b -n "__fish_d2b_using_subcommand device; and __fish_seen_subcommand_from update-spec" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand device; and __fish_seen_subcommand_from update-spec" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand device; and __fish_seen_subcommand_from update-spec" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand device; and __fish_seen_subcommand_from update-spec" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand device; and __fish_seen_subcommand_from delete" -l revision -r
+complete -c d2b -n "__fish_d2b_using_subcommand device; and __fish_seen_subcommand_from delete" -l reconcile-deadline -r
+complete -c d2b -n "__fish_d2b_using_subcommand device; and __fish_seen_subcommand_from delete" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand device; and __fish_seen_subcommand_from delete" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand device; and __fish_seen_subcommand_from delete" -l wait-for-reconcile
+complete -c d2b -n "__fish_d2b_using_subcommand device; and __fish_seen_subcommand_from delete" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand device; and __fish_seen_subcommand_from delete" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand device; and __fish_seen_subcommand_from delete" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand device; and __fish_seen_subcommand_from delete" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand device; and __fish_seen_subcommand_from status" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand device; and __fish_seen_subcommand_from status" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand device; and __fish_seen_subcommand_from status" -l watch
+complete -c d2b -n "__fish_d2b_using_subcommand device; and __fish_seen_subcommand_from status" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand device; and __fish_seen_subcommand_from status" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand device; and __fish_seen_subcommand_from status" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand device; and __fish_seen_subcommand_from status" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand device; and __fish_seen_subcommand_from upgrade" -l reconcile-deadline -r
+complete -c d2b -n "__fish_d2b_using_subcommand device; and __fish_seen_subcommand_from upgrade" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand device; and __fish_seen_subcommand_from upgrade" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand device; and __fish_seen_subcommand_from upgrade" -l recursive
+complete -c d2b -n "__fish_d2b_using_subcommand device; and __fish_seen_subcommand_from upgrade" -l apply
+complete -c d2b -n "__fish_d2b_using_subcommand device; and __fish_seen_subcommand_from upgrade" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand device; and __fish_seen_subcommand_from upgrade" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand device; and __fish_seen_subcommand_from upgrade" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand device; and __fish_seen_subcommand_from upgrade" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand device; and __fish_seen_subcommand_from reconcile" -l reconcile-deadline -r
+complete -c d2b -n "__fish_d2b_using_subcommand device; and __fish_seen_subcommand_from reconcile" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand device; and __fish_seen_subcommand_from reconcile" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand device; and __fish_seen_subcommand_from reconcile" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand device; and __fish_seen_subcommand_from reconcile" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand device; and __fish_seen_subcommand_from reconcile" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand device; and __fish_seen_subcommand_from reconcile" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand device; and __fish_seen_subcommand_from verify" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand device; and __fish_seen_subcommand_from verify" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand device; and __fish_seen_subcommand_from verify" -l repair
+complete -c d2b -n "__fish_d2b_using_subcommand device; and __fish_seen_subcommand_from verify" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand device; and __fish_seen_subcommand_from verify" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand device; and __fish_seen_subcommand_from verify" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand device; and __fish_seen_subcommand_from verify" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand device; and __fish_seen_subcommand_from usb" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand device; and __fish_seen_subcommand_from usb" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand device; and __fish_seen_subcommand_from usb" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand device; and __fish_seen_subcommand_from usb" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand device; and __fish_seen_subcommand_from usb" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand device; and __fish_seen_subcommand_from usb" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand device; and __fish_seen_subcommand_from usb" -f -a "attach"
+complete -c d2b -n "__fish_d2b_using_subcommand device; and __fish_seen_subcommand_from usb" -f -a "detach"
+complete -c d2b -n "__fish_d2b_using_subcommand device; and __fish_seen_subcommand_from usb" -f -a "probe"
+complete -c d2b -n "__fish_d2b_using_subcommand device; and __fish_seen_subcommand_from security-key" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand device; and __fish_seen_subcommand_from security-key" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand device; and __fish_seen_subcommand_from security-key" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand device; and __fish_seen_subcommand_from security-key" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand device; and __fish_seen_subcommand_from security-key" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand device; and __fish_seen_subcommand_from security-key" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand device; and __fish_seen_subcommand_from security-key" -f -a "status"
+complete -c d2b -n "__fish_d2b_using_subcommand device; and __fish_seen_subcommand_from security-key" -f -a "sessions"
+complete -c d2b -n "__fish_d2b_using_subcommand device; and __fish_seen_subcommand_from security-key" -f -a "cancel"
+complete -c d2b -n "__fish_d2b_using_subcommand device; and __fish_seen_subcommand_from security-key" -f -a "test"
+complete -c d2b -n "__fish_d2b_using_subcommand endpoint; and not __fish_seen_subcommand_from get list watch status resolve" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand endpoint; and not __fish_seen_subcommand_from get list watch status resolve" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand endpoint; and not __fish_seen_subcommand_from get list watch status resolve" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand endpoint; and not __fish_seen_subcommand_from get list watch status resolve" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand endpoint; and not __fish_seen_subcommand_from get list watch status resolve" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand endpoint; and not __fish_seen_subcommand_from get list watch status resolve" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand endpoint; and not __fish_seen_subcommand_from get list watch status resolve" -f -a "get"
+complete -c d2b -n "__fish_d2b_using_subcommand endpoint; and not __fish_seen_subcommand_from get list watch status resolve" -f -a "list"
+complete -c d2b -n "__fish_d2b_using_subcommand endpoint; and not __fish_seen_subcommand_from get list watch status resolve" -f -a "watch"
+complete -c d2b -n "__fish_d2b_using_subcommand endpoint; and not __fish_seen_subcommand_from get list watch status resolve" -f -a "status"
+complete -c d2b -n "__fish_d2b_using_subcommand endpoint; and not __fish_seen_subcommand_from get list watch status resolve" -f -a "resolve"
+complete -c d2b -n "__fish_d2b_using_subcommand endpoint; and __fish_seen_subcommand_from get" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand endpoint; and __fish_seen_subcommand_from get" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand endpoint; and __fish_seen_subcommand_from get" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand endpoint; and __fish_seen_subcommand_from get" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand endpoint; and __fish_seen_subcommand_from get" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand endpoint; and __fish_seen_subcommand_from get" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand endpoint; and __fish_seen_subcommand_from list" -l endpoint-class -r
+complete -c d2b -n "__fish_d2b_using_subcommand endpoint; and __fish_seen_subcommand_from list" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand endpoint; and __fish_seen_subcommand_from list" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand endpoint; and __fish_seen_subcommand_from list" -l updates
+complete -c d2b -n "__fish_d2b_using_subcommand endpoint; and __fish_seen_subcommand_from list" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand endpoint; and __fish_seen_subcommand_from list" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand endpoint; and __fish_seen_subcommand_from list" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand endpoint; and __fish_seen_subcommand_from list" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand endpoint; and __fish_seen_subcommand_from watch" -l endpoint-class -r
+complete -c d2b -n "__fish_d2b_using_subcommand endpoint; and __fish_seen_subcommand_from watch" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand endpoint; and __fish_seen_subcommand_from watch" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand endpoint; and __fish_seen_subcommand_from watch" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand endpoint; and __fish_seen_subcommand_from watch" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand endpoint; and __fish_seen_subcommand_from watch" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand endpoint; and __fish_seen_subcommand_from watch" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand endpoint; and __fish_seen_subcommand_from status" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand endpoint; and __fish_seen_subcommand_from status" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand endpoint; and __fish_seen_subcommand_from status" -l watch
+complete -c d2b -n "__fish_d2b_using_subcommand endpoint; and __fish_seen_subcommand_from status" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand endpoint; and __fish_seen_subcommand_from status" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand endpoint; and __fish_seen_subcommand_from status" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand endpoint; and __fish_seen_subcommand_from status" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand endpoint; and __fish_seen_subcommand_from resolve" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand endpoint; and __fish_seen_subcommand_from resolve" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand endpoint; and __fish_seen_subcommand_from resolve" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand endpoint; and __fish_seen_subcommand_from resolve" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand endpoint; and __fish_seen_subcommand_from resolve" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand endpoint; and __fish_seen_subcommand_from resolve" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand export; and not __fish_seen_subcommand_from get list watch status create update-spec delete" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand export; and not __fish_seen_subcommand_from get list watch status create update-spec delete" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand export; and not __fish_seen_subcommand_from get list watch status create update-spec delete" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand export; and not __fish_seen_subcommand_from get list watch status create update-spec delete" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand export; and not __fish_seen_subcommand_from get list watch status create update-spec delete" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand export; and not __fish_seen_subcommand_from get list watch status create update-spec delete" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand export; and not __fish_seen_subcommand_from get list watch status create update-spec delete" -f -a "get"
+complete -c d2b -n "__fish_d2b_using_subcommand export; and not __fish_seen_subcommand_from get list watch status create update-spec delete" -f -a "list"
+complete -c d2b -n "__fish_d2b_using_subcommand export; and not __fish_seen_subcommand_from get list watch status create update-spec delete" -f -a "watch"
+complete -c d2b -n "__fish_d2b_using_subcommand export; and not __fish_seen_subcommand_from get list watch status create update-spec delete" -f -a "status"
+complete -c d2b -n "__fish_d2b_using_subcommand export; and not __fish_seen_subcommand_from get list watch status create update-spec delete" -f -a "create"
+complete -c d2b -n "__fish_d2b_using_subcommand export; and not __fish_seen_subcommand_from get list watch status create update-spec delete" -f -a "update-spec"
+complete -c d2b -n "__fish_d2b_using_subcommand export; and not __fish_seen_subcommand_from get list watch status create update-spec delete" -f -a "delete"
+complete -c d2b -n "__fish_d2b_using_subcommand export; and __fish_seen_subcommand_from get" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand export; and __fish_seen_subcommand_from get" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand export; and __fish_seen_subcommand_from get" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand export; and __fish_seen_subcommand_from get" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand export; and __fish_seen_subcommand_from get" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand export; and __fish_seen_subcommand_from get" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand export; and __fish_seen_subcommand_from list" -l exported-type -r
+complete -c d2b -n "__fish_d2b_using_subcommand export; and __fish_seen_subcommand_from list" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand export; and __fish_seen_subcommand_from list" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand export; and __fish_seen_subcommand_from list" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand export; and __fish_seen_subcommand_from list" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand export; and __fish_seen_subcommand_from list" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand export; and __fish_seen_subcommand_from list" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand export; and __fish_seen_subcommand_from watch" -l exported-type -r
+complete -c d2b -n "__fish_d2b_using_subcommand export; and __fish_seen_subcommand_from watch" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand export; and __fish_seen_subcommand_from watch" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand export; and __fish_seen_subcommand_from watch" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand export; and __fish_seen_subcommand_from watch" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand export; and __fish_seen_subcommand_from watch" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand export; and __fish_seen_subcommand_from watch" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand export; and __fish_seen_subcommand_from status" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand export; and __fish_seen_subcommand_from status" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand export; and __fish_seen_subcommand_from status" -l watch
+complete -c d2b -n "__fish_d2b_using_subcommand export; and __fish_seen_subcommand_from status" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand export; and __fish_seen_subcommand_from status" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand export; and __fish_seen_subcommand_from status" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand export; and __fish_seen_subcommand_from status" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand export; and __fish_seen_subcommand_from create" -l spec-file -r -F
+complete -c d2b -n "__fish_d2b_using_subcommand export; and __fish_seen_subcommand_from create" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand export; and __fish_seen_subcommand_from create" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand export; and __fish_seen_subcommand_from create" -l spec-stdin
+complete -c d2b -n "__fish_d2b_using_subcommand export; and __fish_seen_subcommand_from create" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand export; and __fish_seen_subcommand_from create" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand export; and __fish_seen_subcommand_from create" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand export; and __fish_seen_subcommand_from create" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand export; and __fish_seen_subcommand_from update-spec" -l revision -r
+complete -c d2b -n "__fish_d2b_using_subcommand export; and __fish_seen_subcommand_from update-spec" -l spec-file -r -F
+complete -c d2b -n "__fish_d2b_using_subcommand export; and __fish_seen_subcommand_from update-spec" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand export; and __fish_seen_subcommand_from update-spec" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand export; and __fish_seen_subcommand_from update-spec" -l spec-stdin
+complete -c d2b -n "__fish_d2b_using_subcommand export; and __fish_seen_subcommand_from update-spec" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand export; and __fish_seen_subcommand_from update-spec" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand export; and __fish_seen_subcommand_from update-spec" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand export; and __fish_seen_subcommand_from update-spec" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand export; and __fish_seen_subcommand_from delete" -l revision -r
+complete -c d2b -n "__fish_d2b_using_subcommand export; and __fish_seen_subcommand_from delete" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand export; and __fish_seen_subcommand_from delete" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand export; and __fish_seen_subcommand_from delete" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand export; and __fish_seen_subcommand_from delete" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand export; and __fish_seen_subcommand_from delete" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand export; and __fish_seen_subcommand_from delete" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand import; and not __fish_seen_subcommand_from get list watch status projection graph create update-spec delete" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand import; and not __fish_seen_subcommand_from get list watch status projection graph create update-spec delete" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand import; and not __fish_seen_subcommand_from get list watch status projection graph create update-spec delete" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand import; and not __fish_seen_subcommand_from get list watch status projection graph create update-spec delete" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand import; and not __fish_seen_subcommand_from get list watch status projection graph create update-spec delete" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand import; and not __fish_seen_subcommand_from get list watch status projection graph create update-spec delete" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand import; and not __fish_seen_subcommand_from get list watch status projection graph create update-spec delete" -f -a "get"
+complete -c d2b -n "__fish_d2b_using_subcommand import; and not __fish_seen_subcommand_from get list watch status projection graph create update-spec delete" -f -a "list"
+complete -c d2b -n "__fish_d2b_using_subcommand import; and not __fish_seen_subcommand_from get list watch status projection graph create update-spec delete" -f -a "watch"
+complete -c d2b -n "__fish_d2b_using_subcommand import; and not __fish_seen_subcommand_from get list watch status projection graph create update-spec delete" -f -a "status"
+complete -c d2b -n "__fish_d2b_using_subcommand import; and not __fish_seen_subcommand_from get list watch status projection graph create update-spec delete" -f -a "projection"
+complete -c d2b -n "__fish_d2b_using_subcommand import; and not __fish_seen_subcommand_from get list watch status projection graph create update-spec delete" -f -a "graph"
+complete -c d2b -n "__fish_d2b_using_subcommand import; and not __fish_seen_subcommand_from get list watch status projection graph create update-spec delete" -f -a "create"
+complete -c d2b -n "__fish_d2b_using_subcommand import; and not __fish_seen_subcommand_from get list watch status projection graph create update-spec delete" -f -a "update-spec"
+complete -c d2b -n "__fish_d2b_using_subcommand import; and not __fish_seen_subcommand_from get list watch status projection graph create update-spec delete" -f -a "delete"
+complete -c d2b -n "__fish_d2b_using_subcommand import; and __fish_seen_subcommand_from get" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand import; and __fish_seen_subcommand_from get" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand import; and __fish_seen_subcommand_from get" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand import; and __fish_seen_subcommand_from get" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand import; and __fish_seen_subcommand_from get" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand import; and __fish_seen_subcommand_from get" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand import; and __fish_seen_subcommand_from list" -l expected-type -r
+complete -c d2b -n "__fish_d2b_using_subcommand import; and __fish_seen_subcommand_from list" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand import; and __fish_seen_subcommand_from list" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand import; and __fish_seen_subcommand_from list" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand import; and __fish_seen_subcommand_from list" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand import; and __fish_seen_subcommand_from list" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand import; and __fish_seen_subcommand_from list" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand import; and __fish_seen_subcommand_from watch" -l expected-type -r
+complete -c d2b -n "__fish_d2b_using_subcommand import; and __fish_seen_subcommand_from watch" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand import; and __fish_seen_subcommand_from watch" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand import; and __fish_seen_subcommand_from watch" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand import; and __fish_seen_subcommand_from watch" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand import; and __fish_seen_subcommand_from watch" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand import; and __fish_seen_subcommand_from watch" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand import; and __fish_seen_subcommand_from status" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand import; and __fish_seen_subcommand_from status" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand import; and __fish_seen_subcommand_from status" -l watch
+complete -c d2b -n "__fish_d2b_using_subcommand import; and __fish_seen_subcommand_from status" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand import; and __fish_seen_subcommand_from status" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand import; and __fish_seen_subcommand_from status" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand import; and __fish_seen_subcommand_from status" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand import; and __fish_seen_subcommand_from projection" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand import; and __fish_seen_subcommand_from projection" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand import; and __fish_seen_subcommand_from projection" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand import; and __fish_seen_subcommand_from projection" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand import; and __fish_seen_subcommand_from projection" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand import; and __fish_seen_subcommand_from projection" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand import; and __fish_seen_subcommand_from graph" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand import; and __fish_seen_subcommand_from graph" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand import; and __fish_seen_subcommand_from graph" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand import; and __fish_seen_subcommand_from graph" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand import; and __fish_seen_subcommand_from graph" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand import; and __fish_seen_subcommand_from graph" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand import; and __fish_seen_subcommand_from create" -l spec-file -r -F
+complete -c d2b -n "__fish_d2b_using_subcommand import; and __fish_seen_subcommand_from create" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand import; and __fish_seen_subcommand_from create" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand import; and __fish_seen_subcommand_from create" -l spec-stdin
+complete -c d2b -n "__fish_d2b_using_subcommand import; and __fish_seen_subcommand_from create" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand import; and __fish_seen_subcommand_from create" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand import; and __fish_seen_subcommand_from create" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand import; and __fish_seen_subcommand_from create" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand import; and __fish_seen_subcommand_from update-spec" -l revision -r
+complete -c d2b -n "__fish_d2b_using_subcommand import; and __fish_seen_subcommand_from update-spec" -l spec-file -r -F
+complete -c d2b -n "__fish_d2b_using_subcommand import; and __fish_seen_subcommand_from update-spec" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand import; and __fish_seen_subcommand_from update-spec" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand import; and __fish_seen_subcommand_from update-spec" -l spec-stdin
+complete -c d2b -n "__fish_d2b_using_subcommand import; and __fish_seen_subcommand_from update-spec" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand import; and __fish_seen_subcommand_from update-spec" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand import; and __fish_seen_subcommand_from update-spec" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand import; and __fish_seen_subcommand_from update-spec" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand import; and __fish_seen_subcommand_from delete" -l revision -r
+complete -c d2b -n "__fish_d2b_using_subcommand import; and __fish_seen_subcommand_from delete" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand import; and __fish_seen_subcommand_from delete" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand import; and __fish_seen_subcommand_from delete" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand import; and __fish_seen_subcommand_from delete" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand import; and __fish_seen_subcommand_from delete" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand import; and __fish_seen_subcommand_from delete" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand resource; and not __fish_seen_subcommand_from get list watch create update-spec delete status upgrade reconcile authorities" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand resource; and not __fish_seen_subcommand_from get list watch create update-spec delete status upgrade reconcile authorities" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand resource; and not __fish_seen_subcommand_from get list watch create update-spec delete status upgrade reconcile authorities" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand resource; and not __fish_seen_subcommand_from get list watch create update-spec delete status upgrade reconcile authorities" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand resource; and not __fish_seen_subcommand_from get list watch create update-spec delete status upgrade reconcile authorities" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand resource; and not __fish_seen_subcommand_from get list watch create update-spec delete status upgrade reconcile authorities" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand resource; and not __fish_seen_subcommand_from get list watch create update-spec delete status upgrade reconcile authorities" -f -a "get"
+complete -c d2b -n "__fish_d2b_using_subcommand resource; and not __fish_seen_subcommand_from get list watch create update-spec delete status upgrade reconcile authorities" -f -a "list"
+complete -c d2b -n "__fish_d2b_using_subcommand resource; and not __fish_seen_subcommand_from get list watch create update-spec delete status upgrade reconcile authorities" -f -a "watch"
+complete -c d2b -n "__fish_d2b_using_subcommand resource; and not __fish_seen_subcommand_from get list watch create update-spec delete status upgrade reconcile authorities" -f -a "create"
+complete -c d2b -n "__fish_d2b_using_subcommand resource; and not __fish_seen_subcommand_from get list watch create update-spec delete status upgrade reconcile authorities" -f -a "update-spec"
+complete -c d2b -n "__fish_d2b_using_subcommand resource; and not __fish_seen_subcommand_from get list watch create update-spec delete status upgrade reconcile authorities" -f -a "delete"
+complete -c d2b -n "__fish_d2b_using_subcommand resource; and not __fish_seen_subcommand_from get list watch create update-spec delete status upgrade reconcile authorities" -f -a "status"
+complete -c d2b -n "__fish_d2b_using_subcommand resource; and not __fish_seen_subcommand_from get list watch create update-spec delete status upgrade reconcile authorities" -f -a "upgrade"
+complete -c d2b -n "__fish_d2b_using_subcommand resource; and not __fish_seen_subcommand_from get list watch create update-spec delete status upgrade reconcile authorities" -f -a "reconcile"
+complete -c d2b -n "__fish_d2b_using_subcommand resource; and not __fish_seen_subcommand_from get list watch create update-spec delete status upgrade reconcile authorities" -f -a "authorities"
+complete -c d2b -n "__fish_d2b_using_subcommand resource; and __fish_seen_subcommand_from get" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand resource; and __fish_seen_subcommand_from get" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand resource; and __fish_seen_subcommand_from get" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand resource; and __fish_seen_subcommand_from get" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand resource; and __fish_seen_subcommand_from get" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand resource; and __fish_seen_subcommand_from get" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand resource; and __fish_seen_subcommand_from list" -l execution-ref -r
+complete -c d2b -n "__fish_d2b_using_subcommand resource; and __fish_seen_subcommand_from list" -l domain -r
+complete -c d2b -n "__fish_d2b_using_subcommand resource; and __fish_seen_subcommand_from list" -l phase -r
+complete -c d2b -n "__fish_d2b_using_subcommand resource; and __fish_seen_subcommand_from list" -l label-selector -r
+complete -c d2b -n "__fish_d2b_using_subcommand resource; and __fish_seen_subcommand_from list" -l page-token -r
+complete -c d2b -n "__fish_d2b_using_subcommand resource; and __fish_seen_subcommand_from list" -l limit -r
+complete -c d2b -n "__fish_d2b_using_subcommand resource; and __fish_seen_subcommand_from list" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand resource; and __fish_seen_subcommand_from list" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand resource; and __fish_seen_subcommand_from list" -l updates
+complete -c d2b -n "__fish_d2b_using_subcommand resource; and __fish_seen_subcommand_from list" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand resource; and __fish_seen_subcommand_from list" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand resource; and __fish_seen_subcommand_from list" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand resource; and __fish_seen_subcommand_from list" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand resource; and __fish_seen_subcommand_from watch" -l since-revision -r
+complete -c d2b -n "__fish_d2b_using_subcommand resource; and __fish_seen_subcommand_from watch" -l phase -r
+complete -c d2b -n "__fish_d2b_using_subcommand resource; and __fish_seen_subcommand_from watch" -l label-selector -r
+complete -c d2b -n "__fish_d2b_using_subcommand resource; and __fish_seen_subcommand_from watch" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand resource; and __fish_seen_subcommand_from watch" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand resource; and __fish_seen_subcommand_from watch" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand resource; and __fish_seen_subcommand_from watch" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand resource; and __fish_seen_subcommand_from watch" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand resource; and __fish_seen_subcommand_from watch" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand resource; and __fish_seen_subcommand_from create" -l spec-file -r -F
+complete -c d2b -n "__fish_d2b_using_subcommand resource; and __fish_seen_subcommand_from create" -l reconcile-deadline -r
+complete -c d2b -n "__fish_d2b_using_subcommand resource; and __fish_seen_subcommand_from create" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand resource; and __fish_seen_subcommand_from create" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand resource; and __fish_seen_subcommand_from create" -l spec-stdin
+complete -c d2b -n "__fish_d2b_using_subcommand resource; and __fish_seen_subcommand_from create" -l wait-for-reconcile
+complete -c d2b -n "__fish_d2b_using_subcommand resource; and __fish_seen_subcommand_from create" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand resource; and __fish_seen_subcommand_from create" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand resource; and __fish_seen_subcommand_from create" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand resource; and __fish_seen_subcommand_from create" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand resource; and __fish_seen_subcommand_from update-spec" -l revision -r
+complete -c d2b -n "__fish_d2b_using_subcommand resource; and __fish_seen_subcommand_from update-spec" -l spec-file -r -F
+complete -c d2b -n "__fish_d2b_using_subcommand resource; and __fish_seen_subcommand_from update-spec" -l reconcile-deadline -r
+complete -c d2b -n "__fish_d2b_using_subcommand resource; and __fish_seen_subcommand_from update-spec" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand resource; and __fish_seen_subcommand_from update-spec" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand resource; and __fish_seen_subcommand_from update-spec" -l spec-stdin
+complete -c d2b -n "__fish_d2b_using_subcommand resource; and __fish_seen_subcommand_from update-spec" -l wait-for-reconcile
+complete -c d2b -n "__fish_d2b_using_subcommand resource; and __fish_seen_subcommand_from update-spec" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand resource; and __fish_seen_subcommand_from update-spec" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand resource; and __fish_seen_subcommand_from update-spec" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand resource; and __fish_seen_subcommand_from update-spec" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand resource; and __fish_seen_subcommand_from delete" -l revision -r
+complete -c d2b -n "__fish_d2b_using_subcommand resource; and __fish_seen_subcommand_from delete" -l reconcile-deadline -r
+complete -c d2b -n "__fish_d2b_using_subcommand resource; and __fish_seen_subcommand_from delete" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand resource; and __fish_seen_subcommand_from delete" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand resource; and __fish_seen_subcommand_from delete" -l wait-for-reconcile
+complete -c d2b -n "__fish_d2b_using_subcommand resource; and __fish_seen_subcommand_from delete" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand resource; and __fish_seen_subcommand_from delete" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand resource; and __fish_seen_subcommand_from delete" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand resource; and __fish_seen_subcommand_from delete" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand resource; and __fish_seen_subcommand_from status" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand resource; and __fish_seen_subcommand_from status" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand resource; and __fish_seen_subcommand_from status" -l watch
+complete -c d2b -n "__fish_d2b_using_subcommand resource; and __fish_seen_subcommand_from status" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand resource; and __fish_seen_subcommand_from status" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand resource; and __fish_seen_subcommand_from status" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand resource; and __fish_seen_subcommand_from status" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand resource; and __fish_seen_subcommand_from upgrade" -l reconcile-deadline -r
+complete -c d2b -n "__fish_d2b_using_subcommand resource; and __fish_seen_subcommand_from upgrade" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand resource; and __fish_seen_subcommand_from upgrade" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand resource; and __fish_seen_subcommand_from upgrade" -l recursive
+complete -c d2b -n "__fish_d2b_using_subcommand resource; and __fish_seen_subcommand_from upgrade" -l apply
+complete -c d2b -n "__fish_d2b_using_subcommand resource; and __fish_seen_subcommand_from upgrade" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand resource; and __fish_seen_subcommand_from upgrade" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand resource; and __fish_seen_subcommand_from upgrade" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand resource; and __fish_seen_subcommand_from upgrade" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand resource; and __fish_seen_subcommand_from reconcile" -l reconcile-deadline -r
+complete -c d2b -n "__fish_d2b_using_subcommand resource; and __fish_seen_subcommand_from reconcile" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand resource; and __fish_seen_subcommand_from reconcile" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand resource; and __fish_seen_subcommand_from reconcile" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand resource; and __fish_seen_subcommand_from reconcile" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand resource; and __fish_seen_subcommand_from reconcile" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand resource; and __fish_seen_subcommand_from reconcile" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand resource; and __fish_seen_subcommand_from authorities" -l scope -r
+complete -c d2b -n "__fish_d2b_using_subcommand resource; and __fish_seen_subcommand_from authorities" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand resource; and __fish_seen_subcommand_from authorities" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand resource; and __fish_seen_subcommand_from authorities" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand resource; and __fish_seen_subcommand_from authorities" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand resource; and __fish_seen_subcommand_from authorities" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand resource; and __fish_seen_subcommand_from authorities" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand resource; and __fish_seen_subcommand_from authorities" -f -a "holders"
+complete -c d2b -n "__fish_d2b_using_subcommand resource; and __fish_seen_subcommand_from authorities" -f -a "conflict"
+complete -c d2b -n "__fish_d2b_using_subcommand user; and not __fish_seen_subcommand_from get list watch create update-spec delete status upgrade reconcile verify usb security-key" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand user; and not __fish_seen_subcommand_from get list watch create update-spec delete status upgrade reconcile verify usb security-key" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand user; and not __fish_seen_subcommand_from get list watch create update-spec delete status upgrade reconcile verify usb security-key" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand user; and not __fish_seen_subcommand_from get list watch create update-spec delete status upgrade reconcile verify usb security-key" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand user; and not __fish_seen_subcommand_from get list watch create update-spec delete status upgrade reconcile verify usb security-key" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand user; and not __fish_seen_subcommand_from get list watch create update-spec delete status upgrade reconcile verify usb security-key" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand user; and not __fish_seen_subcommand_from get list watch create update-spec delete status upgrade reconcile verify usb security-key" -f -a "get"
+complete -c d2b -n "__fish_d2b_using_subcommand user; and not __fish_seen_subcommand_from get list watch create update-spec delete status upgrade reconcile verify usb security-key" -f -a "list"
+complete -c d2b -n "__fish_d2b_using_subcommand user; and not __fish_seen_subcommand_from get list watch create update-spec delete status upgrade reconcile verify usb security-key" -f -a "watch"
+complete -c d2b -n "__fish_d2b_using_subcommand user; and not __fish_seen_subcommand_from get list watch create update-spec delete status upgrade reconcile verify usb security-key" -f -a "create"
+complete -c d2b -n "__fish_d2b_using_subcommand user; and not __fish_seen_subcommand_from get list watch create update-spec delete status upgrade reconcile verify usb security-key" -f -a "update-spec"
+complete -c d2b -n "__fish_d2b_using_subcommand user; and not __fish_seen_subcommand_from get list watch create update-spec delete status upgrade reconcile verify usb security-key" -f -a "delete"
+complete -c d2b -n "__fish_d2b_using_subcommand user; and not __fish_seen_subcommand_from get list watch create update-spec delete status upgrade reconcile verify usb security-key" -f -a "status"
+complete -c d2b -n "__fish_d2b_using_subcommand user; and not __fish_seen_subcommand_from get list watch create update-spec delete status upgrade reconcile verify usb security-key" -f -a "upgrade"
+complete -c d2b -n "__fish_d2b_using_subcommand user; and not __fish_seen_subcommand_from get list watch create update-spec delete status upgrade reconcile verify usb security-key" -f -a "reconcile"
+complete -c d2b -n "__fish_d2b_using_subcommand user; and not __fish_seen_subcommand_from get list watch create update-spec delete status upgrade reconcile verify usb security-key" -f -a "verify"
+complete -c d2b -n "__fish_d2b_using_subcommand user; and not __fish_seen_subcommand_from get list watch create update-spec delete status upgrade reconcile verify usb security-key" -f -a "usb"
+complete -c d2b -n "__fish_d2b_using_subcommand user; and not __fish_seen_subcommand_from get list watch create update-spec delete status upgrade reconcile verify usb security-key" -f -a "security-key"
+complete -c d2b -n "__fish_d2b_using_subcommand user; and __fish_seen_subcommand_from get" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand user; and __fish_seen_subcommand_from get" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand user; and __fish_seen_subcommand_from get" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand user; and __fish_seen_subcommand_from get" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand user; and __fish_seen_subcommand_from get" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand user; and __fish_seen_subcommand_from get" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand user; and __fish_seen_subcommand_from list" -l execution-ref -r
+complete -c d2b -n "__fish_d2b_using_subcommand user; and __fish_seen_subcommand_from list" -l domain -r
+complete -c d2b -n "__fish_d2b_using_subcommand user; and __fish_seen_subcommand_from list" -l phase -r
+complete -c d2b -n "__fish_d2b_using_subcommand user; and __fish_seen_subcommand_from list" -l label-selector -r
+complete -c d2b -n "__fish_d2b_using_subcommand user; and __fish_seen_subcommand_from list" -l page-token -r
+complete -c d2b -n "__fish_d2b_using_subcommand user; and __fish_seen_subcommand_from list" -l limit -r
+complete -c d2b -n "__fish_d2b_using_subcommand user; and __fish_seen_subcommand_from list" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand user; and __fish_seen_subcommand_from list" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand user; and __fish_seen_subcommand_from list" -l updates
+complete -c d2b -n "__fish_d2b_using_subcommand user; and __fish_seen_subcommand_from list" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand user; and __fish_seen_subcommand_from list" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand user; and __fish_seen_subcommand_from list" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand user; and __fish_seen_subcommand_from list" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand user; and __fish_seen_subcommand_from watch" -l since-revision -r
+complete -c d2b -n "__fish_d2b_using_subcommand user; and __fish_seen_subcommand_from watch" -l phase -r
+complete -c d2b -n "__fish_d2b_using_subcommand user; and __fish_seen_subcommand_from watch" -l label-selector -r
+complete -c d2b -n "__fish_d2b_using_subcommand user; and __fish_seen_subcommand_from watch" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand user; and __fish_seen_subcommand_from watch" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand user; and __fish_seen_subcommand_from watch" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand user; and __fish_seen_subcommand_from watch" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand user; and __fish_seen_subcommand_from watch" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand user; and __fish_seen_subcommand_from watch" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand user; and __fish_seen_subcommand_from create" -l spec-file -r -F
+complete -c d2b -n "__fish_d2b_using_subcommand user; and __fish_seen_subcommand_from create" -l reconcile-deadline -r
+complete -c d2b -n "__fish_d2b_using_subcommand user; and __fish_seen_subcommand_from create" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand user; and __fish_seen_subcommand_from create" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand user; and __fish_seen_subcommand_from create" -l spec-stdin
+complete -c d2b -n "__fish_d2b_using_subcommand user; and __fish_seen_subcommand_from create" -l wait-for-reconcile
+complete -c d2b -n "__fish_d2b_using_subcommand user; and __fish_seen_subcommand_from create" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand user; and __fish_seen_subcommand_from create" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand user; and __fish_seen_subcommand_from create" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand user; and __fish_seen_subcommand_from create" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand user; and __fish_seen_subcommand_from update-spec" -l revision -r
+complete -c d2b -n "__fish_d2b_using_subcommand user; and __fish_seen_subcommand_from update-spec" -l spec-file -r -F
+complete -c d2b -n "__fish_d2b_using_subcommand user; and __fish_seen_subcommand_from update-spec" -l reconcile-deadline -r
+complete -c d2b -n "__fish_d2b_using_subcommand user; and __fish_seen_subcommand_from update-spec" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand user; and __fish_seen_subcommand_from update-spec" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand user; and __fish_seen_subcommand_from update-spec" -l spec-stdin
+complete -c d2b -n "__fish_d2b_using_subcommand user; and __fish_seen_subcommand_from update-spec" -l wait-for-reconcile
+complete -c d2b -n "__fish_d2b_using_subcommand user; and __fish_seen_subcommand_from update-spec" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand user; and __fish_seen_subcommand_from update-spec" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand user; and __fish_seen_subcommand_from update-spec" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand user; and __fish_seen_subcommand_from update-spec" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand user; and __fish_seen_subcommand_from delete" -l revision -r
+complete -c d2b -n "__fish_d2b_using_subcommand user; and __fish_seen_subcommand_from delete" -l reconcile-deadline -r
+complete -c d2b -n "__fish_d2b_using_subcommand user; and __fish_seen_subcommand_from delete" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand user; and __fish_seen_subcommand_from delete" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand user; and __fish_seen_subcommand_from delete" -l wait-for-reconcile
+complete -c d2b -n "__fish_d2b_using_subcommand user; and __fish_seen_subcommand_from delete" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand user; and __fish_seen_subcommand_from delete" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand user; and __fish_seen_subcommand_from delete" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand user; and __fish_seen_subcommand_from delete" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand user; and __fish_seen_subcommand_from status" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand user; and __fish_seen_subcommand_from status" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand user; and __fish_seen_subcommand_from status" -l watch
+complete -c d2b -n "__fish_d2b_using_subcommand user; and __fish_seen_subcommand_from status" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand user; and __fish_seen_subcommand_from status" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand user; and __fish_seen_subcommand_from status" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand user; and __fish_seen_subcommand_from status" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand user; and __fish_seen_subcommand_from upgrade" -l reconcile-deadline -r
+complete -c d2b -n "__fish_d2b_using_subcommand user; and __fish_seen_subcommand_from upgrade" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand user; and __fish_seen_subcommand_from upgrade" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand user; and __fish_seen_subcommand_from upgrade" -l recursive
+complete -c d2b -n "__fish_d2b_using_subcommand user; and __fish_seen_subcommand_from upgrade" -l apply
+complete -c d2b -n "__fish_d2b_using_subcommand user; and __fish_seen_subcommand_from upgrade" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand user; and __fish_seen_subcommand_from upgrade" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand user; and __fish_seen_subcommand_from upgrade" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand user; and __fish_seen_subcommand_from upgrade" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand user; and __fish_seen_subcommand_from reconcile" -l reconcile-deadline -r
+complete -c d2b -n "__fish_d2b_using_subcommand user; and __fish_seen_subcommand_from reconcile" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand user; and __fish_seen_subcommand_from reconcile" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand user; and __fish_seen_subcommand_from reconcile" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand user; and __fish_seen_subcommand_from reconcile" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand user; and __fish_seen_subcommand_from reconcile" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand user; and __fish_seen_subcommand_from reconcile" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand user; and __fish_seen_subcommand_from verify" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand user; and __fish_seen_subcommand_from verify" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand user; and __fish_seen_subcommand_from verify" -l repair
+complete -c d2b -n "__fish_d2b_using_subcommand user; and __fish_seen_subcommand_from verify" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand user; and __fish_seen_subcommand_from verify" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand user; and __fish_seen_subcommand_from verify" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand user; and __fish_seen_subcommand_from verify" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand user; and __fish_seen_subcommand_from usb" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand user; and __fish_seen_subcommand_from usb" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand user; and __fish_seen_subcommand_from usb" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand user; and __fish_seen_subcommand_from usb" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand user; and __fish_seen_subcommand_from usb" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand user; and __fish_seen_subcommand_from usb" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand user; and __fish_seen_subcommand_from usb" -f -a "attach"
+complete -c d2b -n "__fish_d2b_using_subcommand user; and __fish_seen_subcommand_from usb" -f -a "detach"
+complete -c d2b -n "__fish_d2b_using_subcommand user; and __fish_seen_subcommand_from usb" -f -a "probe"
+complete -c d2b -n "__fish_d2b_using_subcommand user; and __fish_seen_subcommand_from security-key" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand user; and __fish_seen_subcommand_from security-key" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand user; and __fish_seen_subcommand_from security-key" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand user; and __fish_seen_subcommand_from security-key" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand user; and __fish_seen_subcommand_from security-key" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand user; and __fish_seen_subcommand_from security-key" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand user; and __fish_seen_subcommand_from security-key" -f -a "status"
+complete -c d2b -n "__fish_d2b_using_subcommand user; and __fish_seen_subcommand_from security-key" -f -a "sessions"
+complete -c d2b -n "__fish_d2b_using_subcommand user; and __fish_seen_subcommand_from security-key" -f -a "cancel"
+complete -c d2b -n "__fish_d2b_using_subcommand user; and __fish_seen_subcommand_from security-key" -f -a "test"
+complete -c d2b -n "__fish_d2b_using_subcommand credential; and not __fish_seen_subcommand_from get list watch create update-spec delete status upgrade reconcile verify usb security-key" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand credential; and not __fish_seen_subcommand_from get list watch create update-spec delete status upgrade reconcile verify usb security-key" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand credential; and not __fish_seen_subcommand_from get list watch create update-spec delete status upgrade reconcile verify usb security-key" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand credential; and not __fish_seen_subcommand_from get list watch create update-spec delete status upgrade reconcile verify usb security-key" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand credential; and not __fish_seen_subcommand_from get list watch create update-spec delete status upgrade reconcile verify usb security-key" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand credential; and not __fish_seen_subcommand_from get list watch create update-spec delete status upgrade reconcile verify usb security-key" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand credential; and not __fish_seen_subcommand_from get list watch create update-spec delete status upgrade reconcile verify usb security-key" -f -a "get"
+complete -c d2b -n "__fish_d2b_using_subcommand credential; and not __fish_seen_subcommand_from get list watch create update-spec delete status upgrade reconcile verify usb security-key" -f -a "list"
+complete -c d2b -n "__fish_d2b_using_subcommand credential; and not __fish_seen_subcommand_from get list watch create update-spec delete status upgrade reconcile verify usb security-key" -f -a "watch"
+complete -c d2b -n "__fish_d2b_using_subcommand credential; and not __fish_seen_subcommand_from get list watch create update-spec delete status upgrade reconcile verify usb security-key" -f -a "create"
+complete -c d2b -n "__fish_d2b_using_subcommand credential; and not __fish_seen_subcommand_from get list watch create update-spec delete status upgrade reconcile verify usb security-key" -f -a "update-spec"
+complete -c d2b -n "__fish_d2b_using_subcommand credential; and not __fish_seen_subcommand_from get list watch create update-spec delete status upgrade reconcile verify usb security-key" -f -a "delete"
+complete -c d2b -n "__fish_d2b_using_subcommand credential; and not __fish_seen_subcommand_from get list watch create update-spec delete status upgrade reconcile verify usb security-key" -f -a "status"
+complete -c d2b -n "__fish_d2b_using_subcommand credential; and not __fish_seen_subcommand_from get list watch create update-spec delete status upgrade reconcile verify usb security-key" -f -a "upgrade"
+complete -c d2b -n "__fish_d2b_using_subcommand credential; and not __fish_seen_subcommand_from get list watch create update-spec delete status upgrade reconcile verify usb security-key" -f -a "reconcile"
+complete -c d2b -n "__fish_d2b_using_subcommand credential; and not __fish_seen_subcommand_from get list watch create update-spec delete status upgrade reconcile verify usb security-key" -f -a "verify"
+complete -c d2b -n "__fish_d2b_using_subcommand credential; and not __fish_seen_subcommand_from get list watch create update-spec delete status upgrade reconcile verify usb security-key" -f -a "usb"
+complete -c d2b -n "__fish_d2b_using_subcommand credential; and not __fish_seen_subcommand_from get list watch create update-spec delete status upgrade reconcile verify usb security-key" -f -a "security-key"
+complete -c d2b -n "__fish_d2b_using_subcommand credential; and __fish_seen_subcommand_from get" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand credential; and __fish_seen_subcommand_from get" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand credential; and __fish_seen_subcommand_from get" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand credential; and __fish_seen_subcommand_from get" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand credential; and __fish_seen_subcommand_from get" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand credential; and __fish_seen_subcommand_from get" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand credential; and __fish_seen_subcommand_from list" -l execution-ref -r
+complete -c d2b -n "__fish_d2b_using_subcommand credential; and __fish_seen_subcommand_from list" -l domain -r
+complete -c d2b -n "__fish_d2b_using_subcommand credential; and __fish_seen_subcommand_from list" -l phase -r
+complete -c d2b -n "__fish_d2b_using_subcommand credential; and __fish_seen_subcommand_from list" -l label-selector -r
+complete -c d2b -n "__fish_d2b_using_subcommand credential; and __fish_seen_subcommand_from list" -l page-token -r
+complete -c d2b -n "__fish_d2b_using_subcommand credential; and __fish_seen_subcommand_from list" -l limit -r
+complete -c d2b -n "__fish_d2b_using_subcommand credential; and __fish_seen_subcommand_from list" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand credential; and __fish_seen_subcommand_from list" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand credential; and __fish_seen_subcommand_from list" -l updates
+complete -c d2b -n "__fish_d2b_using_subcommand credential; and __fish_seen_subcommand_from list" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand credential; and __fish_seen_subcommand_from list" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand credential; and __fish_seen_subcommand_from list" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand credential; and __fish_seen_subcommand_from list" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand credential; and __fish_seen_subcommand_from watch" -l since-revision -r
+complete -c d2b -n "__fish_d2b_using_subcommand credential; and __fish_seen_subcommand_from watch" -l phase -r
+complete -c d2b -n "__fish_d2b_using_subcommand credential; and __fish_seen_subcommand_from watch" -l label-selector -r
+complete -c d2b -n "__fish_d2b_using_subcommand credential; and __fish_seen_subcommand_from watch" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand credential; and __fish_seen_subcommand_from watch" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand credential; and __fish_seen_subcommand_from watch" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand credential; and __fish_seen_subcommand_from watch" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand credential; and __fish_seen_subcommand_from watch" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand credential; and __fish_seen_subcommand_from watch" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand credential; and __fish_seen_subcommand_from create" -l spec-file -r -F
+complete -c d2b -n "__fish_d2b_using_subcommand credential; and __fish_seen_subcommand_from create" -l reconcile-deadline -r
+complete -c d2b -n "__fish_d2b_using_subcommand credential; and __fish_seen_subcommand_from create" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand credential; and __fish_seen_subcommand_from create" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand credential; and __fish_seen_subcommand_from create" -l spec-stdin
+complete -c d2b -n "__fish_d2b_using_subcommand credential; and __fish_seen_subcommand_from create" -l wait-for-reconcile
+complete -c d2b -n "__fish_d2b_using_subcommand credential; and __fish_seen_subcommand_from create" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand credential; and __fish_seen_subcommand_from create" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand credential; and __fish_seen_subcommand_from create" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand credential; and __fish_seen_subcommand_from create" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand credential; and __fish_seen_subcommand_from update-spec" -l revision -r
+complete -c d2b -n "__fish_d2b_using_subcommand credential; and __fish_seen_subcommand_from update-spec" -l spec-file -r -F
+complete -c d2b -n "__fish_d2b_using_subcommand credential; and __fish_seen_subcommand_from update-spec" -l reconcile-deadline -r
+complete -c d2b -n "__fish_d2b_using_subcommand credential; and __fish_seen_subcommand_from update-spec" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand credential; and __fish_seen_subcommand_from update-spec" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand credential; and __fish_seen_subcommand_from update-spec" -l spec-stdin
+complete -c d2b -n "__fish_d2b_using_subcommand credential; and __fish_seen_subcommand_from update-spec" -l wait-for-reconcile
+complete -c d2b -n "__fish_d2b_using_subcommand credential; and __fish_seen_subcommand_from update-spec" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand credential; and __fish_seen_subcommand_from update-spec" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand credential; and __fish_seen_subcommand_from update-spec" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand credential; and __fish_seen_subcommand_from update-spec" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand credential; and __fish_seen_subcommand_from delete" -l revision -r
+complete -c d2b -n "__fish_d2b_using_subcommand credential; and __fish_seen_subcommand_from delete" -l reconcile-deadline -r
+complete -c d2b -n "__fish_d2b_using_subcommand credential; and __fish_seen_subcommand_from delete" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand credential; and __fish_seen_subcommand_from delete" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand credential; and __fish_seen_subcommand_from delete" -l wait-for-reconcile
+complete -c d2b -n "__fish_d2b_using_subcommand credential; and __fish_seen_subcommand_from delete" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand credential; and __fish_seen_subcommand_from delete" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand credential; and __fish_seen_subcommand_from delete" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand credential; and __fish_seen_subcommand_from delete" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand credential; and __fish_seen_subcommand_from status" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand credential; and __fish_seen_subcommand_from status" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand credential; and __fish_seen_subcommand_from status" -l watch
+complete -c d2b -n "__fish_d2b_using_subcommand credential; and __fish_seen_subcommand_from status" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand credential; and __fish_seen_subcommand_from status" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand credential; and __fish_seen_subcommand_from status" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand credential; and __fish_seen_subcommand_from status" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand credential; and __fish_seen_subcommand_from upgrade" -l reconcile-deadline -r
+complete -c d2b -n "__fish_d2b_using_subcommand credential; and __fish_seen_subcommand_from upgrade" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand credential; and __fish_seen_subcommand_from upgrade" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand credential; and __fish_seen_subcommand_from upgrade" -l recursive
+complete -c d2b -n "__fish_d2b_using_subcommand credential; and __fish_seen_subcommand_from upgrade" -l apply
+complete -c d2b -n "__fish_d2b_using_subcommand credential; and __fish_seen_subcommand_from upgrade" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand credential; and __fish_seen_subcommand_from upgrade" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand credential; and __fish_seen_subcommand_from upgrade" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand credential; and __fish_seen_subcommand_from upgrade" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand credential; and __fish_seen_subcommand_from reconcile" -l reconcile-deadline -r
+complete -c d2b -n "__fish_d2b_using_subcommand credential; and __fish_seen_subcommand_from reconcile" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand credential; and __fish_seen_subcommand_from reconcile" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand credential; and __fish_seen_subcommand_from reconcile" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand credential; and __fish_seen_subcommand_from reconcile" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand credential; and __fish_seen_subcommand_from reconcile" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand credential; and __fish_seen_subcommand_from reconcile" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand credential; and __fish_seen_subcommand_from verify" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand credential; and __fish_seen_subcommand_from verify" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand credential; and __fish_seen_subcommand_from verify" -l repair
+complete -c d2b -n "__fish_d2b_using_subcommand credential; and __fish_seen_subcommand_from verify" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand credential; and __fish_seen_subcommand_from verify" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand credential; and __fish_seen_subcommand_from verify" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand credential; and __fish_seen_subcommand_from verify" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand credential; and __fish_seen_subcommand_from usb" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand credential; and __fish_seen_subcommand_from usb" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand credential; and __fish_seen_subcommand_from usb" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand credential; and __fish_seen_subcommand_from usb" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand credential; and __fish_seen_subcommand_from usb" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand credential; and __fish_seen_subcommand_from usb" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand credential; and __fish_seen_subcommand_from usb" -f -a "attach"
+complete -c d2b -n "__fish_d2b_using_subcommand credential; and __fish_seen_subcommand_from usb" -f -a "detach"
+complete -c d2b -n "__fish_d2b_using_subcommand credential; and __fish_seen_subcommand_from usb" -f -a "probe"
+complete -c d2b -n "__fish_d2b_using_subcommand credential; and __fish_seen_subcommand_from security-key" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand credential; and __fish_seen_subcommand_from security-key" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand credential; and __fish_seen_subcommand_from security-key" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand credential; and __fish_seen_subcommand_from security-key" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand credential; and __fish_seen_subcommand_from security-key" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand credential; and __fish_seen_subcommand_from security-key" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand credential; and __fish_seen_subcommand_from security-key" -f -a "status"
+complete -c d2b -n "__fish_d2b_using_subcommand credential; and __fish_seen_subcommand_from security-key" -f -a "sessions"
+complete -c d2b -n "__fish_d2b_using_subcommand credential; and __fish_seen_subcommand_from security-key" -f -a "cancel"
+complete -c d2b -n "__fish_d2b_using_subcommand credential; and __fish_seen_subcommand_from security-key" -f -a "test"
+complete -c d2b -n "__fish_d2b_using_subcommand provider; and not __fish_seen_subcommand_from list get status inspect" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand provider; and not __fish_seen_subcommand_from list get status inspect" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand provider; and not __fish_seen_subcommand_from list get status inspect" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand provider; and not __fish_seen_subcommand_from list get status inspect" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand provider; and not __fish_seen_subcommand_from list get status inspect" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand provider; and not __fish_seen_subcommand_from list get status inspect" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand provider; and not __fish_seen_subcommand_from list get status inspect" -f -a "list"
+complete -c d2b -n "__fish_d2b_using_subcommand provider; and not __fish_seen_subcommand_from list get status inspect" -f -a "get"
+complete -c d2b -n "__fish_d2b_using_subcommand provider; and not __fish_seen_subcommand_from list get status inspect" -f -a "status"
+complete -c d2b -n "__fish_d2b_using_subcommand provider; and not __fish_seen_subcommand_from list get status inspect" -f -a "inspect"
+complete -c d2b -n "__fish_d2b_using_subcommand provider; and __fish_seen_subcommand_from list" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand provider; and __fish_seen_subcommand_from list" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand provider; and __fish_seen_subcommand_from list" -l package-only
+complete -c d2b -n "__fish_d2b_using_subcommand provider; and __fish_seen_subcommand_from list" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand provider; and __fish_seen_subcommand_from list" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand provider; and __fish_seen_subcommand_from list" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand provider; and __fish_seen_subcommand_from list" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand provider; and __fish_seen_subcommand_from get" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand provider; and __fish_seen_subcommand_from get" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand provider; and __fish_seen_subcommand_from get" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand provider; and __fish_seen_subcommand_from get" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand provider; and __fish_seen_subcommand_from get" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand provider; and __fish_seen_subcommand_from get" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand provider; and __fish_seen_subcommand_from status" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand provider; and __fish_seen_subcommand_from status" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand provider; and __fish_seen_subcommand_from status" -l watch
+complete -c d2b -n "__fish_d2b_using_subcommand provider; and __fish_seen_subcommand_from status" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand provider; and __fish_seen_subcommand_from status" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand provider; and __fish_seen_subcommand_from status" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand provider; and __fish_seen_subcommand_from status" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand provider; and __fish_seen_subcommand_from inspect" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand provider; and __fish_seen_subcommand_from inspect" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand provider; and __fish_seen_subcommand_from inspect" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand provider; and __fish_seen_subcommand_from inspect" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand provider; and __fish_seen_subcommand_from inspect" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand provider; and __fish_seen_subcommand_from inspect" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand zone; and not __fish_seen_subcommand_from get list status" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand zone; and not __fish_seen_subcommand_from get list status" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand zone; and not __fish_seen_subcommand_from get list status" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand zone; and not __fish_seen_subcommand_from get list status" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand zone; and not __fish_seen_subcommand_from get list status" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand zone; and not __fish_seen_subcommand_from get list status" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand zone; and not __fish_seen_subcommand_from get list status" -f -a "get"
+complete -c d2b -n "__fish_d2b_using_subcommand zone; and not __fish_seen_subcommand_from get list status" -f -a "list"
+complete -c d2b -n "__fish_d2b_using_subcommand zone; and not __fish_seen_subcommand_from get list status" -f -a "status"
+complete -c d2b -n "__fish_d2b_using_subcommand zone; and __fish_seen_subcommand_from get" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand zone; and __fish_seen_subcommand_from get" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand zone; and __fish_seen_subcommand_from get" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand zone; and __fish_seen_subcommand_from get" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand zone; and __fish_seen_subcommand_from get" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand zone; and __fish_seen_subcommand_from get" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand zone; and __fish_seen_subcommand_from list" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand zone; and __fish_seen_subcommand_from list" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand zone; and __fish_seen_subcommand_from list" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand zone; and __fish_seen_subcommand_from list" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand zone; and __fish_seen_subcommand_from list" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand zone; and __fish_seen_subcommand_from list" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand zone; and __fish_seen_subcommand_from status" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand zone; and __fish_seen_subcommand_from status" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand zone; and __fish_seen_subcommand_from status" -l watch
+complete -c d2b -n "__fish_d2b_using_subcommand zone; and __fish_seen_subcommand_from status" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand zone; and __fish_seen_subcommand_from status" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand zone; and __fish_seen_subcommand_from status" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand zone; and __fish_seen_subcommand_from status" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand quota; and not __fish_seen_subcommand_from get list watch create update-spec delete status upgrade reconcile verify usb security-key" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand quota; and not __fish_seen_subcommand_from get list watch create update-spec delete status upgrade reconcile verify usb security-key" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand quota; and not __fish_seen_subcommand_from get list watch create update-spec delete status upgrade reconcile verify usb security-key" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand quota; and not __fish_seen_subcommand_from get list watch create update-spec delete status upgrade reconcile verify usb security-key" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand quota; and not __fish_seen_subcommand_from get list watch create update-spec delete status upgrade reconcile verify usb security-key" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand quota; and not __fish_seen_subcommand_from get list watch create update-spec delete status upgrade reconcile verify usb security-key" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand quota; and not __fish_seen_subcommand_from get list watch create update-spec delete status upgrade reconcile verify usb security-key" -f -a "get"
+complete -c d2b -n "__fish_d2b_using_subcommand quota; and not __fish_seen_subcommand_from get list watch create update-spec delete status upgrade reconcile verify usb security-key" -f -a "list"
+complete -c d2b -n "__fish_d2b_using_subcommand quota; and not __fish_seen_subcommand_from get list watch create update-spec delete status upgrade reconcile verify usb security-key" -f -a "watch"
+complete -c d2b -n "__fish_d2b_using_subcommand quota; and not __fish_seen_subcommand_from get list watch create update-spec delete status upgrade reconcile verify usb security-key" -f -a "create"
+complete -c d2b -n "__fish_d2b_using_subcommand quota; and not __fish_seen_subcommand_from get list watch create update-spec delete status upgrade reconcile verify usb security-key" -f -a "update-spec"
+complete -c d2b -n "__fish_d2b_using_subcommand quota; and not __fish_seen_subcommand_from get list watch create update-spec delete status upgrade reconcile verify usb security-key" -f -a "delete"
+complete -c d2b -n "__fish_d2b_using_subcommand quota; and not __fish_seen_subcommand_from get list watch create update-spec delete status upgrade reconcile verify usb security-key" -f -a "status"
+complete -c d2b -n "__fish_d2b_using_subcommand quota; and not __fish_seen_subcommand_from get list watch create update-spec delete status upgrade reconcile verify usb security-key" -f -a "upgrade"
+complete -c d2b -n "__fish_d2b_using_subcommand quota; and not __fish_seen_subcommand_from get list watch create update-spec delete status upgrade reconcile verify usb security-key" -f -a "reconcile"
+complete -c d2b -n "__fish_d2b_using_subcommand quota; and not __fish_seen_subcommand_from get list watch create update-spec delete status upgrade reconcile verify usb security-key" -f -a "verify"
+complete -c d2b -n "__fish_d2b_using_subcommand quota; and not __fish_seen_subcommand_from get list watch create update-spec delete status upgrade reconcile verify usb security-key" -f -a "usb"
+complete -c d2b -n "__fish_d2b_using_subcommand quota; and not __fish_seen_subcommand_from get list watch create update-spec delete status upgrade reconcile verify usb security-key" -f -a "security-key"
+complete -c d2b -n "__fish_d2b_using_subcommand quota; and __fish_seen_subcommand_from get" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand quota; and __fish_seen_subcommand_from get" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand quota; and __fish_seen_subcommand_from get" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand quota; and __fish_seen_subcommand_from get" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand quota; and __fish_seen_subcommand_from get" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand quota; and __fish_seen_subcommand_from get" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand quota; and __fish_seen_subcommand_from list" -l execution-ref -r
+complete -c d2b -n "__fish_d2b_using_subcommand quota; and __fish_seen_subcommand_from list" -l domain -r
+complete -c d2b -n "__fish_d2b_using_subcommand quota; and __fish_seen_subcommand_from list" -l phase -r
+complete -c d2b -n "__fish_d2b_using_subcommand quota; and __fish_seen_subcommand_from list" -l label-selector -r
+complete -c d2b -n "__fish_d2b_using_subcommand quota; and __fish_seen_subcommand_from list" -l page-token -r
+complete -c d2b -n "__fish_d2b_using_subcommand quota; and __fish_seen_subcommand_from list" -l limit -r
+complete -c d2b -n "__fish_d2b_using_subcommand quota; and __fish_seen_subcommand_from list" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand quota; and __fish_seen_subcommand_from list" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand quota; and __fish_seen_subcommand_from list" -l updates
+complete -c d2b -n "__fish_d2b_using_subcommand quota; and __fish_seen_subcommand_from list" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand quota; and __fish_seen_subcommand_from list" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand quota; and __fish_seen_subcommand_from list" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand quota; and __fish_seen_subcommand_from list" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand quota; and __fish_seen_subcommand_from watch" -l since-revision -r
+complete -c d2b -n "__fish_d2b_using_subcommand quota; and __fish_seen_subcommand_from watch" -l phase -r
+complete -c d2b -n "__fish_d2b_using_subcommand quota; and __fish_seen_subcommand_from watch" -l label-selector -r
+complete -c d2b -n "__fish_d2b_using_subcommand quota; and __fish_seen_subcommand_from watch" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand quota; and __fish_seen_subcommand_from watch" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand quota; and __fish_seen_subcommand_from watch" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand quota; and __fish_seen_subcommand_from watch" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand quota; and __fish_seen_subcommand_from watch" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand quota; and __fish_seen_subcommand_from watch" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand quota; and __fish_seen_subcommand_from create" -l spec-file -r -F
+complete -c d2b -n "__fish_d2b_using_subcommand quota; and __fish_seen_subcommand_from create" -l reconcile-deadline -r
+complete -c d2b -n "__fish_d2b_using_subcommand quota; and __fish_seen_subcommand_from create" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand quota; and __fish_seen_subcommand_from create" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand quota; and __fish_seen_subcommand_from create" -l spec-stdin
+complete -c d2b -n "__fish_d2b_using_subcommand quota; and __fish_seen_subcommand_from create" -l wait-for-reconcile
+complete -c d2b -n "__fish_d2b_using_subcommand quota; and __fish_seen_subcommand_from create" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand quota; and __fish_seen_subcommand_from create" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand quota; and __fish_seen_subcommand_from create" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand quota; and __fish_seen_subcommand_from create" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand quota; and __fish_seen_subcommand_from update-spec" -l revision -r
+complete -c d2b -n "__fish_d2b_using_subcommand quota; and __fish_seen_subcommand_from update-spec" -l spec-file -r -F
+complete -c d2b -n "__fish_d2b_using_subcommand quota; and __fish_seen_subcommand_from update-spec" -l reconcile-deadline -r
+complete -c d2b -n "__fish_d2b_using_subcommand quota; and __fish_seen_subcommand_from update-spec" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand quota; and __fish_seen_subcommand_from update-spec" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand quota; and __fish_seen_subcommand_from update-spec" -l spec-stdin
+complete -c d2b -n "__fish_d2b_using_subcommand quota; and __fish_seen_subcommand_from update-spec" -l wait-for-reconcile
+complete -c d2b -n "__fish_d2b_using_subcommand quota; and __fish_seen_subcommand_from update-spec" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand quota; and __fish_seen_subcommand_from update-spec" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand quota; and __fish_seen_subcommand_from update-spec" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand quota; and __fish_seen_subcommand_from update-spec" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand quota; and __fish_seen_subcommand_from delete" -l revision -r
+complete -c d2b -n "__fish_d2b_using_subcommand quota; and __fish_seen_subcommand_from delete" -l reconcile-deadline -r
+complete -c d2b -n "__fish_d2b_using_subcommand quota; and __fish_seen_subcommand_from delete" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand quota; and __fish_seen_subcommand_from delete" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand quota; and __fish_seen_subcommand_from delete" -l wait-for-reconcile
+complete -c d2b -n "__fish_d2b_using_subcommand quota; and __fish_seen_subcommand_from delete" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand quota; and __fish_seen_subcommand_from delete" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand quota; and __fish_seen_subcommand_from delete" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand quota; and __fish_seen_subcommand_from delete" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand quota; and __fish_seen_subcommand_from status" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand quota; and __fish_seen_subcommand_from status" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand quota; and __fish_seen_subcommand_from status" -l watch
+complete -c d2b -n "__fish_d2b_using_subcommand quota; and __fish_seen_subcommand_from status" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand quota; and __fish_seen_subcommand_from status" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand quota; and __fish_seen_subcommand_from status" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand quota; and __fish_seen_subcommand_from status" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand quota; and __fish_seen_subcommand_from upgrade" -l reconcile-deadline -r
+complete -c d2b -n "__fish_d2b_using_subcommand quota; and __fish_seen_subcommand_from upgrade" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand quota; and __fish_seen_subcommand_from upgrade" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand quota; and __fish_seen_subcommand_from upgrade" -l recursive
+complete -c d2b -n "__fish_d2b_using_subcommand quota; and __fish_seen_subcommand_from upgrade" -l apply
+complete -c d2b -n "__fish_d2b_using_subcommand quota; and __fish_seen_subcommand_from upgrade" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand quota; and __fish_seen_subcommand_from upgrade" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand quota; and __fish_seen_subcommand_from upgrade" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand quota; and __fish_seen_subcommand_from upgrade" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand quota; and __fish_seen_subcommand_from reconcile" -l reconcile-deadline -r
+complete -c d2b -n "__fish_d2b_using_subcommand quota; and __fish_seen_subcommand_from reconcile" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand quota; and __fish_seen_subcommand_from reconcile" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand quota; and __fish_seen_subcommand_from reconcile" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand quota; and __fish_seen_subcommand_from reconcile" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand quota; and __fish_seen_subcommand_from reconcile" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand quota; and __fish_seen_subcommand_from reconcile" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand quota; and __fish_seen_subcommand_from verify" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand quota; and __fish_seen_subcommand_from verify" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand quota; and __fish_seen_subcommand_from verify" -l repair
+complete -c d2b -n "__fish_d2b_using_subcommand quota; and __fish_seen_subcommand_from verify" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand quota; and __fish_seen_subcommand_from verify" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand quota; and __fish_seen_subcommand_from verify" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand quota; and __fish_seen_subcommand_from verify" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand quota; and __fish_seen_subcommand_from usb" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand quota; and __fish_seen_subcommand_from usb" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand quota; and __fish_seen_subcommand_from usb" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand quota; and __fish_seen_subcommand_from usb" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand quota; and __fish_seen_subcommand_from usb" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand quota; and __fish_seen_subcommand_from usb" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand quota; and __fish_seen_subcommand_from usb" -f -a "attach"
+complete -c d2b -n "__fish_d2b_using_subcommand quota; and __fish_seen_subcommand_from usb" -f -a "detach"
+complete -c d2b -n "__fish_d2b_using_subcommand quota; and __fish_seen_subcommand_from usb" -f -a "probe"
+complete -c d2b -n "__fish_d2b_using_subcommand quota; and __fish_seen_subcommand_from security-key" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand quota; and __fish_seen_subcommand_from security-key" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand quota; and __fish_seen_subcommand_from security-key" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand quota; and __fish_seen_subcommand_from security-key" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand quota; and __fish_seen_subcommand_from security-key" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand quota; and __fish_seen_subcommand_from security-key" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand quota; and __fish_seen_subcommand_from security-key" -f -a "status"
+complete -c d2b -n "__fish_d2b_using_subcommand quota; and __fish_seen_subcommand_from security-key" -f -a "sessions"
+complete -c d2b -n "__fish_d2b_using_subcommand quota; and __fish_seen_subcommand_from security-key" -f -a "cancel"
+complete -c d2b -n "__fish_d2b_using_subcommand quota; and __fish_seen_subcommand_from security-key" -f -a "test"
+complete -c d2b -n "__fish_d2b_using_subcommand emergency-policy; and not __fish_seen_subcommand_from get list watch create update-spec delete status upgrade reconcile verify usb security-key" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand emergency-policy; and not __fish_seen_subcommand_from get list watch create update-spec delete status upgrade reconcile verify usb security-key" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand emergency-policy; and not __fish_seen_subcommand_from get list watch create update-spec delete status upgrade reconcile verify usb security-key" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand emergency-policy; and not __fish_seen_subcommand_from get list watch create update-spec delete status upgrade reconcile verify usb security-key" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand emergency-policy; and not __fish_seen_subcommand_from get list watch create update-spec delete status upgrade reconcile verify usb security-key" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand emergency-policy; and not __fish_seen_subcommand_from get list watch create update-spec delete status upgrade reconcile verify usb security-key" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand emergency-policy; and not __fish_seen_subcommand_from get list watch create update-spec delete status upgrade reconcile verify usb security-key" -f -a "get"
+complete -c d2b -n "__fish_d2b_using_subcommand emergency-policy; and not __fish_seen_subcommand_from get list watch create update-spec delete status upgrade reconcile verify usb security-key" -f -a "list"
+complete -c d2b -n "__fish_d2b_using_subcommand emergency-policy; and not __fish_seen_subcommand_from get list watch create update-spec delete status upgrade reconcile verify usb security-key" -f -a "watch"
+complete -c d2b -n "__fish_d2b_using_subcommand emergency-policy; and not __fish_seen_subcommand_from get list watch create update-spec delete status upgrade reconcile verify usb security-key" -f -a "create"
+complete -c d2b -n "__fish_d2b_using_subcommand emergency-policy; and not __fish_seen_subcommand_from get list watch create update-spec delete status upgrade reconcile verify usb security-key" -f -a "update-spec"
+complete -c d2b -n "__fish_d2b_using_subcommand emergency-policy; and not __fish_seen_subcommand_from get list watch create update-spec delete status upgrade reconcile verify usb security-key" -f -a "delete"
+complete -c d2b -n "__fish_d2b_using_subcommand emergency-policy; and not __fish_seen_subcommand_from get list watch create update-spec delete status upgrade reconcile verify usb security-key" -f -a "status"
+complete -c d2b -n "__fish_d2b_using_subcommand emergency-policy; and not __fish_seen_subcommand_from get list watch create update-spec delete status upgrade reconcile verify usb security-key" -f -a "upgrade"
+complete -c d2b -n "__fish_d2b_using_subcommand emergency-policy; and not __fish_seen_subcommand_from get list watch create update-spec delete status upgrade reconcile verify usb security-key" -f -a "reconcile"
+complete -c d2b -n "__fish_d2b_using_subcommand emergency-policy; and not __fish_seen_subcommand_from get list watch create update-spec delete status upgrade reconcile verify usb security-key" -f -a "verify"
+complete -c d2b -n "__fish_d2b_using_subcommand emergency-policy; and not __fish_seen_subcommand_from get list watch create update-spec delete status upgrade reconcile verify usb security-key" -f -a "usb"
+complete -c d2b -n "__fish_d2b_using_subcommand emergency-policy; and not __fish_seen_subcommand_from get list watch create update-spec delete status upgrade reconcile verify usb security-key" -f -a "security-key"
+complete -c d2b -n "__fish_d2b_using_subcommand emergency-policy; and __fish_seen_subcommand_from get" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand emergency-policy; and __fish_seen_subcommand_from get" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand emergency-policy; and __fish_seen_subcommand_from get" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand emergency-policy; and __fish_seen_subcommand_from get" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand emergency-policy; and __fish_seen_subcommand_from get" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand emergency-policy; and __fish_seen_subcommand_from get" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand emergency-policy; and __fish_seen_subcommand_from list" -l execution-ref -r
+complete -c d2b -n "__fish_d2b_using_subcommand emergency-policy; and __fish_seen_subcommand_from list" -l domain -r
+complete -c d2b -n "__fish_d2b_using_subcommand emergency-policy; and __fish_seen_subcommand_from list" -l phase -r
+complete -c d2b -n "__fish_d2b_using_subcommand emergency-policy; and __fish_seen_subcommand_from list" -l label-selector -r
+complete -c d2b -n "__fish_d2b_using_subcommand emergency-policy; and __fish_seen_subcommand_from list" -l page-token -r
+complete -c d2b -n "__fish_d2b_using_subcommand emergency-policy; and __fish_seen_subcommand_from list" -l limit -r
+complete -c d2b -n "__fish_d2b_using_subcommand emergency-policy; and __fish_seen_subcommand_from list" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand emergency-policy; and __fish_seen_subcommand_from list" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand emergency-policy; and __fish_seen_subcommand_from list" -l updates
+complete -c d2b -n "__fish_d2b_using_subcommand emergency-policy; and __fish_seen_subcommand_from list" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand emergency-policy; and __fish_seen_subcommand_from list" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand emergency-policy; and __fish_seen_subcommand_from list" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand emergency-policy; and __fish_seen_subcommand_from list" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand emergency-policy; and __fish_seen_subcommand_from watch" -l since-revision -r
+complete -c d2b -n "__fish_d2b_using_subcommand emergency-policy; and __fish_seen_subcommand_from watch" -l phase -r
+complete -c d2b -n "__fish_d2b_using_subcommand emergency-policy; and __fish_seen_subcommand_from watch" -l label-selector -r
+complete -c d2b -n "__fish_d2b_using_subcommand emergency-policy; and __fish_seen_subcommand_from watch" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand emergency-policy; and __fish_seen_subcommand_from watch" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand emergency-policy; and __fish_seen_subcommand_from watch" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand emergency-policy; and __fish_seen_subcommand_from watch" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand emergency-policy; and __fish_seen_subcommand_from watch" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand emergency-policy; and __fish_seen_subcommand_from watch" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand emergency-policy; and __fish_seen_subcommand_from create" -l spec-file -r -F
+complete -c d2b -n "__fish_d2b_using_subcommand emergency-policy; and __fish_seen_subcommand_from create" -l reconcile-deadline -r
+complete -c d2b -n "__fish_d2b_using_subcommand emergency-policy; and __fish_seen_subcommand_from create" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand emergency-policy; and __fish_seen_subcommand_from create" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand emergency-policy; and __fish_seen_subcommand_from create" -l spec-stdin
+complete -c d2b -n "__fish_d2b_using_subcommand emergency-policy; and __fish_seen_subcommand_from create" -l wait-for-reconcile
+complete -c d2b -n "__fish_d2b_using_subcommand emergency-policy; and __fish_seen_subcommand_from create" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand emergency-policy; and __fish_seen_subcommand_from create" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand emergency-policy; and __fish_seen_subcommand_from create" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand emergency-policy; and __fish_seen_subcommand_from create" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand emergency-policy; and __fish_seen_subcommand_from update-spec" -l revision -r
+complete -c d2b -n "__fish_d2b_using_subcommand emergency-policy; and __fish_seen_subcommand_from update-spec" -l spec-file -r -F
+complete -c d2b -n "__fish_d2b_using_subcommand emergency-policy; and __fish_seen_subcommand_from update-spec" -l reconcile-deadline -r
+complete -c d2b -n "__fish_d2b_using_subcommand emergency-policy; and __fish_seen_subcommand_from update-spec" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand emergency-policy; and __fish_seen_subcommand_from update-spec" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand emergency-policy; and __fish_seen_subcommand_from update-spec" -l spec-stdin
+complete -c d2b -n "__fish_d2b_using_subcommand emergency-policy; and __fish_seen_subcommand_from update-spec" -l wait-for-reconcile
+complete -c d2b -n "__fish_d2b_using_subcommand emergency-policy; and __fish_seen_subcommand_from update-spec" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand emergency-policy; and __fish_seen_subcommand_from update-spec" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand emergency-policy; and __fish_seen_subcommand_from update-spec" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand emergency-policy; and __fish_seen_subcommand_from update-spec" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand emergency-policy; and __fish_seen_subcommand_from delete" -l revision -r
+complete -c d2b -n "__fish_d2b_using_subcommand emergency-policy; and __fish_seen_subcommand_from delete" -l reconcile-deadline -r
+complete -c d2b -n "__fish_d2b_using_subcommand emergency-policy; and __fish_seen_subcommand_from delete" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand emergency-policy; and __fish_seen_subcommand_from delete" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand emergency-policy; and __fish_seen_subcommand_from delete" -l wait-for-reconcile
+complete -c d2b -n "__fish_d2b_using_subcommand emergency-policy; and __fish_seen_subcommand_from delete" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand emergency-policy; and __fish_seen_subcommand_from delete" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand emergency-policy; and __fish_seen_subcommand_from delete" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand emergency-policy; and __fish_seen_subcommand_from delete" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand emergency-policy; and __fish_seen_subcommand_from status" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand emergency-policy; and __fish_seen_subcommand_from status" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand emergency-policy; and __fish_seen_subcommand_from status" -l watch
+complete -c d2b -n "__fish_d2b_using_subcommand emergency-policy; and __fish_seen_subcommand_from status" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand emergency-policy; and __fish_seen_subcommand_from status" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand emergency-policy; and __fish_seen_subcommand_from status" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand emergency-policy; and __fish_seen_subcommand_from status" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand emergency-policy; and __fish_seen_subcommand_from upgrade" -l reconcile-deadline -r
+complete -c d2b -n "__fish_d2b_using_subcommand emergency-policy; and __fish_seen_subcommand_from upgrade" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand emergency-policy; and __fish_seen_subcommand_from upgrade" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand emergency-policy; and __fish_seen_subcommand_from upgrade" -l recursive
+complete -c d2b -n "__fish_d2b_using_subcommand emergency-policy; and __fish_seen_subcommand_from upgrade" -l apply
+complete -c d2b -n "__fish_d2b_using_subcommand emergency-policy; and __fish_seen_subcommand_from upgrade" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand emergency-policy; and __fish_seen_subcommand_from upgrade" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand emergency-policy; and __fish_seen_subcommand_from upgrade" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand emergency-policy; and __fish_seen_subcommand_from upgrade" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand emergency-policy; and __fish_seen_subcommand_from reconcile" -l reconcile-deadline -r
+complete -c d2b -n "__fish_d2b_using_subcommand emergency-policy; and __fish_seen_subcommand_from reconcile" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand emergency-policy; and __fish_seen_subcommand_from reconcile" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand emergency-policy; and __fish_seen_subcommand_from reconcile" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand emergency-policy; and __fish_seen_subcommand_from reconcile" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand emergency-policy; and __fish_seen_subcommand_from reconcile" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand emergency-policy; and __fish_seen_subcommand_from reconcile" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand emergency-policy; and __fish_seen_subcommand_from verify" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand emergency-policy; and __fish_seen_subcommand_from verify" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand emergency-policy; and __fish_seen_subcommand_from verify" -l repair
+complete -c d2b -n "__fish_d2b_using_subcommand emergency-policy; and __fish_seen_subcommand_from verify" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand emergency-policy; and __fish_seen_subcommand_from verify" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand emergency-policy; and __fish_seen_subcommand_from verify" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand emergency-policy; and __fish_seen_subcommand_from verify" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand emergency-policy; and __fish_seen_subcommand_from usb" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand emergency-policy; and __fish_seen_subcommand_from usb" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand emergency-policy; and __fish_seen_subcommand_from usb" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand emergency-policy; and __fish_seen_subcommand_from usb" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand emergency-policy; and __fish_seen_subcommand_from usb" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand emergency-policy; and __fish_seen_subcommand_from usb" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand emergency-policy; and __fish_seen_subcommand_from usb" -f -a "attach"
+complete -c d2b -n "__fish_d2b_using_subcommand emergency-policy; and __fish_seen_subcommand_from usb" -f -a "detach"
+complete -c d2b -n "__fish_d2b_using_subcommand emergency-policy; and __fish_seen_subcommand_from usb" -f -a "probe"
+complete -c d2b -n "__fish_d2b_using_subcommand emergency-policy; and __fish_seen_subcommand_from security-key" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand emergency-policy; and __fish_seen_subcommand_from security-key" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand emergency-policy; and __fish_seen_subcommand_from security-key" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand emergency-policy; and __fish_seen_subcommand_from security-key" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand emergency-policy; and __fish_seen_subcommand_from security-key" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand emergency-policy; and __fish_seen_subcommand_from security-key" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand emergency-policy; and __fish_seen_subcommand_from security-key" -f -a "status"
+complete -c d2b -n "__fish_d2b_using_subcommand emergency-policy; and __fish_seen_subcommand_from security-key" -f -a "sessions"
+complete -c d2b -n "__fish_d2b_using_subcommand emergency-policy; and __fish_seen_subcommand_from security-key" -f -a "cancel"
+complete -c d2b -n "__fish_d2b_using_subcommand emergency-policy; and __fish_seen_subcommand_from security-key" -f -a "test"
+complete -c d2b -n "__fish_d2b_using_subcommand activation; and not __fish_seen_subcommand_from apply build generations switch boot test rollback gc migrate keys trust rotate-known-host config" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand activation; and not __fish_seen_subcommand_from apply build generations switch boot test rollback gc migrate keys trust rotate-known-host config" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand activation; and not __fish_seen_subcommand_from apply build generations switch boot test rollback gc migrate keys trust rotate-known-host config" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand activation; and not __fish_seen_subcommand_from apply build generations switch boot test rollback gc migrate keys trust rotate-known-host config" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand activation; and not __fish_seen_subcommand_from apply build generations switch boot test rollback gc migrate keys trust rotate-known-host config" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand activation; and not __fish_seen_subcommand_from apply build generations switch boot test rollback gc migrate keys trust rotate-known-host config" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand activation; and not __fish_seen_subcommand_from apply build generations switch boot test rollback gc migrate keys trust rotate-known-host config" -f -a "apply"
+complete -c d2b -n "__fish_d2b_using_subcommand activation; and not __fish_seen_subcommand_from apply build generations switch boot test rollback gc migrate keys trust rotate-known-host config" -f -a "build"
+complete -c d2b -n "__fish_d2b_using_subcommand activation; and not __fish_seen_subcommand_from apply build generations switch boot test rollback gc migrate keys trust rotate-known-host config" -f -a "generations"
+complete -c d2b -n "__fish_d2b_using_subcommand activation; and not __fish_seen_subcommand_from apply build generations switch boot test rollback gc migrate keys trust rotate-known-host config" -f -a "switch"
+complete -c d2b -n "__fish_d2b_using_subcommand activation; and not __fish_seen_subcommand_from apply build generations switch boot test rollback gc migrate keys trust rotate-known-host config" -f -a "boot"
+complete -c d2b -n "__fish_d2b_using_subcommand activation; and not __fish_seen_subcommand_from apply build generations switch boot test rollback gc migrate keys trust rotate-known-host config" -f -a "test"
+complete -c d2b -n "__fish_d2b_using_subcommand activation; and not __fish_seen_subcommand_from apply build generations switch boot test rollback gc migrate keys trust rotate-known-host config" -f -a "rollback"
+complete -c d2b -n "__fish_d2b_using_subcommand activation; and not __fish_seen_subcommand_from apply build generations switch boot test rollback gc migrate keys trust rotate-known-host config" -f -a "gc"
+complete -c d2b -n "__fish_d2b_using_subcommand activation; and not __fish_seen_subcommand_from apply build generations switch boot test rollback gc migrate keys trust rotate-known-host config" -f -a "migrate"
+complete -c d2b -n "__fish_d2b_using_subcommand activation; and not __fish_seen_subcommand_from apply build generations switch boot test rollback gc migrate keys trust rotate-known-host config" -f -a "keys"
+complete -c d2b -n "__fish_d2b_using_subcommand activation; and not __fish_seen_subcommand_from apply build generations switch boot test rollback gc migrate keys trust rotate-known-host config" -f -a "trust"
+complete -c d2b -n "__fish_d2b_using_subcommand activation; and not __fish_seen_subcommand_from apply build generations switch boot test rollback gc migrate keys trust rotate-known-host config" -f -a "rotate-known-host"
+complete -c d2b -n "__fish_d2b_using_subcommand activation; and not __fish_seen_subcommand_from apply build generations switch boot test rollback gc migrate keys trust rotate-known-host config" -f -a "config"
+complete -c d2b -n "__fish_d2b_using_subcommand activation; and __fish_seen_subcommand_from apply" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand activation; and __fish_seen_subcommand_from apply" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand activation; and __fish_seen_subcommand_from apply" -l dry-run
+complete -c d2b -n "__fish_d2b_using_subcommand activation; and __fish_seen_subcommand_from apply" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand activation; and __fish_seen_subcommand_from apply" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand activation; and __fish_seen_subcommand_from apply" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand activation; and __fish_seen_subcommand_from apply" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand activation; and __fish_seen_subcommand_from build" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand activation; and __fish_seen_subcommand_from build" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand activation; and __fish_seen_subcommand_from build" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand activation; and __fish_seen_subcommand_from build" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand activation; and __fish_seen_subcommand_from build" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand activation; and __fish_seen_subcommand_from build" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand activation; and __fish_seen_subcommand_from generations" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand activation; and __fish_seen_subcommand_from generations" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand activation; and __fish_seen_subcommand_from generations" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand activation; and __fish_seen_subcommand_from generations" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand activation; and __fish_seen_subcommand_from generations" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand activation; and __fish_seen_subcommand_from generations" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand activation; and __fish_seen_subcommand_from switch" -l to-generation -r
+complete -c d2b -n "__fish_d2b_using_subcommand activation; and __fish_seen_subcommand_from switch" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand activation; and __fish_seen_subcommand_from switch" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand activation; and __fish_seen_subcommand_from switch" -l dry-run
+complete -c d2b -n "__fish_d2b_using_subcommand activation; and __fish_seen_subcommand_from switch" -l apply
+complete -c d2b -n "__fish_d2b_using_subcommand activation; and __fish_seen_subcommand_from switch" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand activation; and __fish_seen_subcommand_from switch" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand activation; and __fish_seen_subcommand_from switch" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand activation; and __fish_seen_subcommand_from switch" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand activation; and __fish_seen_subcommand_from boot" -l to-generation -r
+complete -c d2b -n "__fish_d2b_using_subcommand activation; and __fish_seen_subcommand_from boot" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand activation; and __fish_seen_subcommand_from boot" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand activation; and __fish_seen_subcommand_from boot" -l dry-run
+complete -c d2b -n "__fish_d2b_using_subcommand activation; and __fish_seen_subcommand_from boot" -l apply
+complete -c d2b -n "__fish_d2b_using_subcommand activation; and __fish_seen_subcommand_from boot" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand activation; and __fish_seen_subcommand_from boot" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand activation; and __fish_seen_subcommand_from boot" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand activation; and __fish_seen_subcommand_from boot" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand activation; and __fish_seen_subcommand_from test" -l to-generation -r
+complete -c d2b -n "__fish_d2b_using_subcommand activation; and __fish_seen_subcommand_from test" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand activation; and __fish_seen_subcommand_from test" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand activation; and __fish_seen_subcommand_from test" -l dry-run
+complete -c d2b -n "__fish_d2b_using_subcommand activation; and __fish_seen_subcommand_from test" -l apply
+complete -c d2b -n "__fish_d2b_using_subcommand activation; and __fish_seen_subcommand_from test" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand activation; and __fish_seen_subcommand_from test" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand activation; and __fish_seen_subcommand_from test" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand activation; and __fish_seen_subcommand_from test" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand activation; and __fish_seen_subcommand_from rollback" -l to-generation -r
+complete -c d2b -n "__fish_d2b_using_subcommand activation; and __fish_seen_subcommand_from rollback" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand activation; and __fish_seen_subcommand_from rollback" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand activation; and __fish_seen_subcommand_from rollback" -l dry-run
+complete -c d2b -n "__fish_d2b_using_subcommand activation; and __fish_seen_subcommand_from rollback" -l apply
+complete -c d2b -n "__fish_d2b_using_subcommand activation; and __fish_seen_subcommand_from rollback" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand activation; and __fish_seen_subcommand_from rollback" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand activation; and __fish_seen_subcommand_from rollback" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand activation; and __fish_seen_subcommand_from rollback" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand activation; and __fish_seen_subcommand_from gc" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand activation; and __fish_seen_subcommand_from gc" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand activation; and __fish_seen_subcommand_from gc" -l dry-run
+complete -c d2b -n "__fish_d2b_using_subcommand activation; and __fish_seen_subcommand_from gc" -l apply
+complete -c d2b -n "__fish_d2b_using_subcommand activation; and __fish_seen_subcommand_from gc" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand activation; and __fish_seen_subcommand_from gc" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand activation; and __fish_seen_subcommand_from gc" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand activation; and __fish_seen_subcommand_from gc" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand activation; and __fish_seen_subcommand_from migrate" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand activation; and __fish_seen_subcommand_from migrate" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand activation; and __fish_seen_subcommand_from migrate" -l dry-run
+complete -c d2b -n "__fish_d2b_using_subcommand activation; and __fish_seen_subcommand_from migrate" -l apply
+complete -c d2b -n "__fish_d2b_using_subcommand activation; and __fish_seen_subcommand_from migrate" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand activation; and __fish_seen_subcommand_from migrate" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand activation; and __fish_seen_subcommand_from migrate" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand activation; and __fish_seen_subcommand_from migrate" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand activation; and __fish_seen_subcommand_from keys" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand activation; and __fish_seen_subcommand_from keys" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand activation; and __fish_seen_subcommand_from keys" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand activation; and __fish_seen_subcommand_from keys" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand activation; and __fish_seen_subcommand_from keys" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand activation; and __fish_seen_subcommand_from keys" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand activation; and __fish_seen_subcommand_from keys" -f -a "list"
+complete -c d2b -n "__fish_d2b_using_subcommand activation; and __fish_seen_subcommand_from keys" -f -a "show"
+complete -c d2b -n "__fish_d2b_using_subcommand activation; and __fish_seen_subcommand_from keys" -f -a "rotate"
+complete -c d2b -n "__fish_d2b_using_subcommand activation; and __fish_seen_subcommand_from trust" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand activation; and __fish_seen_subcommand_from trust" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand activation; and __fish_seen_subcommand_from trust" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand activation; and __fish_seen_subcommand_from trust" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand activation; and __fish_seen_subcommand_from trust" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand activation; and __fish_seen_subcommand_from trust" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand activation; and __fish_seen_subcommand_from rotate-known-host" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand activation; and __fish_seen_subcommand_from rotate-known-host" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand activation; and __fish_seen_subcommand_from rotate-known-host" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand activation; and __fish_seen_subcommand_from rotate-known-host" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand activation; and __fish_seen_subcommand_from rotate-known-host" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand activation; and __fish_seen_subcommand_from rotate-known-host" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand activation; and __fish_seen_subcommand_from config" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand activation; and __fish_seen_subcommand_from config" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand activation; and __fish_seen_subcommand_from config" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand activation; and __fish_seen_subcommand_from config" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand activation; and __fish_seen_subcommand_from config" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand activation; and __fish_seen_subcommand_from config" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand activation; and __fish_seen_subcommand_from config" -f -a "sync"
+complete -c d2b -n "__fish_d2b_using_subcommand activation; and __fish_seen_subcommand_from config" -f -a "diff"
+complete -c d2b -n "__fish_d2b_using_subcommand activation; and __fish_seen_subcommand_from config" -f -a "approve"
+complete -c d2b -n "__fish_d2b_using_subcommand activation; and __fish_seen_subcommand_from config" -f -a "reject"
+complete -c d2b -n "__fish_d2b_using_subcommand activation; and __fish_seen_subcommand_from config" -f -a "status"
+complete -c d2b -n "__fish_d2b_using_subcommand audit" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand audit" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand audit" -l strict
+complete -c d2b -n "__fish_d2b_using_subcommand audit" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand audit" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand audit" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand audit" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand op; and not __fish_seen_subcommand_from inspect" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand op; and not __fish_seen_subcommand_from inspect" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand op; and not __fish_seen_subcommand_from inspect" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand op; and not __fish_seen_subcommand_from inspect" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand op; and not __fish_seen_subcommand_from inspect" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand op; and not __fish_seen_subcommand_from inspect" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand op; and not __fish_seen_subcommand_from inspect" -f -a "inspect"
+complete -c d2b -n "__fish_d2b_using_subcommand op; and __fish_seen_subcommand_from inspect" -l operation-id -r
+complete -c d2b -n "__fish_d2b_using_subcommand op; and __fish_seen_subcommand_from inspect" -l trace-id -r
+complete -c d2b -n "__fish_d2b_using_subcommand op; and __fish_seen_subcommand_from inspect" -l span-id -r
+complete -c d2b -n "__fish_d2b_using_subcommand op; and __fish_seen_subcommand_from inspect" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand op; and __fish_seen_subcommand_from inspect" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand op; and __fish_seen_subcommand_from inspect" -l watch
+complete -c d2b -n "__fish_d2b_using_subcommand op; and __fish_seen_subcommand_from inspect" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand op; and __fish_seen_subcommand_from inspect" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand op; and __fish_seen_subcommand_from inspect" -l no-deadline -d 'Suppress the command default deadline'
 complete -c d2b -n "__fish_d2b_using_subcommand op; and __fish_seen_subcommand_from inspect" -s h -l help -d 'Print help'
-complete -c d2b -n "__fish_d2b_using_subcommand op; and __fish_seen_subcommand_from help" -f -a "inspect" -d 'Inspect current operation/trace state with bounded partial results'
-complete -c d2b -n "__fish_d2b_using_subcommand op; and __fish_seen_subcommand_from help" -f -a "help" -d 'Print this message or the help of the given subcommand(s)'
-complete -c d2b -n "__fish_d2b_using_subcommand vm; and not __fish_seen_subcommand_from start stop restart list status exec display help" -s h -l help -d 'Print help'
-complete -c d2b -n "__fish_d2b_using_subcommand vm; and not __fish_seen_subcommand_from start stop restart list status exec display help" -f -a "start" -d 'Start the per-VM DAG (virtiofsd → CH → readiness probes)'
-complete -c d2b -n "__fish_d2b_using_subcommand vm; and not __fish_seen_subcommand_from start stop restart list status exec display help" -f -a "stop" -d 'Stop the per-VM DAG in reverse topo order'
-complete -c d2b -n "__fish_d2b_using_subcommand vm; and not __fish_seen_subcommand_from start stop restart list status exec display help" -f -a "restart" -d 'Stop then start; same envelope contract as start'
-complete -c d2b -n "__fish_d2b_using_subcommand vm; and not __fish_seen_subcommand_from start stop restart list status exec display help" -f -a "list" -d 'Daemon-side runtime inventory from d2bd\'s public socket'
-complete -c d2b -n "__fish_d2b_using_subcommand vm; and not __fish_seen_subcommand_from start stop restart list status exec display help" -f -a "status" -d 'Daemon-side readiness state for a VM (api-ready phase)'
-complete -c d2b -n "__fish_d2b_using_subcommand vm; and not __fish_seen_subcommand_from start stop restart list status exec display help" -f -a "exec" -d 'Run or manage commands inside a running VM. Use `d2b vm exec <vm> -- <cmd...>` for a non-interactive command, `d2b vm exec -it <vm> -- bash` for an interactive shell, `-d` for a detached command, and `d2b vm exec <vm> {list|logs|status|kill}` to manage detached execs'
-complete -c d2b -n "__fish_d2b_using_subcommand vm; and not __fish_seen_subcommand_from start stop restart list status exec display help" -f -a "display" -d 'Manage gateway display sessions for provider-backed targets'
-complete -c d2b -n "__fish_d2b_using_subcommand vm; and not __fish_seen_subcommand_from start stop restart list status exec display help" -f -a "help" -d 'Print this message or the help of the given subcommand(s)'
-complete -c d2b -n "__fish_d2b_using_subcommand vm; and __fish_seen_subcommand_from start" -l dry-run -d 'Plan the DAG without spawning any role'
-complete -c d2b -n "__fish_d2b_using_subcommand vm; and __fish_seen_subcommand_from start" -l apply -d 'Apply the DAG (drives the supervisor)'
-complete -c d2b -n "__fish_d2b_using_subcommand vm; and __fish_seen_subcommand_from start" -l no-wait-api -d 'Exit 0 on process-alive success without waiting for api-ready. Default behavior is --strict (wait for both process-alive and api-ready)'
-complete -c d2b -n "__fish_d2b_using_subcommand vm; and __fish_seen_subcommand_from start" -l json
-complete -c d2b -n "__fish_d2b_using_subcommand vm; and __fish_seen_subcommand_from start" -l human
-complete -c d2b -n "__fish_d2b_using_subcommand vm; and __fish_seen_subcommand_from start" -s h -l help -d 'Print help'
-complete -c d2b -n "__fish_d2b_using_subcommand vm; and __fish_seen_subcommand_from stop" -l dry-run
-complete -c d2b -n "__fish_d2b_using_subcommand vm; and __fish_seen_subcommand_from stop" -l apply
-complete -c d2b -n "__fish_d2b_using_subcommand vm; and __fish_seen_subcommand_from stop" -s f -l force -d 'Skip provider graceful shutdown and use the forced cleanup path'
-complete -c d2b -n "__fish_d2b_using_subcommand vm; and __fish_seen_subcommand_from stop" -l json
-complete -c d2b -n "__fish_d2b_using_subcommand vm; and __fish_seen_subcommand_from stop" -l human
-complete -c d2b -n "__fish_d2b_using_subcommand vm; and __fish_seen_subcommand_from stop" -s h -l help -d 'Print help'
-complete -c d2b -n "__fish_d2b_using_subcommand vm; and __fish_seen_subcommand_from restart" -l dry-run
-complete -c d2b -n "__fish_d2b_using_subcommand vm; and __fish_seen_subcommand_from restart" -l apply
-complete -c d2b -n "__fish_d2b_using_subcommand vm; and __fish_seen_subcommand_from restart" -s f -l force -d 'Apply force only to the stop phase before starting again'
-complete -c d2b -n "__fish_d2b_using_subcommand vm; and __fish_seen_subcommand_from restart" -l json
-complete -c d2b -n "__fish_d2b_using_subcommand vm; and __fish_seen_subcommand_from restart" -l human
-complete -c d2b -n "__fish_d2b_using_subcommand vm; and __fish_seen_subcommand_from restart" -s h -l help -d 'Print help'
-complete -c d2b -n "__fish_d2b_using_subcommand vm; and __fish_seen_subcommand_from list" -l realm -d 'Route list through a realm gateway VM' -r
-complete -c d2b -n "__fish_d2b_using_subcommand vm; and __fish_seen_subcommand_from list" -l json
-complete -c d2b -n "__fish_d2b_using_subcommand vm; and __fish_seen_subcommand_from list" -l human
-complete -c d2b -n "__fish_d2b_using_subcommand vm; and __fish_seen_subcommand_from list" -l all -d 'Include configured realm gateway entrypoints in the list'
-complete -c d2b -n "__fish_d2b_using_subcommand vm; and __fish_seen_subcommand_from list" -s h -l help -d 'Print help'
-complete -c d2b -n "__fish_d2b_using_subcommand vm; and __fish_seen_subcommand_from status" -l json
-complete -c d2b -n "__fish_d2b_using_subcommand vm; and __fish_seen_subcommand_from status" -l human
-complete -c d2b -n "__fish_d2b_using_subcommand vm; and __fish_seen_subcommand_from status" -s h -l help -d 'Print help'
-complete -c d2b -n "__fish_d2b_using_subcommand vm; and __fish_seen_subcommand_from exec" -l env -d 'Set an environment variable in the guest command (`KEY=VALUE`). Repeatable' -r
-complete -c d2b -n "__fish_d2b_using_subcommand vm; and __fish_seen_subcommand_from exec" -l cwd -d 'Working directory for the guest command' -r
-complete -c d2b -n "__fish_d2b_using_subcommand vm; and __fish_seen_subcommand_from exec; and __fish_seen_subcommand_from logs" -l stdout-offset -d 'Resume stdout from this byte offset. The daemon clamps stale offsets' -r
-complete -c d2b -n "__fish_d2b_using_subcommand vm; and __fish_seen_subcommand_from exec; and __fish_seen_subcommand_from logs" -l stderr-offset -d 'Resume stderr from this byte offset. The daemon clamps stale offsets' -r
-complete -c d2b -n "__fish_d2b_using_subcommand vm; and __fish_seen_subcommand_from exec; and __fish_seen_subcommand_from logs" -l max-len -d 'Maximum retained bytes to request per stream' -r
-complete -c d2b -n "__fish_d2b_using_subcommand vm; and __fish_seen_subcommand_from exec" -s d -l detach -d 'Start the command detached and print its exec id. Incompatible with `-i`/`-t`; detached execs are managed with `d2b vm exec <vm> {list|logs|status|kill}`'
-complete -c d2b -n "__fish_d2b_using_subcommand vm; and __fish_seen_subcommand_from exec" -s i -l interactive -d 'Forward host stdin into the guest command (`-i`). Requires `-t`/`--tty`; use `-it` for an interactive shell'
-complete -c d2b -n "__fish_d2b_using_subcommand vm; and __fish_seen_subcommand_from exec" -s t -l tty -d 'Allocate a PTY in the guest and put the host terminal in raw mode (`-t`). Implies stdin forwarding. Human-only (incompatible with `--json`)'
-complete -c d2b -n "__fish_d2b_using_subcommand vm; and __fish_seen_subcommand_from exec" -l json -d 'Emit a single terminal JSON envelope (exit code + source/reason + bounded captured output). Non-interactive only'
-complete -c d2b -n "__fish_d2b_using_subcommand vm; and __fish_seen_subcommand_from exec" -l human -d 'Force human output'
-complete -c d2b -n "__fish_d2b_using_subcommand vm; and __fish_seen_subcommand_from exec" -s h -l help -d 'Print help'
-complete -c d2b -n "__fish_d2b_using_subcommand vm; and __fish_seen_subcommand_from display" -s h -l help -d 'Print help'
-complete -c d2b -n "__fish_d2b_using_subcommand vm; and __fish_seen_subcommand_from display" -f -a "list" -d 'List active gateway display sessions'
-complete -c d2b -n "__fish_d2b_using_subcommand vm; and __fish_seen_subcommand_from display" -f -a "close" -d 'Close a gateway display session by id'
-complete -c d2b -n "__fish_d2b_using_subcommand vm; and __fish_seen_subcommand_from display" -f -a "help" -d 'Print this message or the help of the given subcommand(s)'
-complete -c d2b -n "__fish_d2b_using_subcommand vm; and __fish_seen_subcommand_from help" -f -a "start" -d 'Start the per-VM DAG (virtiofsd → CH → readiness probes)'
-complete -c d2b -n "__fish_d2b_using_subcommand vm; and __fish_seen_subcommand_from help" -f -a "stop" -d 'Stop the per-VM DAG in reverse topo order'
-complete -c d2b -n "__fish_d2b_using_subcommand vm; and __fish_seen_subcommand_from help" -f -a "restart" -d 'Stop then start; same envelope contract as start'
-complete -c d2b -n "__fish_d2b_using_subcommand vm; and __fish_seen_subcommand_from help" -f -a "list" -d 'Daemon-side runtime inventory from d2bd\'s public socket'
-complete -c d2b -n "__fish_d2b_using_subcommand vm; and __fish_seen_subcommand_from help" -f -a "status" -d 'Daemon-side readiness state for a VM (api-ready phase)'
-complete -c d2b -n "__fish_d2b_using_subcommand vm; and __fish_seen_subcommand_from help" -f -a "exec" -d 'Run or manage commands inside a running VM. Use `d2b vm exec <vm> -- <cmd...>` for a non-interactive command, `d2b vm exec -it <vm> -- bash` for an interactive shell, `-d` for a detached command, and `d2b vm exec <vm> {list|logs|status|kill}` to manage detached execs'
-complete -c d2b -n "__fish_d2b_using_subcommand vm; and __fish_seen_subcommand_from help" -f -a "display" -d 'Manage gateway display sessions for provider-backed targets'
-complete -c d2b -n "__fish_d2b_using_subcommand vm; and __fish_seen_subcommand_from help" -f -a "help" -d 'Print this message or the help of the given subcommand(s)'
-complete -c d2b -n "__fish_d2b_using_subcommand up" -l dry-run -d 'Plan the DAG without spawning any role'
-complete -c d2b -n "__fish_d2b_using_subcommand up" -l apply -d 'Apply the DAG (drives the supervisor)'
-complete -c d2b -n "__fish_d2b_using_subcommand up" -l no-wait-api -d 'Exit 0 on process-alive success without waiting for api-ready. Default behavior is --strict (wait for both process-alive and api-ready)'
-complete -c d2b -n "__fish_d2b_using_subcommand up" -l json
-complete -c d2b -n "__fish_d2b_using_subcommand up" -l human
-complete -c d2b -n "__fish_d2b_using_subcommand up" -s h -l help -d 'Print help'
-complete -c d2b -n "__fish_d2b_using_subcommand down" -l dry-run
-complete -c d2b -n "__fish_d2b_using_subcommand down" -l apply
-complete -c d2b -n "__fish_d2b_using_subcommand down" -s f -l force -d 'Skip provider graceful shutdown and use the forced cleanup path'
-complete -c d2b -n "__fish_d2b_using_subcommand down" -l json
-complete -c d2b -n "__fish_d2b_using_subcommand down" -l human
-complete -c d2b -n "__fish_d2b_using_subcommand down" -s h -l help -d 'Print help'
-complete -c d2b -n "__fish_d2b_using_subcommand restart" -l dry-run
-complete -c d2b -n "__fish_d2b_using_subcommand restart" -l apply
-complete -c d2b -n "__fish_d2b_using_subcommand restart" -s f -l force -d 'Apply force only to the stop phase before starting again'
-complete -c d2b -n "__fish_d2b_using_subcommand restart" -l json
-complete -c d2b -n "__fish_d2b_using_subcommand restart" -l human
-complete -c d2b -n "__fish_d2b_using_subcommand restart" -s h -l help -d 'Print help'
-complete -c d2b -n "__fish_d2b_using_subcommand build" -l json
-complete -c d2b -n "__fish_d2b_using_subcommand build" -l human
-complete -c d2b -n "__fish_d2b_using_subcommand build" -s h -l help -d 'Print help'
-complete -c d2b -n "__fish_d2b_using_subcommand generations" -l json
-complete -c d2b -n "__fish_d2b_using_subcommand generations" -l human
-complete -c d2b -n "__fish_d2b_using_subcommand generations" -s h -l help -d 'Print help'
-complete -c d2b -n "__fish_d2b_using_subcommand switch" -l dry-run
-complete -c d2b -n "__fish_d2b_using_subcommand switch" -l apply
-complete -c d2b -n "__fish_d2b_using_subcommand switch" -l json
-complete -c d2b -n "__fish_d2b_using_subcommand switch" -l human
-complete -c d2b -n "__fish_d2b_using_subcommand switch" -s h -l help -d 'Print help'
-complete -c d2b -n "__fish_d2b_using_subcommand boot" -l dry-run
-complete -c d2b -n "__fish_d2b_using_subcommand boot" -l apply
-complete -c d2b -n "__fish_d2b_using_subcommand boot" -l json
-complete -c d2b -n "__fish_d2b_using_subcommand boot" -l human
-complete -c d2b -n "__fish_d2b_using_subcommand boot" -s h -l help -d 'Print help'
-complete -c d2b -n "__fish_d2b_using_subcommand test" -l dry-run
-complete -c d2b -n "__fish_d2b_using_subcommand test" -l apply
-complete -c d2b -n "__fish_d2b_using_subcommand test" -l json
-complete -c d2b -n "__fish_d2b_using_subcommand test" -l human
-complete -c d2b -n "__fish_d2b_using_subcommand test" -s h -l help -d 'Print help'
-complete -c d2b -n "__fish_d2b_using_subcommand rollback" -l dry-run
-complete -c d2b -n "__fish_d2b_using_subcommand rollback" -l apply
-complete -c d2b -n "__fish_d2b_using_subcommand rollback" -l json
-complete -c d2b -n "__fish_d2b_using_subcommand rollback" -l human
-complete -c d2b -n "__fish_d2b_using_subcommand rollback" -s h -l help -d 'Print help'
-complete -c d2b -n "__fish_d2b_using_subcommand gc" -l dry-run
-complete -c d2b -n "__fish_d2b_using_subcommand gc" -l apply
-complete -c d2b -n "__fish_d2b_using_subcommand gc" -l json
-complete -c d2b -n "__fish_d2b_using_subcommand gc" -l human
-complete -c d2b -n "__fish_d2b_using_subcommand gc" -s h -l help -d 'Print help'
-complete -c d2b -n "__fish_d2b_using_subcommand store; and not __fish_seen_subcommand_from verify help" -s h -l help -d 'Print help'
-complete -c d2b -n "__fish_d2b_using_subcommand store; and not __fish_seen_subcommand_from verify help" -f -a "verify" -d 'Verify a VM\'s hardlink-backed live store-view'
-complete -c d2b -n "__fish_d2b_using_subcommand store; and not __fish_seen_subcommand_from verify help" -f -a "help" -d 'Print this message or the help of the given subcommand(s)'
-complete -c d2b -n "__fish_d2b_using_subcommand store; and __fish_seen_subcommand_from verify" -l repair
-complete -c d2b -n "__fish_d2b_using_subcommand store; and __fish_seen_subcommand_from verify" -l json
-complete -c d2b -n "__fish_d2b_using_subcommand store; and __fish_seen_subcommand_from verify" -l human
-complete -c d2b -n "__fish_d2b_using_subcommand store; and __fish_seen_subcommand_from verify" -s h -l help -d 'Print help'
-complete -c d2b -n "__fish_d2b_using_subcommand store; and __fish_seen_subcommand_from help" -f -a "verify" -d 'Verify a VM\'s hardlink-backed live store-view'
-complete -c d2b -n "__fish_d2b_using_subcommand store; and __fish_seen_subcommand_from help" -f -a "help" -d 'Print this message or the help of the given subcommand(s)'
-complete -c d2b -n "__fish_d2b_using_subcommand keys; and not __fish_seen_subcommand_from list show rotate help" -s h -l help -d 'Print help'
-complete -c d2b -n "__fish_d2b_using_subcommand keys; and not __fish_seen_subcommand_from list show rotate help" -f -a "list" -d 'List managed keys (per-VM SSH keypair fingerprints)'
-complete -c d2b -n "__fish_d2b_using_subcommand keys; and not __fish_seen_subcommand_from list show rotate help" -f -a "show" -d 'Show details for a specific VM\'s managed key'
-complete -c d2b -n "__fish_d2b_using_subcommand keys; and not __fish_seen_subcommand_from list show rotate help" -f -a "rotate" -d 'Rotate the framework-managed per-VM SSH keypair. --apply mutates'
-complete -c d2b -n "__fish_d2b_using_subcommand keys; and not __fish_seen_subcommand_from list show rotate help" -f -a "help" -d 'Print this message or the help of the given subcommand(s)'
-complete -c d2b -n "__fish_d2b_using_subcommand keys; and __fish_seen_subcommand_from list" -l json
-complete -c d2b -n "__fish_d2b_using_subcommand keys; and __fish_seen_subcommand_from list" -l human
-complete -c d2b -n "__fish_d2b_using_subcommand keys; and __fish_seen_subcommand_from list" -s h -l help -d 'Print help'
-complete -c d2b -n "__fish_d2b_using_subcommand keys; and __fish_seen_subcommand_from show" -l json
-complete -c d2b -n "__fish_d2b_using_subcommand keys; and __fish_seen_subcommand_from show" -l human
-complete -c d2b -n "__fish_d2b_using_subcommand keys; and __fish_seen_subcommand_from show" -s h -l help -d 'Print help'
-complete -c d2b -n "__fish_d2b_using_subcommand keys; and __fish_seen_subcommand_from rotate" -l dry-run
-complete -c d2b -n "__fish_d2b_using_subcommand keys; and __fish_seen_subcommand_from rotate" -l apply
-complete -c d2b -n "__fish_d2b_using_subcommand keys; and __fish_seen_subcommand_from rotate" -l json
-complete -c d2b -n "__fish_d2b_using_subcommand keys; and __fish_seen_subcommand_from rotate" -l human
-complete -c d2b -n "__fish_d2b_using_subcommand keys; and __fish_seen_subcommand_from rotate" -s h -l help -d 'Print help'
-complete -c d2b -n "__fish_d2b_using_subcommand keys; and __fish_seen_subcommand_from help" -f -a "list" -d 'List managed keys (per-VM SSH keypair fingerprints)'
-complete -c d2b -n "__fish_d2b_using_subcommand keys; and __fish_seen_subcommand_from help" -f -a "show" -d 'Show details for a specific VM\'s managed key'
-complete -c d2b -n "__fish_d2b_using_subcommand keys; and __fish_seen_subcommand_from help" -f -a "rotate" -d 'Rotate the framework-managed per-VM SSH keypair. --apply mutates'
-complete -c d2b -n "__fish_d2b_using_subcommand keys; and __fish_seen_subcommand_from help" -f -a "help" -d 'Print this message or the help of the given subcommand(s)'
-complete -c d2b -n "__fish_d2b_using_subcommand trust" -l dry-run
-complete -c d2b -n "__fish_d2b_using_subcommand trust" -l apply
-complete -c d2b -n "__fish_d2b_using_subcommand trust" -l json
-complete -c d2b -n "__fish_d2b_using_subcommand trust" -l human
-complete -c d2b -n "__fish_d2b_using_subcommand trust" -s h -l help -d 'Print help'
-complete -c d2b -n "__fish_d2b_using_subcommand rotate-known-host" -l dry-run
-complete -c d2b -n "__fish_d2b_using_subcommand rotate-known-host" -l apply
-complete -c d2b -n "__fish_d2b_using_subcommand rotate-known-host" -l json
-complete -c d2b -n "__fish_d2b_using_subcommand rotate-known-host" -l human
-complete -c d2b -n "__fish_d2b_using_subcommand rotate-known-host" -s h -l help -d 'Print help'
-complete -c d2b -n "__fish_d2b_using_subcommand migrate" -l dry-run
-complete -c d2b -n "__fish_d2b_using_subcommand migrate" -l apply
-complete -c d2b -n "__fish_d2b_using_subcommand migrate" -l json
-complete -c d2b -n "__fish_d2b_using_subcommand migrate" -l human
-complete -c d2b -n "__fish_d2b_using_subcommand migrate" -s h -l help -d 'Print help'
-complete -c d2b -n "__fish_d2b_using_subcommand config; and not __fish_seen_subcommand_from sync diff approve reject status help" -s h -l help -d 'Print help'
-complete -c d2b -n "__fish_d2b_using_subcommand config; and not __fish_seen_subcommand_from sync diff approve reject status help" -f -a "sync" -d 'Pull the VM\'s in-guest edited config into a host-side staging file'
-complete -c d2b -n "__fish_d2b_using_subcommand config; and not __fish_seen_subcommand_from sync diff approve reject status help" -f -a "diff" -d 'Diff the staged guest config against a live host-side file'
-complete -c d2b -n "__fish_d2b_using_subcommand config; and not __fish_seen_subcommand_from sync diff approve reject status help" -f -a "approve" -d 'Approve the staged guest config by writing it to a target file'
-complete -c d2b -n "__fish_d2b_using_subcommand config; and not __fish_seen_subcommand_from sync diff approve reject status help" -f -a "reject" -d 'Discard the staged guest config'
-complete -c d2b -n "__fish_d2b_using_subcommand config; and not __fish_seen_subcommand_from sync diff approve reject status help" -f -a "status" -d 'Report whether a VM has a pending (un-approved) staged config'
-complete -c d2b -n "__fish_d2b_using_subcommand config; and not __fish_seen_subcommand_from sync diff approve reject status help" -f -a "help" -d 'Print this message or the help of the given subcommand(s)'
-complete -c d2b -n "__fish_d2b_using_subcommand config; and __fish_seen_subcommand_from sync" -l guest-path -d 'Path of the editable guest config INSIDE the VM to pull. Honored only by the legacy operator SSH transport; on guest-control VMs the canonical guest config working copy is read by file id and this flag is rejected' -r
-complete -c d2b -n "__fish_d2b_using_subcommand config; and __fish_seen_subcommand_from sync" -l host -d 'Override the SSH host (defaults to the manifest `static_ip`). SSH transport only; rejected on guest-control VMs' -r
-complete -c d2b -n "__fish_d2b_using_subcommand config; and __fish_seen_subcommand_from sync" -l user -d 'Override the SSH user (defaults to the manifest `ssh_user`). SSH transport only; rejected on guest-control VMs' -r
-complete -c d2b -n "__fish_d2b_using_subcommand config; and __fish_seen_subcommand_from sync" -l key -d 'Override the SSH private key path. SSH transport only; rejected on guest-control VMs' -r -F
-complete -c d2b -n "__fish_d2b_using_subcommand config; and __fish_seen_subcommand_from sync" -l known-hosts -d 'known_hosts file used to verify the VM\'s host key (defaults to the framework-managed `/var/lib/d2b/known_hosts.d2b`). SSH transport only; rejected on guest-control VMs' -r -F
-complete -c d2b -n "__fish_d2b_using_subcommand config; and __fish_seen_subcommand_from sync" -l dry-run -d 'Print the planned action instead of running it'
-complete -c d2b -n "__fish_d2b_using_subcommand config; and __fish_seen_subcommand_from sync" -l json -d 'Emit a JSON envelope'
-complete -c d2b -n "__fish_d2b_using_subcommand config; and __fish_seen_subcommand_from sync" -s h -l help -d 'Print help (see more with \'--help\')'
-complete -c d2b -n "__fish_d2b_using_subcommand config; and __fish_seen_subcommand_from diff" -l against -d 'The live host-side guest config file to compare the staging against' -r -F
-complete -c d2b -n "__fish_d2b_using_subcommand config; and __fish_seen_subcommand_from diff" -l json -d 'Emit a JSON envelope'
-complete -c d2b -n "__fish_d2b_using_subcommand config; and __fish_seen_subcommand_from diff" -s h -l help -d 'Print help'
-complete -c d2b -n "__fish_d2b_using_subcommand config; and __fish_seen_subcommand_from approve" -l to -d 'The host-side file to write the approved staging copy onto. The operator chooses this (typically their `guestConfigFile` path)' -r -F
-complete -c d2b -n "__fish_d2b_using_subcommand config; and __fish_seen_subcommand_from approve" -l json -d 'Emit a JSON envelope'
-complete -c d2b -n "__fish_d2b_using_subcommand config; and __fish_seen_subcommand_from approve" -s h -l help -d 'Print help'
-complete -c d2b -n "__fish_d2b_using_subcommand config; and __fish_seen_subcommand_from reject" -l json -d 'Emit a JSON envelope'
-complete -c d2b -n "__fish_d2b_using_subcommand config; and __fish_seen_subcommand_from reject" -s h -l help -d 'Print help'
-complete -c d2b -n "__fish_d2b_using_subcommand config; and __fish_seen_subcommand_from status" -l all -d 'Report every VM that currently has a pending staging file'
-complete -c d2b -n "__fish_d2b_using_subcommand config; and __fish_seen_subcommand_from status" -l json -d 'Emit a JSON envelope'
-complete -c d2b -n "__fish_d2b_using_subcommand config; and __fish_seen_subcommand_from status" -s h -l help -d 'Print help'
-complete -c d2b -n "__fish_d2b_using_subcommand config; and __fish_seen_subcommand_from help" -f -a "sync" -d 'Pull the VM\'s in-guest edited config into a host-side staging file'
-complete -c d2b -n "__fish_d2b_using_subcommand config; and __fish_seen_subcommand_from help" -f -a "diff" -d 'Diff the staged guest config against a live host-side file'
-complete -c d2b -n "__fish_d2b_using_subcommand config; and __fish_seen_subcommand_from help" -f -a "approve" -d 'Approve the staged guest config by writing it to a target file'
-complete -c d2b -n "__fish_d2b_using_subcommand config; and __fish_seen_subcommand_from help" -f -a "reject" -d 'Discard the staged guest config'
-complete -c d2b -n "__fish_d2b_using_subcommand config; and __fish_seen_subcommand_from help" -f -a "status" -d 'Report whether a VM has a pending (un-approved) staged config'
-complete -c d2b -n "__fish_d2b_using_subcommand config; and __fish_seen_subcommand_from help" -f -a "help" -d 'Print this message or the help of the given subcommand(s)'
-complete -c d2b -n "__fish_d2b_using_subcommand clipboard; and not __fish_seen_subcommand_from arm help" -s h -l help -d 'Print help'
-complete -c d2b -n "__fish_d2b_using_subcommand clipboard; and not __fish_seen_subcommand_from arm help" -f -a "arm" -d 'Open the picker and request paste replay for the focused target'
-complete -c d2b -n "__fish_d2b_using_subcommand clipboard; and not __fish_seen_subcommand_from arm help" -f -a "help" -d 'Print this message or the help of the given subcommand(s)'
-complete -c d2b -n "__fish_d2b_using_subcommand clipboard; and __fish_seen_subcommand_from arm" -l json -d 'Emit a structured JSON envelope'
-complete -c d2b -n "__fish_d2b_using_subcommand clipboard; and __fish_seen_subcommand_from arm" -l human -d 'Emit a human-readable status line'
-complete -c d2b -n "__fish_d2b_using_subcommand clipboard; and __fish_seen_subcommand_from arm" -s h -l help -d 'Print help (see more with \'--help\')'
-complete -c d2b -n "__fish_d2b_using_subcommand clipboard; and __fish_seen_subcommand_from help" -f -a "arm" -d 'Open the picker and request paste replay for the focused target'
-complete -c d2b -n "__fish_d2b_using_subcommand clipboard; and __fish_seen_subcommand_from help" -f -a "help" -d 'Print this message or the help of the given subcommand(s)'
-complete -c d2b -n "__fish_d2b_using_subcommand help; and not __fish_seen_subcommand_from list status launch usb console audio audit host auth realm shell op vm up down restart build generations switch boot test rollback gc store keys trust rotate-known-host migrate config clipboard help" -f -a "list" -d 'List declared VMs with daemon runtime state when d2bd is reachable'
-complete -c d2b -n "__fish_d2b_using_subcommand help; and not __fish_seen_subcommand_from list status launch usb console audio audit host auth realm shell op vm up down restart build generations switch boot test rollback gc store keys trust rotate-known-host migrate config clipboard help" -f -a "status" -d 'Show per-VM runtime status plus bridge health'
-complete -c d2b -n "__fish_d2b_using_subcommand help; and not __fish_seen_subcommand_from list status launch usb console audio audit host auth realm shell op vm up down restart build generations switch boot test rollback gc store keys trust rotate-known-host migrate config clipboard help" -f -a "launch" -d 'Launch a trusted configured workload item through its runtime provider'
-complete -c d2b -n "__fish_d2b_using_subcommand help; and not __fish_seen_subcommand_from list status launch usb console audio audit host auth realm shell op vm up down restart build generations switch boot test rollback gc store keys trust rotate-known-host migrate config clipboard help" -f -a "usb" -d 'USB attach / detach / probe'
-complete -c d2b -n "__fish_d2b_using_subcommand help; and not __fish_seen_subcommand_from list status launch usb console audio audit host auth realm shell op vm up down restart build generations switch boot test rollback gc store keys trust rotate-known-host migrate config clipboard help" -f -a "console" -d 'Foreground serial console bridge for headless VMs'
-complete -c d2b -n "__fish_d2b_using_subcommand help; and not __fish_seen_subcommand_from list status launch usb console audio audit host auth realm shell op vm up down restart build generations switch boot test rollback gc store keys trust rotate-known-host migrate config clipboard help" -f -a "audio" -d 'Per-VM audio status and grant controls'
-complete -c d2b -n "__fish_d2b_using_subcommand help; and not __fish_seen_subcommand_from list status launch usb console audio audit host auth realm shell op vm up down restart build generations switch boot test rollback gc store keys trust rotate-known-host migrate config clipboard help" -f -a "audit" -d 'Tail the broker audit log'
-complete -c d2b -n "__fish_d2b_using_subcommand help; and not __fish_seen_subcommand_from list status launch usb console audio audit host auth realm shell op vm up down restart build generations switch boot test rollback gc store keys trust rotate-known-host migrate config clipboard help" -f -a "host" -d 'Host-side preflight, install, doctor, and reconcile verbs'
-complete -c d2b -n "__fish_d2b_using_subcommand help; and not __fish_seen_subcommand_from list status launch usb console audio audit host auth realm shell op vm up down restart build generations switch boot test rollback gc store keys trust rotate-known-host migrate config clipboard help" -f -a "auth" -d 'Authorisation introspection'
-complete -c d2b -n "__fish_d2b_using_subcommand help; and not __fish_seen_subcommand_from list status launch usb console audio audit host auth realm shell op vm up down restart build generations switch boot test rollback gc store keys trust rotate-known-host migrate config clipboard help" -f -a "realm" -d 'Low-level realm gateway helpers'
-complete -c d2b -n "__fish_d2b_using_subcommand help; and not __fish_seen_subcommand_from list status launch usb console audio audit host auth realm shell op vm up down restart build generations switch boot test rollback gc store keys trust rotate-known-host migrate config clipboard help" -f -a "shell" -d 'Attach to or manage persistent named guest shells'
-complete -c d2b -n "__fish_d2b_using_subcommand help; and not __fish_seen_subcommand_from list status launch usb console audio audit host auth realm shell op vm up down restart build generations switch boot test rollback gc store keys trust rotate-known-host migrate config clipboard help" -f -a "op" -d 'Inspect current constellation operation and trace state'
-complete -c d2b -n "__fish_d2b_using_subcommand help; and not __fish_seen_subcommand_from list status launch usb console audio audit host auth realm shell op vm up down restart build generations switch boot test rollback gc store keys trust rotate-known-host migrate config clipboard help" -f -a "vm" -d 'Per-VM lifecycle verbs (start / stop / restart / list / status) plus the admin-only guest-control sub-verb `exec`, which runs commands or an interactive session inside a VM over the authenticated guest-control transport (no SSH)'
-complete -c d2b -n "__fish_d2b_using_subcommand help; and not __fish_seen_subcommand_from list status launch usb console audio audit host auth realm shell op vm up down restart build generations switch boot test rollback gc store keys trust rotate-known-host migrate config clipboard help" -f -a "up" -d 'Alias for `vm start <vm>`'
-complete -c d2b -n "__fish_d2b_using_subcommand help; and not __fish_seen_subcommand_from list status launch usb console audio audit host auth realm shell op vm up down restart build generations switch boot test rollback gc store keys trust rotate-known-host migrate config clipboard help" -f -a "down" -d 'Alias for `vm stop <vm>`'
-complete -c d2b -n "__fish_d2b_using_subcommand help; and not __fish_seen_subcommand_from list status launch usb console audio audit host auth realm shell op vm up down restart build generations switch boot test rollback gc store keys trust rotate-known-host migrate config clipboard help" -f -a "restart" -d 'Alias for `vm restart <vm>`'
-complete -c d2b -n "__fish_d2b_using_subcommand help; and not __fish_seen_subcommand_from list status launch usb console audio audit host auth realm shell op vm up down restart build generations switch boot test rollback gc store keys trust rotate-known-host migrate config clipboard help" -f -a "build" -d 'Non-destructive eval + build of the per-VM toplevel'
-complete -c d2b -n "__fish_d2b_using_subcommand help; and not __fish_seen_subcommand_from list status launch usb console audio audit host auth realm shell op vm up down restart build generations switch boot test rollback gc store keys trust rotate-known-host migrate config clipboard help" -f -a "generations" -d 'List current / booted / numbered generations for a VM'
-complete -c d2b -n "__fish_d2b_using_subcommand help; and not __fish_seen_subcommand_from list status launch usb console audio audit host auth realm shell op vm up down restart build generations switch boot test rollback gc store keys trust rotate-known-host migrate config clipboard help" -f -a "switch" -d 'Atomically activate a new per-VM closure'
-complete -c d2b -n "__fish_d2b_using_subcommand help; and not __fish_seen_subcommand_from list status launch usb console audio audit host auth realm shell op vm up down restart build generations switch boot test rollback gc store keys trust rotate-known-host migrate config clipboard help" -f -a "boot" -d 'Stage a per-VM closure for the next boot only'
-complete -c d2b -n "__fish_d2b_using_subcommand help; and not __fish_seen_subcommand_from list status launch usb console audio audit host auth realm shell op vm up down restart build generations switch boot test rollback gc store keys trust rotate-known-host migrate config clipboard help" -f -a "test" -d 'Activate a per-VM closure with rollback on reboot'
-complete -c d2b -n "__fish_d2b_using_subcommand help; and not __fish_seen_subcommand_from list status launch usb console audio audit host auth realm shell op vm up down restart build generations switch boot test rollback gc store keys trust rotate-known-host migrate config clipboard help" -f -a "rollback" -d 'Roll a VM back to its previous generation'
-complete -c d2b -n "__fish_d2b_using_subcommand help; and not __fish_seen_subcommand_from list status launch usb console audio audit host auth realm shell op vm up down restart build generations switch boot test rollback gc store keys trust rotate-known-host migrate config clipboard help" -f -a "gc" -d 'Garbage-collect the per-VM /nix/store hardlink farm'
-complete -c d2b -n "__fish_d2b_using_subcommand help; and not __fish_seen_subcommand_from list status launch usb console audio audit host auth realm shell op vm up down restart build generations switch boot test rollback gc store keys trust rotate-known-host migrate config clipboard help" -f -a "store" -d 'Store-view maintenance and verification'
-complete -c d2b -n "__fish_d2b_using_subcommand help; and not __fish_seen_subcommand_from list status launch usb console audio audit host auth realm shell op vm up down restart build generations switch boot test rollback gc store keys trust rotate-known-host migrate config clipboard help" -f -a "keys" -d 'Managed-key lifecycle (list / show / rotate)'
-complete -c d2b -n "__fish_d2b_using_subcommand help; and not __fish_seen_subcommand_from list status launch usb console audio audit host auth realm shell op vm up down restart build generations switch boot test rollback gc store keys trust rotate-known-host migrate config clipboard help" -f -a "trust" -d 'Trust a VM\'s host key on first use (TOFU)'
-complete -c d2b -n "__fish_d2b_using_subcommand help; and not __fish_seen_subcommand_from list status launch usb console audio audit host auth realm shell op vm up down restart build generations switch boot test rollback gc store keys trust rotate-known-host migrate config clipboard help" -f -a "rotate-known-host" -d 'Rotate the consumer\'s recorded known-host entry for a VM'
-complete -c d2b -n "__fish_d2b_using_subcommand help; and not __fish_seen_subcommand_from list status launch usb console audio audit host auth realm shell op vm up down restart build generations switch boot test rollback gc store keys trust rotate-known-host migrate config clipboard help" -f -a "migrate" -d 'Analyse the host config and emit a migration plan'
-complete -c d2b -n "__fish_d2b_using_subcommand help; and not __fish_seen_subcommand_from list status launch usb console audio audit host auth realm shell op vm up down restart build generations switch boot test rollback gc store keys trust rotate-known-host migrate config clipboard help" -f -a "config" -d 'Sync / review / approve a VM\'s guest-editable config (`guestConfigFile`): pull the operator\'s in-VM edits to a host-side staging file, diff them, and approve them'
-complete -c d2b -n "__fish_d2b_using_subcommand help; and not __fish_seen_subcommand_from list status launch usb console audio audit host auth realm shell op vm up down restart build generations switch boot test rollback gc store keys trust rotate-known-host migrate config clipboard help" -f -a "clipboard" -d 'Clipboard authority operations (picker-driven paste replay via d2b-clipd)'
-complete -c d2b -n "__fish_d2b_using_subcommand help; and not __fish_seen_subcommand_from list status launch usb console audio audit host auth realm shell op vm up down restart build generations switch boot test rollback gc store keys trust rotate-known-host migrate config clipboard help" -f -a "help" -d 'Print this message or the help of the given subcommand(s)'
-complete -c d2b -n "__fish_d2b_using_subcommand help; and __fish_seen_subcommand_from usb" -f -a "attach" -d 'Bind a host USB busid to a VM via the native daemon path'
-complete -c d2b -n "__fish_d2b_using_subcommand help; and __fish_seen_subcommand_from usb" -f -a "detach" -d 'Unbind a host USB busid from a VM via the native daemon path'
-complete -c d2b -n "__fish_d2b_using_subcommand help; and __fish_seen_subcommand_from usb" -f -a "probe" -d 'List daemon-declared USBIP session claims and qemu-media USB candidates'
-complete -c d2b -n "__fish_d2b_using_subcommand help; and __fish_seen_subcommand_from usb" -f -a "security-key" -d 'CTAP/WebAuthn security-key proxy status, sessions, and diagnostics'
-complete -c d2b -n "__fish_d2b_using_subcommand help; and __fish_seen_subcommand_from audio" -f -a "status" -d 'Show current grant state. With no VM, lists every audio-enabled VM'
-complete -c d2b -n "__fish_d2b_using_subcommand help; and __fish_seen_subcommand_from audio" -f -a "mic" -d 'Grant or revoke microphone access'
-complete -c d2b -n "__fish_d2b_using_subcommand help; and __fish_seen_subcommand_from audio" -f -a "speaker" -d 'Grant or revoke speaker access'
-complete -c d2b -n "__fish_d2b_using_subcommand help; and __fish_seen_subcommand_from audio" -f -a "off" -d 'Revoke both mic and speaker access'
-complete -c d2b -n "__fish_d2b_using_subcommand help; and __fish_seen_subcommand_from host" -f -a "check" -d 'Read-only preflight: inventories host posture without mutation'
-complete -c d2b -n "__fish_d2b_using_subcommand help; and __fish_seen_subcommand_from host" -f -a "prepare" -d 'Reconcile host-side state (bridges, nftables, sysctls). --apply mutates'
-complete -c d2b -n "__fish_d2b_using_subcommand help; and __fish_seen_subcommand_from host" -f -a "destroy" -d 'Tear down host-side state owned by d2b. --apply mutates'
-complete -c d2b -n "__fish_d2b_using_subcommand help; and __fish_seen_subcommand_from host" -f -a "doctor" -d 'Read-only deep diagnostics for the daemon + broker state'
-complete -c d2b -n "__fish_d2b_using_subcommand help; and __fish_seen_subcommand_from host" -f -a "migrate-storage" -d 'Plan the one-time storage layout cutover. --apply is fail-closed until broker support lands'
-complete -c d2b -n "__fish_d2b_using_subcommand help; and __fish_seen_subcommand_from host" -f -a "install" -d 'Install d2bd + broker units onto the host. --apply mutates'
-complete -c d2b -n "__fish_d2b_using_subcommand help; and __fish_seen_subcommand_from host" -f -a "reconcile" -d 'Reconcile host network state (re-run bridge/route/nftables reconcile without starting any VM)'
-complete -c d2b -n "__fish_d2b_using_subcommand help; and __fish_seen_subcommand_from host" -f -a "validate" -d 'Run the host-side validator suite and write evidence records'
-complete -c d2b -n "__fish_d2b_using_subcommand help; and __fish_seen_subcommand_from auth" -f -a "status"
-complete -c d2b -n "__fish_d2b_using_subcommand help; and __fish_seen_subcommand_from realm" -f -a "list" -d 'List local realm policy entrypoints'
-complete -c d2b -n "__fish_d2b_using_subcommand help; and __fish_seen_subcommand_from realm" -f -a "inspect" -d 'Inspect one local realm policy entrypoint'
-complete -c d2b -n "__fish_d2b_using_subcommand help; and __fish_seen_subcommand_from realm" -f -a "enter" -d 'Open an interactive shell inside the realm gateway VM'
-complete -c d2b -n "__fish_d2b_using_subcommand help; and __fish_seen_subcommand_from realm" -f -a "run" -d 'Run a one-shot command inside the realm gateway VM'
-complete -c d2b -n "__fish_d2b_using_subcommand help; and __fish_seen_subcommand_from op" -f -a "inspect" -d 'Inspect current operation/trace state with bounded partial results'
-complete -c d2b -n "__fish_d2b_using_subcommand help; and __fish_seen_subcommand_from vm" -f -a "start" -d 'Start the per-VM DAG (virtiofsd → CH → readiness probes)'
-complete -c d2b -n "__fish_d2b_using_subcommand help; and __fish_seen_subcommand_from vm" -f -a "stop" -d 'Stop the per-VM DAG in reverse topo order'
-complete -c d2b -n "__fish_d2b_using_subcommand help; and __fish_seen_subcommand_from vm" -f -a "restart" -d 'Stop then start; same envelope contract as start'
-complete -c d2b -n "__fish_d2b_using_subcommand help; and __fish_seen_subcommand_from vm" -f -a "list" -d 'Daemon-side runtime inventory from d2bd\'s public socket'
-complete -c d2b -n "__fish_d2b_using_subcommand help; and __fish_seen_subcommand_from vm" -f -a "status" -d 'Daemon-side readiness state for a VM (api-ready phase)'
-complete -c d2b -n "__fish_d2b_using_subcommand help; and __fish_seen_subcommand_from vm" -f -a "exec" -d 'Run or manage commands inside a running VM. Use `d2b vm exec <vm> -- <cmd...>` for a non-interactive command, `d2b vm exec -it <vm> -- bash` for an interactive shell, `-d` for a detached command, and `d2b vm exec <vm> {list|logs|status|kill}` to manage detached execs'
-complete -c d2b -n "__fish_d2b_using_subcommand help; and __fish_seen_subcommand_from vm" -f -a "display" -d 'Manage gateway display sessions for provider-backed targets'
-complete -c d2b -n "__fish_d2b_using_subcommand help; and __fish_seen_subcommand_from store" -f -a "verify" -d 'Verify a VM\'s hardlink-backed live store-view'
-complete -c d2b -n "__fish_d2b_using_subcommand help; and __fish_seen_subcommand_from keys" -f -a "list" -d 'List managed keys (per-VM SSH keypair fingerprints)'
-complete -c d2b -n "__fish_d2b_using_subcommand help; and __fish_seen_subcommand_from keys" -f -a "show" -d 'Show details for a specific VM\'s managed key'
-complete -c d2b -n "__fish_d2b_using_subcommand help; and __fish_seen_subcommand_from keys" -f -a "rotate" -d 'Rotate the framework-managed per-VM SSH keypair. --apply mutates'
-complete -c d2b -n "__fish_d2b_using_subcommand help; and __fish_seen_subcommand_from config" -f -a "sync" -d 'Pull the VM\'s in-guest edited config into a host-side staging file'
-complete -c d2b -n "__fish_d2b_using_subcommand help; and __fish_seen_subcommand_from config" -f -a "diff" -d 'Diff the staged guest config against a live host-side file'
-complete -c d2b -n "__fish_d2b_using_subcommand help; and __fish_seen_subcommand_from config" -f -a "approve" -d 'Approve the staged guest config by writing it to a target file'
-complete -c d2b -n "__fish_d2b_using_subcommand help; and __fish_seen_subcommand_from config" -f -a "reject" -d 'Discard the staged guest config'
-complete -c d2b -n "__fish_d2b_using_subcommand help; and __fish_seen_subcommand_from config" -f -a "status" -d 'Report whether a VM has a pending (un-approved) staged config'
-complete -c d2b -n "__fish_d2b_using_subcommand help; and __fish_seen_subcommand_from clipboard" -f -a "arm" -d 'Open the picker and request paste replay for the focused target'
+complete -c d2b -n "__fish_d2b_using_subcommand auth; and not __fish_seen_subcommand_from status" -l test-uid -d 'Test-only identity override retained as a hidden fixture seam' -r
+complete -c d2b -n "__fish_d2b_using_subcommand auth; and not __fish_seen_subcommand_from status" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand auth; and not __fish_seen_subcommand_from status" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand auth; and not __fish_seen_subcommand_from status" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand auth; and not __fish_seen_subcommand_from status" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand auth; and not __fish_seen_subcommand_from status" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand auth; and not __fish_seen_subcommand_from status" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand auth; and not __fish_seen_subcommand_from status" -f -a "status"
+complete -c d2b -n "__fish_d2b_using_subcommand auth; and __fish_seen_subcommand_from status" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand auth; and __fish_seen_subcommand_from status" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand auth; and __fish_seen_subcommand_from status" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand auth; and __fish_seen_subcommand_from status" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand auth; and __fish_seen_subcommand_from status" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand auth; and __fish_seen_subcommand_from status" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand complete" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand complete" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand complete" -l list-commands
+complete -c d2b -n "__fish_d2b_using_subcommand complete" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand complete" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand complete" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand complete" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand audio" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand audio" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand audio" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand audio" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand audio" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand audio" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand clipboard" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand clipboard" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand clipboard" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand clipboard" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand clipboard" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand clipboard" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand display" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand display" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand display" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand display" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand display" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand display" -s h -l help -d 'Print help'

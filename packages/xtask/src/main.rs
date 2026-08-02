@@ -1057,18 +1057,15 @@ fn gen_cli_shell_artifacts() -> Result<Vec<PathBuf>, Box<dyn std::error::Error>>
         .render(&mut man_buffer)?;
     write_manpage(&man_path, man_buffer)?;
     let host_man_path = write_subcommand_manpage(&man_dir, &["host"], "d2b-host")?;
-    let launch_man_path = write_subcommand_manpage(&man_dir, &["launch"], "d2b-launch")?;
     let shell_man_path = write_subcommand_manpage(&man_dir, &["shell"], "d2b-shell")?;
     let clipboard_man_path = write_subcommand_manpage(&man_dir, &["clipboard"], "d2b-clipboard")?;
-    let clipboard_arm_man_path =
-        write_subcommand_manpage(&man_dir, &["clipboard", "arm"], "d2b-clipboard-arm")?;
+    let clipboard_arm_man_path = write_clipboard_arm_manpage(&man_dir)?;
 
     let bash_path = comp_dir.join("d2b.bash");
     let mut bash_command = d2b::cli_command();
     let mut bash_buffer = Vec::new();
     generate(Bash, &mut bash_command, "d2b", &mut bash_buffer);
-    let bash_buffer = patch_vm_exec_logs_bash_completion(String::from_utf8(bash_buffer)?)?;
-    fs::write(&bash_path, bash_buffer)?;
+    fs::write(&bash_path, String::from_utf8(bash_buffer)?)?;
 
     let zsh_path = comp_dir.join("d2b.zsh");
     let mut zsh_command = d2b::cli_command();
@@ -1080,13 +1077,11 @@ fn gen_cli_shell_artifacts() -> Result<Vec<PathBuf>, Box<dyn std::error::Error>>
     let mut fish_command = d2b::cli_command();
     let mut fish_buffer = Vec::new();
     generate(Fish, &mut fish_command, "d2b", &mut fish_buffer);
-    let fish_buffer = patch_vm_exec_logs_fish_completion(String::from_utf8(fish_buffer)?)?;
-    fs::write(&fish_path, fish_buffer)?;
+    fs::write(&fish_path, String::from_utf8(fish_buffer)?)?;
 
     Ok(vec![
         man_path,
         host_man_path,
-        launch_man_path,
         shell_man_path,
         clipboard_man_path,
         clipboard_arm_man_path,
@@ -1122,6 +1117,31 @@ fn write_subcommand_manpage(
     Ok(man_path)
 }
 
+fn write_clipboard_arm_manpage(man_dir: &Path) -> Result<PathBuf, Box<dyn std::error::Error>> {
+    // `arm` is a provider projection verb, not a nested clap subcommand.
+    // Start from the modern root so the projection page inherits its global
+    // options without pretending that `ModernCli` owns the provider verb.
+    let mut command = d2b::cli_command()
+        .name("clipboard arm")
+        .bin_name("clipboard arm")
+        .about("Open the clipboard picker through the declared Provider projection")
+        .mut_subcommands(|subcommand| subcommand.hide(true));
+    command.build();
+
+    let man_path = man_dir.join("d2b-clipboard-arm.1");
+    let mut man_buffer = Vec::new();
+    Man::new(command)
+        .title("d2b-clipboard-arm")
+        .section("1")
+        .date("1970-01-01")
+        .source("d2b".to_owned())
+        .manual("d2b CLI")
+        .render(&mut man_buffer)?;
+    let rendered = String::from_utf8(man_buffer)?.replace(r#" <\fIsubcommands\fR>"#, "");
+    write_manpage(&man_path, rendered.into_bytes())?;
+    Ok(man_path)
+}
+
 fn write_manpage(path: &Path, rendered: Vec<u8>) -> Result<(), Box<dyn std::error::Error>> {
     let rendered = String::from_utf8(rendered)?;
     let mut normalized = rendered
@@ -1129,66 +1149,10 @@ fn write_manpage(path: &Path, rendered: Vec<u8>) -> Result<(), Box<dyn std::erro
         .map(str::trim_end)
         .collect::<Vec<_>>()
         .join("\n");
+    normalized = normalized.trim_end().to_owned();
     normalized.push('\n');
     fs::write(path, normalized)?;
     Ok(())
-}
-
-fn patch_vm_exec_logs_bash_completion(
-    generated: String,
-) -> Result<String, Box<dyn std::error::Error>> {
-    let generated = replace_once(
-        generated,
-        r#"            opts="-d -i -t -h --detach --interactive --tty --env --cwd --json --human --help <VM> [MANAGEMENT]... [COMMAND]..."
-"#,
-        r#"            opts="-d -i -t -h --detach --interactive --tty --env --cwd --json --human --help <VM> [MANAGEMENT]... [COMMAND]..."
-            if [[ " ${COMP_WORDS[*]} " == *" logs "* ]] ; then
-                opts="${opts} --stdout-offset --stderr-offset --max-len"
-            fi
-"#,
-        "bash vm exec opts",
-    )?;
-    replace_once(
-        generated,
-        r#"                --cwd)
-                    COMPREPLY=($(compgen -f "${cur}"))
-                    return 0
-                    ;;
-"#,
-        r#"                --cwd)
-                    COMPREPLY=($(compgen -f "${cur}"))
-                    return 0
-                    ;;
-                --stdout-offset|--stderr-offset|--max-len)
-                    COMPREPLY=()
-                    return 0
-                    ;;
-"#,
-        "bash vm exec logs flag values",
-    )
-}
-
-fn patch_vm_exec_logs_fish_completion(
-    generated: String,
-) -> Result<String, Box<dyn std::error::Error>> {
-    replace_once(
-        generated,
-        "complete -c d2b -n \"__fish_d2b_using_subcommand vm; and __fish_seen_subcommand_from exec\" -l cwd -d 'Working directory for the guest command' -r\n",
-        "complete -c d2b -n \"__fish_d2b_using_subcommand vm; and __fish_seen_subcommand_from exec\" -l cwd -d 'Working directory for the guest command' -r\ncomplete -c d2b -n \"__fish_d2b_using_subcommand vm; and __fish_seen_subcommand_from exec; and __fish_seen_subcommand_from logs\" -l stdout-offset -d 'Resume stdout from this byte offset. The daemon clamps stale offsets' -r\ncomplete -c d2b -n \"__fish_d2b_using_subcommand vm; and __fish_seen_subcommand_from exec; and __fish_seen_subcommand_from logs\" -l stderr-offset -d 'Resume stderr from this byte offset. The daemon clamps stale offsets' -r\ncomplete -c d2b -n \"__fish_d2b_using_subcommand vm; and __fish_seen_subcommand_from exec; and __fish_seen_subcommand_from logs\" -l max-len -d 'Maximum retained bytes to request per stream' -r\n",
-        "fish vm exec logs flags",
-    )
-}
-
-fn replace_once(
-    input: String,
-    needle: &str,
-    replacement: &str,
-    label: &str,
-) -> Result<String, Box<dyn std::error::Error>> {
-    if !input.contains(needle) {
-        return Err(format!("could not patch generated completion: missing {label}").into());
-    }
-    Ok(input.replacen(needle, replacement, 1))
 }
 
 fn write_schemas(
