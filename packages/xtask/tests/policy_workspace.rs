@@ -32,6 +32,28 @@ const RUST_LEAF_MODES: &[&str] = &[
     "inventory-stub",
     "fixture-contracts",
 ];
+const RUST_BASELINE_LEAF_IDS: &[&str] = &[
+    "rust-api-surface",
+    "rust-main-format",
+    "rust-main-clippy",
+    "rust-main-workspace-tests",
+    "rust-contract-tests",
+    "rust-cli-contract-tests",
+    "rust-no-bash-ast",
+    "rust-broker-default",
+    "rust-broker-layer1",
+    "rust-broker-fakebackends",
+    "rust-guest-shell-runner",
+    "rust-schema-reproducibility",
+    "rust-deny-main",
+    "rust-deny-broker",
+    "rust-deny-guest",
+    "rust-audit-main",
+    "rust-audit-broker",
+    "rust-audit-guest",
+    "rust-stub-no-socket",
+    "rust-assert-pinned",
+];
 const BROKER_FEATURE_PASSES: &[&str] = &["default", "layer1-bootstrap", "fake-backends"];
 
 fn repo_root() -> PathBuf {
@@ -217,10 +239,11 @@ fn discovered_package_manifests() -> Vec<(String, String)> {
                 && rel.ends_with("/Cargo.toml")
                 && rel != "packages/Cargo.toml"
         })
-        .filter_map(|rel| {
-            std::fs::read_to_string(repo_root().join(&rel))
-                .ok()
-                .map(|content| (rel, content))
+        .map(|rel| {
+            let content = std::fs::read_to_string(repo_root().join(&rel)).unwrap_or_else(|error| {
+                panic!("failed to read tracked package manifest {rel}: {error}")
+            });
+            (rel, content)
         })
         .collect::<Vec<_>>();
     manifests.sort_by(|left, right| left.0.cmp(&right.0));
@@ -513,6 +536,35 @@ fn runtime_frontier_quota_violations(makefile: &str) -> Vec<String> {
     violations
 }
 
+fn rust_manifest_policy_violations(makefile: &str, driver: &str) -> Vec<String> {
+    let mut violations = Vec::new();
+    for leaf in RUST_BASELINE_LEAF_IDS {
+        if !driver.contains(leaf) {
+            violations.push(format!(
+                "Rust execution manifest is missing baseline leaf `{leaf}`"
+            ));
+        }
+    }
+    if driver.contains(r#"--leaf "$rust_mode""#) {
+        violations.push("Rust execution manifest emits a coarse driver mode".to_owned());
+    }
+    let emitter = driver
+        .split("publish_manifest_fragment()")
+        .nth(1)
+        .and_then(|region| region.split("rust_surface_start()").next());
+    match emitter {
+        Some(region) if region.contains(">/dev/null") || region.contains("|| true") => {
+            violations.push("Rust manifest fragment publication suppresses errors".to_owned());
+        }
+        None => violations.push("Rust manifest fragment emitter is missing".to_owned()),
+        Some(_) => {}
+    }
+    if !makefile.contains("D2B_SKIP_FIXTURE_BUILD") {
+        violations.push("Rust aggregate lost its conditional fixture behavior".to_owned());
+    }
+    violations
+}
+
 fn rust_mode_violations(driver: &str) -> Vec<String> {
     let code = non_comment_lines(driver);
     let mut violations = Vec::new();
@@ -791,6 +843,51 @@ rust-runtime-quota:
             .any(|violation| violation.contains("frontier quota")),
         "removing the frontier bound must be rejected: {violations:?}"
     );
+}
+
+#[test]
+fn rust_execution_manifest_policy_is_fail_closed() {
+    let makefile = read_repo_file("Makefile");
+    let driver = read_repo_file(RUST_DRIVER);
+    let violations = rust_manifest_policy_violations(&makefile, &driver);
+    assert!(
+        violations.is_empty(),
+        "Rust execution-manifest policy drifted:\n{}",
+        violations.join("\n")
+    );
+}
+
+#[test]
+fn rust_execution_manifest_policy_rejects_negative_mutations() {
+    let makefile = "D2B_SKIP_FIXTURE_BUILD=1";
+    let driver = format!(
+        "publish_manifest_fragment() {{ perl helper; }}\n\
+         rust_surface_start() {{ :; }}\n{}",
+        RUST_BASELINE_LEAF_IDS.join("\n")
+    );
+    assert!(
+        rust_manifest_policy_violations(makefile, &driver).is_empty(),
+        "the positive execution-manifest policy fixture must pass"
+    );
+
+    let mutated = driver
+        .replacen(RUST_BASELINE_LEAF_IDS[0], "", 1)
+        .replace("perl helper;", "perl helper >/dev/null || true;")
+        + "\n--leaf \"$rust_mode\"";
+    let violations = rust_manifest_policy_violations("", &mutated);
+    for expected in [
+        "missing baseline leaf",
+        "coarse driver mode",
+        "suppresses errors",
+        "conditional fixture behavior",
+    ] {
+        assert!(
+            violations
+                .iter()
+                .any(|violation| violation.contains(expected)),
+            "negative execution-manifest fixture did not reject {expected}: {violations:?}"
+        );
+    }
 }
 
 #[test]

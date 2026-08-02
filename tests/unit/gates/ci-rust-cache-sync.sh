@@ -19,7 +19,6 @@ cd "$ROOT"
 
 wf="$ROOT/.github/workflows/pr-l1-static-fast.yml"
 test_script="$ROOT/tests/test-rust.sh"
-makefile="$ROOT/Makefile"
 
 rc=0
 
@@ -36,68 +35,6 @@ declared_dirs=(
   ".scratch/rust-test-cache"
 )
 
-# The driver is a leaf dispatcher now. Keep the explicit mode inventory here
-# so a renamed or removed leaf cannot silently leave a CI shard uncached or
-# route an aggregate scheduler around Make.
-required_leaf_modes=(
-  api-surface
-  main-workspace
-  broker
-  guest-shell-runner
-  no-bash-ast
-  schema-reproducibility
-  supply-chain
-  inventory-stub
-  fixture-contracts
-)
-for mode in "${required_leaf_modes[@]}"; do
-  if ! grep -qF "$mode" "$test_script"; then
-    log "FAIL: Rust leaf mode '$mode' is missing from tests/test-rust.sh"
-    rc=1
-  fi
-done
-if grep -qE '(^|[[:space:]])(all|remaining-suite)[)]' "$test_script"; then
-  log "FAIL: tests/test-rust.sh still exposes a removed aggregate mode"
-  rc=1
-fi
-
-baseline_leaf_ids=(
-  rust-api-surface
-  rust-main-format
-  rust-main-clippy
-  rust-main-workspace-tests
-  rust-contract-tests
-  rust-cli-contract-tests
-  rust-no-bash-ast
-  rust-broker-default
-  rust-broker-layer1
-  rust-broker-fakebackends
-  rust-guest-shell-runner
-  rust-schema-reproducibility
-  rust-deny-main
-  rust-deny-broker
-  rust-deny-guest
-  rust-audit-main
-  rust-audit-broker
-  rust-audit-guest
-  rust-stub-no-socket
-  rust-assert-pinned
-)
-for leaf in "${baseline_leaf_ids[@]}"; do
-  if ! grep -qF "$leaf" "$test_script"; then
-    log "FAIL: Rust execution manifest leaf '$leaf' is missing from tests/test-rust.sh"
-    rc=1
-  fi
-done
-if grep -qF -- "--leaf \"\$rust_mode\"" "$test_script"; then
-  log "FAIL: Rust execution manifest still emits a coarse mode instead of sub-surface IDs"
-  rc=1
-fi
-fragment_helper=$(sed -n '/^publish_manifest_fragment()/,/^rust_surface_start()/p' "$test_script")
-if printf '%s\n' "$fragment_helper" | grep -qE '>/dev/null|\|\|[[:space:]]*true'; then
-  log "FAIL: Rust execution-manifest fragment publication suppresses an emitter error"
-  rc=1
-fi
 if ! grep -qF 'fixture_target_dir="$ROOT/.scratch/rust-test-cache/fixture-contracts"' "$test_script"; then
   log "FAIL: fixture/CLI target does not use its isolated cached Cargo target"
   rc=1
@@ -121,11 +58,6 @@ if ! grep -qF 'cargo run --quiet --release --locked' "$api_script"; then
   log "FAIL: API snapshot checker is not using the measured release profile"
   rc=1
 fi
-if ! grep -qF 'D2B_SKIP_FIXTURE_BUILD' "$makefile"; then
-  log "FAIL: Rust aggregate lost its conditional fixture behavior"
-  rc=1
-fi
-
 # Broker parallel feature-pass target dirs: the script uses
 # ${broker_target_dir%/}-<suffix> where broker_target_dir resolves to
 # packages/d2b-priv-broker/target.
