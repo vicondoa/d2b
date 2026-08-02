@@ -1,0 +1,4 @@
+[workspace]
+members = [
+    "d2b-provider-fixture-good",
+]
