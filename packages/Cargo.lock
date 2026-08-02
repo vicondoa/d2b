@@ -907,6 +907,7 @@ dependencies = [
  "d2b-core",
  "d2b-realm-core",
  "d2b-realm-router",
+ "d2b-resource-client",
  "nix 0.29.0",
  "rustix 0.38.44",
  "schemars",
