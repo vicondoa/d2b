@@ -8,9 +8,7 @@ use crate::{
     context::{
         OutputMode, RequestDeadline, ZoneContext, parse_resource_ref, read_spec,
     },
-    dispatch::{
-        GenericGetArgs, GenericUpdateSpecArgs,
-    },
+    dispatch::GenericGetArgs,
     resource,
 };
 
@@ -489,6 +487,7 @@ mod tests {
             "projection": {"remoteRef": "Zone/remote"},
             "graph": [{"ownerRef":"ResourceImport/mic"}]
         })));
-        assert!(contains_forbidden_share_key(&json!({"status":{"phase":"Ready"}})));
+        assert!(!contains_forbidden_share_key(&json!({"status":{"phase":"Ready"}})));
+        assert!(contains_forbidden_share_key(&json!({"status":{"bytes":"opaque"}})));
     }
 }
