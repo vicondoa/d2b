@@ -701,10 +701,15 @@ requested-vm-config/no-live-os-or-process-marker-sentinels
 requested-vm-config/no-raw-usb-identities-in-artifacts
 requested-vm-config/opaque-physical-usb-refs
 requested-vm-config/purple-qemu-media-niri-border
+resources-bundle/content-hash-is-prefixed
 resources-bundle/deterministic-digest
+resources-bundle/invalid-generated-bundle-aborts
+resources-bundle/invalid-generated-bundle-does-not-render
 resources-bundle/known-type
 resources-bundle/provider-config-rejected
 resources-bundle/ring-bound-rejected
+resources-bundle/runtime-field-rejected
+resources-bundle/secret-shaped-value-rejected
 resources-bundle/sorted-resources
 resources-bundle/unknown-type-rejected
 resource-sharing/authority-service-and-binding-are-local
@@ -713,6 +718,8 @@ resource-sharing/export-is-service-only
 resource-sharing/no-authored-projection-service
 resource-sharing/security-key-backing-fails-closed
 resource-sharing/usb-export-needs-all-policy-opt-ins
+resources/types-accept-bounded-telemetry
+resources/types-reject-out-of-bounds-telemetry
 restart-policy/ch-exporter
 restart-policy/d2bd-killmode-process
 restart-policy/d2bd-present
