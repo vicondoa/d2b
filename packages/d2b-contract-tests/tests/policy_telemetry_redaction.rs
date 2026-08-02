@@ -57,7 +57,7 @@ const SOURCE_ROOTS: &[&str] = &[
     "packages/d2b-provider-system-core/src",
     "packages/d2b-session/src",
     "packages/d2b-bus/src",
-    "packages/d2b-client/src",
+    "packages/d2b-resource-client/src",
     "packages/d2b/src",
 ];
 
