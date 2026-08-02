@@ -97,6 +97,12 @@ fn cleanup_audit_is_redacted_and_recovery_append_is_exactly_once() {
     controller
         .observe_deleted(&key("sensitive-device-name"), ZoneRevision::new(17), &now())
         .unwrap();
+    assert_eq!(
+        controller
+            .observe_deleted(&key("sensitive-device-name"), ZoneRevision::new(17), &now())
+            .unwrap(),
+        d2b_core_controller::configuration::CleanupOutcome::Deleted
+    );
     assert!(controller.audit().events().iter().any(|event| {
         event.kind() == AuditEventKind::ResourceDeleted
             && event.event() == "deleted"

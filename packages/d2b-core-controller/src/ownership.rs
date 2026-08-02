@@ -35,11 +35,7 @@ impl DeletionObservation {
         let finalizers = finalizers.into_iter().collect::<Vec<_>>();
         let finalizer_count = finalizers.len();
         let finalizers = finalizers.into_iter().collect::<BTreeMap<_, _>>();
-        if finalizers.len() != finalizer_count
-            || finalizers
-                .values()
-                .any(|owner| owner.resource_type().as_str() != "Process")
-        {
+        if finalizers.len() != finalizer_count {
             return Err(OwnershipError::InvalidFinalizer);
         }
         Ok(Self {
@@ -440,6 +436,22 @@ mod tests {
             ),
             Ok(())
         );
+    }
+
+    #[test]
+    fn finalizers_from_non_process_owners_are_supported() {
+        let provider = ResourceRef::parse("Provider/device-security-key").unwrap();
+        let observation = DeletionObservation::new(
+            key("device", 4),
+            None,
+            0,
+            [(finalizer(), provider.clone())],
+            false,
+        )
+        .unwrap();
+        let plan = OwnershipHandler::plan_deletion(&observation);
+        assert_eq!(plan.disposition(), DeletionDisposition::DispatchFinalizers);
+        assert_eq!(plan.finalizers()[0].controller(), &provider);
     }
 
     #[test]

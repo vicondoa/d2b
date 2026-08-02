@@ -753,7 +753,7 @@ pub struct ConfigurationService {
     cleanup: BTreeMap<ResourceKey, CleanupTracking>,
     cleanup_open: BTreeSet<ResourceKey>,
     cleanup_sequence: u64,
-    pending_cleanup_effects: Option<(u64, ResourceKey, CleanupStep, Vec<CleanupEffect>)>,
+    pending_cleanup_effects: BTreeMap<u64, (ResourceKey, CleanupStep, Vec<CleanupEffect>)>,
     appended_audits: BTreeSet<u64>,
     failed: bool,
 }
@@ -774,7 +774,7 @@ impl ConfigurationService {
             cleanup: BTreeMap::new(),
             cleanup_open: BTreeSet::new(),
             cleanup_sequence: 0,
-            pending_cleanup_effects: None,
+            pending_cleanup_effects: BTreeMap::new(),
             appended_audits: BTreeSet::new(),
             failed: false,
         }
@@ -809,7 +809,7 @@ impl ConfigurationService {
             cleanup: BTreeMap::new(),
             cleanup_open: BTreeSet::new(),
             cleanup_sequence: 0,
-            pending_cleanup_effects: None,
+            pending_cleanup_effects: BTreeMap::new(),
             appended_audits: BTreeSet::new(),
             failed: false,
         }
@@ -921,7 +921,10 @@ impl ConfigurationService {
         plan: ActivationPlan,
         now: &Timestamp,
     ) -> Result<GenerationCommitProof, ConfigurationError> {
-        if !self.activation_open || plan.sequence != self.sequence + 1 {
+        if !self.activation_open
+            || self.pending_effects.is_some()
+            || plan.sequence != self.sequence + 1
+        {
             return Err(ConfigurationError::StaleCommitProof);
         }
         self.sequence = plan.sequence;
@@ -943,15 +946,14 @@ impl ConfigurationService {
                     self.outstanding_intents.insert(key.clone());
                 }
                 ConfigurationIntent::Delete(key) => {
-                    self.cleanup.insert(
-                        key.clone(),
-                        CleanupTracking {
+                    self.cleanup
+                        .entry(key.clone())
+                        .or_insert_with(|| CleanupTracking {
                             deletion_requested_at: now.clone(),
                             cleanup_config_generation: superseded.clone(),
                             cleanup_error: None,
                             cleanup_attempt: 0,
-                        },
-                    );
+                        });
                 }
                 ConfigurationIntent::CancelDelete(key) => {
                     self.cleanup.remove(key);
@@ -1018,7 +1020,12 @@ impl ConfigurationService {
         if !self.cleanup.contains_key(key) {
             return Err(ConfigurationError::CleanupNotRequested);
         }
-        if self.cleanup_open.contains(key) {
+        if self.cleanup_open.contains(key)
+            || self
+                .pending_cleanup_effects
+                .values()
+                .any(|(pending_key, _, _)| pending_key == key)
+        {
             return Err(ConfigurationError::CleanupInFlight);
         }
         let step = if observed.pending_finalizers > 0 {
@@ -1053,7 +1060,12 @@ impl ConfigurationService {
         pass: CleanupPass,
         revision: ZoneRevision,
     ) -> Result<CleanupCommitProof, ConfigurationError> {
-        if !self.cleanup_open.contains(&pass.key) {
+        if self
+            .pending_cleanup_effects
+            .values()
+            .any(|(key, _, _)| key == &pass.key)
+            || !self.cleanup_open.contains(&pass.key)
+        {
             return Err(ConfigurationError::StaleCommitProof);
         }
         let Some(tracking) = self.cleanup.get_mut(&pass.key) else {
@@ -1071,7 +1083,8 @@ impl ConfigurationService {
                 vec![CleanupEffect::AppendCleanupAudit(revision)]
             }
         };
-        self.pending_cleanup_effects = Some((pass.sequence, pass.key, pass.step, effects));
+        self.pending_cleanup_effects
+            .insert(pass.sequence, (pass.key, pass.step, effects));
         Ok(CleanupCommitProof {
             sequence: pass.sequence,
         })
@@ -1082,12 +1095,8 @@ impl ConfigurationService {
         &mut self,
         proof: CleanupCommitProof,
     ) -> Result<Vec<CleanupEffect>, ConfigurationError> {
-        match self.pending_cleanup_effects.take() {
-            Some((sequence, _, _, effects)) if sequence == proof.sequence => Ok(effects),
-            Some(pending) => {
-                self.pending_cleanup_effects = Some(pending);
-                Err(ConfigurationError::StaleCommitProof)
-            }
+        match self.pending_cleanup_effects.remove(&proof.sequence) {
+            Some((_, _, effects)) => Ok(effects),
             None => Err(ConfigurationError::StaleCommitProof),
         }
     }
@@ -1137,7 +1146,7 @@ impl ConfigurationService {
         if bundle.zone != self.zone {
             return Err(ConfigurationError::ZoneMismatch);
         }
-        if self.activation_open {
+        if self.activation_open || self.pending_effects.is_some() {
             return Err(ConfigurationError::ActivationInFlight);
         }
         if self.serving_generation() == Some(&bundle.generation_id) {
@@ -1189,14 +1198,21 @@ impl ConfigurationService {
             if Some(generation) != serving.as_ref() {
                 continue;
             }
+            // A second activation while the original Delete is still
+            // outstanding must preserve its timestamp and retry state. The
+            // first committed intent remains the sole cleanup request.
+            if self.cleanup.contains_key(&row.key) {
+                continue;
+            }
             intents.push(ConfigurationIntent::Delete(row.key.clone()));
         }
 
-        if mode == PlanMode::Rollback {
-            for resource in &bundle.resources {
-                if self.cleanup.contains_key(&resource.key) {
-                    intents.push(ConfigurationIntent::CancelDelete(resource.key.clone()));
-                }
+        // A resource can be reintroduced by an ordinary activation as well as
+        // by an explicit rollback. In both cases, cancel an uncommitted
+        // cleanup request before refreshing its configuration generation.
+        for resource in &bundle.resources {
+            if self.cleanup.contains_key(&resource.key) {
+                intents.push(ConfigurationIntent::CancelDelete(resource.key.clone()));
             }
         }
 
@@ -1594,6 +1610,11 @@ impl PendingCleanup {
 
     /// Borrow the deletion request timestamp.
     pub const fn requested_at(&self) -> &Timestamp {
+        &self.requested_at
+    }
+
+    /// Borrow the store metadata timestamp used for the Delete request.
+    pub const fn deletion_requested_at(&self) -> &Timestamp {
         &self.requested_at
     }
 
@@ -2130,6 +2151,13 @@ impl ZoneConfigController {
         self.active_bundles
             .insert(bundle.content_hash().clone(), bundle.clone());
         for effect in &effects {
+            if let bundle_apply::BundleApplyEffect::PrunePriorBundle(generation) = effect {
+                // The retention ring is the rollback authority. Once the
+                // durable commit releases a prune effect, keeping the bundle
+                // in this in-memory map would create a rollback target that
+                // the committed record no longer advertises.
+                self.active_bundles.remove(generation);
+            }
             if let bundle_apply::BundleApplyEffect::DeleteResource { key, .. } = effect
                 && let Some(prior_ordinal) = prior_ordinal
             {
@@ -2214,12 +2242,21 @@ impl ZoneConfigController {
         revision: ZoneRevision,
         now: &Timestamp,
     ) -> Result<CleanupOutcome, ActivationError> {
-        let pending = self
+        if !self.pending_cleanup.contains_key(key) {
+            if self.cleanup_audit_present(key, revision) {
+                return Ok(CleanupOutcome::Deleted);
+            }
+            return Err(ActivationError::Configuration(
+                ConfigurationError::CleanupNotRequested,
+            ));
+        }
+        let (prior_generation, active_generation) = self
             .pending_cleanup
-            .get_mut(key)
+            .get(key)
             .ok_or(ActivationError::Configuration(
                 ConfigurationError::CleanupNotRequested,
-            ))?;
+            ))
+            .map(|pending| (pending.prior_generation(), pending.active_generation()))?;
         let pass = self
             .service
             .begin_cleanup(key, CleanupObservation::new(0, 0))?;
@@ -2235,18 +2272,26 @@ impl ZoneConfigController {
                 ConfigurationError::CleanupNotCompleted,
             ));
         }
-        self.service.record_cleanup_audit_appended(revision)?;
+        match self.service.record_cleanup_audit_appended(revision) {
+            Ok(_) | Err(ConfigurationError::AuditAlreadyAppended) => {}
+            Err(error) => return Err(ActivationError::Configuration(error)),
+        }
         let event = AuditEvent::resource_deleted(
             self.zone.clone(),
             key.type_name().clone(),
             crate::audit::resource_name_digest(key.name()),
-            pending.prior_generation,
-            pending.active_generation,
+            prior_generation,
+            active_generation,
             revision,
             now.clone(),
         );
-        self.audit.append(event)?;
-        pending.phase = CleanupPhase::Deleted;
+        match self.audit.append(event) {
+            Ok(()) | Err(AuditError::AlreadyAppended) => {}
+            Err(error) => return Err(ActivationError::Audit(error)),
+        }
+        if let Some(pending) = self.pending_cleanup.get_mut(key) {
+            pending.phase = CleanupPhase::Deleted;
+        }
         self.pending_cleanup.remove(key);
         if self.pending_cleanup.is_empty() {
             self.state.cleanup_failed = false;
@@ -2262,30 +2307,51 @@ impl ZoneConfigController {
         reason: AuditReason,
         now: &Timestamp,
     ) -> Result<CleanupOutcome, ActivationError> {
-        let pending = self
+        let (active_generation, resource_type, resource_name_digest) = self
             .pending_cleanup
-            .get_mut(key)
+            .get(key)
             .ok_or(ActivationError::Configuration(
                 ConfigurationError::CleanupNotRequested,
-            ))?;
-        pending.phase = match reason {
-            AuditReason::OwnerChildBlocked => CleanupPhase::OwnerChildBlocked,
-            AuditReason::FinalizerBlocked => CleanupPhase::FinalizerBlocked,
-            _ => CleanupPhase::Stalled,
-        };
-        let generation = pending.active_generation;
+            ))
+            .map(|pending| {
+                (
+                    pending.active_generation(),
+                    key.type_name().clone(),
+                    crate::audit::resource_name_digest(key.name()),
+                )
+            })?;
+        if let Some(pending) = self.pending_cleanup.get_mut(key) {
+            pending.phase = match reason {
+                AuditReason::OwnerChildBlocked => CleanupPhase::OwnerChildBlocked,
+                AuditReason::FinalizerBlocked => CleanupPhase::FinalizerBlocked,
+                _ => CleanupPhase::Stalled,
+            };
+        }
         let event = AuditEvent::cleanup_stalled(
             self.zone.clone(),
-            key.type_name().clone(),
-            crate::audit::resource_name_digest(key.name()),
-            generation,
+            resource_type,
+            resource_name_digest,
+            active_generation,
             reason,
             now.clone(),
         );
-        self.audit.append(event)?;
+        match self.audit.append(event) {
+            Ok(()) | Err(AuditError::AlreadyAppended) => {}
+            Err(error) => return Err(ActivationError::Audit(error)),
+        }
         self.state.cleanup_failed = true;
         self.sync_state(None);
         Ok(CleanupOutcome::Stalled)
+    }
+
+    fn cleanup_audit_present(&self, key: &ResourceKey, revision: ZoneRevision) -> bool {
+        let digest = crate::audit::resource_name_digest(key.name());
+        self.audit.events().iter().any(|event| {
+            event.kind() == crate::audit::AuditEventKind::ResourceDeleted
+                && event.resource_type() == Some(key.type_name())
+                && event.resource_name_digest() == Some(&digest)
+                && event.revision() == Some(revision)
+        })
     }
 
     fn reject(
@@ -2319,6 +2385,9 @@ impl ZoneConfigController {
         self.state.active_generation = record.map(|record| record.active_ordinal);
         self.state.pending_cleanup_count =
             u32::try_from(self.pending_cleanup.len()).unwrap_or(u32::MAX);
+        if self.pending_cleanup.is_empty() {
+            self.state.cleanup_failed = false;
+        }
         self.state.phase = if !self.pending_cleanup.is_empty() {
             GenerationPhase::Degraded
         } else {

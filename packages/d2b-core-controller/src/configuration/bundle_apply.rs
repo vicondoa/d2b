@@ -257,6 +257,8 @@ pub enum BundleApplyEffect {
     /// Request finalizer-safe asynchronous deletion.
     DeleteResource {
         key: ResourceKey,
+        /// Store-owned deletion-request timestamp stamped at activation.
+        deletion_requested_at: Timestamp,
         authority: MutationAuthority,
     },
     /// Cancel an outstanding Delete during rollback.
@@ -310,6 +312,7 @@ pub struct BundleApplyCommitProof {
     desired: BTreeMap<ResourceKey, DesiredBundleResource>,
     conflicts: Vec<NameConflict>,
     configuration_generation: ConfigurationGeneration,
+    deletion_requested_at: Timestamp,
     unchanged: Vec<ResourceKey>,
 }
 
@@ -422,6 +425,7 @@ pub fn commit_bundle_apply(
         desired: plan.desired,
         conflicts: plan.conflicts,
         configuration_generation: plan.configuration_generation,
+        deletion_requested_at: now.clone(),
         unchanged,
     })
 }
@@ -436,6 +440,7 @@ pub fn release_bundle_apply_effects(
         desired,
         conflicts,
         configuration_generation,
+        deletion_requested_at,
         unchanged,
     } = proof;
     let effects = service.release_activation_effects(generation)?;
@@ -465,6 +470,7 @@ pub fn release_bundle_apply_effects(
                             &key,
                             OrdinaryMutationVerb::Delete,
                         ),
+                        deletion_requested_at: deletion_requested_at.clone(),
                         key,
                     });
                 }

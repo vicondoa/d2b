@@ -108,6 +108,7 @@ pub struct AuditRecoveryKey {
     resource_name_digest: Option<SchemaFingerprint>,
     content_hash: Option<ResourceBundleGenerationId>,
     active_generation: Option<ConfigurationGeneration>,
+    reason: Option<AuditReason>,
 }
 
 impl AuditRecoveryKey {
@@ -119,6 +120,11 @@ impl AuditRecoveryKey {
     /// Return the committed revision, when this is a deletion event.
     pub const fn revision(&self) -> Option<ZoneRevision> {
         self.revision
+    }
+
+    /// Return the closed reason bound by this key, when present.
+    pub const fn reason(&self) -> Option<AuditReason> {
+        self.reason
     }
 }
 
@@ -307,7 +313,7 @@ impl AuditEvent {
     /// projections.
     pub const fn event(&self) -> &'static str {
         match self.kind {
-            AuditEventKind::GenerationActivated => "generation-activate",
+            AuditEventKind::GenerationActivated => "generation-activated",
             AuditEventKind::GenerationRejected => "generation-rejected",
             AuditEventKind::ResourceDeletionRequested => "delete-scheduled",
             AuditEventKind::ResourceDeleted => "deleted",
@@ -380,6 +386,7 @@ impl AuditEvent {
             resource_name_digest: self.resource_name_digest.clone(),
             content_hash: self.content_hash.clone(),
             active_generation: self.active_generation,
+            reason: self.reason,
         }
     }
 }
