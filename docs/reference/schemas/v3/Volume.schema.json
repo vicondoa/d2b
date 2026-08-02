@@ -99,6 +99,14 @@
       ],
       "type": "string"
     },
+    "BlockImageFormat": {
+      "description": "On-disk format managed for a `block-image` source.",
+      "enum": [
+        "raw",
+        "qcow2"
+      ],
+      "type": "string"
+    },
     "BoundedToken": {
       "maxLength": 63,
       "minLength": 1,
@@ -106,12 +114,33 @@
     },
     "CleanupPolicy": {
       "description": "When a layout entry is removed.",
-      "enum": [
-        "never",
-        "owner-controlled",
-        "process-exit"
-      ],
-      "type": "string"
+      "oneOf": [
+        {
+          "enum": [
+            "never",
+            "boot",
+            "process-exit-with-proof",
+            "vm-stop-with-proof",
+            "cutover-only",
+            "external"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Compatibility spelling for controller-owned cleanup.",
+          "enum": [
+            "owner-controlled"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Compatibility spelling for process-scoped cleanup.",
+          "enum": [
+            "process-exit"
+          ],
+          "type": "string"
+        }
+      ]
     },
     "CreatePolicy": {
       "description": "When a layout entry is created.",
@@ -125,19 +154,47 @@
     },
     "EntryAdoptionPolicy": {
       "description": "How an existing entry is treated on first bind.",
-      "enum": [
-        "adopt-with-live-owner-proof",
-        "never-adopt"
-      ],
-      "type": "string"
+      "oneOf": [
+        {
+          "enum": [
+            "adopt-with-live-owner-proof",
+            "recreate-from-persistent",
+            "quarantine-on-ambiguity",
+            "delete-if-owner-dead",
+            "not-adoptable"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Compatibility spelling for a non-adoptable entry.",
+          "enum": [
+            "never-adopt"
+          ],
+          "type": "string"
+        }
+      ]
     },
     "EntryRestartPolicy": {
       "description": "Behavior across a Volume controller restart.",
-      "enum": [
-        "preserve-across-controller-restart",
-        "recreate-on-controller-restart"
-      ],
-      "type": "string"
+      "oneOf": [
+        {
+          "enum": [
+            "preserve-across-controller-restart",
+            "recreate-after-owner-death",
+            "cleanup-after-owner-death",
+            "manual-recovery",
+            "not-applicable"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Compatibility spelling for restart recreation.",
+          "enum": [
+            "recreate-on-controller-restart"
+          ],
+          "type": "string"
+        }
+      ]
     },
     "EntryType": {
       "description": "Layout entry class.",
@@ -170,7 +227,13 @@
       "description": "Additional fail-closed layout check.",
       "enum": [
         "no-symlink",
-        "broker-opaque-id-only"
+        "no-magic-link",
+        "no-recursive-mutation",
+        "same-filesystem",
+        "hardlink-farm-no-recursion",
+        "broker-opaque-id-only",
+        "root-owned-parent",
+        "scope-authorization-required"
       ],
       "type": "string"
     },
@@ -271,12 +334,25 @@
     },
     "LeaseClass": {
       "description": "Type of live-ownership lease checked during adoption.",
-      "enum": [
-        "none",
-        "process-pidfd",
-        "controller-lock"
-      ],
-      "type": "string"
+      "oneOf": [
+        {
+          "enum": [
+            "none",
+            "process-pidfd",
+            "cgroup-leaf",
+            "file-record",
+            "external"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Compatibility spelling for a controller-owned lock.",
+          "enum": [
+            "controller-lock"
+          ],
+          "type": "string"
+        }
+      ]
     },
     "QuotaEnforcement": {
       "description": "Whether the backing filesystem must enforce the declared quota.",
@@ -316,13 +392,32 @@
     },
     "RepairPolicy": {
       "description": "How drift from the declared layout state is reconciled.",
-      "enum": [
-        "none",
-        "exact-owner",
-        "exact-mode",
-        "exact-owner-and-acl"
-      ],
-      "type": "string"
+      "oneOf": [
+        {
+          "enum": [
+            "none",
+            "nix-activation",
+            "exact-owner",
+            "fail-closed",
+            "operator-only"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Compatibility policy for callers that repair only mode bits.",
+          "enum": [
+            "exact-mode"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Compatibility policy for callers that repair owner and ACLs.",
+          "enum": [
+            "exact-owner-and-acl"
+          ],
+          "type": "string"
+        }
+      ]
     },
     "ResourceRef": {
       "oneOf": [
@@ -342,12 +437,43 @@
     },
     "SensitivityClass": {
       "description": "Audit and log handling class of one layout entry.",
-      "enum": [
-        "public",
-        "private",
-        "secret"
-      ],
-      "type": "string"
+      "oneOf": [
+        {
+          "enum": [
+            "public",
+            "private"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "State whose path and size are restricted to the broker audit trail.",
+          "enum": [
+            "secret-adjacent"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "A tamper-evident audit segment.",
+          "enum": [
+            "audit"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "State whose visibility is bounded by the Zone boundary.",
+          "enum": [
+            "zone-scoped"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Compatibility spelling retained for already-landed fixtures.",
+          "enum": [
+            "secret"
+          ],
+          "type": "string"
+        }
+      ]
     },
     "SourceKind": {
       "description": "Backing class of the Volume source.",
@@ -361,8 +487,21 @@
     "SourceSettings": {
       "description": "The Volume base source settings.\n\n`sourcePolicyId` is an opaque bounded ID, never a raw host path.",
       "properties": {
+        "imageFormat": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/BlockImageFormat"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "kind": {
           "$ref": "#/definitions/SourceKind"
+        },
+        "preallocate": {
+          "type": "boolean"
         },
         "sourcePolicyId": {
           "anyOf": [
