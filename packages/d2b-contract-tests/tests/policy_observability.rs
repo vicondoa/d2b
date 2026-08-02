@@ -432,9 +432,20 @@ fn journald_component_ids(content: &str) -> BTreeSet<String> {
 fn journald_pipeline_references(content: &str) -> BTreeSet<String> {
     let re = Regex::new(r#"lib\.optional cfg\.scrapeJournal "([^"]+)""#)
         .expect("valid journald pipeline reference regex");
-    re.captures_iter(content)
-        .map(|caps| caps[1].to_string())
-        .collect()
+    let mut in_logs_pipeline = false;
+    let mut references = BTreeSet::new();
+    for line in content.lines() {
+        if line.contains("pipelines.logs = {") {
+            in_logs_pipeline = true;
+        }
+        if in_logs_pipeline {
+            references.extend(re.captures_iter(line).map(|caps| caps[1].to_string()));
+            if line.trim() == "};" {
+                break;
+            }
+        }
+    }
+    references
 }
 
 #[test]
