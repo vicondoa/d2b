@@ -485,7 +485,9 @@ let
           assertion = builtins.isString (spec.exportKey or null)
             && builtins.stringLength spec.exportKey >= 1
             && builtins.stringLength spec.exportKey <= 128
-            && builtins.match "^[A-Za-z0-9._-]+$" spec.exportKey != null;
+            && builtins.match
+              "^[a-z][A-Za-z0-9._-]{0,63}(/[A-Za-z0-9._-]{1,63})*$"
+              spec.exportKey != null;
           message = "${row.path}.spec.exportKey must be a bounded non-ResourceRef key.";
         }
         {
