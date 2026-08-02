@@ -8,11 +8,13 @@
 
 use core::{
     fmt,
-    sync::atomic::{AtomicBool, Ordering},
+    sync::atomic::{AtomicBool, AtomicUsize, Ordering},
     time::Duration,
 };
 use std::{
-    sync::Arc,
+    future::Future,
+    sync::{Arc, Mutex},
+    task::{Context, Poll, Waker},
     time::{SystemTime, UNIX_EPOCH},
 };
 
@@ -214,9 +216,68 @@ pub struct CallOptions {
 /// Cancellation is observed, never inferred: a driver checks the token before
 /// each attempt and refuses with [`ClientError::Cancelled`] rather than racing
 /// an in-flight attempt to a second answer.
+#[derive(Default)]
+struct CancellationState {
+    cancelled: AtomicBool,
+    next_waiter: AtomicUsize,
+    waiters: Mutex<Vec<(usize, Waker)>>,
+}
+
+/// A future that completes when its cancellation token is cancelled.
+///
+/// The future is allocation-free after the token has been created and does
+/// not depend on the session runtime's executor primitives. That keeps the
+/// cancellation signal usable by both the local Zone client and the session
+/// adapter that eventually forwards the cancel record.
+pub struct CancellationFuture {
+    state: Arc<CancellationState>,
+    registered: Option<usize>,
+}
+
+impl Future for CancellationFuture {
+    type Output = ();
+
+    fn poll(mut self: core::pin::Pin<&mut Self>, context: &mut Context<'_>) -> Poll<()> {
+        if self.state.cancelled.load(Ordering::Acquire) {
+            return Poll::Ready(());
+        }
+
+        let state = Arc::clone(&self.state);
+        let mut waiters = state.waiters.lock().unwrap();
+        if state.cancelled.load(Ordering::Acquire) {
+            return Poll::Ready(());
+        }
+
+        if let Some(registered) = self.registered {
+            if let Some((_, waiter)) = waiters.iter_mut().find(|(id, _)| *id == registered) {
+                if !waiter.will_wake(context.waker()) {
+                    *waiter = context.waker().clone();
+                }
+            } else {
+                waiters.push((registered, context.waker().clone()));
+            }
+        } else {
+            let registered = state.next_waiter.fetch_add(1, Ordering::Relaxed);
+            self.registered = Some(registered);
+            waiters.push((registered, context.waker().clone()));
+        }
+        Poll::Pending
+    }
+}
+
+impl Drop for CancellationFuture {
+    fn drop(&mut self) {
+        let Some(registered) = self.registered.take() else {
+            return;
+        };
+        let mut waiters = self.state.waiters.lock().unwrap();
+        waiters.retain(|(id, _)| *id != registered);
+    }
+}
+
 #[derive(Clone, Default)]
 pub struct CancellationToken {
-    cancelled: Arc<AtomicBool>,
+    state: Arc<CancellationState>,
 }
 
 impl fmt::Debug for CancellationToken {
@@ -231,12 +292,25 @@ impl fmt::Debug for CancellationToken {
 impl CancellationToken {
     /// Request cancellation. Idempotent.
     pub fn cancel(&self) {
-        self.cancelled.store(true, Ordering::Release);
+        if !self.state.cancelled.swap(true, Ordering::AcqRel) {
+            let waiters = std::mem::take(&mut *self.state.waiters.lock().unwrap());
+            for (_, waiter) in waiters {
+                waiter.wake();
+            }
+        }
     }
 
     /// Whether cancellation has been requested.
     pub fn is_cancelled(&self) -> bool {
-        self.cancelled.load(Ordering::Acquire)
+        self.state.cancelled.load(Ordering::Acquire)
+    }
+
+    /// Wait until cancellation has been requested.
+    pub fn cancelled(&self) -> CancellationFuture {
+        CancellationFuture {
+            state: Arc::clone(&self.state),
+            registered: None,
+        }
     }
 }
 

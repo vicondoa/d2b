@@ -9,14 +9,14 @@
 
 use core::fmt;
 
-use d2b_contracts::v3::{ResourceName, zone_routing::ZonePath};
+use d2b_contracts::v3::{ResourceName, ResourceRef, ResourceTypeName, zone_routing::ZonePath};
 
 use crate::ClientError;
 
 /// The v3 service inventory reachable through the Zone bus.
 ///
-/// This replaces the twenty-five entry ADR45 inventory. The set is closed: a
-/// service that is not listed here is not addressable by this client.
+/// This is the closed v3 service inventory. A service that is not listed here
+/// is not addressable by this client.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum ZoneServiceKind {
     /// The Zone resource plane.
@@ -27,38 +27,56 @@ pub enum ZoneServiceKind {
     ZoneLink,
     /// A Provider service installed in the addressed Zone.
     Provider,
-    /// A Guest agent service.
-    Guest,
-    /// The local daemon service.
-    Daemon,
+    /// A controller service.
+    Controller,
+    /// The audit service.
+    Audit,
+    /// The support-bundle service.
+    Support,
+    /// The credential service.
+    Credential,
 }
 
 impl ZoneServiceKind {
     /// Exhaustive stable variant order.
-    pub const fn all() -> &'static [Self; 6] {
+    pub const fn all() -> &'static [Self; 8] {
         &[
             Self::Resource,
             Self::Zone,
             Self::ZoneLink,
             Self::Provider,
-            Self::Guest,
-            Self::Daemon,
+            Self::Controller,
+            Self::Audit,
+            Self::Support,
+            Self::Credential,
         ]
     }
 
-    /// The stable kebab-case label for a diagnostic or a metric label.
-    ///
-    /// This is deliberately not a wire package name. The specification fixes
-    /// only `d2b.resource.v3` and `d2b.zone.v3`, so this crate exposes no
-    /// package spelling for the remaining variants rather than inventing one.
+    /// The canonical v3 package name.
+    pub const fn package(self) -> &'static str {
+        match self {
+            Self::Resource => "d2b.resource.v3",
+            Self::Zone => "d2b.zone.v3",
+            Self::ZoneLink => "d2b.zonelink.v3",
+            Self::Provider => "d2b.provider.v3",
+            Self::Controller => "d2b.controller.v3",
+            Self::Audit => "d2b.audit.v3",
+            Self::Support => "d2b.support.v3",
+            Self::Credential => "d2b.credential.v3",
+        }
+    }
+
+    /// The stable kebab-case label for a diagnostic or metric label.
     pub const fn label(self) -> &'static str {
         match self {
             Self::Resource => "resource",
             Self::Zone => "zone",
             Self::ZoneLink => "zone-link",
             Self::Provider => "provider",
-            Self::Guest => "guest",
-            Self::Daemon => "daemon",
+            Self::Controller => "controller",
+            Self::Audit => "audit",
+            Self::Support => "support",
+            Self::Credential => "credential",
         }
     }
 }
@@ -86,6 +104,20 @@ pub enum ServiceOwner {
         /// The Provider resource name inside that Zone.
         provider: ResourceName,
     },
+    /// A Host resource inside a named Zone.
+    Host {
+        /// The owning Zone.
+        zone: ZonePath,
+        /// The Host resource name.
+        host: ResourceName,
+    },
+    /// An arbitrary ResourceRef inside a named Zone.
+    Resource {
+        /// The owning Zone.
+        zone: ZonePath,
+        /// The canonical same-Zone resource reference.
+        resource: ResourceRef,
+    },
 }
 
 impl ServiceOwner {
@@ -93,7 +125,10 @@ impl ServiceOwner {
     pub const fn zone(&self) -> &ZonePath {
         match self {
             Self::ZoneLocal(zone) | Self::Zone(zone) => zone,
-            Self::Guest { zone, .. } | Self::Provider { zone, .. } => zone,
+            Self::Guest { zone, .. }
+            | Self::Provider { zone, .. }
+            | Self::Host { zone, .. }
+            | Self::Resource { zone, .. } => zone,
         }
     }
 
@@ -104,6 +139,28 @@ impl ServiceOwner {
             Self::Zone(_) => "zone",
             Self::Guest { .. } => "guest",
             Self::Provider { .. } => "provider",
+            Self::Host { .. } => "host",
+            Self::Resource { .. } => "resource",
+        }
+    }
+
+    /// Borrow the resource reference when this owner addresses one.
+    pub fn resource_ref(&self) -> Option<ResourceRef> {
+        match self {
+            Self::Guest { guest, .. } => Some(ResourceRef::new(
+                ResourceTypeName::parse("Guest").expect("closed ResourceType"),
+                guest.clone(),
+            )),
+            Self::Provider { provider, .. } => Some(ResourceRef::new(
+                ResourceTypeName::parse("Provider").expect("closed ResourceType"),
+                provider.clone(),
+            )),
+            Self::Host { host, .. } => Some(ResourceRef::new(
+                ResourceTypeName::parse("Host").expect("closed ResourceType"),
+                host.clone(),
+            )),
+            Self::Resource { resource, .. } => Some(resource.clone()),
+            Self::ZoneLocal(_) | Self::Zone(_) => None,
         }
     }
 }
@@ -138,6 +195,20 @@ pub enum TargetInput {
         /// The Provider resource name.
         provider: ResourceName,
     },
+    /// A Host inside a named Zone.
+    Host {
+        /// The owning Zone.
+        zone: ZonePath,
+        /// The Host resource name.
+        host: ResourceName,
+    },
+    /// An arbitrary canonical ResourceRef inside a named Zone.
+    Resource {
+        /// The owning Zone.
+        zone: ZonePath,
+        /// The canonical same-Zone resource reference.
+        resource: ResourceRef,
+    },
     /// An owner plus the exact service the caller intends to reach.
     Service {
         /// The addressed owner.
@@ -163,6 +234,14 @@ impl TargetInput {
                 zone: zone.clone(),
                 provider: provider.clone(),
             },
+            Self::Host { zone, host } => ServiceOwner::Host {
+                zone: zone.clone(),
+                host: host.clone(),
+            },
+            Self::Resource { zone, resource } => ServiceOwner::Resource {
+                zone: zone.clone(),
+                resource: resource.clone(),
+            },
             Self::Service { owner, .. } => owner.clone(),
         }
     }
@@ -182,9 +261,16 @@ impl TargetInput {
             Self::Zone(_) => "zone",
             Self::Guest { .. } => "guest",
             Self::Provider { .. } => "provider",
+            Self::Host { .. } => "host",
+            Self::Resource { .. } => "resource",
             Self::Service { .. } => "service",
             Self::ZoneService(..) => "zone-service",
         }
+    }
+
+    /// Borrow the canonical resource target when one was supplied.
+    pub fn resource_ref(&self) -> Option<ResourceRef> {
+        self.owner().resource_ref()
     }
 }
 
@@ -309,6 +395,11 @@ impl ResolvedTarget {
     pub const fn service(&self) -> ZoneServiceKind {
         self.service
     }
+
+    /// Return the addressed resource reference, when this target names one.
+    pub fn resource_ref(&self) -> Option<ResourceRef> {
+        self.owner.resource_ref()
+    }
 }
 
 impl fmt::Debug for ResolvedTarget {
@@ -323,7 +414,7 @@ impl fmt::Debug for ResolvedTarget {
 }
 
 /// Resolves a caller target to an exact route.
-pub trait TargetResolver {
+pub trait TargetResolver: Send + Sync {
     /// Resolve one target, or refuse with a typed reason.
     fn resolve(
         &self,
@@ -428,8 +519,10 @@ mod tests {
                 "zone",
                 "zone-link",
                 "provider",
-                "guest",
-                "daemon"
+                "controller",
+                "audit",
+                "support",
+                "credential"
             ]
         );
         services.sort_unstable();
@@ -475,6 +568,22 @@ mod tests {
                 "provider",
             ),
             (
+                TargetInput::Host {
+                    zone: k1.clone(),
+                    host: name("host-system"),
+                },
+                &k1,
+                "host",
+            ),
+            (
+                TargetInput::Resource {
+                    zone: k1.clone(),
+                    resource: ResourceRef::parse("Process/worker").unwrap(),
+                },
+                &k1,
+                "resource",
+            ),
+            (
                 TargetInput::ZoneService(k1.clone(), ZoneServiceKind::Resource),
                 &k1,
                 "zone-service",
@@ -482,7 +591,7 @@ mod tests {
             (
                 TargetInput::Service {
                     owner: ServiceOwner::ZoneLocal(k0.clone()),
-                    service: ZoneServiceKind::Daemon,
+                    service: ZoneServiceKind::Zone,
                 },
                 &k0,
                 "service",
@@ -506,6 +615,20 @@ mod tests {
             "zone"
         );
         assert_eq!(TargetInput::ZoneLocal(k0).owner().class(), "zone-local");
+    }
+
+    #[test]
+    fn resource_targets_preserve_the_exact_canonical_reference() {
+        let zone = zone(&["k1", "k0"]);
+        let target = TargetInput::Resource {
+            zone: zone.clone(),
+            resource: ResourceRef::parse("acme.d2bus.org.Widget/item").unwrap(),
+        };
+        assert_eq!(
+            target.resource_ref().unwrap().to_canonical_string(),
+            "acme.d2bus.org.Widget/item"
+        );
+        assert_eq!(target.owner().zone(), &zone);
     }
 
     #[test]
