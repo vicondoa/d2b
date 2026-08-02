@@ -76,10 +76,12 @@ partial:
 | `pkgs.openssl` (whole) | len 6 | 6 names | `bin` | **absent** |
 | `pkgs.openssl.bin` | len **6** | 6 names | `bin` | **true** |
 | `pkgs.openssl.dev` | len **6** | 6 names | `dev` | **true** |
+| `pkgs.openssl.out` | len 6 | 6 names | `out` | **true** |
 | `lib.toDerivation "<store path>"` | **absent** | `["out"]` | `out` | absent |
 | raw `derivation`, one output | **absent** | **absent** | `out` | absent |
 | raw `derivation`, two outputs | len 2 | `["out","lib"]` | `out` | absent |
-| raw `derivation`, `.lib` selected | len 2 | `["out","lib"]` | `lib` | absent |
+| raw `derivation`, `.lib` selected | len 2 | `["out","lib"]` | **`lib`** | absent |
+| raw `derivation`, `.out` selected | len 2 | `["out","lib"]` | `out` | absent |
 
 Two failures follow. First, `all` has length 6 on `pkgs.openssl.dev`, which
 names exactly one output, so the predicate **rejects a correctly pinned single
@@ -90,9 +92,23 @@ coerces such a string through `lib.toDerivation`, whose result carries
 `builtins.length package.all` **throws**, replacing an actionable module
 assertion with a raw eval trace.
 
-`outputs` is the attribute to test, defaulted, together with `outputSpecified`.
-`outputs` is absent on exactly one admitted shape, the raw one-output primop,
-where defaulting to `["out"]` is correct.
+`outputs` is the attribute to test, defaulted, together with `outputSpecified`
+and `outputName`. `outputs` is absent on exactly one admitted shape, the raw
+one-output primop, where defaulting to `["out"]` is correct.
+
+**A store-path-valued package is accepted, not refused.** Round 2 caught a
+contradiction between the first revision's predicate, which accepted it via the
+one-output arm, and its scenario text, which claimed it failed. The measurement
+settles it: `lib.toDerivation` yields `outputs = ["out"]`, one determinate
+output. Nothing about the layout, the digests, or the signature chain is weaker
+for it, so there is no security reason to refuse what the code already accepts.
+The predicate is canon; the prose and the scenario were wrong and are corrected.
+
+**`outputName` rescues the raw-primop selected output.** For a derivation built
+with the raw primop, selecting `.lib` sets `outputName = "lib"` while the whole
+derivation reports `outputName = "out"`, the first element of `outputs`. So
+`outputName != head outputs` is a sound second witness of explicit selection for
+exactly the shapes `outputSpecified` cannot cover.
 
 **The hazard is ambiguity of intent, not of the resulting path.** Worth stating
 precisely, because it changes what the assertion is for: `pkgs.openssl` and
@@ -153,39 +169,52 @@ which one. `nixos-modules/provider-catalog.nix` asserts, for every
 
 ```nix
 let
+  package = artifact.package;
   # `outputs` is absent on exactly one admitted shape, the raw one-output
-  # primop, where "out" is the correct default. `all` is deliberately not
-  # read: it is absent on store-path-coerced values and carries the whole
-  # derivation's output count on an explicitly selected output.
-  declaredOutputs = artifact.package.outputs or [ "out" ];
-  outputSelected  = (artifact.package.outputSpecified or false) == true;
+  # primop, where "out" is the correct default. `all` is deliberately never
+  # read: it is absent on store-path-coerced values, so reading it throws,
+  # and it carries the whole derivation's output count on an explicitly
+  # selected output, so reading it rejects a correctly pinned one.
+  declaredOutputs = package.outputs or [ "out" ];
   shapeRecognised =
     builtins.isList declaredOutputs
-    && builtins.all builtins.isString declaredOutputs
-    && declaredOutputs != [ ];
+    && declaredOutputs != [ ]
+    && builtins.all builtins.isString declaredOutputs;
 in
-  shapeRecognised && (outputSelected || builtins.length declaredOutputs == 1)
+  # Ordered with `if` rather than `&&` so the guard visibly precedes every
+  # partial operation. `builtins.head` and `builtins.length` are reached only
+  # after `shapeRecognised` has established a non-empty list of strings.
+  if !shapeRecognised then false
+  else if builtins.length declaredOutputs == 1 then true
+  else if (package.outputSpecified or false) == true then true
+  else (package.outputName or null) != builtins.head declaredOutputs
 ```
 
 The predicate is **total** over every shape `types.package` admits, which the
-table in Context enumerates: it reads only `outputs` and `outputSpecified`, both
-defaulted, and it calls `builtins.length` only after `builtins.isList` has
-succeeded. An unrecognised shape rejects rather than throws, so the operator
-gets a module assertion instead of an eval trace.
+table in Context enumerates. It reads only `outputs`, `outputSpecified`, and
+`outputName`, all defaulted, and every partial operation sits behind the
+`shapeRecognised` guard. An unrecognised shape rejects rather than throws, so the
+operator gets a module assertion instead of an eval trace.
 
-It accepts a single-output derivation, and an explicitly selected output of a
-multi-output derivation (`pkgs.foo.dev`). It rejects exactly one thing: a whole
-multi-output derivation with no selection, which is the case that silently pins
-the first output.
+What it accepts:
 
-Three failure messages, each naming the artifact ID and, where known, the
-observed output names:
+- a single-output derivation, including `pkgs.hello` and `pkgs.writeText`;
+- a **store-path-valued** `types.package`, which `lib.types.package.check`
+  admits and the module system coerces to `outputs = ["out"]`. This is what the
+  code already did; round 2 corrected the prose that claimed otherwise;
+- an explicitly selected output of a multi-output `mkDerivation`
+  (`pkgs.foo.dev`, `pkgs.foo.out`), witnessed by `outputSpecified`;
+- a non-first output selected on a raw-primop derivation, witnessed by
+  `outputName != head outputs`.
 
-| Condition | Message and remediation |
-| --- | --- |
-| Multi-output, unselected | `provider-artifact-output-ambiguous`: names the artifact ID and the declared output names, and instructs the operator to name one, for example `package = pkgs.<name>.out;` |
-| Unrecognised shape | `provider-artifact-output-shape-unknown`: names the artifact ID and states that the value declares no usable output list |
-| Empty output list | folded into the shape error above |
+What it rejects, and nothing else: a multi-output derivation whose pinned path is
+the first output with no evidence anyone chose it, and a value declaring no
+usable output list.
+
+| Condition | Code | Message and remediation |
+| --- | --- | --- |
+| Multi-output, first output, no evidence of selection | `provider-artifact-output-ambiguous` | names the artifact ID and the declared output names, then gives **both** truthful remedies, because which one applies depends on how the derivation was built: select the output on a `stdenv.mkDerivation` derivation (`package = pkgs.<name>.out;`), or, if the derivation comes from the raw `builtins.derivation` primop, repackage it with `stdenv.mkDerivation`, since selecting an output on a raw primop derivation does not set `outputSpecified` and will not satisfy this check |
+| `outputs` present but not a non-empty list of strings | `provider-artifact-output-shape-unknown` | names the artifact ID and states that the value declares no usable output list; the remedy is to supply a derivation or a store path, not a hand-built attrset |
 
 This is Phase 1, so it fails before any build starts. It earns its place even
 though Phase 2 would also fail closed, because `nix-build-required-outputs-missing`
@@ -197,13 +226,14 @@ Every path this ADR fixes is relative to the single store path that
 `"${artifact.package}"` yields. That makes "the required outputs are present"
 computable from the one value the catalog already records.
 
-**Known limitation, recorded rather than papered over.** `outputSpecified` is a
-nixpkgs `mkDerivation` convention. A multi-output derivation built with the raw
-`builtins.derivation` primop and then selected (`rawMulti.lib`) carries
-`outputName = "lib"` but no `outputSpecified`, and is therefore rejected. That is
-fail-closed with an actionable message, and the remediation is to package the
-Provider with `stdenv.mkDerivation` or one of its wrappers, which every Provider
-crate does already.
+**The one residual case, stated exactly.** A raw-primop multi-output derivation
+whose **first** output is explicitly selected (`rawMulti.out`) is
+indistinguishable from the whole derivation: both report
+`outputName = "out" = head outputs` and neither carries `outputSpecified`. It is
+rejected. Both also coerce to the same store path, so the rejection is the same
+answer the whole-derivation case gets, not a new one. The remedy the message
+gives is truthful for it: repackage with `stdenv.mkDerivation`, or select a
+non-first output. No Provider crate in the tree is built this way.
 
 ### 2. The required paths are fixed, and identity-independent
 
@@ -273,6 +303,28 @@ A mismatch fails the build naming the symmetric difference and the side each
 name came from. An invalid name fails the build naming the offending entry
 under its layout-relative path.
 
+**Every `bin/` entry MUST be an ELF executable.** The check is a bounded read of
+the first 18 octets from the already-open descriptor: `e_ident` must begin with
+`\x7fELF`, `EI_CLASS` must be `ELFCLASS64`, `EI_DATA` must match the host byte
+order, `EI_VERSION` must be 1, and `e_type` must be `ET_EXEC` or `ET_DYN`. No
+parser is run over the file, nothing is mapped, and nothing is executed; the
+compiler reads a fixed-length prefix of a descriptor it already holds and
+compares constants. `ET_REL` and `ET_CORE` are refused, as is a `#!` script, an
+empty file, and a file shorter than the header.
+
+The rule exists for one concrete reason recorded in item 8: `execveat` with
+`AT_EMPTY_PATH` on an `O_PATH` descriptor needs `/proc` mounted in the callee's
+mount namespace to start a `#!` interpreter, and d2b sandbox profiles do not
+promise one. Refusing non-ELF entries at Phase 2 means the launcher can never
+meet a case whose behaviour depends on a mount that may not be there. The
+alternative, discovering it at launch, converts a packaging error into a runtime
+failure inside a sandbox.
+
+A non-ELF entry fails the build with `provider-executable-not-elf`, naming the
+entry and the observed first four octets rendered as hex. Four octets is the
+bound: it distinguishes the common causes (`#!` shell script, an archive, a
+text file) without echoing file content.
+
 ### 4. Digest preimages, stated exactly
 
 Every value below renders as `sha256:<64 lowercase hex>`, which is what
@@ -282,7 +334,7 @@ admits and what `provider-catalog.nix` already asserts at eval time.
 | Value | Preimage |
 | --- | --- |
 | `package.executableDigests[<name>]` (manifest) | SHA-256 over the raw octets of `<out>/bin/<name>` |
-| executable set digest (catalog) | `canonical_digest("d2b:v3:provider-executable-set", C)` where `C` is the `d2b-cjson/v1` serialization of the `executableDigests` object |
+| executable set digest (catalog) | `canonical_digest("d2b:v3:provider-executable-set", C)` where `C` is the `d2b-cjson/v1` serialization of the **whole `executableDigests` object**: every binary name as a key, bound to that binary's own `sha256:<hex>` value |
 | `manifestDigest` | SHA-256 over the raw octets of `<out>/share/d2b/provider/provider-manifest.json` |
 | `configSchemaDigest` | SHA-256 over the raw octets of `<out>/share/d2b/provider/config-schema.json` |
 | package content digest | SHA-256 of the NAR serialization of the single output store path, as `nix hash path --type sha256 --base16` renders it |
@@ -293,6 +345,23 @@ digest is domain-tagged because it is a JSON document, and it uses the shipped
 `canonical_digest` helper unchanged: `SHA-256(domain_tag || 0x00 ||
 canonical_bytes)`. `d2b:v3:provider-executable-set` is a new D101 domain tag and
 registers alongside the nine already in use.
+
+**The set digest binds the map, not a summary of it.** Stated explicitly because
+round 2 found the wording loose enough to read as a placeholder. The preimage is
+the serialization of the object
+
+```json
+{"d2b-provider-foo-controller":"sha256:<64 hex>","d2b-provider-foo-service":"sha256:<64 hex>"}
+```
+
+so it covers every binary name **and** every per-binary digest, and the pairing
+between them. It is not a digest of the name list, not a digest of the
+concatenated digest values, and not a digest of a count or a tuple. Key order is
+not a degree of freedom: `d2b-cjson/v1` is RFC 8785 JCS narrowed, so object keys
+are sorted by code unit during serialization, and the same map therefore has one
+digest regardless of the order any producer emitted it in. Renaming a binary,
+replacing one binary's bytes, adding a binary, or removing one all change this
+value; permuting the authoring order does not.
 
 `provider-manifest.json` and `config-schema.json` MUST already be in
 `d2b-cjson/v1` canonical form, with no trailing newline, so that their file
@@ -379,15 +448,115 @@ regular-file rules in items 2 and 3 are enforced by the open itself rather than
 by a preceding `lstat` whose result could be stale.
 `RESOLVE_NO_MAGICLINKS` refuses `/proc/*/fd`-style jumps.
 
+**`O_CLOEXEC` on every descriptor, without exception.** The anchor dirfd and
+every child descriptor the helper opens set `O_CLOEXEC` in `open_how.flags`. This
+is the same rule ADR 0034 states for storage locks, and it exists for the same
+reason: this codebase transfers descriptors explicitly, over `SCM_RIGHTS`, and a
+descriptor that survives an exec it was not handed to is an implicit transfer
+nobody authorised. A Provider binary launched by item 7 must not receive a
+writable-adjacent handle to its own artifact directory.
+
+**Measured, because the interaction with `execveat` is not obvious.** The
+concern is real: `O_CLOEXEC` on the very descriptor being executed sounds like it
+should defeat the exec. It does not, and neither descriptor reaches the child:
+
+```text
+anchor fd=3 err=-
+symlink open fd=-1 errno=Too many levels of symbolic links (expect refusal)
+escape open fd=-1 errno=Invalid cross-device link (expect refusal)
+subdir S_ISREG=0 (expect 0)
+exe fd=5 err=-
+exe S_ISREG=1 cloexec=1
+PARENT passing fds anchor=3 exe=5 to execveat
+CHILD inherited fds (excluding its own opendir fd 3):
+  fd 0 -> /dev/null
+  fd 1 -> pipe:[17462070]
+  fd 2 -> pipe:[17462071]
+CHILD /proc/self/exe -> /tmp/adr0050probe/tree/bin/child
+```
+
+Four facts follow, and each is load-bearing. `RESOLVE_NO_SYMLINKS` refuses a
+trailing symlink with `ELOOP` at the open, so no `lstat` is needed to enforce
+item 2 and item 3. `RESOLVE_BENEATH` refuses `bin/../../child` with `EXDEV`.
+`fstat` works on an `O_PATH` descriptor and reports `S_ISREG = 0` for a
+directory. And `execveat(fd, "", argv, envp, AT_EMPTY_PATH)` **succeeds on an
+`O_PATH | O_CLOEXEC` descriptor** while the child inherits only fds 0, 1, and 2.
+
+**Lifetime, stated so an implementer does not close it early.** The descriptor
+must be open in the *calling* process at the moment `execveat` is invoked;
+close-on-exec is applied by the kernel as part of a successful exec, after the
+image has been resolved, so the fd is consumed rather than leaked. On a
+*failed* `execveat` the descriptor is still open and still owned by the caller,
+which must close it, so it is held in an RAII guard that closes on every path.
+The anchor dirfd has the same lifetime and the same guarantee. Neither is ever
+passed to a child deliberately, and item 6 of the launcher contract is that the
+child's fd table is exactly what the sandbox profile declares.
+
+One consequence worth recording: the child's `/proc/self/exe` resolves to the
+real store path, not to `/proc/self/fd/N`, so `execveat`-from-descriptor does not
+disturb any consumer that reads its own image path.
+
 **Confirm after opening, not before.** Every opened fd is `fstat(2)`ed on the fd
-and refused unless `S_ISREG` holds. The digest is then computed by reading *that
-same fd*, never by reopening the path. There is no window between the check and
-the use because there is no second resolution.
+and refused unless `S_ISREG` holds, and the ELF prefix of item 3 is read from
+that same fd. The digest is then computed by reading *that same fd*, never by
+reopening the path. There is no window between the check and the use because
+there is no second resolution.
 
 **Launch.** The launcher resolves `bin/<binaryRef>` through the same anchored
 `openat2`, `fstat`s the fd for `S_ISREG`, and executes it with
 `execveat(fd, "", argv, envp, AT_EMPTY_PATH)`. The program that runs is the
 inode the digest was computed over, with no path re-traversal in between.
+
+### 8a. The syscall sequence sits behind an injectable boundary
+
+`openat2`, `fstat`, and `execveat` are reached only through two traits, so the
+sequencing and the error mapping are testable without a Nix store, a real
+symlink, or a real exec:
+
+```rust
+/// A directory the caller has already anchored. Implementations resolve
+/// only single, pre-validated components beneath the anchor.
+pub trait AnchoredDir: Send + Sync {
+    type File: AnchoredFile;
+    /// Resolve one layout-relative path to a regular file, refusing
+    /// symlinks, magic links, escapes, and non-regular types.
+    fn open_regular(&self, path: LayoutPath) -> Result<Self::File, LayoutError>;
+    /// Enumerate the entries of a closed subdirectory.
+    fn entries(&self, dir: LayoutDir) -> Result<Vec<OsString>, LayoutError>;
+}
+
+/// An opened regular file, readable exactly once and never re-resolved.
+pub trait AnchoredFile: Send {
+    fn len(&self) -> u64;
+    fn read_prefix(&mut self, out: &mut [u8]) -> Result<usize, LayoutError>;
+    fn read_to_digest(self) -> Result<ArtifactDigest, LayoutError>;
+}
+
+/// Launching a program from an already-opened, already-verified file.
+pub trait ProcessLauncher: Send + Sync {
+    type File: AnchoredFile;
+    fn exec_from(&self, file: Self::File, argv: &Argv, envp: &Envp) -> Result<Infallible, LaunchError>;
+}
+```
+
+The production implementation is the only place in the workspace that names
+`openat2`, `execveat`, or `AT_EMPTY_PATH`, which makes "is the sequence correct"
+a question about one module rather than about every caller. `LayoutError` carries
+the distinguished variants the kernel actually produces - `NotBeneath` for
+`EXDEV`, `SymlinkRefused` for `ELOOP`, `NotRegular` from the `fstat`, `NotElf`
+from the prefix read, `Absent` for `ENOENT` - so the mapping from errno to the
+item 9 codes is itself a total match a test can exhaust.
+
+The test implementation is an in-memory tree that can be told to present an entry
+as a symlink, a directory, a short file, a non-ELF file, or an escape, and a
+launcher that records what it was handed instead of execing. That is what makes
+`nix-build-required-output-not-regular`, `nix-build-executable-not-elf`, and the
+Phase 3 launcher scenario hermetic rather than requiring a privileged fixture.
+
+Taking an `AnchoredFile` **by value** in `read_to_digest` and `exec_from` is the
+same single-use discipline ADR 0049 established for the mutation seal: a
+descriptor that was verified and then digested cannot be handed to the launcher
+a second time after the verification result has been discarded.
 
 **This is not novel machinery.** It is the same discipline ADR 0034 already
 binds for broker storage mutations, which AGENTS.md states as "anchored
@@ -407,11 +576,11 @@ mean relying on an invariant this code has no way to check.
 requires Linux 5.6 and this repository's floor is 6.9 (ADR 0008), so it is
 unconditionally available; there is no fallback path and a kernel without it
 fails closed. And `execveat` with `AT_EMPTY_PATH` on an `O_PATH` fd needs
-`/proc` mounted in the callee's mount namespace to run a `#!` script. Provider
-component binaries are ELF images, which do not need it; a Provider shipping a
-script entry point must therefore either be refused or run in a profile that
-mounts `/proc`. This ADR takes the narrow side: `bin/` entries are ELF, and a
-non-ELF entry is a Phase 2 build failure, so the launcher never meets the case.
+`/proc` mounted in the callee's mount namespace to run a `#!` script. That is
+exactly why item 3 makes ELF a Phase 2 requirement with its own code and
+scenario rather than leaving it as a caveat: the case is refused at build time,
+so the launcher never meets a behaviour that depends on a mount the sandbox
+profile may not provide.
 
 ### 9. One bounded, actionable failure taxonomy
 
@@ -421,10 +590,11 @@ secret, credential, path, or process data. These codes join that table.
 
 | Code | Raised when | Names |
 | --- | --- | --- |
-| `provider-artifact-output-ambiguous` | Multi-output package, no selection | artifact ID, declared output names |
-| `provider-artifact-output-shape-unknown` | Package declares no usable output list | artifact ID |
+| `provider-artifact-output-ambiguous` | Multi-output package pinning its first output with no evidence of selection | artifact ID, declared output names, and both truthful remedies |
+| `provider-artifact-output-shape-unknown` | `outputs` present but not a non-empty list of strings | artifact ID |
 | `provider-required-output-absent` | A file from item 2 is missing | artifact ID, layout-relative path |
 | `provider-required-output-not-regular` | A layout path is a symlink, directory, or other non-regular type | artifact ID, layout-relative path, observed file type token |
+| `provider-executable-not-elf` | A `bin/` entry is not an `ET_EXEC`/`ET_DYN` ELF64 image | artifact ID, the entry, first four octets as hex |
 | `provider-signature-publisher-unregistered` | `publisher` is neither `d2b-official` nor a declared trusted publisher | artifact ID, publisher, the option path `d2b.zones.<zone>.trustedPublishers.<publisher>` |
 | `provider-signature-id-unresolvable` | `signatureId` names no key under a registered publisher | artifact ID, publisher, signatureId |
 | `provider-signature-malformed` | The `.sig` file is not exactly 64 octets | artifact ID, expected length `64`, observed length |
@@ -490,10 +660,12 @@ The missing scenarios are added to section 15.8. Each is named so
 
 | Scenario | Phase | Assertion |
 | --- | --- | --- |
-| `nix-eval-provider-output-ambiguous` | 1 | A `type = "provider"` artifact whose package is a whole multi-output derivation with no explicit output selection fails eval naming the artifact ID and the declared output names; the same package with an output selected (`pkgs.foo.out`) evaluates |
-| `nix-eval-provider-output-shape-unknown` | 1 | A `type = "provider"` artifact whose package declares no usable output list, including a store-path-valued `types.package`, fails eval with a module assertion rather than an eval trace |
+| `nix-eval-provider-output-ambiguous` | 1 | A `type = "provider"` artifact whose package is a multi-output derivation pinning its first output with no evidence of selection fails eval naming the artifact ID and the declared output names; the same package with an output selected (`pkgs.foo.out`, `pkgs.foo.dev`) evaluates, and so does a non-first output selected on a raw-primop derivation |
+| `nix-eval-provider-output-shape-accepted` | 1 | A store-path-valued `types.package`, which `lib.types.package.check` accepts and the module system coerces to `outputs = ["out"]`, **evaluates successfully**; this pins the accepted behaviour so the predicate and the prose cannot drift apart again |
+| `nix-eval-provider-output-shape-unknown` | 1 | A value whose `outputs` is present but is not a non-empty list of strings fails eval with a module assertion rather than an eval trace |
 | `nix-build-required-outputs-missing` | 2 | A Provider derivation missing any of `share/d2b/provider/provider-manifest.json`, `provider-manifest.json.sig`, or `config-schema.json` fails build naming the absent layout-relative path |
 | `nix-build-required-output-not-regular` | 2 | Each of the three `share/d2b/provider/` paths, replaced in turn by a symlink (including one resolving inside the same output) and by a directory, fails build naming the path and the observed file type |
+| `nix-build-executable-not-elf` | 2 | A `bin/` entry that is a `#!` script, an empty file, a file shorter than the ELF header, an `ET_REL` object, or an `ET_CORE` image fails build naming the entry and the first four octets as hex |
 | `nix-build-manifest-signature-invalid` | 2 | Four distinct cases fail with four distinct codes: unregistered publisher, unresolvable `signatureId`, a `.sig` that is not exactly 64 octets, and 64 well-formed octets that do not verify |
 | `nix-build-manifest-not-canonical` | 2 | A manifest or config schema whose octets are not their own `d2b-cjson/v1` canonical bytes fails build naming the file and the first divergent byte offset; a trailing newline alone is sufficient to fail |
 | `nix-build-executable-set-mismatch` | 2 | `executableDigests` keys unequal to the `bin/` entry set fails build naming the symmetric difference |
@@ -530,6 +702,21 @@ obligation and the cited name was a misremembering of it.
 correction; it is listed here because the W5 audit named it, and because it
 inherits the unblocking through `016`.
 
+`ADR046-zone-control-016` additionally **gains** one Phase 3 scenario. The
+launcher contract of items 7 and 8 has no runtime conformance identity, which is
+the same defect this ADR was written to fix on the Phase 2 side, so it is not
+left for a later record:
+
+| Scenario | Phase | Assertion |
+| --- | --- | --- |
+| `nix-runtime-launcher-anchored-resolution` | 3 | The launcher resolves a component program only as `bin/<binaryRef>` beneath the anchored artifact dirfd. With the resolved entry replaced by a symlink (including one whose target is a valid ELF inside the same output), by a directory, and by a non-ELF regular file, each launch is refused before any process is created, with the item 9 code for that case and no fallback to `PATH` or to a manifest-supplied path. An artifact path outside the anchor is refused as `NotBeneath` |
+
+Cited in `016`'s validation field alongside the corrected Phase 3 names. It
+belongs to `016` rather than to `015` because `015` is a build-time program and
+the launcher is runtime; the symlink case in particular cannot be caught at
+Phase 2 alone, because Phase 2 validated a different process's view of the tree
+at an earlier time.
+
 ### 13. What this ADR does not decide
 
 The catalog-versus-contract digest reconciliation recorded in
@@ -551,7 +738,7 @@ Publisher key custody, key rotation, and revocation distribution are out of
 scope. This ADR consumes `signatureId`, `publisher`, `trustEpoch`, and
 `revocationRef` as section 4.3.1 already defines them.
 
-### 14. A prerequisite this ADR depends on and does not itself supply
+### 14. `BinaryRef` is a validated newtype, and launchability is modelled, not optional
 
 Item 3's `binaryRef` check cannot be written against the contract as it stands.
 The shipped `ComponentDescriptor` in `packages/d2b-contracts/src/v3/provider.rs`
@@ -561,31 +748,98 @@ carries `component_id`, `component_type`, `exported_resource_types`,
 `binary_ref` field at all**, while section 4.3.3 defines `binaryRef` three times
 as a normative descriptor field.
 
-That drift predates this ADR and this ADR does not create it, but item 3 depends
-on it, so recording it silently as "someone else's problem" would leave T174 with
-the same shape of hole it was blocked on. It is therefore carried as an explicit
-W5 implementation obligation: `ComponentDescriptor` gains `binary_ref`, bounded
-by the item 3 grammar, before `nix-build-binary-ref-unresolved` is implementable.
-Until it lands, that one scenario is blocked while the other thirteen are not,
-and the amendment records the split rather than letting the whole item slip.
+That drift predates this ADR, but item 3 depends on it, so this ADR fixes the
+shape the field must take rather than leaving the next implementer to choose.
+
+**The reference is a validated newtype, not a string.**
+
+```rust
+/// A `^[a-z][a-z0-9-]*$` component binary name, at most 64 bytes.
+///
+/// Parsing is the only constructor, so a value of this type is a name the
+/// item 3 grammar already admitted: no `/`, no `.` or `..`, no NUL, no ASCII
+/// control byte, no whitespace, no leading `-`, valid UTF-8. Nothing in the
+/// launcher re-checks it, because nothing can construct one that failed.
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
+#[serde(transparent)]
+pub struct BinaryRef(BoundedToken);
+```
+
+It is a distinct type from `ArtifactId` and `ComponentId` even though the three
+grammars coincide today, because they are three different namespaces and a
+coincidence of syntax is not a licence to substitute one for another. The
+newtype is what lets `AnchoredDir::open_regular` accept a component name without
+a traversal check at the call site: the type is the check.
+
+**Launchability is an enum, so there is no contradictory state.** A bare
+`Option<BinaryRef>` would admit two readings of `None` - "this component is not
+launchable" and "this component is launchable but the manifest omitted the
+field" - and the second is exactly the hole item 3 exists to close. The
+distinction is therefore made in the type:
+
+```rust
+pub enum ComponentExecution {
+    /// The Zone runtime creates a Process from this component and launches
+    /// exactly `<out>/bin/<binary_ref>`.
+    Launchable { binary_ref: BinaryRef },
+    /// The component's handlers execute in-process inside a binary belonging
+    /// to a different derivation. No Process is created (section 11.3 step 5).
+    InProcessBootstrap,
+}
+```
+
+`ComponentDescriptor` holds one `ComponentExecution`, not an optional ref, so
+"launchable" and "has a binary name" are the same fact and cannot disagree.
+
+Two admission rules keep the bootstrap arm from becoming a general escape hatch:
+
+1. `InProcessBootstrap` is admissible only for a Provider on the closed
+   bootstrap-exception list (`system-core`, `system-minijail`). Any other
+   Provider declaring it is refused at manifest admission.
+2. A Provider whose components are all `InProcessBootstrap` MUST declare an
+   empty `package.executableDigests` and ship no `bin/`, and conversely. This is
+   the same biconditional item 2 states, now checkable on the contract side
+   rather than only against the filesystem.
+
+**W5 implementation obligation.** `ComponentDescriptor` gains
+`ComponentExecution` with `BinaryRef` before `nix-build-binary-ref-unresolved`
+is implementable. Until it lands, that one scenario is blocked while the other
+sixteen this ADR adds are not, and the amendment records the split rather than
+letting the whole item slip.
 
 ## Consequences
 
 **A Provider package becomes a checkable object rather than an assertion.**
 `ADR046-zone-control-015` can now write the Phase 2 required-outputs check
-against fixed paths, and every one of the fourteen scenarios in item 11 is a
-filesystem or digest comparison a machine evaluates. The blocking status recorded
+against fixed paths, and every one of the sixteen scenarios in item 11 is a
+filesystem or digest comparison a machine evaluates, with a seventeenth in
+item 12 covering the launcher at Phase 3. The blocking status recorded
 in implementation-debt 19.7 lifts for `015`, and with it for `016` and `021` -
 with one exception, `nix-build-binary-ref-unresolved`, which item 14 records as
 blocked on a contract field that does not exist yet.
 
 **Multi-output Provider packaging is permitted but must be said out loud.** This
-is where panel round 1 moved the decision. A Provider may ship a multi-output
-derivation; the operator must select the output that carries the Provider
-(`package = pkgs.foo.out;`). The cost is a small authoring burden on every
-multi-output Provider and one more thing for a `d2b.artifacts` example to show.
-The benefit is that the framework no longer refuses a correctly pinned
-`pkgs.foo.dev`, which the first draft's `all`-based predicate did.
+is where panel round 1 moved the decision, and round 2 widened it further. A
+Provider may ship a multi-output derivation; the operator names the output that
+carries the Provider (`package = pkgs.foo.out;`), and a non-first output selected
+on a raw-primop derivation is accepted through `outputName` without needing
+`outputSpecified`. One case remains refused that a human would call correct: the
+*first* output explicitly selected on a raw-primop derivation, which is
+indistinguishable from no selection and pins the same path either way.
+
+**Requiring ELF forecloses script-entry-point Providers.** A Provider whose
+component entry point is a `#!` wrapper is refused at Phase 2 and must ship a
+compiled entry point, or a compiled shim that execs its interpreter itself. That
+is a real constraint on third-party Providers, taken deliberately: the
+alternative is a launcher whose success depends on whether `/proc` happens to be
+mounted in the callee's namespace, which is a failure mode that appears only in
+production and only in some profiles.
+
+**The trait boundary is indirection that has to earn its keep.** Item 8a puts
+three syscalls behind two traits, which is more machinery than calling them
+directly. It buys hermetic coverage of the sequencing and the errno mapping
+without a privileged fixture, and it makes "does anything else in the workspace
+call `execveat`" a greppable question with one answer.
 
 **Byte-canonical JSON files are a real authoring burden.** A publisher cannot
 hand-write `provider-manifest.json` and have it pass; it must be emitted by a
@@ -627,7 +881,7 @@ It also means a compromised publisher key invalidates every artifact that key
 signed, with no partial-trust story. That is the fail-closed side of the trade
 and it is deliberate.
 
-**Fourteen error codes is a real surface.** Item 9 adds fourteen rows to section
+**Fifteen error codes is a real surface.** Item 9 adds fifteen rows to section
 13.4's table, where a single `provider-package-invalid` would have added one.
 Each one has to be tested for its redaction behaviour, which is what
 `nix-build-provider-error-redaction` costs. The judgement is that an operator who
@@ -663,12 +917,43 @@ store-path-valued `types.package`, so the assertion throws instead of asserting.
 The replacement in item 1 reads `outputs` and `outputSpecified`, both defaulted,
 and is total over every measured shape.
 
-**Testing `outputName` against the first element of `outputs`.** An appealing
-way to detect "the operator did not choose": if `outputName == head outputs` the
-selection might be the implicit default. Rejected because it is not a test of
-intent at all - `pkgs.openssl.bin` satisfies it while being an explicit choice -
-so it would reject exactly the case item 1 exists to permit. `outputSpecified` is
-the only attribute that records whether a human named the output.
+**Testing `outputName` against the first element of `outputs`, as the *only*
+witness of selection.** Round 2 adopted this as a *second* witness, after
+`outputSpecified`, which is where it belongs. As the only witness it is wrong:
+`pkgs.openssl.bin` selects the first output explicitly and would be refused. As a
+fallback it is sound, because it fires only where `outputSpecified` is absent,
+which is exactly the raw-primop shapes nixpkgs conventions do not reach.
+
+**Refusing a store-path-valued `types.package`.** The first revision's scenario
+text claimed this, while its predicate accepted it - the contradiction round 2
+caught. Refusal was reconsidered on its merits and rejected: `lib.toDerivation`
+yields one determinate output, the layout check, the digests, and the signature
+chain all run against that path unchanged, and `lib.types.package` has admitted
+store paths for as long as the option type has existed. Refusing would break a
+legitimate authoring form to no security end. The predicate was already right;
+the prose was wrong.
+
+**Detecting non-ELF entries at launch instead of at build.** Cheaper: the kernel
+reports `ENOEXEC` and the launcher maps it. Rejected because the failure would
+then depend on the sandbox profile - a `#!` entry point works where `/proc` is
+mounted and fails where it is not - so the same artifact would be valid on one
+host and not another, discovered only in production. Item 3 pays a bounded
+18-octet read at build time to make the answer the same everywhere.
+
+**Modelling `binary_ref` as `Option<BinaryRef>`.** The obvious shape, and it is
+what a serde-derived DTO would produce by default. Rejected because `None` would
+carry two meanings - "not launchable" and "launchable, field omitted" - and the
+second is the exact hole item 3 exists to close. `ComponentExecution` makes the
+launchable arm carry the ref, so the two facts cannot disagree, and confines the
+absent case to a closed bootstrap list.
+
+**Calling `openat2`, `fstat`, and `execveat` directly at each call site.** Less
+code and no trait objects. Rejected because the sequencing *is* the security
+property, and a sequence spread across call sites can only be tested with a
+privileged fixture that builds real symlinks and really execs. The boundary in
+item 8a makes the ordering, the by-value single-use discipline, and the errno
+mapping hermetically testable, and leaves exactly one module naming the
+syscalls.
 
 **Identity-parameterized file names, as the system-core dossier spells them.**
 `provider-<name>-manifest.json` is friendlier when several manifests sit in one

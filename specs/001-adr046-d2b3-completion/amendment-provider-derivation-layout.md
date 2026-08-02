@@ -64,39 +64,61 @@ derivation layout is a build output fact.
 #### 4.9.1 One unambiguously named Nix output
 
 A `type = "provider"` artifact's package MUST resolve to exactly one Nix output,
-and the operator MUST have named which one when the derivation has more than one.
-The Phase 1 assertion, evaluated in `nixos-modules/provider-catalog.nix`, is:
+and where the derivation has more than one, that output MUST carry evidence that
+it was chosen. The Phase 1 assertion, evaluated in
+`nixos-modules/provider-catalog.nix`, is:
 
 ```nix
 let
-  declaredOutputs = artifact.package.outputs or [ "out" ];
-  outputSelected  = (artifact.package.outputSpecified or false) == true;
+  package = artifact.package;
+  declaredOutputs = package.outputs or [ "out" ];
   shapeRecognised =
     builtins.isList declaredOutputs
-    && builtins.all builtins.isString declaredOutputs
-    && declaredOutputs != [ ];
+    && declaredOutputs != [ ]
+    && builtins.all builtins.isString declaredOutputs;
 in
-  shapeRecognised && (outputSelected || builtins.length declaredOutputs == 1)
+  if !shapeRecognised then false
+  else if builtins.length declaredOutputs == 1 then true
+  else if (package.outputSpecified or false) == true then true
+  else (package.outputName or null) != builtins.head declaredOutputs
 ```
 
 The predicate MUST NOT read `package.all`. Measured across every shape
 `lib.types.package` admits:
 
-| Value | `all` | `outputs` | `outputSpecified` |
-| --- | --- | --- | --- |
-| `pkgs.hello` | len 1 | `["out"]` | absent |
-| `pkgs.openssl` (whole) | len 6 | 6 names | absent |
-| `pkgs.openssl.dev` (selected) | len **6** | 6 names | **true** |
-| `lib.toDerivation "<store path>"` | **absent** | `["out"]` | absent |
-| raw `derivation`, one output | **absent** | **absent** | absent |
-| raw `derivation`, two outputs | len 2 | `["out","lib"]` | absent |
+| Value | `all` | `outputs` | `outputName` | `outputSpecified` |
+| --- | --- | --- | --- | --- |
+| `pkgs.hello` | len 1 | `["out"]` | `out` | absent |
+| `pkgs.openssl` (whole) | len 6 | 6 names | `bin` | absent |
+| `pkgs.openssl.bin` | len **6** | 6 names | `bin` | **true** |
+| `pkgs.openssl.dev` | len **6** | 6 names | `dev` | **true** |
+| `pkgs.openssl.out` | len 6 | 6 names | `out` | **true** |
+| `lib.toDerivation "<store path>"` | **absent** | `["out"]` | `out` | absent |
+| raw `derivation`, one output | **absent** | **absent** | `out` | absent |
+| raw `derivation`, two outputs | len 2 | `["out","lib"]` | `out` | absent |
+| raw `derivation`, `.lib` selected | len 2 | `["out","lib"]` | **`lib`** | absent |
+| raw `derivation`, `.out` selected | len 2 | `["out","lib"]` | `out` | absent |
 
 `all` therefore rejects `pkgs.openssl.dev`, which names exactly one output, and
 throws on a store-path-valued `types.package`, which `lib.types.package.check`
 accepts and the module system coerces through `lib.toDerivation`. The predicate
-above reads only defaulted attributes and calls `builtins.length` only after
-`builtins.isList` succeeds, so it is total and an unrecognised shape rejects with
-a module assertion rather than an eval trace.
+above reads only defaulted attributes, and `if` ordering places the
+`shapeRecognised` guard before every partial operation, so `builtins.head` and
+`builtins.length` are reached only on a non-empty list of strings. It is total,
+and an unrecognised shape rejects with a module assertion rather than an eval
+trace.
+
+**A store-path-valued package is accepted.** `lib.toDerivation` yields
+`outputs = ["out"]`, one determinate output, and the layout check, the digests,
+and the signature chain all run against that path unchanged. There is no security
+reason to refuse it, so the predicate's existing behaviour governs and the prose
+states it.
+
+**`outputName` is the second witness of selection.** For a raw-primop
+derivation, `.lib` reports `outputName = "lib"` while the whole derivation
+reports `outputName = "out"`, the head of `outputs`. `outputName != head outputs`
+therefore establishes explicit selection for exactly the shapes
+`outputSpecified` does not reach.
 
 The rule exists because `provider-catalog.nix` records
 `storePath = "${artifact.package}"`, and for a whole multi-output derivation that
@@ -109,13 +131,18 @@ Failures, both fail-closed:
 
 | Condition | Error code | Message names |
 | --- | --- | --- |
-| Multi-output package with no selection | `provider-artifact-output-ambiguous` | artifact ID, declared output names, and the remediation form `package = pkgs.<name>.out;` |
-| No usable output list, including a store-path-valued package | `provider-artifact-output-shape-unknown` | artifact ID |
+| Multi-output package pinning its first output with no evidence of selection | `provider-artifact-output-ambiguous` | artifact ID, the declared output names, and **both** remedies, because which applies depends on how the derivation was built: select the output on a `stdenv.mkDerivation` derivation (`package = pkgs.<name>.out;`), or repackage a raw `builtins.derivation` with `stdenv.mkDerivation`, since selecting an output on a raw primop derivation does not set `outputSpecified` and will not satisfy this check |
+| `outputs` present but not a non-empty list of strings | `provider-artifact-output-shape-unknown` | artifact ID; the remedy is to supply a derivation or a store path rather than a hand-built attrset |
 
-Known limitation: `outputSpecified` is a nixpkgs `mkDerivation` convention, so a
-multi-output derivation built with the raw `builtins.derivation` primop and then
-selected carries `outputName` but no `outputSpecified`, and is rejected. The
-remediation is to package the Provider with `stdenv.mkDerivation` or a wrapper.
+The message MUST NOT tell an operator to select an output when selection cannot
+produce the evidence the predicate reads. That is why the ambiguous message
+carries both remedies and names the condition under which each applies.
+
+Residual case, stated exactly: a raw-primop multi-output derivation whose
+**first** output is explicitly selected is indistinguishable from the whole
+derivation - same `outputName`, same head of `outputs`, no `outputSpecified` -
+and both coerce to the same store path, so both are refused with the same answer.
+The remedy above is truthful for it.
 
 Every path below is relative to the single store path
 `"${artifact.package}"` yields, written `<out>`.
@@ -202,21 +229,71 @@ anything.
 
 `<out>/bin` MUST NOT exist with zero entries; see 4.9.2.
 
+**Every `<out>/bin/<name>` MUST be an ELF executable.** The check is a bounded
+read of the first 18 octets from the already-open descriptor: `e_ident` begins
+`\x7fELF`, `EI_CLASS` is `ELFCLASS64`, `EI_DATA` matches host byte order,
+`EI_VERSION` is 1, and `e_type` is `ET_EXEC` or `ET_DYN`. No parser runs, nothing
+is mapped, nothing is executed. `ET_REL`, `ET_CORE`, a `#!` script, an empty
+file, and a file shorter than the header are all refused with
+`provider-executable-not-elf`, naming the entry and the first four octets as hex.
+
+The requirement is not stylistic. `execveat` with `AT_EMPTY_PATH` on an `O_PATH`
+descriptor needs `/proc` mounted in the callee's mount namespace to start a `#!`
+interpreter (see 4.9.7), and d2b sandbox profiles do not promise one. Refusing
+non-ELF entries at build time means the same artifact behaves identically on
+every host, instead of succeeding where `/proc` happens to be mounted.
+
 A Process created for a Provider component resolves its program as
 `<out>/bin/<binaryRef>` and by no other means: no `PATH` lookup, no
 manifest-supplied absolute path, no path relative to a working directory.
 
-**Prerequisite.** The `binaryRef` term of (3) is not implementable against the
-contract as committed. `ComponentDescriptor` in
-`packages/d2b-contracts/src/v3/provider.rs` declares `component_id`,
-`component_type`, `exported_resource_types`, `exported_methods`,
+**`BinaryRef` is a validated newtype and launchability is modelled.** The
+`binaryRef` term of (3) is not implementable against the contract as committed.
+`ComponentDescriptor` in `packages/d2b-contracts/src/v3/provider.rs` declares
+`component_id`, `component_type`, `exported_resource_types`, `exported_methods`,
 `allowed_domains`, `cardinality`, `config_digest`, `dependencies`,
 `declares_state_volume`, and `state_namespaces`, and carries no `binary_ref`
-field, while section 4.3.3 defines `binaryRef` three times as normative. The
-drift predates this amendment. It is carried as a W5 implementation obligation:
-`ComponentDescriptor` gains `binary_ref`, bounded by the grammar above, before
-`nix-build-binary-ref-unresolved` is implementable. Until it lands that one
-scenario is blocked; the other thirteen are not.
+field, while section 4.3.3 defines `binaryRef` three times as normative.
+
+The field this amendment requires is not a `String` and not an
+`Option<BinaryRef>`:
+
+```rust
+/// A `^[a-z][a-z0-9-]*$` component binary name, at most 64 bytes.
+/// Parsing is the only constructor, so the grammar above is a type invariant.
+pub struct BinaryRef(BoundedToken);
+
+pub enum ComponentExecution {
+    /// A Process is created and `<out>/bin/<binary_ref>` is launched.
+    Launchable { binary_ref: BinaryRef },
+    /// Handlers run in-process inside a binary from another derivation;
+    /// no Process is created (§11.3 step 5).
+    InProcessBootstrap,
+}
+```
+
+`Option<BinaryRef>` is rejected because `None` would mean both "not launchable"
+and "launchable but the manifest omitted the field", and the second is the hole
+this check exists to close. `ComponentDescriptor` holds one
+`ComponentExecution`, so launchability and the presence of a binary name are the
+same fact.
+
+Two admission rules bound the bootstrap arm:
+
+1. `InProcessBootstrap` is admissible only for a Provider on the closed
+   bootstrap-exception list (`system-core`, `system-minijail`); any other
+   Provider declaring it is refused at manifest admission;
+2. a Provider whose components are all `InProcessBootstrap` MUST declare an empty
+   `package.executableDigests` and ship no `bin/`, and conversely.
+
+`BinaryRef` is distinct from `ArtifactId` and `ComponentId` even though the three
+grammars coincide today, because they are three namespaces and syntactic
+coincidence is not a licence to substitute.
+
+The drift predates this amendment. It is carried as a W5 implementation
+obligation; until it lands, `nix-build-binary-ref-unresolved` is blocked and the
+other twelve Phase 2 scenarios this amendment adds are not, nor are the three
+Phase 1 scenarios or the Phase 3 launcher scenario.
 
 #### 4.9.4 Digest preimages
 
@@ -225,7 +302,7 @@ Every value renders `sha256:<64 lowercase hex>`.
 | Value | Carried by | Preimage |
 | --- | --- | --- |
 | `package.executableDigests[<name>]` | signed manifest | SHA-256 over the raw octets of `<out>/bin/<name>` |
-| `executableDigest` | artifact catalog | `canonical_digest("d2b:v3:provider-executable-set", C)`, where `C` is the `d2b-cjson/v1` serialization of the manifest's `package.executableDigests` object |
+| `executableDigest` | artifact catalog | `canonical_digest("d2b:v3:provider-executable-set", C)`, where `C` is the `d2b-cjson/v1` serialization of the **whole** `package.executableDigests` object: every binary name as a key bound to that binary's own `sha256:<hex>` value |
 | `manifestDigest` | artifact catalog | SHA-256 over the raw octets of `<out>/share/d2b/provider/provider-manifest.json` |
 | `configSchemaDigest` | artifact catalog and signed manifest | SHA-256 over the raw octets of `<out>/share/d2b/provider/config-schema.json` |
 | `digest` | artifact catalog | SHA-256 of the NAR serialization of `<out>`, as `nix hash path --type sha256 --base16` renders it |
@@ -234,6 +311,21 @@ Executable digests carry no domain tag: an ELF image is not canonical JSON and
 there is nothing to canonicalize. The executable set digest is domain-separated
 under D101 using the existing `canonical_digest` helper,
 `SHA-256(domain_tag || 0x00 || canonical_bytes)`.
+
+The set digest binds the **map**, not a summary of it. The preimage is the
+serialization of the object
+
+```json
+{"d2b-provider-foo-controller":"sha256:<64 hex>","d2b-provider-foo-service":"sha256:<64 hex>"}
+```
+
+covering every binary name, every per-binary digest, and the pairing between
+them. It is not a digest of the name list, of the concatenated digest values, or
+of a count or tuple. Key order is not a degree of freedom: `d2b-cjson/v1` is
+RFC 8785 JCS narrowed, so object keys are sorted by code unit during
+serialization and one map has one digest regardless of emission order. Renaming
+a binary, changing one binary's bytes, adding one, or removing one all change
+this value; reordering the authored map does not.
 
 `provider-manifest.json` and `config-schema.json` MUST already be their own
 `d2b-cjson/v1` canonical bytes. The compiler parses each file, re-serializes it
@@ -313,15 +405,90 @@ path argument that is either a fixed literal from 4.9.2 or one already-validated
   rather than by a preceding `lstat` whose result could be stale.
 - `RESOLVE_NO_MAGICLINKS` refuses `/proc/*/fd`-style jumps.
 
+**`O_CLOEXEC` is set on the anchor and on every child descriptor the helper
+opens, without exception.** This repository transfers descriptors explicitly over
+`SCM_RIGHTS`; a descriptor surviving an exec it was not handed to is an implicit
+transfer nobody authorised. A launched Provider binary must not receive a handle
+to its own artifact directory.
+
+Measured on Linux 7.0.10, because the interaction between `O_CLOEXEC` and
+`execveat` is not self-evident:
+
+```text
+anchor fd=3 err=-
+symlink open fd=-1 errno=Too many levels of symbolic links (expect refusal)
+escape open fd=-1 errno=Invalid cross-device link (expect refusal)
+subdir S_ISREG=0 (expect 0)
+exe fd=5 err=-
+exe S_ISREG=1 cloexec=1
+PARENT passing fds anchor=3 exe=5 to execveat
+CHILD inherited fds (excluding its own opendir fd 3):
+  fd 0 -> /dev/null
+  fd 1 -> pipe:[17462070]
+  fd 2 -> pipe:[17462071]
+CHILD /proc/self/exe -> /tmp/adr0050probe/tree/bin/child
+```
+
+`RESOLVE_NO_SYMLINKS` refuses a trailing symlink with `ELOOP` at the open;
+`RESOLVE_BENEATH` refuses `bin/../../child` with `EXDEV`; `fstat` on an `O_PATH`
+descriptor reports `S_ISREG = 0` for a directory; and
+`execveat(fd, "", argv, envp, AT_EMPTY_PATH)` succeeds on an
+`O_PATH | O_CLOEXEC` descriptor while the child inherits only fds 0, 1 and 2.
+
+**Descriptor lifetime.** The descriptor MUST be open in the calling process at
+the moment `execveat` is invoked. Close-on-exec is applied by the kernel as part
+of a successful exec, after the image is resolved, so the descriptor is consumed
+rather than leaked into the child. On a failed `execveat` the descriptor is still
+open and still owned by the caller, so both it and the anchor are held in guards
+that close on every path. Neither is ever passed to a child deliberately: the
+child's descriptor table is exactly what its sandbox profile declares.
+
+The child's `/proc/self/exe` resolves to the real store path rather than to
+`/proc/self/fd/N`, so executing from a descriptor does not disturb a component
+that reads its own image path.
+
 Every opened descriptor is then `fstat(2)`ed **on the descriptor** and refused
-unless `S_ISREG` holds. Digests are computed by reading that same descriptor; a
-path is never re-resolved between the check and the read, so there is no
-check-to-use window.
+unless `S_ISREG` holds; the 4.9.3 ELF prefix is read from that same descriptor.
+Digests are computed by reading that same descriptor; a path is never re-resolved
+between the check and the read, so there is no check-to-use window.
 
 The launcher resolves `bin/<binaryRef>` through the same anchored `openat2`,
 `fstat`s the descriptor for `S_ISREG`, and executes it with
 `execveat(fd, "", argv, envp, AT_EMPTY_PATH)`. The program that runs is the inode
 whose digest was verified.
+
+**The sequence sits behind an injectable boundary.** `openat2`, `fstat`, and
+`execveat` are reached only through two traits, so sequencing and errno mapping
+are hermetically testable without a Nix store, a real symlink, or a real exec:
+
+```rust
+pub trait AnchoredDir: Send + Sync {
+    type File: AnchoredFile;
+    fn open_regular(&self, path: LayoutPath) -> Result<Self::File, LayoutError>;
+    fn entries(&self, dir: LayoutDir) -> Result<Vec<OsString>, LayoutError>;
+}
+
+pub trait AnchoredFile: Send {
+    fn len(&self) -> u64;
+    fn read_prefix(&mut self, out: &mut [u8]) -> Result<usize, LayoutError>;
+    fn read_to_digest(self) -> Result<ArtifactDigest, LayoutError>;
+}
+
+pub trait ProcessLauncher: Send + Sync {
+    type File: AnchoredFile;
+    fn exec_from(&self, file: Self::File, argv: &Argv, envp: &Envp)
+        -> Result<Infallible, LaunchError>;
+}
+```
+
+The production implementation MUST be the only place in the workspace naming
+`openat2`, `execveat`, or `AT_EMPTY_PATH`. `LayoutError` carries the variants the
+kernel actually produces - `NotBeneath` (`EXDEV`), `SymlinkRefused` (`ELOOP`),
+`NotRegular` (from `fstat`), `NotElf` (from the prefix read), `Absent`
+(`ENOENT`) - so the mapping onto the 4.9.8 codes is a total match a test can
+exhaust. `read_to_digest` and `exec_from` take the file **by value**, the same
+single-use discipline ADR 0049 established for the mutation seal, so a verified
+descriptor cannot be reused after its verification result was discarded.
 
 This is the discipline ADR 0034 already binds for broker storage mutations
 (anchored `openat2`, fd-relative walking, `O_CLOEXEC`, explicit fd transfer
@@ -333,13 +500,12 @@ instant or can verify it: the artifact is an operator-supplied input that may be
 locally built or substituted, `/nix/store` is a normal directory a privileged
 process can write, and the launcher runs long after the compiler finished.
 
-Two portability facts are load-bearing. `openat2` requires Linux 5.6 and the
-supported floor is 6.9 (ADR 0008), so it is unconditionally available and a
-kernel without it fails closed with no fallback. `execveat` with `AT_EMPTY_PATH`
-on an `O_PATH` descriptor requires `/proc` mounted in the callee's mount
-namespace to run a `#!` script; Provider component binaries are therefore
-required to be ELF images, and a non-ELF `bin/` entry is a Phase 2 build failure
-so the launcher never meets the case.
+`openat2` requires Linux 5.6 and the supported floor is 6.9 (ADR 0008), so it is
+unconditionally available and a kernel without it fails closed with no fallback.
+`execveat` with `AT_EMPTY_PATH` on an `O_PATH` descriptor requires `/proc`
+mounted in the callee's mount namespace to run a `#!` script, which is why 4.9.3
+makes ELF a build-time requirement with its own code and scenario rather than a
+caveat: the launcher never meets the case.
 
 #### 4.9.8 Failure taxonomy (normative)
 
@@ -349,8 +515,8 @@ secret, credential, path, or process data.
 
 | Error code | Raised when | Message names |
 | --- | --- | --- |
-| `provider-artifact-output-ambiguous` | Multi-output package, no selection | artifact ID, declared output names |
-| `provider-artifact-output-shape-unknown` | No usable output list | artifact ID |
+| `provider-artifact-output-ambiguous` | Multi-output package pinning its first output with no evidence of selection | artifact ID, declared output names, and both truthful remedies (4.9.1) |
+| `provider-artifact-output-shape-unknown` | `outputs` present but not a non-empty list of strings | artifact ID |
 | `provider-required-output-absent` | A 4.9.2 file is missing | artifact ID, layout-relative path |
 | `provider-required-output-not-regular` | A 4.9.2 path is a symlink, directory, or other non-regular type | artifact ID, layout-relative path, observed file type token |
 | `provider-signature-publisher-unregistered` | See 4.9.6 | artifact ID, publisher, `d2b.zones.<zone>.trustedPublishers.<publisher>` |
@@ -361,6 +527,7 @@ secret, credential, path, or process data.
 | `provider-manifest-not-canonical` | File octets are not their own canonical bytes | artifact ID, layout-relative path, byte offset of first divergence, expected and observed lengths, and the fixed remediation "re-emit with the toolkit canonical serializer; the usual cause is a trailing newline" |
 | `provider-executable-name-invalid` | A `bin/` entry violates the 4.9.3 grammar | artifact ID, the rejected entry, the grammar |
 | `provider-executable-set-empty` | `bin/` exists with no entries | artifact ID |
+| `provider-executable-not-elf` | A `bin/` entry is not an `ET_EXEC`/`ET_DYN` ELF64 image | artifact ID, the entry, first four octets as hex |
 | `provider-executable-not-regular` | A `bin/` entry is not a regular file | artifact ID, entry, observed file type token |
 | `provider-executable-set-mismatch` | Key set and directory set differ | artifact ID, the symmetric difference and the side of each name |
 | `provider-binary-ref-unresolved` | A `binaryRef` is not a key | artifact ID, component ID, the ref |
@@ -395,7 +562,7 @@ reaches the second.
 
 ### Phase 1 table: insert after the last Provider row
 
-> | Provider artifact package resolves to exactly one Nix output, explicitly selected when the derivation has more than one (§4.9.1 predicate over `outputs` and `outputSpecified`; `package.all` MUST NOT be read) - Provider only | Nix `assert` in `provider-catalog.nix` | eval error `provider-artifact-output-ambiguous` or `provider-artifact-output-shape-unknown`, naming the artifact ID and the declared output names |
+> | Provider artifact package resolves to one Nix output, carrying evidence of selection when the derivation has more than one (§4.9.1 predicate over `outputs`, `outputSpecified`, and `outputName`; `package.all` MUST NOT be read) - Provider only | Nix `assert` in `provider-catalog.nix` | eval error `provider-artifact-output-ambiguous` or `provider-artifact-output-shape-unknown`, naming the artifact ID and the declared output names |
 
 ### Phase 2 table: replace this row
 
@@ -408,6 +575,7 @@ reaches the second.
 > | Each of those three paths is a regular file, established by anchored `openat2` with `RESOLVE_NO_SYMLINKS` plus `fstat` on the descriptor (section 4.9.7) - Provider only | Resource compiler | `provider-required-output-not-regular`, naming the path and the observed file type |
 > | `provider-manifest.json` and `config-schema.json` octets equal their own `d2b-cjson/v1` canonical bytes - Provider only | Resource compiler | `provider-manifest-not-canonical`, naming the file, the first divergent byte offset, and the remediation |
 > | `bin/` entry set equals the signed manifest's `package.executableDigests` key set; each entry is a regular file - Provider only | Resource compiler | `provider-executable-set-mismatch` or `provider-executable-not-regular` |
+> | Every `bin/` entry is an `ET_EXEC` or `ET_DYN` ELF64 image, established by a bounded 18-octet prefix read of the already-open descriptor (section 4.9.3) - Provider only | Resource compiler | `provider-executable-not-elf`, naming the entry and the first four octets as hex |
 > | Every `bin/` directory entry name matches `^[a-z][a-z0-9-]*$`, is at most 64 bytes, and is valid UTF-8, checked as read from the directory (section 4.9.3) - Provider only | Resource compiler | `provider-executable-name-invalid`, naming the entry and the grammar |
 > | `bin/` does not exist with zero entries; a Provider with no executables ships no `bin/` and an empty `package.executableDigests` - Provider only | Resource compiler | `provider-executable-set-empty` |
 > | Every component `binaryRef` is a key of `package.executableDigests` - Provider only | Resource compiler | `provider-binary-ref-unresolved`, naming the component and the ref |
@@ -431,8 +599,9 @@ section 4 below; it had none.
 
 ### Phase 1 - Nix eval tests: append
 
-> | `nix-eval-provider-output-ambiguous` | A `type = "provider"` artifact whose package is a whole multi-output derivation with no explicit output selection fails eval naming the artifact ID and the declared output names; the same package with an output selected (`pkgs.foo.out`) evaluates |
-> | `nix-eval-provider-output-shape-unknown` | A `type = "provider"` artifact whose package declares no usable output list, including a store-path-valued `types.package` accepted by `lib.types.package.check`, fails eval with a module assertion rather than an eval trace |
+> | `nix-eval-provider-output-ambiguous` | A `type = "provider"` artifact whose package is a multi-output derivation pinning its first output with no evidence of selection fails eval naming the artifact ID and the declared output names; the same package with an output selected (`pkgs.foo.out`, `pkgs.foo.dev`) evaluates, and so does a non-first output selected on a raw-primop derivation |
+> | `nix-eval-provider-output-shape-accepted` | A store-path-valued `types.package`, which `lib.types.package.check` accepts and the module system coerces to `outputs = ["out"]`, **evaluates successfully**; this pins the accepted behaviour so the predicate and the prose cannot drift apart again |
+> | `nix-eval-provider-output-shape-unknown` | A value whose `outputs` is present but is not a non-empty list of strings fails eval with a module assertion rather than an eval trace |
 
 ### Phase 2 - Build tests: insert after `nix-build-manifest-digest-mismatch`
 
@@ -444,6 +613,7 @@ section 4 below; it had none.
 > | `nix-build-executable-set-empty` | A derivation with a `bin/` directory containing no entries fails build, and is distinguished from a Provider that legitimately declares an empty `package.executableDigests` and ships no `bin/` at all, which succeeds |
 > | `nix-build-executable-name-invalid` | A `bin/` entry whose name violates `^[a-z][a-z0-9-]*$`, exceeds 64 bytes, contains `/`, `.`, `..`, NUL, an ASCII control byte, or whitespace, begins with `-`, or is not valid UTF-8, fails build naming the entry; the name is checked as read from the directory, not only as declared in the manifest |
 > | `nix-build-executable-not-regular-file` | A `bin/` entry that is a symlink, directory, FIFO, socket, or device node fails build naming the entry |
+> | `nix-build-executable-not-elf` | A `bin/` entry that is a `#!` script, an empty file, a file shorter than the ELF header, an `ET_REL` object, or an `ET_CORE` image fails build naming the entry and the first four octets as hex |
 > | `nix-build-binary-ref-unresolved` | A component descriptor `binaryRef` absent from `package.executableDigests` fails build naming the component and the ref |
 > | `nix-build-executable-digest-mismatch` | A `bin/` file whose SHA-256 differs from its `package.executableDigests` value fails build naming the binary and both digests in full |
 > | `nix-build-catalog-manifest-disagreement` | Operator-authored catalog digests, manifest-declared digests, and compiler-recomputed digests disagreeing on any pinned value fails build naming the two disagreeing sources and both digest values |
@@ -474,7 +644,7 @@ enumerating the whole table: its Phase 2 entries are
 
 Replace the Validation cell with:
 
-> | Validation | All Phase 2 build tests in §15.8 (`nix-build-artifact-id-missing-from-catalog`, `nix-build-artifact-wrong-type-rejected`, `nix-build-duplicate-artifact-id`, `nix-build-artifact-store-path-absent-from-bundle`, `nix-build-artifact-store-path-absent-from-config`, `nix-build-config-schema-failure`, `nix-build-schema-digest-mismatch`, `nix-build-manifest-digest-mismatch`, `nix-build-required-outputs-missing`, `nix-build-required-output-not-regular`, `nix-build-manifest-signature-invalid`, `nix-build-manifest-not-canonical`, `nix-build-executable-set-mismatch`, `nix-build-executable-set-empty`, `nix-build-executable-name-invalid`, `nix-build-executable-not-regular-file`, `nix-build-binary-ref-unresolved`, `nix-build-executable-digest-mismatch`, `nix-build-catalog-manifest-disagreement`, `nix-build-provider-error-redaction`, `nix-build-resourcetype-collision`, `nix-build-bundle-sorted`, `nix-build-content-hash-stable`, `nix-build-artifact-catalog-digest-anchored`, `nix-build-credential-ref-survives-build`, `nix-build-inline-secret-lint-warning`, `nix-build-inline-secret-strict-failure`) and the Phase 1 eval tests `nix-eval-provider-output-ambiguous` and `nix-eval-provider-output-shape-unknown`. `nix-build-binary-ref-unresolved` is blocked until `ComponentDescriptor` gains a `binary_ref` field (§4.9.3); the remaining scenarios are not |
+> | Validation | All Phase 2 build tests in §15.8 (`nix-build-artifact-id-missing-from-catalog`, `nix-build-artifact-wrong-type-rejected`, `nix-build-duplicate-artifact-id`, `nix-build-artifact-store-path-absent-from-bundle`, `nix-build-artifact-store-path-absent-from-config`, `nix-build-config-schema-failure`, `nix-build-schema-digest-mismatch`, `nix-build-manifest-digest-mismatch`, `nix-build-required-outputs-missing`, `nix-build-required-output-not-regular`, `nix-build-manifest-signature-invalid`, `nix-build-manifest-not-canonical`, `nix-build-executable-set-mismatch`, `nix-build-executable-set-empty`, `nix-build-executable-name-invalid`, `nix-build-executable-not-regular-file`, `nix-build-executable-not-elf`, `nix-build-binary-ref-unresolved`, `nix-build-executable-digest-mismatch`, `nix-build-catalog-manifest-disagreement`, `nix-build-provider-error-redaction`, `nix-build-resourcetype-collision`, `nix-build-bundle-sorted`, `nix-build-content-hash-stable`, `nix-build-artifact-catalog-digest-anchored`, `nix-build-credential-ref-survives-build`, `nix-build-inline-secret-lint-warning`, `nix-build-inline-secret-strict-failure`) and the Phase 1 eval tests `nix-eval-provider-output-ambiguous`, `nix-eval-provider-output-shape-accepted`, and `nix-eval-provider-output-shape-unknown`. `nix-build-binary-ref-unresolved` is blocked until `ComponentDescriptor` gains `ComponentExecution` with a validated `BinaryRef` (§4.9.3); the remaining scenarios are not |
 
 Also append to its Detailed design cell, after "extract and hash manifest and
 config schema files":
@@ -493,7 +663,21 @@ config schema files":
 
 Replace the Validation cell with:
 
-> | Validation | All Phase 3 runtime and cleanup tests in §15.8 (`nix-runtime-content-hash-integrity`, `nix-runtime-same-content-hash-noop`, `nix-runtime-zoneuid-mismatch-rejected`, `nix-runtime-zone-mismatch-rejected`, `nix-runtime-activation-nonblocking`, `nix-runtime-provider-config-invalid-continues`, all `cleanup-*` and `rollback-*` tests) |
+> | Validation | All Phase 3 runtime and cleanup tests in §15.8 (`nix-runtime-content-hash-integrity`, `nix-runtime-same-content-hash-noop`, `nix-runtime-zoneuid-mismatch-rejected`, `nix-runtime-zone-mismatch-rejected`, `nix-runtime-activation-nonblocking`, `nix-runtime-provider-config-invalid-continues`, `nix-runtime-launcher-anchored-resolution`, all `cleanup-*` and `rollback-*` tests) |
+
+**One Phase 3 scenario is added, not just corrected.** The launcher contract of
+sections 4.9.3 and 4.9.7 has no runtime conformance identity today, which is the
+same defect on the Phase 3 side that this amendment fixes on the Phase 2 side.
+Append to the §15.8 Phase 3 table:
+
+> | `nix-runtime-launcher-anchored-resolution` | The launcher resolves a component program only as `bin/<binaryRef>` beneath the anchored artifact dirfd. With the resolved entry replaced by a symlink (including one whose target is a valid ELF inside the same output), by a directory, and by a non-ELF regular file, each launch is refused before any process is created, with the §4.9.8 code for that case and with no fallback to `PATH` or to a manifest-supplied path. An artifact path outside the anchor is refused as `NotBeneath`. Descriptors opened during resolution carry `O_CLOEXEC` and do not appear in the launched process |
+
+It belongs to `016` rather than `015` because `015` is a build-time program and
+the launcher is runtime. The symlink case in particular cannot be discharged at
+Phase 2 alone: Phase 2 validated a different process's view of the tree at an
+earlier time, which is exactly the check-to-use gap 4.9.7 exists to close.
+Section 4.9.7's trait boundary is what makes this scenario hermetic rather than
+requiring a privileged fixture that builds real symlinks and really execs.
 
 ### 5.3 `ADR046-zone-control-021`
 
@@ -658,7 +842,7 @@ a signal that the edit did something unintended.
 | Required-outputs row has no conformance scenario in the section 15.8 Phase 2 table (12.3) | Closed by section 4 above |
 | Output cardinality not checkable: no Provider crate has a package output (12.2) | Closed by ADR 0050 item 1: the cardinality is now an eval assertion on the artifact entry, which exists whether or not any Provider crate ships a package yet |
 | `d2b.artifacts.<id>.package` typed `types.package` already enforces the cardinality at the one entry point (12.2, "inference, needs confirm or reject") | **Reject.** `types.package` pins one derivation per artifact ID; it does not pin one output per derivation, and `"${package}"` selecting the first output is exactly the case it misses. It is also weaker than it looks: `lib.types.package.check` accepts a bare store path, which the module system coerces through `lib.toDerivation`. The inference is superseded by the explicit §4.9.1 predicate |
-| `ADR046-zone-control-015` stays blocked pending an amendment (19.7) | Closed on acceptance, with one carve-out: `nix-build-binary-ref-unresolved` stays blocked on the `ComponentDescriptor` field recorded in section 11. `016` and `021` unblock |
+| `ADR046-zone-control-015` stays blocked pending an amendment (19.7) | Closed on acceptance, with one carve-out: `nix-build-binary-ref-unresolved` stays blocked on the `ComponentExecution`/`BinaryRef` obligation recorded in section 11. `016` and `021` unblock, and `016` gains one new Phase 3 launcher scenario |
 | Catalog names component and descriptor digests; contract names exported schema and service digests (12.4) | **Partly narrowed, not closed.** The executable digest was never part of the dispute: the catalog's singular value and the manifest's map are different objects, and section 2 states the derivation rule. The component/descriptor versus schema/service pair remains open and remains `ADR046-provider-002`'s |
 
 ## 10. Drift observed while drafting, recorded not fixed
@@ -679,7 +863,7 @@ is recorded separately rather than as observed drift.
 
 | Obligation | Owner | Blocks |
 | --- | --- | --- |
-| `ComponentDescriptor` in `packages/d2b-contracts/src/v3/provider.rs` gains a `binary_ref` field, bounded by the §4.9.3 name grammar. The shipped struct declares `component_id`, `component_type`, `exported_resource_types`, `exported_methods`, `allowed_domains`, `cardinality`, `config_digest`, `dependencies`, `declares_state_volume`, `state_namespaces` and no `binary_ref`, while §4.3.3 defines `binaryRef` three times as normative. For bootstrap exception Providers the field is absent, per §6.3 | W5, alongside `ADR046-zone-control-015` | `nix-build-binary-ref-unresolved` only; the other thirteen Phase 2 scenarios are independent of it |
+| `ComponentDescriptor` in `packages/d2b-contracts/src/v3/provider.rs` gains a `ComponentExecution` field carrying a validated `BinaryRef` newtype, per §4.9.3. Not `Option<BinaryRef>`: `None` would mean both "not launchable" and "launchable, field omitted". The shipped struct declares `component_id`, `component_type`, `exported_resource_types`, `exported_methods`, `allowed_domains`, `cardinality`, `config_digest`, `dependencies`, `declares_state_volume`, `state_namespaces` and no `binary_ref`, while §4.3.3 defines `binaryRef` three times as normative. The `InProcessBootstrap` arm is admissible only for the closed bootstrap-exception list, per §6.3 | W5, alongside `ADR046-zone-control-015` | `nix-build-binary-ref-unresolved` only; the other twelve Phase 2 scenarios, the three Phase 1 scenarios, and the Phase 3 launcher scenario are independent of it |
 
 The drift predates this amendment. It is recorded as an obligation rather than
 as observed drift because §4.9.3 depends on it, and carrying it in the
