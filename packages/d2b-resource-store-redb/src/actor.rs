@@ -105,7 +105,8 @@ impl SignalCounters {
     }
 
     fn record_shared_batch(&self) {
-        self.shared_immutable_batches.fetch_add(1, Ordering::Relaxed);
+        self.shared_immutable_batches
+            .fetch_add(1, Ordering::Relaxed);
     }
 
     fn record_fanout_reference(&self) {
@@ -248,10 +249,7 @@ impl WriterHandle {
         self.sender
             .as_ref()
             .ok_or_else(|| crate::transaction::integrity("writer-closed"))?
-            .send(WriterCommand::Backup {
-                identity,
-                response,
-            })
+            .send(WriterCommand::Backup { identity, response })
             .await
             .map_err(|_| crate::transaction::integrity("writer-closed"))?;
         receiver
@@ -458,10 +456,10 @@ impl WriterActor {
                                 let Some(filtered) = filter_batch(batch, &resource_types) else {
                                     return Ok(());
                                 };
-                            self.signals.record_shared_batch();
-                            self.signals.record_fanout_reference();
-                            visit(filtered)
-                        })
+                                self.signals.record_shared_batch();
+                                self.signals.record_fanout_reference();
+                                visit(filtered)
+                            })
                             .map(|()| high_water)
                         }
                         Err(error) => Err(error),
@@ -629,12 +627,7 @@ where
     F: FnMut(ChangeBatch) -> Result<(), StoreError>,
 {
     let mut replay = crate::revision_log::ReplaySignals::default();
-    let result = crate::revision_log::stream_after(
-        database,
-        after_revision,
-        &mut replay,
-        visit,
-    );
+    let result = crate::revision_log::stream_after(database, after_revision, &mut replay, visit);
     signals
         .revision_range_seeks
         .fetch_add(replay.range_seeks(), Ordering::Relaxed);
@@ -1210,9 +1203,7 @@ fn read_schema(
     let decoded =
         crate::DecodedValue::decode(bytes.value()).map_err(crate::transaction::integrity)?;
     if decoded.kind() != ValueKind::ApiSchemaRecord {
-        return Err(crate::transaction::integrity(
-            "table-value-kind-mismatch",
-        ));
+        return Err(crate::transaction::integrity("table-value-kind-mismatch"));
     }
     let canonical_json = decoded.canonical_json().to_vec();
     let payload_digest =

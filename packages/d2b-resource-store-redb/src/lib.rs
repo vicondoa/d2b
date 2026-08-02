@@ -33,9 +33,9 @@ pub use actor::{
     SharedChangeBatch, WRITE_QUEUE_CAPACITY,
 };
 pub use backup::{
-    BackupRow, BackupTable, LogicalBackup, MAX_LOGICAL_BACKUP_BYTES,
-    MAX_LOGICAL_BACKUP_ROWS, MAX_PUBLICATION_NAME_BYTES, PublicationState,
-    LOGICAL_BACKUP_FORMAT_VERSION, publish_staged, publication_state, sync_staged_file,
+    BackupRow, BackupTable, LOGICAL_BACKUP_FORMAT_VERSION, LogicalBackup, MAX_LOGICAL_BACKUP_BYTES,
+    MAX_LOGICAL_BACKUP_ROWS, MAX_PUBLICATION_NAME_BYTES, PublicationState, publication_state,
+    publish_staged, sync_staged_file,
 };
 pub use keys::{
     DecodedKey, DecodedKeyComponent, EncodedKey, KeyCodecError, KeyComponent, KeySpace,
@@ -296,19 +296,17 @@ impl RedbResourceStore {
             != 0
         {
             return Err(
-                transaction::quarantined_reason("restore-target-not-empty")
-                    .with_store_slot(slot),
+                transaction::quarantined_reason("restore-target-not-empty").with_store_slot(slot)
             );
         }
         let open_identity = identity.clone();
-        let database = tokio::task::spawn_blocking(move || {
-            backup.restore_file(file, &open_identity)
-        })
-        .await
-        .map_err(|_| {
-            transaction::integrity("database-restore-task-failed").with_store_slot(slot)
-        })?
-        .map_err(|error| error.with_store_slot(slot))?;
+        let database =
+            tokio::task::spawn_blocking(move || backup.restore_file(file, &open_identity))
+                .await
+                .map_err(|_| {
+                    transaction::integrity("database-restore-task-failed").with_store_slot(slot)
+                })?
+                .map_err(|error| error.with_store_slot(slot))?;
         Self::start(database, identity, false, acceptor)
             .map_err(|error| error.with_store_slot(slot))
     }
