@@ -62,6 +62,62 @@ let
     && builtins.hasAttr parsed.name resources
     && resources.${parsed.name}.type == parsed.type;
 
+  artifactFor = artifactId:
+    if builtins.isString artifactId
+      && builtins.hasAttr artifactId (cfg.artifacts or { })
+    then cfg.artifacts.${artifactId}
+    else null;
+
+  artifactAssertions = zoneName: resourceName: resource:
+    let
+      path = "d2b.zones.${zoneName}.resources.${resourceName}";
+      spec = resource.spec or { };
+      source = spec.source or { };
+      systemIds = lib.filter (value: value != null) [
+        (spec.systemArtifactId or null)
+        (source.systemArtifactId or null)
+      ];
+      artifactsDeclared = (cfg.artifacts or { }) != { };
+      providerArtifact = artifactFor (spec.artifactId or null);
+      providerCatalog = cfg.providerCatalog or { };
+      providerCatalogMatches = lib.filter
+        (entry:
+          let
+            selected = entry.artifactId or (entry.entry.artifactId or null);
+          in selected == (spec.artifactId or null))
+        (lib.attrValues providerCatalog);
+    in
+      lib.optionals (artifactsDeclared && resource.type == "Provider") [
+        {
+          assertion = builtins.isString (spec.artifactId or null)
+            && builtins.match "^[a-z][a-z0-9-]*$" spec.artifactId != null;
+          message = "${path}.spec.artifactId must be a bounded plain artifact ID.";
+        }
+        {
+          assertion = providerArtifact != null
+            && (providerArtifact.type or null) == "provider";
+          message = "${path}.spec.artifactId must resolve to a provider artifact.";
+        }
+        {
+          assertion = providerCatalog == { }
+            || lib.length providerCatalogMatches == 1;
+          message = "${path}.spec.artifactId must resolve to exactly one provider catalog entry.";
+        }
+      ]
+      ++ lib.optionals (artifactsDeclared && systemIds != [ ]) [
+        {
+          assertion = lib.all
+            (artifactId:
+              let artifact = artifactFor artifactId;
+              in builtins.isString artifactId
+                && builtins.match "^[a-z][a-z0-9-]*$" artifactId != null
+                && artifact != null
+                && (artifact.type or null) == "nixos-system")
+            systemIds;
+          message = "${path}: systemArtifactId and source.systemArtifactId must resolve to nixos-system artifacts.";
+        }
+      ];
+
   resourceAssertions = zoneName: resources:
     lib.flatten (lib.mapAttrsToList
       (resourceName: resource:
@@ -163,7 +219,8 @@ let
               !isExecutionTarget || lib.length policy.volumeAttachmentDefaults <= 64;
             message = "${path}.spec.volumeAttachmentDefaults must contain at most 64 entries.";
           }
-        ])
+        ]
+        ++ artifactAssertions zoneName resourceName resource)
       resources);
 
   zoneAssertions = lib.flatten (lib.mapAttrsToList

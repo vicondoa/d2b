@@ -49,6 +49,36 @@ let
   catalogData = preimage // { inherit catalogDigest; };
   catalogJson = builtins.toJSON catalogData;
 
+  # Keep the pre-cutover internal projection available to the legacy
+  # zone-resources emitter while the installed document uses the v3 artifact
+  # rows above.  The compatibility view intentionally contains no new
+  # authority; it is only an eval-visible table for existing consumers.
+  compatibilityEntries = map
+    (entry: {
+      inherit (entry) id type storePath;
+      packageDigest = entry.packageDigest;
+      closureMetadata = {
+        executableDigest = null;
+        manifestDigest = null;
+        componentDigest = null;
+        descriptorDigest = null;
+        configDigest = null;
+        systems = [ ];
+        platform = null;
+      };
+    })
+    (map
+      (entry: {
+        id = entry.artifactId;
+        inherit (entry) type storePath;
+        packageDigest = entry.packageDigest;
+      })
+      artifactRows);
+  compatibilityData = {
+    schemaVersion = 3;
+    entries = compatibilityEntries;
+  };
+
   catalogPath = pkgs.runCommand "d2b-artifact-catalog.json"
     {
       buildRowsJson = builtins.toJSON buildRows;
@@ -125,13 +155,13 @@ in
 
   config = {
     d2b._artifactCatalogV3 = {
-      inherit ids artifactRows preimage catalogDigest catalogData catalogJson;
+      inherit ids artifactRows preimage preimageJson catalogDigest catalogData catalogJson;
       path = catalogPath;
       publicEntries = map (entry: builtins.removeAttrs entry [ "storePath" ]) artifactRows;
     };
 
-    d2b._bundle.extraArtifacts.artifactCatalog = {
-      data = catalogData;
+    d2b._bundle.extraArtifacts.artifactCatalog = lib.mkDefault {
+      data = compatibilityData;
       jsonText = catalogJson;
       path = catalogPath;
       installFileName = "artifact-catalog.json";

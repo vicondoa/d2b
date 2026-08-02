@@ -20,8 +20,12 @@ let
       })
       standardResourceTypes);
 
+  # Evaluation-time checks must not depend on realizing a schema farm
+  # derivation.  The committed schemas are the source of truth for Nix
+  # assertions; the farm is retained as an explicit build input below so a
+  # Provider package can replace it for the derivation-time round trip.
   schemaFor = resourceType:
-    let path = schemaFarm + "/${resourceType}.schema.json";
+    let path = ../docs/reference/schemas/v3 + "/${resourceType}.schema.json";
     in if builtins.pathExists path
     then builtins.fromJSON (builtins.readFile path)
     else null;

@@ -21,7 +21,7 @@
 # projection strips it, because a resource spec, status, or audit record never
 # exposes one.
 
-{ config, lib, ... }:
+{ config, lib, pkgs, ... }:
 
 let
   types = lib.types;
@@ -113,6 +113,28 @@ let
   # record never exposes a store path.
   publicEntries = map (e: { inherit (e) id type entry; }) entries;
 
+  # The provider catalog is a separate public document.  It carries only the
+  # frozen package metadata; private store locations remain in the artifact
+  # catalog used by activation.
+  providerCatalogEntries = lib.sort
+    (left: right:
+      let
+        leftName = left.entry.providerName or left.id;
+        rightName = right.entry.providerName or right.id;
+      in leftName < rightName)
+    entries;
+  providerCatalogData = {
+    schemaVersion = "v1";
+    entries = map
+      (entry: {
+        providerName = entry.entry.providerName or entry.id;
+        artifactId = entry.id;
+      } // entry.entry)
+      providerCatalogEntries;
+  };
+  providerCatalogJson = builtins.toJSON providerCatalogData;
+  providerCatalogPath = pkgs.writeText "d2b-provider-catalog.json" providerCatalogJson;
+
   catalogJson = builtins.toJSON {
     excludedMechanisms = shape.excludedMechanisms;
     entries = publicEntries;
@@ -165,12 +187,30 @@ in
     internal = true;
     visible = false;
     default = {
-      inherit entries publicEntries;
+      inherit entries publicEntries providerCatalogEntries providerCatalogData providerCatalogJson providerCatalogPath;
       json = catalogJson;
       ids = artifactIds;
       shape = shape;
     };
     description = "Internal compiled artifact catalog.";
+  };
+
+  config = {
+    d2b._providerCatalog = {
+      inherit entries publicEntries providerCatalogEntries providerCatalogData providerCatalogJson providerCatalogPath;
+      json = catalogJson;
+      ids = artifactIds;
+      shape = shape;
+    };
+
+    d2b._bundle.extraArtifacts.providerCatalog = {
+      data = providerCatalogData;
+      jsonText = providerCatalogJson;
+      path = providerCatalogPath;
+      installFileName = "provider-catalog.json";
+      classification = "contractPrivateNonSecret";
+      sensitivity = "nonSecret";
+    };
   };
 
   config.assertions =

@@ -518,6 +518,109 @@ let
 
   zoneResourceIdentityRows = lib.concatMap (zone: zone.resources) zoneRows;
 
+  # v3 cross-Zone index.  This is deliberately derived from the unified
+  # resource declarations rather than from the legacy env/VM tables above.
+  # The legacy index remains available to the pre-cutover emitters until
+  # their consumers move to the v3 artifact.
+  v3ResourceRows = zoneName: zone:
+    lib.mapAttrsToList
+      (resourceName: resource: {
+        inherit zoneName resourceName resource;
+        ref = "${resource.type}/${resourceName}";
+      })
+      zone.resources;
+
+  v3Resources = lib.concatMap
+    (zoneName: v3ResourceRows zoneName cfg.zones.${zoneName})
+    (sortedAttrNames declaredZones);
+
+  v3RowsOfType = resourceType:
+    lib.filter (row: row.resource.type == resourceType) v3Resources;
+
+  v3ZoneSummary = zoneName:
+    {
+      hosts = v3NamesOfTypeInZone "Host" zoneName;
+      guests = v3NamesOfTypeInZone "Guest" zoneName;
+      networks = v3NamesOfTypeInZone "Network" zoneName;
+      providers = v3NamesOfTypeInZone "Provider" zoneName;
+    };
+
+  v3NamesOfTypeInZone = resourceType: zoneName:
+    map (row: row.resourceName)
+      (lib.sort
+        (left: right: left.resourceName < right.resourceName)
+        (lib.filter
+          (row: row.zoneName == zoneName && row.resource.type == resourceType)
+          v3Resources));
+
+  v3ExecutionRefRows = lib.filter
+    (row: row.resource.type == "Host" || row.resource.type == "Guest")
+    v3Resources;
+
+  v3ProcessRefsFor = executionRow:
+    map (row: row.resourceName)
+      (lib.sort
+        (left: right: left.resourceName < right.resourceName)
+        (lib.filter
+          (row:
+            row.zoneName == executionRow.zoneName
+            && builtins.elem row.resource.type [ "Process" "EphemeralProcess" ]
+            && (row.resource.spec.executionRef or null) == executionRow.ref)
+          v3Resources));
+
+  v3ExecutionIndex = lib.listToAttrs (map
+    (row: lib.nameValuePair row.ref {
+      zone = row.zoneName;
+      providerRef = row.resource.spec.providerRef or null;
+      processes = v3ProcessRefsFor row;
+    })
+    v3ExecutionRefRows);
+
+  v3NetworkIndex = lib.listToAttrs (map
+    (row:
+      let
+        attachedGuests = map (guest: guest.resourceName)
+          (lib.sort
+            (left: right: left.resourceName < right.resourceName)
+            (lib.filter
+              (guest:
+                guest.zoneName == row.zoneName
+                && guest.resource.type == "Guest"
+                && lib.any
+                  (attachment:
+                    (attachment.networkRef or null) == row.ref)
+                  (guest.resource.spec.networkAttachments or [ ]))
+              v3Resources));
+      in
+      lib.nameValuePair row.ref {
+        zone = row.zoneName;
+        lanSubnet = row.resource.spec.lanCidr or null;
+        attachedGuests = attachedGuests;
+      })
+    (v3RowsOfType "Network"));
+
+  v3ClosureIndex = lib.listToAttrs (map
+    (row: lib.nameValuePair "Guest/${row.zoneName}/${row.resourceName}" {
+      zone = row.zoneName;
+      guest = row.resourceName;
+      closureArtifact = row.resource.spec.systemArtifactId or null;
+      closurePath = "/etc/d2b/closures/zones/${row.zoneName}/${row.resourceName}.json";
+    })
+    (lib.filter
+      (row: row.resource.type == "Guest"
+        && (row.resource.spec.systemArtifactId or null) != null)
+      v3Resources));
+
+  v3IndexData = {
+    schemaVersion = "v1";
+    zones = lib.listToAttrs (map
+      (zoneName: lib.nameValuePair zoneName (v3ZoneSummary zoneName))
+      (sortedAttrNames declaredZones));
+    executionIndex = v3ExecutionIndex;
+    networkIndex = v3NetworkIndex;
+    closureIndex = v3ClosureIndex;
+  };
+
   # Flat list of workload rows for enabled realms whose workload.enable = true.
   enabledRealmWorkloadRows = lib.filter (w: w.enable)
     (lib.flatten (map (row: row.workloads) enabledRealmRows));
@@ -801,7 +904,12 @@ let
 in
 {
   imports = [
+    ./options-artifacts.nix
+    ./artifact-catalog.nix
     ./options-zones.nix
+    ./options-zones-resources.nix
+    ./generated/options-zones-Zone.nix
+    ./generated/options-zones-ZoneLink.nix
 
     # Resource-emitter modules. Each region below holds the imports for one
     # module scaffold, so the work item that fills a scaffold appends inside
@@ -809,6 +917,9 @@ in
 
     # Region: per-Zone bundle emitter (ADR046-pstate-010).
     ./zone-resources.nix
+    ./bundle-zones.nix
+    ./resources-zones-processes.nix
+    ./resources-zones-volumes.nix
 
     # Region: Network ResourceType emitter (ADR046-network-004).
     ./resources-network.nix
@@ -830,5 +941,12 @@ in
   config.d2b = {
     _index = index;
     _envMeta = config.d2b._index.envMeta;
+  };
+
+  config.d2b._bundle.extraArtifacts.index = {
+    data = v3IndexData;
+    installFileName = "index.json";
+    classification = "contractPrivateNonSecret";
+    sensitivity = "nonSecret";
   };
 }
