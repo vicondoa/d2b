@@ -146,16 +146,13 @@ D2B_RUST_MAIN_PREREQS_aggregate := test-rust-leaf-schema
 D2B_RUST_MAIN_PREREQS_cold := test-rust-leaf-schema
 D2B_RUST_MAIN_PREREQS_api :=
 D2B_RUST_MAIN_PREREQS_main :=
-D2B_RUST_MAIN_PREREQS_remaining :=
 D2B_RUST_MAIN_PREREQS := $(D2B_RUST_MAIN_PREREQS_$(D2B_RUST_PROFILE))
 D2B_RUST_SCHEMA_PREREQS_aggregate := test-rust-leaf-inventory
 D2B_RUST_SCHEMA_PREREQS_cold := test-rust-leaf-inventory
-D2B_RUST_SCHEMA_PREREQS_remaining := test-rust-leaf-inventory
 D2B_RUST_SCHEMA_PREREQS_schema :=
 D2B_RUST_SCHEMA_PREREQS := $(D2B_RUST_SCHEMA_PREREQS_$(D2B_RUST_PROFILE))
 D2B_RUST_BROKER_PREREQS_aggregate := test-rust-leaf-inventory
 D2B_RUST_BROKER_PREREQS_cold := test-rust-leaf-inventory
-D2B_RUST_BROKER_PREREQS_remaining := test-rust-leaf-inventory
 D2B_RUST_BROKER_PREREQS_broker :=
 D2B_RUST_BROKER_PREREQS := $(D2B_RUST_BROKER_PREREQS_$(D2B_RUST_PROFILE))
 
@@ -333,16 +330,6 @@ case "$$profile" in \
         frontier_quota=$$((quota_main + quota_fixture)); \
       fi; \
     fi; \
-    ;; \
-  remaining) \
-    active_lanes=1; \
-    quota_schema="$$runtime_budget"; \
-    quota_inventory="$$runtime_budget"; \
-    quota_broker="$$runtime_budget"; \
-    quota_guest="$$runtime_budget"; \
-    quota_ast="$$runtime_budget"; \
-    quota_supply="$$runtime_budget"; \
-    frontier_quota="$$runtime_budget"; \
     ;; \
   broker) \
     active_lanes=1; \

@@ -371,12 +371,10 @@ fn rust_dag_violations(makefile: &str) -> Vec<String> {
         "test-rust-leaf-main-workspace: $(D2B_RUST_MAIN_PREREQS)",
         "D2B_RUST_SCHEMA_PREREQS_aggregate := test-rust-leaf-inventory",
         "D2B_RUST_SCHEMA_PREREQS_cold := test-rust-leaf-inventory",
-        "D2B_RUST_SCHEMA_PREREQS_remaining := test-rust-leaf-inventory",
         "D2B_RUST_SCHEMA_PREREQS_schema :=",
         "test-rust-leaf-schema: $(D2B_RUST_SCHEMA_PREREQS)",
         "D2B_RUST_BROKER_PREREQS_aggregate := test-rust-leaf-inventory",
         "D2B_RUST_BROKER_PREREQS_cold := test-rust-leaf-inventory",
-        "D2B_RUST_BROKER_PREREQS_remaining := test-rust-leaf-inventory",
         "D2B_RUST_BROKER_PREREQS_broker :=",
         "test-rust-leaf-broker: $(D2B_RUST_BROKER_PREREQS)",
     ] {
@@ -589,7 +587,6 @@ fn rust_profile_violations(makefile: &str, driver: &str, api_driver: &str) -> Ve
         "aggregate",
         "api",
         "main",
-        "remaining",
         "broker",
         "guest",
         "no-bash",
@@ -849,7 +846,6 @@ D2B_RUST_MAIN_PREREQS_main :=
 test-rust-leaf-main-workspace: $(D2B_RUST_MAIN_PREREQS)
 D2B_RUST_BROKER_PREREQS_aggregate := test-rust-leaf-inventory
 D2B_RUST_BROKER_PREREQS_cold := test-rust-leaf-inventory
-D2B_RUST_BROKER_PREREQS_remaining := test-rust-leaf-inventory
 D2B_RUST_BROKER_PREREQS_broker :=
 test-rust-leaf-broker: $(D2B_RUST_BROKER_PREREQS)
 test-rust-leaf-guest-shell-runner:
@@ -857,7 +853,6 @@ test-rust-leaf-no-bash-ast:
 test-rust-leaf-supply-chain:
 D2B_RUST_SCHEMA_PREREQS_aggregate := test-rust-leaf-inventory
 D2B_RUST_SCHEMA_PREREQS_cold := test-rust-leaf-inventory
-D2B_RUST_SCHEMA_PREREQS_remaining := test-rust-leaf-inventory
 D2B_RUST_SCHEMA_PREREQS_schema :=
 test-rust-leaf-schema: $(D2B_RUST_SCHEMA_PREREQS)
 test-rust-leaf-inventory:
@@ -983,7 +978,6 @@ fn rust_profile_policy_rejects_a_missing_ci_profile() {
 $(call D2B_RUST_DISPATCH,leaves,aggregate)
 $(call D2B_RUST_DISPATCH,leaves,api)
 $(call D2B_RUST_DISPATCH,leaves,main)
-$(call D2B_RUST_DISPATCH,leaves,remaining)
 $(call D2B_RUST_DISPATCH,leaves,broker)
 $(call D2B_RUST_DISPATCH,leaves,guest)
 $(call D2B_RUST_DISPATCH,leaves,no-bash)
