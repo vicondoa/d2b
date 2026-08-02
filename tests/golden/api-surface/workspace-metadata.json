@@ -4,8 +4,8 @@
       "crate_name": "d2b",
       "private_census": {
         "external_crates": 94,
-        "index_items": 17584,
-        "path_items": 12883
+        "index_items": 17630,
+        "path_items": 12884
       },
       "private_hidden_items": 45,
       "private_json_file": "d2b.json",
@@ -676,15 +676,15 @@
       "crate_name": "d2b_resource_client",
       "private_census": {
         "external_crates": 64,
-        "index_items": 1581,
-        "path_items": 10918
+        "index_items": 1622,
+        "path_items": 10919
       },
       "private_hidden_items": 30,
       "private_json_file": "d2b_resource_client.json",
       "public_census": {
         "external_crates": 64,
-        "index_items": 931,
-        "path_items": 10866
+        "index_items": 935,
+        "path_items": 10867
       },
       "public_json_file": "d2b_resource_client.json"
     },
