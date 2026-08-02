@@ -10,10 +10,13 @@ use std::{
     time::Duration,
 };
 
-use d2b_contracts::v3::{ResourceRef, ResourceTypeName, ZoneId, STANDARD_RESOURCE_TYPES};
+use d2b_contracts::v3::{
+    ResourceRef, ResourceTypeName, ZoneId,
+    identity::STANDARD_RESOURCE_TYPES,
+};
 use serde_json::{Value, json};
 
-use crate::{CliFailure, MAX_FRAME_BYTES, SeqpacketUnixSocket, print_stderr, print_stdout};
+use crate::{CliFailure, MAX_FRAME_BYTES, SeqpacketUnixSocket, print_stdout};
 
 /// The frozen JSON envelope version emitted by the CLI.
 pub(crate) const JSON_SCHEMA_VERSION: u8 = 1;
@@ -511,10 +514,12 @@ fn human_summary(value: &Value) -> String {
     if let Some(object) = value.as_object() {
         if let Some(resource_ref) = object.get("resourceRef").and_then(Value::as_str) {
             let phase = object
-                .pointer("/status/phase")
-                .and_then(Value::as_str)
-                .or_else(|| object.get("phase").and_then(Value::as_str))
-                .unwrap_or("unknown");
+            .get("status")
+            .and_then(Value::as_object)
+            .and_then(|status| status.get("phase"))
+            .and_then(Value::as_str)
+            .or_else(|| object.get("phase").and_then(Value::as_str))
+            .unwrap_or("unknown");
             return format!("{resource_ref}\t{phase}");
         }
         if let Some(items) = object.get("items").and_then(Value::as_array) {

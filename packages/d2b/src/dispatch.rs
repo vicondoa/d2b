@@ -3,8 +3,6 @@
 use std::{ffi::OsString, path::PathBuf};
 
 use clap::{Args, Parser, Subcommand};
-use serde_json::Value;
-
 use crate::{
     CliFailure,
     activation, complete, endpoint, exec, guest, host, provider, resource, share, shell, zone,
@@ -337,4 +335,3 @@ pub(crate) fn modern_run(raw_args: Vec<OsString>) -> i32 {
         Err(error) => crate::report_failure(error),
     }
 }
-

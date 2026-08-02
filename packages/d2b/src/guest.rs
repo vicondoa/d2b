@@ -7,7 +7,7 @@ use crate::{
     CliFailure,
     context::{OutputMode, RequestDeadline, ZoneContext, parse_resource_ref},
     dispatch::{
-        GenericCreateArgs, GenericDeleteArgs, GenericGetArgs, GenericListArgs,
+        GenericCreateArgs, GenericGetArgs, GenericListArgs,
         GenericStatusArgs, GenericUpdateSpecArgs,
     },
     resource,

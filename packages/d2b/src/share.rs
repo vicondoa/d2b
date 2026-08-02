@@ -9,8 +9,7 @@ use crate::{
         OutputMode, RequestDeadline, ZoneContext, parse_resource_ref, read_spec,
     },
     dispatch::{
-        GenericCreateArgs, GenericDeleteArgs, GenericGetArgs, GenericListArgs,
-        GenericStatusArgs, GenericUpdateSpecArgs, GenericWatchArgs,
+        GenericGetArgs, GenericUpdateSpecArgs,
     },
     resource,
 };

@@ -3,7 +3,7 @@
 use clap::{Args, ValueEnum};
 use serde_json::json;
 
-use crate::{CliFailure, context::MAX_REQUEST_LIFETIME_MS, dispatch::BUILTIN_COMMANDS};
+use crate::{CliFailure, dispatch::BUILTIN_COMMANDS};
 
 pub(crate) const MAX_COMPLETION_BYTES: usize = 256 * 1024;
 pub(crate) const MAX_PROVIDER_FETCH_MS: u64 = 10_000;
@@ -110,6 +110,6 @@ mod tests {
 
     #[test]
     fn completion_deadline_is_not_longer_than_request_bound() {
-        assert!(MAX_PROVIDER_FETCH_MS < MAX_REQUEST_LIFETIME_MS);
+        assert!(MAX_PROVIDER_FETCH_MS < crate::context::MAX_REQUEST_LIFETIME_MS);
     }
 }
