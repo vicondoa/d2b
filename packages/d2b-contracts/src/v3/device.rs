@@ -842,7 +842,7 @@ impl DeviceErrorCode {
     }
 
     /// Return the complete closed Device error-code set.
-    pub const fn all() -> &'static [Self; 13] {
+    pub const fn all() -> &'static [Self; 12] {
         &[
             Self::DeviceNotFound,
             Self::DeviceClaimConflict,
