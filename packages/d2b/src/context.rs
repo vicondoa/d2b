@@ -102,22 +102,19 @@ impl std::fmt::Debug for CanonicalZoneBackend {
     }
 }
 
-#[cfg(test)]
-enum ContextBackend {
-    Canonical(CanonicalZoneBackend),
-    Injected(Arc<dyn SessionClient>),
+struct ContextBackend {
+    canonical: CanonicalZoneBackend,
+    #[cfg(test)]
+    injected: Option<Arc<dyn SessionClient>>,
 }
 
-#[cfg(not(test))]
-type ContextBackend = CanonicalZoneBackend;
-
-#[cfg(test)]
 impl std::fmt::Debug for ContextBackend {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Canonical(backend) => formatter.debug_tuple("Canonical").field(backend).finish(),
-            Self::Injected(_) => formatter.write_str("Injected(<test>)"),
+        #[cfg(test)]
+        if self.injected.is_some() {
+            return formatter.write_str("Injected(<test>)");
         }
+        self.canonical.fmt(formatter)
     }
 }
 
@@ -207,13 +204,16 @@ impl ZoneContext {
     ) -> Result<Self, CliFailure> {
         let zone_name = zone_name.into();
         validate_zone_name(&zone_name)?;
+        let socket_path = socket_path.into();
         let zone_path = zone_path(&zone_name)
             .map_err(|_| CliFailure::new(2, "ref-invalid: invalid Zone name"))?;
+        let mut backend = canonical_backend(&zone_name, &socket_path)?;
+        backend.injected = Some(session_client);
         Ok(Self {
             zone_name,
-            socket_path: socket_path.into(),
+            socket_path,
             zone_path,
-            backend: ContextBackend::Injected(session_client),
+            backend,
         })
     }
 
@@ -281,18 +281,13 @@ impl ZoneContext {
         mode: OutputMode,
     ) -> Result<Value, CliFailure> {
         #[cfg(test)]
-        if let ContextBackend::Injected(client) = &self.backend {
+        if let Some(client) = &self.backend.injected {
             return self.invoke_injected(client.as_ref(), method, payload, deadline, mode);
         }
 
-        #[cfg(test)]
-        let ContextBackend::Canonical(backend) = &self.backend else {
-            unreachable!("injected transport returned above");
-        };
-        #[cfg(not(test))]
-        let backend = &self.backend;
-
-        let value = backend
+        let value = self
+            .backend
+            .canonical
             .invoke(method, payload, deadline)
             .map_err(|error| self.client_failure(error, mode))?;
         self.decorate_response(value)
@@ -590,19 +585,15 @@ impl ZoneContext {
 fn canonical_backend(zone_name: &str, socket_path: &Path) -> Result<ContextBackend, CliFailure> {
     let zone_path =
         zone_path(zone_name).map_err(|_| CliFailure::new(2, "ref-invalid: invalid Zone name"))?;
-    let backend = CanonicalZoneBackend {
-        zone_name: zone_name.to_owned(),
-        zone_path,
-        socket_path: socket_path.to_owned(),
-    };
-    #[cfg(test)]
-    {
-        Ok(ContextBackend::Canonical(backend))
-    }
-    #[cfg(not(test))]
-    {
-        Ok(backend)
-    }
+    Ok(ContextBackend {
+        canonical: CanonicalZoneBackend {
+            zone_name: zone_name.to_owned(),
+            zone_path,
+            socket_path: socket_path.to_owned(),
+        },
+        #[cfg(test)]
+        injected: None,
+    })
 }
 
 impl CanonicalZoneBackend {
