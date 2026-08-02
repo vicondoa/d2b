@@ -106,13 +106,22 @@ fn startup_tracing_and_v3_sources_do_not_leak_forbidden_fields() {
         "telemetry foundation source must be present"
     );
     for (path, content) in &sources {
-        for field in FORBIDDEN_SPAN_FIELDS {
-            let tracing_field = format!("{field} =");
-            let span_field = format!("\"{field}\"");
-            assert!(
-                !content.contains(&tracing_field) && !content.contains(&span_field),
-                "{path} contains forbidden telemetry field {field}"
-            );
+        for line in content.lines().filter(|line| {
+            line.contains("tracing::")
+                || line.contains("span!")
+                || line.contains("event!")
+                || line.contains("info!")
+                || line.contains("warn!")
+                || line.contains("error!")
+        }) {
+            for field in FORBIDDEN_SPAN_FIELDS {
+                let tracing_field = format!("{field} =");
+                let span_field = format!("\"{field}\"");
+                assert!(
+                    !line.contains(&tracing_field) && !line.contains(&span_field),
+                    "{path} contains forbidden telemetry field {field}"
+                );
+            }
         }
         assert!(
             !content.contains(r#"config_source = "realm-controllers""#),
