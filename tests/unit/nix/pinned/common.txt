@@ -542,6 +542,8 @@ observability/obs-host-flags-require-enable
 observability/obs-host-identity-override
 observability/obs-host-otlp-client-group-umask
 observability/obs-journal-default-on
+observability/obs-journal-execstart-disabled-deep-force
+observability/obs-journal-execstart-enabled-deep-force
 observability/obs-manifest-fields
 observability/obs-metric-references
 observability/obs-name-extension-allowed
