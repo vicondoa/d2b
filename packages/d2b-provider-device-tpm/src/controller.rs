@@ -4,7 +4,9 @@ use core::fmt;
 
 use crate::{
     DEVICE_TPM_FINALIZER,
-    runner::{FlushLaunchTicket, SignedBinaryRef, SwtpmSettings, SwtpmStartLaunchTicket},
+    runner::{
+        FlushLaunchTicket, SignedBinaryRef, SwtpmArgvError, SwtpmSettings, SwtpmStartLaunchTicket,
+    },
     state::{StateDirIntent, TpmStateObservation, TpmStateValidationError},
 };
 
@@ -107,6 +109,8 @@ impl fmt::Debug for TpmStatePreparationResult {
 /// Controller-level failures, distinct from effect failures.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TpmControllerError {
+    /// Device settings failed the signed Provider schema bounds.
+    Settings(SwtpmArgvError),
     /// The state machine was called in a phase that cannot accept the action.
     InvalidState,
     /// The trusted state observation was rejected.
@@ -118,6 +122,7 @@ pub enum TpmControllerError {
 impl fmt::Display for TpmControllerError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::Settings(error) => error.fmt(formatter),
             Self::InvalidState => formatter.write_str("tpm-invalid-state"),
             Self::StateValidation(error) => error.fmt(formatter),
             Self::Effect(error) => error.fmt(formatter),
@@ -167,7 +172,7 @@ impl TpmController {
         settings: SwtpmSettings,
         binary: SignedBinaryRef,
     ) -> Result<Self, TpmControllerError> {
-        settings.validate().map_err(TpmControllerError::Effect)?;
+        settings.validate().map_err(TpmControllerError::Settings)?;
         Ok(Self {
             intent,
             settings,

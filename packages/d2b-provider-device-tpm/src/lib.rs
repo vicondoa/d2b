@@ -13,7 +13,7 @@ mod state;
 
 pub use controller::{
     TpmController, TpmControllerError, TpmEffectError, TpmEffectPort, TpmPhase,
-    TpmReconcileDisposition, TpmReconcileOutcome,
+    TpmReconcileDisposition, TpmReconcileOutcome, TpmStatePreparationResult,
 };
 pub use runner::{
     BinaryKind, FlushLaunchTicket, SignedBinaryRef, SwtpmArgv, SwtpmArgvError, SwtpmSettings,
