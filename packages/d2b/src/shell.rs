@@ -110,7 +110,7 @@ fn open(
         deadline,
         mode,
     )?;
-    context.emit(&value, mode)?;
+    context.emit(&with_unsafe_posture(value, &execution_ref), mode)?;
     Ok(0)
 }
 
@@ -248,4 +248,19 @@ fn warn_unsafe_local(resource_ref: &d2b_contracts::v3::ResourceRef, mode: Output
             "warning: no isolation boundary - this process runs as your host user\n",
         );
     }
+}
+
+fn with_unsafe_posture(
+    mut value: serde_json::Value,
+    resource_ref: &d2b_contracts::v3::ResourceRef,
+) -> serde_json::Value {
+    if resource_ref.resource_type().as_str() == "Host"
+        && let serde_json::Value::Object(object) = &mut value
+    {
+        object.insert(
+            "isolationPosture".to_owned(),
+            serde_json::Value::String("none".to_owned()),
+        );
+    }
+    value
 }
