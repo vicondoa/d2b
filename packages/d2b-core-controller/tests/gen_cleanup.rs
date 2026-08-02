@@ -107,3 +107,33 @@ fn removed_configuration_resource_is_deleted_asynchronously() {
     assert_eq!(controller.state().phase(), GenerationPhase::Ready);
     assert_eq!(controller.state().pending_cleanup_count(), 0);
 }
+
+#[test]
+fn rollback_cancels_cleanup_for_resources_reintroduced_by_the_retained_bundle() {
+    let mut controller = ZoneConfigController::new(
+        ZoneId::parse("work").unwrap(),
+        RetainedGenerations::default_value(),
+    );
+    let first = input_bundle('a', true);
+    let first_id = first.content_hash().clone();
+    controller
+        .activate(BundleActivation::new(first), &[], &now())
+        .unwrap();
+    controller.complete_intent(&key("device-a")).unwrap();
+    controller
+        .activate(
+            BundleActivation::new(input_bundle('b', false)),
+            &[stored_device()],
+            &now(),
+        )
+        .unwrap();
+    assert_eq!(controller.state().pending_cleanup_count(), 1);
+
+    let rolled_back = controller
+        .rollback(&first_id, &[stored_device()], &now())
+        .unwrap();
+    assert!(rolled_back.audits().iter().any(|event| {
+        event.kind() == d2b_core_controller::audit::AuditEventKind::GenerationRolledBack
+    }));
+    assert_eq!(controller.state().pending_cleanup_count(), 0);
+}

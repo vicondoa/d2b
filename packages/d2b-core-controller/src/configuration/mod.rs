@@ -2138,6 +2138,9 @@ impl ZoneConfigController {
                     PendingCleanup::new(key.clone(), now.clone(), prior_ordinal, next_generation),
                 );
             }
+            if let bundle_apply::BundleApplyEffect::CancelDelete(key) = effect {
+                self.pending_cleanup.remove(key);
+            }
         }
         let mut audits = Vec::new();
         let activation_audit = match activation_kind {
