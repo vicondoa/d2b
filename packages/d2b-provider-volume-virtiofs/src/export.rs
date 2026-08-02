@@ -59,6 +59,11 @@ impl SocketIdentity {
             out.push(char::from_digit(u32::from(byte >> 4), 16).unwrap_or('0'));
             out.push(char::from_digit(u32::from(byte & 0x0f), 16).unwrap_or('0'));
         }
+
+        /// Return the eight-character tag used by the private socket filename.
+        pub fn short_tag(self) -> String {
+            self.to_hex()[..8].to_owned()
+        }
         out
     }
 }
@@ -78,6 +83,7 @@ pub struct ExportSpec {
     view: BoundedToken,
     access: AttachmentAccess,
     settings: AttachmentSettings,
+    mount_path: String,
 }
 
 impl ExportSpec {
@@ -101,6 +107,7 @@ impl ExportSpec {
             view,
             access,
             settings,
+            mount_path: "/".to_owned(),
         })
     }
 
@@ -122,6 +129,7 @@ impl ExportSpec {
             attachment.access(),
             attachment.settings().clone(),
         )
+        .map(|export| export.with_mount_path(attachment.mount_path()))
     }
 
     /// Borrow the Volume this Export serves.
@@ -147,6 +155,24 @@ impl ExportSpec {
     /// Borrow the typed base attachment options.
     pub const fn settings(&self) -> &AttachmentSettings {
         &self.settings
+    }
+
+    /// Borrow the guest-side mount path carried by the attachment.
+    pub fn mount_path(&self) -> &str {
+        &self.mount_path
+    }
+
+    /// Set the typed base mount path while retaining the compatibility
+    /// constructor used by older callers.
+    pub fn with_mount_path(mut self, mount_path: impl Into<String>) -> Self {
+        self.mount_path = mount_path.into();
+        self
+    }
+
+    /// Derive the stable per-Volume worker principal name.
+    pub fn worker_principal(&self) -> Result<BoundedToken, VirtiofsExportError> {
+        BoundedToken::parse(format!("vol-{}-vfd", self.volume_ref.name().as_str()))
+            .map_err(|_| VirtiofsExportError::InvalidExport)
     }
 
     /// Derive this Export's private socket identity within a Zone.

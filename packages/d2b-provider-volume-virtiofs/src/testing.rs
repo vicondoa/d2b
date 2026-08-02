@@ -34,6 +34,8 @@ pub fn block_on<F: Future>(future: F) -> F::Output {
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum PortCall {
+    /// The store-view readiness marker was checked.
+    ObserveStoreViewMarker,
     /// A worker was launched.
     LaunchWorker,
     /// The private socket was probed.
@@ -47,6 +49,7 @@ pub enum PortCall {
 /// A scripted, recording [`VirtiofsExportEffectPort`].
 #[derive(Debug)]
 pub struct ScriptedPort {
+    store_view_marker: bool,
     socket_ready: bool,
     guest_mount_ready: bool,
     guest_mount_after_delete: bool,
@@ -59,6 +62,7 @@ impl ScriptedPort {
     /// A port whose worker serves and whose guest mounts.
     pub fn serving() -> Self {
         Self {
+            store_view_marker: true,
             socket_ready: true,
             guest_mount_ready: true,
             guest_mount_after_delete: false,
@@ -77,6 +81,12 @@ impl ScriptedPort {
     /// A port whose guest never reports the mount.
     pub const fn guest_never_mounts(mut self) -> Self {
         self.guest_mount_ready = false;
+        self
+    }
+
+    /// A store-view marker that has not been published yet.
+    pub const fn store_view_marker_missing(mut self) -> Self {
+        self.store_view_marker = false;
         self
     }
 
@@ -148,6 +158,14 @@ impl VirtiofsExportEffectPort for &ScriptedPort {
         self.record(PortCall::ObserveGuestMount);
         if self.deleted() {
             return Ok(self.guest_mount_after_delete);
+        }
+
+        async fn observe_store_view_marker(
+            &self,
+            _export: &ExportSpec,
+        ) -> Result<bool, VirtiofsExportError> {
+            self.record(PortCall::ObserveStoreViewMarker);
+            Ok(self.store_view_marker)
         }
         Ok(self.guest_mount_ready)
     }

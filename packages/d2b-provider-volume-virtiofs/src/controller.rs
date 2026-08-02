@@ -67,6 +67,22 @@ impl<P: VirtiofsExportEffectPort> VirtiofsExportController<P> {
             reason: Some(reason),
         };
 
+        if export.access() == d2b_contracts::v3::volume::AttachmentAccess::SharedWrite {
+            return Ok(failed(VirtiofsExportError::SharedWriteUnsupported));
+        }
+        if export.view().as_str() == "ro-store"
+            && !self.port.observe_store_view_marker(export).await?
+        {
+            return Ok(ExportStatusReport {
+                provider: self.provider.clone(),
+                phase: ExportPhase::Pending,
+                export_ready: false,
+                guest_mount_ready: false,
+                worker_process_ref: None,
+                socket: None,
+                reason: Some(VirtiofsExportError::StoreViewMarkerMissing),
+            });
+        }
         WorkerSandbox::conformant().assert_conformant()?;
         let view = resolve_view(volume, export)?;
         let plan = match VirtiofsdWorkerPlan::for_export(export, view, vcpu_count, principal) {
@@ -74,7 +90,10 @@ impl<P: VirtiofsExportEffectPort> VirtiofsExportController<P> {
             Err(error) => return Ok(failed(error)),
         };
 
-        let worker = self.port.launch_worker(export, &plan).await?;
+        let worker = match self.port.launch_worker(export, &plan).await {
+            Ok(worker) => worker,
+            Err(error) => return Ok(failed(error)),
+        };
         let export_ready = self.port.observe_socket(&worker).await?;
         let guest_mount_ready = if export_ready {
             self.port.observe_guest_mount(export).await?

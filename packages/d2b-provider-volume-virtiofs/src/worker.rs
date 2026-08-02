@@ -189,6 +189,9 @@ pub(crate) fn render_argv(
             return Err(VirtiofsExportError::InvalidExport);
         }
     }
+    if paths.shared_dir == "/nix/store" {
+        return Err(VirtiofsExportError::InvalidExport);
+    }
     if plan.thread_pool_size == 0 {
         return Err(VirtiofsExportError::InvalidExport);
     }
@@ -356,16 +359,9 @@ mod tests {
     fn the_store_view_share_is_the_farm_and_never_the_host_store() {
         let mut store = paths();
         store.shared_dir = "/nix/store".to_owned();
-        let argv = render_argv(&plan(true), &store).expect("renders");
-        // The renderer emits what the adapter resolved; the store-view
-        // redirect is asserted where the Volume declares its view, so
-        // this case only pins that no flag rewrites the shared dir.
-        assert!(argv.iter().any(|arg| arg == "--shared-dir=/nix/store"));
         assert_eq!(
-            argv.iter()
-                .filter(|arg| arg.starts_with("--shared-dir="))
-                .count(),
-            1
+            render_argv(&plan(true), &store).unwrap_err(),
+            VirtiofsExportError::InvalidExport
         );
     }
 

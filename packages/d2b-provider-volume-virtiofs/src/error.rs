@@ -29,6 +29,10 @@ pub enum VirtiofsExportError {
     GuestMountNotReady,
     /// The Export could not drain because a child is still present.
     DrainIncomplete,
+    /// A store-view readiness marker is absent or non-empty.
+    StoreViewMarkerMissing,
+    /// Shared-write is not a supported Export access mode.
+    SharedWriteUnsupported,
 }
 
 impl VirtiofsExportError {
@@ -43,11 +47,13 @@ impl VirtiofsExportError {
             Self::ExportNotReady => "export-not-ready",
             Self::GuestMountNotReady => "guest-mount-not-ready",
             Self::DrainIncomplete => "drain-incomplete",
+            Self::StoreViewMarkerMissing => "store-view-marker-missing",
+            Self::SharedWriteUnsupported => "shared-write-unsupported",
         }
     }
 
     /// The complete closed code set, for conformance assertions.
-    pub const ALL: [Self; 8] = [
+    pub const ALL: [Self; 10] = [
         Self::InvalidExport,
         Self::ViewNotFound,
         Self::ViewRightsInsufficient,
@@ -56,6 +62,8 @@ impl VirtiofsExportError {
         Self::ExportNotReady,
         Self::GuestMountNotReady,
         Self::DrainIncomplete,
+        Self::StoreViewMarkerMissing,
+        Self::SharedWriteUnsupported,
     ];
 }
 

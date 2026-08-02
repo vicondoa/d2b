@@ -29,6 +29,10 @@ mod controller;
 mod error;
 mod export;
 mod port;
+mod readiness;
+mod socket_path;
+mod user_ns;
+mod virtiofsd_argv;
 mod worker;
 
 pub mod testing;
@@ -37,6 +41,19 @@ pub use controller::{VirtiofsExportController, resolve_view};
 pub use error::VirtiofsExportError;
 pub use export::{EXPORT_FINALIZER, EXPORT_RESOURCE_TYPE, ExportSpec, SocketIdentity};
 pub use port::{ExportPhase, ExportStatusReport, LaunchedWorker, VirtiofsExportEffectPort};
+pub use readiness::{
+    GuestMountObservation, SocketObservation, StoreViewMarkerObservation, classify_readiness,
+    require_store_view_marker,
+};
+pub use socket_path::{MAX_SOCKET_PATH_BYTES, PrivateSocketPath, SocketPathError};
+pub use user_ns::{
+    CLONE_NEWNS_FLAG, CLONE_NEWUSER_FLAG, MappingStep, UserNamespaceError,
+    UserNamespaceTemplate, validate_clone3_flags, validate_mapping_order,
+};
+pub use virtiofsd_argv::{
+    SocketGroup, VirtiofsdArgvError, VirtiofsdArgvInput, VirtiofsdCacheMode,
+    generate_virtiofsd_argv,
+};
 pub use worker::{
     INODE_FILE_HANDLES, SANDBOX_MODE, USER_NAMESPACE_MAPPING_CLASS, VirtiofsdWorkerPlan,
     WORKER_TEMPLATE, WorkerSandbox,
