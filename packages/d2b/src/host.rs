@@ -54,7 +54,7 @@ pub(crate) struct HostDoctorArgs {
 
 #[derive(Debug, Args, Clone)]
 pub(crate) struct HostInstallArgs {
-    #[arg(long, conflicts_with_all = ["apply", "enable", "start", "no-start"])]
+    #[arg(long, conflicts_with_all = ["apply", "enable", "start", "no_start"])]
     pub(crate) dry_run: bool,
     #[arg(long, conflicts_with = "dry_run")]
     pub(crate) apply: bool,
