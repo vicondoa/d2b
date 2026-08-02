@@ -332,3 +332,38 @@ pub(crate) fn modern_run(raw_args: Vec<OsString>) -> i32 {
         Err(error) => crate::report_failure(error),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::Parser;
+
+    #[test]
+    fn modern_parser_accepts_zone_resource_commands_and_global_flags() {
+        let cli = ModernCli::try_parse_from([
+            "d2b", "--zone", "dev", "guest", "start", "work", "--apply", "--json",
+        ])
+        .expect("modern guest command parses");
+        assert_eq!(cli.zone.as_deref(), Some("dev"));
+        assert!(cli.json);
+        assert!(matches!(cli.command, ModernCommand::Guest(_)));
+    }
+
+    #[test]
+    fn modern_parser_has_no_v2_alias_or_realm_dispatch() {
+        assert!(ModernCli::try_parse_from(["d2b", "up", "work"]).is_err());
+        assert!(ModernCli::try_parse_from(["d2b", "vm", "start", "work"]).is_err());
+        assert!(ModernCli::try_parse_from(["d2b", "realm", "list"]).is_err());
+    }
+
+    #[test]
+    fn built_in_registry_is_unique_and_matches_expected_size() {
+        let mut names = BUILTIN_COMMANDS.to_vec();
+        names.sort();
+        names.dedup();
+        assert_eq!(names.len(), BUILTIN_COMMANDS.len());
+        assert_eq!(BUILTIN_COMMANDS.len(), 32);
+        assert!(BUILTIN_COMMANDS.contains(&"endpoint"));
+        assert!(BUILTIN_COMMANDS.contains(&"import"));
+    }
+}
