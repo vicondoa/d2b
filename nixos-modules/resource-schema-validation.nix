@@ -336,7 +336,11 @@ in
 
   config = {
     assertions = lib.mkIf validationEnabled assertions;
-    d2b._resourceCompiler.schemaValidation = lib.mkIf validationEnabled {
+    # Bundle derivations always consume the build-time validator.  The
+    # internal `enable` switch only controls eager eval-time diagnostics so
+    # existing module-only consumers can inspect legacy configurations
+    # without forcing the derivation check.
+    d2b._resourceCompiler.schemaValidation = {
       inherit schemaFarm buildValidation;
       resourceTypes = standardResourceTypes;
       errors = lib.concatMap rowErrors rows;
