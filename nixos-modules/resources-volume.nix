@@ -21,7 +21,7 @@ let
 
   tokenPattern = "^[a-z][a-z0-9-]{0,62}$";
   modePattern = "^[0-7][0-7][0-7][0-7]$";
-  permissionsPattern = "^[rwx]{0,3}$";
+  permissionsPattern = "^[rwx-]{0,3}$";
 
   # Parse a "Type/name" reference, or report that it is not one.
   #
@@ -59,7 +59,15 @@ let
     && builtins.stringLength value <= maxLayoutPathBytes
     && !(lib.hasPrefix "/" value)
     && !(lib.hasInfix "\\" value)
-    && !(builtins.elem ".." (lib.splitString "/" value));
+    && !(lib.hasPrefix "." value && value != "")
+    && !(lib.hasInfix ":" value)
+    && !(builtins.elem ".." (lib.splitString "/" value))
+    && (value == "" || lib.all
+      (component: component != "" && component != ".")
+      (lib.splitString "/" value))
+    && !(lib.any
+      (separator: lib.hasInfix separator value)
+      [ "∕" "⁄" "＼" "﹨" "．" ]);
 
   # A guest-side mount path is absolute and still carries no traversal.
   guestMountPath = value:
@@ -196,7 +204,7 @@ let
         ])
       views);
 
-  attachmentAssertions = path: resources: views: attachments:
+  attachmentAssertions = path: resources: views: sourceKind: attachments:
     let
       writers = lib.filter (a: attrOr a "access" "read-only" == "read-write") attachments;
     in
@@ -228,6 +236,18 @@ let
             message = "${where}.transport must be virtiofs or virtio-blk.";
           }
           {
+            assertion =
+              sourceKind != "block-image"
+              || attrOr attachment "transport" null == "virtio-blk";
+            message = "${where}.transport must be virtio-blk for a block-image Volume.";
+          }
+          {
+            assertion =
+              sourceKind == "block-image"
+              || attrOr attachment "transport" null != "virtio-blk";
+            message = "${where}.transport virtio-blk is accepted only for a block-image Volume.";
+          }
+          {
             assertion = view != null && builtins.hasAttr view views;
             message = "${where}.view must name a view the Volume declares.";
           }
@@ -246,7 +266,7 @@ let
         ])
       attachments);
 
-  sourceAssertions = path: resources: source: quota:
+  sourceAssertions = path: resources: source: quota: volumeKind:
     let
       settings = attrOr source "settings" { };
       kind = attrOr settings "kind" null;
@@ -281,8 +301,16 @@ let
         message = "${path}.quota.maxBytes is required for a block-image source.";
       }
       {
+        assertion = kind != "block-image" || builtins.elem volumeKind [ "durable" "ephemeral" ];
+        message = "${path}.kind must be durable or ephemeral for a block-image source.";
+      }
+      {
         assertion = kind != "tmpfs" || (maxBytes != null && maxInodes != null);
         message = "${path}.quota.maxBytes and ${path}.quota.maxInodes are required for a tmpfs source.";
+      }
+      {
+        assertion = kind != "tmpfs" || builtins.elem volumeKind [ "ephemeral" "tmp" ];
+        message = "${path}.kind must be ephemeral or tmp for a tmpfs source.";
       }
     ];
 
@@ -298,14 +326,39 @@ let
         message = "${path}.spec.providerRef must resolve to a Provider in Zone ${zoneName}.";
       }
       {
+        assertion =
+          let
+            providerRef = parseRef (attrOr spec "providerRef" "");
+            provider =
+              if providerRef != null && builtins.hasAttr providerRef.name resources
+              then resources.${providerRef.name}
+              else null;
+            artifactId =
+              if provider != null && provider.spec ? artifactId
+              then provider.spec.artifactId
+              else null;
+            artifact =
+              if artifactId != null && builtins.hasAttr artifactId cfg.artifacts
+              then cfg.artifacts.${artifactId}
+              else null;
+          in provider != null
+            && artifactId != null
+            && artifact != null
+            && artifact.type == "provider";
+        message = "${path}.spec.providerRef must select a Provider with a provider artifact in d2b.artifacts.";
+      }
+      {
         assertion = builtins.elem (attrOr spec "kind" null) [ "durable" "ephemeral" "state" "tmp" "cache" ];
         message = "${path}.spec.kind must be durable, ephemeral, state, tmp, or cache.";
       }
     ]
     ++ sourceAssertions "${path}.spec" resources (attrOr spec "source" { }) (attrOr spec "quota" { })
+      (attrOr spec "kind" null)
     ++ layoutAssertions "${path}.spec" resources (attrOr spec "layout" [ ])
     ++ viewAssertions "${path}.spec" views
-    ++ attachmentAssertions "${path}.spec" resources views (attrOr spec "attachments" [ ]);
+    ++ attachmentAssertions "${path}.spec" resources views
+      (attrOr (attrOr (attrOr spec "source" { }) "settings" { }) "kind" null)
+      (attrOr spec "attachments" [ ]);
 
   zoneVolumeAssertions = lib.flatten (lib.mapAttrsToList
     (zoneName: zone:
