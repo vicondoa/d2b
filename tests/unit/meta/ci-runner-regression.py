@@ -722,6 +722,12 @@ set -euo pipefail
             # binding used by the dependency-free helper.
             if marker == "fstat":
                 self.assertRegex(helper, r"(?i)(?:fstat|stat\()")
+            elif marker == "st_uid":
+                self.assertRegex(
+                    helper,
+                    r"(?:st_uid|\$[A-Za-z_][A-Za-z0-9_]*\[4\]\s*==\s*\$>)",
+                    msg="manifest ownership checks must compare stat uid to the effective uid",
+                )
             else:
                 self.assertIn(marker, helper)
 
