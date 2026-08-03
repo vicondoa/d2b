@@ -34,6 +34,8 @@ use constant {
     O_RDWR      => 0x2,
     O_WRONLY   => 0x1,
     PR_SET_CHILD_SUBREAPER => 36,
+    RESOLVE_NO_MAGICLINKS => 0x02,
+    RESOLVE_NO_SYMLINKS => 0x04,
     MAX_INTERRUPT_RETRIES => 16,
     SEEK_SET    => 0,
     SHUTDOWN_GRACE_SECONDS => 10,
@@ -175,7 +177,12 @@ sub open_manifest_parent {
     my @parent_parts = grep { $_ ne "" && $_ ne "." } @{$parts};
     my $parent_path = @parent_parts ? join("/", @parent_parts) : ".";
     $parent_path = "/$parent_path" if $absolute;
-    my $how = pack("QQQ", O_PATH | O_DIRECTORY | O_CLOEXEC, 0, 0x06);
+    my $how = pack(
+        "QQQ",
+        O_PATH | O_DIRECTORY | O_CLOEXEC,
+        0,
+        RESOLVE_NO_MAGICLINKS | RESOLVE_NO_SYMLINKS,
+    );
     my $mutable_parent_path = "$parent_path";
     my $mutable_how = "$how";
     my $openat2_fd = syscall(
