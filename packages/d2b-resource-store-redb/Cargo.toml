@@ -22,7 +22,5 @@ sha2.workspace = true
 tokio = { workspace = true, features = ["rt", "sync", "time"] }
 
 [dev-dependencies]
-d2b-bus = { path = "../d2b-bus", version = "0.0.0-bootstrap", features = ["production-rss-fixture"] }
-d2b-resource-api = { path = "../d2b-resource-api", version = "0.0.0-bootstrap" }
 tempfile = "3"
 tokio = { workspace = true, features = ["macros", "rt", "sync", "test-util", "time"] }

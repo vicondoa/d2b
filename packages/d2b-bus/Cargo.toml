@@ -32,3 +32,8 @@ serde_json.workspace = true
 syn = { version = "2", features = ["full", "visit"] }
 tempfile = "3"
 tokio = { workspace = true, features = ["macros", "rt", "sync", "test-util"] }
+
+[[test]]
+name = "production_watch_rss"
+path = "tests/production_watch_rss.rs"
+required-features = ["production-rss-fixture"]
