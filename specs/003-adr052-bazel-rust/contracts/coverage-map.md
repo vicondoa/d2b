@@ -8,15 +8,18 @@ does not version or replace execution-manifest v1.
 Each row contains:
 
 - `surfaceId`: one baseline execution-manifest ID;
-- `carriers`: the nonempty set of existing Bazel labels for this surface, with
-  exactly one marked as owning the verdict;
+- `carriers`: the nonempty set of carrier entries for this surface, each naming
+  an existing Bazel label, whether it owns the verdict, and either its topology
+  or an explicit not-applicable reason. Exactly one entry owns the verdict.
+  Topology is per carrier, not per surface, because
+  `rust-main-workspace-tests` carries a process-per-case suite, a doctest
+  carrier, and a harness-free carrier under one identifier;
 - `slice`: `main`, `api`, `broker`, or `aux`;
 - `cargoBaseline`: current leaf/mode reference;
 - `census`: the generator-derived census artifact, its expected entries and
   count, and the derivation that produced it;
 - `outOfCensus`: every manifest entry the executed selector excludes, each with
   its reason;
-- `topology`: topology reference or explicit not-applicable reason;
 - `testTargets`: all transitively carried Rust tests;
 - `handwrittenFragments`: all non-generated BUILD fragments;
 - `binaryProviders`: expected provider label, runfiles path, and binary
@@ -71,6 +74,9 @@ These are not generated and must each appear exactly once in
 - the `rustdoc_json` rule that renders the census and emits the toolchain
   version the action actually used;
 - the vendor repository rule that materializes the offline dependency tree;
+- the yanked-state carrier fragment that consumes the committed lock-bounded
+  snapshot and reports under `rust-deny-main`, `rust-deny-broker`, and
+  `rust-deny-guest`, which exists unconditionally and adds no nineteenth ID;
 - the aggregate, slice, carrier, and guard fragments under `bazel/` and
   `ci/rust/`.
 
@@ -106,7 +112,7 @@ The guard rejects:
   naming the label before any test runs;
 - a Rust test target not transitively claimed exactly once;
 - a suite without an exact nonempty census or a required topology;
-- a hand-written fragment not listed exactly once, including the three
+- a hand-written fragment not listed exactly once, including the four
   fragments named above;
 - a scan input set unequal to its committed manifest in either direction;
 - parsed no-bash files unequal to declared inputs;

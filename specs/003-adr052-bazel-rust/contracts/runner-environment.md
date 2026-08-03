@@ -37,7 +37,13 @@ mechanically true.
 - Raw child stdout and stderr stay in Bazel's ordinary `test.log` artifact,
   reached through the failed target's test-log link or the Actions artifact, so
   removing raw output from the structured result does not remove the
-  contributor's diagnostic path.
+  contributor's diagnostic path. This split is a contract, not an
+  implementation detail: the structured document is bounded and redacted
+  because machines consume it, and `test.log` is unbounded and unredacted
+  because a human reads it after a failure. Every wave that ships or promotes
+  this behavior states both halves in its release note, so a contributor
+  reading the changelog learns where the raw output went rather than
+  discovering it is missing.
 
 ## Filesystem semantics
 
@@ -59,10 +65,18 @@ mechanically true.
   filesystem error unlink only the runner-created temporary with `unlinkat`
   before failing the carrier, so no partial evidence remains and no foreign
   path is removed.
-- Open, write, sync, rename, and unlink sit behind a small injectable
-  filesystem trait, so errno mapping, ownership state, and call ordering are
-  hermetically testable rather than requiring a full disk or signal races on
-  the shared host.
+- Open, write, sync, rename, unlink, and directory enumeration sit behind one
+  injectable filesystem trait in `packages/d2b-bazel-runner/src/fsops.rs`, so
+  errno mapping, ownership state, and call ordering are hermetically testable
+  rather than requiring a full disk or signal races on the shared host.
+- That trait is shared with cleanup, which enforces the same anchored
+  close-on-exec, link-refusal, escape-refusal, and own-what-you-unlink
+  properties on the same syscalls. One implementation means one set of planted
+  mutations proves both callers, and a later fix cannot land in one copy only.
+  See `recovery-deadline.md` for the cleanup side of the same boundary.
+- No test in this contract may depend on live host filesystem state. `ENOSPC`,
+  short writes, `EINTR` and `EAGAIN` retries, `EEXIST` collisions, and
+  replacement races are produced by the injected fake.
 
 ## Publication is enforcing
 
@@ -74,6 +88,27 @@ Publication is part of the enforcing test contract, not optional telemetry:
 - when tests already failed, a publication failure preserves the test failure
   as the primary diagnosis and reports the publication failure as an additional
   bounded runner error.
+
+This is deliberate and is not softened to a warning. One Bazel test action per
+carrier means the event stream carries one verdict per target; every finer
+attribution the eighteen-surface manifest consumes comes from this document.
+A carrier that exits zero with no document has not produced a degraded signal,
+it has produced no evidence, and `execution-manifest-binding.md` cannot mark
+that surface complete from nothing. Warning instead would let a run report
+`passed` for a surface nothing observed, which is precisely the empty-success
+class this migration exists to remove, and it would fail in the one direction
+reviewers do not check. The cost is bounded and named: the publication failure
+is reported as a runner error distinct from a test failure, it never displaces
+an existing test failure, and it carries a code-specific recovery message.
+
+Two properties stop the rule from becoming a flake source. The document is
+written only after every child is reaped, through the injected filesystem
+boundary, into a same-directory close-on-exec temporary that is synced and
+installed with `renameat`, so there is no window in which a contended
+filesystem yields a partial document the carrier accepts. And every terminal
+error on that path is a mapped errno with a planted mutation behind it, so
+"publication failed" is a specific reproducible condition rather than an
+unexplained nonzero exit.
 
 Two injected outcome tests bind that ordering and must land with the runner
 implementation: one starts from an all-passing case set and forces publication

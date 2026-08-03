@@ -9,6 +9,16 @@ Both `openat2` and forced component-walk fallback are tested. Every opened
 descriptor is close-on-exec. A tracked file, unsafe layout, replacement race,
 or live matching server causes refusal before deletion.
 
+Cleanup performs every one of those operations through the same injectable
+filesystem trait in `packages/d2b-bazel-runner/src/fsops.rs` that the per-case
+result writer uses. The two subsystems enforce identical properties on
+identical syscalls, so a single implementation and a single mutation set cover
+both, and no cleanup test needs live host filesystem state: the tracked-file,
+symlink, magic-link, escape, replacement-race, decoy-survival, and
+descriptor-inheritance negatives are all produced by the injected fake. The
+forced component-walk route is selected through the same boundary rather than
+by finding a kernel that lacks `openat2`.
+
 | Code | Required recovery |
 | --- | --- |
 | `D2B-BZLCLEAN-TRACKED` | Run `D2B_CLEAN_DRY_RUN=1 make clean`; remove or relocate the unexpected tracked entry under `.scratch/bazel/`; rerun `make clean`. |
@@ -38,6 +48,17 @@ is forbidden by promoted workflow policy. Malformed, signed, nonnumeric,
 trailing, or overflowing input fails without echo. `None` or zero remaining
 means an ordinary expired budget, not malformed input. Child duration rounds
 down.
+
+Both the raw uptime field and the current instant arrive through
+`packages/d2b-bazel-runner/src/clock.rs`, which declares an `UptimeSource` and
+a `Clock`. Nothing in the deadline path opens `/proc/uptime` or reads the host
+clock directly. That is what makes the grammar and rounding table testable:
+every accepted and rejected field, the truncate-on-capture and round-up-on-read
+pair, the exactly-zero remaining budget, and the overflow case are supplied
+values rather than states a test has to wait for or provoke. Expiry-path tests
+drive the fake clock past the deadline so the SIGTERM, full-grace, SIGKILL, and
+reap ordering below is asserted deterministically, with no sleep and no timing
+race on a loaded host.
 
 ## Process control
 

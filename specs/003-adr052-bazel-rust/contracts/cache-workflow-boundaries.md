@@ -38,7 +38,7 @@ stale cache:
 - all four per-hub dependency-generator Bazel-side locks;
 - the dependency generator binary's pinned URL and sha256;
 - all deny configurations and the advisory-database pin;
-- the committed yanked-state snapshot, when one exists;
+- the committed yanked-state snapshot, which always exists;
 - `.bazelignore`;
 - the symlink-prefix and startup-option configuration;
 - the third-party build-script annotation digest and the action-environment

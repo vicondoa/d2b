@@ -30,6 +30,15 @@ positive integer and remains the only resource budget. Cold-local evidence
 preparation is an internal, temporary W2 xtask helper, not a Make target or
 environment contract, and is removed in W5.
 
+Two other operations are deliberately **not** Make targets and never become
+approved targets, because every approved target is reachable from a workflow:
+
+- `cargo xtask bazel-repin --hub <name>`, the single-hub lock regeneration
+  described in `workspace-and-tool-pinning.md`;
+- `cargo xtask bazel-evidence prepare-cold-local`, the temporary W2 helper.
+
+The workflow guard rejects any workflow that invokes either one.
+
 ## Promotion
 
 - Required context remains `test-rust`.

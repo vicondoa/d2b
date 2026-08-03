@@ -72,12 +72,61 @@ conflating them loses one of them:
   remediation when the committed lock is stale. That check exists **only when
   `lockfile = ...` is set on the `crate.from_cargo` tag**; omitting the
   attribute makes repin unconditional and silently removes the guard. All four
-  hubs therefore set it.
+  hubs therefore set it, together with `cargo_lockfile` and
+  `skip_cargo_lockfile_overwrite = True`.
 
-**No repin escape hatch.** `CARGO_BAZEL_REPIN`, `REPIN`, and
+**No repin escape hatch, and one supported regeneration path.**
+`CARGO_BAZEL_REPIN`, `REPIN`, and
 `CARGO_BAZEL_REPIN_ONLY` are never set by the Make wrapper or by continuous
 integration, and a policy assertion proves it. A repin control in the gate
 environment converts the fail-closed lock check into an automatic rewrite.
+
+A prohibition with no supported alternative is a prohibition that gets routed
+around: the contributor who hits the stale-lock refusal at the end of a long
+change has one obvious next move, and it is `CARGO_BAZEL_REPIN=1 make ...`.
+Regeneration is therefore a repository-owned command,
+`cargo xtask bazel-repin --hub <main|broker|guest|walker>`, and it is the only
+site in the repository where those three names may appear as a
+process-environment assignment. Its contract:
+
+- it refuses any hub name outside the closed four-hub set, and it refuses to
+  run at all when the ambient environment already carries any of the three
+  controls, so it cannot be used to launder a setting a contributor exported;
+- it sets `CARGO_BAZEL_REPIN` and `CARGO_BAZEL_REPIN_ONLY=<hub>` only on the
+  `Command` it builds for the one Bazel child it spawns, never through a
+  process-global mutation;
+- it reuses the wrapper's absolute startup options and output user root, so it
+  cannot start a second server against the same tree;
+- it snapshots the digests of every committed derived artifact first and fails
+  unless the named hub's Bazel-side lock is the only tracked file that changed
+  afterwards;
+- it is not a Make target, and the workflow guard refuses any workflow that
+  invokes it.
+
+Three measured facts at `rules_rust` 0.73.0 make that contract enforceable
+rather than aspirational. First, `determine_repin` in
+`crate_universe/private/generate_utils.bzl` treats `CARGO_BAZEL_REPIN_ONLY` as
+a comma-delimited allowlist compared by exact repository name, so single-hub
+scoping is a substrate property, not a convention this plan invents. Second,
+any value other than `false`, `no`, `0`, or `off` is truthy, so a guard that
+looks for `=1` and stops is wrong; the guard rejects the name, not a value.
+Third, `skip_cargo_lockfile_overwrite` defaults to `False` in
+`crate_universe/extensions.bzl`, which means a repin writes the plain
+`Cargo.lock` back by default. That directly contradicts the authority rule this
+decision exists to protect, so every hub sets it to `True`, and the command's
+post-check catches it independently if a future default changes. For the same
+family of reasons every hub also sets both `lockfile` and `cargo_lockfile`: the
+extension reports itself reproducible only when both are present, and
+`--lockfile_mode=error` only constrains a reproducible extension.
+
+One thing is deliberately not settled here. The extension docstring at 0.73.0
+recommends `CARGO_BAZEL_REPIN=1 bazel sync --only=<hub>`, which is a
+WORKSPACE-era control, while the bzlmod code default for `regen_command` is
+`bazel mod show_repo`, which does not repin anything. The two disagree, so W0
+records the invocation observed to actually repin exactly one hub on Bazel
+8.6.0 with this module graph, and the command asserts the outcome rather than
+trusting the docstring. The invariant that must hold is "exactly one hub lock
+changed", and that is checked, not assumed.
 
 **The generator binary is a pinned tool too.** `crate_universe` executes a
 `cargo-bazel` binary. The registry release form of `rules_rust` carries an
@@ -107,6 +156,8 @@ required in the dev shell; the dev shell instead gains `bazel_8` and
 **Rationale**: Dependency changes must remain Cargo edits followed by
 regeneration. A second authority would permit feature or compiler drift, and a
 lock check that can be disabled by an environment variable is not a lock check.
+A regeneration path that is narrow, reviewed, and self-verifying is not a
+weakening of that rule; it is what keeps the rule from being bypassed.
 
 **Alternatives**:
 
@@ -120,6 +171,16 @@ lock check that can be disabled by an environment variable is not a lock check.
 - Omitting `lockfile` and relying on `--lockfile_mode=error`: rejected because
   that flag governs the module lock only and omitting `lockfile` makes repin
   unconditional.
+- A documented `CARGO_BAZEL_REPIN=1 make ...` escape hatch: rejected because
+  it repins every hub, is indistinguishable in a shell history from an
+  accidental export, and at the 0.73.0 default also rewrites the authoritative
+  `Cargo.lock`.
+- A `make bazel-repin` target: rejected because every Make target is reachable
+  from a workflow and the approved-target policy would then have to carve out
+  an exception; an `xtask` subcommand is reachable only from a shell a
+  contributor typed into.
+- Leaving regeneration undocumented: rejected as the failure mode the repin
+  sub-decision exists to prevent.
 
 ## Decision 3: Generate first-party BUILD files in repository-owned xtask
 
@@ -211,11 +272,11 @@ server. `test-drift` already carries query-derived staleness for every other
 generated output, so no new gate, Layer-1 job, or Make target is created.
 
 **Hand-written fragments the map must list.** The migration knowingly carries
-three fragments upstream does not provide, plus the aggregate and carrier
+four fragments upstream does not provide, plus the aggregate and carrier
 fragments: the per-target nightly channel transition (Decision 14), the
-`rustdoc_json` rule (Decision 14), and the vendor repository rule
-(Decision 6). Each tracks upstream internals and is a review surface at every
-version bump.
+`rustdoc_json` rule (Decision 14), the vendor repository rule (Decision 6), and
+the yanked-state carrier fragment (Decision 6). Each tracks upstream internals
+or a committed snapshot and is a review surface at every version bump.
 
 **Rationale**: Exact coverage catches a green result caused by omission.
 Minimum counts cannot detect a missing file offset by a new one. A guard that
@@ -259,6 +320,33 @@ raw child output stays in the ordinary `test.log` artifact. Publication is
 enforcing evidence, so an otherwise passing carrier fails when the document
 cannot be written, while an existing test failure stays the primary diagnosis.
 `contracts/runner-environment.md` is the full contract.
+
+**Why publication failure is a carrier failure, not a warning.** The objection
+to a fail-closed publication rule is that it converts an observability defect
+into a test failure. That objection assumes the structured result is telemetry.
+Here it is not. The amended ADR and `contracts/execution-manifest-binding.md`
+make the JUnit and build-event stream the *only* mechanism that attributes a
+result to a surface and a case: one Bazel test action per carrier means the
+event stream carries exactly one verdict per target, and everything finer comes
+from the document the runner writes. A carrier that returns success with no
+document has not produced a weaker signal, it has produced no evidence that the
+eighteen-surface manifest can consume, and the manifest finalization contract
+cannot then mark that surface complete. Degrading to a warning would let a run
+report `passed` for a surface whose result nothing observed, which is the exact
+class of empty success this migration exists to eliminate, and it would do so
+silently in the one direction reviewers do not look. The cost is bounded and
+named: the failure is reported as a runner error distinct from a test failure,
+it never displaces an existing test failure as the primary diagnosis, and its
+remedy is a per-code recovery message rather than a rerun.
+
+Two properties keep that rule from becoming a flake source, and both are
+mechanical rather than aspirational. Publication happens after every child is
+reaped, through the injected filesystem boundary, into a same-directory
+close-on-exec temporary that is synced and installed with `renameat`; there is
+no window in which a slow or contended filesystem produces a partial document
+that the carrier accepts. And every terminal error in that path is a mapped
+errno with a planted mutation behind it, so "publication failed" is a specific,
+reproducible condition rather than an unexplained nonzero exit.
 
 **Two scheduling consequences are recorded because they change measurement
 shape.** First, exclusive tests are executed one at a time **after the entire
@@ -340,19 +428,29 @@ action asserts the materialized package count equals the lock's, because a
 vendor tree quietly short a crate makes `licenses` harvest fewer license files,
 report fewer findings, and exit zero.
 
-**The yanked-state carrier is pre-authorized so W4 cannot deadlock.** Today's
-leaf runs `cargo deny check` with no subcommand list, so `advisories` runs
-there in addition to `cargo audit`, which is what makes the promotion
-comparison meaningful. The decomposed pair can lose yanked-crate detection,
-which needs a registry index that neither the vendored tree nor the RustSec
-snapshot provides. If the recorded comparison shows no yanked-state difference,
-nothing is built. If it shows one, a yanked-crate check against a committed,
-lock-bounded index snapshot lands before promotion, reporting under the
-existing `rust-deny-main`, `rust-deny-broker`, and `rust-deny-guest`
-identifiers rather than as a nineteenth surface. The snapshot is refreshed only
-by an explicit reviewed networked `xtask` update outside the gate; the gate's
-own drift check is offline and proves exact `(name, version)` key-set equality
-with the three committed locks.
+**The yanked-state carrier is unconditional, because a conditional capability
+is not a capability.** Today's leaf runs `cargo deny check` with no subcommand
+list, so `advisories` runs there in addition to `cargo audit`, which is what
+makes the promotion comparison meaningful. The decomposed pair can lose
+yanked-crate detection, which needs a registry index that neither the vendored
+tree nor the RustSec snapshot provides.
+
+An earlier draft built the yanked carrier only if the recorded comparison
+showed a difference. That is backwards. The comparison is one observation of
+one lock set at one instant, and "no crate in these three locks is yanked
+today" says nothing about whether the gate can detect the next one. A
+capability gated on a finding is missing exactly when the first finding
+arrives, and by then promotion has retired the Cargo executor that used to
+carry the outcome. So the committed, lock-bounded index snapshot and its three
+carriers land in the shadow stage either way, reporting under the existing
+`rust-deny-main`, `rust-deny-broker`, and `rust-deny-guest` identifiers rather
+than as a nineteenth surface. An all-clear snapshot is the expected normal case
+and is still committed; it is the baseline the next diff line is read against.
+The snapshot is refreshed only by an explicit reviewed networked `xtask` update
+outside the gate; the gate's own drift check is offline and proves exact
+`(name, version)` key-set equality with the three committed locks. The
+comparison keeps its full promotion-blocking force; what it no longer decides
+is whether the detection exists.
 
 Schema reproducibility gains `gen-schemas --out-dir`, performs two sequential
 independent generations in one action, and checks the exact generated census
@@ -377,6 +475,10 @@ already present in the current schema leaf.
 - Accept a yanked-state difference as a deliberate difference: rejected,
   because promotion criterion 7 requires no differing enforcing outcome and
   ADR 0009 authorizes no supply-chain waiver.
+- Build the yanked carrier only when the comparison finds a difference:
+  rejected because it makes the capability absent precisely when it is first
+  needed, and because it puts the decision to build a security check inside a
+  promotion window where the cheapest answer is not to.
 - Pin a full crates.io index snapshot: rejected because the state needed is
   bounded by three committed locks, so the artifact is bounded by them too.
 
@@ -465,6 +567,25 @@ files, live ownership, and replacement races, and deletes descriptor-relative
 with close-on-exec descriptors. Refusal deletes nothing and gives its
 code-specific recovery.
 
+**Cleanup and result publication share one injectable filesystem boundary.**
+`packages/d2b-bazel-runner/src/fsops.rs` owns `openat2`, the forced
+component-walk fallback, `open`, `write`, `fsync`, `renameat`, `unlinkat`, and
+directory enumeration, and both the JUnit writer and cleanup call through it.
+Two reasons, and neither is stylistic. The first is that these two subsystems
+enforce the *same* properties on the same syscalls: anchored close-on-exec
+descriptors, refusal of symlink and magic-link parents, refusal of an anchored
+`..` escape, and unlinking only what the runner created. Implementing them
+twice means the planted mutations only prove one copy is correct, and a future
+change fixes one caller. The second is that every negative in this design is an
+errno at an exact call ordering, and the only reliable way to produce
+`ENOSPC`, a short write, an `EINTR` retry, an `EEXIST` collision, or a
+replacement race on a shared reference host is to inject it. A test that needs
+a genuinely full disk is a test that will be marked ignored within a quarter.
+
+The boundary is a W0-frozen module path, not a W2 refactor, so cleanup, result
+publication, and deadline scopes open against a stable trait surface and the
+W2 slices stay file-disjoint.
+
 **Rationale**: Persistent reuse is the local performance benefit, but an
 unbounded or path-based cleanup can fill disk or delete unrelated data, and a
 trim whose completion cannot be observed converts a safety check into a
@@ -522,7 +643,7 @@ The output base is never cached. Keys bind, at minimum: `.bazelversion`,
 `MODULE.bazel`, `MODULE.bazel.lock`, `.bazelrc`, both `rust-toolchain.toml`
 files, all four hub Cargo locks, `packages/Cargo.guest.lock`, all four per-hub
 `crate_universe` Bazel-side locks, the `cargo-bazel` generator sha256, all deny
-configurations, the advisory-database pin, the yanked snapshot when it exists,
+configurations, the advisory-database pin, the committed yanked snapshot,
 `.bazelignore`, the symlink-prefix and startup-option configuration, the
 build-script annotation digest and action-environment allowlist, and the
 generated BUILD tree digest. PRs restore read-only; exactly one protected-`v3`
@@ -580,6 +701,21 @@ is allowed locally and forbidden in promoted jobs; the promoted-job assertion
 is an implementation deliverable rather than an existing check. Expired is a
 normal budget expiry. Malformed or overflowing values fail without echo.
 
+**Time enters through one injected boundary.**
+`packages/d2b-bazel-runner/src/clock.rs` declares an `UptimeSource` that yields
+the raw `/proc/uptime` field and a `Clock` that yields the current
+boot-relative instant; the deadline parser, the remaining-budget subtraction,
+and the child-duration rounding take both by injection and never read the host
+clock or the procfs path directly. That is what makes the grammar and rounding
+table testable at all. The interesting cases here are a rejected exponent, a
+second separator, a non-ASCII digit, an overflowing value, a capture that must
+truncate while the paired read must round up, and a remaining budget of exactly
+zero. Every one of them is a specific input, and none of them can be produced
+by waiting on a real clock; a test that sleeps to reach a boundary is a test
+that is flaky on a loaded host and green on an idle one. Expiry-path tests
+drive the fake clock past the deadline deterministically, so the SIGTERM,
+full-grace, SIGKILL, and reap ordering is asserted without a timing race.
+
 The wrapper creates a dedicated child process group without a shell, sends
 SIGTERM, waits the fixed grace in full, observes with `EXITED|NOWAIT|NOHANG`,
 sends unconditional group SIGKILL, then reaps. It never signals its own group
@@ -589,7 +725,9 @@ options and its own bound.
 **Rationale**: A job timeout alone is unactionable. Conservative conversion and
 group ownership make the ceiling a real upper bound without orphaning work or
 signalling unrelated processes. A ceiling asserted with no supporting
-measurement is a guess that becomes coverage pressure at the worst moment.
+measurement is a guess that becomes coverage pressure at the worst moment. A
+deadline implementation that reads the clock directly cannot be tested at its
+boundaries, and an untestable boundary is where the off-by-one lives.
 
 **Alternatives**:
 
@@ -598,6 +736,9 @@ measurement is a guess that becomes coverage pressure at the worst moment.
 - Reap or end grace on leader exit: rejected because descendants can survive.
 - Relax a missed ceiling: not authorized. Only a larger runner or a further
   disjoint slice split is allowed.
+- Read `/proc/uptime` and the system clock directly from the deadline module:
+  rejected because every boundary case then requires either a sleep or a
+  privileged clock change, and both produce tests that get disabled.
 
 ## Decision 11: Stage promotion, alias removal, and retirement separately
 
@@ -657,7 +798,22 @@ substrate-level: channel scope, rustdoc-JSON absence, compile-time environment
 expansion, repository-cache enumeration, disk-cache collection timing, and rc
 file expansion rules. A generalist software seat produced a plan that read
 correctly and could not be built. That seat assignment is a delivery-run
-requirement, not a preference.
+requirement, not a preference, and it applies to every plan panel and every
+integrated-diff panel in every wave, including the post-promotion W6 and W7
+children.
+
+**Choosing the carrier is not free, because one Rust crate is invisible to the
+workspace leaves.** `tests/test-rust.sh` sets
+`workspace_test_excludes=(--exclude d2b-contract-tests)`, so a guard placed in
+`packages/d2b-contract-tests/tests/` runs only under
+`D2B_ENABLE_FIXTURE_BUILD=1 make test-fixture-contracts`, never under
+`make test-rust-main`. The reverse is also true and is the sharper edge: that
+crate's `policy_broker_schema.rs` walks every `.rs` file under `packages/`, so
+a wave that adds a runner test file has already changed one of its inputs even
+though the diff looks unrelated to fixtures. The plan's fixture-dependent
+validation rule derives the input set from the crate with a `grep` rather than
+from memory, and every code-changing wave in this migration runs the
+fixture-contract target as a result.
 
 **Rationale**: These are hermetic build-infrastructure properties. Existing
 Layer-1 carriers are both lower and more enforcing than container, VM, live, or
@@ -843,6 +999,11 @@ reader does not re-derive them from documentation that disagrees.
 | `rules_rust` 0.73.0 is registry-published and CI-tested against Bazel 7.x, 8.x, and 9.x, with no restrictive `bazel_compatibility` | Bazel Central Registry metadata and presubmit for 0.73.0 |
 | `crate.from_cargo` accepts `cargo_lockfile`, `lockfile`, and `manifests`, and duplicate hub names are rejected | `rules_rust` `crate_universe/extensions.bzl` at `refs/tags/0.73.0` |
 | Repin is fail-closed on a stale committed lock, and repin is unconditional when `lockfile` is omitted | `rules_rust` `crate_universe/private/generate_utils.bzl` and `extensions.bzl` at `refs/tags/0.73.0` |
+| `CARGO_BAZEL_REPIN_ONLY` is a comma-delimited allowlist matched by exact hub repository name in `determine_repin`, and any repin value outside `false`, `no`, `0`, `off` is truthy | `rules_rust` `crate_universe/private/generate_utils.bzl` and `common_utils.bzl` at `refs/tags/0.73.0` |
+| `skip_cargo_lockfile_overwrite` defaults to `False`, so a repin writes the plain `Cargo.lock` back unless the hub opts out | `rules_rust` `crate_universe/extensions.bzl` at `refs/tags/0.73.0` |
+| The extension reports itself reproducible only when both `lockfile` and `cargo_lockfile` are set, which is what makes `--lockfile_mode=error` bind it | `rules_rust` `crate_universe/extensions.bzl` at `refs/tags/0.73.0` |
+| The 0.73.0 docstring recommends `bazel sync --only=<hub>` while the bzlmod `regen_command` default is `bazel mod show_repo`, so neither can be trusted as the repin invocation without measurement | `rules_rust` `crate_universe/extensions.bzl` at `refs/tags/0.73.0` |
+| `--lockfile_mode=error` never rewrites `MODULE.bazel.lock` and fails instead | Bazel 8.6.0 external-dependency lockfile documentation |
 | `cargo-bazel` is downloaded by URL and sha256 in the registry release form, and built from source through a non-reproducible bootstrap otherwise | `rules_rust` `crate_universe/private/urls.bzl` and `internal_extensions.bzl` at `refs/tags/0.73.0` |
 | Stable and nightly toolchains register together, one version per channel | `rules_rust` `rust/extensions.bzl` at `refs/tags/0.73.0` |
 | The toolchain channel is a universal-scope global build setting with no public per-target transition | `rules_rust` `rust/toolchain/channel/BUILD.bazel` and `rust/private/unpretty.bzl` at `refs/tags/0.73.0` |
@@ -859,6 +1020,10 @@ files under `packages/` reference `CARGO_BIN_EXE_`; 50 reference
 which four carry `required-features = ["fuzz"]` and `fuzz` is not a default
 feature, plus one `[[bench]] harness = false` in
 `packages/d2b-zone-routing/Cargo.toml` that the gate's discovery filters out;
+`tests/test-rust.sh` sets `workspace_test_excludes=(--exclude
+d2b-contract-tests)` and `packages/d2b-contract-tests/tests/policy_broker_schema.rs`
+walks every `.rs` file under `packages/`, so that crate is invisible to every
+workspace leaf and its inputs include the whole first-party Rust tree;
 `flake.nix` exposes no Bazel tooling today; and the repository has no root
 `BUILD.bazel`, `MODULE.bazel`, `.bazelrc`, `.bazelignore`, or `.bazelversion`,
 so the migration is greenfield.

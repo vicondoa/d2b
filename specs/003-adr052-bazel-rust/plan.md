@@ -85,11 +85,19 @@ Nix/package/release migration, no new linter, formatter, or hook, no new
 Layer-1 job, and no new required context. Repository-rule fetch is permitted
 and is always pinned by URL plus checksum or by git rev.
 `CARGO_BAZEL_REPIN`, `REPIN`, and `CARGO_BAZEL_REPIN_ONLY` are never set in the
-Make wrapper or in continuous integration. No `.bazelrc` line and no wrapper
+Make wrapper or in continuous integration. The single exception is the scoped
+child environment `cargo xtask bazel-repin --hub <name>` constructs for the one
+Bazel process it spawns; that command is not a Make target, no workflow may
+reach it, and a structural guard allowlists exactly that one construction site.
+Every hub sets `lockfile`, `cargo_lockfile`, and
+`skip_cargo_lockfile_overwrite = True`, because the last of those defaults to
+false at `rules_rust` 0.73.0 and a repin would otherwise rewrite the
+authoritative Cargo lock. No `.bazelrc` line and no wrapper
 argument sets `@rules_rust//rust/toolchain/channel`. `.bazelrc` carries only
 `common`, `build`, `test`, and `build:<config>` lines; every startup option is
 supplied by the wrapper as an absolute path and is byte-identical across
-`build`, `test`, `query`, `info`, `shutdown`, and `clean`.
+`build`, `test`, `query`, `info`, `shutdown`, `clean`, and, from W2, the
+repin child.
 `D2B_RUST_BUDGET` remains the only resource control, and custom Bazel local
 resources are inert because `--local_test_jobs` discards tag-derived resources.
 `--test_output=streamed` is forbidden during any measured run. Any change to
@@ -184,14 +192,18 @@ bazel/cargo/                          # Four crate_universe hubs and per-hub loc
 bazel/rules/channel_transition.bzl    # Per-target nightly transition over the census
 bazel/rules/rustdoc_json.bzl          # JSON render plus emitted toolchain version
 bazel/vendor/                         # Vendor repository rule and lock classification
+bazel/supply_chain/                   # Offline deny/audit carriers and the yanked snapshot
 bazel/carriers/                       # Carrier fragments consumed by ci/rust
 ci/rust/BUILD.bazel                   # ADR-fixed carriers, guard, and aggregate
 packages/**/BUILD.bazel               # Generated first-party targets
 tests/tools/no-bash-ast-walker/BUILD.bazel   # Generated; fourth hub consumer
-packages/xtask/src/                   # gen-bazel, schema output, evidence helpers
+packages/xtask/src/bazel.rs           # gen-bazel, gen-bazel --check, bazel-repin
+packages/xtask/src/                   # Schema output and evidence helpers
 packages/xtask/tests/policy_ci.rs
 packages/xtask/tests/fixtures/ci/
 packages/d2b-contract-tests/tests/policy_docs.rs
+packages/d2b-bazel-runner/src/fsops.rs # Injectable filesystem for JUnit and cleanup
+packages/d2b-bazel-runner/src/clock.rs # Injectable Clock and UptimeSource for deadlines
 packages/                             # Runner crate and locator crate paths fixed by W0 prep
 tests/golden/bazel-rust-coverage.json
 tests/golden/bazel-rust-query.json     # Committed drift-checked query result
@@ -222,6 +234,9 @@ parallel worktrees open.
 | ADR prose once generalized that custom local resources are not a serialization mechanism. | They are inert specifically because `--local_test_jobs` discards tag-derived resources, which this configuration always sets. | Recorded as the narrower, durable statement. |
 | GitHub default branch is `main`, while protected `v3` never merges to `main`. | Repository branch policy and the `v3` promotion lineage. | Settled by the merged ADR amendment. W0 verifies the amendment is present rather than proposing it. |
 | Workflow prose predates constitution pipelining. | Constitution 2.1.0 controls. | Use the stricter serialization. |
+| An earlier plan draft validated a wave with `make test-rust-main` or `make test-policy` alone after editing a file the `d2b-contract-tests` crate reads. | `tests/test-rust.sh` sets `workspace_test_excludes=(--exclude d2b-contract-tests)`, and `policy_broker_schema.rs` walks every `.rs` file under `packages/`, so that crate executes only under `D2B_ENABLE_FIXTURE_BUILD=1 make test-fixture-contracts` and every wave that touches `packages/` is inside its input set. | Every code-changing wave now runs the fixture-contract target in its validation. The rule and the command that derives the input set are in the delivery rules above and in `tasks.md`. |
+| An earlier plan draft treated the yanked-state carrier as conditional on the recorded comparison. | The amended ADR 0052 section 6 makes the snapshot and the three carriers unconditional. | The carrier lands in W1 either way; the comparison keeps its promotion-blocking force but no longer decides whether the capability exists. |
+| An earlier plan draft forbade the repin controls without naming any supported regeneration path. | `rules_rust` 0.73.0 `determine_repin` treats `CARGO_BAZEL_REPIN_ONLY` as an exact-match comma-delimited hub allowlist, and `skip_cargo_lockfile_overwrite` defaults to false. | `cargo xtask bazel-repin --hub <name>` is the one supported path; the environment prohibition in Make and continuous integration is unchanged, and every hub sets `skip_cargo_lockfile_overwrite = True` so a repin cannot rewrite the authoritative Cargo lock. |
 
 There is no eighteen-surface drift: committed code publishes eighteen with
 `D2B_SKIP_FIXTURE_BUILD=1` and two fixture surfaces when enabled.
@@ -252,26 +267,66 @@ was substrate-level. All ten must sign off with no recommendations. Reviewers
 inspect supplied evidence and do not rerun validation. Content changes
 invalidate prior signoffs.
 
+### Fixture-dependent validation rule
+
+`tests/test-rust.sh` sets `workspace_test_excludes=(--exclude
+d2b-contract-tests)`, so the `d2b-contract-tests` crate never runs under
+`make test-rust-main` or any other workspace leaf. It runs only under
+`D2B_ENABLE_FIXTURE_BUILD=1 make test-fixture-contracts`. A wave that edits a
+file that crate reads therefore has no coverage at all unless its validation
+task runs that target.
+
+The crate's committed input set is derived mechanically, not by memory:
+
+```bash
+grep -rhoE 'read_repo_file(_opt)?\("[^"]+"' packages/d2b-contract-tests/ \
+  | sed -E 's/.*\("//; s/"$//' | sort -u
+grep -rhoE 'repo_root\(\)\.join\("[^"]+"' packages/d2b-contract-tests/ \
+  | sed -E 's/.*\("//; s/"$//' | sort -u
+```
+
+A wave whose owned path set intersects that union MUST run
+`D2B_ENABLE_FIXTURE_BUILD=1 make test-fixture-contracts` in its validation
+task. Measured at the current base, the union already contains
+`repo_root().join("packages")`, which
+`packages/d2b-contract-tests/tests/policy_broker_schema.rs` walks for every
+`.rs` file, plus `Makefile`, `tests/test-rust.sh`, `flake.nix`,
+`packages/Cargo.toml`, `packages/xtask/src/main.rs`, `AGENTS.md`,
+`docs/contributing`, and `nixos-modules`. Every code-changing wave in this plan
+adds or edits at least one `.rs` file under `packages/`, so W0, W1, W2, W3, W5,
+W6, and W7 all carry the target. W4 owns no implementation file and runs it
+anyway, because promotion evidence requires the same-commit companion verdict.
+The practical consequence is that the target is not optional for a wave whose
+diff looks unrelated to fixtures: a wave that adds a new runner test file has
+already changed an input this crate scans. Each wave recomputes the
+intersection against its final owned path set rather than inheriting this list.
+
 ### W0 - Reversible foundation
 
 **Deliverable**: Verified amendment ancestry, pinned Bazel and Bzlmod state,
-four `crate_universe` hubs with committed per-hub locks, the pinned
+four `crate_universe` hubs with committed per-hub locks, the scoped
+single-hub repin command, the reviewed networked yanked-snapshot refresh
+command, the pinned
 `cargo-bazel` acquisition, the generated workspace boundary, the Cargo-derived
 generator, the schema output prerequisite, the generated first-party graph, the
 coverage-map structure, the third-party build-script and action-environment
-inventory, and the frozen runner and locator crate decisions. Cargo remains
-authoritative.
+inventory, and the frozen runner and locator crate decisions, including the
+`fsops` and `clock` boundary modules. Cargo remains authoritative.
 
 **Ownership**:
 
 - `foundation-tools`: `.bazelversion`, `.bazelrc`, `MODULE.bazel`,
   `MODULE.bazel.lock`, `flake.nix`, hand-written `bazel/`, `bazel/cargo/` hub
   declarations and per-hub locks, and `packages/xtask/tests/policy_ci.rs` for
-  the pinning and repin-control guards.
-- `generator`: `packages/xtask/src/bazel.rs`, its tests, and its generated
-  outputs including `.bazelignore` and the derived censuses.
+  the pinning and repin-control guards. The one exception is the main-hub lock
+  after workspace membership changes, which only the integrator regenerates and
+  commits; the other three must be byte-identical across integration.
+- `generator`: `packages/xtask/src/bazel.rs`, including `gen-bazel`,
+  `gen-bazel --check`, `bazel-repin`, and `bazel-yanked-refresh`, its tests,
+  and its generated outputs including `.bazelignore` and the derived censuses.
 - `schema`: schema generator, its tests, and the current schema leaf only.
-- `runner`: the frozen runner crate skeleton.
+- `runner`: the frozen runner crate skeleton, including the `fsops` and `clock`
+  boundary modules W2 implements against.
 - `locator`: the frozen locator crate skeleton and its own tests.
 - Integrator prep: `Makefile`, Cargo workspace membership,
   `packages/xtask/src/main.rs` seams, coverage-map format, runner and locator
@@ -279,13 +334,19 @@ authoritative.
   folding.
 
 **Validation**: `make check-tier0`, `make test-lint`, `make test-rust-schema`,
-`make test-rust-inventory`, `make test-drift`, `make test-policy`, and a
-Cargo-authoritative `D2B_SKIP_FIXTURE_BUILD=1 make test-rust`.
+`make test-rust-inventory`, `make test-drift`, `make test-policy`,
+`D2B_ENABLE_FIXTURE_BUILD=1 make test-fixture-contracts` per the
+fixture-dependent validation rule, and a Cargo-authoritative
+`D2B_SKIP_FIXTURE_BUILD=1 make test-rust`.
 
 **Done when**: the amended ADR commit is an ancestor of the W0 base; Bazel is
-8.6.0; module lock mode is `error`; all four hubs declare `lockfile` and a
-stale-lock mutation fails closed; no repin environment control exists in the
-wrapper or CI; the `cargo-bazel` URL and sha256 are pinned and the source
+8.6.0; module lock mode is `error`; all four hubs declare `lockfile`,
+`cargo_lockfile`, and `skip_cargo_lockfile_overwrite = True`, and a stale-lock
+mutation fails closed; no repin environment control exists in the
+wrapper or CI; `cargo xtask bazel-repin --hub <name>` refuses an unknown hub,
+refuses an ambient repin control, changes only the named hub's lock, and fails
+when any other generated artifact changed; the `cargo-bazel` URL and sha256 are
+pinned and the source
 bootstrap is refused; `.bazelrc` contains no startup line and no channel flag;
 generated `.bazelignore` covers `.scratch/` and every Cargo output directory,
 proven by a drift mutation; `gen-bazel --check` is clean; both schema
@@ -311,7 +372,8 @@ guard, the manifest adapter, and the six ADR Make targets.
   for the global-channel-flag refusal.
 - `broker`: three feature carriers and their exclusivity.
 - `aux`: the guest runner carrier and the offline supply-chain carriers,
-  including the vendor repository rule.
+  including the vendor repository rule and the unconditional lock-bounded
+  yanked-state snapshot and its three carriers.
 - `runner`: only the frozen runner crate, its environment and per-case evidence
   implementation, and its tests.
 - `locator`: the locator crate and the enumerated first-party migration.
@@ -336,9 +398,12 @@ Bazel test and no Bazel test invokes `bazel query`; censuses and ignored counts
 are exact and generator-derived; the census emits the toolchain version it
 actually used and the guard compares it to the pin; a global channel flag is
 rejected by a guard; the vendor rule refuses an unclassifiable lock entry and
-asserts materialized package count equals the lock's; every migrated test
-resolves its binary and fixtures through the locator, the planted stale-binary
-negative fixture fails under Bazel, and both arms stay green under Cargo;
+asserts materialized package count equals the lock's; the committed
+lock-bounded yanked snapshot exists, its offline key-set drift check passes for
+all three locks, and it reports under the existing `rust-deny-*` identifiers
+without adding a nineteenth surface; every migrated test resolves its binary
+and fixtures through the locator, the planted stale-binary negative fixture
+fails under Bazel, and both arms stay green under Cargo;
 per-case JUnit results are published with the canonical redaction set absent
 and raw output only in `test.log`; failed and interrupted runs publish partial
 evidence; repository-owned runner execution uses no shell, with the
@@ -361,14 +426,29 @@ control. W5 removes that helper after W4 qualification is complete.
 - `process-control`: deadline, process group, wait ordering, shutdown tests.
 - `cleanup`: cleanup modules and tests, plus its `policy_docs.rs` marker block.
 - `local-wrapper`: `Makefile`, `.bazelrc`, startup-option construction, the
-  synchronous trim step, and scratch budgets.
+  synchronous trim step, scratch budgets, and `packages/xtask/Cargo.toml` plus
+  `packages/xtask/src/bazel.rs` solely to replace the minimal W0 startup-option
+  derivation inside `bazel-repin` with the one shared construction. That
+  replacement adds a `d2b-bazel-runner` path dependency, which changes the
+  generated graph, so W2 gains an integrator regeneration step and
+  `make test-drift` in validation.
 - `recovery`: the recovery table and its tests only.
+- `boundaries`: `packages/d2b-bazel-runner/src/fsops.rs` and
+  `packages/d2b-bazel-runner/src/clock.rs`. Both are W0-frozen module paths
+  whose operation set W1 already fixed, so this scope owns only their W2
+  changes and their in-memory fakes. Cleanup, result publication, and deadline
+  handling consume those traits rather than calling the standard library
+  directly and rather than adding operations to these two files. No cleanup or
+  deadline test may depend on live host filesystem state or on the host clock.
 
 Prep first splits stable interfaces if process-control and cleanup would share
-a file.
+a file. `fsops` and `clock` land in the prep commit so cleanup, deadline, and
+result-publication scopes open against a stable trait surface.
 
 **Validation**: `make test-rust-main`, `make test-policy`, `make check-tier0`,
-`make test-bazel-rust`, `D2B_CLEAN_DRY_RUN=1 make clean`, and planted
+`make test-drift`, `make test-bazel-rust`, `D2B_CLEAN_DRY_RUN=1 make clean`,
+`D2B_ENABLE_FIXTURE_BUILD=1 make test-fixture-contracts` per the
+fixture-dependent validation rule, and planted
 mutations through their existing Rust and policy carriers.
 
 **Done when**: cleanup, descriptor inheritance and race, signal order,
@@ -377,6 +457,8 @@ unrelated processes survive; the 20/40 GiB marks work; startup options are
 proven byte-identical across `build`, `test`, `query`, `info`, `shutdown`, and
 `clean`, with a mutation that perturbs one of them failing closed; the trim
 step is synchronous and its completion is observed before any size measurement;
+every cleanup, result-file, and deadline property is proven through the
+injected `fsops` and `clock` boundaries with no live-host dependency;
 panel and PR are sealed and merged.
 
 ### W3 - Shadow CI
@@ -394,7 +476,9 @@ ceiling. The required Cargo CI is unchanged.
 - Integrator: triggers, path filters, and workflow allowlist reconciliation.
 
 **Validation**: `make test-rust-main`, `make test-policy`, `make test-lint`,
-`make check-tier0`, four Bazel slices, and inspection of the shadow workflow's
+`make check-tier0`, `D2B_ENABLE_FIXTURE_BUILD=1 make test-fixture-contracts`
+per the fixture-dependent validation rule, four Bazel slices, and inspection of
+the shadow workflow's
 `pull_request` run from a draft W3 PR for permissions, zero writes, slice
 verdicts, and rollup attribution.
 
@@ -423,9 +507,9 @@ shared head commit with a passing same-commit fixture-contract verdict;
 eighteen isolated seeded failures; exact generator-derived census, topology,
 and ignored counts; twenty exclusive broker repetitions; three warm, three
 cold-local, and the five most recent qualifying cold qualification-record
-measurements; supply-chain equivalence including the yanked outcome; and zero
-shadow cache publication. Run both Rust aggregates, policy, and fixture
-contracts on the evidence commit.
+measurements; supply-chain equivalence together with the landed yanked carrier
+and its passing offline key-set drift check; and zero shadow cache publication.
+Run both Rust aggregates, policy, and fixture contracts on the evidence commit.
 
 **Done when**: the Qualification Evidence Record validates every threshold and
 reference, no item is pending, and the load-bearing documentation wave gets
@@ -484,7 +568,9 @@ Cargo retirement state are irrelevant to this entry.
 
 **Validation**: Recheck release containment, then run `make test-rust`, all
 authoritative leaf targets, `make test-rust-main`, `make test-policy`,
-`make check-tier0`, and workflow absence checks for the removed names.
+`make check-tier0`, `D2B_ENABLE_FIXTURE_BUILD=1 make test-fixture-contracts`
+per the fixture-dependent validation rule, and workflow
+absence checks for the removed names.
 
 **Done when**: release containment is rechecked; aliases are absent;
 authoritative names retain status; release notes, panel, and PR are complete.
@@ -531,7 +617,9 @@ possible, each with the guard that catches it.
 | The channel transition silently stops applying in a `rules_rust` bump, so the census renders on stable and still looks correct. | The census emits the toolchain version the action actually used as a declared output, and a test compares it to the committed pin. | Revert the `api` scope; the census stays on the Cargo path. |
 | The channel flag is set globally instead, so every first-party crate compiles on nightly while the gate stays green. | A guard fails closed on any `.bazelrc` line or wrapper argument that sets the channel flag. | Remove the flag; the guard blocks the merge before it ships. |
 | The vendor tree is quietly short a crate, so `licenses` harvests fewer files, reports fewer findings, and exits zero. | Total classification with named refusals for mirrors and checksum-less non-git entries, plus an assertion that the materialized package count equals the lock's before any tool runs. | Revert the vendor rule; the Cargo supply-chain leaf remains authoritative. |
-| The decomposed supply-chain pair loses yanked-state detection and W4 deadlocks with no authorized remedy. | The comparison is recorded before promotion, and the offline lock-bounded yanked carrier is pre-authorized under the existing `rust-deny-*` identifiers. | Land the pre-authorized carrier; dropping the outcome is not authorized. |
+| The decomposed supply-chain pair loses yanked-state detection and nothing notices, because the migration comparison happened to run on a lock set with no yanked crate. | The lock-bounded snapshot and its three carriers land in W1 unconditionally, so the capability exists before the first finding; the comparison still blocks promotion on any differing enforcing outcome, and the offline key-set drift check ties the snapshot to the three locks. | Fix the snapshot or the drift check; omitting the carrier is not authorized in either direction. |
+| A contributor hits the stale-lock refusal, finds no supported regeneration path, and runs `CARGO_BAZEL_REPIN=1 make ...`, rewriting every hub lock and, at the 0.73.0 default, the authoritative `Cargo.lock` as well. | `cargo xtask bazel-repin --hub <name>` is the one supported path: closed hub set, `CARGO_BAZEL_REPIN_ONLY` scoped to that hub, controls set only on the spawned child, `skip_cargo_lockfile_overwrite = True` on every hub, and a post-check that fails unless the named hub lock is the only changed tracked file. The Make and workflow prohibition is unchanged and the guard allowlists exactly one construction site. | Discard the worktree change; the refusal is fail-closed and the lock is committed. |
+| A cleanup or deadline guard is written against the live host filesystem or clock, so its planted negative silently never runs and the guard is decorative. | `fsops` and `clock` are injected boundaries; every negative is produced by the fake, and the mutation tests assert errno mapping, ownership state, call ordering, and rounding without a full disk, a privileged mount, or a manipulated host clock. | Revert the affected W2 scope; the boundary is a W0-frozen module path, so reverting an implementation does not move the seam. |
 | The coverage guard is green while half its invariants never executed, because a Bazel test cannot query the graph. | Analysis-time dependency edges prove label existence; completeness and query drift run in the wrapper and `test-drift` over a committed drift-checked query result; no Bazel test invokes `bazel query`. | Revert the guard split; do not weaken either half. |
 | The disk cache is measured before asynchronous trimming finishes, so a compliant run refuses to publish forever. | An explicit synchronous on-demand collector runs as a named step before measurement and save; the size refusal stays a backstop. | Revert to the previous snapshot; the maintenance verdict is outside the Rust verdict. |
 | A cache-key input changes without changing the key, restoring a subtly stale cache. | The key binds all four hub locks, all four per-hub Bazel-side locks, the guest lock, the generator sha256, `.bazelignore`, the startup and symlink configuration, the build-script and action-environment digest, and the generated BUILD digest. | Rotate the restore prefix; a stale generation is superseded and deleted by the maintenance job. |

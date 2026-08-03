@@ -4,41 +4,98 @@ These are internal migration and evidence entities, not application data or a
 new public API. The existing execution-manifest v1 reference and schema remain
 authoritative.
 
+## Modelling rules
+
+Two rules apply to every entity below, because the round-one plan panel found
+both classes of defect in an earlier draft:
+
+1. **Variants, not a tag plus optional members.** Where a record has several
+   shapes, the shape is the variant and the variant carries its own members. A
+   `kind` field beside members that only some kinds may use admits states that
+   cannot exist, and a validator then has to re-derive the invariant that the
+   type should have made unrepresentable.
+2. **No constant fields.** A field whose only legal value is a constant is not
+   data; it is an invariant, and it belongs in prose where it cannot be set to
+   the other value. Global invariants are listed once, below.
+
+Global invariants, formerly modelled as always-true or always-false fields:
+
+- No carrier action opens a network socket.
+- Every carrier reports an independent verdict.
+- No fixture-backed identifier is part of this model; the two fixture surfaces
+  stay on the Cargo and Nix path.
+- The two locator arms never chain, and no located path is an absolute
+  execution-root path.
+- Concurrency is always derived from `D2B_RUST_BUDGET`, which remains the only
+  resource control.
+- Under Bazel, every binary is resolved through declared runfiles, and only the
+  declared test environment is forwarded to a child.
+- Repository-owned execution paths are shell-free. The
+  `rules_rust`-generated stable-channel doctest runner is not repository-owned
+  and is a recorded deliberate difference.
+- Result publication is enforcing for every test carrier.
+
 ## Rust Surface
+
+Common to every variant:
 
 | Field | Rule |
 | --- | --- |
 | `surface_id` | Unique member of the fixed eighteen-ID baseline. |
-| `kind` | `compile`, `test`, `policy`, `scan`, or `reproducibility`. |
 | `cargo_baseline` | Current Make leaf/mode and command family. |
-| `fixture_backed` | Must be `false`; fixture IDs are outside this model. |
-| `carrier_labels` | Nonempty set of Carrier Targets; one of them owns the verdict. |
+| `carriers` | Nonempty set of Carrier Targets; exactly one owns the verdict. |
 | `slice_id` | Exactly one of `main`, `api`, `broker`, `aux`. |
-| `census_ref` | Generator-derived census artifact plus its derivation. |
-| `topology_ref` | Required for test suites; absent only when not applicable. |
+
+The variant is the shape, and each variant carries only what it can have:
+
+| Variant | Members | Baseline identifiers |
+| --- | --- | --- |
+| `Compile` | none beyond the common set | `rust-main-format`, `rust-main-clippy` |
+| `TestSuite` | every carrier is a Test Carrier and therefore has a topology | `rust-main-workspace-tests`, `rust-guest-shell-runner`, `rust-broker-default`, `rust-broker-layer1`, `rust-broker-fakebackends` |
+| `Policy` | `check_inputs`: the committed policy files, pinned snapshots, and pinned artifacts the carriers declare, nonempty | `rust-deny-main`, `rust-deny-broker`, `rust-deny-guest`, `rust-audit-main`, `rust-audit-broker`, `rust-audit-guest`, `rust-stub-no-socket` |
+| `Census` | `census_ref`: one generator-derived census artifact plus its derivation | `rust-api-surface`, `rust-assert-pinned` |
+| `Scan` | `governed_source_ref`: the exact generated input manifest | `rust-no-bash-ast` |
+| `Reproducibility` | `emitted_census_ref`: the census the generator returns, not a literal | `rust-schema-reproducibility` |
+
+A `Compile` surface has no census member to leave empty and a `Policy` surface
+has no topology member to leave absent, so neither state is expressible. The
+identifier column is the current assignment and is itself checked against the
+coverage map; moving an identifier between variants is a contract decision, not
+a map edit.
 
 The mapping is total and unambiguous: every `surface_id` has a nonempty
-`carrier_labels` set, and every carrier belongs to exactly one `surface_id`.
+`carriers` set, and every carrier belongs to exactly one `surface_id`.
 Cardinality one is not required and never was; `rust-main-workspace-tests`
 already needs three carriers. Removing or adding a baseline ID requires a
 separate contract decision, not a map edit.
 
 ## Carrier Target
 
+Common to both variants:
+
 | Field | Rule |
 | --- | --- |
 | `label` | Unique Bazel label; ADR-fixed labels live below `//ci/rust`. |
 | `surface_id` | Exactly one Rust Surface. |
-| `owns_verdict` | Exactly one carrier per surface has `true`. |
+| `owns_verdict` | True for exactly one carrier per surface. |
 | `declared_inputs` | Closed, nonempty input set. |
 | `declared_outputs` | Exact outputs, if any; generated outputs must be nonempty. |
-| `test_targets` | Transitive Rust test targets carried by the surface. |
 | `handwritten_fragments` | Every non-generated BUILD fragment used. |
-| `runfiles_data` | Every binary and fixture the carrier's tests locate, as declared data. |
-| `binary_identities` | Expected identity for every located executable. |
-| `result_document` | Required for test carriers; the per-case result contract this carrier satisfies. |
-| `action_network_allowed` | Always `false`. |
-| `independent_verdict` | Always `true`. |
+| `runfiles_data` | Every binary and fixture this carrier's actions locate, as declared data. |
+| `binary_identities` | The expected identity of every executable in `runfiles_data`, one per executable, no more and no fewer. |
+
+Variants:
+
+| Variant | Members |
+| --- | --- |
+| `TestCarrier` | `topology`: exactly one Test Topology. `test_targets`: the Rust test targets carried, nonempty. `result_document`: the Per-Case Result Document this carrier publishes. |
+| `CheckCarrier` | `check_inputs`: the committed configuration, snapshot, manifest, or pinned artifact the check consumes, nonempty. |
+
+Topology and the per-case result document belong to the carrier, not to the
+surface. `rust-main-workspace-tests` carries a process-per-case suite, a
+doctest carrier, and a harness-free carrier, and those are three different
+topologies under one identifier; a surface-level topology field could not
+represent that without lying about two of them.
 
 Label existence is proved at analysis time by a real dependency edge from the
 coverage guard, not by a query issued from inside a test. Every Rust test
@@ -56,7 +113,7 @@ target and hand-written fragment is claimed exactly once across carriers.
 | `governed_source_manifest` | Exact no-bash input manifest. |
 | `derived_censuses` | Generator-derived executed harness-free, doctest, and emitted-schema censuses. |
 | `out_of_census_entries` | Every manifest entry the executed selector excludes, each with its reason. |
-| `handwritten_fragments` | Every non-generated fragment, including the channel transition rule, the `rustdoc_json` rule, and the vendor repository rule. |
+| `handwritten_fragments` | Every non-generated fragment, including the channel transition rule, the `rustdoc_json` rule, the vendor repository rule, and the yanked-state carrier fragment. |
 | `query_result_ref` | The committed drift-checked graph query result the out-of-test completeness check consumes. |
 | `locator_migration` | Reference to the Test Locator Migration record set. |
 | `deliberate_differences` | ADR section 13 difference and rationale per affected surface. |
@@ -69,29 +126,31 @@ hand is invalid where the generator can derive one.
 
 ## Test Topology
 
+Common to every variant:
+
 | Field | Rule |
 | --- | --- |
 | `topology_id` | Unique stable internal ID. |
-| `mode` | `process-per-case`, `process-per-binary`, `doctest`, or `harness-free`. |
-| `suite` | Main, guest, or one broker feature suite. |
-| `case_census` | Exact nonempty libtest listing when supported. |
-| `ignored_census` | Exact ignored names/count; ignored never means passed. |
-| `internal_threads` | Positive bounded value for broker; one case per child otherwise. |
-| `exclusive` | `true` for all broker feature carriers, otherwise `false`. |
-| `budget_source` | Always derived from `D2B_RUST_BUDGET`. |
-| `case_tmpdir` | Each case gets its own directory beneath the executor temporary root. |
-| `binary_resolution` | Always through declared runfiles under Bazel. |
-| `env_policy` | Only the declared test environment is forwarded. |
-| `result_document` | Per-case structured result written to the executor-designated path. |
-| `shell_free` | Always `true` for repository-owned execution paths. |
+| `carrier_label` | The one Test Carrier this topology describes. |
+| `case_tmpdir` | Each unit of execution gets its own directory beneath the executor temporary root. |
 
-Main and guest must use `process-per-case`. Broker must use
-`process-per-binary` and be exclusive. Exclusive carriers run one at a time and
+Variants:
+
+| Variant | Members |
+| --- | --- |
+| `ProcessPerCase` | `suite`: main workspace or guest shell runner. `case_census`: exact nonempty libtest listing. `ignored_census`: exact ignored names and count. One fresh process per case. |
+| `ProcessPerBinary` | `suite`: one broker feature suite. `binary_census`: exact nonempty binary listing. `case_census` and `ignored_census` as above. `internal_threads`: positive bounded value. Exclusive by construction. |
+| `Doctest` | `discovered_census`: derived, nonempty. |
+| `HarnessFree` | `discovered_census`: derived, nonempty, matching the selector the Cargo gate uses. |
+
+`internal_threads` exists only where a binary runs several cases in one
+process, and exclusivity is a property of the `ProcessPerBinary` variant rather
+than a boolean any topology could set. Exclusive carriers run one at a time and
 strictly after the parallel phase, which is a property of the schedule rather
-than of the carrier. Doctest and harness-free discovery is derived and refuses
-empty discovery. The `rules_rust`-generated stable-channel doctest runner is a
-shell script; it is a recorded deliberate difference and is not
-repository-owned, so `shell_free` binds repository-owned paths only.
+than of the carrier. `Doctest` and `HarnessFree` discovery is derived and
+refuses an empty result; those two variants carry a census rather than a
+process contract, so the qualification evidence records exactly five topology
+proofs, two `ProcessPerCase` and three `ProcessPerBinary`.
 
 ## Per-Case Result Document
 
@@ -105,46 +164,74 @@ repository-owned, so `shell_free` binds repository-owned paths only.
 | `write_semantics` | Anchored close-on-exec parent descriptor, link and magic-link refusal, close-on-exec same-directory temporary, sync, descriptor-relative rename. |
 | `ownership` | Only a runner-created temporary is ever unlinked; a failed creation unlinks nothing. |
 | `ordering` | No output descriptor is opened before every child is reaped. |
-| `publication_is_enforcing` | A passing carrier fails when publication fails. |
 | `failure_precedence` | An existing test failure remains primary; publication failure is reported additionally. |
 
-Filesystem operations sit behind an injectable trait so errno mapping,
-ownership state, and call ordering are hermetically testable. Every property in
-this table has a planted mutation the test must reject.
+Publication is enforcing, per the global invariants: a passing carrier fails
+when publication fails. Every property in this table has a planted mutation the
+test must reject, and every one of those mutations is produced through the
+injected boundaries below rather than by arranging host state.
+
+## Injected Boundaries
+
+Two traits exist so that failure states are supplied rather than provoked.
+Both are W0-frozen module paths, so W2 scopes open against a stable surface.
+
+| Boundary | Path | Serves | Supplied states |
+| --- | --- | --- | --- |
+| `FileSystem` | `packages/d2b-bazel-runner/src/fsops.rs` | Per-case result publication and scratch cleanup | `openat2` and forced component-walk routes, symlink and magic-link parents, anchored `..` escape, `EEXIST` collision, short write, `EINTR`, `EAGAIN`, `ENOSPC`, replacement race, tracked entry, foreign decoy |
+| `Clock` and `UptimeSource` | `packages/d2b-bazel-runner/src/clock.rs` | Deadline parsing, remaining-budget arithmetic, child duration, expiry escalation | Every accepted and rejected uptime field, truncate on capture and round up on read, exactly-zero remaining budget, overflow, expiry reached without sleeping |
+
+No test of cleanup, result publication, or deadline handling may depend on
+live host filesystem state, a full disk, a privileged mount, or the host clock.
+A property that can only be exercised by arranging host state is a property
+that will be marked ignored, which is the same as not testing it.
 
 ## Test Locator Migration
+
+Every record identifies one affected first-party file and one of two
+dispositions. The disposition is the variant, so a record cannot claim to need
+no migration while also carrying a runfiles path.
+
+Common:
 
 | Field | Rule |
 | --- | --- |
 | `file` | Repository-relative path of one affected first-party file. |
-| `kind` | `binary-location`, `manifest-path`, or `repo-root-walk`. |
-| `disposition` | `migrated` or `no-migration-needed` with a recorded reason. |
-| `bazel_arm` | Declared runfiles path plus the `data` label providing it. |
-| `cargo_arm` | Call-site macro expansion in the calling test crate. |
-| `chaining_allowed` | Always `false`. |
-| `absolute_execroot_path` | Always absent. |
-| `identity_assertion` | Located binary is checked to exist, to be executable, and to report the expected identity. |
+| `site` | `binary-location`, `manifest-path`, or `repo-root-walk` with the helper named. |
+
+Variants:
+
+| Variant | Members |
+| --- | --- |
+| `Migrated` | `bazel_runfiles_path` and the `data` label providing it; `cargo_call_site_crate`, the test crate the Cargo arm expands in; for a `binary-location` site, the identity the located executable must report before use. |
+| `NoMigrationNeeded` | `reason`: the recorded reason this file needs no change. |
 
 The affected set is enumerated, not sampled: 25 files locating binaries through
 compile-time Cargo environment expansion and 20 test files resolving
 `CARGO_MANIFEST_DIR`, 11 of those through a `repo_root()` helper. A file that
-is neither migrated nor recorded as needing no migration is a gap the coverage
-map makes visible. Both arms stay green on the Cargo path for the whole shadow
-stage.
+is in neither variant is a gap the coverage map makes visible. Both arms stay
+green on the Cargo path for the whole shadow stage.
 
 ## Hermeticity Inventory
 
 | Field | Rule |
 | --- | --- |
-| `hub` | One of the four `crate_universe` hubs. |
+| `hub` | One of the four `crate_universe` hubs: `main`, `broker`, `guest`, `walker`. |
+| `hub_lock_attrs` | `lockfile`, `cargo_lockfile`, and `skip_cargo_lockfile_overwrite = True` are all present. |
 | `build_script_crates` | Every third-party crate for which a build-script target is generated. |
 | `required_annotations` | Per crate: build-script environment, data, and toolchain requirements. |
 | `action_env_allowlist` | The explicit minimal set of host environment values any action may observe. |
 | `bazelignore_entries` | `.scratch/` plus every Cargo output directory any workspace or tool creates. |
 | `symlink_prefix` | Absolute path beneath `.scratch/`. |
-| `startup_options` | Absolute values supplied by the wrapper, byte-identical across build, test, query, info, shutdown, and clean. |
-| `repin_controls` | Must be absent from the wrapper and CI environments. |
+| `startup_options` | Absolute values supplied by the wrapper, byte-identical across build, test, query, info, shutdown, clean, and, from W2, the repin child. |
 | `generator_pin` | `cargo-bazel` URL plus sha256; source bootstrap refused. |
+
+Repin controls are absent from the wrapper and from every
+continuous-integration environment. The single scoped exception is the child
+environment `cargo xtask bazel-repin --hub <name>` constructs, which sets
+`CARGO_BAZEL_REPIN` and `CARGO_BAZEL_REPIN_ONLY=<hub>` for that one process,
+writes only that hub's Bazel-side lock, and fails when any other tracked
+derived artifact changed.
 
 Every field here is a cache-key input. A change to `action_env_allowlist`
 invalidates the entire action cache and is reviewed against the promoted size
@@ -247,7 +334,7 @@ not carved out of it.
 | --- | --- |
 | `generation_id` | Unique successful protected-`v3` run identifier. |
 | `kind` | `action` or `repository`; never `output-base`. |
-| `key_input_digest` | Digest over `.bazelversion`, `MODULE.bazel`, `MODULE.bazel.lock`, `.bazelrc`, both `rust-toolchain.toml` files, all four hub Cargo locks, `packages/Cargo.guest.lock`, all four per-hub `crate_universe` Bazel-side locks, the `cargo-bazel` URL and sha256, all deny configurations, the advisory-database pin, the yanked snapshot when present, `.bazelignore`, the symlink-prefix and startup-option configuration, the build-script annotation and action-environment digest, and the generated BUILD tree digest. |
+| `key_input_digest` | Digest over `.bazelversion`, `MODULE.bazel`, `MODULE.bazel.lock`, `.bazelrc`, both `rust-toolchain.toml` files, all four hub Cargo locks, `packages/Cargo.guest.lock`, all four per-hub `crate_universe` Bazel-side locks, the `cargo-bazel` URL and sha256, all deny configurations, the advisory-database pin, the committed yanked snapshot, `.bazelignore`, the symlink-prefix and startup-option configuration, the build-script annotation and action-environment digest, and the generated BUILD tree digest. |
 | `restore_prefix` | Omits run ID and commit SHA. |
 | `trim_evidence` | Reference proving the explicit synchronous collector completed before measurement. |
 | `size_bytes` | At most 4 GiB action or 1 GiB repository, measured after the trim. |
@@ -263,21 +350,28 @@ key input changing without changing the key is a defect, not a tuning choice.
 
 ## Recovery Condition
 
+Common:
+
 | Field | Rule |
 | --- | --- |
 | `code` | Unique stable static code. |
-| `owner` | Cleanup or deadline/server subsystem. |
-| `trigger` | One exact refusal/expiry class. |
+| `trigger` | One exact refusal or expiry class. |
 | `message_template` | Fixed and actionable. |
 | `required_steps` | Exact repository-relative remedy for this code. |
 | `forbidden_values` | Absolute path, output hash, user/PID, raw deadline, opaque handle. |
 | `forbidden_actions` | Code-specific unsafe actions. |
-| `deletes_nothing` | Required for cleanup refusal. |
 
-Required cleanup codes are `D2B-BZLCLEAN-TRACKED`,
-`D2B-BZLCLEAN-SYMLINK`, `D2B-BZLCLEAN-ESCAPE`, and
-`D2B-BZLCLEAN-LIVE`; server shutdown uses `D2B-BZLSERVER-STUCK`. Expired
-budget and ceiling miss are normal deadline outcomes. Remedies cannot be
+Variants:
+
+| Variant | Members | Codes |
+| --- | --- | --- |
+| `CleanupRefusal` | Deletes nothing, by construction of the variant. Exercised through the injected `FileSystem`. | `D2B-BZLCLEAN-TRACKED`, `D2B-BZLCLEAN-SYMLINK`, `D2B-BZLCLEAN-ESCAPE`, `D2B-BZLCLEAN-LIVE` |
+| `ServerRefusal` | Bounded shutdown attempt, no manual signal instruction. | `D2B-BZLSERVER-STUCK` |
+| `DeadlineOutcome` | `measured_duration` and `target`. Exercised through the injected `Clock`. | Expired budget and ceiling miss |
+
+`deletes_nothing` is not a field, because only `CleanupRefusal` can carry it
+and it is always true there. Expired budget and ceiling miss are normal
+deadline outcomes rather than refusals. Remedies cannot be
 borrowed across codes. A ceiling miss names only a larger runner or further
 disjoint split.
 
@@ -296,7 +390,7 @@ Promotion Evidence Set before executor authority changes.
 | `locator_migration_proof` | Every enumerated file migrated or recorded as needing none, plus the passing stale-binary negative fixture. |
 | `broker_repetitions` | Twenty consecutive passes per broker suite with exclusivity. |
 | `performance_sets` | Three valid profiles. Local sets bind the candidate; cold-CI samples carry their own `head_sha` values and reference the W3 feasibility measurement. |
-| `supply_chain_comparison` | Three locks, no differing enforcing outcome, with the yanked carrier landed if the comparison required it. |
+| `supply_chain_comparison` | Three locks, no differing enforcing outcome, with the yanked carrier landed and its offline key-set drift check passing. |
 | `cache_shadow_proof` | Zero shadow publications. |
 | `workflow_policy_proof` | Positive and every required negative fixture pass. |
 | `status` | `collecting`, `qualified`, or `invalidated`. |
@@ -386,9 +480,10 @@ Transition rules:
 Coverage Map 1 -- 18 Rust Surfaces
 Rust Surface 1 -- 1..n Carrier Targets
 Carrier Target 1 -- 1 Rust Surface
-Rust Surface 0..1 -- 1 Test Topology
-Test Topology 1 -- 1 Per-Case Result Document
+Carrier Target (TestCarrier) 1 -- 1 Test Topology
+Carrier Target (TestCarrier) 1 -- 1 Per-Case Result Document
 Carrier Target many -- 1 CI Slice
+Injected Boundaries 2 -- many Carrier Targets and cleanup paths
 Coverage Map 1 -- many Test Locator Migration records
 Hermeticity Inventory 4 -- 1 Coverage Map
 Qualification Record many -- many protected-v3 push events

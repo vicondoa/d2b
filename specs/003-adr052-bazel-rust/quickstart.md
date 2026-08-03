@@ -33,22 +33,42 @@ worktree output tree.
 ## Amended ADR verification - before W0
 
 The ADR 0052 amendment is a merged prerequisite, not work this feature
-performs. Before any W0 branch is created, prove the amended commit is an
-ancestor of the W0 base:
+performs. Before any W0 branch is created, prove the amended record is present
+in the base by content, not by a remembered commit hash:
 
 ```bash
-git log --oneline -1 -- docs/adr/0052-bazel-rust-build-and-test.md
-grep -n '^- Amended:' docs/adr/0052-bazel-rust-build-and-test.md
-grep -n '0052' docs/adr/README.md
+grep -q '^- Status: Accepted$' docs/adr/0052-bazel-rust-build-and-test.md
+grep -q '^- Amended: 2026-08-03\.' docs/adr/0052-bazel-rust-build-and-test.md
+grep -q 'yanked' docs/adr/0052-bazel-rust-build-and-test.md
+grep -q 'bazel-repin' docs/adr/0052-bazel-rust-build-and-test.md
+grep -q '0052-bazel-rust-build-and-test.md' docs/adr/README.md
 ```
 
 The record must be `Status: Accepted`, must carry the 2026-08-03 amendment
-line, and must already name protected `v3` as the promotion,
+line, must already name protected `v3` as the promotion,
 cache-maintenance, cache-publication, streak, and post-promotion lineage, with
-the cold measurement set drawn from qualifying cold qualification records. If
-any of `.bazelversion`, `.bazelrc`, `.bazelignore`, `MODULE.bazel`,
+the cold measurement set drawn from qualifying cold qualification records, must
+state that the section 6 yanked carrier lands unconditionally, and must name
+`cargo xtask bazel-repin` as the one supported lock regeneration path.
+
+Resolve the amendment commit from history rather than pasting a hash, so the
+check keeps working after any rebase or backport:
+
+```bash
+git rev-list --reverse HEAD -- docs/adr/0052-bazel-rust-build-and-test.md \
+  | while read -r sha; do
+      if git show "$sha:docs/adr/0052-bazel-rust-build-and-test.md" \
+           | grep -q '^- Amended: 2026-08-03\.'; then
+        printf '%s\n' "$sha"
+        break
+      fi
+    done
+```
+
+Record that resolved SHA as evidence and require it to be an ancestor of the
+W0 base. If any of `.bazelversion`, `.bazelrc`, `.bazelignore`, `MODULE.bazel`,
 `MODULE.bazel.lock`, `bazel/`, or generated `packages/**/BUILD.bazel` exists in
-a commit that predates that amendment, stop.
+a commit that predates it, stop.
 
 ## Foundation validation - W0
 
@@ -59,7 +79,15 @@ make test-rust-schema
 make test-rust-inventory
 make test-drift
 make test-policy
+D2B_ENABLE_FIXTURE_BUILD=1 make test-fixture-contracts
 ```
+
+The last one is not optional and is easy to skip, because a W0 diff looks like
+build configuration. `tests/test-rust.sh` excludes `d2b-contract-tests` from
+every workspace leaf, and that crate reads `Makefile`, `flake.nix`,
+`packages/Cargo.toml`, `packages/xtask/src/main.rs`, and every `.rs` file under
+`packages/`. Without this target, W0 changes those files with no coverage at
+all. The same applies to every later code-changing wave.
 
 Review the schema result for two independent generations, each containing the
 exact generated nonempty valid JSON census before comparison. The census is the
@@ -73,16 +101,56 @@ Check the pinning and boundary invariants that are easy to get wrong quietly:
 ! grep -qE '^[[:space:]]*startup[[:space:]]' .bazelrc
 ! grep -q 'rust/toolchain/channel' .bazelrc
 
-# All four hubs declare a Bazel-side lock.
+# All four hubs declare a Bazel-side lock, a Cargo lock, and the overwrite opt-out.
 grep -c 'lockfile' MODULE.bazel
+grep -c 'cargo_lockfile' MODULE.bazel
+grep -c 'skip_cargo_lockfile_overwrite = True' MODULE.bazel
 
 # No repin escape hatch anywhere on the gate path.
 ! grep -rqE 'CARGO_BAZEL_REPIN|CARGO_BAZEL_REPIN_ONLY|(^|[^A-Z_])REPIN=' \
   Makefile .github/workflows/
 
+# The only site that may assign a repin control to a process environment.
+grep -rnE '\.env\("(CARGO_BAZEL_REPIN|CARGO_BAZEL_REPIN_ONLY|REPIN)"' \
+  packages/ | cut -d: -f1 | sort -u
+
+# The only site that may set one process-globally is nowhere.
+! grep -rqE 'set_var\("(CARGO_BAZEL_REPIN|CARGO_BAZEL_REPIN_ONLY|REPIN)"' \
+  packages/
+
 # The workspace boundary covers scratch and every Cargo output directory.
 grep -q '^\.scratch/$' .bazelignore
 ```
+
+The third `grep -c` must report four, not zero: at `rules_rust` 0.73.0
+`skip_cargo_lockfile_overwrite` defaults to false, so a repin would otherwise
+rewrite the authoritative `Cargo.lock`. The assignment grep must print exactly
+`packages/xtask/src/bazel.rs`. Grepping for the bare variable names instead
+would also match `packages/xtask/tests/policy_ci.rs`, which necessarily
+contains all three literals because it is the guard that refuses them, so the
+check is on the assignment form, which is what the rule is actually about.
+
+Regenerating a hub lock is a single reviewed command, never an exported
+variable. It is deliberately not a Make target:
+
+```bash
+cargo xtask bazel-repin --hub main
+git status --short
+```
+
+The command must refuse an unknown `--hub` and must refuse to run when the
+ambient environment already carries any repin control. It must never leave a
+changed `Cargo.lock`, `MODULE.bazel.lock`, `.bazelignore`, generated
+`BUILD.bazel`, or `bazel/generated/**`; those are defects, not results, and the
+command fails on them rather than reporting success.
+
+Whether the hub lock itself changes depends on whether its inputs moved. On a
+committed tree whose lock is already current, the expected outcome is exit zero
+with an empty `git status --short`, which is why this is safe to run during
+review. The run that must report a changed lock is the one immediately after a
+Cargo workspace membership or dependency change; a command wired to the wrong
+Bazel invocation shows up there, as a repin that changed nothing when something
+had to change.
 
 Confirm `make test-rust` still invokes Cargo and remains authoritative:
 
@@ -218,6 +286,21 @@ Two negative controls matter more than the positive ones:
   is present in the unredacted fixture and then prove every one absent from the
   result document.
 
+Confirm the supply-chain carriers include the yanked-state check, which lands
+whether or not the recorded comparison found a difference:
+
+```bash
+ls bazel/supply_chain/
+jq -e 'has("entries") and (.entries | length) > 0' \
+  bazel/supply_chain/yanked-snapshot.json
+make test-drift
+```
+
+An all-clear snapshot with no yanked entry is the expected result and is still
+committed. What must fail is a snapshot whose `(name, version)` key set differs
+from the three committed locks in either direction; `test-drift` proves that
+offline and never contacts the index.
+
 Seeded failures are made on eighteen disposable, committed evidence branches,
 one protected condition per branch. Each branch runs only its owning approved
 slice and the aggregate manifest adapter. W4 records immutable commits and
@@ -266,6 +349,7 @@ make test-policy
 make check-tier0
 make test-bazel-rust
 D2B_CLEAN_DRY_RUN=1 make clean
+D2B_ENABLE_FIXTURE_BUILD=1 make test-fixture-contracts
 ```
 
 The targeted tests must exercise both cleanup syscall routes, descriptor
@@ -275,6 +359,21 @@ message redaction, every wrong-remedy mutation, and the result-document
 filesystem cases: link and anchored-escape refusal, creation ownership,
 short-write and collision handling, sync before rename, close-on-exec, and
 child-reap ordering.
+
+Every one of those states is supplied through an injected boundary, not
+arranged on the host. Cleanup and the result writer share the `FileSystem`
+trait in `packages/d2b-bazel-runner/src/fsops.rs`, and the deadline path takes
+`Clock` and `UptimeSource` from `packages/d2b-bazel-runner/src/clock.rs`. When
+reviewing W2, check that no test fills a disk, requires a privileged mount,
+sleeps to reach an expiry, or reads the host clock; a test that does is not
+reproducible and will be disabled later:
+
+```bash
+! grep -rnE 'thread::sleep|SystemTime::now|/proc/uptime' \
+  packages/d2b-bazel-runner/tests/
+grep -rn 'fsops::' packages/d2b-bazel-runner/src/cleanup.rs | head
+grep -rn 'clock::' packages/d2b-bazel-runner/src/deadline.rs | head
+```
 
 Prove startup options are byte-identical across every command the wrapper
 issues, because a mismatch starts a second server:
@@ -362,6 +461,7 @@ make test-bazel-rust-aux
 make test-rust-main
 make test-policy
 make test-lint
+D2B_ENABLE_FIXTURE_BUILD=1 make test-fixture-contracts
 ```
 
 Review the shadow run rather than treating green as sufficient. It must be
@@ -406,6 +506,8 @@ jq -e '
   .coverage.analysis_time_label_check_passed and
   .coverage.out_of_test_completeness_check_passed and
   .supply_chain.differing_enforcing_outcomes == 0 and
+  .supply_chain.yanked_carrier_landed and
+  .supply_chain.yanked_snapshot_key_set_matches_all_three_locks and
   .shadow_cache.publications == 0 and
   .workflow_policy.all_positive_and_negative_controls_pass
 ' specs/003-adr052-bazel-rust/evidence/qualification.json
@@ -479,7 +581,12 @@ make test-rust-inventory
 make test-rust-supply-chain
 make test-policy
 make check-tier0
+D2B_ENABLE_FIXTURE_BUILD=1 make test-fixture-contracts
 ```
+
+W6 owns `Makefile`, `AGENTS.md`, and `docs/contributing/`, all of which the
+`d2b-contract-tests` crate reads, so the fixture-contract target is part of W6
+validation and not an optional extra.
 
 W7 retires the eighteen Cargo implementations using only the independent
 green-run clock:

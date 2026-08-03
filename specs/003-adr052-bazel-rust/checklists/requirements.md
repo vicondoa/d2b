@@ -37,3 +37,10 @@
   makes them binding scope and compatibility constraints. Low-level design
   mechanics remain authoritative in the ADR rather than being re-specified
   here.
+- Revalidated after the round-one plan panel. FR-004 gained the single
+  supported lock-regeneration path, FR-020 and FR-021 made the yanked-state
+  carrier unconditional, and FR-052 gained the injected filesystem and clock
+  boundary requirement. Three edge cases and three acceptance scenarios were
+  added for the same three changes, and SC-011 gained the committed snapshot
+  and its offline drift check so the unconditional rule is measurable rather
+  than asserted.

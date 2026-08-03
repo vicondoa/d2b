@@ -33,12 +33,22 @@
   rule refuses by name, and the crate count is checked against the lock before
   the policy tool runs, so a vendored tree that is short a crate cannot report
   fewer findings and pass.
-- If the combined dependency check and its offline decomposition disagree about
-  yanked crates, the difference is carried by an added check against a
-  committed registry snapshot bounded by the lock files and reported under the
-  existing dependency-policy surfaces. Switching over stays blocked until both
-  paths produce the same enforcing findings; no advisory or licence outcome may
-  be dropped.
+- Yanked-crate detection is carried by an added check against a committed
+  registry snapshot bounded by the lock files and reported under the existing
+  dependency-policy surfaces. That check lands whether or not the combined
+  dependency check and its offline decomposition currently disagree about
+  yanked crates, so the capability is present before the first disagreement
+  rather than built in response to it. Refreshing the snapshot is an explicit
+  reviewed update outside the gate, and the gate's own check is offline and
+  only proves the snapshot describes exactly the dependencies the lock files
+  declare. Switching over stays blocked until both paths produce the same
+  enforcing findings; no advisory or licence outcome may be dropped.
+- Regenerating a Bazel-side dependency lock is a repository-owned command that
+  names one dependency hub, applies the regeneration control only to the single
+  build-tool process it starts, and refuses to finish if anything other than
+  that hub's lock changed. The environment overrides that would rewrite locks
+  silently stay forbidden in the build entry points and in continuous
+  integration, and the command is not reachable from either.
 - The requirement that no shell appears in the execution path is scoped to the
   build wrapper, test runner, cleanup, and process-control code this repository
   owns. The documentation-test runner that the Rust build rules generate on a

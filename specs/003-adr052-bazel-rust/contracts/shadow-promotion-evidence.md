@@ -68,9 +68,10 @@ produced no measurement rather than selecting among warm and cold runs.
 7. three valid warm-local, three cold-local, and the five most recent
    qualifying cold measurements, with the cold continuous-integration set
    referencing the W3 feasibility measurement that made the ceiling binding;
-8. identical enforcing supply-chain outcomes for all three locks, including the
-   yanked-state outcome, with the pre-authorized yanked carrier landed if the
-   comparison required it;
+8. identical enforcing supply-chain outcomes for all three locks, and the
+   yanked carrier landed under the existing `rust-deny-*` identifiers with its
+   committed lock-bounded snapshot passing the offline key-set drift check for
+   all three locks, whatever the comparison found;
 9. zero shadow cache restore, save, or publication;
 10. the complete locator migration record set, every file migrated or recorded
     as needing no migration, with the planted stale-binary negative fixture
