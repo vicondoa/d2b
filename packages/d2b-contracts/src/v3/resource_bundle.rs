@@ -404,7 +404,10 @@ impl std::error::Error for ResourceBundleError {}
 fn digest_resources(resources: &[BundleResource]) -> Result<String, ResourceBundleError> {
     let bytes =
         canonical_json_bytes(&resources).map_err(ResourceBundleError::CanonicalJsonEncode)?;
-    Ok(framed_canonical_digest(RESOURCE_BUNDLE_CONTENT_DOMAIN_TAG, &bytes))
+    Ok(framed_canonical_digest(
+        RESOURCE_BUNDLE_CONTENT_DOMAIN_TAG,
+        &bytes,
+    ))
 }
 
 fn is_digest(value: &str) -> bool {
