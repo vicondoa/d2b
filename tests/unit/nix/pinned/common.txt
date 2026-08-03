@@ -523,6 +523,9 @@ net-vm-network/work-nft-safe-uplink-drop-before-egress-accept
 net-vm-network/work-nft-safe-uplink-drop-present
 net-vm-network/work-uplink-address
 net-vm-network/work-uplink-mtu
+nix-eval-provider-output-ambiguous
+nix-eval-provider-output-shape-accepted
+nix-eval-provider-output-shape-unknown
 observability/obs-alerting-surface
 observability/obs-audit-surface
 observability/obs-cid-cross-env-noncollision

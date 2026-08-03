@@ -160,6 +160,64 @@ let
         in value == null || builtins.match digestPattern (toString value) == null)
       shape.digestFields;
 
+  maxOutputNameLength = 16;
+  maxOutputNamesInMessage = 4;
+
+  shortenOutputName = output:
+    if builtins.stringLength output <= maxOutputNameLength
+    then output
+    else builtins.substring 0 (maxOutputNameLength - 3) output + "...";
+
+  outputNamesSummary = outputs:
+    let
+      rendered = map (name: "\"${name}\"") (map shortenOutputName outputs);
+      complete = lib.concatStringsSep ", " rendered;
+      shown = lib.take maxOutputNamesInMessage (map shortenOutputName outputs);
+      omitted = builtins.length outputs - builtins.length shown;
+      abbreviated =
+        lib.concatStringsSep ", " (map (name: "\"${name}\"") shown)
+        + (if omitted > 0
+          then ", ... (${toString omitted} more; ${toString (builtins.length outputs)} total)"
+          else "");
+    in
+    if builtins.stringLength complete <= 96 then complete else abbreviated;
+
+  providerOutputSelection = id:
+    let
+      artifact = artifacts.${id};
+    in
+    if artifact.type != "provider" then
+      {
+        assertion = true;
+        message = "";
+      }
+    else
+      let
+        package = artifact.package;
+        declaredOutputs = package.outputs or [ "out" ];
+        shapeRecognised =
+          builtins.isList declaredOutputs
+          && declaredOutputs != [ ]
+          && builtins.all builtins.isString declaredOutputs;
+        outputSelectionRecognised =
+          if !shapeRecognised then false
+          else if builtins.length declaredOutputs == 1 then true
+          else if (package.outputSpecified or false) == true then true
+          else (package.outputName or null) != builtins.head declaredOutputs;
+        outputSummary =
+          if !shapeRecognised then ""
+          else outputNamesSummary declaredOutputs;
+      in
+      {
+        assertion = outputSelectionRecognised;
+        message =
+          if !shapeRecognised then
+            "d2b.artifacts.\"${id}\".package: provider-artifact-output-shape-unknown: outputs must be a non-empty list of strings; supply a derivation or store path, not a hand-built attrset."
+          else if outputSelectionRecognised then ""
+          else
+            "d2b.artifacts.\"${id}\".package: provider-artifact-output-ambiguous: declared outputs [ ${outputSummary} ] have no selection evidence; stdenv.mkDerivation: select any output (for example package = pkgs.<name>.out; sets outputSpecified). builtins.derivation: select a non-first output (outputName); its first output requires repackaging with stdenv.mkDerivation.";
+      };
+
 in
 {
   options.d2b.artifacts = lib.mkOption {
@@ -264,5 +322,9 @@ in
           there is no version-range solving and no latest.
         '';
       })
-      artifactIds);
+      artifactIds)
+
+    # Provider packages must name one determinate output before any later
+    # required-output validation can diagnose the artifact layout.
+    ++ (map providerOutputSelection artifactIds);
 }

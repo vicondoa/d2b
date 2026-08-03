@@ -48,6 +48,19 @@ let
     catalog = entryFor name;
   };
 
+  artifactForPackage = name: package:
+    (artifactFor name) // { inherit package; };
+
+  rawMultiOutput = builtins.derivation {
+    name = "provider-catalog-raw-multi-output";
+    system = pkgs.system;
+    builder = "${pkgs.bash}/bin/bash";
+    args = [ "-c" "mkdir -p $out $lib" ];
+    outputs = [ "out" "lib" ];
+  };
+
+  storePathPackage = "${pkgs.writeText "provider-catalog-store-path" "store-path"}";
+
   # Declared deliberately out of alphabetical order: the compiled catalog must
   # sort by artifactId rather than preserve the authoring order.
   authored = {
@@ -491,6 +504,69 @@ in
   "provider-catalog/single-artifact" = {
     expr = evalArtifacts { solo = artifactFor "solo"; };
     expected = [ "solo" ];
+  };
+
+  "nix-eval-provider-output-ambiguous" = {
+    expr =
+      let
+        wholeMessage = failing {
+          provider-openssl = artifactForPackage "provider-openssl" pkgs.openssl;
+        };
+        rawFirstMessage = failing {
+          raw-first = artifactForPackage "raw-first" rawMultiOutput.out;
+        };
+        selected = evalArtifacts {
+          selected-out = artifactForPackage "selected-out" pkgs.openssl.out;
+          selected-dev = artifactForPackage "selected-dev" pkgs.openssl.dev;
+          raw-lib = artifactForPackage "raw-lib" rawMultiOutput.lib;
+        };
+      in {
+        wholeRejected =
+          lib.hasInfix "provider-artifact-output-ambiguous" wholeMessage
+          && lib.hasInfix "provider-openssl" wholeMessage
+          && lib.hasInfix "\"bin\"" wholeMessage
+          && lib.hasInfix "\"debug\"" wholeMessage
+          && lib.hasInfix "outputSpecified" wholeMessage
+          && lib.hasInfix "builtins.derivation" wholeMessage
+          && lib.hasInfix "stdenv.mkDerivation" wholeMessage
+          && builtins.stringLength wholeMessage <= 512;
+        selectedOutputsAccepted =
+          selected == [ "raw-lib" "selected-dev" "selected-out" ];
+        rawFirstRejected =
+          lib.hasInfix "provider-artifact-output-ambiguous" rawFirstMessage
+          && lib.hasInfix "raw-first" rawFirstMessage
+          && lib.hasInfix "\"out\"" rawFirstMessage
+          && lib.hasInfix "\"lib\"" rawFirstMessage
+          && builtins.stringLength rawFirstMessage <= 512;
+      };
+    expected = {
+      wholeRejected = true;
+      selectedOutputsAccepted = true;
+      rawFirstRejected = true;
+    };
+  };
+
+  "nix-eval-provider-output-shape-accepted" = {
+    expr = evalArtifacts {
+      store-path = artifactForPackage "store-path" storePathPackage;
+    };
+    expected = [ "store-path" ];
+  };
+
+  "nix-eval-provider-output-shape-unknown" = {
+    expr =
+      let
+        message = failing {
+          malformed = artifactForPackage "malformed"
+            (rawMultiOutput // { outputs = "not-a-list"; });
+        };
+      in
+      lib.hasInfix "provider-artifact-output-shape-unknown" message
+      && lib.hasInfix "malformed" message
+      && lib.hasInfix "non-empty list of strings" message
+      && lib.hasInfix "hand-built attrset" message
+      && builtins.stringLength message <= 512;
+    expected = true;
   };
 
   "provider-catalog/zone-resource-bundle-credential-envelope-and-digest" = {
