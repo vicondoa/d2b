@@ -14,6 +14,7 @@ pub use crate::zone_links::{
     ZoneLinkHandler, ZoneLinkKeyPolicy, ZoneLinkLimits, ZoneLinkMetricSample, ZoneLinkPhase,
     ZoneLinkRecord, ZoneLinkSessionState, ZoneLinkStatus,
 };
+pub use d2b_contracts::v3::zone_routing::ZoneLinkControllerGeneration;
 
 /// Closed failure from owner-proof cursor adoption.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -188,8 +189,9 @@ impl ZoneLinkCursorAuthority {
 
     /// Adopt observations from the durable ZoneLink cursor table.
     ///
-    /// A distinct proof or duplicate differing cursor is ambiguous.  The
-    /// method never chooses a cursor by recency or map iteration order.
+    /// More than one durable observation is ambiguous, even when observations
+    /// happen to carry the same proof and cursor. The method never chooses a
+    /// cursor by recency or map iteration order.
     pub fn adopt(
         &mut self,
         observations: impl IntoIterator<Item = ZoneLinkCursorRecord>,
@@ -204,14 +206,9 @@ impl ZoneLinkCursorAuthority {
                 ZoneLinkAdoption::Quarantined(ZoneLinkAdoptionError::OwnerProofMismatch);
             return self.adoption.clone();
         }
-        for candidate in observed {
-            if candidate.owner_proof() != &self.expected_owner
-                || candidate.cursor() != first.cursor()
-            {
-                self.adoption =
-                    ZoneLinkAdoption::Quarantined(ZoneLinkAdoptionError::AmbiguousOwner);
-                return self.adoption.clone();
-            }
+        if observed.next().is_some() {
+            self.adoption = ZoneLinkAdoption::Quarantined(ZoneLinkAdoptionError::AmbiguousOwner);
+            return self.adoption.clone();
         }
         self.adoption = ZoneLinkAdoption::Adopted(first);
         self.adoption.clone()
@@ -237,6 +234,55 @@ impl ZoneLinkCursorAuthority {
                     .quarantine_reason()
                     .unwrap_or(ZoneLinkAdoptionError::OwnerProofMissing)
             })
+    }
+}
+
+/// ZoneLink handler facade that owns cursor adoption for its link.
+///
+/// The transport handler and cursor authority are kept together so restart
+/// recovery cannot be performed by a generic store caller. The caller supplies
+/// only durable observations; the owner proof is fixed when this handler is
+/// constructed.
+pub struct ZoneLinkController {
+    handler: ZoneLinkHandler,
+    cursor_authority: ZoneLinkCursorAuthority,
+}
+
+impl ZoneLinkController {
+    /// Restore one handler and bind its cursor authority to one owner proof.
+    pub fn restore(
+        limits: ZoneLinkLimits,
+        key_policy: ZoneLinkKeyPolicy,
+        record: ZoneLinkRecord,
+        owner_proof: ZoneLinkOwnerProof,
+    ) -> Self {
+        Self {
+            handler: ZoneLinkHandler::restore(limits, key_policy, record),
+            cursor_authority: ZoneLinkCursorAuthority::restore(owner_proof),
+        }
+    }
+
+    /// Borrow the transport/session handler.
+    pub const fn handler(&self) -> &ZoneLinkHandler {
+        &self.handler
+    }
+
+    /// Mutably borrow the transport/session handler.
+    pub fn handler_mut(&mut self) -> &mut ZoneLinkHandler {
+        &mut self.handler
+    }
+
+    /// Adopt exactly one owner-proof-bound cursor after restart.
+    pub fn adopt_cursor(
+        &mut self,
+        observations: impl IntoIterator<Item = ZoneLinkCursorRecord>,
+    ) -> ZoneLinkAdoption {
+        self.cursor_authority.adopt(observations)
+    }
+
+    /// Borrow the handler-owned cursor authority.
+    pub const fn cursor_authority(&self) -> &ZoneLinkCursorAuthority {
+        &self.cursor_authority
     }
 }
 
@@ -286,5 +332,45 @@ mod tests {
             Some(ZoneLinkAdoptionError::AmbiguousOwner)
         );
         assert!(authority.cursor().is_err());
+    }
+
+    #[test]
+    fn duplicate_owner_observations_are_quarantined() {
+        let proof = owner('a');
+        let cursor = ZoneLinkCursor::default();
+        let mut authority = ZoneLinkCursorAuthority::restore(proof.clone());
+        let result = authority.adopt([
+            ZoneLinkCursorRecord::new(proof.clone(), cursor),
+            ZoneLinkCursorRecord::new(proof, cursor),
+        ]);
+        assert_eq!(
+            result.quarantine_reason(),
+            Some(ZoneLinkAdoptionError::AmbiguousOwner)
+        );
+        assert!(authority.cursor().is_err());
+    }
+
+    #[test]
+    fn handler_owns_restart_cursor_adoption() {
+        let owner = owner('a');
+        let mut controller = ZoneLinkController::restore(
+            ZoneLinkLimits::default(),
+            ZoneLinkKeyPolicy::default(),
+            ZoneLinkRecord::unenrolled(
+                ZoneLinkControllerGeneration::parse("link-generation-1").unwrap(),
+            ),
+            owner.clone(),
+        );
+        let result =
+            controller.adopt_cursor([ZoneLinkCursorRecord::new(owner, ZoneLinkCursor::default())]);
+        assert!(result.is_adopted());
+        assert_eq!(
+            controller.cursor_authority().cursor(),
+            Ok(ZoneLinkCursor::default())
+        );
+        assert_eq!(
+            controller.handler().record().cursor(),
+            ZoneLinkCursor::default()
+        );
     }
 }

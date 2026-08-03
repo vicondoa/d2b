@@ -17,7 +17,7 @@ use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::{
-    Arc, Mutex, OnceLock,
+    Arc, Mutex,
     atomic::{AtomicU64, Ordering},
     mpsc,
 };
@@ -58,6 +58,7 @@ use d2b_contracts::{
     guest_proto as pb,
     public_wire::{self, AuthRole, AuthStatusResponse, DeniedCommandHint, SocketReachability},
     types::{BundleClosureRef, BundleOpId, MediaRef, RoleId, ScopeId, TracingSpanId, VmId},
+    v3::ZoneId,
 };
 use d2b_core::bundle::Bundle;
 use d2b_core::bundle_resolver::{
@@ -75,6 +76,7 @@ use d2b_core::manifest_v04::{ManifestV04, VmEntry as ManifestVmEntry};
 use d2b_core::processes::{ProcessNode, ProcessRole, ProcessesJson, ReadinessPredicate};
 use d2b_core::realm_controller_config::{RealmControllerMetadataSummary, RealmControllersJson};
 use d2b_core::workload_identity::WorkloadIdentity;
+use d2b_core_controller::coordinator::{CoordinatorError, ZoneCoordinator};
 use d2b_gateway::{
     AgentHandle, AgentSpawnRequest, AppCommand, Clock, ContextSeed, DisplayListener,
     DisplaySessionContext, GatewayDeps, GatewayError, GatewayOrchestrator, GatewayWorkload,
@@ -584,6 +586,10 @@ struct ServerState {
     /// pre-v3 bundle remains in explicit compatibility mode; a malformed
     /// v3 catalog is fail-closed rather than falling back.
     provider_runtime: Arc<provider_registry::ProviderRuntime>,
+    /// Authoritative Zone index for daemon-side coordination state. USBIP
+    /// reconciliation, force-stop generations, and activation staging all
+    /// resolve through this index; no process-global lock carries that state.
+    zone_coordinator: Arc<Mutex<ZoneCoordinator>>,
     /// Per-VM console session table (ring buffers and drainer tasks) for
     /// `d2b console <vm>`. Sessions are created on first Attach and persist
     /// until the daemon restarts or the VM stops.
@@ -591,6 +597,84 @@ struct ServerState {
     security_key_sessions: Arc<parking_lot::Mutex<security_key::SkSessionTable>>,
     #[allow(dead_code)]
     unsafe_local_helpers: Arc<unsafe_local_helper::HelperRegistry>,
+}
+
+fn new_zone_coordinator() -> Arc<Mutex<ZoneCoordinator>> {
+    Arc::new(Mutex::new(ZoneCoordinator::new()))
+}
+
+/// Populate the daemon's Zone authority index from the trusted host bundle.
+///
+/// VM lifecycle requests carry only a VM resource name. The Zone binding is
+/// derived here from bundle-owned `vmRuntimes` rows, never from a request
+/// field. A malformed or incomplete row is left unavailable so subsequent
+/// coordination fails closed.
+fn register_authoritative_zones(
+    state: &ServerState,
+    resolver: &BundleResolver,
+) -> Result<(), &'static str> {
+    let mut coordinator = state
+        .zone_coordinator
+        .lock()
+        .map_err(|_| "zone coordinator lock unavailable")?;
+    for environment in &resolver.host.environments {
+        let zone =
+            ZoneId::parse(environment.env.clone()).map_err(|_| "bundle Zone identity invalid")?;
+        let _ = coordinator.register_zone(zone);
+    }
+    for runtime in &resolver.host.vm_runtimes {
+        let Some(environment) = runtime.env.as_deref() else {
+            continue;
+        };
+        let zone = ZoneId::parse(environment).map_err(|_| "VM Zone identity invalid")?;
+        let _ = coordinator.register_zone(zone.clone());
+        coordinator
+            .bind_vm(runtime.vm.clone(), &zone)
+            .map_err(|_| "VM Zone binding conflicted")?;
+    }
+    // `vmRuntimes` is optional in legacy host bundles. The signed public
+    // manifest carries the same VM-to-environment binding, so use it as the
+    // compatibility projection without accepting a request-supplied Zone.
+    for (vm, runtime) in &resolver.manifest.vms {
+        let Some(environment) = runtime.env.as_deref() else {
+            continue;
+        };
+        let zone = ZoneId::parse(environment).map_err(|_| "manifest Zone identity invalid")?;
+        let _ = coordinator.register_zone(zone.clone());
+        coordinator
+            .bind_vm(vm.clone(), &zone)
+            .map_err(|_| "manifest VM Zone binding conflicted")?;
+    }
+    Ok(())
+}
+
+/// Resolve a VM through the authoritative Zone index.
+fn authoritative_zone_for_vm(state: &ServerState, vm: &str) -> Result<ZoneId, CoordinatorError> {
+    #[allow(unused_mut)]
+    let mut coordinator = state
+        .zone_coordinator
+        .lock()
+        .map_err(|_| CoordinatorError::ZoneNotRegistered)?;
+    if let Ok(zone) = coordinator.zone_for_vm(vm) {
+        return Ok(zone.clone());
+    }
+
+    // Test-only states do not load a production bundle. Their VM names stand
+    // in for distinct Zones so unit tests retain the old hermetic setup
+    // without creating a production fallback for caller-supplied identity.
+    #[cfg(test)]
+    {
+        let zone = ZoneId::parse(vm).map_err(|_| CoordinatorError::VmNotRegistered)?;
+        coordinator.register_zone(zone.clone());
+        coordinator.bind_vm(vm.to_owned(), &zone)?;
+        Ok(zone)
+    }
+
+    #[cfg(not(test))]
+    {
+        let _ = vm;
+        Err(CoordinatorError::VmNotRegistered)
+    }
 }
 
 struct GatewayDisplayRuntime {
@@ -1479,6 +1563,7 @@ pub async fn serve(options: ServeOptions) -> Result<(), TypedError> {
         op_locks: crate::concurrency::OpLockManager::new(),
         public_status_read_model: Arc::new(crate::PublicStatusReadModel::new()),
         provider_runtime: Arc::new(crate::provider_registry::ProviderRuntime::new()),
+        zone_coordinator: new_zone_coordinator(),
         security_key_sessions: Arc::new(parking_lot::Mutex::new(
             crate::security_key::SkSessionTable::default(),
         )),
@@ -1498,6 +1583,14 @@ pub async fn serve(options: ServeOptions) -> Result<(), TypedError> {
 
     match load_bundle_resolver(&state) {
         Ok(resolver) => {
+            if let Err(error) = register_authoritative_zones(&state, &resolver) {
+                tracing::error!(
+                    error,
+                    "trusted bundle did not populate the Zone authority index; Zone coordination will fail closed",
+                );
+            } else {
+                restore_configuration_staging_on_startup(&state);
+            }
             if let Err(error) = state.provider_runtime.configure_from_host(&resolver.host) {
                 tracing::error!(
                     error = %error,
@@ -3193,7 +3286,7 @@ fn dispatch_request(
         wire::Request::VmStop(lifecycle) | wire::Request::VmRestart(lifecycle)
             if vm_lifecycle_force_requested(lifecycle) =>
         {
-            note_force_shutdown_request(&lifecycle.vm);
+            note_force_shutdown_request(state, &lifecycle.vm);
         }
         _ => {}
     }
@@ -3981,6 +4074,7 @@ mod workload_observability_tests {
             op_locks: concurrency::OpLockManager::new(),
             public_status_read_model: Arc::new(PublicStatusReadModel::new()),
             provider_runtime: Arc::new(crate::provider_registry::ProviderRuntime::new()),
+            zone_coordinator: new_zone_coordinator(),
             console_sessions: Arc::new(Mutex::new(console_session::ConsoleSessionTable::default())),
             security_key_sessions: Arc::new(parking_lot::Mutex::new(
                 security_key::SkSessionTable::default(),
@@ -6507,28 +6601,24 @@ enum UsbipBackgroundReconcileSpawn {
     Spawned,
 }
 
-static USBIP_BACKGROUND_RECONCILE_ACTIVE: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
-
 struct UsbipBackgroundReconcileGuard {
-    vm: String,
+    coordinator: Arc<Mutex<ZoneCoordinator>>,
+    zone: ZoneId,
 }
 
 impl UsbipBackgroundReconcileGuard {
-    fn try_acquire(vm: &str) -> Option<Self> {
-        let active = USBIP_BACKGROUND_RECONCILE_ACTIVE.get_or_init(|| Mutex::new(HashSet::new()));
-        let mut active = active.lock().ok()?;
-        active
-            .insert(vm.to_owned())
-            .then(|| Self { vm: vm.to_owned() })
+    fn try_acquire(state: &ServerState, vm: &str) -> Option<Self> {
+        let zone = authoritative_zone_for_vm(state, vm).ok()?;
+        let coordinator = Arc::clone(&state.zone_coordinator);
+        coordinator.lock().ok()?.begin_usbip_reconcile(&zone).ok()?;
+        Some(Self { coordinator, zone })
     }
 }
 
 impl Drop for UsbipBackgroundReconcileGuard {
     fn drop(&mut self) {
-        if let Some(active) = USBIP_BACKGROUND_RECONCILE_ACTIVE.get()
-            && let Ok(mut active) = active.lock()
-        {
-            active.remove(&self.vm);
+        if let Ok(mut coordinator) = self.coordinator.lock() {
+            let _ = coordinator.finish_usbip_reconcile(&self.zone);
         }
     }
 }
@@ -6542,7 +6632,7 @@ fn spawn_usbip_reconcile_after_vm_start(
     if same_vm_declared_usbip_start_claims(resolver, vm).is_empty() {
         return UsbipBackgroundReconcileSpawn::NoClaims;
     }
-    let Some(guard) = UsbipBackgroundReconcileGuard::try_acquire(vm) else {
+    let Some(guard) = UsbipBackgroundReconcileGuard::try_acquire(state, vm) else {
         return UsbipBackgroundReconcileSpawn::AlreadyRunning;
     };
 
@@ -13709,31 +13799,38 @@ struct ShutdownDegradedMarker {
     elapsed_ms: u64,
 }
 
-static FORCE_SHUTDOWN_GENERATIONS: OnceLock<Mutex<HashMap<String, u64>>> = OnceLock::new();
-
-fn force_shutdown_generations() -> &'static Mutex<HashMap<String, u64>> {
-    FORCE_SHUTDOWN_GENERATIONS.get_or_init(|| Mutex::new(HashMap::new()))
-}
-
-fn force_shutdown_generation(vm: &str) -> u64 {
-    force_shutdown_generations()
+fn force_shutdown_generation(state: &ServerState, vm: &str) -> u64 {
+    let Ok(zone) = authoritative_zone_for_vm(state, vm) else {
+        return 0;
+    };
+    state
+        .zone_coordinator
         .lock()
-        .expect("force shutdown generation lock")
-        .get(vm)
-        .copied()
+        .ok()
+        .and_then(|coordinator| coordinator.snapshot(&zone).ok())
+        .and_then(|snapshot| snapshot.force_shutdown_generation())
         .unwrap_or(0)
 }
 
-fn note_force_shutdown_request(vm: &str) {
-    let mut generations = force_shutdown_generations()
-        .lock()
-        .expect("force shutdown generation lock");
-    let entry = generations.entry(vm.to_owned()).or_default();
-    *entry = entry.saturating_add(1);
+fn note_force_shutdown_request(state: &ServerState, vm: &str) {
+    let Ok(zone) = authoritative_zone_for_vm(state, vm) else {
+        tracing::warn!(
+            vm = %vm,
+            "force shutdown request ignored because the VM has no authoritative Zone binding",
+        );
+        return;
+    };
+    let Ok(mut coordinator) = state.zone_coordinator.lock() else {
+        tracing::warn!(vm = %vm, "force shutdown request ignored because Zone state is unavailable");
+        return;
+    };
+    if let Err(error) = coordinator.note_force_shutdown_request(&zone) {
+        tracing::warn!(vm = %vm, error = %error, "force shutdown generation did not advance");
+    }
 }
 
-fn force_shutdown_interrupted(vm: &str, baseline: u64) -> bool {
-    force_shutdown_generation(vm) > baseline
+fn force_shutdown_interrupted(state: &ServerState, vm: &str, baseline: u64) -> bool {
+    force_shutdown_generation(state, vm) > baseline
 }
 
 impl VmShutdownOutcome {
@@ -14689,7 +14786,7 @@ async fn run_provider_graceful_shutdown(
     };
     let deadline = Instant::now() + input.timeout;
     loop {
-        if force_shutdown_interrupted(&input.target.vm, input.force_generation_baseline) {
+        if force_shutdown_interrupted(state, &input.target.vm, input.force_generation_baseline) {
             tracing::warn!(vm = %input.target.vm, "force stop requested during graceful shutdown; forcing cleanup");
             return (VmShutdownOutcome::ForceRequested, None);
         }
@@ -14885,7 +14982,7 @@ fn stop_vmm_runner_with_provider(
     }
 
     let sidecars = required_sidecars_for_graceful_wait(input.stop_entries);
-    let force_generation_baseline = force_shutdown_generation(input.vm);
+    let force_generation_baseline = force_shutdown_generation(state, input.vm);
     let provider: Box<dyn provider_shutdown::GracefulVmShutdown> = match target.kind {
         provider_shutdown::ProviderKind::CloudHypervisor => {
             Box::new(provider_shutdown::CloudHypervisorShutdown::default())
@@ -17393,47 +17490,95 @@ struct HostActivationPendingMarker {
     updated_unix_secs: u64,
 }
 
-#[derive(Default)]
-struct ActivationLockSet {
-    active: Mutex<HashSet<String>>,
+struct ActivationLockGuard {
+    coordinator: Arc<Mutex<ZoneCoordinator>>,
+    zone: ZoneId,
 }
 
-struct ActivationLockGuard {
-    vm: String,
-    locks: &'static ActivationLockSet,
+impl ActivationLockGuard {
+    fn zone(&self) -> &ZoneId {
+        &self.zone
+    }
 }
 
 impl Drop for ActivationLockGuard {
     fn drop(&mut self) {
-        self.locks
-            .active
-            .lock()
-            .expect("activation lock poisoned")
-            .remove(&self.vm);
+        if let Ok(mut coordinator) = self.coordinator.lock() {
+            let _ = coordinator.finish_activation(&self.zone);
+        }
     }
 }
 
-fn activation_locks() -> &'static ActivationLockSet {
-    static LOCKS: OnceLock<ActivationLockSet> = OnceLock::new();
-    LOCKS.get_or_init(ActivationLockSet::default)
+fn try_acquire_activation_lock(
+    state: &ServerState,
+    vm: &str,
+) -> Result<ActivationLockGuard, Value> {
+    let zone = match authoritative_zone_for_vm(state, vm) {
+        Ok(zone) => zone,
+        Err(_) => {
+            return Err(invalid_request_response_with_summary(
+                "activation",
+                format!("activation target vm '{vm}' has no authoritative Zone"),
+                "reconcile the trusted bundle's VM-to-Zone index, then retry activation".to_owned(),
+            ));
+        }
+    };
+    let coordinator = Arc::clone(&state.zone_coordinator);
+    let acquired = match coordinator.lock() {
+        Ok(mut coordinator) => coordinator.begin_activation(&zone),
+        Err(_) => Err(CoordinatorError::ZoneNotRegistered),
+    };
+    match acquired {
+        Ok(()) => {}
+        Err(CoordinatorError::ActivationInFlight) => {
+            return Err(invalid_request_response_with_summary(
+                "activation",
+                format!("activation already in progress for vm '{vm}'"),
+                format!(
+                    "wait for the existing activation on vm '{vm}' to finish, then retry the command; status/list will report activation-pending if recovery is needed"
+                ),
+            ));
+        }
+        Err(_) => {
+            return Err(invalid_request_response_with_summary(
+                "activation",
+                format!("activation target vm '{vm}' has unavailable Zone state"),
+                "retry after the Zone coordinator becomes ready".to_owned(),
+            ));
+        }
+    }
+    Ok(ActivationLockGuard { coordinator, zone })
 }
 
-fn try_acquire_activation_lock(vm: &str) -> Result<ActivationLockGuard, Value> {
-    let locks = activation_locks();
-    let mut active = locks.active.lock().expect("activation lock poisoned");
-    if !active.insert(vm.to_owned()) {
-        return Err(invalid_request_response_with_summary(
-            "activation",
-            format!("activation already in progress for vm '{vm}'"),
-            format!(
-                "wait for the existing activation on vm '{vm}' to finish, then retry the command; status/list will report activation-pending if recovery is needed"
-            ),
-        ));
-    }
-    Ok(ActivationLockGuard {
-        vm: vm.to_owned(),
-        locks,
-    })
+fn stage_configuration_ordinal(
+    state: &ServerState,
+    zone: &ZoneId,
+    ordinal: u64,
+) -> Result<(), CoordinatorError> {
+    state
+        .zone_coordinator
+        .lock()
+        .map_err(|_| CoordinatorError::ZoneNotRegistered)?
+        .stage_configuration_ordinal(zone, ordinal)
+}
+
+fn commit_configuration_ordinal(
+    state: &ServerState,
+    zone: &ZoneId,
+) -> Result<Option<u64>, CoordinatorError> {
+    state
+        .zone_coordinator
+        .lock()
+        .map_err(|_| CoordinatorError::ZoneNotRegistered)?
+        .commit_configuration_ordinal(zone)
+}
+
+fn abort_configuration_ordinal(state: &ServerState, zone: &ZoneId) -> Result<(), CoordinatorError> {
+    state
+        .zone_coordinator
+        .lock()
+        .map_err(|_| CoordinatorError::ZoneNotRegistered)?
+        .abort_configuration_ordinal(zone)
 }
 
 fn activation_marker_dir(state: &ServerState) -> PathBuf {
@@ -17606,6 +17751,38 @@ fn refresh_activation_marker_metrics_on_startup(state: &ServerState) {
     }
 }
 
+fn restore_configuration_staging_on_startup(state: &ServerState) {
+    let dir = activation_marker_dir(state);
+    let Ok(entries) = fs::read_dir(&dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let Ok(bytes) = fs::read(entry.path()) else {
+            continue;
+        };
+        let Ok(marker) = serde_json::from_slice::<HostActivationPendingMarker>(&bytes) else {
+            continue;
+        };
+        let Some(ordinal) = marker.generation_number else {
+            continue;
+        };
+        let Ok(zone) = authoritative_zone_for_vm(state, &marker.vm) else {
+            tracing::warn!(
+                vm = %marker.vm,
+                "activation marker could not be adopted because its VM has no authoritative Zone",
+            );
+            continue;
+        };
+        if let Err(error) = stage_configuration_ordinal(state, &zone, ordinal) {
+            tracing::warn!(
+                vm = %marker.vm,
+                error = %error,
+                "activation marker configuration staging was quarantined",
+            );
+        }
+    }
+}
+
 fn activation_marker_reason(marker: &HostActivationPendingMarker) -> &'static str {
     match marker.state {
         HostActivationMarkerState::Pending => "activation-pending",
@@ -17701,6 +17878,8 @@ type TestGuestActivationHook =
 
 #[cfg(test)]
 fn test_guest_activation_hook_cell() -> &'static Mutex<Option<TestGuestActivationHook>> {
+    use std::sync::OnceLock;
+
     static HOOK: OnceLock<Mutex<Option<TestGuestActivationHook>>> = OnceLock::new();
     HOOK.get_or_init(|| Mutex::new(None))
 }
@@ -18111,7 +18290,7 @@ fn dispatch_live_guest_activation(
     verb: &'static str,
     mode: BrokerActivationMode,
 ) -> Result<Value, TypedError> {
-    let _guard = match try_acquire_activation_lock(&request.vm) {
+    let _guard = match try_acquire_activation_lock(state, &request.vm) {
         Ok(guard) => guard,
         Err(frame) => return Ok(frame),
     };
@@ -18190,6 +18369,20 @@ fn dispatch_live_guest_activation(
         ));
     };
     let activation_id = generate_activation_id()?;
+    if let Some(ordinal) = prepare.generation_number
+        && let Err(error) = stage_configuration_ordinal(state, _guard.zone(), ordinal)
+    {
+        return Ok(invalid_request_response_with_summary(
+            verb,
+            format!(
+                "configuration staging for vm '{}' is unavailable",
+                request.vm
+            ),
+            format!(
+                "the Zone configuration publisher refused this generation ({error}); retry after the existing Zone activation is resolved"
+            ),
+        ));
+    }
     let mut marker = build_activation_marker(
         &request.vm,
         mode,
@@ -18218,6 +18411,9 @@ fn dispatch_live_guest_activation(
                 "failure",
                 marker_started.elapsed(),
             );
+            if prepare.generation_number.is_some() {
+                let _ = abort_configuration_ordinal(state, _guard.zone());
+            }
             return Err(error);
         }
     }
@@ -18254,6 +18450,9 @@ fn dispatch_live_guest_activation(
                 "failure",
                 guest_started.elapsed(),
             );
+            if prepare.generation_number.is_some() {
+                let _ = abort_configuration_ordinal(state, _guard.zone());
+            }
             clear_activation_marker(state, &request.vm);
             record_activation_degraded_metric(state, &request.vm, false);
             let remediation = match remediation {
@@ -18316,6 +18515,15 @@ fn dispatch_live_guest_activation(
             return Ok(frame);
         }
     };
+    if prepare.generation_number.is_some()
+        && let Err(error) = commit_configuration_ordinal(state, _guard.zone())
+    {
+        tracing::warn!(
+            vm = %request.vm,
+            error = %error,
+            "configuration publisher could not record the committed Zone generation",
+        );
+    }
     clear_activation_marker(state, &request.vm);
     record_activation_degraded_metric(state, &request.vm, false);
     let generation_suffix = commit
@@ -19809,6 +20017,7 @@ mod public_status_tests {
             op_locks: crate::concurrency::OpLockManager::new(),
             public_status_read_model: Arc::new(crate::PublicStatusReadModel::new()),
             provider_runtime: Arc::new(crate::provider_registry::ProviderRuntime::new()),
+            zone_coordinator: new_zone_coordinator(),
             security_key_sessions: Arc::new(parking_lot::Mutex::new(
                 crate::security_key::SkSessionTable::default(),
             )),
@@ -22719,6 +22928,7 @@ mod detached_exec_routing_tests {
             op_locks: crate::concurrency::OpLockManager::new(),
             public_status_read_model: Arc::new(crate::PublicStatusReadModel::new()),
             provider_runtime: Arc::new(crate::provider_registry::ProviderRuntime::new()),
+            zone_coordinator: new_zone_coordinator(),
             security_key_sessions: Arc::new(parking_lot::Mutex::new(
                 crate::security_key::SkSessionTable::default(),
             )),
@@ -23434,6 +23644,7 @@ mod accept_loop_concurrency_tests {
             op_locks: crate::concurrency::OpLockManager::new(),
             public_status_read_model: Arc::new(crate::PublicStatusReadModel::new()),
             provider_runtime: Arc::new(crate::provider_registry::ProviderRuntime::new()),
+            zone_coordinator: new_zone_coordinator(),
             security_key_sessions: Arc::new(parking_lot::Mutex::new(
                 crate::security_key::SkSessionTable::default(),
             )),
@@ -23933,8 +24144,8 @@ mod broker_dispatch_tests {
         dispatch_broker_vm_start, dispatch_broker_vm_stop, dispatch_broker_vm_stop_with_timeout,
         dispatch_request, dispatch_status, force_shutdown_generation, map_shell_attach_response,
         map_shell_detach_response, map_shell_kill_response, map_shell_list_response,
-        note_force_shutdown_request, prove_role_cgroup_empty_or_escalate, provider_shutdown,
-        read_activation_marker, redact_broker_dispatch_failure_for_launcher,
+        new_zone_coordinator, note_force_shutdown_request, prove_role_cgroup_empty_or_escalate,
+        provider_shutdown, read_activation_marker, redact_broker_dispatch_failure_for_launcher,
         redact_broker_error_for_launcher, resolve_store_view_intent_for_vm,
         rollback_failed_vm_start, run_provider_graceful_shutdown,
         same_vm_declared_usbip_start_claims_with_reader,
@@ -24017,6 +24228,7 @@ mod broker_dispatch_tests {
             op_locks: crate::concurrency::OpLockManager::new(),
             public_status_read_model: Arc::new(crate::PublicStatusReadModel::new()),
             provider_runtime: Arc::new(crate::provider_registry::ProviderRuntime::new()),
+            zone_coordinator: new_zone_coordinator(),
             security_key_sessions: Arc::new(parking_lot::Mutex::new(
                 crate::security_key::SkSessionTable::default(),
             )),
@@ -24056,6 +24268,7 @@ mod broker_dispatch_tests {
             op_locks: crate::concurrency::OpLockManager::new(),
             public_status_read_model: Arc::new(crate::PublicStatusReadModel::new()),
             provider_runtime: Arc::new(crate::provider_registry::ProviderRuntime::new()),
+            zone_coordinator: new_zone_coordinator(),
             security_key_sessions: Arc::new(parking_lot::Mutex::new(
                 crate::security_key::SkSessionTable::default(),
             )),
@@ -24432,14 +24645,16 @@ mod broker_dispatch_tests {
     #[test]
     fn usbip_background_reconcile_guard_deduplicates_by_vm() {
         let vm = format!("vm-guard-{}", NEXT_TEST_ID.fetch_add(1, Ordering::Relaxed));
-        let guard = UsbipBackgroundReconcileGuard::try_acquire(&vm).expect("first guard");
+        let state =
+            test_state_with_broker_socket(unreachable_broker_socket_path("usbip-background-guard"));
+        let guard = UsbipBackgroundReconcileGuard::try_acquire(&state, &vm).expect("first guard");
         assert!(
-            UsbipBackgroundReconcileGuard::try_acquire(&vm).is_none(),
+            UsbipBackgroundReconcileGuard::try_acquire(&state, &vm).is_none(),
             "second guard for same VM must be refused"
         );
         drop(guard);
         assert!(
-            UsbipBackgroundReconcileGuard::try_acquire(&vm).is_some(),
+            UsbipBackgroundReconcileGuard::try_acquire(&state, &vm).is_some(),
             "dropping the guard releases the VM slot"
         );
     }
@@ -25991,12 +26206,14 @@ mod broker_dispatch_tests {
     #[test]
     fn activation_same_vm_lock_rejects_concurrent_request() {
         let _serial = activation_test_serial();
-        let guard = try_acquire_activation_lock("vm-a").expect("first activation lock");
-        let second = try_acquire_activation_lock("vm-a");
+        let state =
+            test_state_with_broker_socket(unreachable_broker_socket_path("activation-lock"));
+        let guard = try_acquire_activation_lock(&state, "vm-a").expect("first activation lock");
+        let second = try_acquire_activation_lock(&state, "vm-a");
         assert!(second.is_err(), "second activation must be rejected");
         drop(guard);
         assert!(
-            try_acquire_activation_lock("vm-a").is_ok(),
+            try_acquire_activation_lock(&state, "vm-a").is_ok(),
             "lock releases after guard drop"
         );
     }
@@ -26149,6 +26366,7 @@ mod broker_dispatch_tests {
             op_locks: crate::concurrency::OpLockManager::new(),
             public_status_read_model: Arc::new(crate::PublicStatusReadModel::new()),
             provider_runtime: Arc::new(crate::provider_registry::ProviderRuntime::new()),
+            zone_coordinator: new_zone_coordinator(),
             security_key_sessions: Arc::new(parking_lot::Mutex::new(
                 crate::security_key::SkSessionTable::default(),
             )),
@@ -26375,6 +26593,7 @@ mod broker_dispatch_tests {
             op_locks: crate::concurrency::OpLockManager::new(),
             public_status_read_model: Arc::new(crate::PublicStatusReadModel::new()),
             provider_runtime: Arc::new(crate::provider_registry::ProviderRuntime::new()),
+            zone_coordinator: new_zone_coordinator(),
             security_key_sessions: Arc::new(parking_lot::Mutex::new(
                 crate::security_key::SkSessionTable::default(),
             )),
@@ -26634,6 +26853,7 @@ mod broker_dispatch_tests {
             op_locks: crate::concurrency::OpLockManager::new(),
             public_status_read_model: Arc::new(crate::PublicStatusReadModel::new()),
             provider_runtime: Arc::new(crate::provider_registry::ProviderRuntime::new()),
+            zone_coordinator: new_zone_coordinator(),
             security_key_sessions: Arc::new(parking_lot::Mutex::new(
                 crate::security_key::SkSessionTable::default(),
             )),
@@ -26802,11 +27022,13 @@ mod broker_dispatch_tests {
             "force-generation-{}",
             NEXT_TEST_ID.fetch_add(1, Ordering::Relaxed)
         );
-        let baseline = super::force_shutdown_generation(&vm);
-        assert!(!super::force_shutdown_interrupted(&vm, baseline));
+        let state =
+            test_state_with_broker_socket(unreachable_broker_socket_path("force-generation"));
+        let baseline = super::force_shutdown_generation(&state, &vm);
+        assert!(!super::force_shutdown_interrupted(&state, &vm, baseline));
 
-        super::note_force_shutdown_request(&vm);
-        assert!(super::force_shutdown_interrupted(&vm, baseline));
+        super::note_force_shutdown_request(&state, &vm);
+        assert!(super::force_shutdown_interrupted(&state, &vm, baseline));
     }
 
     #[test]
@@ -26963,8 +27185,8 @@ mod broker_dispatch_tests {
             kind: provider_shutdown::ProviderKind::CloudHypervisor,
             api_socket: None,
         };
-        let baseline = force_shutdown_generation("vm-force");
-        note_force_shutdown_request("vm-force");
+        let baseline = force_shutdown_generation(&state, "vm-force");
+        note_force_shutdown_request(&state, "vm-force");
         let provider = ScriptedShutdownProvider {
             states: Arc::new(Mutex::new(VecDeque::from([
                 provider_shutdown::ProviderGuestState::Running,
@@ -28529,6 +28751,7 @@ mod broker_dispatch_tests {
             op_locks: crate::concurrency::OpLockManager::new(),
             public_status_read_model: Arc::new(crate::PublicStatusReadModel::new()),
             provider_runtime: Arc::new(crate::provider_registry::ProviderRuntime::new()),
+            zone_coordinator: new_zone_coordinator(),
             security_key_sessions: Arc::new(parking_lot::Mutex::new(
                 crate::security_key::SkSessionTable::default(),
             )),
@@ -29465,6 +29688,7 @@ mod broker_dispatch_tests {
             op_locks: crate::concurrency::OpLockManager::new(),
             public_status_read_model: Arc::new(crate::PublicStatusReadModel::new()),
             provider_runtime: Arc::new(crate::provider_registry::ProviderRuntime::new()),
+            zone_coordinator: new_zone_coordinator(),
             security_key_sessions: Arc::new(parking_lot::Mutex::new(
                 crate::security_key::SkSessionTable::default(),
             )),
@@ -29591,6 +29815,7 @@ mod broker_dispatch_tests {
             op_locks: crate::concurrency::OpLockManager::new(),
             public_status_read_model: Arc::new(crate::PublicStatusReadModel::new()),
             provider_runtime: Arc::new(crate::provider_registry::ProviderRuntime::new()),
+            zone_coordinator: new_zone_coordinator(),
             security_key_sessions: Arc::new(parking_lot::Mutex::new(
                 crate::security_key::SkSessionTable::default(),
             )),

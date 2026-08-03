@@ -5,7 +5,7 @@
 //! Zone-keyed state and therefore cannot let one Zone suppress reconciliation
 //! or activation in another Zone.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, btree_map::Entry};
 
 use d2b_contracts::v3::{ResourceBundleGenerationId, ZoneId};
 
@@ -14,14 +14,24 @@ use d2b_contracts::v3::{ResourceBundleGenerationId, ZoneId};
 pub enum CoordinatorError {
     /// The requested Zone has not been registered.
     ZoneNotRegistered,
+    /// The requested VM has not been bound to an authoritative Zone.
+    VmNotRegistered,
+    /// A VM was already bound to a different Zone.
+    VmZoneConflict,
     /// A USBIP reconciliation pass is already active for this Zone.
     UsbipReconcileInFlight,
     /// An activation lock is already held for this Zone.
     ActivationInFlight,
+    /// A different configuration generation is already staged for this Zone.
+    ConfigurationStagingInFlight,
     /// The caller attempted to release a lock that is not held.
     LockNotHeld,
     /// A shutdown generation cannot be zero.
     InvalidShutdownGeneration,
+    /// A shutdown generation cannot advance any further.
+    ShutdownGenerationExhausted,
+    /// A configuration generation cannot be zero.
+    InvalidConfigurationGeneration,
 }
 
 impl CoordinatorError {
@@ -29,10 +39,19 @@ impl CoordinatorError {
     pub const fn label(self) -> &'static str {
         match self {
             Self::ZoneNotRegistered => "zone-coordinator-zone-not-registered",
+            Self::VmNotRegistered => "zone-coordinator-vm-not-registered",
+            Self::VmZoneConflict => "zone-coordinator-vm-zone-conflict",
             Self::UsbipReconcileInFlight => "zone-coordinator-usbip-reconcile-in-flight",
             Self::ActivationInFlight => "zone-coordinator-activation-in-flight",
+            Self::ConfigurationStagingInFlight => {
+                "zone-coordinator-configuration-staging-in-flight"
+            }
             Self::LockNotHeld => "zone-coordinator-lock-not-held",
             Self::InvalidShutdownGeneration => "zone-coordinator-shutdown-generation-invalid",
+            Self::ShutdownGenerationExhausted => "zone-coordinator-shutdown-generation-exhausted",
+            Self::InvalidConfigurationGeneration => {
+                "zone-coordinator-configuration-generation-invalid"
+            }
         }
     }
 }
@@ -48,8 +67,10 @@ impl std::error::Error for CoordinatorError {}
 /// Per-Zone configuration staging state.
 #[derive(Clone, PartialEq, Eq)]
 pub struct ConfigurationStaging {
-    pending: Option<ResourceBundleGenerationId>,
-    active: Option<ResourceBundleGenerationId>,
+    pub(crate) pending: Option<ResourceBundleGenerationId>,
+    pub(crate) active: Option<ResourceBundleGenerationId>,
+    pub(crate) pending_ordinal: Option<u64>,
+    pub(crate) active_ordinal: Option<u64>,
 }
 
 impl ConfigurationStaging {
@@ -58,6 +79,8 @@ impl ConfigurationStaging {
         Self {
             pending: None,
             active: None,
+            pending_ordinal: None,
+            active_ordinal: None,
         }
     }
 
@@ -70,6 +93,16 @@ impl ConfigurationStaging {
     pub const fn active(&self) -> Option<&ResourceBundleGenerationId> {
         self.active.as_ref()
     }
+
+    /// Return the staged configuration ordinal used by the daemon publisher.
+    pub const fn pending_ordinal(&self) -> Option<u64> {
+        self.pending_ordinal
+    }
+
+    /// Return the active configuration ordinal used by the daemon publisher.
+    pub const fn active_ordinal(&self) -> Option<u64> {
+        self.active_ordinal
+    }
 }
 
 impl core::fmt::Debug for ConfigurationStaging {
@@ -78,6 +111,8 @@ impl core::fmt::Debug for ConfigurationStaging {
             .debug_struct("ConfigurationStaging")
             .field("has_pending", &self.pending.is_some())
             .field("has_active", &self.active.is_some())
+            .field("has_pending_ordinal", &self.pending_ordinal.is_some())
+            .field("has_active_ordinal", &self.active_ordinal.is_some())
             .finish()
     }
 }
@@ -136,6 +171,7 @@ impl ZoneCoordinatorSnapshot {
 #[derive(Default)]
 pub struct ZoneCoordinator {
     zones: BTreeMap<ZoneId, ZoneCoordinatorState>,
+    vm_zones: BTreeMap<String, ZoneId>,
 }
 
 impl ZoneCoordinator {
@@ -143,14 +179,54 @@ impl ZoneCoordinator {
     pub const fn new() -> Self {
         Self {
             zones: BTreeMap::new(),
+            vm_zones: BTreeMap::new(),
         }
     }
 
     /// Register one Zone before it can acquire coordination state.
+    ///
+    /// Registration is idempotent and never resets state for an already
+    /// admitted Zone. The caller is expected to supply Zones from the trusted
+    /// authority index, not from a public lifecycle request.
     pub fn register_zone(&mut self, zone: ZoneId) -> bool {
-        self.zones
-            .insert(zone, ZoneCoordinatorState::new())
-            .is_none()
+        match self.zones.entry(zone) {
+            Entry::Vacant(entry) => {
+                entry.insert(ZoneCoordinatorState::new());
+                true
+            }
+            Entry::Occupied(_) => false,
+        }
+    }
+
+    /// Bind one trusted VM resource to its owning Zone.
+    ///
+    /// This is the routing part of the authority index. Coordination methods
+    /// can then resolve a VM without accepting a caller-supplied Zone or
+    /// authority.
+    pub fn bind_vm(
+        &mut self,
+        vm: impl Into<String>,
+        zone: &ZoneId,
+    ) -> Result<bool, CoordinatorError> {
+        if !self.zones.contains_key(zone) {
+            return Err(CoordinatorError::ZoneNotRegistered);
+        }
+        let vm = vm.into();
+        match self.vm_zones.get(&vm) {
+            Some(existing) if existing != zone => Err(CoordinatorError::VmZoneConflict),
+            Some(_) => Ok(false),
+            None => {
+                self.vm_zones.insert(vm, zone.clone());
+                Ok(true)
+            }
+        }
+    }
+
+    /// Resolve a trusted VM resource to its authoritative Zone.
+    pub fn zone_for_vm(&self, vm: &str) -> Result<&ZoneId, CoordinatorError> {
+        self.vm_zones
+            .get(vm)
+            .ok_or(CoordinatorError::VmNotRegistered)
     }
 
     /// Return the number of independently coordinated Zones.
@@ -225,6 +301,18 @@ impl ZoneCoordinator {
         Ok(())
     }
 
+    /// Advance and record a force-shutdown generation for one Zone.
+    pub fn note_force_shutdown_request(&mut self, zone: &ZoneId) -> Result<u64, CoordinatorError> {
+        let state = self.state_mut(zone)?;
+        let generation = state
+            .force_shutdown_generation
+            .unwrap_or(0)
+            .checked_add(1)
+            .ok_or(CoordinatorError::ShutdownGenerationExhausted)?;
+        state.force_shutdown_generation = Some(generation);
+        Ok(generation)
+    }
+
     /// Clear a force-shutdown generation after the matching Zone teardown.
     pub fn clear_force_shutdown_generation(
         &mut self,
@@ -248,6 +336,27 @@ impl ZoneCoordinator {
         Ok(())
     }
 
+    /// Stage a broker-published configuration ordinal for exactly one Zone.
+    pub fn stage_configuration_ordinal(
+        &mut self,
+        zone: &ZoneId,
+        ordinal: u64,
+    ) -> Result<(), CoordinatorError> {
+        if ordinal == 0 {
+            return Err(CoordinatorError::InvalidConfigurationGeneration);
+        }
+        let state = self.state_mut(zone)?;
+        if state
+            .staging
+            .pending_ordinal
+            .is_some_and(|pending| pending != ordinal)
+        {
+            return Err(CoordinatorError::ConfigurationStagingInFlight);
+        }
+        state.staging.pending_ordinal = Some(ordinal);
+        Ok(())
+    }
+
     /// Commit the staged generation after the durable generation record commit.
     pub fn commit_configuration(
         &mut self,
@@ -261,9 +370,28 @@ impl ZoneCoordinator {
         Ok(pending)
     }
 
+    /// Commit the broker-published ordinal after its durable generation record.
+    pub fn commit_configuration_ordinal(
+        &mut self,
+        zone: &ZoneId,
+    ) -> Result<Option<u64>, CoordinatorError> {
+        let state = self.state_mut(zone)?;
+        let pending = state.staging.pending_ordinal.take();
+        if let Some(ordinal) = pending {
+            state.staging.active_ordinal = Some(ordinal);
+        }
+        Ok(pending)
+    }
+
     /// Clear a pending staging record after an aborted activation.
     pub fn abort_configuration(&mut self, zone: &ZoneId) -> Result<(), CoordinatorError> {
         self.state_mut(zone)?.staging.pending = None;
+        Ok(())
+    }
+
+    /// Clear a pending broker-published ordinal after an aborted activation.
+    pub fn abort_configuration_ordinal(&mut self, zone: &ZoneId) -> Result<(), CoordinatorError> {
+        self.state_mut(zone)?.staging.pending_ordinal = None;
         Ok(())
     }
 
@@ -279,6 +407,7 @@ impl core::fmt::Debug for ZoneCoordinator {
         formatter
             .debug_struct("ZoneCoordinator")
             .field("zone_count", &self.zones.len())
+            .field("vm_count", &self.vm_zones.len())
             .finish()
     }
 }
@@ -303,6 +432,8 @@ mod tests {
         let personal = zone("personal");
         assert!(coordinator.register_zone(work.clone()));
         assert!(coordinator.register_zone(personal.clone()));
+        assert_eq!(coordinator.bind_vm("work-vm", &work), Ok(true));
+        assert_eq!(coordinator.bind_vm("personal-vm", &personal), Ok(true));
 
         coordinator.begin_usbip_reconcile(&work).unwrap();
         coordinator.begin_activation(&work).unwrap();
@@ -316,11 +447,14 @@ mod tests {
         assert!(!untouched.activation_lock_held());
         assert_eq!(untouched.force_shutdown_generation(), None);
         assert_eq!(untouched.staging().pending(), None);
+        assert_eq!(untouched.staging().pending_ordinal(), None);
         assert_eq!(
             coordinator.begin_usbip_reconcile(&personal),
             Ok(()),
             "one Zone cannot suppress another Zone"
         );
+        assert_eq!(coordinator.zone_for_vm("work-vm"), Ok(&work));
+        assert_eq!(coordinator.zone_for_vm("personal-vm"), Ok(&personal));
     }
 
     #[test]
@@ -345,6 +479,63 @@ mod tests {
         assert_eq!(
             coordinator.snapshot(&personal).unwrap().staging().active(),
             None
+        );
+    }
+
+    #[test]
+    fn vm_binding_is_authoritative_and_does_not_cross_zone_state() {
+        let mut coordinator = ZoneCoordinator::new();
+        let work = zone("work");
+        let personal = zone("personal");
+        coordinator.register_zone(work.clone());
+        coordinator.register_zone(personal.clone());
+        assert_eq!(coordinator.bind_vm("guest", &work), Ok(true));
+        assert_eq!(
+            coordinator.bind_vm("guest", &personal),
+            Err(CoordinatorError::VmZoneConflict)
+        );
+        assert_eq!(
+            coordinator.zone_for_vm("unknown"),
+            Err(CoordinatorError::VmNotRegistered)
+        );
+
+        coordinator.note_force_shutdown_request(&work).unwrap();
+        assert_eq!(
+            coordinator
+                .snapshot(&work)
+                .unwrap()
+                .force_shutdown_generation(),
+            Some(1)
+        );
+        assert_eq!(
+            coordinator
+                .snapshot(&personal)
+                .unwrap()
+                .force_shutdown_generation(),
+            None
+        );
+
+        coordinator.stage_configuration_ordinal(&work, 4).unwrap();
+        assert_eq!(
+            coordinator.stage_configuration_ordinal(&work, 5),
+            Err(CoordinatorError::ConfigurationStagingInFlight)
+        );
+        assert_eq!(
+            coordinator
+                .snapshot(&personal)
+                .unwrap()
+                .staging()
+                .pending_ordinal(),
+            None
+        );
+        assert_eq!(coordinator.commit_configuration_ordinal(&work), Ok(Some(4)));
+        assert_eq!(
+            coordinator
+                .snapshot(&work)
+                .unwrap()
+                .staging()
+                .active_ordinal(),
+            Some(4)
         );
     }
 }
