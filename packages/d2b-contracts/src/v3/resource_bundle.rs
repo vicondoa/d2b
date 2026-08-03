@@ -14,7 +14,7 @@ use serde::{Deserialize, Deserializer, Serialize};
 use super::{
     ResourceRef, ResourceTypeName, ZoneId,
     resource_schema::{
-        CanonicalJsonObject, CanonicalJsonValue, canonical_digest, canonical_json_bytes,
+        CanonicalJsonObject, CanonicalJsonValue, canonical_json_bytes, framed_canonical_digest,
     },
 };
 
@@ -404,7 +404,7 @@ impl std::error::Error for ResourceBundleError {}
 fn digest_resources(resources: &[BundleResource]) -> Result<String, ResourceBundleError> {
     let bytes =
         canonical_json_bytes(&resources).map_err(ResourceBundleError::CanonicalJsonEncode)?;
-    Ok(canonical_digest(RESOURCE_BUNDLE_CONTENT_DOMAIN_TAG, &bytes))
+    Ok(framed_canonical_digest(RESOURCE_BUNDLE_CONTENT_DOMAIN_TAG, &bytes))
 }
 
 fn is_digest(value: &str) -> bool {

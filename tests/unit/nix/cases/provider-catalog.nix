@@ -9,6 +9,7 @@
 { mkEval, lib, pkgs, flakeRoot, ... }:
 
 let
+  digestHelpers = import ../../../../nixos-modules/resources-bundle.nix { inherit lib; };
   shape = import ../../../../nixos-modules/generated/provider-catalog-shape.nix;
 
   base = { ... }: {
@@ -580,8 +581,11 @@ in
         zoneCfg.d2b._bundle.zoneResourceBundles.local-root.path != null
         && zoneCfg.d2b._bundle.extraArtifacts.artifactCatalog.path != null;
       digestContract = {
-        nulSeparator = lib.hasInfix "printf '%s\\000' \"$domain\""
+        noRawNulSeparator = !(lib.hasInfix "printf '%s\\000' \"$domain\""
+          digestRendererSource);
+        framedObject = lib.hasInfix "\"framing\": \"d2b-digest/v1\""
           digestRendererSource;
+        canonicalJson = lib.hasInfix "sort_keys=True" digestRendererSource;
         resourceBundleDomain = lib.hasInfix
           "domain_digest 'd2b:v3:resource-bundle'" digestRendererSource;
         resourceBundleGolden = lib.hasInfix
@@ -636,7 +640,9 @@ in
       evalCatalogFields = [ "entries" "schemaVersion" ];
       pathsAreBuildBacked = true;
       digestContract = {
-        nulSeparator = true;
+        noRawNulSeparator = true;
+        framedObject = true;
+        canonicalJson = true;
         resourceBundleDomain = true;
         resourceBundleGolden = true;
         artifactCatalogDomain = true;
@@ -690,6 +696,21 @@ in
     expected = {
       resourceWithoutOwnerRef = true;
       invalidOwnerRef = true;
+    };
+  };
+
+  "provider-catalog/framed-digest-separates-domain-and-payload-boundaries" = {
+    expr = {
+      preimagesDiffer =
+        digestHelpers.framedDigestPreimage "ab" "c"
+        != digestHelpers.framedDigestPreimage "a" "bc";
+      digestsDiffer =
+        digestHelpers.framedDigest "ab" "c"
+        != digestHelpers.framedDigest "a" "bc";
+    };
+    expected = {
+      preimagesDiffer = true;
+      digestsDiffer = true;
     };
   };
 

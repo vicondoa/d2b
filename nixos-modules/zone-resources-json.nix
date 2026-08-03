@@ -3,17 +3,33 @@
 
 let
   resourceBundleGoldenDigest =
-    "38bbe7643fbe19b682a1c266fd6b0b6d3dd41e9e5a5abdf5d13be38b8fc37894";
+    "TODO_RESOURCE_BUNDLE_FRAMED_DIGEST";
   artifactCatalogGoldenDigest =
-    "e2d86f09e58fd957f7750ebcb9b7b194976db06a5578e823afbc2501ef6f4464";
+    "TODO_ARTIFACT_CATALOG_FRAMED_DIGEST";
 
   digestFunctions = ''
     domain_digest() {
       local domain="$1"
-      {
-        printf '%s\000' "$domain"
-        cat
-      } | sha256sum | cut -d' ' -f1
+      python3 -c '
+import hashlib
+import json
+import sys
+
+domain = sys.argv[1]
+payload = sys.stdin.buffer.read().decode("utf-8")
+frame = {
+    "domain": domain,
+    "framing": "d2b-digest/v1",
+    "payload": payload,
+}
+encoded = json.dumps(
+    frame,
+    ensure_ascii=False,
+    sort_keys=True,
+    separators=(",", ":"),
+).encode("utf-8")
+print(hashlib.sha256(encoded).hexdigest())
+' "$domain"
     }
 
     verify_digest_vectors() {

@@ -8,7 +8,6 @@
 let
   cfg = config.d2b;
   apiVersion = "resources.d2bus.org/v3";
-  nul = builtins.fromJSON "\"\\u0000\"";
   resourcesBundle = import ./resources-bundle.nix { inherit lib; };
   providerCatalogEntries = cfg._providerCatalog.entries or [ ];
   phase2 = cfg._resourceCompiler.phase2 or { };
@@ -74,8 +73,8 @@ let
   catalogDigest =
     if cfg ? _artifactCatalogV3 && cfg._artifactCatalogV3 ? catalogDigest
     then cfg._artifactCatalogV3.catalogDigest
-    else "sha256:${builtins.hashString "sha256"
-      ("d2b:v3:artifact-catalog" + nul + emptyArtifactCatalogPreimageJson)}";
+    else "sha256:${resourcesBundle.framedDigest
+      "d2b:v3:artifact-catalog" emptyArtifactCatalogPreimageJson}";
   catalogPath =
     if cfg ? _artifactCatalogV3 && cfg._artifactCatalogV3 ? path
     then cfg._artifactCatalogV3.path
@@ -231,8 +230,8 @@ let
       resources = resourceList zoneName zone;
       resourcesJson = canonicalJson resources;
       contentHash =
-        "sha256:${builtins.hashString "sha256"
-          ("d2b:v3:resource-bundle" + nul + resourcesJson)}";
+        "sha256:${resourcesBundle.framedDigest
+          "d2b:v3:resource-bundle" resourcesJson}";
     in {
       schemaVersion = 3;
       bundleVersion = 1;

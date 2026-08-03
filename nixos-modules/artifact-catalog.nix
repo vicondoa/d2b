@@ -107,6 +107,20 @@ let
               if child.is_file()
           )
 
+      def framed_digest(domain, payload):
+          frame = {
+              "domain": domain,
+              "framing": "d2b-digest/v1",
+              "payload": payload.decode("utf-8"),
+          }
+          encoded = json.dumps(
+              frame,
+              ensure_ascii=False,
+              sort_keys=True,
+              separators=(",", ":"),
+          ).encode("utf-8")
+          return hashlib.sha256(encoded).hexdigest()
+
       entries = []
       for row in rows:
           closure_paths = [
@@ -124,11 +138,21 @@ let
               "type": row["type"],
           })
       preimage = {"entries": entries, "schemaVersion": 3}
-      encoded = json.dumps(preimage, sort_keys=True, separators=(",", ":")).encode()
-      digest = hashlib.sha256(b"d2b:v3:artifact-catalog\0" + encoded).hexdigest()
+      encoded = json.dumps(
+          preimage,
+          ensure_ascii=False,
+          sort_keys=True,
+          separators=(",", ":"),
+      ).encode("utf-8")
+      digest = framed_digest("d2b:v3:artifact-catalog", encoded)
       catalog = preimage | {"catalogDigest": "sha256:" + digest}
       pathlib.Path(output_path).write_text(
-          json.dumps(catalog, sort_keys=True, separators=(",", ":")) + "\n",
+          json.dumps(
+              catalog,
+              ensure_ascii=False,
+              sort_keys=True,
+              separators=(",", ":"),
+          ) + "\n",
           encoding="utf-8",
       )
       PY

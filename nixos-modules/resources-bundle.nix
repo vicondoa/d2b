@@ -302,6 +302,20 @@ let
     then map canonical value
     else value;
 
+  # The bundle and artifact-catalog digests cross the Nix/Rust/Python
+  # boundary. Keep their preimage textual and self-framing: the canonical
+  # JSON object separates the domain from the payload instead of relying on
+  # an embedded NUL byte.
+  framedDigestPreimage = domain: payload:
+    builtins.toJSON (canonical {
+      domain = domain;
+      framing = "d2b-digest/v1";
+      inherit payload;
+    });
+
+  framedDigest = domain: payload:
+    builtins.hashString "sha256" (framedDigestPreimage domain payload);
+
   canonicalMetadata = zoneName: resource:
     let
       metadata = attrOr resource "metadata" { };
@@ -405,6 +419,8 @@ in
     canonical
     canonicalResource
     compileBundle
+    framedDigest
+    framedDigestPreimage
     forbiddenRows
     sortResources
     validateBundle

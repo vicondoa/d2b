@@ -1,6 +1,7 @@
 { mkEval, lib, pkgs, system, flakeRoot, ... }:
 
 let
+  digestHelpers = import ../../../../nixos-modules/resources-bundle.nix { inherit lib; };
   base = { lib, ... }: {
     boot.loader.grub.enable = false;
     boot.loader.systemd-boot.enable = false;
@@ -69,7 +70,6 @@ let
     };
   };
 
-  bundleNul = builtins.fromJSON "\"\\u0000\"";
   digestCfg = (mkEval [ base ({ ... }: {
     d2b.artifacts = lib.optionalAttrs (system == "x86_64-linux") {
       sample = {
@@ -299,9 +299,9 @@ in
   "bundle-artifacts/v3-zone-content-hash-covers-shipped-resources" = {
     expr = if system != "x86_64-linux" then true else
       digestBundle.data.contentHash
-        == "sha256:${builtins.hashString "sha256"
-          ("d2b:v3:resource-bundle" + bundleNul
-            + builtins.toJSON digestBundle.data.resources)}";
+        == "sha256:${digestHelpers.framedDigest
+          "d2b:v3:resource-bundle"
+          (builtins.toJSON digestBundle.data.resources)}";
     expected = true;
   };
 

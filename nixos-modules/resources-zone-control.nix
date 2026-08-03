@@ -497,8 +497,8 @@ let
     then cfg._bundle.zoneResourceBundlesV3.${zoneName}.data
     else {
       resources = [ ];
-      contentHash = "sha256:${builtins.hashString "sha256"
-        ("d2b:v3:resource-bundle${builtins.fromJSON "\"\\u0000\""}[]")}";
+      contentHash = "sha256:${resourceBundle.framedDigest
+        "d2b:v3:resource-bundle" "[]"}";
     };
 
   canonicalResources = zoneName:
@@ -515,9 +515,8 @@ let
   parentMap = lib.mapAttrs
     (_: topology: topology.parentZone)
     (cfg._zoneCompiler.topology or { });
-  parentMapDigest = "sha256:${builtins.hashString "sha256"
-    ("d2b:v3:parent-topology${builtins.fromJSON "\"\\u0000\""}"
-      + builtins.toJSON parentMap)}";
+  parentMapDigest = "sha256:${resourceBundle.framedDigest
+    "d2b:v3:parent-topology" (builtins.toJSON parentMap)}";
   generationByZone = lib.mapAttrs
     (zoneName: _zone: (bundleFor zoneName).contentHash)
     cfg.zones;
