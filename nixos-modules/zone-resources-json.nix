@@ -3,9 +3,9 @@
 
 let
   resourceBundleGoldenDigest =
-    "2fa7348cd18ac4f54d28aeb87ef0be5da1fd772c3d173d830ef25e67b7adc63e";
-  artifactCatalogGoldenDigest =
     "854fc6c314b185ac9f842231e368fc75650729f669e15d0f1e60141ea334cb5e";
+  artifactCatalogGoldenDigest =
+    "2fa7348cd18ac4f54d28aeb87ef0be5da1fd772c3d173d830ef25e67b7adc63e";
 
   digestFunctions = ''
     domain_digest() {
