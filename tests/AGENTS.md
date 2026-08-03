@@ -255,7 +255,7 @@ message naming `D2B_NIX_UNIT_WORKERS`. Use that bounded operator-intent
 control. Its effective count is capped by four workers, logical CPUs, any
 finite cgroup CPU quota, and available memory after a 3 GiB host reserve at
 the evaluator limit plus 2048 MiB of process and flake overhead per worker.
-The limit defaults to 4096 MiB locally and 2048 MiB on GitHub Actions.
+The limit defaults to 4096 MiB locally and 1024 MiB on GitHub Actions.
 GitHub Actions explicitly requests one worker by default, while local
 development requests four on the reference 12-CPU, 62-GiB host.
 `D2B_NIX_UNIT_MEMORY_MB` may set the limit from 512 through 4096 MiB.

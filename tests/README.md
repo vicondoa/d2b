@@ -255,7 +255,7 @@ retired and exits with status 2; use
 bounded by the CPU cap `min(4, logical CPUs, finite cgroup CPU quota)` and the
 memory cap
 `max(1, floor((effective available MiB - 3072) / (limit + 2048)))`.
-The evaluator limit defaults to 4096 MiB locally and 2048 MiB on GitHub
+The evaluator limit defaults to 4096 MiB locally and 1024 MiB on GitHub
 Actions, plus 2048 MiB of per-worker process and flake overhead. GitHub
 Actions requests one worker by default; local development requests four.
 This keeps the hosted evaluator serialized under memory pressure while

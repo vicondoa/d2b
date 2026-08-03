@@ -190,7 +190,7 @@ esac
 if [ -n "${D2B_NIX_UNIT_MEMORY_MB:-}" ]; then
   memory_mb=$D2B_NIX_UNIT_MEMORY_MB
 elif [ "${GITHUB_ACTIONS:-}" = true ]; then
-  memory_mb=2048
+  memory_mb=1024
 else
   memory_mb=4096
 fi

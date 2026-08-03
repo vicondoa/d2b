@@ -1066,7 +1066,7 @@ fn execution_manifest_schema_and_prose_agree_with_non_empty_discovery() {
             && nix_driver.contains("GITHUB_ACTIONS")
             && nix_driver.contains("requested_workers=1")
             && nix_driver.contains("requested_workers=4")
-            && nix_driver.contains("memory_mb=2048")
+            && nix_driver.contains("memory_mb=1024")
             && nix_driver.contains("memory_mb=4096"),
         "execution-manifest-policy: Nix-unit hosted-runner memory envelope drifted"
     );
