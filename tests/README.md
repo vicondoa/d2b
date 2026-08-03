@@ -229,11 +229,17 @@ replace source inventory, `make test-policy`, or
 
 `make test-nix-unit` uses the established `nix-eval-jobs` runner with
 `--no-instantiate` against the locked
-`nixUnitJobs.<system>` flake output. It evaluates every current x86 case
-without submitting installables to the daemon or realizing derivations. The
-full corpus currently contains 893 cases plus one integrity result, and the
-runner reports every JSON-lines failure before returning a failure status.
-Discovery is empty-set failure and pin or shard integrity remains enforcing.
+`nixUnitJobs.<system>` flake output. That output contains exactly the seven
+aggregate leaves `nix-unit`, `nix-unit-daemon`, `nix-unit-guest`,
+`nix-unit-misc`, `nix-unit-network`, `nix-unit-runtime`, and `nix-unit-state`;
+each leaf reuses the corresponding `checks.<system>` definition. The runner
+evaluates every current x86 case through those aggregate shards without
+submitting installables to the daemon or realizing derivations.
+`nixUnitCaseNames.<system>` is a separate locked, sorted case-name inventory
+derived from the same corpus without forcing case expressions. The runner
+evaluates that inventory once and compares its exact names with the common and
+native-system pin files. Discovery is empty-set failure, and missing or
+unexpected names still direct operators to `run make nix-unit-pin`.
 
 If `nix-eval-jobs` or `jq` is absent, the target makes one guarded re-entry
 through `devShells.<system>.nix-unit`, a focused `mkShellNoCC` output containing
@@ -254,14 +260,15 @@ controller fails closed to one worker. On the reference 12-CPU, 62-GiB host
 the effective cap preserves four workers.
 `D2B_NIX_UNIT_MEMORY_MB` may set the evaluator limit from 512 through 4096 MiB;
 the 2048 MiB overhead remains reserved. Successful full runs
-suppress raw JSONL output. Failed attributes remain individually attributable
-as one concise, repository-root-sanitized stderr line each, and evaluated
-case-name drift reports each missing or unexpected name with
-`run make nix-unit-pin`. Command progress uses the fixed path-free `d2b` flake
-label.
+suppress raw JSONL output. Every real `FAIL <case>: <detail>` line from an
+aggregate error is printed as one concise, repository-root-sanitized stderr
+entry; source-code template lines are ignored, and an aggregate with no real
+FAIL line receives one attributable fallback diagnostic. Result attributes are
+also compared exactly with the seven baseline leaves. Command progress uses
+the fixed path-free `d2b` flake label.
 
 `D2B_NIX_UNIT_CHECK=<name>` remains the manual single-shard selector. It
-requires a discovered `nix-unit` or `nix-unit-*` check and evaluates only that
+requires one of the seven discovered aggregate checks and evaluates only that
 check. With execution evidence enabled, a full pass publishes exactly the
 seven leaves `nix-unit`, `nix-unit-daemon`, `nix-unit-guest`, `nix-unit-misc`,
 `nix-unit-network`, `nix-unit-runtime`, and `nix-unit-state`; a selected pass

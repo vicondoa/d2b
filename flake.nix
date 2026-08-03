@@ -845,7 +845,7 @@
         # (panel W2 re-review finding). The set of supported systems is the
         # flake's own `systems`, not the currently-evaluated case set (which
         # could be deleted in the same diff).
-        nixUnitCaseNames = pkgs.lib.attrNames nixUnitCases;
+        nixUnitCorpusCaseNames = pkgs.lib.attrNames nixUnitCases;
         pinNames = path: pkgs.lib.filter (n: n != "" && !(pkgs.lib.hasPrefix "#" n))
           (pkgs.lib.splitString "\n" (builtins.readFile path));
         readPinsRequiredNonEmpty = path:
@@ -867,7 +867,7 @@
           (readPinsRequiredNonEmpty ./tests/unit/nix/pinned/common.txt)
           ++ (readPinsRequiredExist (./tests/unit/nix/pinned + "/${system}.txt"));
         nixUnitMissingPins =
-          pkgs.lib.filter (n: !(builtins.elem n nixUnitCaseNames)) nixUnitPinned;
+          pkgs.lib.filter (n: !(builtins.elem n nixUnitCorpusCaseNames)) nixUnitPinned;
         nixUnitMissingReport = pkgs.lib.concatMapStringsSep "\n"
           (n: "MISSING PINNED CASE: ${n} (a pinned nix-unit case was deleted - restore it or run `make nix-unit-pin`)")
           nixUnitMissingPins;
@@ -922,7 +922,7 @@
             ''
           else
             pkgs.runCommand "d2b-nix-unit" { } ''
-              echo "nix-unit: ${toString (pkgs.lib.length nixUnitCaseNames)} pinned case names present; ${toString (pkgs.lib.length (pkgs.lib.attrNames nixUnitShardCaseFiles))} shards cover ${toString (pkgs.lib.length nixUnitCaseFileNames)} case files"
+              echo "nix-unit: ${toString (pkgs.lib.length nixUnitCorpusCaseNames)} pinned case names present; ${toString (pkgs.lib.length (pkgs.lib.attrNames nixUnitShardCaseFiles))} shards cover ${toString (pkgs.lib.length nixUnitCaseFileNames)} case files"
               mkdir -p "$out"
               echo ok > "$out/nix-unit"
             '';
@@ -1316,11 +1316,26 @@
           (mkEval [ (import ./examples/graphics-workstation/configuration.nix) ]);
       });
 
-      # A separate derivation attrset is the local nix-eval-jobs surface. The
-      # integrity attr keeps the existing fail-closed pin and shard-coverage
-      # check in the same invocation without adding a second scheduler or
-      # broadening the realized-check set.
+      # The local nix-eval-jobs surface deliberately contains only the existing
+      # aggregate checks. Reusing self.checks keeps the corpus evaluator and
+      # shard semantics in one place instead of rebuilding one derivation per
+      # case in every evaluator worker.
       nixUnitJobs = forAllSystems (system:
+        nixpkgs.lib.genAttrs [
+          "nix-unit"
+          "nix-unit-daemon"
+          "nix-unit-guest"
+          "nix-unit-misc"
+          "nix-unit-network"
+          "nix-unit-runtime"
+          "nix-unit-state"
+        ] (checkName: self.checks.${system}.${checkName})
+      );
+
+      # A separate, evaluation-only inventory exposes the complete case-name
+      # set without forcing any case expression. It is built from the same
+      # eval-jobs corpus used by the flake shard checks.
+      nixUnitCaseNames = forAllSystems (system:
         let
           pkgs = nixpkgsFor.${system};
           d2bModule = import ./nixos-modules { inherit inputs; };
@@ -1344,9 +1359,7 @@
             inherit d2bModule;
           };
         in
-        {
-          __nix_unit_integrity = self.checks.${system}.nix-unit;
-        } // nixUnitCorpus.jobs
+        builtins.sort builtins.lessThan nixUnitCorpus.caseNames
       );
 
       lib = nixpkgs.lib.makeExtensible (_: {

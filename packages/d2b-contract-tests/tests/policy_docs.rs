@@ -992,14 +992,48 @@ fn execution_manifest_schema_and_prose_agree_with_non_empty_discovery() {
     );
     assert!(
         nix_jobs.contains("builtins.tryEval")
-            && nix_jobs.contains("jobsFor")
-            && flake.contains("nixUnitJobs = forAllSystems"),
-        "execution-manifest-policy: Nix-unit corpus and jobs attrset are not wired together"
+            && nix_jobs.contains("caseNamesFor")
+            && !nix_jobs.contains("jobsFor")
+            && !nix_jobs.contains("derivationName")
+            && flake.contains("nixUnitJobs = forAllSystems")
+            && flake.contains("nixUnitCaseNames = forAllSystems")
+            && flake.contains("nixUnitCorpus.caseNames")
+            && flake.contains("builtins.sort builtins.lessThan nixUnitCorpus.caseNames")
+            && !flake.contains("nixUnitCorpus.jobs")
+            && !flake.contains("__nix_unit_integrity"),
+        "execution-manifest-policy: Nix-unit aggregate and case-inventory surfaces drifted"
+    );
+    let jobs_block = flake
+        .split("nixUnitJobs = forAllSystems")
+        .nth(1)
+        .and_then(|region| region.split("nixUnitCaseNames = forAllSystems").next())
+        .expect("execution-manifest-policy: Nix-unit jobs block is missing");
+    let job_attr_re =
+        Regex::new(r#""(nix-unit(?:-[A-Za-z0-9_-]+)?)""#).expect("valid Nix-unit attr regex");
+    let actual_job_attrs: BTreeSet<String> = job_attr_re
+        .captures_iter(jobs_block)
+        .map(|capture| capture[1].to_string())
+        .collect();
+    assert_eq!(
+        actual_job_attrs, expected_nix_unit_leaves,
+        "execution-manifest-policy: Nix-unit jobs must expose exactly the seven baseline attrs"
+    );
+    for leaf in nix_unit_baseline_leaves {
+        assert_eq!(
+            jobs_block.matches(&format!("\"{leaf}\"")).count(),
+            1,
+            "execution-manifest-policy: Nix-unit jobs must contain exactly one aggregate attr {leaf}"
+        );
+    }
+    assert!(
+        jobs_block.contains("self.checks.${system}.${checkName}"),
+        "execution-manifest-policy: Nix-unit jobs must reuse existing flake checks"
     );
     for marker in [
         "nix-eval-jobs",
         "--no-instantiate",
         "nixUnitJobs.<system>",
+        "nixUnitCaseNames",
         "installables",
         "realized_checks",
         "893",
@@ -1106,6 +1140,8 @@ fn execution_manifest_schema_and_prose_agree_with_non_empty_discovery() {
         .expect("execution-manifest-policy: Nix-unit failure reporting loop is missing");
     assert!(
         failure_reporting.contains("failure=${failure//\"$flake_root\"/<repo>}")
+            && failure_reporting.contains("failure_attr")
+            && failure_reporting.contains("failure_line")
             && failure_reporting.contains(">&2")
             && !failure_reporting.contains("log "),
         "execution-manifest-policy: evaluator failures must be root-sanitized and printed directly to stderr"
@@ -1113,6 +1149,10 @@ fn execution_manifest_schema_and_prose_agree_with_non_empty_discovery() {
     for marker in [
         "expected_cases_file",
         "actual_cases_file",
+        "expected_result_attrs_file",
+        "actual_result_attrs_file",
+        "missing_result_attrs",
+        "unexpected_result_attrs",
         "missing_cases",
         "unexpected_cases",
         "comm -23",
@@ -1124,23 +1164,50 @@ fn execution_manifest_schema_and_prose_agree_with_non_empty_discovery() {
         "missing_cases_file",
         "unexpected_cases_file",
         "sort -u",
-        "missing evaluated case",
-        "unexpected evaluated case",
+        "missing inventory case",
+        "unexpected inventory case",
         "run make nix-unit-pin",
         "case_names_ok",
-        "select(. != \"__nix_unit_integrity\"",
+        "result_attrs_ok",
+        "case_inventory_file",
+        "test(\"^[[:space:]]*FAIL [^:]+: \")",
+        "contains(\"${\") | not",
+        "evaluation failed without a FAIL line",
+        "failure_attr",
+        "failure_line",
         "result_count=$(jq -s 'length'",
-        "case_count=$((result_count - integrity_count))",
-        "integrity_count",
     ] {
         assert!(
             nix_driver.contains(marker),
-            "execution-manifest-policy: Nix-unit pin/integrity diagnostic marker is missing: {marker}"
+            "execution-manifest-policy: Nix-unit pin/result diagnostic marker is missing: {marker}"
         );
     }
+    assert_eq!(
+        nix_driver.matches("nixUnitCaseNames").count(),
+        1,
+        "execution-manifest-policy: Nix-unit case inventory must be evaluated exactly once"
+    );
+    assert!(
+        nix_driver.contains("--json")
+            && nix_driver.contains("--impure")
+            && nix_driver.contains("--no-warn-dirty")
+            && nix_driver.contains("flake_ref=$(d2b_flake_ref"),
+        "execution-manifest-policy: Nix-unit case inventory must use the checked git+file JSON eval"
+    );
     assert!(
         nix_driver.contains("|| [ \"$case_names_ok\" -ne 1 ]; then"),
         "execution-manifest-policy: Nix-unit must fail on symmetric-difference drift even when counts match"
+    );
+    assert!(
+        nix_driver.contains("[ \"$result_attrs_ok\" -ne 1 ]")
+            && nix_driver.contains("result_attrs_ok=0"),
+        "execution-manifest-policy: Nix-unit must fail on result-attribute symmetric-difference drift"
+    );
+    assert!(
+        !nix_driver.contains("integrity_count")
+            && !nix_driver.contains("__nix_unit_integrity")
+            && !nix_driver.contains("FAIL ${result.name}"),
+        "execution-manifest-policy: stale per-case/integrity or template diagnostics remain"
     );
 
     // Lifecycle entry must precede every Nix evaluator, runner, or toolchain

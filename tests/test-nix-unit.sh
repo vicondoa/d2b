@@ -326,24 +326,51 @@ if ! command -v jq >/dev/null 2>&1; then
   exit 2
 fi
 
-# nix-eval-jobs owns the evaluator worker pool. It evaluates the dedicated
-# per-case derivations but --no-instantiate never submits them as installables
-# to the daemon or realizes their outputs.
+# nix-eval-jobs owns the evaluator worker pool. It evaluates the seven
+# aggregate checks but --no-instantiate never submits them as installables to
+# the daemon or realizes their outputs.
 nix_unit_surface=nix-unit
 result_dir=$(d2b_mktemp ".d2b-nix-eval-jobs.XXXXXX")
 result_file="$result_dir/results.jsonl"
 tool_stderr="$result_dir/stderr"
 
-emit_sanitized_tool_stderr() {
-  local line
+sanitize_stderr_file() {
+  local source="$1" line
   while IFS= read -r line || [ -n "$line" ]; do
     line=${line//"$flake_root"/<repo>}
     if [ -n "${HOME:-}" ]; then
       line=${line//"$HOME"/<home>}
     fi
     printf '%s\n' "$line" >&2
-  done <"$tool_stderr"
+  done <"$source"
 }
+
+emit_sanitized_tool_stderr() {
+  sanitize_stderr_file "$tool_stderr"
+}
+
+case_inventory_file="$result_dir/case-names.json"
+case_inventory_stderr="$result_dir/case-names.stderr"
+if ! nix eval \
+  --impure \
+  --quiet \
+  --no-warn-dirty \
+  --json \
+  "${flake_ref}#nixUnitCaseNames.${system}" \
+  >"$case_inventory_file" \
+  2>"$case_inventory_stderr"; then
+  sanitize_stderr_file "$case_inventory_stderr"
+  fail "nix-unit case inventory ($system): evaluation failed" || true
+  exit 1
+fi
+if ! jq -e '
+  type == "array"
+  and length > 0
+  and all(.[]; type == "string" and length > 0)
+' "$case_inventory_file" >/dev/null; then
+  fail "nix-unit case inventory ($system): output was not a non-empty string array" || true
+  exit 1
+fi
 
 log "--> nix-eval-jobs --no-instantiate --flake ${flake_label}#nixUnitJobs.${system} --workers $workers --max-memory-size $memory_mb"
 if nix-eval-jobs \
@@ -369,17 +396,27 @@ fi
 
 failures=()
 failures_file="$result_dir/failures"
-if ! jq -r '
-    select(type == "object" and (.error? != null))
-    | (.attr // ((.attrPath // []) | join(".")))
-      + ": "
-      + (
-          .error
-          | tostring
-          | split("\n")
-          | map(select(length > 0))
-          | if length > 0 then last else "evaluation failed without diagnostic" end
-        )
+if ! jq -r -s '
+    .[]
+    | select(type == "object" and (.error? != null))
+    | (.attr // ((.attrPath // []) | join("."))) as $attr
+    | (
+        .error
+        | tostring
+        | split("\n")
+        | map(
+            select(
+              test("^[[:space:]]*FAIL [^:]+: ")
+              and (contains("${") | not)
+            )
+            | sub("^[[:space:]]+"; "")
+          )
+      ) as $fail_lines
+    | if ($fail_lines | length) == 0 then
+        "\($attr)\tevaluation failed without a FAIL line"
+      else
+        $fail_lines[] | "\($attr)\t\(.)"
+      end
   ' "$result_file" >"$failures_file"; then
   emit_sanitized_tool_stderr
   fail "could not parse nix-eval-jobs attribute failures" || true
@@ -387,11 +424,67 @@ if ! jq -r '
 fi
 mapfile -t failures <"$failures_file"
 result_count=$(jq -s 'length' "$result_file")
-integrity_count=$(jq -s '
-  [ .[]
-    | select(((.attrPath // []) | join(".")) == "__nix_unit_integrity")
-  ] | length
-' "$result_file")
+
+expected_result_attrs_unsorted="$result_dir/expected-result-attrs.unsorted"
+expected_result_attrs_file="$result_dir/expected-result-attrs"
+actual_result_attrs_unsorted="$result_dir/actual-result-attrs.unsorted"
+actual_result_attrs_file="$result_dir/actual-result-attrs"
+if ! printf '%s\n' "${nix_unit_baseline_leaves[@]}" \
+  >"$expected_result_attrs_unsorted"; then
+  fail "could not write expected Nix-unit result attributes" || true
+  exit 1
+fi
+if ! sort "$expected_result_attrs_unsorted" >"$expected_result_attrs_file"; then
+  fail "could not sort expected Nix-unit result attributes" || true
+  exit 1
+fi
+if ! jq -r -s '
+    .[]
+    | select(type == "object")
+    | (.attr // ((.attrPath // []) | join(".")))
+    | select(. != "")
+  ' "$result_file" >"$actual_result_attrs_unsorted"; then
+  emit_sanitized_tool_stderr
+  fail "could not parse nix-eval-jobs result attributes" || true
+  exit 1
+fi
+if ! sort "$actual_result_attrs_unsorted" >"$actual_result_attrs_file"; then
+  fail "could not sort nix-eval-jobs result attributes" || true
+  exit 1
+fi
+missing_result_attrs_file="$result_dir/missing-result-attrs"
+unexpected_result_attrs_file="$result_dir/unexpected-result-attrs"
+if ! comm -23 \
+  "$expected_result_attrs_file" \
+  "$actual_result_attrs_file" \
+  >"$missing_result_attrs_file"; then
+  fail "could not compare expected and evaluated Nix-unit result attributes" || true
+  exit 1
+fi
+if ! comm -13 \
+  "$expected_result_attrs_file" \
+  "$actual_result_attrs_file" \
+  >"$unexpected_result_attrs_file"; then
+  fail "could not compare evaluated and expected Nix-unit result attributes" || true
+  exit 1
+fi
+missing_result_attrs=()
+unexpected_result_attrs=()
+mapfile -t missing_result_attrs <"$missing_result_attrs_file"
+mapfile -t unexpected_result_attrs <"$unexpected_result_attrs_file"
+result_attrs_ok=1
+if [ "${#missing_result_attrs[@]}" -ne 0 ] \
+  || [ "${#unexpected_result_attrs[@]}" -ne 0 ]; then
+  log "  FAIL: nix-unit result attributes differ from the seven baseline leaves"
+  for attr in "${missing_result_attrs[@]}"; do
+    log "    missing result attribute: $attr"
+  done
+  for attr in "${unexpected_result_attrs[@]}"; do
+    log "    unexpected result attribute: $attr"
+  done
+  result_attrs_ok=0
+fi
+
 common_pin_file="$ROOT/tests/unit/nix/pinned/common.txt"
 system_pin_file="$ROOT/tests/unit/nix/pinned/$system.txt"
 if [ ! -f "$common_pin_file" ] || [ ! -f "$system_pin_file" ]; then
@@ -401,20 +494,27 @@ if [ ! -f "$common_pin_file" ] || [ ! -f "$system_pin_file" ]; then
   fail "nix-unit case-presence pin files are missing for $system (${missing_pin_files[*]}); run make nix-unit-pin" || true
   exit 1
 fi
-common_case_count=$(awk '!/^#/ && NF { count++ } END { print count + 0 }' "$common_pin_file")
-system_case_count=$(awk '!/^#/ && NF { count++ } END { print count + 0 }' "$system_pin_file")
-expected_case_count=$((common_case_count + system_case_count))
-case_count=$((result_count - integrity_count))
+expected_cases_unsorted="$result_dir/expected-cases.unsorted"
 expected_cases_file="$result_dir/expected-cases"
 actual_cases_file="$result_dir/actual-cases"
-awk '!/^#/ && NF { print $1 }' "$common_pin_file" "$system_pin_file" \
-  | sort -u >"$expected_cases_file"
-jq -r -s '
-  .[]
-  | select(type == "object")
-  | (.attr // ((.attrPath // []) | join("/")))
-  | select(. != "__nix_unit_integrity" and . != "")
-' "$result_file" | sort -u >"$actual_cases_file"
+if ! awk '!/^#/ && NF { print $1 }' "$common_pin_file" "$system_pin_file" \
+  >"$expected_cases_unsorted"; then
+  fail "could not read pinned Nix-unit case names" || true
+  exit 1
+fi
+if ! sort -u "$expected_cases_unsorted" >"$expected_cases_file"; then
+  fail "could not sort pinned Nix-unit case names" || true
+  exit 1
+fi
+inventory_cases_unsorted="$result_dir/inventory-cases.unsorted"
+if ! jq -r '.[]' "$case_inventory_file" >"$inventory_cases_unsorted"; then
+  fail "could not parse evaluated Nix-unit case names" || true
+  exit 1
+fi
+if ! sort -u "$inventory_cases_unsorted" >"$actual_cases_file"; then
+  fail "could not sort evaluated Nix-unit case names" || true
+  exit 1
+fi
 missing_cases=()
 unexpected_cases=()
 missing_cases_file="$result_dir/missing-cases"
@@ -429,30 +529,28 @@ if ! comm -13 "$expected_cases_file" "$actual_cases_file" >"$unexpected_cases_fi
 fi
 mapfile -t missing_cases <"$missing_cases_file"
 mapfile -t unexpected_cases <"$unexpected_cases_file"
-case_count_ok=1
-if [ "$case_count" -ne "$expected_case_count" ]; then
-  log "  FAIL: nix-unit corpus returned $case_count case attributes; expected $expected_case_count pinned cases for $system; run make nix-unit-pin"
-  case_count_ok=0
-fi
 case_names_ok=1
 if [ "${#missing_cases[@]}" -ne 0 ] \
   || [ "${#unexpected_cases[@]}" -ne 0 ]; then
-  log "  FAIL: nix-unit evaluated case names drift from pins for $system; run make nix-unit-pin"
+  log "  FAIL: nix-unit case inventory differs from pins for $system; run make nix-unit-pin"
   for case_name in "${missing_cases[@]}"; do
-    log "    missing evaluated case: $case_name"
+    log "    missing inventory case: $case_name"
   done
   for case_name in "${unexpected_cases[@]}"; do
-    log "    unexpected evaluated case: $case_name"
+    log "    unexpected inventory case: $case_name"
   done
   case_names_ok=0
 fi
 
-if [ "$integrity_count" -ne 1 ]; then
-  log "  FAIL: nix-unit integrity attribute was not evaluated exactly once"
-fi
 for failure in "${failures[@]}"; do
   failure=${failure//"$flake_root"/<repo>}
-  printf '%s\n' "  FAIL: nix-unit attribute $failure" >&2
+  if [ -n "${HOME:-}" ]; then
+    failure=${failure//"$HOME"/<home>}
+  fi
+  failure_attr=${failure%%$'\t'*}
+  failure_line=${failure#*$'\t'}
+  printf '%s\n' \
+    "  FAIL: nix-unit attribute $failure_attr: $failure_line" >&2
 done
 if [ "$tool_status" -ne 0 ]; then
   if [ "${#failures[@]}" -eq 0 ]; then
@@ -462,10 +560,9 @@ if [ "$tool_status" -ne 0 ]; then
 fi
 if [ "${#failures[@]}" -ne 0 ] \
   || [ "$tool_status" -ne 0 ] \
-  || [ "$integrity_count" -ne 1 ] \
-  || [ "$case_count_ok" -ne 1 ] \
+  || [ "$result_attrs_ok" -ne 1 ] \
   || [ "$case_names_ok" -ne 1 ]; then
-  fail "nix-unit corpus ($system): ${#failures[@]} attribute failure(s) across $result_count results" || true
+  fail "nix-unit corpus ($system): ${#failures[@]} failure diagnostic(s) across $result_count results" || true
   exit 1
 fi
 

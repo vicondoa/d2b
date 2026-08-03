@@ -5,6 +5,11 @@ This record covers only the pre-change baseline at
 It completes T001-T007. No implementation file was changed and no optimized
 acceptance claim is made here.
 
+The optimized Nix-unit measurements later in this record describe the
+pre-CI-cold-refinement runner. The refinement recorded at the end changes the
+evaluation surface and has not been benchmarked or observed on a hosted
+GitHub Actions runner.
+
 ## Measurement identity and environment
 
 The complete capture is
@@ -460,12 +465,14 @@ client were retained as invalid and excluded. Candidate artifacts are under
 | N4 - consolidated flake check | Rejected | The command is the already measured direct `nix flake check --no-build --keep-going` path. Its 565.495s baseline warm median exceeds the target and broadens focused iteration to the full flake. |
 | N5 - nix-fast-build | Not entered | N3 removed realization from the critical path. Parallel realization and grouped build logs were therefore not material. |
 
-The selected runner exposes one derivation-shaped attribute per case plus one
-integrity attribute and invokes `nix-eval-jobs --no-instantiate`. It preserves
-the existing case evaluator and all pin and shard checks while avoiding 894
-derivation writes and all output realization. The runner owns parallel
-evaluation; the shell only validates output and caps the requested worker
-count by logical CPUs, finite cgroup CPU quota, and available memory.
+At the measured tip, the selected runner exposed one derivation-shaped
+attribute per case plus one integrity attribute and invoked
+`nix-eval-jobs --no-instantiate`. It preserved the existing case evaluator and
+all pin and shard checks while avoiding 894 derivation writes and all output
+realization. The runner owned parallel evaluation; the shell only validated
+output and capped the requested worker count by logical CPUs, finite cgroup
+CPU quota, and available memory. This paragraph describes that historical
+measurement, not the CI-cold refinement below.
 
 The focused locked dev shell supplies `nix-eval-jobs` and `jq`. Plain
 `make test-nix-unit` enters it once when necessary. The retired
@@ -495,8 +502,8 @@ The representative warm samples on the integrated runner were:
 
 The optimized median is 37.52% of baseline and passes the 50%-of-baseline
 ceiling of 269.444737 seconds. The slowest valid sample is less than 1% above
-the median. Every run evaluated 893 pinned x86 cases plus the integrity
-attribute with four effective workers.
+the median. Every pre-refinement run evaluated 893 pinned x86 cases plus the
+integrity attribute with four effective workers.
 
 The final fresh-cache observation used plain `make test-nix-unit`, a newly
 created `XDG_CACHE_HOME`, and locked tool self-provisioning. It completed in
@@ -547,3 +554,25 @@ The retained selector probe
 manifest containing only `nix-unit-misc`. CI no longer uses the selector: the
 generated workflow contains one enforcing `test-nix-unit` job whose test
 command is exactly `make test-nix-unit`.
+
+## CI-cold refinement status
+
+This refinement changes only the Nix-unit evaluation surface; it has no new
+timing result. `nixUnitJobs.<system>` now contains exactly the seven existing
+aggregate check names and reuses `self.checks`, while
+`nixUnitCaseNames.<system>` is a separately locked, sorted inventory derived
+from the shared corpus without forcing case expressions. The runner evaluates
+that inventory once through `git+file`, compares exact sorted names with the
+common and native-system pins, and compares the `nix-eval-jobs` result
+attributes by exact sorted symmetric difference with the seven-leaf baseline.
+Aggregate errors retain every real `FAIL <case>: <detail>` line, excluding
+source templates, and emit one attributable fallback when a shard provides no
+real FAIL line.
+
+The local defaults remain four requested workers and a 4096 MiB evaluator
+limit. GitHub Actions uses 3072 MiB, allowing the existing automatic resource
+envelope to admit two workers on a 16 GiB runner. No hosted success or hosted
+timing claim has been made for this refinement. Validation is intentionally
+non-timing only: shell syntax, Nix parsing, formatting/checks, the meta suite,
+and targeted policy coverage; no Nix evaluation/build, `make test-nix-unit`,
+or benchmark was run.

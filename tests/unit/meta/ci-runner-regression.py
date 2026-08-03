@@ -586,6 +586,9 @@ set -euo pipefail
     def test_nix_unit_driver_uses_one_full_corpus_eval_jobs_path(self) -> None:
         driver = executable_shell_source(source_text(NIX_UNIT_DRIVER))
         flake = (ROOT / "flake.nix").read_text(encoding="utf-8")
+        eval_jobs = (ROOT / "tests" / "unit" / "nix" / "eval-jobs.nix").read_text(
+            encoding="utf-8"
+        )
 
         runner_calls = list(
             re.finditer(r"(?m)^\s*(?:if\s+)?nix-eval-jobs\b", driver)
@@ -611,14 +614,48 @@ set -euo pipefail
         jobs_match = re.search(r"(?m)^\s*nixUnitJobs\s*=", flake)
         self.assertIsNotNone(jobs_match, "flake must expose the eval-jobs attrset")
         assert jobs_match is not None
-        jobs_tail = flake[jobs_match.start() :]
-        jobs_block = jobs_tail
-        self.assertRegex(
-            jobs_block,
-            r"(?s)nixUnitCorpus\s*=\s*import\s+[^;]*eval-jobs\.nix",
+        inventory_match = re.search(
+            r"(?m)^\s*nixUnitCaseNames\s*=\s*forAllSystems",
+            flake,
         )
-        self.assertIn("nixUnitCorpus.jobs", jobs_block)
-        self.assertIn("__nix_unit_integrity", jobs_block)
+        self.assertIsNotNone(
+            inventory_match,
+            "flake must expose the separate case-name inventory",
+        )
+        assert inventory_match is not None
+        jobs_block = flake[jobs_match.start() : inventory_match.start()]
+        expected_leaves = [
+            "nix-unit",
+            "nix-unit-daemon",
+            "nix-unit-guest",
+            "nix-unit-misc",
+            "nix-unit-network",
+            "nix-unit-runtime",
+            "nix-unit-state",
+        ]
+        self.assertEqual(
+            re.findall(r'"(nix-unit(?:-[a-z]+)?)"', jobs_block),
+            expected_leaves,
+            "nixUnitJobs must expose exactly the seven aggregate leaves",
+        )
+        self.assertIn("self.checks.${system}.${checkName}", jobs_block)
+        self.assertNotIn("nixUnitCorpus.jobs", jobs_block)
+        self.assertNotIn("__nix_unit_integrity", jobs_block)
+        self.assertNotIn("jobsFor", flake)
+
+        inventory_block = flake[inventory_match.start() :]
+        self.assertIn("nixUnitCaseNames = forAllSystems", inventory_block)
+        self.assertIn("nixUnitCorpus.caseNames", inventory_block)
+        self.assertIn("builtins.sort builtins.lessThan nixUnitCorpus.caseNames", inventory_block)
+        self.assertEqual(driver.count("nixUnitCaseNames"), 1)
+        self.assertIn("--json", driver)
+        self.assertIn("--impure", driver)
+        self.assertIn("--no-warn-dirty", driver)
+        self.assertIn("flake_ref=$(d2b_flake_ref", driver)
+        self.assertIn("caseNamesFor", eval_jobs)
+        self.assertIn("caseNames = caseNamesFor null", eval_jobs)
+        self.assertNotIn("jobsFor", eval_jobs)
+        self.assertNotIn("derivationName", eval_jobs)
 
     def test_nix_unit_reports_all_failures_and_rejects_empty_discovery(self) -> None:
         driver = executable_shell_source(source_text(NIX_UNIT_DRIVER))
@@ -649,9 +686,14 @@ set -euo pipefail
         )
         self.assertRegex(
             driver,
-            r'(?s)split\("\\n"\).*map\(select\(length\s*>\s*0\)\).*last',
-            msg="each evaluator error must collapse to one concise failure entry",
+            r'(?s)test\("\^\[\[:space:\]\]\*FAIL \[\^:\]\+: "\)',
+            msg="evaluator output must select real FAIL lines",
         )
+        self.assertIn('jq -r -s', driver)
+        self.assertIn('contains("${") | not', driver)
+        self.assertIn("evaluation failed without a FAIL line", driver)
+        self.assertIn("failure_attr", driver)
+        self.assertIn("failure_line", driver)
         self.assertRegex(
             driver,
             r"(?is)(?:for|while).{0,120}(?:failure|failed).{0,300}"
@@ -706,7 +748,13 @@ set -euo pipefail
         self.assertIn('if ! jq -r ', driver)
         self.assertIn('if ! comm -23 ', driver)
         self.assertIn('if ! comm -13 ', driver)
-        for array_name in ("failures", "missing_cases", "unexpected_cases"):
+        for array_name in (
+            "failures",
+            "missing_cases",
+            "unexpected_cases",
+            "missing_result_attrs",
+            "unexpected_result_attrs",
+        ):
             self.assertNotRegex(
                 driver,
                 rf"mapfile\s+-t\s+{array_name}\s*<\s*<\(",
@@ -714,6 +762,14 @@ set -euo pipefail
             )
         self.assertIn("case_names_ok", driver)
         self.assertIn("run make nix-unit-pin", driver)
+        self.assertIn("expected_result_attrs_file", driver)
+        self.assertIn("actual_result_attrs_file", driver)
+        self.assertIn("missing_result_attrs", driver)
+        self.assertIn("unexpected_result_attrs", driver)
+        self.assertIn("result_attrs_ok", driver)
+        self.assertIn("case_inventory_file", driver)
+        self.assertNotIn("integrity_count", driver)
+        self.assertNotIn("__nix_unit_integrity", driver)
         self.assertRegex(
             driver,
             r"(?s)case_names_ok.{0,1200}"

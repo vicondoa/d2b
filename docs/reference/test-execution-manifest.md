@@ -28,13 +28,17 @@ failed fragment is best effort and the original test status is preserved.
 
 The Nix-unit target uses the same lifecycle. Its full pass invokes the locked
 `nix-eval-jobs` tool on the `nixUnitJobs.<system>` attrset with
-`--no-instantiate`. That attrset contains one result for each case and the
-`__nix_unit_integrity` result, so the runner evaluates the complete current
-corpus and reports every result without realizing a derivation. The expected
-count is derived from the common and native-system pin files; the current x86
-corpus contains 893 cases. A selected `D2B_NIX_UNIT_CHECK` pass evaluates only
-that discovered check's `drvPath`, retaining the single-shard interface
-without realizing its output.
+`--no-instantiate`. That attrset contains exactly the seven existing aggregate
+checks, which reuse the corresponding `checks.<system>` definitions. The
+runner compares the sorted result attributes by symmetric difference with that
+seven-leaf baseline, so each worker evaluates one shard rather than the
+complete 893-case attrset. The separate locked
+`nixUnitCaseNames.<system>` output is evaluated once with a `git+file` flake
+reference and compared by sorted symmetric difference with the common and
+native-system pin files. It contains names only and does not force case
+expressions. A selected `D2B_NIX_UNIT_CHECK` pass evaluates only that
+discovered check's `drvPath`, retaining the single-shard interface without
+realizing its output.
 
 Because both Nix-unit paths are evaluation-only, they submit no installables
 to the Nix daemon and realize no checks. Their manifest evidence therefore
@@ -44,6 +48,13 @@ are the coverage evidence: a full pass publishes exactly `nix-unit`,
 `nix-unit-runtime`, and `nix-unit-state`; a selected pass publishes only the
 selected leaf. A failed evaluation records the stable failed Nix-unit surface
 best effort and preserves the original target status.
+
+When an aggregate evaluation fails, the runner extracts each real
+`FAIL <case>: <detail>` line from that aggregate's error and prints one
+concise, sanitized stderr entry per line. Source-code template lines such as
+`${result.name}` are ignored. If an aggregate error contains no real FAIL line,
+one final fallback diagnostic naming that result attribute is printed, so
+integrity failures remain attributable.
 
 ## Schema version
 
@@ -169,7 +180,8 @@ as separate full-budget Make jobs before the stable `test-rust` join.
 
 For Nix-unit, compare the seven completed leaves listed above with the
 baseline execution manifest, then compare the source case inventory
-separately. A passing full run must contain all seven leaves and 893 case
-results plus the integrity result; a selected run must contain only its one
-selected leaf. A failed or interrupted record is diagnostic partial evidence
-and cannot satisfy coverage acceptance.
+separately. A passing full run must contain exactly the seven aggregate result
+attributes and all 893 names in the separate inventory; it publishes all seven
+leaves. A selected run evaluates and publishes only its one selected leaf. A
+failed or interrupted record is diagnostic partial evidence and cannot satisfy
+coverage acceptance.

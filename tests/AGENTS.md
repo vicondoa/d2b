@@ -226,10 +226,20 @@ budget, including budget 1. Top-level Make `-j` is not the Rust budget knob.
 ### Nix-unit execution
 
 `make test-nix-unit` uses `nix-eval-jobs --no-instantiate` against the locked
-`nixUnitJobs.<system>` output. It evaluates the complete 893-case x86 corpus
-and the integrity attribute without realizing derivations, reports every
-observed attribute failure, and fails closed on empty discovery, missing or
-duplicate shard coverage, and missing pinned cases. Do not replace it with a
+`nixUnitJobs.<system>` output. The output has exactly the seven existing
+aggregate checks: `nix-unit`, `nix-unit-daemon`, `nix-unit-guest`,
+`nix-unit-misc`, `nix-unit-network`, `nix-unit-runtime`, and `nix-unit-state`.
+Those checks reuse the flake shard definitions, so each evaluator worker sees
+one aggregate shard rather than the full 893-case attrset. No installable is
+submitted and no derivation is realized.
+
+The separate locked `nixUnitCaseNames.<system>` output is a sorted inventory
+from the same shared corpus and does not force case expressions. The runner
+evaluates it once with a `git+file` flake reference and compares its exact
+names with `tests/unit/nix/pinned/common.txt` plus the native-system pin file.
+Missing or unexpected names fail closed and retain the exact `run make
+nix-unit-pin` remedy. Result attributes are checked by sorted symmetric
+difference against the seven baseline leaves. Do not replace this with a
 repository-specific worker loop or a second scheduler.
 
 The target enters `devShells.<system>.nix-unit` once when `nix-eval-jobs` or
@@ -244,12 +254,12 @@ The limit defaults to 4096 MiB locally and 3072 MiB on GitHub Actions, so a
 16 GiB hosted runner admits two bounded workers while four workers remain
 available on the reference 12-CPU, 62-GiB host.
 `D2B_NIX_UNIT_MEMORY_MB` may set the limit from 512 through 4096 MiB.
-Successful full
-runs suppress raw JSONL output; failed attributes are reported one per
-concise, repository-root-sanitized stderr line, and evaluated case-name drift
-names every missing or unexpected case and reminds operators to
-`run make nix-unit-pin`. Command progress uses the fixed path-free `d2b` flake
-label.
+Successful full runs suppress raw JSONL output. Every real `FAIL <case>:
+<detail>` line from an aggregate error is parsed and printed as one concise,
+repository-root-sanitized stderr entry; source-code template lines such as
+`${result.name}` are excluded. If an aggregate has no real FAIL line, one
+final fallback diagnostic remains attributable to that result attribute.
+Command progress uses the fixed path-free `d2b` flake label.
 
 `D2B_NIX_UNIT_CHECK` remains the manual single-shard selector. When
 `D2B_EXECUTION_MANIFEST` is set, enter the shared secure lifecycle before Nix

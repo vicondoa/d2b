@@ -55,28 +55,14 @@ let
 
   resultsFor = cases: lib.mapAttrsToList evalCase cases;
 
-  derivationName = name:
-    "d2b-nix-unit-${builtins.replaceStrings [ "/" ] [ "-" ] name}";
-
-  jobsFor = cases:
-    lib.mapAttrs
-      (name: testCase:
-        let result = evalCase name testCase;
-        in
-        if result.ok then
-          pkgs.runCommand (derivationName name) { } ''
-            mkdir -p "$out"
-            echo passed > "$out/result"
-          ''
-        else
-          throw ''
-            nix-unit case FAILED for ${system}:
-            FAIL ${result.name}: ${result.detail}
-          '')
-      cases;
+  # `attrNames` forces only the corpus shape needed to discover names. The
+  # case expressions remain thunks, so the separate flake inventory can be
+  # evaluated without traversing the assertion values.
+  caseNamesFor = caseFileNames:
+    builtins.sort builtins.lessThan (lib.attrNames (casesFor caseFileNames));
 in
 {
-  inherit casesFor evalCase resultsFor;
+  inherit casesFor caseNamesFor evalCase resultsFor;
   cases = casesFor null;
-  jobs = jobsFor (casesFor null);
+  caseNames = caseNamesFor null;
 }
