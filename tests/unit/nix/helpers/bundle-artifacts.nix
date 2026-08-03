@@ -2,6 +2,13 @@
 
 let
   digestHelpers = import ../../../../nixos-modules/resources-bundle.nix { inherit lib; };
+  compilerStub = pkgs.writeShellScriptBin
+    "d2b-resource-compiler-eval-stub" "exit 0";
+  mkEvalStub = modules: mkEval (modules ++ [
+    ({ lib, ... }: {
+      d2b._resourceCompiler.phase2.compiler = lib.mkForce compilerStub;
+    })
+  ]);
 
   base = { lib, ... }: {
     boot.loader.grub.enable = false;
@@ -34,15 +41,15 @@ let
     };
   };
 
-  cfgDaemon = (mkEval [ base defaultedArtifact ({ ... }: {
+  cfgDaemon = (mkEvalStub [ base defaultedArtifact ({ ... }: {
     d2b.daemonExperimental.enable = true;
   }) ]).config;
 
-  cfgCompat = (mkEval [ base defaultedArtifact ({ lib, ... }: {
+  cfgCompat = (mkEvalStub [ base defaultedArtifact ({ lib, ... }: {
     d2b.daemonExperimental.enable = lib.mkForce false;
   }) ]).config;
 
-  zoneStorageCfg = (mkEval [ base ({ ... }: {
+  zoneStorageCfg = (mkEvalStub [ base ({ ... }: {
     d2b.daemonExperimental.enable = true;
     d2b.zones.local-root = { };
   }) ]).config;
@@ -74,9 +81,7 @@ let
   compilerSource = builtins.readFile (flakeRoot + "/nixos-modules/bundle-zones.nix");
   compilerMainSource =
     builtins.readFile (flakeRoot + "/packages/d2b-resource-compiler/src/main.rs");
-  compilerStub = pkgs.writeShellScriptBin
-    "d2b-resource-compiler-eval-stub" "exit 0";
-  providerSecretCfg = (mkEval [ base ({ ... }: {
+  providerSecretCfg = (mkEvalStub [ base ({ ... }: {
     d2b.artifacts.provider = {
       package = pkgs.writeText "provider-secret-artifact" "provider";
       type = "provider";
@@ -89,13 +94,13 @@ let
       };
     };
   }) ]).config;
-  helperWiringCfg = (mkEval [ base ({ ... }: {
+  helperWiringCfg = (mkEvalStub [ base ({ ... }: {
     d2b.zones.local-root.resources.telemetry = {
       type = "Provider";
       spec.telemetry.emitter.ringCapacityBytes = 0;
     };
   }) ]).config;
-  nullProviderCfg = (mkEval [ base ({ ... }: {
+  nullProviderCfg = (mkEvalStub [ base ({ ... }: {
     d2b.artifacts.provider = {
       package = pkgs.writeText "provider-artifact" "provider";
       type = "provider";
