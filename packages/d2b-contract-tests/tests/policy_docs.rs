@@ -1484,16 +1484,28 @@ fn panel_preflight_unreadable_inputs_fail_closed() {
 //
 // The panel receipt error enum does not exist in this repository yet, so
 // nothing below inspects a shipped type and nothing below is evidence about
-// one. What lands now is the *algorithm* and the corpus that proves it works:
-// an exhaustive recursive census over a type graph, plus planted fixtures that
-// it must accept and reject today.
+// one. What lands now is the *algorithm*, the declared root set it walks, and
+// the corpus that proves both work: an exhaustive recursive census over a type
+// graph, plus planted fixtures that it must accept and reject today.
 //
-// The rule the census enforces: every field of every struct, and every variant
-// and every variant-field of every enum, reachable from the entry type, at any
+// The census is **multi-root, not reachability-based**. The governed surface is
+// a declared list someone maintains, not one type and whatever hangs off it:
+// `remedies` computes a `RemedyPlan` rather than storing one, so no field edge
+// leads from the panel receipt error to `RemedyPlan`, `RemedyAction` or
+// `ProducerContext`. A census rooted only at the error enum would walk a small
+// tree, report success, and never look at the types that carry the
+// operator-facing content. Every governed type is a root in its own right, so
+// adding a governed type means adding a root; a governed type nobody declared
+// is simply not censused, which puts the blind spot in a list someone
+// maintains rather than in the traversal's own semantics.
+//
+// The rule the census enforces: from every declared root, every field of every
+// struct, and every variant and every variant-field of every enum, at any
 // depth, must resolve to a member of the closed approved set - a redacting
 // newtype, a closed enum whose own variant-fields satisfy the same rule, a
 // bounded numeric, a version or stage newtype, or a collection of safe items.
-// Raw text, a path, an unresolved type, and a cycle it cannot traverse to a
+// An empty root set, a root that resolves to no governable structure at all,
+// raw text, a path, an unresolved type, and a cycle it cannot traverse to a
 // fixed point are all failures. Enums are not leaves: a census that stops at
 // variant names, or that descends one level into structs only, is the census
 // that misses the field that leaks.
@@ -1502,8 +1514,9 @@ fn panel_preflight_unreadable_inputs_fail_closed() {
 // hand-written model, deliberately shaped like the metadata a real census has:
 // named types, fields, variants, variant-fields, and type references resolved
 // through one map. The commit that introduces the real panel receipt error
-// enum builds a `TypeCorpus` from that type's actual metadata and calls
-// `census_reachable_types` on it - the same predicate, not a second one - and
+// enum and remedy types builds a `TypeCorpus` from those types' actual
+// metadata, adds them to the declared root set, and calls
+// `census_governed_types` on it - the same predicate, not a second one - and
 // keeps the fixtures below as its negative corpus. Until then this file
 // asserts a property of the predicate, not of any production type.
 // ---------------------------------------------------------------------------
@@ -1560,22 +1573,84 @@ enum TypeDef {
 /// unresolved, and unresolved is a failure rather than a pass.
 type TypeCorpus = BTreeMap<&'static str, TypeDef>;
 
+/// The variants and fields one type definition contributes to a count. A type
+/// contributes them once, however many places reference it, so a diamond does
+/// not inflate what the census claims to have examined.
+fn structure_counts(def: &TypeDef) -> (usize, usize) {
+    match def {
+        TypeDef::Enum(variants) => (
+            variants.len(),
+            variants.iter().map(|(_, fields)| fields.len()).sum(),
+        ),
+        TypeDef::Struct(fields) => (0, fields.len()),
+        TypeDef::Leaf(_) | TypeDef::Collection(_) => (0, 0),
+    }
+}
+
+/// What one declared root's own type tree contained. Each root is walked
+/// independently, so the numbers do not depend on the order the roots were
+/// declared in, and a root whose whole tree was already examined from an
+/// earlier root is still shown to have been resolved, entered and traversed.
+#[derive(Debug, PartialEq, Eq)]
+struct RootCoverage {
+    root: &'static str,
+    /// Every type examined from this root, the root itself included.
+    types: BTreeSet<&'static str>,
+    variants: usize,
+    fields: usize,
+}
+
+impl RootCoverage {
+    /// `(types, variants, fields)` - the shape the assertions below compare.
+    fn counts(&self) -> (usize, usize, usize) {
+        (self.types.len(), self.variants, self.fields)
+    }
+}
+
 /// What the census examined. Reported, not asserted away: a census that cannot
-/// say how much it looked at cannot be shown to have looked at anything.
-#[derive(Debug, Default, PartialEq, Eq)]
+/// say how much it looked at cannot be shown to have looked at anything. The
+/// totals count each distinct type once across every root, so they are the size
+/// of the governed union rather than the sum of overlapping trees; per-root
+/// coverage is kept alongside them because a total alone cannot show that every
+/// declared root was actually entered.
+#[derive(Debug, PartialEq, Eq)]
 struct CensusReport {
+    /// One entry per declared root, in declaration order.
+    roots: Vec<RootCoverage>,
     types: usize,
     variants: usize,
     fields: usize,
 }
 
+impl CensusReport {
+    fn coverage(&self, root: &str) -> &RootCoverage {
+        self.roots
+            .iter()
+            .find(|coverage| coverage.root == root)
+            .expect("the census reports coverage for every declared root")
+    }
+
+    /// `(types, variants, fields)` across the governed union.
+    fn counts(&self) -> (usize, usize, usize) {
+        (self.types, self.variants, self.fields)
+    }
+}
+
 #[derive(Debug, PartialEq, Eq)]
 enum CensusReject {
+    /// No declared roots. Governance is a maintained list, and a list that
+    /// governs nothing is a declaration bug rather than a clean census.
+    NoRoots,
     /// Nothing to traverse at all.
     EmptyCorpus,
-    /// The entry type resolved but reaches no variant and no field.
-    NothingExamined { root: String },
-    /// A referenced type the census cannot resolve. Not a skip.
+    /// A declared root resolved but its whole tree exposes no variant and no
+    /// field, so censusing it proved nothing. A root is a governed payload
+    /// type: a bare leaf newtype, or a struct or enum with no members, is a
+    /// declaration bug. The rule is per root, not per census, so one empty root
+    /// cannot hide behind the fields another root contributed.
+    RootExaminedNothing { root: String },
+    /// A referenced type the census cannot resolve - a declared root included.
+    /// Not a skip.
     Unresolved { type_name: String, path: String },
     UnapprovedLeaf {
         kind: LeafKind,
@@ -1587,17 +1662,17 @@ enum CensusReject {
     UnsupportedCycle { type_name: String, path: String },
 }
 
-struct Census<'a> {
+/// The traversal of one declared root.
+struct RootWalk<'a> {
     corpus: &'a TypeCorpus,
-    report: CensusReport,
-    /// Types fully traversed. A shared (diamond) reference is supported and
-    /// counted once, so the counts stay deterministic.
-    settled: BTreeSet<&'static str>,
+    /// Doubles as the memo: a type lands here once it is fully traversed, so a
+    /// shared (diamond) reference is supported and counted once.
+    coverage: RootCoverage,
     /// Types currently being traversed, innermost last.
     stack: Vec<&'static str>,
 }
 
-impl Census<'_> {
+impl RootWalk<'_> {
     fn visit(&mut self, type_name: &'static str, path: &str) -> Result<(), CensusReject> {
         if self.stack.contains(&type_name) {
             return Err(CensusReject::UnsupportedCycle {
@@ -1605,7 +1680,7 @@ impl Census<'_> {
                 path: path.to_string(),
             });
         }
-        if self.settled.contains(type_name) {
+        if self.coverage.types.contains(type_name) {
             return Ok(());
         }
         let corpus = self.corpus;
@@ -1617,7 +1692,9 @@ impl Census<'_> {
         };
 
         self.stack.push(type_name);
-        self.report.types += 1;
+        let (variants, fields) = structure_counts(def);
+        self.coverage.variants += variants;
+        self.coverage.fields += fields;
         match def {
             TypeDef::Leaf(kind) => {
                 if !kind.approved() {
@@ -1630,15 +1707,12 @@ impl Census<'_> {
             }
             TypeDef::Struct(fields) => {
                 for &(field, field_type) in fields {
-                    self.report.fields += 1;
                     self.visit(field_type, &format!("{path}.{field}"))?;
                 }
             }
             TypeDef::Enum(variants) => {
                 for (variant, fields) in variants {
-                    self.report.variants += 1;
                     for &(field, field_type) in fields {
-                        self.report.fields += 1;
                         self.visit(field_type, &format!("{path}::{variant}.{field}"))?;
                     }
                 }
@@ -1648,46 +1722,101 @@ impl Census<'_> {
             }
         }
         self.stack.pop();
-        self.settled.insert(type_name);
+        self.coverage.types.insert(type_name);
         Ok(())
     }
 }
 
-/// Traverse every type reachable from `root` and prove each member is safe.
+/// Census every declared governed root and prove every member of every one of
+/// their type trees is safe.
+///
+/// `roots` is the governed list, not a reachability frontier. Reachability is
+/// not governance: a computed payload is governed and reaches nothing from the
+/// type it is computed from, which is why an empty root set and a root that
+/// cannot be resolved both fail closed instead of reporting a vacuous pass.
 ///
 /// This is a fixture predicate, not a production scan: it reads the modelled
 /// `corpus` it is handed. The implementation commit that adds the real panel
-/// receipt error enum is expected to build that corpus from the type's own
-/// metadata and call this function, rather than writing a second census.
-fn census_reachable_types(
+/// receipt error enum and remedy types is expected to build that corpus from
+/// those types' own metadata and add them to the declared root set, calling
+/// this function rather than writing a second census.
+fn census_governed_types(
     corpus: &TypeCorpus,
-    root: &'static str,
+    roots: &[&'static str],
 ) -> Result<CensusReport, CensusReject> {
+    if roots.is_empty() {
+        return Err(CensusReject::NoRoots);
+    }
     if corpus.is_empty() {
         return Err(CensusReject::EmptyCorpus);
     }
-    let mut census = Census {
-        corpus,
-        report: CensusReport::default(),
-        settled: BTreeSet::new(),
-        stack: Vec::new(),
-    };
-    census.visit(root, root)?;
-    if census.report.variants == 0 && census.report.fields == 0 {
-        return Err(CensusReject::NothingExamined {
-            root: root.to_string(),
-        });
+
+    let mut covered = Vec::with_capacity(roots.len());
+    for &root in roots {
+        let mut walk = RootWalk {
+            corpus,
+            coverage: RootCoverage {
+                root,
+                types: BTreeSet::new(),
+                variants: 0,
+                fields: 0,
+            },
+            stack: Vec::new(),
+        };
+        walk.visit(root, root)?;
+        if walk.coverage.variants == 0 && walk.coverage.fields == 0 {
+            return Err(CensusReject::RootExaminedNothing {
+                root: root.to_string(),
+            });
+        }
+        covered.push(walk.coverage);
     }
-    Ok(census.report)
+
+    // The totals dedupe the overlap between roots: every governed type
+    // contributes its variants and fields once, however many roots reach it.
+    let governed: BTreeSet<&'static str> = covered
+        .iter()
+        .flat_map(|coverage| coverage.types.iter().copied())
+        .collect();
+    let (mut variants, mut fields) = (0, 0);
+    for type_name in &governed {
+        let def = corpus
+            .get(type_name)
+            .expect("every examined type resolved during its root's walk");
+        let (root_variants, root_fields) = structure_counts(def);
+        variants += root_variants;
+        fields += root_fields;
+    }
+
+    Ok(CensusReport {
+        roots: covered,
+        types: governed.len(),
+        variants,
+        fields,
+    })
 }
 
-const CENSUS_ROOT: &str = "PanelReceiptError";
+/// The panel receipt error enum. A root like any other, and the type whose
+/// *absence* of a stored remedy field is the reason the remedy types have to be
+/// roots of their own.
+const ERROR_ROOT: &str = "PanelReceiptError";
 
-/// The accepted fixture: an entry enum whose reachable graph is entirely
-/// approved. It exercises every supported shape - variant fields, a fieldless
-/// variant, a nested struct, a closed fieldless enum, a collection of typed
-/// items whose own variant-fields are safe, and a type (`RemedyPlan`) reached
-/// from two different variants.
+/// The declared, closed root set. Adding a governed type means adding it here;
+/// a governed type that is not listed is not censused at all.
+const CENSUS_ROOTS: &[&str] = &[ERROR_ROOT, "RemedyPlan", "ProducerContext", "RemedyAction"];
+
+/// The accepted fixture: four governed roots whose type trees are entirely
+/// approved. Between them they exercise every supported shape - variant fields,
+/// a fieldless variant, a nested struct, a closed fieldless enum, a collection
+/// of typed items whose own variant-fields are safe, and types reached from
+/// more than one place (`HarnessVersion` and `PipelineStage` are each reached
+/// twice inside the `RemedyPlan` tree, and three roots overlap).
+///
+/// The error enum deliberately stores **no** `RemedyPlan`: a remedy is computed
+/// from an error, not carried by one. That is exactly why `RemedyPlan`,
+/// `ProducerContext` and `RemedyAction` are declared roots - no field edge
+/// reaches them from `PanelReceiptError`, so a reachability census rooted at
+/// the error enum would never see them.
 fn safe_panel_receipt_corpus() -> TypeCorpus {
     TypeCorpus::from([
         (
@@ -1697,14 +1826,8 @@ fn safe_panel_receipt_corpus() -> TypeCorpus {
                     "HarnessVersionUnparseable",
                     vec![("observed", "BannerDigest"), ("stage", "ReceiptStage")],
                 ),
-                (
-                    "HarnessUnavailable",
-                    vec![("attempts", "AttemptCount"), ("plan", "RemedyPlan")],
-                ),
-                (
-                    "ReceiptRejected",
-                    vec![("alias", "CorrelationAlias"), ("plan", "RemedyPlan")],
-                ),
+                ("HarnessUnavailable", vec![("attempts", "AttemptCount")]),
+                ("ReceiptRejected", vec![("alias", "CorrelationAlias")]),
                 ("Cancelled", vec![]),
             ]),
         ),
@@ -1765,15 +1888,15 @@ fn corpus_with(overrides: &[(&'static str, TypeDef)]) -> TypeCorpus {
     corpus
 }
 
-/// The entry enum with one extra variant appended, for planting a defect at
-/// the top level of the reachable graph.
+/// The entry enum with one extra variant appended, for planting a defect at the
+/// top level of the error root's own tree.
 fn root_enum_with_extra_variant(variant: &'static str, fields: FieldList) -> TypeDef {
     let TypeDef::Enum(mut variants) = safe_panel_receipt_corpus()
-        .get(CENSUS_ROOT)
-        .expect("the fixture corpus defines its entry type")
+        .get(ERROR_ROOT)
+        .expect("the fixture corpus defines its error root")
         .clone()
     else {
-        panic!("the fixture entry type is an enum");
+        panic!("the fixture error root is an enum");
     };
     variants.push((variant, fields));
     TypeDef::Enum(variants)
@@ -1781,36 +1904,124 @@ fn root_enum_with_extra_variant(variant: &'static str, fields: FieldList) -> Typ
 
 #[test]
 fn safe_type_census_accepts_the_approved_fixture() {
-    let report = census_reachable_types(&safe_panel_receipt_corpus(), CENSUS_ROOT)
+    let report = census_governed_types(&safe_panel_receipt_corpus(), CENSUS_ROOTS)
         .expect("the approved fixture corpus is accepted");
 
-    // Non-vacuous counts: 12 reachable types, 11 variants (4 on the entry
-    // enum, 3 on the closed fieldless enum, 4 on RemedyAction), 15 fields.
-    // `RemedyPlan` is reached from two variants and counted once.
+    // Per-root coverage as `(types, variants, fields)`: every declared root was
+    // resolved, entered and walked. These type counts sum to 22 against 12
+    // distinct governed types, and that overlap is what the totals dedupe.
     assert_eq!(
-        report,
-        CensusReport {
-            types: 12,
-            variants: 11,
-            fields: 15,
-        },
+        report
+            .roots
+            .iter()
+            .map(|coverage| (coverage.root, coverage.counts()))
+            .collect::<Vec<_>>(),
+        vec![
+            (ERROR_ROOT, (5, 7, 4)),
+            ("RemedyPlan", (9, 4, 9)),
+            ("ProducerContext", (4, 0, 3)),
+            ("RemedyAction", (4, 4, 3)),
+        ],
+        "each declared root must be walked on its own account; per-root drift means a root stopped being censused"
+    );
+
+    // Non-vacuous totals over the governed union: 12 distinct types, 11
+    // variants (4 on the error enum, 3 on the closed fieldless enum, 4 on
+    // `RemedyAction`) and 13 fields, each counted once however many roots
+    // reach it.
+    assert_eq!(
+        report.counts(),
+        (12, 11, 13),
         "the census must report what it examined; a drifting count means the traversal changed"
     );
 }
 
 #[test]
-fn safe_type_census_rejects_planted_unsafe_members() {
-    // A raw String at the top level, carrying no protected marking at all.
+fn approved_fixture_computes_remedies_rather_than_storing_them() {
+    let report = census_governed_types(&safe_panel_receipt_corpus(), CENSUS_ROOTS)
+        .expect("the approved fixture corpus is accepted");
+    let error = report.coverage(ERROR_ROOT);
+
+    // The error enum carries no remedy field, so no field edge reaches the
+    // remedy types from it. That is the invariant *and* the reason governance
+    // cannot be reachability: each of these is censused because it is declared,
+    // not because something points at it.
+    for governed in [
+        "RemedyPlan",
+        "RemedyActionList",
+        "RemedyAction",
+        "ProducerContext",
+    ] {
+        assert!(
+            !error.types.contains(governed),
+            "no field edge may run from {ERROR_ROOT} to {governed}: remedies are computed, not stored"
+        );
+        assert!(
+            report
+                .roots
+                .iter()
+                .any(|coverage| coverage.types.contains(governed)),
+            "{governed} is unreachable from the error enum, so a declared root must still cover it"
+        );
+    }
+}
+
+#[test]
+fn safe_type_census_rejects_a_violation_only_the_remedy_plan_root_reaches() {
+    // The plant is a field of `RemedyPlan` itself, so it sits in exactly one
+    // root's tree: not the error enum's (nothing reaches `RemedyPlan` from it),
+    // not `ProducerContext`'s, and not `RemedyAction`'s.
+    let corpus = corpus_with(&[
+        (
+            "RemedyPlan",
+            TypeDef::Struct(vec![
+                ("actions", "RemedyActionList"),
+                ("harness", "HarnessVersion"),
+                ("producer", "ProducerContext"),
+                ("summary", "RawMessage"),
+            ]),
+        ),
+        ("RawMessage", TypeDef::Leaf(LeafKind::RawText)),
+    ]);
+
     assert_eq!(
-        census_reachable_types(
+        census_governed_types(&corpus, CENSUS_ROOTS),
+        Err(CensusReject::UnapprovedLeaf {
+            kind: LeafKind::RawText,
+            type_name: "RawMessage".to_string(),
+            path: "RemedyPlan.summary".to_string(),
+        })
+    );
+
+    // The discriminating half: the same corpus is *accepted* when the census is
+    // rooted only at the error enum, and when it is rooted at the two other
+    // governed types. A single-root or reachability-based implementation passes
+    // every other fixture in this file and still ships this leak.
+    assert_eq!(
+        census_governed_types(&corpus, &[ERROR_ROOT]).map(|report| report.counts()),
+        Ok((5, 7, 4)),
+        "a census rooted at the error enum cannot see the remedy tree at all"
+    );
+    assert!(
+        census_governed_types(&corpus, &["ProducerContext", "RemedyAction"]).is_ok(),
+        "the plant is in neither of those trees; only RemedyPlan's own root catches it"
+    );
+}
+
+#[test]
+fn safe_type_census_rejects_planted_unsafe_members() {
+    // A raw String at the top level of the error root, carrying no protected
+    // marking at all.
+    assert_eq!(
+        census_governed_types(
             &corpus_with(&[
                 (
-                    CENSUS_ROOT,
+                    ERROR_ROOT,
                     root_enum_with_extra_variant("Diagnostic", vec![("message", "RawMessage")])
                 ),
                 ("RawMessage", TypeDef::Leaf(LeafKind::RawText)),
             ]),
-            CENSUS_ROOT
+            CENSUS_ROOTS
         ),
         Err(CensusReject::UnapprovedLeaf {
             kind: LeafKind::RawText,
@@ -1819,17 +2030,17 @@ fn safe_type_census_rejects_planted_unsafe_members() {
         })
     );
 
-    // A PathBuf at the top level.
+    // A PathBuf at the top level of the error root.
     assert_eq!(
-        census_reachable_types(
+        census_governed_types(
             &corpus_with(&[
                 (
-                    CENSUS_ROOT,
+                    ERROR_ROOT,
                     root_enum_with_extra_variant("ReceiptMissing", vec![("path", "ReceiptPath")])
                 ),
                 ("ReceiptPath", TypeDef::Leaf(LeafKind::RawPath)),
             ]),
-            CENSUS_ROOT
+            CENSUS_ROOTS
         ),
         Err(CensusReject::UnapprovedLeaf {
             kind: LeafKind::RawPath,
@@ -1838,11 +2049,11 @@ fn safe_type_census_rejects_planted_unsafe_members() {
         })
     );
 
-    // A raw String on a struct field two levels below the entry type
-    // (entry enum -> RemedyPlan -> ProducerContext). A census that inspects
-    // only the top level passes this fixture.
+    // A raw String on a struct field two levels below a root
+    // (`RemedyPlan` -> `ProducerContext` -> field). A census that inspects only
+    // the level below each root passes this fixture.
     assert_eq!(
-        census_reachable_types(
+        census_governed_types(
             &corpus_with(&[
                 (
                     "ProducerContext",
@@ -1854,23 +2065,23 @@ fn safe_type_census_rejects_planted_unsafe_members() {
                 ),
                 ("RawMessage", TypeDef::Leaf(LeafKind::RawText)),
             ]),
-            CENSUS_ROOT
+            CENSUS_ROOTS
         ),
         Err(CensusReject::UnapprovedLeaf {
             kind: LeafKind::RawText,
             type_name: "RawMessage".to_string(),
-            path: "PanelReceiptError::HarnessUnavailable.plan.producer.note".to_string(),
+            path: "RemedyPlan.producer.note".to_string(),
         })
     );
 
-    // A raw String on an enum variant-field two levels below the entry type,
-    // reached through another enum. A census that stops at variant names
-    // passes this fixture.
+    // A raw String on an enum variant-field two levels below a root, reached
+    // through another enum. A census that stops at variant names passes this
+    // fixture.
     assert_eq!(
-        census_reachable_types(
+        census_governed_types(
             &corpus_with(&[
                 (
-                    CENSUS_ROOT,
+                    ERROR_ROOT,
                     root_enum_with_extra_variant("Escalated", vec![("inner", "InnerError")])
                 ),
                 (
@@ -1882,7 +2093,7 @@ fn safe_type_census_rejects_planted_unsafe_members() {
                 ),
                 ("RawMessage", TypeDef::Leaf(LeafKind::RawText)),
             ]),
-            CENSUS_ROOT
+            CENSUS_ROOTS
         ),
         Err(CensusReject::UnapprovedLeaf {
             kind: LeafKind::RawText,
@@ -1891,10 +2102,10 @@ fn safe_type_census_rejects_planted_unsafe_members() {
         })
     );
 
-    // A path on a variant-field of the typed action collection: entry enum ->
-    // RemedyPlan -> collection -> RemedyAction variant.
+    // A path on a variant-field of the typed action collection:
+    // `RemedyPlan` -> collection -> `RemedyAction` variant.
     assert_eq!(
-        census_reachable_types(
+        census_governed_types(
             &corpus_with(&[
                 (
                     "RemedyAction",
@@ -1908,13 +2119,12 @@ fn safe_type_census_rejects_planted_unsafe_members() {
                 ),
                 ("ReceiptPath", TypeDef::Leaf(LeafKind::RawPath)),
             ]),
-            CENSUS_ROOT
+            CENSUS_ROOTS
         ),
         Err(CensusReject::UnapprovedLeaf {
             kind: LeafKind::RawPath,
             type_name: "ReceiptPath".to_string(),
-            path: "PanelReceiptError::HarnessUnavailable.plan.actions[]::RerunPreflight.workdir"
-                .to_string(),
+            path: "RemedyPlan.actions[]::RerunPreflight.workdir".to_string(),
         })
     );
 }
@@ -1924,12 +2134,12 @@ fn safe_type_census_fails_closed_on_unresolved_cyclic_and_empty_corpora() {
     // A type the census does not recognise. Unresolved is a failure: a census
     // that skips what it cannot resolve has counted the easy fields.
     assert_eq!(
-        census_reachable_types(
+        census_governed_types(
             &corpus_with(&[(
-                CENSUS_ROOT,
+                ERROR_ROOT,
                 root_enum_with_extra_variant("Opaque", vec![("payload", "UnmodelledPayload")])
             )]),
-            CENSUS_ROOT
+            CENSUS_ROOTS
         ),
         Err(CensusReject::Unresolved {
             type_name: "UnmodelledPayload".to_string(),
@@ -1939,43 +2149,78 @@ fn safe_type_census_fails_closed_on_unresolved_cyclic_and_empty_corpora() {
 
     // A cycle the census cannot traverse to a fixed point.
     assert_eq!(
-        census_reachable_types(
+        census_governed_types(
             &corpus_with(&[(
                 "ProducerContext",
                 TypeDef::Struct(vec![("stage", "PipelineStage"), ("parent", "RemedyPlan"),])
             )]),
-            CENSUS_ROOT
+            CENSUS_ROOTS
         ),
         Err(CensusReject::UnsupportedCycle {
             type_name: "RemedyPlan".to_string(),
-            path: "PanelReceiptError::HarnessUnavailable.plan.producer.parent".to_string(),
+            path: "RemedyPlan.producer.parent".to_string(),
         })
     );
 
-    // An entry enum with no variants: nothing was examined, so nothing was
-    // shown safe.
+    // An error enum with no variants: nothing was examined from that root, so
+    // nothing was shown safe. The three other roots still contribute 8 variants
+    // and 15 fields between them, so only a per-root rule rejects this.
     assert_eq!(
-        census_reachable_types(
-            &corpus_with(&[(CENSUS_ROOT, TypeDef::Enum(vec![]))]),
-            CENSUS_ROOT
+        census_governed_types(
+            &corpus_with(&[(ERROR_ROOT, TypeDef::Enum(vec![]))]),
+            CENSUS_ROOTS
         ),
-        Err(CensusReject::NothingExamined {
-            root: CENSUS_ROOT.to_string(),
+        Err(CensusReject::RootExaminedNothing {
+            root: ERROR_ROOT.to_string(),
         })
     );
 
     // An empty corpus.
     assert_eq!(
-        census_reachable_types(&TypeCorpus::new(), CENSUS_ROOT),
+        census_governed_types(&TypeCorpus::new(), CENSUS_ROOTS),
         Err(CensusReject::EmptyCorpus)
     );
 
-    // An entry type that is not in the corpus at all.
+    // A declared root that is not in the corpus at all.
     assert_eq!(
-        census_reachable_types(&safe_panel_receipt_corpus(), "AbsentEntryType"),
+        census_governed_types(&safe_panel_receipt_corpus(), &["AbsentGovernedType"]),
         Err(CensusReject::Unresolved {
-            type_name: "AbsentEntryType".to_string(),
-            path: "AbsentEntryType".to_string(),
+            type_name: "AbsentGovernedType".to_string(),
+            path: "AbsentGovernedType".to_string(),
+        })
+    );
+}
+
+#[test]
+fn safe_type_census_fails_closed_on_a_root_set_that_governs_nothing() {
+    // No declared roots. The root set is a list someone maintains, so an empty
+    // one is a declaration bug: censusing nothing must never read as a pass.
+    assert_eq!(
+        census_governed_types(&safe_panel_receipt_corpus(), &[]),
+        Err(CensusReject::NoRoots)
+    );
+
+    // One unresolvable root among otherwise valid ones. A governed type whose
+    // name no longer resolves - renamed, moved, or deleted - fails the whole
+    // census rather than quietly shrinking the governed set.
+    assert_eq!(
+        census_governed_types(
+            &safe_panel_receipt_corpus(),
+            &[ERROR_ROOT, "AbsentGovernedType", "RemedyPlan"]
+        ),
+        Err(CensusReject::Unresolved {
+            type_name: "AbsentGovernedType".to_string(),
+            path: "AbsentGovernedType".to_string(),
+        })
+    );
+
+    // A root that resolves to a leaf newtype. It has no variant and no field,
+    // so walking it proves nothing about any payload; the rule is that a root
+    // must expose governable structure of its own.
+    assert_eq!(
+        census_governed_types(&safe_panel_receipt_corpus(), &["AttemptCount"]),
+        Err(CensusReject::RootExaminedNothing {
+            root: "AttemptCount".to_string(),
         })
     );
 }

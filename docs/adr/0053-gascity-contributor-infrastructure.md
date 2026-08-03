@@ -716,12 +716,20 @@ invites exactly the half-finished rebase that then fails the preflight for a
 second, unrelated reason.
 
 **Redaction is type-level, the type set is closed, and the outer `Debug` is
-derived on purpose.** **Every** field of the panel receipt error enum, and
-every field of every type nested inside it, must come from a **closed approved
-set** of safe types: redacting newtypes, closed enums, bounded numeric,
-version or stage newtypes. No raw `String`, no `OsString`, no
-`Path` or `PathBuf`, no arbitrary map or vector of text, and no type absent
-from the approved set may appear anywhere in the tree.
+derived on purpose.** The governed surface is a **declared closed set of
+types**, not one type and whatever hangs off it: `PanelReceiptError`,
+`RemedyPlan`, `ProducerContext`, `RemedyAction`, and any other independently
+governed payload type added later. Each is governed on its own account,
+because `remedies` computes a plan rather than storing one, so `RemedyPlan`
+and its actions are never reachable by following fields from the error.
+Governance here is a list someone maintains, not a graph walk.
+
+**Every** field of every governed type, and every field of every type nested
+inside one, must come from a **closed approved set** of safe types: redacting
+newtypes, closed enums, bounded numeric, version or stage newtypes. No raw
+`String`, no `OsString`, no `Path` or `PathBuf`, no arbitrary map or vector of
+text, and no type absent from the approved set may appear anywhere in any of
+those trees.
 
 The policy is deliberately **not** scoped to fields someone marked protected.
 "Protected" is a judgement made by whoever added the field, and the field that
@@ -1660,48 +1668,70 @@ and it ships planted violations it must reject.
      because extracting a plausible-looking version from attacker-influenced
      bytes is how the hostile content gets carried forward under a safe-looking
      type.
-  2. **Policy control: an exhaustive recursive census, with planted controls.**
-     Through the repository's existing policy-test mechanism over the source or
-     API surface, the check **traverses the whole reachable type tree**: every
-     field of every struct, and every variant and every variant-field of every
-     enum, recursively, at every nesting level, starting from the panel receipt
-     error enum and including `RemedyAction`, `RemedyPlan` and
-     `ProducerContext`. Enums are not a leaf. An enum whose variants are
-     inspected only for their names, or a struct whose fields are inspected
-     only one level down, is where the unsafe field survives.
+  2. **Policy control: a multi-root recursive census, with planted controls.**
+     The census takes an **explicit closed set of entry roots**. It does not
+     start at one type and follow stored fields, because reachability is not
+     the same as governance and this record broke that assumption itself:
+     `remedies` computes a `RemedyPlan` rather than storing one, so there is no
+     field edge from the error type to `RemedyPlan`, `RemedyAction` or
+     `ProducerContext` at all. A reachability census rooted at the error enum
+     would traverse a small tree, report success, and never look at the types
+     that carry the operator-facing content. Every governed type is a root in
+     its own right.
+
+     The root set for the implementation is `PanelReceiptError`, `RemedyPlan`,
+     `ProducerContext`, `RemedyAction`, and any other independently governed
+     public or internal payload type in this surface. The set is **declared,
+     versioned and closed**: adding a governed type means adding a root, and a
+     governed type that is not a root is the census's blind spot rather than a
+     silent pass. The check **fails closed** on an empty root set and on a
+     declared root it cannot resolve.
+
+     From every root the check **traverses the whole type tree**: every field
+     of every struct, and every variant and every variant-field of every enum,
+     recursively, at every nesting level. Enums are not a leaf. An enum whose
+     variants are inspected only for their names, or a struct whose fields are
+     inspected only one level down, is where the unsafe field survives.
 
      Each field's type must be a member of the closed approved set: redacting
      newtype, closed enum whose own variant-fields satisfy the same rule,
      bounded numeric, version or stage newtype. A raw `String`, `OsString`,
      `Path`, `PathBuf`, arbitrary text map or vector, or **any type the census
      does not recognise**, fails, whether or not anyone labelled it protected.
-     The enum's **derived** `Debug` rendering is then what control 3 scans, so
-     the check covers the rendering that actually ships.
+     Separately, the error enum is asserted to hold **no remedy field**, which
+     is both the D8 invariant and the reason `RemedyPlan` must be censused as
+     its own root.
+
+     The derived `Debug` rendering of these types is then what control 3 scans,
+     so the check covers the rendering that actually ships.
 
      Planted mock types are submitted to the same policy test and each must be
      **rejected**: a raw `String` field carrying no protected marking at all; a
-     `PathBuf` field; a raw `String` on a **struct** field two levels below the
-     entry type; and a raw `String` or path on an **enum variant-field** two
-     levels below the entry type, reached through another enum. The unmarked,
-     the nested and the through-an-enum cases matter most; a census that stops
-     at variant names, inspects only the top level, or trusts annotations is
-     the census that misses the field that leaks.
+     `PathBuf` field; a raw `String` on a **struct** field two levels below a
+     root; a raw `String` or path on an **enum variant-field** two levels below
+     a root, reached through another enum; and a planted violation inside the
+     **`RemedyPlan` fixture specifically**, which must still be detected even
+     though no field edge reaches it from the error fixture. That last control
+     is what proves the census is multi-root rather than reachability-based;
+     without it a single-root implementation passes the whole suite.
 
-     The check reports the number of types, variants and fields it examined and
-     **fails closed** on an empty corpus, on any type it cannot resolve, and on
-     any shape it does not support, including a cycle it cannot traverse to a
-     fixed point. Unresolved is a failure, not a pass: a census that silently
-     skips what it cannot parse has counted the easy fields.
+     The check reports, **per root**, the number of types, variants and fields
+     it examined, and fails closed on an empty corpus for any root, on any type
+     it cannot resolve, and on any shape it does not support, including a cycle
+     it cannot traverse to a fixed point. Unresolved is a failure, not a pass:
+     a census that silently skips what it cannot parse has counted the easy
+     fields.
 
      **What lands when.** The panel receipt error enum does not exist yet, so
      this record does not claim a census over it. This pull request adds the
-     census predicate and its planted fixtures as a Type 5 policy test now,
+     census predicate, the declared root set and the planted fixtures as a
+     Type 5 policy test now, exercising **multiple roots** over fixture types,
      which is non-vacuous because the planted mocks are real types the
      predicate accepts or rejects today. The implementation commit that
-     introduces the real error enum wires that type into the **same** census
-     rather than writing a second one, and the fixtures stay as the negative
+     introduces the real types adds them as roots to the **same** declared set
+     rather than writing a second census, and the fixtures stay as the negative
      corpus. A predicate proven against fixtures and then pointed at the
-     production type is a check that was working before the type it guards
+     production types is a check that was working before the types it guards
      existed; a census written alongside the type is one nobody has seen
      reject anything.
 
