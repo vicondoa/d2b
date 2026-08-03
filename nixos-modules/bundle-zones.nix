@@ -50,17 +50,23 @@ let
   helperAssertions = lib.flatten (lib.mapAttrsToList
     (zoneName: zone:
       let
-        validation = resourcesBundle.validateBundle zoneName zone.resources;
+        # Volume layout paths are anchored policy paths, not host paths. Their
+        # dedicated compiler owns the Volume schema, so the generic bundle
+        # secret/path lint must not reinterpret LayoutEntry.path.
+        genericResources = lib.filterAttrs
+          (_: resource: resource.type != "Volume")
+          zone.resources;
+        validation = resourcesBundle.validateBundle zoneName genericResources;
         # Keep ordinary validation failures visible as assertions, but never
         # downgrade secret-shaped material to a soft assertion.
         hasForbiddenMaterial = lib.any
           (resource:
             builtins.isAttrs resource
             && resourcesBundle.forbiddenRows (resource.spec or { }) != [ ])
-          (lib.attrValues zone.resources);
+          (lib.attrValues genericResources);
       in
       if hasForbiddenMaterial
-      then (resourcesBundle.bundleForZone zoneName zone.resources).assertions
+      then (resourcesBundle.bundleForZone zoneName genericResources).assertions
       else validation.assertions)
     cfg.zones);
   catalogDigest =
@@ -101,6 +107,11 @@ let
       annotations = resource.metadata.annotations;
     };
 
+  zoneResources = zoneName: zone:
+    zone.resources
+    // (cfg._resourceCompiler.volumeGenerated.byZone.${zoneName} or { })
+    // (cfg._resourceCompiler.volumeShorthand.${zoneName} or { });
+
   canonicalResource = zoneName: resourceName: resource: {
     inherit apiVersion;
     type = resource.type;
@@ -122,10 +133,11 @@ let
   resourceList = zoneName: zone:
     sortResources (lib.mapAttrsToList
       (resourceName: resource: canonicalResource zoneName resourceName resource)
-      (lib.filterAttrs (_: resource: resource.type != "Zone") zone.resources));
+      (lib.filterAttrs (_: resource: resource.type != "Zone")
+        (zoneResources zoneName zone)));
   canonicalJson = value: builtins.toJSON (resourcesBundle.canonical value);
 
-  providerSchemaDigests = zone:
+  providerSchemaDigests = zoneName: zone:
     lib.listToAttrs (lib.filter
       (entry: entry != null)
       (lib.mapAttrsToList
@@ -148,7 +160,8 @@ let
             if digest == null
             then null
             else lib.nameValuePair "Provider/${resourceName}" digest)
-        (lib.filterAttrs (_: resource: resource.type != "Zone") zone.resources)));
+        (lib.filterAttrs (_: resource: resource.type != "Zone")
+          (zoneResources zoneName zone))));
 
   bundleData = zoneName: zone:
     let
@@ -165,7 +178,7 @@ let
       artifactCatalogDigest = catalogDigest;
       generatedAt = "1970-01-01T00:00:00.000Z";
       inherit resources;
-      providerSchemaDigests = providerSchemaDigests zone;
+      providerSchemaDigests = providerSchemaDigests zoneName zone;
     };
 
   bundlePath = zoneName: data:

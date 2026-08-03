@@ -27,6 +27,8 @@
 {
   imports = [
     ./options.nix
+    ./options-volumes.nix
+    ./resources-zone-control.nix
     ./bundle-artifacts.nix
     ./options-observability.nix
     ./provider-catalog.nix

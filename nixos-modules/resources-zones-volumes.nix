@@ -82,6 +82,23 @@ let
         (lib.filterAttrs (_: resource: resource.type == "Volume") zone.resources))
     (lib.sort lib.lessThan (lib.attrNames cfg.zones));
 
+  generatedRows = lib.concatMap
+    (zoneName:
+      let generated =
+        (cfg._resourceCompiler.volumeGenerated.byZone.${zoneName} or { })
+        // (cfg._resourceCompiler.volumeShorthand.${zoneName} or { });
+      in lib.mapAttrsToList
+        (resourceName: resource: {
+          inherit zoneName resourceName resource;
+          zone = cfg.zones.${zoneName};
+          path = "d2b.zones.${zoneName}.resources.${resourceName}";
+          spec = resource.spec or { };
+        })
+        (lib.filterAttrs (_: resource: resource.type == "Volume") generated))
+    (lib.sort lib.lessThan (lib.attrNames cfg.zones));
+
+  allRows = rows ++ generatedRows;
+
   aclAssertions = row: index: field: grants:
     lib.flatten (lib.imap0
       (grantIndex: grant:
@@ -389,7 +406,7 @@ let
         };
       })
     { }
-    rows;
+    allRows;
 in
 {
   config = {

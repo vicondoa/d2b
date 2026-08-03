@@ -116,6 +116,56 @@ let
   };
 
   validVolume = (mkEval [ volumeBase ]).config;
+  generatedGuestVolume = (mkEval [
+    volumeBase
+    {
+      d2b.zones.local-root.resources.guest = {
+        type = "Guest";
+        spec.tpmEnabled = true;
+      };
+    }
+  ]).config;
+  generatedStoreView =
+    generatedGuestVolume.d2b._resourceCompiler.volumeGenerated.byZone.local-root.store-view-guest;
+  generatedTpm =
+    generatedGuestVolume.d2b._resourceCompiler.volumeGenerated.byZone.local-root.swtpm-guest;
+  attachmentVolume = (mkEval [
+    volumeBase
+    {
+      d2b.zones.local-root.resources.state.spec.attachments = [{
+        executionRef = "Guest/guest";
+        transport = "virtiofs";
+        view = "controller";
+        access = "read-only";
+        mountPath = "/state";
+        settings = {
+          posixAcl = false;
+          xattr = false;
+          cache = "auto";
+          inodeFileHandles = "never";
+          threadPoolSize = null;
+          socketGroup = null;
+        };
+      }];
+      d2b.zones.local-root.resources.guest = {
+        type = "Guest";
+        spec = { };
+      };
+    }
+  ]).config;
+  digestWithExtraUser = (mkEval [
+    volumeBase
+    { d2b.zones.local-root.resources.extra-user.type = "User"; }
+  ]).config;
+  typedShorthand = (mkEval [
+    volumeBase
+    {
+      d2b.volumes.typed = {
+        zone = "local-root";
+        spec = volumeResource.spec;
+      };
+    }
+  ]).config;
 
   volumeAssertionsOf = sys:
     sys.config.d2b._resourceCompiler.volumeValidation;
@@ -269,10 +319,120 @@ in
       in state.spec.source.settings.sourcePolicyId;
     expected = "state-root";
   };
+  "volume-mounts/v3-valid-volume-assertions-pass" = {
+    expr = lib.all (assertion: assertion.assertion)
+      (lib.filter
+        (assertion:
+          lib.hasPrefix "d2b.zones.local-root.resources.state" assertion.message)
+        validVolume.d2b._resourceCompiler.volumeValidation);
+    expected = true;
+  };
 
   "volume-mounts/v3-valid-resource-reaches-topical-compiler" = {
     expr = validVolume.d2b._resourceCompiler.volumes.byZone.local-root.state.type;
     expected = "Volume";
+  };
+  "volume-mounts/v3-typed-volume-shorthand-reaches-compiler" = {
+    expr = typedShorthand.d2b._resourceCompiler.volumeShorthand.local-root.typed.type;
+    expected = "Volume";
+  };
+  "volume-mounts/v3-typed-volume-shorthand-enters-zone-bundle" = {
+    expr = builtins.any
+      (resource:
+        resource.type == "Volume" && resource.metadata.name == "typed")
+      typedShorthand.d2b._bundle.zoneResourceBundlesV3.local-root.data.resources;
+    expected = true;
+  };
+  "volume-mounts/v3-typed-volume-shorthand-rejects-anchored-path-escape" = {
+    expr = (builtins.tryEval (
+      builtins.deepSeq
+        ((mkEval [
+          volumeBase
+          {
+            d2b.volumes.bad = {
+              zone = "local-root";
+              spec = volumeResource.spec // {
+                layout = [
+                  ((builtins.head volumeResource.spec.layout)
+                    // { path = "/escape"; })
+                ];
+              };
+            };
+          }
+        ]).config.d2b.volumes.bad.spec.layout)
+        true
+    )).success;
+    expected = false;
+  };
+  "volume-mounts/v3-store-view-generates-root-state-and-gcroots" = {
+    expr = map (entry: entry.path) generatedStoreView.spec.layout;
+    expected = [
+      ""
+      "live"
+      "live/.d2b-marker-guest"
+      "meta"
+      "meta/generations"
+      "meta/current"
+      "state"
+      "gcroots"
+      "sync.lock"
+    ];
+  };
+  "volume-mounts/v3-store-view-gcroots-is-not-under-meta" = {
+    expr = builtins.any (entry: entry.path == "meta/gcroots") generatedStoreView.spec.layout;
+    expected = false;
+  };
+  "volume-mounts/v3-store-view-attachment-is-provider-neutral-virtiofs" = {
+    expr = {
+      transport = (builtins.head generatedStoreView.spec.attachments).transport;
+      access = (builtins.head generatedStoreView.spec.attachments).access;
+      view = (builtins.head generatedStoreView.spec.attachments).view;
+      mountPath = (builtins.head generatedStoreView.spec.attachments).mountPath;
+    };
+    expected = {
+      transport = "virtiofs";
+      access = "read-only";
+      view = "ro-store";
+      mountPath = "/nix/.ro-store";
+    };
+  };
+  "volume-mounts/v3-generated-volumes-enter-zone-bundle" = {
+    expr = map (resource: resource.metadata.name)
+      (lib.filter (resource: resource.type == "Volume")
+        generatedGuestVolume.d2b._bundle.zoneResourceBundlesV3.local-root.data.resources);
+    expected = [ "state" "store-view-guest" "swtpm-guest" ];
+  };
+  "volume-mounts/v3-tpm-volume-is-secret-adjacent-and-never-recreated" = {
+    expr = {
+      kind = generatedTpm.spec.kind;
+      sensitivity = (builtins.head generatedTpm.spec.layout).sensitivity;
+      createPolicy = (builtins.head generatedTpm.spec.layout).createPolicy;
+      repairPolicy = (builtins.head generatedTpm.spec.layout).repairPolicy;
+      ownerRef = (builtins.head generatedTpm.spec.layout).ownerRef;
+    };
+    expected = {
+      kind = "state";
+      sensitivity = "secret-adjacent";
+      createPolicy = "create-if-never-provisioned";
+      repairPolicy = "fail-closed";
+      ownerRef = "User/d2b-guest-swtpm";
+    };
+  };
+  "volume-mounts/v3-virtiofs-attachment-emits-vfd-user-and-provider" = {
+    expr = {
+      vfd = attachmentVolume.d2b._resourceCompiler.volumeGenerated.byZone.local-root."vol-state-vfd".type;
+      provider = attachmentVolume.d2b._resourceCompiler.volumeGenerated.byZone.local-root.volume-virtiofs.spec.artifactId;
+    };
+    expected = {
+      vfd = "User";
+      provider = "volume-virtiofs-provider";
+    };
+  };
+  "volume-mounts/v3-volume-bundle-digest-covers-all-resources" = {
+    expr =
+      validVolume.d2b._bundle.zoneResourceBundlesV3.local-root.data.contentHash
+      != digestWithExtraUser.d2b._bundle.zoneResourceBundlesV3.local-root.data.contentHash;
+    expected = true;
   };
 
   "volume-mounts/v3-block-image-requires-byte-quota" = {
@@ -406,6 +566,46 @@ in
     expr = hasFailure "must not carry a host path"
       (invalid {
         d2b.zones.local-root.resources.state.spec.source.settings.path = "/etc";
+      });
+    expected = true;
+  };
+  "volume-mounts/v3-anchored-path-rejects-absolute-layout-path" = {
+    expr = hasFailure "anchored inside the Volume"
+      (invalid {
+        d2b.zones.local-root.resources.state.spec.layout = [
+          (layoutEntry { path = "/escape"; })
+        ];
+      });
+    expected = true;
+  };
+  "volume-mounts/v3-anchored-path-rejects-parent-component" = {
+    expr = hasFailure "anchored inside the Volume"
+      (invalid {
+        d2b.zones.local-root.resources.state.spec.layout = [
+          (layoutEntry { path = "safe/../escape"; })
+        ];
+      });
+    expected = true;
+  };
+  "volume-mounts/v3-symlink-target-rejects-absolute-path" = {
+    expr = hasFailure "target is required for a symlink"
+      (invalid {
+        d2b.zones.local-root.resources.state.spec.layout = [
+          (layoutEntry {
+            type = "symlink";
+            target = "/escape";
+            noFollow = false;
+          })
+        ];
+      });
+    expected = true;
+  };
+  "volume-mounts/v3-layout-schema-rejects-unknown-field" = {
+    expr = hasFailure "unsupported layout field"
+      (invalid {
+        d2b.zones.local-root.resources.state.spec.layout = [
+          (layoutEntry { unexpected = true; })
+        ];
       });
     expected = true;
   };

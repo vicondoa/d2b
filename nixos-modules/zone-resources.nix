@@ -43,6 +43,11 @@ let
   emittedResources = resources:
     lib.filterAttrs (_: resource: resource.type != "Zone") resources;
 
+  zoneResources = zoneName: zone:
+    zone.resources
+    // (cfg._resourceCompiler.volumeGenerated.byZone.${zoneName} or { })
+    // (cfg._resourceCompiler.volumeShorthand.${zoneName} or { });
+
   executionPolicyDefaults = {
     providerRef = null;
     defaultDomain = "system";
@@ -153,12 +158,12 @@ let
   zoneResourceList = zoneName: zone:
     sortResources (lib.mapAttrsToList
       (resourceName: resource: canonicalResource zoneName resourceName resource)
-      (emittedResources zone.resources));
+      (emittedResources (zoneResources zoneName zone)));
 
   catalogEntry = artifactId:
     lib.findFirst (entry: entry.id == artifactId) null providerCatalogEntries;
 
-  providerSchemaDigests = zone:
+  providerSchemaDigests = zoneName: zone:
     lib.listToAttrs (lib.filter (entry: entry != null) (lib.mapAttrsToList
       (resourceName: resource:
         if resource.type != "Provider" || !(resource.spec ? artifactId) then null
@@ -172,7 +177,7 @@ let
               else "sha256:${builtins.hashString "sha256"
                 "d2b:v3:schema/${resource.spec.artifactId or resourceName}"}";
           in lib.nameValuePair "Provider/${resourceName}" digest)
-      (emittedResources zone.resources)));
+      (emittedResources (zoneResources zoneName zone))));
 
   bundleData = zoneName: zone:
     let
@@ -183,7 +188,7 @@ let
       zone = zoneName;
       inherit resources;
       generatedAt = "1970-01-01T00:00:00.000Z";
-      providerSchemaDigests = providerSchemaDigests zone;
+      providerSchemaDigests = providerSchemaDigests zoneName zone;
     };
 
   bundlePath = zoneName: data:

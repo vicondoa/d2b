@@ -872,6 +872,8 @@ let
       list = zoneRows;
       byName = zoneRowsByName;
       resourceIdentities = zoneResourceIdentityRows;
+      topology = cfg._zoneCompiler.topology or { };
+      control = cfg._resourceCompiler.zoneControl or { };
     };
 
     realms = {
