@@ -71,7 +71,7 @@ Are requirements present for each scenario class, or explicitly excluded?
 - [ ] CHK030 Are requirements defined per distinct cutover phase, or only for the procedure as a whole? [Coverage, Spec §FR-020]
 - [ ] CHK031 Are requirements defined for a wave that repeatedly fails its panel or cannot reach unanimous sign-off? [Gap, Exception Flow]
 - [x] CHK032 Are requirements defined for a specification amendment discovered mid-program, including its effect on in-flight validation evidence? [Coverage, Spec §Assumptions]
-- [ ] CHK033 Are requirements defined for partial or stalled companion adaptation, distinct from the binary release-block? [Gap, Spec §FR-039]
+- [x] CHK033 Are requirements defined for partial or stalled companion adaptation, distinct from the binary release-block? [Gap, Spec §FR-039]
 - [ ] CHK034 Are requirements defined for the terminal case where a hard target cannot be met even after redesign? [Gap, Spec §FR-030]
 - [ ] CHK035 Are requirements defined for rollback or recovery of a wave already merged into the integration lineage? [Gap, Recovery Flow]
 
@@ -223,7 +223,7 @@ the row reads **needs integrator** rather than guessing.
 | CHK026 | Removal-proof consistency - one per path, 3 of 16 supplied, non-empty proof fields | W7 | Removal proofs are consumed by the cutover and streamline waves |
 | CHK030 | Requirements per distinct cutover phase | W7 | `ADR046-reset-*` items are W7 |
 | CHK031 | A wave that repeatedly fails its panel or cannot reach unanimity | needs integrator | Partially mitigated by FR-051 through FR-053 (round-nine deferral of LOW/MEDIUM findings); the terminal non-convergence case remains a governance decision |
-| CHK033 | Partial or stalled companion adaptation, distinct from the binary block | needs integrator | Same locally-added companion family as CHK018 |
+| CHK033 | Partial or stalled companion adaptation, distinct from the binary block | W5 | **closed** - FR-063; see the W5 date-bound gate below |
 | CHK034 | Terminal case where a hard target cannot be met even after redesign | W5 | The first hard footprint target is re-measured against the corrected W5 design; the escalation path must exist by then |
 | CHK035 | Rollback or recovery of a wave already merged into the integration lineage | needs integrator | Delivery-contract governance; no work item owns it |
 | CHK036 | Hermetic execution-budget and runtime-ledger obligations | needs integrator | Binds from W2 onward as test discipline but no work item owns the requirement text |
@@ -334,8 +334,61 @@ published inventory read "Pending live-host verification". CO-1 and CO-2 are rec
 because the documents are committed and reachable; CO-3 and CO-4 are open, and they are the ones
 that carry the compatibility claim.
 
-**Still open, and deliberately not closed here**: CHK033 - requirements for partial or stalled
-adaptation as a scenario class, distinct from the binary release-block. FR-061 names the two
-lawful outcomes when adaptation stalls; it does not decide whether the release may ship with a
-companion degraded rather than absent. That is a product decision about release scope, and
-closing it inside this item would have been overreach dressed as thoroughness.
+**Still open in this family, and deliberately not closed here**: CHK018 (an objective test for
+"desktop companion that consumes d2b's public operator contracts") and CHK022 (a pass condition
+for "compatible version verified"). Both concern the *membership* and *entry bar* of the
+inventory rather than what happens when a member falls short. CHK033, which asked what happens
+when adaptation is partial, is closed below.
+
+### CHK033 - partial adaptation, decided (2026-08-03)
+
+CHK033 asked for requirements covering partial or stalled adaptation as a scenario class,
+distinct from the binary release-block. It was previously parked as "needs integrator" on the
+grounds that it is a product decision. It is a product decision, and it is now made.
+
+**The answer is no: a degraded required companion holds the release, exactly as an absent one
+does.** SC-024 exists so that an operator's desktop is not degraded by adopting 3.0, and
+nothing here carves an exception into it. There is no tolerance band and no per-surface partial
+credit; a row with one Blocked surface is Blocked.
+
+**What changed is the boundary, not the strictness.** Two different things were being called
+degradation, and separating them is the whole content of the decision:
+
+- A companion that reads a published capability key, finds it false, and declines the action is
+  **conforming to the contract**. `runtime.operationCapabilities` is a committed manifest field
+  emitted by `nixos-modules/lib.nix`, and `docs/reference/zone-cli-contract.md` already binds
+  the shell client to check `runtime.operationCapabilities.guest.shell` before offering a shell
+  action, with `PoolUnavailable` and `FeatureDisabled` as distinct required states. Classifying
+  that as a defect would hold the release on a companion for obeying d2b and would make the
+  capability surface pointless.
+- **Degradation** is the other case: the surface is available and the companion cannot use it.
+  That is what SC-024 names, and it blocks.
+
+| Item | Resolution |
+| --- | --- |
+| CHK033 | **FR-063** added. Every named surface is classified at W8 as **Conformant** (works, or is unavailable through a published capability key or named refusal state, refused actionably, with no fallback), **Blocked** (anything else, including absent, crash, hang, silent wrong result, fallback to another transport or privilege path, unactionable refusal, undocumented workaround, or an outcome that cannot be classified), or **Retired** (a Blocked surface converted to an explicit FR-042 capability retirement decided before the tag). Conformant and Retired ship; Blocked holds. **Unclassified defaults to Blocked**, because an inconclusive exercise and a broken one are indistinguishable from the gate's position. A conformant refusal must name the false capability key and at least one concrete operator action per FR-017; a bare "not supported", a generic retry, a message naming only the companion, and a silently greyed control are each unactionable and therefore Blocked. Retirement is unavailable where FR-041 promised a successor, must carry a justification, an owner, the restoring condition, and a release-note line, and must never be a failed exercise relabelled afterwards. SC-024 was amended to define "verified" as exercised and classified, so it and FR-063 cannot be read against each other. |
+
+**No shipped document changed, and that is a finding rather than a convenience.** The published
+inventory's release-record requirement already reads "the result, including any capability
+refusal or degraded behavior". The shipped page anticipated this classification; the program
+spec was the side missing the rule. Existing docs are canon, so the rule was written to fit the
+evidence shape that already ships.
+
+**Recorded count drift.** Closing CHK033 moves this checklist to 20 of 47. `plan.md`'s Project
+Structure listing says "19/47 as of the W5 pass", written in the pass that closed CHK025 and
+CHK044, and is now one behind. It is left unedited because this change's file ownership is the
+spec, checklist, and companion-contract set; the correction a follow-up should apply is
+"20/47". Recorded here rather than silently fixed, per the standing rule on drift.
+
+**No deprecation ladder was invented.** FR-045 leaves exactly one release, and this repository
+deliberately retired its staged warning, fail-loud, and removal calendar at the clean break -
+`docs/reference/default-switch-and-deprecation.md` is a historical landing page for that
+reason. A retirement is therefore an enumerated, release-note-named fact and not the first step
+of a timeline. The inventory row must not read as verified while a surface is retired, so the
+gap stays visible instead of aging into silence.
+
+**One rule deliberately not written**: a security carve-out. A missing security-key indicator
+or a missing `unsafe-local` no-isolation posture reads to an operator as "no ceremony in
+progress" and "isolated", so a silent absence already lands in the unactionable class and is
+Blocked. The general rule reaches the strict answer on its own; a named exception would only
+create an edge to argue about.

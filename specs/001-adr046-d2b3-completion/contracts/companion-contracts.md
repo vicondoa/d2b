@@ -1,6 +1,6 @@
 # Contract: Desktop companion surfaces
 
-**Requirement**: FR-039, FR-040, FR-045, FR-061, FR-062, SC-024 | **Waves**: W5 publish, W8 verify
+**Requirement**: FR-039, FR-040, FR-041, FR-042, FR-045, FR-061, FR-062, FR-063, SC-024 | **Waves**: W5 publish, W8 verify
 
 ## Why this file exists
 
@@ -37,6 +37,8 @@ resolution that governs when each stage may proceed.
 | CO-4 | Hold the release while any companion lacks a verified compatible version | W8 | Open |
 | CO-5 | Every "surface consumed" cell in the inventory resolves to a committed reference document, schema, or typed definition at a public ref | W5 exit | Open - the W5 exit condition for CO-2 |
 | CO-6 | Carry the companion-adaptation assumption as an unvalidated risk with a mitigation and a detection point, and never restate it as fact | standing | **Done** - FR-062 |
+| CO-7 | Classify every named surface at W8 as Conformant, Blocked, or Retired, defaulting to Blocked when the outcome cannot be classified | W8 | Open - the pass condition CO-3 is measured against |
+| CO-8 | Record any Retired surface on the FR-042 retirement list before the tag, with justification, owner, restoring condition, and a release-note line, and never as a relabelled failure | W8 | Open |
 
 ## The resolution, and what it binds
 
@@ -98,16 +100,123 @@ Absent that, the constraint stands.
 
 ### What this does not close
 
-CHK033 - requirements for *partial or stalled* companion adaptation as a scenario class,
-distinct from the binary block - remains open and unassigned. FR-061 names the two lawful
-outcomes when adaptation stalls; it does not decide whether a release may ship with one
-companion degraded rather than absent, which is a product decision about release scope and
-not a resolution of the FR-039/FR-045 conflict.
+Nothing in the companion family now depends on this item. CHK018 (an objective test for
+"desktop companion that consumes d2b's public operator contracts") and CHK022 (a pass
+condition for "compatible version verified") remain open and unassigned; both are about the
+*membership* and *pass bar* of the inventory rather than about what happens when a member
+falls short, and neither is decided here.
+
+## Partial adaptation: the classification that decides the release
+
+FR-063 answers the question this file previously left open, and the answer is **no**: a
+required companion that is degraded holds the release exactly as an absent one does. What
+changed is not the strictness but the boundary, because two different things were being
+called degradation.
+
+### Conformance is not degradation
+
+`runtime.operationCapabilities` is a committed manifest field, emitted by
+`nixos-modules/lib.nix` and pinned in `docs/reference/manifest-schema.json`.
+`docs/reference/zone-cli-contract.md` already binds the shell client to "check
+`runtime.operationCapabilities.guest.shell` before offering a shell action", and requires
+`PoolUnavailable` and `FeatureDisabled` to render as distinct states.
+
+A companion that reads that key, finds it false, and declines the action is **doing what the
+contract instructs**. Calling that a defect would hold the release on a companion for obeying
+d2b, and would make the capability surface it obeys pointless. Capability discovery is the
+sanctioned way an operator's desktop shrinks: it is configuration-driven, operator-visible,
+and typed.
+
+Degradation is the other case, and it is the one SC-024 names: the surface is available, and
+the companion cannot use it. That is "an operator's desktop degraded by adopting 3.0", and it
+blocks.
+
+### The three outcomes
+
+| Outcome | Condition | Release |
+| --- | --- | --- |
+| **Conformant** | Every surface in the row works, or is unavailable through a published capability key or a named typed refusal state, and the companion refuses with an actionable message and takes no fallback | Ships |
+| **Blocked** | Absent, crashes, hangs, silently wrong, falls back to another transport or privilege path or a legacy shape, refuses unactionably, needs an undocumented workaround, or cannot be classified | Held |
+| **Retired** | A Blocked surface converted to an explicit FR-042 capability retirement, decided before the tag | Ships, named in the release notes |
+
+**No partial credit.** A row with one Blocked surface is Blocked. **Unclassified is Blocked**,
+because an inconclusive exercise and a broken one look the same from the gate.
+
+**No fallback, ever.** This mirrors what the shipped contract already says of the surfaces
+themselves: "there is no SSH, host-shell, per-VM service, or broker-operation fallback for a
+refused shell request", and unknown fields "are refusals, not an invitation to guess a legacy
+shape". A companion that reaches around a refusal is Blocked, not degraded.
+
+### The actionable-refusal bar
+
+A conformant refusal names the capability key or refusal state that is false, **and** at least
+one concrete operator action - an option to set, a command to run, or an artifact to inspect
+(FR-017).
+
+Not actionable, and therefore Blocked:
+
+- a bare "not supported" or "unavailable";
+- a generic retry prompt;
+- a message that names only the companion and not the capability;
+- a silently disabled or greyed control with no explanation.
+
+The last is the one a live-host exercise is most likely to wave through, because a greyed
+button looks deliberate. It is not: the operator cannot tell a configuration choice from a
+broken integration, which is precisely the state this bar exists to reject.
+
+### The safety carve-out, and why it is not a special case
+
+No separate rule is needed for security-relevant surfaces, and it is worth saying why. A
+missing security-key state indicator in `d2b-wlcontrol`, or a missing `unsafe-local`
+no-isolation posture, reads to an operator as "no ceremony in progress" and "isolated". A
+capability-conditional refusal is visible and says so; a silent absence is not, and lands in
+the unactionable class above, which is Blocked. The general rule already produces the strict
+answer, so adding a security exception would only invite argument about its edges.
+
+### Release-gate evidence, exactly
+
+The shipped inventory already requires four items per row, and its fourth is "the result,
+including **any capability refusal or degraded behavior**". That page anticipated this
+classification, so **no shipped document changes**; what follows says how the fourth item is
+populated.
+
+Per row, the release record carries:
+
+1. the exact release candidate exercised;
+2. the companion revision and host integration used;
+3. a live-host exercise of every surface named in the row; and
+4. per surface, the outcome and its classification, plus:
+   - for a capability-conditional refusal: the capability key or refusal state, its observed
+     value, and the refusal text as displayed;
+   - for a Retired surface: the retirement-list entry, its justification, its named owner, the
+     condition that would restore the surface, and the release-note line;
+   - for a Blocked surface: the observed behaviour, which holds the release.
+
+Source inspection, a package version, a green docs check, and the fact that the contracts were
+published at W5 remain excluded as substitutes (FR-040, FR-061).
+
+### Migration and deprecation behaviour
+
+A retirement is an enumerated fact, not a timeline. FR-045 leaves exactly one release, and
+this repository deliberately retired its staged warning, fail-loud, and removal calendar at
+the clean break - `docs/reference/default-switch-and-deprecation.md` is now a historical
+landing page for that reason. Inventing a multi-release deprecation ladder for companions
+would contradict a posture the repository already decided.
+
+So a retirement carries a justification, an owner, the restoring condition, and a release-note
+line, and nothing else. The published inventory row must not read as verified while a surface
+is retired; it reads the retirement, so the gap stays visible rather than aging into silence.
+
+Retirement is unavailable where FR-041 applies: if the capability's migration disposition
+promised a successor, the successor must be obtainable and no retirement substitutes for it.
+And a retirement is decided **before** the tag - relabelling a failed exercise afterwards is
+the one move this whole classification exists to prevent.
 
 ## Acceptance
 
 Every companion in the inventory has a compatible version exercised against the release
-candidate on the daily-driver host before 3.0 is tagged (SC-024). Publication of this
-inventory and of the replacement contracts is not part of that acceptance; it is the
-precondition that makes adaptation possible, and FR-061 forbids reading it as evidence of
-compatibility.
+candidate on the daily-driver host before 3.0 is tagged (SC-024), and every surface it names
+is classified Conformant or Retired under FR-063. Publication of this inventory and of the
+replacement contracts is not part of that acceptance; it is the precondition that makes
+adaptation possible, and FR-061 forbids reading it as evidence of compatibility. A surface
+that is Blocked, including one whose exercise could not be classified, holds the release.

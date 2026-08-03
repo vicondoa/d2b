@@ -567,6 +567,56 @@ artifacts, complete Story 1, and exercise each desktop companion against it.
   - **Escalation**: if the assumption is found wrong for any companion, that finding MUST be
     recorded against this requirement rather than absorbed into a wave's fix round, because
     it changes a program-level premise and not a wave's implementation.
+- **FR-063**: Each companion surface named in the published inventory MUST be classified at
+  W8 into exactly one of three outcomes, and the classification - not the impression a
+  reviewer forms - decides whether the release proceeds.
+
+  **First, the distinction the classification rests on.** A companion that reads a published
+  capability key, finds the capability false, and declines to offer the action is **conforming
+  to the contract**, not degrading. Capability discovery is the sanctioned way an operator's
+  desktop shrinks: `runtime.operationCapabilities` is a committed manifest field, and
+  `docs/reference/zone-cli-contract.md` already binds the shell client to check
+  `runtime.operationCapabilities.guest.shell` before offering a shell action. Treating that as
+  a defect would block the release on a companion doing exactly what d2b told it to do, and
+  would make the capability surface pointless. **Degradation** is the different case: the
+  surface is available and the companion cannot use it.
+
+  | Outcome | Condition | Effect on the release |
+  | --- | --- | --- |
+  | **Conformant** | Every surface named in the row either works, or is unavailable through a published capability key or a typed refusal state the contract already names, and the companion refuses that action with an actionable message and takes no fallback | Ships |
+  | **Blocked** | Anything else: absent, crashes, hangs, silently returns a wrong result, falls back to another transport or privilege path or a legacy shape, refuses without an actionable message, requires an undocumented workaround, or **cannot be classified** | Holds the release (FR-039) |
+  | **Retired** | The operator has converted a Blocked surface into an explicit capability retirement under FR-042 **before the tag** | Ships, with the retirement named in the consumer-facing release notes |
+
+  **A degraded required companion blocks.** SC-024 exists so that an operator's desktop is not
+  degraded by adopting 3.0, and this requirement does not carve an exception into it. There is
+  no tolerance band, no "mostly working" outcome, and no per-surface partial credit: a row with
+  one Blocked surface is Blocked.
+
+  **Fail closed on classification.** Any W8 outcome not positively classified as Conformant or
+  Retired is Blocked. An exercise that was not run, was inconclusive, or produced a result the
+  verifier could not place is Blocked, because an unclassifiable outcome and a broken one are
+  indistinguishable from the release gate's position.
+
+  **Refusal must be actionable, per FR-017.** A conformant refusal MUST name the capability key
+  or refusal state that is false, and MUST name at least one concrete operator action: an option
+  to set, a command to run, or an artifact to inspect. A bare "not supported", a generic retry
+  prompt, a message naming only the companion, and a silently disabled or greyed control with no
+  explanation are each **not** actionable, and a row whose refusal is unactionable is Blocked
+  rather than Conformant.
+
+  **Retirement is the only lawful ship-with-less path, and it is not a reclassification.** A
+  Retired outcome requires an entry on the FR-042 retirement list with a stated justification,
+  a named owner, the condition that would restore the surface, and a line in the consumer-facing
+  release notes. It MUST be decided before the tag; a failed exercise MUST NOT be relabelled as
+  a retirement after the fact. It is unavailable where FR-041 independently applies - if the
+  capability's migration disposition promised a successor, that successor must be obtainable and
+  no retirement may substitute for it. The published inventory row MUST NOT read as verified for
+  a retired surface.
+
+  **No staged deprecation applies.** FR-045 leaves exactly one release, and this repository
+  deliberately retired its staged warning, fail-loud, and removal calendar at the clean break.
+  A retirement is therefore an enumerated, release-note-named fact, never the first step of a
+  multi-release timeline.
 
 ### Key Entities
 
@@ -701,6 +751,9 @@ Delegation is not omission. Every delegated obligation is enumerated in
 - **SC-024**: 100 percent of identified desktop companions that consume d2b's public
   operator contracts have a compatible version verified against the release candidate on a
   live host before 3.0 is tagged, so an operator's desktop is not degraded by adopting 3.0.
+  "Verified" means exercised and classified under FR-063: every named surface is Conformant,
+  or Retired under FR-042 by a decision recorded before the tag. A Blocked surface, including
+  one that could not be classified, holds the release.
 - **SC-026**: All seven remaining waves reach the integration lineage through a pull request
   whose gates passed first, with zero waves landing by direct push or by a gate-bypassing
   local merge, and zero intermediate versions published before 3.0.
@@ -787,4 +840,5 @@ Delegation is not omission. Every delegated obligation is enumerated in
   authored and released by their own maintainers. This program owns identifying the
   companion set, publishing the replacement contracts they need, and verifying them against
   the release candidate; a companion that has not adapted blocks the 3.0 release (FR-039,
-  FR-040).
+  FR-040), and a companion that adapted only partly is classified and blocks on any Blocked
+  surface (FR-063).
