@@ -1,10 +1,18 @@
 # Contract-first cases for the shared nix-unit corpus.
 #
 # The missing-file and duplicate-name probes call the production corpus
-# aggregator directly. The shard map is lexical inside flake.nix, so its
-# coverage probe reads that committed source rather than constructing a
-# second evaluator or scheduler. Pin coverage is checked against the
-# generator's committed output for this file.
+# aggregator directly. Pin coverage is checked against the generator's
+# committed output for this file.
+#
+# Scope note on the shard probe below. It reads the committed flake source
+# and asserts that THIS file appears in the shard map exactly once. That is
+# self-registration only: it says nothing about the other case files and does
+# not prove shard coverage of the corpus. The general bijection - every case
+# file in exactly one shard, no unknown entries, no duplicates - is computed
+# in flake.nix as `nixUnitShardMissingFiles`, `nixUnitShardUnknownFiles`,
+# `nixUnitShardDuplicateFiles` and `nixUnitShardCoverageOk`, and the
+# `nix-unit` integrity check fails closed on it with a JSON report. Do not
+# reimplement that here; a second evaluator would be a second answer.
 { lib
 , pkgs
 , system
@@ -44,7 +52,7 @@ let
   ownCaseNames = [
     "test-infrastructure/shared-corpus-missing-file-rejected"
     "test-infrastructure/shared-corpus-duplicate-name-rejected"
-    "test-infrastructure/shard-coverage-complete"
+    "test-infrastructure/own-shard-registration-unique"
     "test-infrastructure/pin-integrity-complete"
   ];
   unpinnedOwnCases =
@@ -61,7 +69,10 @@ in
     expectedError = { };
   };
 
-  "test-infrastructure/shard-coverage-complete" = {
+  # Self-registration only: this file is named in the flake's shard map
+  # exactly once. Corpus-wide shard coverage is flake.nix's job (see the
+  # header note); this case must not grow into a second implementation of it.
+  "test-infrastructure/own-shard-registration-unique" = {
     expr = {
       missing = shardEntryLines == [ ];
       duplicate = lib.length shardEntryLines > 1;
