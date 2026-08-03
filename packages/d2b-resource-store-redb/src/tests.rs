@@ -1607,6 +1607,9 @@ async fn production_backend_hard_fixture_child() {
         .await
         .expect("production backend hard fixture list");
     assert_eq!(listed.resources.len(), 1);
+    while store.reads.available_permits() != MAX_CONCURRENT_READS {
+        tokio::task::yield_now().await;
+    }
     assert_eq!(store.reads.available_permits(), MAX_CONCURRENT_READS);
 
     let backend_before_replay = store.signals();
