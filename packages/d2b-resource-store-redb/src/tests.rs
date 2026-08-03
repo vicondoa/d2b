@@ -3,6 +3,7 @@ use std::os::fd::{AsFd, AsRawFd};
 use std::os::unix::fs::MetadataExt;
 use std::os::unix::process::CommandExt;
 use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Barrier};
 
 use d2b_contracts::v3::{
@@ -1272,4 +1273,410 @@ fn checked_mutation_constructors_and_raw_commit_path_are_not_public() {
     assert!(source.contains("SealedMutation"));
     assert!(!source.contains("MutationView"));
     assert!(!source.contains("type_name"));
+}
+
+const PRODUCTION_RSS_RESOURCE_COUNT: usize = 10_000;
+const PRODUCTION_RSS_WATCH_COUNT: usize = 100;
+const PRODUCTION_RSS_THRESHOLD_KIB: u64 = 24_576;
+const PRODUCTION_RSS_CHILD_ENV: &str = "D2B_REDB_PRODUCTION_RSS_CHILD";
+const PRODUCTION_RSS_CHILD_MARKER: &str = "PRODUCTION_REDB_FIXTURE";
+
+#[test]
+#[ignore = "run the whole-process production RSS fixture through the public heavy gate"]
+fn production_backend_hard_fixture_rss() {
+    if std::env::var_os(PRODUCTION_RSS_CHILD_ENV).is_some() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("production RSS child runtime");
+        runtime.block_on(production_backend_hard_fixture_child());
+        return;
+    }
+
+    let executable = std::env::current_exe().expect("production RSS test executable");
+    let mut raw_runs = Vec::with_capacity(3);
+    for run in 1..=3 {
+        let output = Command::new("/usr/bin/time")
+            .args([
+                "-v",
+                executable.to_str().expect("test executable is UTF-8"),
+                "--exact",
+                "tests::production_backend_hard_fixture_rss",
+                "--ignored",
+                "--nocapture",
+                "--test-threads=1",
+            ])
+            .env(PRODUCTION_RSS_CHILD_ENV, "1")
+            .output()
+            .expect("GNU time is required for the production RSS fixture");
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            output.status.success(),
+            "production RSS child failed (run {run}):\nstdout:\n{stdout}\nstderr:\n{stderr}"
+        );
+        assert!(
+            stdout.contains(&format!(
+                "{PRODUCTION_RSS_CHILD_MARKER} resources={PRODUCTION_RSS_RESOURCE_COUNT} watches={PRODUCTION_RSS_WATCH_COUNT}"
+            )),
+            "production RSS child did not report the hard fixture (run {run}):\n{stdout}"
+        );
+        let rss = parse_maximum_rss_kib(&stderr);
+        assert!(
+            rss <= PRODUCTION_RSS_THRESHOLD_KIB,
+            "production whole-process RSS run {run} was {rss} KiB, above the unchanged {PRODUCTION_RSS_THRESHOLD_KIB} KiB threshold"
+        );
+        println!("production whole-process RSS run {run}: {rss} KiB");
+        raw_runs.push(rss);
+    }
+
+    raw_runs.sort_unstable();
+    let median = raw_runs[1];
+    assert!(
+        median <= PRODUCTION_RSS_THRESHOLD_KIB,
+        "production whole-process RSS median was {median} KiB, above the unchanged {PRODUCTION_RSS_THRESHOLD_KIB} KiB threshold"
+    );
+    println!(
+        "production whole-process RSS raw runs: {:?}; median: {median} KiB; threshold: {PRODUCTION_RSS_THRESHOLD_KIB} KiB; baseline subtraction: none",
+        raw_runs
+    );
+}
+
+fn parse_maximum_rss_kib(stderr: &str) -> u64 {
+    const FIELD: &str = "Maximum resident set size (kbytes):";
+    stderr
+        .lines()
+        .find_map(|line| {
+            line.strip_prefix(FIELD)
+                .and_then(|value| value.trim().parse::<u64>().ok())
+        })
+        .expect("GNU time did not report whole-process maximum RSS")
+}
+
+async fn production_backend_hard_fixture_child() {
+    let (_directory, file, marker) = provisioned_store();
+    let store_identity = identity();
+    let (issuer, acceptor) = mutation_seal_pair(store_identity.seal_identity());
+    let store = Arc::new(
+        RedbResourceStore::provision_owned(file, marker, store_identity, acceptor)
+            .await
+            .expect("production backend hard fixture store"),
+    );
+    let issuer = Arc::new(issuer);
+    let mut current_revision = 0_u64;
+
+    for chunk_start in (0..PRODUCTION_RSS_RESOURCE_COUNT).step_by(128) {
+        let chunk_end = (chunk_start + 128).min(PRODUCTION_RSS_RESOURCE_COUNT);
+        let mut commits = Vec::with_capacity(chunk_end - chunk_start);
+        for index in chunk_start..chunk_end {
+            let name = format!("hard-host-{index:05}");
+            let canonical = create_body(&name);
+            let payload_digest = canonical_digest(RESOURCE_ENVELOPE_DOMAIN_TAG, &canonical);
+            let body = create_seal_body_with_resource(
+                &format!("hard-create-{index:05}"),
+                &name,
+                canonical,
+                payload_digest,
+            );
+            let store = Arc::clone(&store);
+            let issuer = Arc::clone(&issuer);
+            commits.push(tokio::spawn(async move {
+                store
+                    .commit_verified(issuer.seal(body))
+                    .await
+                    .expect("production backend hard fixture mutation")
+            }));
+        }
+        for commit in commits {
+            current_revision = current_revision.max(
+                commit
+                    .await
+                    .expect("production backend hard fixture task")
+                    .revision
+                    .get(),
+            );
+        }
+    }
+    assert!(current_revision > 0);
+
+    assert_eq!(WRITE_QUEUE_CAPACITY, 256);
+    assert_eq!(GROUP_COMMIT_MAX, 16);
+    assert_eq!(READ_POOL_THREADS, 4);
+    assert_eq!(MAX_CONCURRENT_READS, 16);
+    assert_eq!(READ_LIFETIME, std::time::Duration::from_millis(250));
+    let listed = store
+        .list(StoreListRequest {
+            operation: operation("production-hard-list"),
+            zone: ZoneId::parse("work").unwrap(),
+            resource_types: vec![ResourceTypeName::parse("Host").unwrap()],
+            resource_names: Vec::new(),
+            filters: Vec::new(),
+            page_size: 1,
+            cursor: None,
+            projection: StoreProjection::MetadataOnly,
+        })
+        .await
+        .expect("production backend hard fixture list");
+    assert_eq!(listed.resources.len(), 1);
+    assert_eq!(store.reads.available_permits(), MAX_CONCURRENT_READS);
+
+    let backend_before_replay = store.signals();
+    let replay_batches = Arc::new(AtomicU64::new(0));
+    let replay_entries = Arc::new(AtomicU64::new(0));
+    let replay_batches_for_visit = Arc::clone(&replay_batches);
+    let replay_entries_for_visit = Arc::clone(&replay_entries);
+    store
+        .replay_backend(
+            d2b_contracts::v3::ZoneRevision::new(current_revision.saturating_sub(1)).get(),
+            [ResourceTypeName::parse("Host").unwrap()],
+            move |batch| {
+                replay_batches_for_visit.fetch_add(1, Ordering::Relaxed);
+                replay_entries_for_visit.fetch_add(
+                    u64::try_from(batch.entries().len()).expect("replay entry count"),
+                    Ordering::Relaxed,
+                );
+                Ok(())
+            },
+        )
+        .await
+        .expect("production backend hard fixture replay");
+    let backend_after_replay = store.signals();
+    assert_eq!(
+        backend_after_replay.revision_range_seeks - backend_before_replay.revision_range_seeks,
+        1
+    );
+    assert_eq!(
+        backend_after_replay.replay_rows_scanned - backend_before_replay.replay_rows_scanned,
+        1
+    );
+    assert_eq!(
+        backend_after_replay.replay_rows_decoded - backend_before_replay.replay_rows_decoded,
+        1
+    );
+    assert_eq!(replay_batches.load(Ordering::Relaxed), 1);
+    assert!(replay_entries.load(Ordering::Relaxed) > 0);
+
+    let (replay_receipt, mut replay_stream) = store
+        .watch_stream(StoreWatchRequest {
+            operation: operation("production-hard-replay-watch"),
+            zone: ZoneId::parse("work").unwrap(),
+            resource_types: vec![ResourceTypeName::parse("Host").unwrap()],
+            resource_names: Vec::new(),
+            filters: Vec::new(),
+            after_revision: d2b_contracts::v3::ZoneRevision::new(current_revision - 1),
+            initial_credits: 2,
+            projection: StoreProjection::Full,
+        })
+        .await
+        .expect("production watch replay registration");
+    let replay_batch = replay_stream
+        .recv()
+        .await
+        .expect("production watch replay delivery");
+    assert_eq!(replay_batch.revision(), replay_receipt.snapshot_revision);
+    store
+        .acknowledge_watch(replay_stream.id(), replay_receipt.snapshot_revision)
+        .await
+        .expect("production watch replay acknowledgement");
+    assert_eq!(
+        store
+            .watch_signals()
+            .expect("production watch replay signals")
+            .replay_work,
+        1
+    );
+    store
+        .unregister_watch(replay_stream.id())
+        .await
+        .expect("production watch replay unregister");
+
+    let mut watchers = Vec::with_capacity(PRODUCTION_RSS_WATCH_COUNT);
+    for index in 0..PRODUCTION_RSS_WATCH_COUNT {
+        let (receipt, stream) = store
+            .watch_stream(StoreWatchRequest {
+                operation: operation(&format!("production-hard-watch-{index:03}")),
+                zone: ZoneId::parse("work").unwrap(),
+                resource_types: vec![ResourceTypeName::parse("Host").unwrap()],
+                resource_names: Vec::new(),
+                filters: Vec::new(),
+                after_revision: d2b_contracts::v3::ZoneRevision::new(current_revision),
+                initial_credits: 2,
+                projection: StoreProjection::Full,
+            })
+            .await
+            .expect("production watch hard fixture registration");
+        assert_eq!(
+            receipt.snapshot_revision,
+            d2b_contracts::v3::ZoneRevision::new(current_revision)
+        );
+        watchers.push(stream);
+    }
+    let registered = store
+        .watch_signals()
+        .expect("production watch registration signals");
+    assert_eq!(
+        registered.current_registrations,
+        PRODUCTION_RSS_WATCH_COUNT as u64
+    );
+    assert_eq!(registered.budget_used, 0);
+    assert_eq!(registered.budget_capacity, WATCH_ADMISSION_CAPACITY as u64);
+
+    let backend_before_fanout = store.signals();
+    let fanout_commit =
+        commit_fixture_resource(&store, &issuer, "production-hard-fanout", "hard-fanout").await;
+    let mut shared_batch = None;
+    for watcher in &mut watchers {
+        let batch = watcher
+            .recv()
+            .await
+            .expect("production watch hard fixture fan-out delivery");
+        assert_eq!(batch.revision(), fanout_commit.revision);
+        if let Some(first) = &shared_batch {
+            assert!(first.shares_batch_with(&batch));
+        } else {
+            shared_batch = Some(batch);
+        }
+    }
+    let after_fanout = store.watch_signals().expect("production fan-out signals");
+    assert_eq!(after_fanout.budget_used, PRODUCTION_RSS_WATCH_COUNT as u64);
+    assert_eq!(
+        after_fanout.current_registrations,
+        PRODUCTION_RSS_WATCH_COUNT as u64
+    );
+    let backend_after_fanout = store.signals();
+    assert_eq!(
+        backend_after_fanout.shared_immutable_batches
+            - backend_before_fanout.shared_immutable_batches,
+        1
+    );
+    assert_eq!(
+        backend_after_fanout.fanout_references - backend_before_fanout.fanout_references,
+        PRODUCTION_RSS_WATCH_COUNT as u64
+    );
+    assert_eq!(backend_after_fanout.writer_queue_depth, 0);
+    current_revision = fanout_commit.revision.get();
+
+    for watcher in watchers.drain(..) {
+        let id = watcher.id();
+        store
+            .acknowledge_watch(id, fanout_commit.revision)
+            .await
+            .expect("production watch hard fixture acknowledgement");
+        store
+            .unregister_watch(id)
+            .await
+            .expect("production watch hard fixture unregister");
+    }
+    assert_eq!(
+        store
+            .watch_signals()
+            .expect("production watch post-fan-out signals")
+            .budget_used,
+        0
+    );
+
+    let rejected = store
+        .watch_stream(StoreWatchRequest {
+            operation: operation("production-hard-rejected-watch"),
+            zone: ZoneId::parse("work").unwrap(),
+            resource_types: vec![ResourceTypeName::parse("Host").unwrap()],
+            resource_names: Vec::new(),
+            filters: Vec::new(),
+            after_revision: d2b_contracts::v3::ZoneRevision::new(current_revision),
+            initial_credits: 0,
+            projection: StoreProjection::Full,
+        })
+        .await
+        .expect_err("zero-credit production watch must be rejected");
+    assert_eq!(
+        rejected.kind(),
+        d2b_resource_store::StoreErrorKind::StoreBackpressure
+    );
+
+    let slow_start = current_revision;
+    let (_slow_receipt, slow_stream) = store
+        .watch_stream(StoreWatchRequest {
+            operation: operation("production-hard-slow-watch"),
+            zone: ZoneId::parse("work").unwrap(),
+            resource_types: vec![ResourceTypeName::parse("Host").unwrap()],
+            resource_names: Vec::new(),
+            filters: Vec::new(),
+            after_revision: d2b_contracts::v3::ZoneRevision::new(slow_start),
+            initial_credits: 1,
+            projection: StoreProjection::Full,
+        })
+        .await
+        .expect("production slow watch registration");
+    let slow_id = slow_stream.id();
+    let _slow_first = commit_fixture_resource(
+        &store,
+        &issuer,
+        "production-hard-slow-first",
+        "hard-slow-first",
+    )
+    .await;
+    let _slow_second = commit_fixture_resource(
+        &store,
+        &issuer,
+        "production-hard-slow-second",
+        "hard-slow-second",
+    )
+    .await;
+    let watch_signals = store.watch_signals().expect("production watch signals");
+    assert!(watch_signals.admission_rejections >= 1);
+    assert!(watch_signals.slow_watcher_evictions >= 1);
+    assert_eq!(watch_signals.current_registrations, 0);
+    assert_eq!(watch_signals.budget_used, 0);
+    assert_eq!(
+        store
+            .watch_coordinator
+            .lock()
+            .expect("production watch coordinator")
+            .take_resume_cursor(slow_id),
+        Some(d2b_contracts::v3::ZoneRevision::new(slow_start))
+    );
+    assert_eq!(store.signals().writer_queue_depth, 0);
+
+    let backend_signals = store.signals();
+    println!(
+        "{PRODUCTION_RSS_CHILD_MARKER} resources={PRODUCTION_RSS_RESOURCE_COUNT} watches={PRODUCTION_RSS_WATCH_COUNT} range_seeks={} decoded_rows={} shared_batches={} fanout_references={} queue_depth={} queue_capacity={} read_pool_threads={} max_concurrent_reads={} slow_watcher_evictions={} admission_rejections={} replay_work={}",
+        backend_signals.revision_range_seeks,
+        backend_signals.replay_rows_decoded,
+        backend_signals.shared_immutable_batches,
+        backend_signals.fanout_references,
+        backend_signals.writer_queue_depth,
+        backend_signals.writer_queue_capacity,
+        READ_POOL_THREADS,
+        MAX_CONCURRENT_READS,
+        watch_signals.slow_watcher_evictions,
+        watch_signals.admission_rejections,
+        watch_signals.replay_work,
+    );
+    drop(slow_stream);
+    drop(replay_stream);
+    drop(issuer);
+    let store = Arc::try_unwrap(store).expect("production hard fixture store references");
+    store
+        .shutdown()
+        .await
+        .expect("production hard fixture store shutdown");
+}
+
+async fn commit_fixture_resource(
+    store: &RedbResourceStore,
+    issuer: &d2b_resource_store::mutation_seal::MutationSealIssuer,
+    operation_id: &str,
+    name: &str,
+) -> d2b_resource_store::StoreCommitResult {
+    let canonical = create_body(name);
+    let payload_digest = canonical_digest(RESOURCE_ENVELOPE_DOMAIN_TAG, &canonical);
+    store
+        .commit_verified(issuer.seal(create_seal_body_with_resource(
+            operation_id,
+            name,
+            canonical,
+            payload_digest,
+        )))
+        .await
+        .expect("production fixture mutation")
 }
