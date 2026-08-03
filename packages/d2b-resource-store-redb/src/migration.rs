@@ -204,11 +204,11 @@ fn recover_owned_inner(
     match state {
         PublicationState::Empty => Ok(RecoveryOutcome::Clean),
         PublicationState::ActiveOnly => {
-            validate_named_current(parent, DEFAULT_ACTIVE_FILE_NAME, identity)?;
+            validate_named_supported(parent, DEFAULT_ACTIVE_FILE_NAME, identity)?;
             Ok(RecoveryOutcome::Clean)
         }
         PublicationState::ActiveAndStaged => {
-            validate_named_current(parent, DEFAULT_ACTIVE_FILE_NAME, identity)?;
+            validate_named_supported(parent, DEFAULT_ACTIVE_FILE_NAME, identity)?;
             validate_named_current(parent, DEFAULT_STAGED_FILE_NAME, identity)?;
             publish_with_rollback(parent, None, identity)?;
             validate_named_current(parent, DEFAULT_ACTIVE_FILE_NAME, identity)?;
