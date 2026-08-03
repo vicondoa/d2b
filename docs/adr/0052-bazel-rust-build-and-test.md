@@ -698,14 +698,34 @@ repository/download cache. Each is bounded and each is reclaimable.
   base or its hash, a user identifier, a process identifier, or any opaque
   handle, because a refusal gets pasted into issues and chat and those values
   describe a person's machine rather than the defect. The remediation is
-  exact, repository-relative, and the same three steps under every code: run
-  `D2B_CLEAN_DRY_RUN=1 make clean` to see the sweep without removing anything,
-  correct the tracked or symlinked entries it reports under `.scratch/bazel/`,
-  then rerun `make clean`. That dry run is the sanctioned place for local
-  paths to appear, because it runs on the operator's own machine at their
-  request and writes to their terminal rather than into a shared log. Nothing
-  is deleted against a live server tree. Section 14 carries the tests that
-  make each of these refusals and the descriptor discipline mechanical. This
+  exact, repository-relative, and **specific to the code**, because one
+  generic remedy is wrong for at least one of the four: a dry run tells an
+  operator nothing about a live server, and "correct the tracked or symlinked
+  entry" is not an action a `D2B-BZLCLEAN-LIVE` refusal can take. Each code
+  names its own steps and only those:
+
+  - `D2B-BZLCLEAN-TRACKED`: run `D2B_CLEAN_DRY_RUN=1 make clean` to see the
+    sweep without removing anything, remove or relocate the unexpected
+    tracked entry from `.scratch/bazel/` as appropriate, then rerun
+    `make clean`.
+  - `D2B-BZLCLEAN-SYMLINK` and `D2B-BZLCLEAN-ESCAPE`: run
+    `D2B_CLEAN_DRY_RUN=1 make clean`, replace the offending symlink or magic
+    link, or the escaping layout, under `.scratch/bazel/` with an ordinary
+    contained directory, then rerun `make clean`.
+  - `D2B-BZLCLEAN-LIVE`: close any Bazel clients running against this
+    worktree, run `make bazel-shutdown`, then rerun `make clean`. Neither a
+    dry run nor an edit under `.scratch/bazel/` is part of this remedy: the
+    tree belongs to a live server until the shutdown completes, which is
+    exactly why nothing there may be corrected first.
+
+  Every step above is repository-relative and names nothing outside
+  `.scratch/bazel/` and the two Make targets, so no remedy can leak a path, a
+  process identifier or an opaque handle by being followed. The dry run is the
+  sanctioned place for local paths to appear, because it runs on the
+  operator's own machine at their request and writes to their terminal rather
+  than into a shared log. Nothing is deleted against a live server tree.
+  Section 14 carries the tests that make each of these refusals and the
+  descriptor discipline mechanical. This
   is local developer disk reclamation, running as the invoking user inside a
   gitignored directory it already owns: it is deliberately not a privileged
   operation, not a broker op, and not a new host mutation surface.
@@ -799,10 +819,12 @@ produce a different key rather than a subtly stale cache.
 branch pushes restore, run, trim, and publish exactly one refreshed snapshot,
 from exactly one job. This is stronger than the current path, which does
 publish pull-request-ref entries; that is measured, is a contributing cause of
-the full cache, and is not carried forward. A structural assertion in
-`packages/xtask/tests/policy_ci.rs` fails closed when any workflow reaches a
-saving cache action on a `pull_request` event, so the policy is enforced by a
-test rather than by review attention.
+the full cache, and is not carried forward. A structural assertion added to
+`packages/xtask/tests/policy_ci.rs` by this implementation - that file owns
+the approved-target list and the workflow allowlist today, and carries no
+cache policy yet - fails closed when any workflow reaches a saving cache
+action on a `pull_request` event, so the policy is enforced by a test rather
+than by review attention.
 
 That assertion is worthless without proof that it can fail, because a checker
 that always returns clean passes against a compliant repository. It therefore
@@ -1035,13 +1057,27 @@ contributor is left to guess. The enforcement is in band and actionable.
   converts the first field through the same repository-owned parser the
   capture used, rounding this conversion **up** rather than truncating, the
   mirror of the capture's rounding, so both conversion errors move the bound
-  earlier. It computes `remaining_ms = deadline_ms - now_ms` with checked
-  arithmetic, treating overflow, underflow or a non-representable result as a
-  bad value and refusing on it. If `remaining_ms` is zero or negative the
-  target fails immediately, before starting any work, with the same
-  actionable budget report the expiry path prints: the elapsed duration
-  against the ceiling, the target that was about to run, and the two
-  authorized remedies below. Only that relative remaining duration is passed
+  earlier. It computes `remaining_ms = deadline_ms.checked_sub(now_ms)` in
+  unsigned integer milliseconds. **A `None` here is an expired budget, not a
+  bad value.**
+  Unsigned `checked_sub` returns `None` under exactly one condition,
+  `now_ms > deadline_ms`, which is the ordinary outcome of a job that used
+  its whole window, and reporting it as malformed input would send a
+  contributor whose job merely ran long to inspect an input that was
+  perfectly well formed. `None` and `Some(0)` therefore take the same normal
+  expired-budget path: the target fails immediately, before starting any
+  work, with the same actionable budget report the expiry path prints - the
+  elapsed duration against the ceiling, the target that was about to run, and
+  the two remedies pre-authorized for a missed ceiling below. Bad-value
+  refusal is reserved for the cases that really are malformed input or a
+  broken domain: a `/proc/uptime` field the shared parser rejects, a
+  conversion that overflows, and a deadline control that is present but
+  non-numeric, signed, or not representable as an unsigned millisecond
+  count. Those refuse with the parse or domain message and, as everywhere
+  else, without echoing the value. An **absent** control is neither of those
+  and is not a refusal at all; it is the unbounded local default named at the
+  end of this bullet. Only the relative remaining duration of a surviving
+  `Some(n)` with `n > 0` is passed
   to the child-bounding mechanism, and it is rounded **down** to whatever
   granularity that mechanism accepts, so a rounding step can only shorten the
   bound and can never lift the total above the ceiling. The absolute deadline
@@ -1066,26 +1102,56 @@ contributor is left to guess. The enforcement is in band and actionable.
   SIGTERM, then SIGKILL after a fixed grace. **It reaps the direct child at
   no point before that final group SIGKILL.** A process group outlives its
   leader, so a leader that exits during the grace period can still have
-  descendants running, and reaping it there releases the process identifier
-  that is also the group identifier and discards the only handle the
-  escalation has. The wrapper therefore leaves an exited leader unreaped, a
-  zombie whose PID and PGID the kernel cannot reuse while it stays unreaped,
-  and observes the exit **without consuming it** - `waitid` with
-  `WEXITED|WNOWAIT`, which is `rustix::process::waitid` with
-  `WaitIdOptions::EXITED | WaitIdOptions::NOWAIT` and needs no first-party
-  `unsafe`, or an equivalent non-consuming wait - so an early exit may cut
-  the grace short but never ends the escalation. After the final group
-  SIGKILL, and only then, it reaps the direct child.
+  descendants running, and the escalation must therefore run to its end
+  whenever the leader exits. Holding the leader unreaped until after the
+  final SIGKILL is a deliberately conservative requirement, and the reason is
+  not the one an earlier draft of this ADR gave: reaping the leader does
+  **not** by itself cost the escalation its group. Measured below, the group
+  stayed addressable and a group SIGKILL still reached a surviving descendant
+  after the leader had been reaped. The requirement stands because it removes
+  the identifier-reuse question rather than answering it per kernel. While
+  the leader is held, its identifier - which is also the group identifier -
+  cannot be recycled under any scheduling, so the wrapper never has to reason
+  about which descendant happens to be keeping the group alive at the moment
+  it signals. The cost is one delayed `wait`.
+
+  The wrapper therefore leaves an exited leader unreaped and observes the
+  exit **without consuming it and without blocking** - `waitid` with
+  `WEXITED|WNOWAIT|WNOHANG`, which is `rustix::process::waitid` with
+  `WaitidOptions::EXITED | WaitidOptions::NOWAIT | WaitidOptions::NOHANG`
+  and needs no first-party `unsafe`, or an equivalent non-consuming,
+  non-blocking wait. All three flags are load-bearing. `EXITED` selects the
+  transition being polled. `NOWAIT` leaves the leader in a waitable state, so
+  the observation does not consume the status and the escalation keeps its
+  handle. `NOHANG` is what makes the observation a poll rather than a wait:
+  without it the call parks in the kernel until the leader exits, so a leader
+  that has not exited when the grace timer should fire holds the wrapper
+  inside `waitid` and the grace period stops being a bound the wrapper
+  controls. With it, a poll against a leader that has not exited returns
+  immediately reporting no state change - `Ok(None)` from that rustix
+  signature, which is a result and not an error - so the wrapper polls,
+  waits against its own grace deadline, and escalates on schedule whether or
+  not the leader ever exits. An early exit may cut the grace short; nothing
+  ends the escalation early. After the final group SIGKILL, and only then, it
+  reaps the direct child.
 
   Measured on the reference host on 2026-08-02, Linux 7.0.10, because this is
-  the step the correction turns on. With the leader held as an unreaped
-  zombie, `kill(-pgid, 0)` returns 0 whether or not a descendant survives,
-  and returns ESRCH only after the leader is reaped; a repeated
-  `waitid(WEXITED|WNOWAIT)` returns the same exit status twice, so the
-  observation does not consume it; the group SIGKILL reaches a descendant the
-  exited leader left behind; and a group SIGKILL whose only remaining member
-  is the held zombie returns 0 and does nothing. Two consequences are
-  binding. The final SIGKILL is **unconditional**, because a liveness probe
+  the step the correction turns on. Against a still-running leader,
+  `waitid(WEXITED|WNOWAIT|WNOHANG)` returned in under a millisecond reporting
+  no state change (`si_pid == 0`), while the same call without `WNOHANG`
+  blocked for the leader's entire remaining lifetime, 1.400 seconds in the
+  probe; that is the grace-timer overrun `NOHANG` exists to prevent. With the
+  leader held as an unreaped zombie, `kill(-pgid, 0)` returns 0 whether or not
+  a descendant survives; a repeated `waitid(WEXITED|WNOWAIT|WNOHANG)` returns
+  the same exit status twice, so the observation does not consume it; the
+  group SIGKILL reaches a descendant the exited leader left behind; and a
+  group SIGKILL whose only remaining member is the held zombie returns 0 and
+  does nothing, leaving that zombie's recorded exit status unchanged. The
+  measurement that corrects the earlier draft: after the leader was reaped
+  while a descendant was still running, `kill(-pgid, 0)` still returned 0 and
+  a group SIGKILL still killed that descendant, and ESRCH appeared only once
+  the group held no member at all. Two consequences are binding. The final
+  SIGKILL is **unconditional**, because a liveness probe
   cannot report an empty group while the wrapper is holding the leader, so
   there is nothing for a conditional to read; and it is free, because
   signalling a group down to its held zombie is a no-op. The single skip this
@@ -1125,13 +1191,22 @@ contributor is left to guess. The enforcement is in band and actionable.
   and its identifier may already belong to something else. If
   `make bazel-shutdown` does not clear it, the escalation is a bug report
   carrying that code, not a manual kill. The job-level `timeout-minutes` below
-  stays the backstop for a runner still stuck after all of that. In every path
-  the target prints the measured duration against the ceiling and the target
-  that was executing - never the raw deadline value, an output base, a path or
-  a process identifier - and exits nonzero naming only the two pre-authorized
-  remedies below. It never prints "relax the ceiling", because that is not an
-  available remedy. Section 14 carries the tests that make the group
-  discipline, the deadline conversion and the message redaction mechanical.
+  stays the backstop for a runner still stuck after all of that. **On a
+  missed ceiling, and only there,** the target prints the measured duration
+  against the ceiling and the target that was executing - never the raw
+  deadline value, an output base, a path or a process identifier - and exits
+  nonzero naming only the two remedies pre-authorized for a ceiling miss
+  below. It never prints "relax the ceiling", because that is not an
+  available remedy. That restriction is scoped to the performance ceiling and
+  to nothing else. It does not suppress, replace or shorten the recovery
+  steps any other failure names: a `D2B-BZLSERVER-STUCK` failure still names
+  its two steps, close other Bazel clients and run `make bazel-shutdown`, and
+  a cleanup refusal still names the per-code remedy section 8 gives it. Those
+  are static recovery actions for an operation that refused or did not
+  complete, not remediations for a budget that was exceeded, and the two
+  lists never merge in either direction. Section 14 carries the tests that
+  make the group discipline, the deadline conversion and the message
+  redaction mechanical.
 - *Backstop.* The job keeps a `timeout-minutes` slightly above the ceiling,
   17 against a 15-minute ceiling with a 2-minute checkout allowance, purely so
   a dead runner is still reaped. The in-band deadline is the failure a
@@ -1150,7 +1225,10 @@ raise the runner class for the Bazel Rust jobs, or split a slice further while
 keeping slices disjoint and keeping the surface-to-target map one-to-one.
 Reducing coverage, reclassifying an enforcing surface as advisory, moving a
 surface out of the Rust gate, and relaxing a ceiling are **not** authorized and
-require a superseding ADR.
+require a superseding ADR. This pair is the closed remedy list for a *ceiling
+miss* and for nothing else. The recovery steps a cleanup refusal or a
+`D2B-BZLSERVER-STUCK` failure names are not remediations under this rule, are
+not constrained by it, and are never replaced by it.
 
 **Honest expectation.** The cold ceilings are ambitious against the measured
 baseline. The workflow's own comment puts a cold Rust-profile job at about 43
@@ -1297,8 +1375,13 @@ Layer-1 Rust tests in the crate that owns the plumbing, carried by the
 `rust-main-workspace-tests` surface and therefore by `//ci/rust:main_tests`
 after migration; source-shape assertions extend
 `packages/d2b-contract-tests/tests/policy_docs.rs`, carried by `test-policy`;
-workflow-shape assertions extend `packages/xtask/tests/policy_ci.rs`, which
-already owns the approved-target list and the cache writer-policy assertion.
+workflow-shape assertions extend `packages/xtask/tests/policy_ci.rs`. That
+file today owns `APPROVED_MAKE_TARGETS` and the `ALLOWLISTED_WORKFLOWS`
+allowlist and nothing else relevant here; the cache writer-policy assertion of
+section 10 and its committed fixtures under
+`packages/xtask/tests/fixtures/ci/` do **not** exist there today and are added
+to it by this implementation, in the same change as the six new approved
+targets.
 **No new top-level shell gate is added**: a new gate would mean a new Layer-1
 job, a new required-context question, and a new bash surface ADR 0017
 forbids, to carry assertions three existing surfaces already carry. Nothing
@@ -1314,6 +1397,15 @@ removed, and every removal is descriptor-relative. Descriptor discipline: the
 helper execs a planted child that enumerates its own `/proc/self/fd` and
 reports what it inherited; the test fails when any cleanup descriptor appears
 there, which is what proves `O_CLOEXEC` rather than asserting it was written.
+**The `O_CLOEXEC` mutation belongs to that behavioural test**, not to the
+source scan: run against a planted cleanup variant that opens one descriptor
+without `O_CLOEXEC` - the anchor, a traversal descriptor, or the
+`O_DIRECTORY|O_RDONLY` reopen used for enumeration, one case per position -
+the planted child must observe the leaked descriptor in its own
+`/proc/self/fd` and the exec-inheritance case must fail. That is the only
+placement where the mutation proves anything, because the property under test
+is what a child actually inherits across `exec`, and only a child that
+enumerates its own descriptors can observe it.
 The `openat2` route and the component-by-component `openat` fallback are
 exercised as separate cases, with the fallback forced even where `openat2` is
 available, so the fallback's flags are covered on every kernel the gate runs
@@ -1323,12 +1415,17 @@ asserts the exact static code, asserts that the planted tree is unchanged
 afterwards, and asserts the refusal never widened to the anchor or above it.
 Race: the subtree name is replaced by a symlink to a decoy tree after the
 anchor descriptor is opened; the decoy must be untouched, which is the
-property string re-resolution cannot deliver. Negative: the existing
-`policy_docs.rs` marker set that requires `openat` and `unlinkat` and bans
-path-based recursive cleanup is extended to cover the new cleanup source, and
-is proved failing against planted mutations of that source that substitute a
-path-based recursive removal and that drop `O_CLOEXEC` from one descriptor,
-in the same in-test mutation-fixture idiom that file already uses.
+property string re-resolution cannot deliver. Negative, source shape: the
+existing `policy_docs.rs` marker set that requires `openat` and `unlinkat`
+and bans path-based recursive cleanup is extended to cover the new cleanup
+source, and is proved failing against a planted mutation of that source that
+substitutes a path-based recursive removal, in the same in-test
+mutation-fixture idiom that file already uses. The source policy is kept for
+the deletion idiom because a path-based recursive remove is a shape a scan
+can see. It is deliberately **not** kept as the proof of `O_CLOEXEC`: a
+marker scan cannot distinguish a flag that is written from a flag that
+reaches the descriptor that matters, so it would pass a variant that sets
+`O_CLOEXEC` on three descriptors and leaks the fourth.
 
 **Timeout wrapper.** The tests spawn planted children, never a real Bazel
 client, so they cost milliseconds, cannot be perturbed by a live server, and
@@ -1336,43 +1433,88 @@ stay correct once these very tests are themselves scheduled by Bazel. The
 Bazel client's process group identifier differs from
 the wrapper's own and equals the child's process identifier. A sibling
 process placed in the wrapper's own group is still alive after expiry, which
-is what proves the wrapper did not signal its own group. A leader that exits
-during the grace period is still in a waitable, unreaped state at the moment
-the final group SIGKILL is sent, observed non-destructively, and is reaped
-only after it; a descendant that ignores SIGTERM and outlives the leader is
-dead once escalation completes. A decoy process whose identifier is planted
+is what proves the wrapper did not signal its own group.
+
+*Escalation order is tested as order, not as a race.* The wrapper's
+signalling and waiting sit behind a small process backend, and the order test
+drives it with a recording fake that logs every call in sequence. It asserts
+the exact order `group SIGTERM` -> non-consuming, non-blocking observation
+across the grace -> `group SIGKILL` -> reap of the direct child; that no reap
+call appears anywhere before the group SIGKILL; that the observation calls
+carry `EXITED|NOWAIT|NOHANG` and never consume; and that every signal call
+names the dedicated group and never the wrapper's own group, group zero or
+group -1. A state-machine test over the same backend is an acceptable
+equivalent provided it asserts the same ordering and the same absence.
+
+*The real-process cases stay, and prove what only real processes can.* A
+descendant that ignores SIGTERM and outlives the leader is dead once
+escalation completes, which proves the final group SIGKILL actually reaches
+descendants; a leader that exits during the grace period is observed
+non-destructively and is still waitable at the moment that SIGKILL is sent.
+That surviving-descendant case is a positive for the unconditional final
+SIGKILL and is deliberately **not** the early-reap negative, because on the
+measured kernel an early reap does not by itself make the group
+unaddressable, so the case can stay green against an early-reap mutation.
+
+A decoy process whose identifier is planted
 in a server PID file inside a scratch output base is alive and unsignalled
 after expiry, and the policy surface asserts the wrapper source carries no
 server PID path literal and no signal aimed at a value read from a file. The
 `bazel shutdown` that follows is issued with the same startup options under
 its own bound, with a planted stub that never returns producing
 `D2B-BZLSERVER-STUCK` within that bound rather than hanging or escalating to
-a raw signal. Negative: run against a planted variant that reaps the leader
-during the grace period, the surviving-descendant case must fail, and run
-against a variant that signals the planted server identifier, the
-decoy-alive case must fail; a guard that stays green against either mutation
-is not enforcing.
+a raw signal.
 
-**Deadline conversion.** Table-driven over the parser both ends share: a
-well-formed reading with the measured two fractional digits converts to the
-expected millisecond count; a field with no fractional part, a missing field,
-an empty field, a sign, an exponent, a second separator, non-ASCII digits,
-and trailing content are each refused; a value that overflows the checked
-conversion is refused. Every refusal asserts the message does not contain the
+Negative: four planted mutations, each of which a named case above must fail
+against, and a guard that stays green against any of them is not enforcing.
+
+- A variant that reaps the leader as soon as it exits: the **order test**
+  must fail, on the reap call preceding the group SIGKILL. This is the
+  early-reap negative, and it is deliberately not carried by the
+  surviving-descendant case.
+- A variant that omits `process_group(0)` before exec, so the child inherits
+  the wrapper's group: the sibling-survival case must fail, because the
+  sibling planted in the wrapper's own group is killed by the expiry signal.
+- A variant that signals the wrapper's own process group identifier directly
+  while still spawning the child into its dedicated group: the
+  sibling-survival case must fail here too. This mutation exists separately
+  because it is the failure that survives a correct spawn, and a test that
+  only checks group creation would miss it.
+- A variant that signals the planted server identifier read from the PID
+  file: the decoy-alive case must fail.
+
+**Deadline conversion.** Table-driven over the parser both ends share, and
+the table tests the grammar the parser actually accepts rather than a
+stricter one. Accepted: a well-formed reading with the measured two
+fractional digits converts to the expected millisecond count, **and a field
+with no fractional part at all converts to an exact multiple of one thousand
+milliseconds**, because the grammar is `<digits>` optionally followed by `.`
+and one or more digits, so the fractional part is optional and an integer
+field is well formed. Refused: a missing field, an empty field, a separator
+with no digits after it, a sign, an exponent, a second separator, non-ASCII
+digits, and any trailing content; and a value that overflows the checked
+conversion. Every refusal asserts the message does not contain the
 rejected input. Rounding direction is asserted, not assumed: capture
 truncates, read rounds up, the child timeout rounds down, and a case built
-from the 15-minute ceiling asserts the resulting bound never exceeds it.
-Negative: a planted variant that parses with a floating-point conversion, and
-one that rounds the child timeout up, are both rejected.
+from the 15-minute ceiling asserts the resulting bound never exceeds it. A
+separate case asserts that a `deadline_ms.checked_sub(now_ms)` of `None` and
+a result of `Some(0)` both take the expired-budget path with the duration
+report and the ceiling-miss remedies, and that neither is reported as a bad
+value. Negative: a planted variant that parses with a floating-point
+conversion, one that rounds the child timeout up, one that refuses the
+integer field, and one that reports an expired budget as malformed input are
+all rejected.
 
 **Recovery messages.** Table-driven over every refusal path in sections 8 and
 11: each is fed an absolute worktree path, an output-base hash, a process
 identifier, a raw deadline value, and an opaque handle, and the emitted
 message is asserted to contain none of those planted values as a substring,
 to contain the exact static code, and to contain the repository-relative
-remedy that code names. Negative: a planted message variant that interpolates
-the rejected path, and one that omits the remedy, must both be rejected,
-which is what proves the redaction assertion is not vacuous.
+remedy that section 8 maps to that code and not the remedy of another code.
+Negative: a planted message variant that interpolates
+the rejected path, one that omits the remedy, and one that answers
+`D2B-BZLCLEAN-LIVE` with the tracked-entry remedy, must all be rejected,
+which is what proves the redaction and per-code assertions are not vacuous.
 
 ## Consequences
 
@@ -1521,12 +1663,18 @@ provides each binary.
   evaluation is not.
 - **A custom local resource to serialize the broker suites.** Rejected on
   measurement, not on design: it does not serialize anything in Bazel 8.6.0.
-- **Reaping the timed-out Bazel client as soon as it exits, then stopping.**
-  Rejected on measurement: a process group outlives its leader, and reaping
-  the leader during the SIGTERM grace releases the identifier the escalation
-  signals through, so any descendant the client left behind survives with no
-  further signal aimed at it. Holding the leader as an unreaped zombie until
-  after the final group SIGKILL costs one delayed `wait` and closes the leak.
+- **Reaping the timed-out Bazel client as soon as it exits, and ending the
+  escalation there.** Rejected: a process group outlives its leader, so a
+  leader that exits during the SIGTERM grace can still have descendants
+  running, and an escalation that stops at leader exit leaves them with no
+  further signal aimed at them. The measured correction to an earlier draft
+  of this ADR is that the reap itself is not what would lose them: after the
+  leader was reaped with a descendant still running, the group stayed
+  addressable and a group SIGKILL still killed the descendant. What binds is
+  therefore the unconditional final group SIGKILL. Holding the leader
+  unreaped until after that SIGKILL is kept as well, at a cost of one delayed
+  `wait`, because it closes the identifier-reuse window by construction
+  rather than by an argument that has to be re-made per kernel.
 - **Carrying the deadline as a floating-point value, or as the raw
   `/proc/uptime` field.** Rejected because the raw field is fixed-point
   decimal and fails an integer validator outright, and because a float
@@ -1588,19 +1736,29 @@ provides each binary.
     network. The union of the two is the ADR 0009 supply-chain policy, and a
     recorded outcome comparison proves the union is unchanged.
 15. A missed performance ceiling blocks promotion or fails a job in band with
-    the measured duration and the two authorized remedies. It never licenses
-    reducing coverage, reclassifying an enforcing surface as advisory, or
-    relaxing the ceiling. The exported control is the absolute deadline
-    `anchor + ceiling - checkout allowance` in integer milliseconds, with the
+    the measured duration and the two remedies authorized for a ceiling miss.
+    It never licenses reducing coverage, reclassifying an enforcing surface as
+    advisory, or
+    relaxing the ceiling. That two-remedy restriction is scoped to a ceiling
+    miss and to nothing else: it never suppresses or replaces the static
+    recovery actions invariant 19 requires. The exported control is the
+    absolute deadline `anchor + ceiling - checkout allowance` in integer
+    milliseconds, with the
     anchor taken after checkout, so `checkout_actual + post_checkout` stays at
     or under the ceiling. Both ends convert the fixed-point `/proc/uptime`
-    field through one repository-owned checked parser that refuses malformed
+    field through one repository-owned checked parser that accepts an
+    optional fractional part and refuses malformed
     and overflowing values without echoing them, and every rounding step is
     conservative: capture truncates, read rounds up, the child timeout rounds
-    down. The in-band bound is always a relative duration derived from that
+    down. A deadline that has already passed at read time is an expired
+    budget reported on the ceiling-miss path, not a malformed-input refusal.
+    The in-band bound is always a relative duration derived from that
     deadline at read time, never the deadline itself. The bounding wrapper
     spawns its Bazel client into a dedicated process group created before
-    exec, signals only that group, holds an exited leader unreaped through the
+    exec, signals only that group, observes leader exit with a non-consuming
+    and non-blocking wait (`EXITED|NOWAIT|NOHANG`) so a leader that has not
+    exited cannot park the wrapper inside the wait and overrun the grace,
+    holds an exited leader unreaped through the
     final group SIGKILL so its identifier cannot be reused, reaps the direct
     child only after that SIGKILL, and never signals its own process group or
     a server process identifier read from a file. Skipping the escalation
@@ -1623,14 +1781,22 @@ provides each binary.
 19. A cleanup refusal and a stuck Bazel server each fail with a stable static
     error code and a fixed message that carries no absolute path, output base
     or output-base hash, user identifier, process identifier, raw deadline
-    value, or opaque handle, and each names its exact repository-relative
-    recovery. A refusal directs the operator to
-    `D2B_CLEAN_DRY_RUN=1 make clean`, to correcting the tracked or symlinked
-    entries under `.scratch/bazel/`, and then to `make clean`. A stuck server
-    directs the operator to close other Bazel clients and run
-    `make bazel-shutdown`. Deleting `.scratch/bazel/` or signalling any
-    process identifier by hand while a shutdown is unresolved is never an
-    authorized remedy.
+    value, or opaque handle, and each names the exact repository-relative
+    recovery **for its own code**, never one generic recovery for all of
+    them. `D2B-BZLCLEAN-TRACKED` directs the operator to
+    `D2B_CLEAN_DRY_RUN=1 make clean`, to removing or relocating the
+    unexpected tracked entry from `.scratch/bazel/`, then to `make clean`.
+    `D2B-BZLCLEAN-SYMLINK` and `D2B-BZLCLEAN-ESCAPE` direct the operator to
+    that same dry run, to replacing the offending symlink, magic link or
+    escaping layout under `.scratch/bazel/` with an ordinary contained
+    directory, then to `make clean`. `D2B-BZLCLEAN-LIVE` directs the operator
+    to close other Bazel clients, run `make bazel-shutdown`, then rerun
+    `make clean`, and never to inspect or correct the tree first.
+    `D2B-BZLSERVER-STUCK` directs the operator to close other Bazel clients
+    and run `make bazel-shutdown`. Deleting `.scratch/bazel/` or signalling
+    any process identifier by hand while a shutdown is unresolved is never an
+    authorized remedy, and the ceiling-miss remedy pair in invariant 15 never
+    replaces any of these.
 20. Invariants 15, 16 and 19 are carried by enforcing tests that land with the
     plumbing they constrain, not at promotion: Layer-1 Rust tests in the crate
     that owns the plumbing, source-shape assertions in
@@ -1638,7 +1804,11 @@ provides each binary.
     ban on path-based recursive cleanup, and workflow-shape assertions in
     `packages/xtask/tests/policy_ci.rs`. Each guard ships with a planted
     negative fixture or mutation proving it fails when the invariant is
-    removed. No new top-level shell gate, Layer-1 job, or Make target carries
+    removed, placed where the mutation is observable: the `O_CLOEXEC`
+    mutation is carried by the behavioural exec-inheritance test rather than
+    by a source marker, and the early-reap mutation is carried by an
+    escalation-order test rather than by the surviving-descendant case. No
+    new top-level shell gate, Layer-1 job, or Make target carries
     them.
 
 ## References
