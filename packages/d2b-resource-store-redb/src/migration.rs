@@ -121,9 +121,12 @@ pub fn restore_owned(
         return Ok(MigrationOutcome::Recovered);
     }
     ensure_active_is_safe_or_absent(parent, identity)?;
-    backup
-        .validate_for_identity(identity)
-        .map_err(|_| quarantine(identity, "migration-backup-identity-mismatch"))?;
+    if let Err(error) = backup.validate_for_identity(identity) {
+        if error.kind() == StoreErrorKind::UpgradeRequired {
+            return Err(error.with_store_slot(identity.slot()));
+        }
+        return Err(quarantine(identity, "migration-backup-identity-mismatch"));
+    }
 
     prepare_restore_stage(parent, backup, identity)?;
     publish_with_rollback(parent, None, identity)?;
@@ -919,6 +922,43 @@ mod tests {
             .unwrap(),
             PublicationState::ActiveOnly
         );
+    }
+
+    #[test]
+    fn unknown_active_and_backup_versions_refuse_without_publication() {
+        let (directory, parent_fd, mut marker) = parent();
+        create_current_file(&directory, DEFAULT_ACTIVE_FILE_NAME);
+        set_schema_version(&directory, CURRENT_PHYSICAL_SCHEMA_VERSION + 1);
+        let error = upgrade_owned(&parent_fd, &mut marker, &identity()).unwrap_err();
+        assert_eq!(error.kind(), StoreErrorKind::UpgradeRequired);
+        assert_eq!(
+            backup::publication_state(
+                &parent_fd,
+                DEFAULT_STAGED_FILE_NAME,
+                DEFAULT_ACTIVE_FILE_NAME,
+                DEFAULT_PRIOR_FILE_NAME
+            )
+            .unwrap(),
+            PublicationState::ActiveOnly
+        );
+
+        let (backup_directory, backup_parent, mut backup_marker) = parent();
+        let mut backup = empty_backup();
+        backup.schema_version = CURRENT_PHYSICAL_SCHEMA_VERSION + 1;
+        let error =
+            restore_owned(&backup_parent, &mut backup_marker, &backup, &identity()).unwrap_err();
+        assert_eq!(error.kind(), StoreErrorKind::UpgradeRequired);
+        assert_eq!(
+            backup::publication_state(
+                &backup_parent,
+                DEFAULT_STAGED_FILE_NAME,
+                DEFAULT_ACTIVE_FILE_NAME,
+                DEFAULT_PRIOR_FILE_NAME
+            )
+            .unwrap(),
+            PublicationState::Empty
+        );
+        drop(backup_directory);
     }
 
     #[test]
