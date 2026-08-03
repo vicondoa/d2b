@@ -199,7 +199,9 @@ honour.
 > replacing the operator spelling with a single `make panel-preflight` target
 > that runs this checker plus a standalone harness receipt resolver and version
 > check. That target does not exist yet. Until it lands, run the node command
-> above.
+> above. Whoever adds the target removes this notice and updates the command
+> above in the same commit; leaving either half behind points contributors at
+> the wrong preflight.
 
 ## Panel seats
 
