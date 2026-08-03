@@ -1,9 +1,23 @@
 //! Read-only Zone health aggregation.
 
-use serde::Serialize;
+use std::{fs, path::Path};
+
+use clap::Args;
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
+use serde_json::{Value, json};
+
+use crate::{
+    CliFailure,
+    context::{OutputMode, RequestDeadline, ZoneContext},
+    print_stdout,
+};
+
+/// Arguments for `d2b zone doctor`.
+#[derive(Debug, Args, Clone, Default)]
+pub(crate) struct ZoneDoctorArgs {}
 
 /// Closed Zone phase used in the doctor envelope.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ZonePhase {
     /// Bootstrap is incomplete.
     Pending,
@@ -18,7 +32,7 @@ pub enum ZonePhase {
 }
 
 /// Check result.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum CheckStatus {
     /// Healthy.
@@ -30,7 +44,7 @@ pub enum CheckStatus {
 }
 
 /// One stable doctor check.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DoctorCheck {
     /// Stable check name.
     pub name: String,
@@ -41,7 +55,8 @@ pub struct DoctorCheck {
 }
 
 /// Store health projection.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(default)]
 pub struct StoreHealth {
     /// Store phase.
     pub phase: String,
@@ -54,7 +69,8 @@ pub struct StoreHealth {
 }
 
 /// Controller health projection.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(default)]
 pub struct ControllerHealth {
     /// Closed handler name.
     pub handler: String,
@@ -67,7 +83,8 @@ pub struct ControllerHealth {
 }
 
 /// Provider health projection.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(default)]
 pub struct ProviderHealth {
     /// Closed provider class.
     pub provider: String,
@@ -78,7 +95,8 @@ pub struct ProviderHealth {
 }
 
 /// Audit health projection.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(default)]
 pub struct AuditHealth {
     /// `ok`, `rate_limited`, or `unavailable`.
     pub phase: String,
@@ -91,7 +109,8 @@ pub struct AuditHealth {
 }
 
 /// Telemetry health projection.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(default)]
 pub struct TelemetryHealth {
     /// `ok`, `buffering`, or `unavailable`.
     pub phase: String,
@@ -100,7 +119,8 @@ pub struct TelemetryHealth {
 }
 
 /// Summary counts.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(default)]
 pub struct DoctorSummary {
     /// Number of successful checks.
     pub ok: u32,
@@ -111,7 +131,7 @@ pub struct DoctorSummary {
 }
 
 /// Complete doctor report.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ZoneDoctorReport {
     /// Zone name.
     pub zone: String,
@@ -136,7 +156,8 @@ pub struct ZoneDoctorReport {
 }
 
 /// Process counts without PID or process identity.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(default)]
 pub struct ProcessCounts {
     /// Active processes.
     pub active: u32,
@@ -179,6 +200,231 @@ pub struct DoctorInput {
     pub user_only_hosts: u32,
     /// Number of user-only Host statuses carrying the required posture.
     pub user_only_hosts_declared: u32,
+}
+
+/// Run the read-only Zone health command.
+pub(crate) fn run(
+    context: &ZoneContext,
+    _args: &ZoneDoctorArgs,
+    mode: OutputMode,
+    deadline: RequestDeadline,
+) -> Result<i32, CliFailure> {
+    let value = context.invoke(
+        "ZoneStatus",
+        json!({
+            "resourceRef": context.zone_ref(),
+            "doctor": true,
+        }),
+        deadline,
+        mode,
+    )?;
+    let report = report_from_value(&value, context.zone_name());
+    if mode.is_json() {
+        let mut rendered = render_json(&report).map_err(|_| {
+            context.failure(
+                "internal-error",
+                "failed to render Zone doctor report",
+                mode,
+                1,
+            )
+        })?;
+        rendered.push('\n');
+        print_stdout(&rendered);
+    } else {
+        print_stdout(&render_human(&report));
+    }
+    Ok(exit_code(&report))
+}
+
+/// Adapt a bounded Zone status response into the fixed doctor report.
+pub(crate) fn report_from_value(value: &Value, fallback_zone: &str) -> ZoneDoctorReport {
+    let mut input = input_from_value(value);
+    apply_optional_fixture_reads(&mut input);
+    build_report(fallback_zone, input)
+}
+
+fn input_from_value(value: &Value) -> DoctorInput {
+    let object = status_object(value);
+    let mut store_health: StoreHealth =
+        value_or_default(alias(object, &["store_health", "storeHealth", "store"]));
+    let mut audit: AuditHealth = value_or_default(alias(object, &["audit"]));
+    let mut telemetry: TelemetryHealth = value_or_default(alias(object, &["telemetry"]));
+    if store_health.phase.is_empty() {
+        store_health.phase = "unknown".to_owned();
+    }
+    if audit.phase.is_empty() {
+        audit.phase = "unavailable".to_owned();
+    }
+    if telemetry.phase.is_empty() {
+        telemetry.phase = "unavailable".to_owned();
+    }
+
+    let audit_value = alias(object, &["audit"]);
+    let audit_hash_chain_clean = alias(object, &["audit_hash_chain_clean", "auditHashChainClean"])
+        .and_then(Value::as_bool)
+        .or_else(|| {
+            audit_value
+                .and_then(|value| value.get("hash_chain_clean"))
+                .and_then(Value::as_bool)
+        })
+        .or_else(|| {
+            audit_value
+                .and_then(|value| value.get("defects"))
+                .and_then(Value::as_array)
+                .map(Vec::is_empty)
+        })
+        .unwrap_or(audit.phase == "ok");
+
+    DoctorInput {
+        zone_phase: parse_zone_phase(alias(object, &["zone_phase", "zonePhase", "phase"])),
+        store_health,
+        controllers: value_or_default(alias(object, &["controllers", "controller_status"])),
+        providers: value_or_default(alias(object, &["providers", "provider_status"])),
+        process_counts: value_or_default(alias(object, &["process_counts", "processCounts"])),
+        audit,
+        telemetry,
+        schema_catalog_consistent: alias(
+            object,
+            &["schema_catalog_consistent", "schemaCatalogConsistent"],
+        )
+        .and_then(Value::as_bool)
+        .unwrap_or(false),
+        watch_quota_headroom: alias(object, &["watch_quota_headroom", "watchQuotaHeadroom"])
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+        audit_hash_chain_clean,
+        user_only_hosts: alias(object, &["user_only_hosts", "userOnlyHosts"])
+            .and_then(Value::as_u64)
+            .unwrap_or(0)
+            .min(u64::from(u32::MAX)) as u32,
+        user_only_hosts_declared: alias(
+            object,
+            &["user_only_hosts_declared", "userOnlyHostsDeclared"],
+        )
+        .and_then(Value::as_u64)
+        .unwrap_or(0)
+        .min(u64::from(u32::MAX)) as u32,
+    }
+}
+
+fn status_object(value: &Value) -> &serde_json::Map<String, Value> {
+    for key in ["doctor", "report", "status", "health"] {
+        if let Some(object) = value.get(key).and_then(Value::as_object) {
+            return object;
+        }
+    }
+    value.as_object().unwrap_or_else(|| {
+        static EMPTY: std::sync::OnceLock<serde_json::Map<String, Value>> =
+            std::sync::OnceLock::new();
+        EMPTY.get_or_init(serde_json::Map::new)
+    })
+}
+
+fn alias<'a>(object: &'a serde_json::Map<String, Value>, names: &[&str]) -> Option<&'a Value> {
+    names.iter().find_map(|name| object.get(*name))
+}
+
+fn value_or_default<T>(value: Option<&Value>) -> T
+where
+    T: DeserializeOwned + Default,
+{
+    value
+        .cloned()
+        .and_then(|value| serde_json::from_value(value).ok())
+        .unwrap_or_default()
+}
+
+fn parse_zone_phase(value: Option<&Value>) -> ZonePhase {
+    match value.and_then(Value::as_str).unwrap_or("unknown") {
+        value if value.eq_ignore_ascii_case("pending") => ZonePhase::Pending,
+        value if value.eq_ignore_ascii_case("ready") => ZonePhase::Ready,
+        value if value.eq_ignore_ascii_case("degraded") => ZonePhase::Degraded,
+        value
+            if value.eq_ignore_ascii_case("failed")
+                || value.eq_ignore_ascii_case("quarantined") =>
+        {
+            ZonePhase::Failed
+        }
+        _ => ZonePhase::Unknown,
+    }
+}
+
+fn apply_optional_fixture_reads(input: &mut DoctorInput) {
+    if let Some(value) = read_fixture(&["D2B_OTEL_SELF_METRICS_PATH", "D2B_OTEL_METRICS_PATH"]) {
+        if let Some(phase) = value.get("phase").and_then(Value::as_str) {
+            input.telemetry.phase = phase.to_owned();
+        }
+        if let Some(drop_total) = value.get("drop_total").and_then(Value::as_u64) {
+            input.telemetry.drop_total = drop_total;
+        }
+    } else if manifest_observability_disabled() {
+        input.telemetry.phase = "unavailable".to_owned();
+    }
+
+    if let Some(value) = read_fixture(&["D2B_AUDIT_STATUS_PATH", "D2B_ZONE_AUDIT_STATUS_PATH"]) {
+        if let Some(phase) = value.get("phase").and_then(Value::as_str) {
+            input.audit.phase = phase.to_owned();
+        }
+        input.audit.segments = value
+            .get("segments")
+            .and_then(Value::as_u64)
+            .unwrap_or(u64::from(input.audit.segments))
+            .min(u64::from(u32::MAX)) as u32;
+        input.audit.drop_privileged = value
+            .get("drop_privileged")
+            .and_then(Value::as_u64)
+            .unwrap_or(input.audit.drop_privileged);
+        input.audit.drop_total = value
+            .get("drop_total")
+            .and_then(Value::as_u64)
+            .unwrap_or(input.audit.drop_total);
+        if let Some(defects) = value.get("defects").and_then(Value::as_array) {
+            input.audit_hash_chain_clean = defects.is_empty();
+        }
+    } else if let Some(directory) =
+        std::env::var_os("D2B_ZONE_AUDIT_DIR").or_else(|| std::env::var_os("D2B_AUDIT_DIR"))
+    {
+        let directory = Path::new(&directory);
+        if let Some((segments, clean)) = audit_directory_health(directory) {
+            input.audit.segments = segments;
+            input.audit.phase = "ok".to_owned();
+            input.audit_hash_chain_clean = clean;
+        } else {
+            input.audit.phase = "unavailable".to_owned();
+            input.audit_hash_chain_clean = false;
+        }
+    }
+}
+
+fn read_fixture(names: &[&str]) -> Option<Value> {
+    let path = names.iter().find_map(std::env::var_os)?;
+    let bytes = fs::read(path).ok()?;
+    if bytes.len() > crate::MAX_FRAME_BYTES {
+        return None;
+    }
+    serde_json::from_slice(&bytes).ok()
+}
+
+fn manifest_observability_disabled() -> bool {
+    let Some(path) = std::env::var_os("D2B_MANIFEST_PATH") else {
+        return false;
+    };
+    read_fixture_value(Path::new(&path)).and_then(|value| {
+        value
+            .pointer("/_observability/enabled")
+            .and_then(Value::as_bool)
+    }) == Some(false)
+}
+
+fn read_fixture_value(path: &Path) -> Option<Value> {
+    let bytes = fs::read(path).ok()?;
+    (bytes.len() <= crate::MAX_FRAME_BYTES)
+        .then(|| serde_json::from_slice(&bytes).ok())
+        .flatten()
+}
+
+fn audit_directory_health(path: &Path) -> Option<(u32, bool)> {
+    crate::zone_audit::audit_directory_health(path)
 }
 
 /// Build the fixed doctor check set.
@@ -332,6 +578,25 @@ pub fn exit_code(report: &ZoneDoctorReport) -> i32 {
 /// Render the report as a stable JSON envelope.
 pub fn render_json(report: &ZoneDoctorReport) -> Result<String, serde_json::Error> {
     serde_json::to_string(report)
+}
+
+/// Render the bounded human doctor summary.
+pub(crate) fn render_human(report: &ZoneDoctorReport) -> String {
+    let mut output = format!(
+        "zone doctor {}: phase={:?} ok={} warn={} error={}\n",
+        report.zone,
+        report.zone_phase,
+        report.summary.ok,
+        report.summary.warn,
+        report.summary.error
+    );
+    for check in &report.checks {
+        output.push_str(&format!(
+            "{}\t{:?}\t{}\n",
+            check.name, check.status, check.detail
+        ));
+    }
+    output
 }
 
 fn push_check(checks: &mut Vec<DoctorCheck>, name: &str, passed: bool, error: bool, detail: &str) {

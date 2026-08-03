@@ -24,6 +24,9 @@ mod status_read_model;
 mod target_routing;
 mod terminal_client;
 mod zone;
+mod zone_audit;
+mod zone_doctor;
+mod zone_support_bundle;
 
 #[allow(unused_imports)]
 use legacy::*;

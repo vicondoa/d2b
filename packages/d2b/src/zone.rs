@@ -6,6 +6,7 @@ use serde_json::{Value, json};
 use crate::{
     CliFailure,
     context::{OutputMode, RequestDeadline, ZoneContext, parse_resource_ref},
+    zone_audit, zone_doctor, zone_support_bundle,
 };
 
 #[derive(Debug, Args, Clone)]
@@ -19,6 +20,21 @@ pub(crate) enum ZoneCommand {
     Get(ZoneGetArgs),
     List,
     Status(ZoneStatusArgs),
+    Audit(ZoneAuditArgs),
+    Doctor(zone_doctor::ZoneDoctorArgs),
+    #[command(name = "support-bundle")]
+    SupportBundle(zone_support_bundle::ZoneSupportBundleArgs),
+}
+
+#[derive(Debug, Args, Clone)]
+pub(crate) struct ZoneAuditArgs {
+    #[command(subcommand)]
+    pub(crate) command: ZoneAuditCommand,
+}
+
+#[derive(Debug, Subcommand, Clone)]
+pub(crate) enum ZoneAuditCommand {
+    Export(zone_audit::AuditExportArgs),
 }
 
 #[derive(Debug, Args, Clone)]
@@ -43,6 +59,11 @@ pub(crate) fn run(
         ZoneCommand::Get(args) => get(context, args, mode, deadline),
         ZoneCommand::List => list(context, mode, deadline),
         ZoneCommand::Status(args) => status(context, args, mode, deadline),
+        ZoneCommand::Audit(args) => match &args.command {
+            ZoneAuditCommand::Export(args) => zone_audit::run(context, args, mode, deadline),
+        },
+        ZoneCommand::Doctor(args) => zone_doctor::run(context, args, mode, deadline),
+        ZoneCommand::SupportBundle(args) => zone_support_bundle::run(context, args, mode, deadline),
     }
 }
 

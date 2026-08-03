@@ -282,7 +282,15 @@ impl ZoneContext {
     ) -> Result<Value, CliFailure> {
         #[cfg(test)]
         if let Some(client) = &self.backend.injected {
-            return self.invoke_injected(client.as_ref(), method, payload, deadline, mode);
+            return self.invoke_injected(
+                client.as_ref(),
+                method,
+                payload,
+                deadline,
+                mode,
+                None,
+                None,
+            );
         }
 
         let value = self
@@ -293,7 +301,43 @@ impl ZoneContext {
         self.decorate_response(value)
     }
 
+    /// Invoke one exact non-resource Zone service operation.
+    ///
+    /// Diagnostic operations are still routed through the typed Zone client.
+    /// The service and session verb are bound into the authenticated session
+    /// request rather than inferred from a user-provided resource verb.
+    pub(crate) fn invoke_service(
+        &self,
+        service: ZoneServiceKind,
+        operation: &str,
+        session_verb: &str,
+        payload: Value,
+        deadline: RequestDeadline,
+        mode: OutputMode,
+    ) -> Result<Value, CliFailure> {
+        #[cfg(test)]
+        if let Some(client) = &self.backend.injected {
+            return self.invoke_injected(
+                client.as_ref(),
+                operation,
+                payload,
+                deadline,
+                mode,
+                Some(service),
+                Some(session_verb),
+            );
+        }
+
+        let value = self
+            .backend
+            .canonical
+            .invoke_service(operation, payload, deadline, service, Some(session_verb))
+            .map_err(|error| self.client_failure(error, mode))?;
+        self.decorate_response(value)
+    }
+
     #[cfg(test)]
+    #[allow(clippy::too_many_arguments)]
     fn invoke_injected(
         &self,
         client: &dyn SessionClient,
@@ -301,8 +345,11 @@ impl ZoneContext {
         payload: Value,
         deadline: RequestDeadline,
         mode: OutputMode,
+        service: Option<ZoneServiceKind>,
+        session_verb: Option<&str>,
     ) -> Result<Value, CliFailure> {
-        let request = self.request_value(method, payload, mode)?;
+        let request =
+            self.request_value_with_service(method, payload, mode, service, session_verb)?;
         let request = serde_json::to_vec(&request).map_err(|_| {
             self.failure(
                 "internal-error",
@@ -332,6 +379,17 @@ impl ZoneContext {
         payload: Value,
         mode: OutputMode,
     ) -> Result<Value, CliFailure> {
+        self.request_value_with_service(method, payload, mode, None, None)
+    }
+
+    fn request_value_with_service(
+        &self,
+        method: &str,
+        payload: Value,
+        mode: OutputMode,
+        service: Option<ZoneServiceKind>,
+        session_verb: Option<&str>,
+    ) -> Result<Value, CliFailure> {
         let mut request = match payload {
             Value::Object(object) => object,
             _ => {
@@ -353,6 +411,18 @@ impl ZoneContext {
             "schemaVersion".to_owned(),
             Value::Number(serde_json::Number::from(JSON_SCHEMA_VERSION)),
         );
+        if let Some(service) = service {
+            request.insert(
+                "service".to_owned(),
+                Value::String(service.package().to_owned()),
+            );
+        }
+        if let Some(session_verb) = session_verb {
+            request.insert(
+                "sessionVerb".to_owned(),
+                Value::String(session_verb.to_owned()),
+            );
+        }
         Ok(Value::Object(request))
     }
 
@@ -603,11 +673,22 @@ impl CanonicalZoneBackend {
         payload: Value,
         deadline: RequestDeadline,
     ) -> Result<Value, ClientError> {
+        let service = operation_service(method);
+        self.invoke_service(method, payload, deadline, service, None)
+    }
+
+    fn invoke_service(
+        &self,
+        operation: &str,
+        payload: Value,
+        deadline: RequestDeadline,
+        service: ZoneServiceKind,
+        session_verb: Option<&str>,
+    ) -> Result<Value, ClientError> {
         let payload = serde_json::to_vec(&payload).map_err(|_| ClientError::ContractViolation)?;
         let payload =
             CanonicalJsonObject::parse(&payload).map_err(|_| ClientError::ContractViolation)?;
-        let verb = canonical_verb(method);
-        let service = operation_service(method);
+        let verb = canonical_verb(operation);
         let options = call_options(deadline, verb)?;
         let cancellation = CancellationToken::default();
         let request = ResourceCallOptions::new(payload, false, &cancellation);
@@ -620,7 +701,9 @@ impl CanonicalZoneBackend {
             self.zone_name.clone(),
             self.zone_path.clone(),
             self.socket_path.clone(),
-            method.to_owned(),
+            service,
+            operation.to_owned(),
+            session_verb.map(str::to_owned),
             deadline.duration(),
         );
         let client = ZoneClient::new(resolver, connector);
@@ -640,7 +723,9 @@ struct CliZoneConnector {
     zone_name: String,
     zone_path: d2b_contracts::v3::zone_routing::ZonePath,
     socket_path: PathBuf,
+    service: ZoneServiceKind,
     operation: String,
+    session_verb: Option<String>,
     handshake_timeout: Duration,
 }
 
@@ -649,6 +734,7 @@ impl std::fmt::Debug for CliZoneConnector {
         formatter
             .debug_struct("CliZoneConnector")
             .field("zone_name", &self.zone_name)
+            .field("service", &self.service)
             .field("operation", &self.operation)
             .field("session", &"<authenticated>")
             .finish()
@@ -660,14 +746,18 @@ impl CliZoneConnector {
         zone_name: String,
         zone_path: d2b_contracts::v3::zone_routing::ZonePath,
         socket_path: PathBuf,
+        service: ZoneServiceKind,
         operation: String,
+        session_verb: Option<String>,
         request_timeout: Duration,
     ) -> Self {
         Self {
             zone_name,
             zone_path,
             socket_path,
+            service,
             operation,
+            session_verb,
             handshake_timeout: request_timeout
                 .min(Duration::from_millis(LOCAL_HANDSHAKE_DEADLINE_MS)),
         }
@@ -678,14 +768,19 @@ impl CliZoneConnector {
         target: &d2b_resource_client::ResolvedTarget,
         service: ZoneServiceKind,
     ) -> Result<(CliConnectedSession, ZoneSessionPin), ClientError> {
-        if !matches!(service, ZoneServiceKind::Resource | ZoneServiceKind::Zone)
-            || target.service() != service
+        if !matches!(
+            service,
+            ZoneServiceKind::Resource
+                | ZoneServiceKind::Zone
+                | ZoneServiceKind::Audit
+                | ZoneServiceKind::Support
+        ) || target.service() != service
             || target.transport() != TransportKind::LocalUnix
             || target.owner().zone() != &self.zone_path
         {
             return Err(ClientError::TransportPolicyMismatch);
         }
-        let operation = validate_operation(&self.operation)?;
+        let operation = validate_operation(service, &self.operation, self.session_verb.as_deref())?;
         let mut socket =
             SeqpacketUnixSocket::connect(&self.socket_path).map_err(classify_client_io_error)?;
         socket
@@ -726,7 +821,9 @@ impl CliZoneConnector {
         Ok((
             CliConnectedSession {
                 zone_name: self.zone_name.clone(),
+                service,
                 operation,
+                session_verb: self.session_verb.clone(),
                 socket: Arc::new(Mutex::new(socket)),
             },
             pin,
@@ -749,7 +846,9 @@ impl ZoneSessionConnector for CliZoneConnector {
 #[derive(Clone)]
 struct CliConnectedSession {
     zone_name: String,
+    service: ZoneServiceKind,
     operation: String,
+    session_verb: Option<String>,
     socket: Arc<Mutex<SeqpacketUnixSocket>>,
 }
 
@@ -799,6 +898,10 @@ impl CliConnectedSession {
         );
         object.insert("method".to_owned(), Value::String(self.operation.clone()));
         object.insert(
+            "service".to_owned(),
+            Value::String(self.service.package().to_owned()),
+        );
+        object.insert(
             "zoneRef".to_owned(),
             Value::String(format!("Zone/{}", self.zone_name)),
         );
@@ -806,6 +909,12 @@ impl CliConnectedSession {
             "schemaVersion".to_owned(),
             Value::Number(serde_json::Number::from(JSON_SCHEMA_VERSION)),
         );
+        if let Some(session_verb) = &self.session_verb {
+            object.insert(
+                "sessionVerb".to_owned(),
+                Value::String(session_verb.clone()),
+            );
+        }
         if let Some(target) = target {
             object
                 .entry("resourceRef".to_owned())
@@ -860,16 +969,29 @@ fn owner_for_zone(zone_path: &d2b_contracts::v3::zone_routing::ZonePath) -> Serv
     }
 }
 
-fn validate_operation(operation: &str) -> Result<String, ClientError> {
-    if operation.is_empty()
-        || operation.len() > 64
-        || !operation
-            .chars()
-            .all(|character| character.is_ascii_alphanumeric() || character == '_')
-    {
-        return Err(ClientError::InvalidMethod);
+fn validate_operation(
+    service: ZoneServiceKind,
+    operation: &str,
+    session_verb: Option<&str>,
+) -> Result<String, ClientError> {
+    match (service, operation, session_verb) {
+        (ZoneServiceKind::Audit, "AuditService/Export", Some("audit-export"))
+        | (ZoneServiceKind::Support, "SupportService/GenerateBundle", Some("support-bundle")) => {
+            Ok(operation.to_owned())
+        }
+        (ZoneServiceKind::Audit | ZoneServiceKind::Support, ..) => Err(ClientError::InvalidMethod),
+        (_, _, Some(_)) => Err(ClientError::InvalidMethod),
+        (_, operation, None)
+            if !operation.is_empty()
+                && operation.len() <= 64
+                && operation
+                    .chars()
+                    .all(|character| character.is_ascii_alphanumeric() || character == '_') =>
+        {
+            Ok(operation.to_owned())
+        }
+        _ => Err(ClientError::InvalidMethod),
     }
-    Ok(operation.to_owned())
 }
 
 fn canonical_verb(method: &str) -> ResourceVerb {
@@ -889,6 +1011,8 @@ fn canonical_verb(method: &str) -> ResourceVerb {
 fn operation_service(method: &str) -> ZoneServiceKind {
     match method {
         "ZoneGet" | "ZoneList" | "ZoneStatus" => ZoneServiceKind::Zone,
+        "AuditService/Export" => ZoneServiceKind::Audit,
+        "SupportService/GenerateBundle" => ZoneServiceKind::Support,
         _ => ZoneServiceKind::Resource,
     }
 }
