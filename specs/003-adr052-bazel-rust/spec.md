@@ -4,7 +4,7 @@
 
 **Created**: 2026-08-02
 
-**Status**: Draft
+**Status**: Approved
 
 **Input**: User description: "create a spec for adr 052 on a sepwrate worktree"
 
