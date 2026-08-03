@@ -9,7 +9,8 @@
 
 use std::fs::File;
 
-use d2b_resource_store::{RetryClass, StoreError, StoreErrorKind};
+use d2b_contracts::v3::RetryClass;
+use d2b_resource_store::{StoreError, StoreErrorKind};
 use redb::backends::FileBackend;
 use redb::{Database, Durability, ReadableDatabase, ReadableTable};
 use rustix::fs::{AtFlags, FileType, Mode, OFlags, fsync, openat, renameat, statat, unlinkat};
@@ -17,8 +18,8 @@ use rustix::io::{FdFlags, fcntl_getfd};
 
 use crate::backup::{self, LogicalBackup, PublicationState};
 use crate::transaction::{
-    ALL_TABLES, PHYSICAL_SCHEMA_VERSION, STORE_META, StoreMeta, decode, encode, integrity,
-    meta_key, validate_consistency, validate_identity,
+    ALL_TABLES, PHYSICAL_SCHEMA_VERSION, StoreMeta, decode, encode, integrity, meta_key,
+    validate_consistency,
 };
 use crate::{REDB_CACHE_SIZE, StoreIdentity, ValueKind};
 
@@ -161,7 +162,7 @@ pub fn upgrade_owned(
     let source_meta = read_meta(&source, identity)?;
     let chain = migration_chain(source_meta.schema_version)?;
     if chain.is_empty() {
-        validate_database(&source, identity, CURRENT_PHYSICAL_SCHEMA_VERSION)?;
+        validate_database(&source, identity, Some(CURRENT_PHYSICAL_SCHEMA_VERSION))?;
         drop(source);
         return Ok(MigrationOutcome::AlreadyCurrent);
     }
@@ -719,7 +720,6 @@ fn injected_fault(reason: &'static str, identity: &StoreIdentity) -> StoreError 
     .with_store_slot(identity.slot())
 }
 
-#[cfg(test)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PublicationBoundary {
     AfterStageSync,
