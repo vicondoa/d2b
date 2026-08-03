@@ -59,9 +59,16 @@ assert_wf "discover enumerates via make test-flake-partition" 'make -s test-flak
 # both shard lanes consume the discovered JSON (not a hardcoded list)
 assert_wf "eval matrix sourced from discover output" 'fromJSON\(needs\.flake-eval-discover\.outputs\.evalchecks\)'
 assert_wf "realized matrix sourced from discover output" 'fromJSON\(needs\.flake-eval-discover\.outputs\.realizedchecks\)'
-# the nix-unit lane is handed the class the eval matrix drops, from that same
-# partition, so the exclusion cannot silently drop a check from every lane
-assert_wf "nix-unit lane sourced from the same partition" 'checks:\s*\$\{\{\s*steps\.list\.outputs\.nixunitchecks'
+# nix-unit owns the complete corpus in one evaluation-only job. It no longer
+# consumes the flake partition or a per-check matrix.
+assert_wf "nix-unit runs the full public target once" 'name:\s*Nix unit gate'
+assert_wf "nix-unit invokes make test-nix-unit" 'run:\s*make test-nix-unit'
+if grep -Eq 'nix-unit-discover:|nix-unit-shards:|D2B_NIX_UNIT_CHECK:.*matrix\.check|outputs\.nixunitchecks' "$wf"; then
+  fail "wiring: obsolete Nix-unit discovery or shard wiring remains"
+  rc=1
+else
+  ok "wiring: Nix-unit discovery and shard wiring are absent"
+fi
 # each shard runs the make-routed single-check evaluation
 assert_wf "shard runs D2B_FLAKE_CHECK make test-flake" 'D2B_FLAKE_CHECK'
 # the required-context aggregator gates on both shard matrices
