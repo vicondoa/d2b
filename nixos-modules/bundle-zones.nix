@@ -280,15 +280,7 @@ let
         sensitivity = "nonSecret";
       })
     cfg.zones;
-  activeBundles = lib.mapAttrs
-      (zoneName: bundle:
-        let compatibility = cfg._bundle.zoneResourceBundlesCompatibility.${zoneName} or { };
-        in bundle // {
-          # Keep the old eval projection for compatibility, but never its path:
-          # the active artifact always comes from the coherent v3 emitter.
-          data = compatibility.data or bundle.data;
-        })
-      bundles;
+  activeBundles = bundles;
 in
 {
   options.d2b._bundle = {
