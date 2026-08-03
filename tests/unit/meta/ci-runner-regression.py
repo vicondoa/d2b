@@ -637,7 +637,10 @@ set -euo pipefail
         self.assertIn("nixUnitCorpus.caseNames", inventory_block)
         self.assertIn("nixUnitCorpus.jobNames", inventory_block)
         self.assertIn("builtins.sort builtins.lessThan nixUnitCorpus.caseNames", inventory_block)
-        self.assertIn('nixUnitCorpus.jobNames ++ [ "nix-unit" ]', inventory_block)
+        self.assertIn(
+            'builtins.sort builtins.lessThan (nixUnitCorpus.jobNames ++ [ "nix-unit" ])',
+            inventory_block,
+        )
         self.assertEqual(driver.count("nixUnitInventory"), 1)
         self.assertIn("--json", driver)
         self.assertIn("--impure", driver)
@@ -694,7 +697,7 @@ set -euo pipefail
         )
         self.assertIn('jq -r -s', driver)
         self.assertIn('contains("${") | not', driver)
-        self.assertIn("$error_lines[-1]", driver)
+        self.assertIn('$error_lines | join(" ; ")', driver)
         self.assertIn("evaluation failed without diagnostic", driver)
         self.assertIn("failure_attr", driver)
         self.assertIn("failure_line", driver)

@@ -426,7 +426,7 @@ if ! jq -r -s '
           if ($error_lines | length) == 0 then
             "evaluation failed without diagnostic"
           else
-            $error_lines[-1]
+            ($error_lines | join(" ; "))
           end
         )"
       else

@@ -1006,7 +1006,9 @@ fn execution_manifest_schema_and_prose_agree_with_non_empty_discovery() {
             && flake.contains("nixUnitCorpus.caseNames")
             && flake.contains("nixUnitCorpus.jobNames")
             && flake.contains("builtins.sort builtins.lessThan nixUnitCorpus.caseNames")
-            && flake.contains("nixUnitCorpus.jobNames ++ [ \"nix-unit\" ]")
+            && flake.contains(
+                "builtins.sort builtins.lessThan (nixUnitCorpus.jobNames ++ [ \"nix-unit\" ])"
+            )
             && !flake.contains("nixUnitCaseNames")
             && !flake.contains("nixUnitCorpus.jobs")
             && !flake.contains("__nix_unit_integrity"),
@@ -1172,7 +1174,7 @@ fn execution_manifest_schema_and_prose_agree_with_non_empty_discovery() {
         "keys | sort",
         "test(\"^[[:space:]]*FAIL [^:]+: \")",
         "contains(\"${\") | not",
-        "$error_lines[-1]",
+        "$error_lines | join(\" ; \")",
         "evaluation failed without diagnostic",
         "failure_attr",
         "failure_line",
