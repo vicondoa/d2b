@@ -7,8 +7,12 @@
   [`docs/specs/ADR-046-decision-register.md`](../specs/ADR-046-decision-register.md);
   [ADR 0015](0015-daemon-only-clean-break.md) for the daemon-only control plane
   the resource plane sits inside; [ADR 0032](0032-d2b-v2-constellation-control-plane.md)
-  and [ADR 0043](0043-realm-native-control-plane.md) for the rule that no host
-  process holds realm credentials;
+  and [ADR 0043](0043-realm-native-control-plane.md) **for their host-credential
+  and realm-boundary claims only**: that realm relay, session, provider and
+  enrollment credentials live inside a per-realm gateway guest rather than in
+  `d2bd`, the broker, or any host-side activation artifact. Neither record makes
+  any claim about which component may execute Provider or artifact code, and
+  neither is cited here for one;
   [ADR 0034](0034-storage-lifecycle-restart-and-synchronization.md) for the
   anchored `openat2` fd-relative resolution discipline item 8 reuses;
   [ADR 0008](0008-supported-platforms-and-rejected-targets.md) for the kernel
@@ -153,8 +157,25 @@ decided rather than discovered.
   in the required layout may be sensitive.
 - Trust material on the host is public verification key material only. Publisher
   signing keys never enter `d2b.artifacts`, the host closure, or any host-side
-  activation artifact, and this ADR creates no host credential ownership
-  (ADR 0032, ADR 0043).
+  activation artifact, and this ADR creates no host credential ownership. That
+  is the whole of what ADR 0032 and ADR 0043 are cited for here.
+- **The host does execute Provider code, and this ADR does not pretend
+  otherwise.** Stated explicitly because the opposite is an easy and dangerous
+  thing to assume from the surrounding credential rules. `d2bd`'s DAG executor
+  launches Provider component binaries on the host through the broker's
+  `SpawnRunner` op, and item 7 is a rule about *how* that launch resolves its
+  program, not a claim that it does not happen. No ADR in this repository
+  establishes a "no host or daemon component executes Provider or untrusted
+  artifact code" rule, ADR 0032 and ADR 0043 least of all, and this ADR does not
+  create one.
+
+  What actually bounds an executed Provider binary is three things, none of
+  which is non-execution: the digest chain of items 4 through 6, which pins
+  exactly which bytes may run; the anchored resolution of items 7 and 8, which
+  pins how they are reached; and the component's sandbox profile, which is
+  outside this ADR's scope and is where confinement of the running process
+  belongs. A reader looking for the confinement argument should look there, not
+  here.
 - The daemon-only end-state holds. Nothing here declares a unit; the resource
   compiler is a build-time program and the launcher is `d2bd`'s DAG executor
   (ADR 0015).
@@ -983,8 +1004,15 @@ conflict once each value is examined rather than the class assumed:
   clause of section 13.4 that actually binds.
 - The canonical-JSON failure emits a **byte offset and two lengths**, never file
   content. Bounded by construction, and it is what makes the failure fixable.
-  The remediation text is fixed: "re-emit with the toolkit canonical serializer;
-  the usual cause is a trailing newline."
+  The remediation text is the **exact command**, not a description of one:
+  `d2b-provider-toolkit manifest emit --out <path>`, followed by
+  `d2b-provider-toolkit manifest verify <path>` to confirm before rebuilding.
+  `<path>` is the layout-relative path already named earlier in the same
+  message, never an absolute or `<out>`-prefixed one, so naming the command
+  costs no additional disclosure. "Re-emit with the toolkit canonical
+  serializer" was the earlier wording and is not good enough: it tells an
+  operator what happened and leaves them to find the tool, which is the gap
+  between a diagnosis and a fix.
 - **Every set-valued payload follows one bounding discipline**, so a future code
   inherits it rather than being fixed after a reviewer notices: at most four
   members, sorted for determinism, each truncated to 64 bytes with an explicit
@@ -1031,7 +1059,7 @@ The missing scenarios are added to section 15.8. Each is named so
 | `nix-build-executable-declaration-inconsistent` | 2 | A Provider declaring an empty `executableDigests` while some component is `Launchable`, and one declaring a non-empty `executableDigests` while no component is, both fail with `provider-executable-declaration-inconsistent`. The message names which side failed and **carries no component ID**, which is asserted, because attributing a Provider-wide inconsistency to one component would misdirect the fix |
 | `nix-build-manifest-binary-ref-wire-compatible` | 2 | A component descriptor authored with the flat `binaryRef` field of section 4.3.3 parses unchanged, round-trips to identical bytes, and yields an unchanged `manifestDigest`; a `binaryRef` violating the item 3 grammar is refused during deserialization rather than after |
 | `nix-build-manifest-signature-invalid` | 2 | Four distinct cases fail with four distinct codes: unregistered publisher, unresolvable `signatureId`, a `.sig` that is not exactly 64 octets, and 64 well-formed octets that do not verify |
-| `nix-build-manifest-not-canonical` | 2 | A manifest or config schema whose octets are not their own `d2b-cjson/v1` canonical bytes fails build naming the file and the first divergent byte offset; a trailing newline alone is sufficient to fail |
+| `nix-build-manifest-not-canonical` | 2 | A manifest or config schema whose octets are not their own `d2b-cjson/v1` canonical bytes fails build naming the file and the first divergent byte offset; a trailing newline alone is sufficient to fail. The message is asserted to contain the literal command `d2b-provider-toolkit manifest emit --out` with the layout-relative path, and to contain no absolute path |
 | `nix-build-executable-set-mismatch` | 2 | `executableDigests` keys unequal to the `bin/` entry set fails build naming the symmetric difference. Cardinality is asserted, not assumed: a small difference reports every name; a difference of 64 names, half missing from each side and each name at the 64-byte maximum, reports exactly four sorted names with their side labels plus the true total of 64, and the whole message stays inside the section 13.4 512-byte bound. The reported count is the real difference size, not the truncated sample size |
 | `nix-build-executable-set-empty` | 2 | A derivation with a `bin/` directory containing no entries fails build, and is distinguished from a Provider that legitimately declares an empty `executableDigests` and ships no `bin/` at all, which succeeds |
 | `nix-build-executable-name-invalid` | 2 | A `bin/` entry whose name violates `^[a-z][a-z0-9-]*$`, exceeds 64 bytes, contains `/`, `.`, `..`, NUL, an ASCII control byte, or whitespace, begins with `-`, or is not valid UTF-8, fails build naming the entry; the name is checked as read from the directory, not only as declared in the manifest |
@@ -1310,7 +1338,8 @@ toolkit's only supported writer, with a `manifest verify` command that answers
 option, since either would produce a file the compiler refuses. The amendment
 states the surface and the required tests. The property bought is that the
 digest in the catalog covers exactly the bytes a reviewer reads. Item 9 makes the
-failure survivable by naming the first divergent byte offset and the remediation
+failure survivable by naming the first divergent byte offset and the exact
+toolkit command
 rather than saying "not canonical".
 
 **Symlinks are refused throughout the layout, which breaks `symlinkJoin`

@@ -6,7 +6,7 @@
 | Raised under | The W5 audit, recorded in `implementation-debt.md` sections 12.1, 12.2, 12.3, 14.8, and 19.7 |
 | Deciding record | [ADR 0050](../../docs/adr/0050-provider-derivation-artifact-layout.md), currently **Proposed** |
 | Affected member specs | `ADR-046-resources-zone-control` (sections 4.3.1, 4.9 new, 13.4, 14.10, 15.8, 17); `ADR-046-provider-model-and-packaging` (Package catalog, Crate/package boundary); `ADR-046-nix-configuration` (Validation); `ADR-046-security-and-threat-model`; `ADR-046-decision-register` (D101 domain tags); provider dossiers `system-core` (naming **and** a `binaryRef` self-contradiction) and `transport-azure-relay` |
-| Affected manifests | `ADR-046-work-items.json`, `ADR-046-implementation-graph.json`, `ADR-046-implementation-graph.md`, `ADR-046-spec-set.json` - all four are **generated**, see section 8 |
+| Affected manifests | `ADR-046-work-items.json`, `ADR-046-implementation-graph.json`, `ADR-046-implementation-graph.md`, `ADR-046-spec-set.json` - all four are **generated**, see section 9 |
 | Unblocks | `ADR046-zone-control-015` (T174), and transitively `ADR046-zone-control-016` (T212) and `ADR046-zone-control-021` (T213) |
 | Status | Drafted. **Not applied.** ADR 0050 is Proposed; the edits below land once it is Accepted |
 
@@ -563,6 +563,14 @@ Trust material on the host is public verification key material only. Publisher
 signing keys never enter `d2b.artifacts`, the host closure, or any host-side
 activation artifact.
 
+This is a statement about **credentials**, not about execution. The host does
+execute Provider component binaries, through `d2bd`'s DAG executor and the
+broker's `SpawnRunner` op; 4.9.3 and 4.9.7 fix how that launch resolves its
+program, not whether it happens. No record in this repository establishes a rule
+that no host or daemon component may execute Provider or artifact code, and this
+amendment does not create one. Confinement of the running process is the
+component's sandbox profile, which is outside this amendment's scope.
+
 #### 4.9.7 Anchored fd-relative resolution (normative)
 
 Neither the resource compiler nor the launcher resolves a path in this layout by
@@ -762,7 +770,7 @@ secret, credential, path, or process data.
 | `provider-signature-malformed` | See 4.9.6 | artifact ID, expected length `64`, observed length |
 | `provider-signature-verification-failed` | See 4.9.6 | artifact ID, publisher, signatureId |
 | `provider-digest-mismatch` | Any pinned digest disagrees | artifact ID, which digest, expected value, actual value, the two disagreeing sources |
-| `provider-manifest-not-canonical` | File octets are not their own canonical bytes | artifact ID, layout-relative path, byte offset of first divergence, expected and observed lengths, and the fixed remediation "re-emit with the toolkit canonical serializer; the usual cause is a trailing newline" |
+| `provider-manifest-not-canonical` | File octets are not their own canonical bytes | artifact ID, layout-relative path, byte offset of first divergence, expected and observed lengths, and the fixed remediation, which is the exact command rather than a description of one: `d2b-provider-toolkit manifest emit --out <path>`, then `d2b-provider-toolkit manifest verify <path>` to confirm before rebuilding. `<path>` is the layout-relative path already named in the same message, never absolute and never `<out>`-prefixed |
 | `provider-executable-name-invalid` | A `bin/` entry violates the 4.9.3 grammar | artifact ID, the rejected entry, the grammar |
 | `provider-executable-set-empty` | `bin/` exists with no entries | artifact ID, and both remedies, since the right one depends on intent: remove `bin/` entirely if the Provider ships no executable of its own and declare an empty `executableDigests`, or install at least one launchable ELF and declare its digest |
 | `provider-executable-not-elf` | **Phase 2 only.** A `bin/` entry is not an `ET_EXEC`/`ET_DYN` ELF64 image, established by the compiler reading a bounded prefix | artifact ID, the entry, first four octets as hex, and the `d2b.lib.buildProviderElfShim` remedy |
@@ -859,7 +867,7 @@ section 4 below; it had none.
 > | `nix-build-manifest-signature-invalid` | Four distinct cases fail with four distinct codes: unregistered publisher, unresolvable `signatureId`, a `.sig` that is not exactly 64 octets, and 64 well-formed octets that do not verify |
 > | `nix-build-layout-entry-unexpected` | A derivation with a fourth entry under `share/d2b/provider/` fails build naming it; the cases are a stray regular file, a subdirectory, and a symlink, so the refusal is by enumeration rather than by file type. A derivation with exactly the three required entries succeeds, and the pair is asserted together. Many extra entries produce a message still within the §13.4 512-byte bound, with the count reported and the name list truncated |
 > | `nix-build-required-output-not-regular` | Each of the three `share/d2b/provider/` paths, replaced in turn by a symlink (including one resolving inside the same output), **a symlink whose target is a procfs-style magic link such as `/proc/self/fd/<n>`**, a directory, a FIFO, a Unix socket, and a device node, fails build naming the path and the observed file type. The FIFO case must not hang, which is what `O_NONBLOCK` buys; the socket case is refused by `ENXIO` at open rather than by `fstat`, and both refusals are asserted distinctly. The magic-link case additionally asserts that the requested `open_how.resolve` mask carried `RESOLVE_NO_MAGICLINKS`, observable at the §4.9.7 seam, since with `RESOLVE_NO_SYMLINKS` also set the refusal alone cannot attribute itself to either flag |
-> | `nix-build-manifest-not-canonical` | A manifest or config schema whose octets are not their own `d2b-cjson/v1` canonical bytes fails build naming the file and the first divergent byte offset; a trailing newline alone is sufficient to fail |
+> | `nix-build-manifest-not-canonical` | A manifest or config schema whose octets are not their own `d2b-cjson/v1` canonical bytes fails build naming the file and the first divergent byte offset; a trailing newline alone is sufficient to fail. The message is asserted to contain the literal command `d2b-provider-toolkit manifest emit --out` with the layout-relative path, and no absolute path |
 > | `nix-build-executable-set-mismatch` | `package.executableDigests` keys unequal to the `bin/` entry set fails build naming the symmetric difference. Cardinality is asserted, not assumed: a small difference reports every name; a difference of 64 names, half missing from each side and each at the 64-byte maximum, reports exactly four sorted names with side labels plus the true total of 64, and the whole message stays inside the §13.4 512-byte bound. The reported count is the real difference size, not the truncated sample size |
 > | `nix-build-executable-set-empty` | A derivation with a `bin/` directory containing no entries fails build, and is distinguished from a Provider that legitimately declares an empty `package.executableDigests` and ships no `bin/` at all, which succeeds |
 > | `nix-build-executable-name-invalid` | A `bin/` entry whose name violates `^[a-z][a-z0-9-]*$`, exceeds 64 bytes, contains `/`, `.`, `..`, NUL, an ASCII control byte, or whitespace, begins with `-`, or is not valid UTF-8, fails build naming the entry; the name is checked as read from the directory, not only as declared in the manifest |
@@ -1174,7 +1182,48 @@ What the obligation buys is that the rule is satisfiable by ordinary means. Its
 absence would not block the compiler; it would push every Provider author into
 hand-canonicalizing JSON, which is the failure this section exists to prevent.
 
-## 8. Applying this amendment: the manifests are generated
+## 8. Migration: authoring-time only, and why
+
+**No runtime migration. No data migration. No compatibility shim.** Verified
+against the tree rather than assumed, because "no migration needed" is the kind
+of claim that is cheap to assert and expensive to be wrong about:
+
+| Question | Answer at this tip |
+| --- | --- |
+| Does any `provider-manifest.json` exist in the tree? | No. `find` over the whole tree returns none |
+| Does any detached signature (`*.json.sig`) exist? | No |
+| Does any `config-schema.json` exist? | No |
+| Does the component that would read them exist? | No. `packages/d2b-resource-compiler/` is absent |
+| Does the private artifact catalog emitter exist? | No. `nixos-modules/artifact-catalog.nix` is absent |
+| Are there `d2b.artifacts` declarations? | Only in eval test fixtures, whose catalog digests are synthetic (`"sha256:" + builtins.hashString "sha256" "<name>/<field>"`), not derived from any artifact |
+| Is `ProviderManifest` deserialized from disk anywhere? | No. It exists as an in-memory contract DTO, constructed in toolkit tests and in the core-controller engines, which AGENTS.md records as test-only and unwired from the absent production store and watch dispatcher |
+
+So there is no shipped or consumed signed Provider artifact descriptor to
+migrate, no persisted digest to recompute, and no installed base whose
+`manifestDigest` would change. `ADR046-zone-control-015`'s own Data migration
+field already says "Full reset; no prior bundle state exists to carry forward",
+and this section is consistent with it rather than an exception to it.
+
+**What does need doing, and by whom.** Any Provider manifest or root config
+schema authored *before* the toolkit lands - by hand, by an ad hoc script, or by
+a serializer that pretty-prints or appends a trailing newline - will be refused
+by Phase 2 with `provider-manifest-not-canonical`. Such an author must:
+
+1. re-emit both artifacts with `d2b-provider-toolkit manifest emit --out <path>`
+   (section 7.5.1), rather than editing the existing file toward canonical form
+   by hand;
+2. confirm with `d2b-provider-toolkit manifest verify <path>` before rebuilding;
+3. **re-sign the manifest**, because re-emission changes its octets and therefore
+   its digest, which invalidates any signature computed over the previous bytes.
+   The detached `provider-manifest.json.sig` of section 4.9.2 must be regenerated;
+   a stale signature fails as `provider-signature-verification-failed`, not as a
+   canonicality error, which is a confusing way to learn this and is why the step
+   is called out rather than left implied.
+
+This applies to out-of-tree authoring only. Nothing in this repository has such
+a file to convert.
+
+## 9. Applying this amendment: the manifests are generated
 
 `docs/specs/ADR-046-work-items.json`, `ADR-046-implementation-graph.json`,
 `ADR-046-implementation-graph.md`, and `ADR-046-spec-set.json` are **generated**
@@ -1193,7 +1242,7 @@ gate that proves it. `gen_spec_set.rs` also asserts a fixed corpus size
 member and no work item, so both counts are unchanged and a change in either is
 a signal that the edit did something unintended.
 
-## 9. Register rows this amendment closes
+## 10. Register rows this amendment closes
 
 | `implementation-debt.md` row | Disposition |
 | --- | --- |
@@ -1201,10 +1250,10 @@ a signal that the edit did something unintended.
 | Required-outputs row has no conformance scenario in the section 15.8 Phase 2 table (12.3) | Closed by section 4 above |
 | Output cardinality not checkable: no Provider crate has a package output (12.2) | Closed by ADR 0050 item 1: the cardinality is now an eval assertion on the artifact entry, which exists whether or not any Provider crate ships a package yet |
 | `d2b.artifacts.<id>.package` typed `types.package` already enforces the cardinality at the one entry point (12.2, "inference, needs confirm or reject") | **Reject.** `types.package` pins one derivation per artifact ID; it does not pin one output per derivation, and `"${package}"` selecting the first output is exactly the case it misses. It is also weaker than it looks: `lib.types.package.check` accepts a bare store path, which the module system coerces through `lib.toDerivation`. The inference is superseded by the explicit §4.9.1 predicate |
-| `ADR046-zone-control-015` stays blocked pending an amendment (19.7) | Closed on acceptance, with one carve-out: four scenarios stay blocked on the two obligations recorded in section 11, three on `ComponentExecution`/`BinaryRef` and one on the shim helper. `016` and `021` unblock, and `016` gains one new Phase 3 launcher scenario |
+| `ADR046-zone-control-015` stays blocked pending an amendment (19.7) | Closed on acceptance, with one carve-out: four scenarios stay blocked on the two obligations recorded in section 12, three on `ComponentExecution`/`BinaryRef` and one on the shim helper. `016` and `021` unblock, and `016` gains one new Phase 3 launcher scenario |
 | Catalog names component and descriptor digests; contract names exported schema and service digests (12.4) | **Partly narrowed, not closed.** The executable digest was never part of the dispute: the catalog's singular value and the manifest's map are different objects, and section 2 states the derivation rule. The component/descriptor versus schema/service pair remains open and remains `ADR046-provider-002`'s |
 
-## 10. Drift observed while drafting, recorded not fixed
+## 11. Drift observed while drafting, recorded not fixed
 
 Not in scope for this amendment; recorded so it is not lost.
 
@@ -1215,9 +1264,9 @@ Not in scope for this amendment; recorded so it is not lost.
 | The root config schema is spelled three ways across the set: `config` (D075 and shipped `ProviderSpec::config`), `settingsSchemaDigest` in the `provider-catalog.json` example, and `configDigest` in the generated catalog shape. D075 and shipped code agree on `config` | D075, `ADR-046-nix-configuration`, `provider-catalog-shape.nix` |
 | `SPIKE-05`, which would have exercised exactly this layout before it was specified, is recorded "Specified - not yet executed" and `proofs/provider-packaging-spike/` does not exist | `ADR-046-feasibility-and-spikes` |
 
-## 11. Implementation obligation this amendment creates
+## 12. Implementation obligations this amendment creates
 
-Unlike section 10, these are **in scope**, so they are recorded
+Unlike section 11, these are **in scope**, so they are recorded
 separately rather than as observed drift. Two of the three block named
 scenarios; the third blocks none and is recorded because the rule it
 discharges is otherwise satisfiable only by hand.
