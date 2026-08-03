@@ -31,7 +31,8 @@
 
 ## Notes
 
-- Validation passed on the first review iteration.
+- Validation passed on the second review iteration after low-level cleanup and
+  timeout mechanics were restated as observable safety outcomes.
 - Bazel, Cargo, Make, and the stable Rust gate names appear because ADR 0052
   makes them binding scope and compatibility constraints. Low-level design
   mechanics remain authoritative in the ADR rather than being re-specified

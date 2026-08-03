@@ -16,8 +16,8 @@ is intended to remove duplicated compilation and scheduling work while
 preserving the exact coverage, failure, test-isolation, supply-chain, and
 execution-evidence contracts that protect the repository today.
 
-The existing `make test-rust` path and required `test-rust` continuous-
-integration context remain authoritative during a shadow period. A separate
+The existing `make test-rust` path and required `test-rust`
+continuous-integration context remain authoritative during a shadow period. A separate
 Bazel path must demonstrate complete equivalence, enforce its own failure
 conditions, satisfy fixed performance ceilings, and operate within the
 repository's disk and cache budgets before promotion. Promotion changes the
@@ -209,9 +209,9 @@ workflow-policy fixtures.
    Rust test verdict.
 4. **Given** any Rust build or test action, **When** it executes third-party
    code, **Then** cache service credentials are absent from its environment.
-5. **Given** a promoted Bazel Rust job, **When** it starts after checkout,
-   **Then** it carries an in-band deadline that can fail the job
-   actionably before the job-level timeout backstop.
+5. **Given** a promoted Bazel Rust job, **When** it runs, **Then** its
+   enforceable deadline covers the complete measured job window and can fail
+   actionably before the outer timeout backstop.
 
 ---
 
@@ -263,8 +263,8 @@ retirement conditions independently block premature deletion.
   wrong binary.
 - A broker suite is accidentally allowed to overlap another test process.
 - An ignored test is counted as passed or omitted from the census.
-- The Bazel client leader exits during timeout grace while a descendant
-  remains alive.
+- The top-level validation process exits during timeout handling while one of
+  its descendants remains alive.
 - A deadline is absent, expired, malformed, overflowing, or rounded later
   than the allowed ceiling.
 - Cleanup encounters a tracked file, a symlink or magic link, a path escape,
@@ -353,13 +353,13 @@ retirement conditions independently block premature deletion.
   bounds.
 - **FR-025**: The local runner MUST warn at the configured soft output-state
   limit and MUST refuse to start build work at the configured hard limit.
-- **FR-026**: Cleanup MUST shut down the matching Bazel server before
-  deletion, anchor all traversal beneath the managed scratch tree, refuse
-  symlinks, magic links, escapes, and tracked files, and never delete through
-  a path that can be re-resolved after validation.
-- **FR-027**: Cleanup descriptors MUST not be inherited across child process
-  execution, and both supported traversal routes MUST have enforcing
-  behavioral coverage.
+- **FR-026**: Cleanup MUST operate only within the managed scratch subtree,
+  MUST refuse ambiguous or unsafe layouts and live ownership, and MUST
+  guarantee that no refused or successful cleanup reaches tracked content or
+  any external target.
+- **FR-027**: Cleanup safety MUST remain effective across every supported host
+  path and across child process execution, with behavioral evidence that a
+  planted unsafe variant is rejected.
 - **FR-028**: Every cleanup or shutdown refusal MUST delete nothing and emit a
   stable static code with the exact repository-relative recovery for that
   condition.
@@ -372,9 +372,8 @@ retirement conditions independently block premature deletion.
 - **FR-031**: Pull-request-reachable jobs MUST be read-only, MUST NOT request
   `actions: write`, and MUST NOT save through direct, indirect, or post-step
   cache writers.
-- **FR-032**: Cache credentials MUST remain confined to the cache action and
-  MUST NOT enter a command step or any build, test, build-script, or macro
-  environment.
+- **FR-032**: Cache credentials MUST remain unavailable to repository and
+  third-party build or test code.
 - **FR-033**: Promotion caching MUST keep the action cache and download cache
   separate, MUST never cache the output base, and MUST bind cache keys to all
   dependency, toolchain, policy, module, and generated-build inputs named by
@@ -393,21 +392,21 @@ retirement conditions independently block premature deletion.
 - **FR-038**: Each performance profile MUST be evaluated using all required
   measurements, with a passing median at or below the ceiling and no
   individual measurement above 1.2 times the ceiling.
-- **FR-039**: Promoted continuous-integration jobs MUST enforce an in-band
-  deadline that includes checkout within the total ceiling and retains a
-  slightly higher job timeout only as a dead-runner backstop.
-- **FR-040**: Deadline conversion MUST use one checked interpretation at both
-  handoff ends, reject malformed or overflowing input without echoing it, and
-  apply conservative rounding that can only shorten the available time.
+- **FR-039**: Promoted continuous-integration jobs MUST enforce an actionable
+  in-band deadline that covers the complete measured job window and retains a
+  slightly higher outer timeout only as a dead-runner backstop.
+- **FR-040**: Deadline calculations MUST fail safely on invalid or
+  unrepresentable input, MUST not disclose the rejected value, and MUST never
+  grant more time than the applicable ceiling.
 - **FR-041**: An expired deadline MUST be reported as a normal budget expiry,
   not malformed input, and a missing deadline MUST remain an unbounded local
   default while being forbidden in promoted jobs.
-- **FR-042**: On deadline expiry, the runner MUST terminate only the dedicated
-  child process group, wait the full fixed grace, terminate surviving
-  descendants, and reap the direct child only after escalation completes.
-- **FR-043**: The timeout path MUST never signal its own process group, group
-  zero, group negative one, or a detached server process identifier read from
-  a file.
+- **FR-042**: On deadline expiry, the runner MUST give the validation work a
+  fixed graceful-stop interval, MUST terminate any surviving descendants
+  after that interval, and MUST finish with no orphaned validation process.
+- **FR-043**: Timeout handling MUST affect only processes owned by the current
+  validation run and MUST leave the caller, unrelated processes, and detached
+  server processes untouched.
 - **FR-044**: A missed performance ceiling MUST block promotion or fail the
   promoted job and MUST authorize only a larger runner class or a further
   disjoint slice split; it MUST NOT authorize weaker coverage, lower
