@@ -821,18 +821,27 @@ and invokes no shell. It:
 - opens `TEST_TMPDIR` once as an anchored directory with close-on-exec, creates
   each per-case directory descriptor-relative without following symlinks or
   magic links, and refuses an existing case directory rather than reusing it.
-  The runner opens no JUnit output descriptor until every child has been
-  reaped; the descriptor and same-directory temporary file are close-on-exec,
-  the complete document is written with bounded retry on interrupted or
-  temporarily unavailable writes, synced, and atomically renamed onto
-  `XML_OUTPUT_FILE`. Short write, `ENOSPC`, unexpected `EEXIST` and every
-  unhandled filesystem error make the carrier fail rather than publish partial
-  evidence;
-- carries a behavioral redaction test with a simulated failed case whose
-  environment, argv, output and failure text contain every member of the
-  forbidden set. The test requires every planted value absent from the JUnit
-  bytes, the stable case name/outcome/duration present, and raw output
-  recoverable only from the planted `test.log` path.
+  The runner opens the parent of `XML_OUTPUT_FILE` as a second anchored,
+  close-on-exec directory descriptor, refusing symlinks and magic links, and
+  opens no JUnit output descriptor until every child has been reaped. Temporary
+  creation and final replacement are descriptor-relative: a close-on-exec
+  same-directory temporary is written, synced and installed with `renameat`.
+  The bounded write loop advances the buffer after a short write, retries
+  `EINTR` and `EAGAIN`, and chooses another unpredictable temporary name after
+  `EEXIST`. Exhausting a retry bound, `ENOSPC` and every unhandled filesystem
+  error unlink the temporary with `unlinkat` before failing the carrier, so no
+  partial evidence or persistent collision remains;
+- carries behavioral negative tests for the evidence path. A committed planted
+  failed-case fixture contains every member of the canonical forbidden set in
+  its environment, argv, output and failure text; the test first asserts every
+  planted value is present in the unredacted fixture, then requires every value
+  absent from the JUnit bytes, the stable case name/outcome/duration present,
+  and raw output recoverable only from the planted `test.log` path. Separate
+  injected cases prove refusal of symlink and magic-link parents, refusal of an
+  existing case directory, buffer advancement after a short write, bounded
+  `EINTR`/`EAGAIN` and temporary-name-collision retries, failure on `ENOSPC`,
+  temporary unlink on every terminal error, and descriptor-relative
+  `renameat`.
 
 Doctests and `harness = false` companions keep their own targets and are not
 routed through the case runner: doctests expose no such listing interface, and
@@ -2379,12 +2388,17 @@ closed when any `.bazelrc` line or wrapper argument sets that flag.
    locations, systemd unit names, process identifiers, user identifiers,
    opaque handles, terminal bytes, shell names and raw child output. The runner
    creates per-case directories from an anchored close-on-exec `TEST_TMPDIR`
-   descriptor without link traversal, opens JUnit output only after all
-   children are reaped, writes a close-on-exec same-directory temporary with
-   bounded retry, and atomically renames it. Any incomplete write, collision or
-   filesystem failure fails the carrier. A planted behavioral test proves the
-   forbidden set is absent and that raw output remains available only through
-   Bazel's ordinary `test.log` artifact.
+   descriptor without link traversal, resolves the `XML_OUTPUT_FILE` parent
+   through a second anchored close-on-exec descriptor with the same link
+   refusals, opens JUnit output only after all children are reaped, writes a
+   close-on-exec same-directory temporary with bounded retry, and installs it
+   through descriptor-relative `renameat`. Short writes advance the buffer;
+   `EINTR`, `EAGAIN` and temporary-name `EEXIST` retry within a bound; terminal
+   errors unlink the temporary through `unlinkat` and fail the carrier. A
+   committed planted fixture first proves every canonical forbidden value is
+   present before proving it absent from JUnit, and injected filesystem
+   failures prove link refusal, collision handling, cleanup and atomic
+   replacement.
 6. Pull requests never publish a shared cache entry and never hold
    `actions: write`, and a structural policy test with committed negative and
    positive fixtures enforces both. Exactly one job writes, and only on a push

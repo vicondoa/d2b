@@ -60,7 +60,7 @@
   redacted and does not publish environment values, command-line arguments,
   absolute paths, Nix store paths, socket paths, runfiles or worktree
   locations, systemd unit names, process identifiers, user identifiers,
-  opaque handles, terminal bytes, shell names, or raw child output. Raw output
+  opaque handles, terminal bytes, shell names and raw child output. Raw output
   remains available in Bazel's ordinary test log.
 - The repository development shell supplies the pinned Bazel tools, the
   `cargo-bazel` generator cannot fall back to an unpinned source bootstrap, and
