@@ -1330,6 +1330,11 @@ fn production_backend_hard_fixture_rss() {
             )),
             "production RSS child did not report the hard fixture (run {run}):\n{stdout}"
         );
+        for line in stdout.lines() {
+            if line.contains(PRODUCTION_RSS_CHILD_MARKER) {
+                println!("production fixture signals run {run}: {line}");
+            }
+        }
         let rss = parse_maximum_rss_kib(&stderr);
         assert!(
             rss <= PRODUCTION_RSS_THRESHOLD_KIB,
