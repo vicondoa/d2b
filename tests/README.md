@@ -196,9 +196,10 @@ not repeat schema or inventory work in the main and broker jobs. A cold local
 aggregate (detected when `packages/target` is absent) restores the shared
 workspace target layout and retains the warm-local split API census cache
 across `make clean`. A bounded API/main/broker prebuild frontier runs first;
-fixture, schema and inventory then run as a full-budget chain so discovery
-reuses all prior builds. Warm local runs retain the parallel isolated-target
-profile, while CI alone uses the shared API census target.
+fixture, inventory and schema then run as a full-budget chain so discovery
+reuses all prior builds before schema generation. Warm local runs retain the
+parallel isolated-target profile, while CI alone uses the shared API census
+target.
 
 Use `D2B_RUST_BUDGET=<positive-integer>` to request a Rust budget. It is an
 upper bound, not a host-capacity bypass. The default is the smaller of logical

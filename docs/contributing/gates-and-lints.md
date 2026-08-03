@@ -150,8 +150,9 @@ The local warm aggregate keeps that parallel profile. When its normal Cargo
 target is absent, it selects a cold profile that reuses the workspace target
 for fixture/CLI work while retaining the warm-local split API census targets
 across `make clean`. A four-lane bounded prebuild frontier overlaps API, main,
-broker and light independent work. Fixture, schema and inventory then run as a
-full-budget dependency chain, so inventory reuses every prior build. CI alone
+broker and light independent work. Fixture, inventory and schema then run as a
+full-budget dependency chain, so inventory reuses every prior build before
+schema generation. CI alone
 uses the shared API census target and dispatches each Rust leaf as its own job.
 
 `D2B_RUST_BUDGET` is the supported local Rust control. It must be a positive

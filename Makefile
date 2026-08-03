@@ -148,7 +148,7 @@ D2B_RUST_MAIN_PREREQS_api :=
 D2B_RUST_MAIN_PREREQS_main :=
 D2B_RUST_MAIN_PREREQS := $(D2B_RUST_MAIN_PREREQS_$(D2B_RUST_PROFILE))
 D2B_RUST_SCHEMA_PREREQS_aggregate := test-rust-leaf-inventory
-D2B_RUST_SCHEMA_PREREQS_cold := test-rust-leaf-fixture-contracts
+D2B_RUST_SCHEMA_PREREQS_cold := test-rust-leaf-inventory
 D2B_RUST_SCHEMA_PREREQS_schema :=
 D2B_RUST_SCHEMA_PREREQS := $(D2B_RUST_SCHEMA_PREREQS_$(D2B_RUST_PROFILE))
 D2B_RUST_BROKER_PREREQS_aggregate := test-rust-leaf-inventory
@@ -160,7 +160,7 @@ D2B_RUST_FIXTURE_PREREQS_cold := test-rust-leaf-api-surface test-rust-leaf-main-
 D2B_RUST_FIXTURE_PREREQS_main :=
 D2B_RUST_FIXTURE_PREREQS := $(D2B_RUST_FIXTURE_PREREQS_$(D2B_RUST_PROFILE))
 D2B_RUST_INVENTORY_PREREQS_aggregate :=
-D2B_RUST_INVENTORY_PREREQS_cold := test-rust-leaf-schema
+D2B_RUST_INVENTORY_PREREQS_cold := test-rust-leaf-fixture-contracts
 D2B_RUST_INVENTORY_PREREQS_inventory :=
 D2B_RUST_INVENTORY_PREREQS := $(D2B_RUST_INVENTORY_PREREQS_$(D2B_RUST_PROFILE))
 

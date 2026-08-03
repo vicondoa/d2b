@@ -212,8 +212,9 @@ eight separate jobs, each with the full runner budget. When a local aggregate
 starts without `packages/target`, its cold profile restores shared
 workspace targets while retaining the warm-local split API census cache across
 `make clean`. It overlaps a bounded API/main/broker prebuild frontier, then
-runs fixture, schema and inventory as a full-budget chain so discovery reuses
-all prior builds. CI alone uses the shared API census target.
+runs fixture, inventory and schema as a full-budget chain so discovery reuses
+all prior builds before schema generation. CI alone uses the shared API census
+target.
 
 The local Rust budget control is `D2B_RUST_BUDGET`, a positive requested upper
 bound. Its automatic cap uses logical CPUs and cache-adjusted available memory,

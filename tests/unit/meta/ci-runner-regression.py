@@ -862,11 +862,11 @@ esac
         self.assertIn("D2B_RUST_MAIN_PREREQS_cold :=", makefile)
         self.assertIn("D2B_RUST_BROKER_PREREQS_cold :=", makefile)
         self.assertIn(
-            "D2B_RUST_SCHEMA_PREREQS_cold := test-rust-leaf-fixture-contracts",
+            "D2B_RUST_SCHEMA_PREREQS_cold := test-rust-leaf-inventory",
             makefile,
         )
         self.assertIn(
-            "D2B_RUST_INVENTORY_PREREQS_cold := test-rust-leaf-schema",
+            "D2B_RUST_INVENTORY_PREREQS_cold := test-rust-leaf-fixture-contracts",
             makefile,
         )
         self.assertIn(

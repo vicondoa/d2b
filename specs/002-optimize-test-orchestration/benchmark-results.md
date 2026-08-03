@@ -342,7 +342,7 @@ Two measured target-state changes removed the remaining warm critical path:
 
 Cold and CI runs do not use those duplicated warm targets. Cold execution
 uses a four-lane bounded API/main/broker prebuild frontier, followed by a
-full-budget fixture, schema and inventory chain on shared targets. CI runs
+full-budget fixture, inventory and schema chain on shared targets. CI runs
 API, main, broker, guest shell runner, no-bash AST, schema, inventory and
 supply chain as eight independent full-budget Make jobs.
 

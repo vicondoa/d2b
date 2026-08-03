@@ -17,5 +17,6 @@
 - Keep the separate enforcing fixture lane from duplicating the aggregate by
   honoring `D2B_SKIP_FIXTURE_BUILD=1` in the Layer-1 orchestration.
 - Keep the measured parallel profile for warm local runs, retain its API cache
-  while using a bounded prebuild plus full-budget chain for cold runs, and run
-  each Rust leaf as a separate full-budget CI job behind the stable rollup.
+  while using a bounded prebuild plus fixture/inventory/schema chain for cold
+  runs, and run each Rust leaf as a separate full-budget CI job behind the
+  stable rollup.
