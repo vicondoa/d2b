@@ -1620,6 +1620,7 @@ dependencies = [
  "clap",
  "d2b-contracts",
  "d2b-core",
+ "d2b-core-controller",
  "d2b-gateway",
  "d2b-gateway-runtime",
  "d2b-host",
