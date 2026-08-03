@@ -508,32 +508,39 @@ made in the other direction.
 No host path is hardcoded; the boundary is injected as **bounded message bytes
 on stdin or over the authenticated socket**, so tests supply fixtures. A path
 variant remains available only if the path is controller-owned and resolved
-anchored and fd-relative per D20, and descriptor passing follows D9's
-discipline if an implementation reaches for it at all.
+anchored and fd-relative per D20 under all three `openat2` resolve flags, and
+descriptor passing follows D9's discipline if an implementation reaches for it
+at all.
 
 **Two variants of trusted binding evidence, one verifier.** The verifier
 accepts exactly two forms and rejects everything else:
 
 1. **`GasCityControllerDispatch`** - the record or receipt emitted by D7's
    controller when it owned the dispatch.
-2. **`StandaloneHarnessObservation`** - the existing Copilot harness's
-   **observed** dispatch result, captured under the interactive operator
-   session. This is what the standalone skill already produces; its adapter
-   turns that observation into trusted evidence.
+2. **`StandaloneHarnessReceipt`** - an **opaque harness-issued run or receipt
+   locator**, resolved through an authoritative harness or session receipt
+   resolver that returns the binding. The adapter may carry the locator; it may
+   **not** mint trust from model or effort strings a human typed. A locator
+   that cannot be resolved is a typed error and the submission fails closed.
 
-The standalone producer therefore remains fully functional with no Gas City and
-no controller present, which D3 requires. Both variants converge on the same
-typed verifier and then on `validate_record_set`. **Raw producer strings are
-rejected for both**: a record's own claim about its binding is never evidence,
-whichever producer wrote it.
+An earlier revision accepted an "operator-recorded observation" here. That was
+wrong: a value a person transcribes into an adapter is a self-asserted string
+with a longer story attached, and the verifier cannot tell the two apart. The
+replacement moves the trust to whatever the harness itself issued and to a
+resolver that can be asked, so nothing in the path depends on the honesty of
+the transcription.
 
-Assurance is not equal across the two, and this record says so rather than
-implying it. The controller variant is a record written by a process the agent
-cannot impersonate. The standalone variant is an operator-recorded observation
-from an interactive session, so its assurance rests on the operator having run
-the harness rather than on a cryptographic proof. That is materially stronger
-than a self-asserted string and materially weaker than the controller path, and
-strengthening it is future work rather than a v1 blocker.
+The standalone producer therefore remains fully functional with **no Gas City
+and no controller**, which D3 requires, but it does require an authoritative
+resolver. The standalone skill and its adapter are updated to capture the
+harness-provided receipt locator **automatically** rather than prompting for
+it, which is the change that keeps D3 satisfied without reintroducing a typed
+string.
+
+Both variants converge on the same typed verifier and then on
+`validate_record_set`. **Raw producer strings are rejected for both**: a
+record's own claim about its binding is never evidence, whichever producer
+wrote it.
 
 No round manifest is added to xtask. The gate refuses any set containing a
 finding and has no round concept, so **rounds stay in the producer**: Gas City
@@ -587,17 +594,25 @@ distinguishes the two cases it can actually be in:
   git -C <handoff-repo> push origin <full-sha>:refs/heads/<branch>
   ```
 
-- **Existing PR branch, after a rebase or amend.** The publisher first reads
-  the expected current remote sha, then pushes with a lease naming it:
+- **Existing PR branch, after a rebase or amend.** The publisher does **not**
+  read remote state and call whatever it finds "expected": a fresh read races
+  the very concurrent push the lease exists to catch, and would happily lease
+  against someone else's commit. The expected value comes from the
+  controller-bound manifest, which carries **`expected_previous_remote_sha`**
+  captured from the known PR branch state *before* the replacement candidate
+  was produced. The publisher uses that exact value:
 
   ```
   git -C <handoff-repo> push origin <full-sha>:refs/heads/<branch> \
     --force-with-lease=refs/heads/<branch>:<expected-old-sha>
   ```
 
-  If the remote has moved since that read, the lease fails and the publisher
-  **refuses** rather than retrying with a wider hammer. Unexpected remote
-  movement is a condition to report, not to overwrite.
+  If the remote has moved since the manifest captured that value, the lease
+  fails and the publisher **refuses** rather than retrying with a wider hammer.
+  If the manifest carries no `expected_previous_remote_sha` at all, a
+  non-fast-forward update is **refused outright**: absent expected state is not
+  permission to force. Unexpected remote movement is a condition to report, not
+  to overwrite.
 
 Retry is safe in both paths. The publisher looks for an existing pull request
 by head branch, creates one if absent and edits the body if present, so a
@@ -612,12 +627,16 @@ descriptor to mismanage.
 
 Descriptor passing is not required and should not be reached for by default. If
 a chosen implementation does pass one, then exactly **one** descriptor is
-passed, it is received with `MSG_CMSG_CLOEXEC`, the receiver owns and closes
-it, the sender opens it safely, and unbounded descriptor reception is refused.
+passed; the sender opens it safely and **closes its own copy immediately after
+a successful `sendmsg`**; the receiver takes it with `MSG_CMSG_CLOEXEC` and
+owns and closes it; and unbounded descriptor reception is refused. Neither side
+accumulates descriptors across repeated transfers, which is a property a test
+can count rather than a discipline a comment can request.
 This record does not claim that setting close-on-exec after creation is atomic,
 because it is not. A path variant remains possible only if the path is
-controller-owned and resolved anchored and fd-relative per D20; bytes over the
-socket remain preferred.
+controller-owned and resolved anchored and fd-relative per D20, meaning
+`openat2` with `RESOLVE_BENEATH | RESOLVE_NO_MAGICLINKS | RESOLVE_NO_SYMLINKS`
+or proven-equivalent semantics; bytes over the socket remain preferred.
 
 Temporary and handoff state is removed on both success and failure, with
 bounded recovery for what a crash leaves behind.
@@ -730,7 +749,9 @@ two of them need mechanism the module must actually wire rather than inherit:
   supply it. A user-scope supervisor stopped by the system manager can take its
   whole cgroup with it, killing tmux panes immediately, so the module must
   configure the supervisor unit's stop behaviour so the supervisor gets time to
-  drain and adopt sessions and systemd escalates only after a bounded interval.
+  **drain** sessions and systemd escalates only after a bounded interval.
+  Adoption and reconciliation are a **start** concern, not a stop one, and
+  conflating them in the stop interval hides which phase a failure came from.
   Whether `KillMode=mixed` is the right expression of that is **prototype
   gated**, not asserted here; the property is that no immediate cgroup-wide
   kill of agent panes occurs before the drain bound expires.
@@ -764,15 +785,25 @@ the protected record, not the bead, and routes:
 | --- | --- |
 | `approve` | Continue to the next stage |
 | `revise` | Invalidate the current artifact approval and route back to the producing stage or its fix loop |
-| `rescope` | Park or terminate the current run and start a successor route, linked to the source run, requiring its own approvals |
+| `rescope` | Park or terminate the current run and attach or create the successor route, linked to the source run, requiring its own approvals |
 | `abort` | Cancel and close the remaining workflow and stop |
+
+**Rescope is idempotent by construction.** The successor's identity is derived
+deterministically from the source run id together with the protected decision
+record's id or digest, so the same decision always names the same successor.
+The router looks for an existing linked successor before creating one; a retry,
+including one after a crash between creation and completion, **attaches to and
+returns the existing successor** rather than creating a second. A rescope that
+could produce two successors would fork the work and leave one of them
+unapproved.
 
 Two consequences worth stating. **A naked `gc bd close` is not authority**: the
 controller performs the close after recording, and the router consults the
-record, so a bead closed by anything else advances nothing. And the router
-reports actionable status, naming the stage it routed to and the command that
-resumes or inspects the run, rather than leaving the operator to infer what a
-closed bead meant.
+record, so a bead closed by anything else advances nothing, and a bead whose
+state disagrees with the record is a diagnosed mismatch in which **the record
+governs**. And the router reports actionable status, naming the stage it routed
+to and the command that resumes or inspects the run, rather than leaving the
+operator to infer what a closed bead meant.
 
 Ingress remains restricted to the one configured operator identity and channel.
 A rejection emits a bounded local diagnostic naming **only its closed rejection
@@ -854,8 +885,11 @@ message or operator output contains any of: a credential or token; a raw
 Discord id, user id or run handle; an opaque session or run secret; a URL
 carrying authentication; a store or host filesystem path; an argument vector,
 environment block or working directory; a socket path, unit name or PID; raw
-terminal bytes; a shell or session name; or raw command output. Audit records
-may carry approved fixed digests and closed enum values only.
+terminal bytes; a shell or session name; raw command output; a span attribute
+or metric label carrying any of the above; or a `Debug` rendering that exposes
+them. Audit records may carry approved fixed digests and closed enum values
+only, and protected observable surfaces carry explicit redacting `Debug`
+implementations rather than derived ones.
 
 The scan reports the number of records, log lines and error strings examined,
 fails closed on an empty corpus, and ships one planted control per category
@@ -943,9 +977,12 @@ vulnerability rather than a detail.** Any filesystem path a helper, controller,
 publisher or audit sink owns and resolves is resolved **anchored and
 fd-relative** from a pinned descriptor, refusing symlinks and magic links, so a
 component swapped between validation and use cannot redirect a privileged write
-or read. `openat2` with `RESOLVE_BENEATH` and `RESOLVE_NO_MAGICLINKS`, or an
-equivalent component walk with `O_DIRECTORY | O_NOFOLLOW` and verification,
-satisfies it; which one is spec-level. This repository already uses that shape
+or read. `openat2` with `RESOLVE_BENEATH | RESOLVE_NO_MAGICLINKS | RESOLVE_NO_SYMLINKS`
+satisfies it, as does an equivalent with **proven** equal semantics, such as a
+component walk with `O_DIRECTORY | O_NOFOLLOW` and `fstat` verification of each
+opened component. All three resolve flags are required together; dropping
+`RESOLVE_NO_SYMLINKS` leaves a symlinked leaf traversable, which is the case a
+planted control catches. This repository already uses that shape
 in `packages/xtask/src/delivery/storage.rs`, so it is established practice
 rather than a novel demand.
 
@@ -1093,11 +1130,19 @@ and it ships planted violations it must reject.
   eligibility**: the wave is not merge-eligible, the records do not carry over,
   and a fresh unanimous round against the new snapshot is required. Rejecting a
   late submission alone does not satisfy this item.
-- **M11 Check scripts are unwritable by agents.** Every script referenced by a
-  privileged or orchestrator-run `check` step resolves outside every
-  agent-writable tree and is not writable by the `gascity` identity. A planted
-  hostile edit from a task worktree is refused, and the edited script is
-  observed never to execute.
+- **M11 Check scripts are unwritable by agents, and helper paths are anchored.**
+  Every script referenced by a privileged or orchestrator-run `check` step
+  resolves outside every agent-writable tree and is not writable by the
+  `gascity` identity. A planted hostile edit from a task worktree is refused,
+  and the edited script is observed never to execute.
+
+  Every filesystem path the controller, publisher or audit sink owns is
+  resolved with `openat2` under
+  `RESOLVE_BENEATH | RESOLVE_NO_MAGICLINKS | RESOLVE_NO_SYMLINKS`, or proven
+  equivalent semantics. Three planted controls are each refused: a symlinked
+  leaf, a symlinked intermediate component, and a magic-link component. A
+  resolver missing `RESOLVE_NO_SYMLINKS` passes the magic-link control and
+  fails the symlinked-leaf control, which is why all three are required.
 - **M12 Egress denies the right things and permits the control plane.** From
   the confined context: `gc bd update`, `gc bd close`, a check script and a
   supervisor call all succeed, and the Dolt port and `127.0.0.1:8372` are
@@ -1189,26 +1234,41 @@ and it ships planted violations it must reject.
   each asserted on the observed argument vector, and none of them a bare force:
   an **initial** push of a new branch with no lease; a **fast-forward retry**
   of the same publication, which converges; a **non-fast-forward update** after
-  a rebase, which carries
-  `--force-with-lease=refs/heads/<branch>:<expected-old-sha>` and succeeds; and
-  a **stale lease**, where the remote moved after the expected sha was read,
-  which is **refused** rather than forced. PR create-or-edit is exercised
-  across the retry: created once, body edited the second time, never
-  duplicated.
+  a rebase, carrying the manifest's `expected_previous_remote_sha` in
+  `--force-with-lease`, which succeeds; and a **missing lease**, where the
+  manifest carries no expected value, which is **refused outright** rather than
+  forced.
+
+  Two concurrency cases distinguish where the expected value came from: a
+  remote commit landing **before** the manifest was produced is captured by it
+  and the update succeeds; a remote commit landing **after** the manifest was
+  produced makes the lease stale and the update is **refused**. A publisher
+  that freshly reads remote state would pass the second case wrongly, so the
+  test asserts the value used came from the manifest.
+
+  PR create-or-edit is exercised across the retry: created once, body edited
+  the second time, never duplicated.
 
   The body arrives as bounded message bytes over the socket or stdin, so a
   planted attempt to swap a file at a caller-supplied path has nothing to
   swap. If the implementation passes a descriptor instead, exactly one is
-  passed, it is received with `MSG_CMSG_CLOEXEC`, the receiver closes it, and a
+  passed, the sender closes its own copy immediately after a successful
+  `sendmsg`, the receiver takes it with `MSG_CMSG_CLOEXEC` and closes it, and a
   planted attempt to send two or to send an unexpected descriptor is refused.
+  Over a hundred repeated transfers, the open-descriptor count of **both**
+  sender and receiver is observed not to grow.
   Temporary and handoff state is absent after both a successful and a failed
   run, and a crash mid-publication leaves only state a bounded recovery
   removes.
-- **M24 Exactly one publication audit record per attempt.** Counted across a
-  successful publication, one refused for a missing approval, one refused for a
-  stale snapshot and one refused for an underived binding: four attempts, four
-  records, each bounded and redacted, all written through the controller's
-  append-only path and none writable by the `gascity` identity.
+- **M24 Exactly one publication audit record per attempt id.** Four attempts,
+  each with its own attempt id: a successful publication, one refused for a
+  missing approval, one refused for a stale snapshot and one refused for an
+  underived binding. The assertion is **per attempt id**, not an aggregate
+  count: each id maps to exactly one record. Planted controls supply an attempt
+  id with **zero** records and one with **two**, and both are rejected, because
+  an aggregate of four would pass a zero-and-two distribution while proving
+  nothing. Each record is bounded and redacted, written through the append-only
+  path, and none is writable by the `gascity` identity.
 - **M25 Retention is enforced by something that runs, on both bounds.** The
   named enforcer, a `gascity.nix` timer or a pack-owned cleanup command, is
   observed to run on schedule. Two planted corpora are required, not one: round
@@ -1224,8 +1284,11 @@ and it ships planted violations it must reject.
   handle; an opaque session or run secret; a URL carrying authentication; a
   store or host filesystem path; an argument vector, environment block or
   working directory; a socket path, unit name or PID; raw terminal bytes; a
-  shell or session name; or raw command output. Audit records carry only
-  approved fixed digests and closed enum values.
+  shell or session name; raw command output; a span attribute or metric label
+  carrying any of the above; or a `Debug` rendering that exposes them. Audit
+  records carry only approved fixed digests and closed enum values, and
+  protected observable surfaces carry explicit redacting `Debug`
+  implementations.
 
   The scan reports the number of records, log lines and error strings examined
   and **fails closed on an empty corpus**. One planted control per category
@@ -1237,10 +1300,12 @@ and it ships planted violations it must reject.
   A live agent session with an active pane is started **before** the stop, so
   the item cannot pass against an empty supervisor. On stop, that pane is
   observed **not** killed immediately with the supervisor's cgroup; the
-  supervisor receives the configured interval to drain and adopt; and systemd
-  escalates only after the bound expires. Signal delivery and timing are
-  observed rather than inferred from unit file text, and a run in which no
-  session was active is a failed run.
+  supervisor receives the configured interval to **drain**; and systemd
+  escalates only after the bound expires. Adoption is tested as a separate
+  phase on the following **start**, where the supervisor is observed to adopt
+  and reconcile the surviving sessions. Signal delivery and timing are observed
+  rather than inferred from unit file text, and a run in which no session was
+  active is a failed run.
 - **M28 Confinement outlives every agent process.** With an agent deliberately
   ignoring its stop request for the whole grace period, the confinement
   selected by P3 and P8 is observed still in force throughout and torn down
@@ -1249,15 +1314,23 @@ and it ships planted violations it must reject.
 - **M29 Both evidence variants converge on one typed verifier.** Admission
   accepts trusted binding evidence as bounded bytes on stdin or over the
   socket, with no host path hardcoded, and tests supply fixtures for both
-  variants: `GasCityControllerDispatch` and `StandaloneHarnessObservation`.
-  A standalone round is driven to admission **with no controller present**,
-  proving the skill remains functional alone.
+  variants: `GasCityControllerDispatch` and `StandaloneHarnessReceipt`. A
+  standalone round is driven to admission **with no controller present**,
+  proving the skill remains functional alone, and its receipt locator is
+  observed to have been captured **automatically by the adapter** rather than
+  entered by a person.
 
-  Four **well-formed** envelopes are each rejected with their own typed
-  semantic error rather than a parse failure: evidence absent; evidence present
-  but untrusted; evidence contradicting the record's claimed binding; and a
-  record carrying only its own producer strings with no evidence at all, which
-  is refused for **both** producers.
+  For the standalone variant specifically: a locator that **resolves** through
+  the authoritative resolver is accepted and its resolved binding is what the
+  verifier uses; a locator that **cannot be resolved** is refused; a locator
+  whose resolved binding **contradicts** the record is refused; and a
+  submission carrying **typed model and effort strings instead of a locator**
+  is refused. Each refusal is its own typed semantic error on a well-formed
+  envelope, not a parse failure.
+
+  The same shape is exercised for the controller variant: evidence absent,
+  evidence untrusted, evidence contradicting the record, and a record carrying
+  only its own producer strings, all refused.
 
 - **M30 Every decision routes, and no bead is stranded.** All four decisions
   are exercised end to end against a real gate. In each case the controller
@@ -1270,15 +1343,37 @@ and it ships planted violations it must reject.
   is left open with nothing to close it, and the router's reported status names
   the stage it routed to and the command to resume or inspect.
 
+  **Rescope is idempotent.** The successor's identity is derived from the
+  source run id and the protected decision record's id or digest, so a repeated
+  rescope attaches to the existing successor. A crash injected **after the
+  successor is created and before the route completes** is followed by a retry,
+  which returns the same successor rather than creating a second.
+
+  **The record governs, not the bead.** Two divergence controls: a gate bead
+  closed directly with **no** protected decision recorded causes the router to
+  **refuse or park** rather than advance; and a bead whose state disagrees with
+  the record is resolved in favour of the **record**, with the mismatch
+  diagnosed. Together these prove the router does not read the bead as
+  authority, which an advance-on-close implementation would fail.
+
 - **M31 The audit sink is root-owned and append-only.** Submitting a bounded
   typed record from the controller and from the publisher succeeds; submitting
   from the `gascity` identity is refused. Update, delete and truncate have no
   API to call, and attempts to rewrite or truncate the store from every
   non-sink identity fail. An acknowledged submission survives an immediate
-  power-loss simulation, demonstrating the synchronous flush. Daily rotation
-  runs and the bounded retention default is enforced. Separately, the publisher
-  is observed to verify the **controller's protected approval** and to refuse a
-  publication whose approval exists only as an audit line.
+  power-loss simulation, demonstrating the synchronous flush.
+
+  **Retention is proven on planted corpora, not asserted.** Audit records are
+  planted beyond the age bound, beyond the size bound, and beyond the default
+  retention, and rotation is observed to remove **only** eligible sealed
+  records while preserving the content-address and attestation floor. The scan
+  counts the records it examined and fails closed on an empty corpus. A
+  deployment whose enforcer is missing, or whose enforcer runs and removes
+  nothing eligible, fails this item.
+
+  Separately, the publisher is observed to verify the **controller's protected
+  approval** and to refuse a publication whose approval exists only as an audit
+  line.
 
 ## Consequences
 
