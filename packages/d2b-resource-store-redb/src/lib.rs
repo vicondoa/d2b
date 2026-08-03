@@ -62,6 +62,9 @@ pub use values::{
     ValueKind, encode_value,
 };
 
+/// Bound redb's page cache so database scale cannot turn into process RSS.
+pub const REDB_CACHE_SIZE: usize = 4 * 1024 * 1024;
+
 /// Immutable identity and generation binding for one already-provisioned store.
 #[derive(Clone, PartialEq, Eq)]
 pub struct StoreIdentity {
@@ -162,6 +165,7 @@ impl RedbResourceStore {
         let database = tokio::task::spawn_blocking(move || {
             let backend = FileBackend::new(file).map_err(transaction::integrity)?;
             let database = Database::builder()
+                .set_cache_size(REDB_CACHE_SIZE)
                 .create_with_backend(backend)
                 .map_err(transaction::integrity)?;
             transaction::initialize(&database, &open_identity)?;
@@ -202,6 +206,7 @@ impl RedbResourceStore {
         let database = tokio::task::spawn_blocking(move || {
             let backend = FileBackend::new(file).map_err(transaction::integrity)?;
             let database = Database::builder()
+                .set_cache_size(REDB_CACHE_SIZE)
                 .create_with_backend(backend)
                 .map_err(transaction::integrity)?;
             let meta = transaction::validate_identity(&database, &open_identity)?;

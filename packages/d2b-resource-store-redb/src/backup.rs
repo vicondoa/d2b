@@ -448,6 +448,7 @@ impl LogicalBackup {
             .map_err(integrity)
             .map_err(|error| error.with_store_slot(identity.slot()))?;
         let database = Database::builder()
+            .set_cache_size(crate::REDB_CACHE_SIZE)
             .create_with_backend(backend)
             .map_err(integrity)
             .map_err(|error| error.with_store_slot(identity.slot()))?;
