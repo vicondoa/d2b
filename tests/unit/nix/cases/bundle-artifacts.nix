@@ -308,6 +308,13 @@ in
     expected = true;
   };
 
+  "bundle-artifacts/v3-zone-content-hash-has-one-prefix" = {
+    expr = if system != "x86_64-linux" then true else
+      lib.hasPrefix "sha256:" digestBundle.data.contentHash
+      && !(lib.hasPrefix "sha256:sha256:" digestBundle.data.contentHash);
+    expected = true;
+  };
+
   "bundle-artifacts/v3-artifact-catalog-data-matches-realised-json" = {
     expr = if system != "x86_64-linux" then true else
       digestCfg.d2b._artifactCatalogV3.catalogData == realisedCatalog

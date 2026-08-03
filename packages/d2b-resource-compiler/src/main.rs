@@ -230,7 +230,6 @@ fn compile(
 
     let resources_bytes = canonical_value_bytes(&Value::Array(input.resources.clone()))?;
     let content_hash = framed_canonical_digest(RESOURCE_BUNDLE_DOMAIN_TAG, &resources_bytes);
-    let content_hash = format!("sha256:{content_hash}");
     if let Some(expected) = input.expected_content_hash.as_deref()
         && expected != content_hash
     {
