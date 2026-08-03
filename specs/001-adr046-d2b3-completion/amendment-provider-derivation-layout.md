@@ -764,7 +764,7 @@ secret, credential, path, or process data.
 | `provider-digest-mismatch` | Any pinned digest disagrees | artifact ID, which digest, expected value, actual value, the two disagreeing sources |
 | `provider-manifest-not-canonical` | File octets are not their own canonical bytes | artifact ID, layout-relative path, byte offset of first divergence, expected and observed lengths, and the fixed remediation "re-emit with the toolkit canonical serializer; the usual cause is a trailing newline" |
 | `provider-executable-name-invalid` | A `bin/` entry violates the 4.9.3 grammar | artifact ID, the rejected entry, the grammar |
-| `provider-executable-set-empty` | `bin/` exists with no entries | artifact ID |
+| `provider-executable-set-empty` | `bin/` exists with no entries | artifact ID, and both remedies, since the right one depends on intent: remove `bin/` entirely if the Provider ships no executable of its own and declare an empty `executableDigests`, or install at least one launchable ELF and declare its digest |
 | `provider-executable-not-elf` | **Phase 2 only.** A `bin/` entry is not an `ET_EXEC`/`ET_DYN` ELF64 image, established by the compiler reading a bounded prefix | artifact ID, the entry, first four octets as hex, and the `d2b.lib.buildProviderElfShim` remedy |
 | `provider-launch-format-rejected` | **Phase 3 only.** `execveat` refused the verified regular file: `ENOEXEC` for an invalid image, or `ENOENT` after a successful open, which can only be an unresolvable script interpreter | artifact ID, component ID, `binaryRef`, errno token. No content bytes are read, because the launcher holds `O_PATH` |
 | `provider-launch-permission-denied` | **Phase 3 only.** `execveat` returned `EACCES`: a valid ELF the kernel will not execute, in practice a missing execute bit. Defense in depth behind `provider-executable-not-executable`, distinct because the remedy differs | artifact ID, component ID, `binaryRef`, errno token |
@@ -772,7 +772,7 @@ secret, credential, path, or process data.
 | `provider-executable-declaration-inconsistent` | **Provider-level.** The §4.9.3 biconditional is violated: `executableDigests` empty while some component is `Launchable`, or non-empty while none is | artifact ID, which side failed, count of launchable components. **No component ID**, because the fact is Provider-wide |
 | `provider-executable-not-executable` | **Phase 2 only.** A `bin/` entry is a valid ELF but `st_mode & 0o111 == 0` | artifact ID, the entry, observed mode as octal, and the remedy: set the execute bit in the install step |
 | `provider-executable-not-regular` | A `bin/` entry is not a regular file | artifact ID, entry, observed file type token |
-| `provider-executable-set-mismatch` | Key set and directory set differ | artifact ID, the symmetric difference and the side of each name |
+| `provider-executable-set-mismatch` | Key set and directory set differ | artifact ID; at most **four** names from the symmetric difference, in sorted order, each labelled with the side it came from and truncated to 64 bytes; and the **total mismatch count**. Bounded because both sides are publisher-supplied and the difference can be arbitrarily large |
 | `provider-binary-ref-unresolved` | A `binaryRef` is not a key | artifact ID, component ID, the ref |
 
 **Bounded safe representation.** Each named value is safe under section 13.4 for
@@ -791,6 +791,13 @@ a stated reason, rather than by assuming the class:
   path are never emitted**, which is the clause of 13.4 that binds.
 - The canonical-JSON failure emits a byte offset and two lengths, never file
   content.
+- **Every set-valued payload follows one bounding discipline**, so a future code
+  inherits it rather than being fixed after a reviewer notices: at most four
+  members, sorted for determinism, each truncated to 64 bytes with an explicit
+  marker, accompanied by the true total count rather than the sample size, since
+  "4 mismatches" and "4 of 900 mismatches" call for different responses. This
+  binds `provider-executable-set-mismatch` and `provider-layout-entry-unexpected`
+  today; a set-valued payload added later without it is a defect in that code.
 - Key material, manifest contents, config values, and store paths are never
   emitted by any code above.
 
@@ -853,7 +860,7 @@ section 4 below; it had none.
 > | `nix-build-layout-entry-unexpected` | A derivation with a fourth entry under `share/d2b/provider/` fails build naming it; the cases are a stray regular file, a subdirectory, and a symlink, so the refusal is by enumeration rather than by file type. A derivation with exactly the three required entries succeeds, and the pair is asserted together. Many extra entries produce a message still within the §13.4 512-byte bound, with the count reported and the name list truncated |
 > | `nix-build-required-output-not-regular` | Each of the three `share/d2b/provider/` paths, replaced in turn by a symlink (including one resolving inside the same output), **a symlink whose target is a procfs-style magic link such as `/proc/self/fd/<n>`**, a directory, a FIFO, a Unix socket, and a device node, fails build naming the path and the observed file type. The FIFO case must not hang, which is what `O_NONBLOCK` buys; the socket case is refused by `ENXIO` at open rather than by `fstat`, and both refusals are asserted distinctly. The magic-link case additionally asserts that the requested `open_how.resolve` mask carried `RESOLVE_NO_MAGICLINKS`, observable at the §4.9.7 seam, since with `RESOLVE_NO_SYMLINKS` also set the refusal alone cannot attribute itself to either flag |
 > | `nix-build-manifest-not-canonical` | A manifest or config schema whose octets are not their own `d2b-cjson/v1` canonical bytes fails build naming the file and the first divergent byte offset; a trailing newline alone is sufficient to fail |
-> | `nix-build-executable-set-mismatch` | `package.executableDigests` keys unequal to the `bin/` entry set fails build naming the symmetric difference |
+> | `nix-build-executable-set-mismatch` | `package.executableDigests` keys unequal to the `bin/` entry set fails build naming the symmetric difference. Cardinality is asserted, not assumed: a small difference reports every name; a difference of 64 names, half missing from each side and each at the 64-byte maximum, reports exactly four sorted names with side labels plus the true total of 64, and the whole message stays inside the §13.4 512-byte bound. The reported count is the real difference size, not the truncated sample size |
 > | `nix-build-executable-set-empty` | A derivation with a `bin/` directory containing no entries fails build, and is distinguished from a Provider that legitimately declares an empty `package.executableDigests` and ships no `bin/` at all, which succeeds |
 > | `nix-build-executable-name-invalid` | A `bin/` entry whose name violates `^[a-z][a-z0-9-]*$`, exceeds 64 bytes, contains `/`, `.`, `..`, NUL, an ASCII control byte, or whitespace, begins with `-`, or is not valid UTF-8, fails build naming the entry; the name is checked as read from the directory, not only as declared in the manifest |
 > | `nix-build-executable-not-regular-file` | A `bin/` entry that is a symlink, **a symlink to a procfs-style magic link**, a directory, FIFO, socket, or device node fails build naming the entry, with the same `RESOLVE_NO_MAGICLINKS` mask assertion at the §4.9.7 seam |
@@ -866,7 +873,7 @@ section 4 below; it had none.
 > | `nix-build-binary-ref-unresolved` | A component descriptor `binaryRef` absent from `package.executableDigests` fails build naming the component and the ref |
 > | `nix-build-executable-digest-mismatch` | A `bin/` file whose SHA-256 differs from its `package.executableDigests` value fails build naming the binary and both digests in full |
 > | `nix-build-catalog-manifest-disagreement` | Operator-authored catalog digests, manifest-declared digests, and compiler-recomputed digests disagreeing on any pinned value fails build naming the two disagreeing sources and both digest values |
-> | `nix-build-provider-error-redaction` | No failure message from any code in section 4.9.8 contains an absolute path, a `/nix/store` prefix, key material, manifest content, or a config value, and every message is within the section 13.4 512-byte bound |
+> | `nix-build-provider-error-redaction` | No failure message from any code in §4.9.8 contains an absolute path, a `/nix/store` prefix, key material, manifest content, or a config value, and every message is within the §13.4 512-byte bound. The bound is asserted at each code worst case, not a typical one: every set-valued payload is driven at maximum cardinality with maximum-length members, and every truncation reports the true total rather than the sample size |
 
 ## 5. `ADR-046-resources-zone-control` section 17: correct two Validation fields
 
@@ -1112,12 +1119,60 @@ verifying a file and reading it.
 ### 7.5 `ADR-046-provider-model-and-packaging`, "Toolkit"
 
 The Toolkit section enumerates what the official Rust toolkit provides and ends
-with "Provider flake/project templates". Add the framework-owned Nix helper
-alongside it, since it is the supported route the ELF rule of 4.9.3 depends on:
+with "Provider flake/project templates". Add two entries, both of which exist
+because this amendment created the obligation they discharge:
 
 > - `d2b.lib.buildProviderElfShim`, the framework-owned builder that produces a
 >   conforming ELF entry point for an interpreted Provider component
 >   (`ADR-046-resources-zone-control` section 4.9.3a).
+> - **Canonical artifact emission.** The toolkit is the supported writer of
+>   `provider-manifest.json` and `config-schema.json`, emitting exactly the bytes
+>   section 4.9.4 requires. A Provider author never hand-canonicalizes.
+
+#### 7.5.1 The canonical-emission obligation, stated normatively
+
+Section 4.9.4 requires both JSON artifacts to *be* their own `d2b-cjson/v1`
+canonical bytes, and the resource compiler refuses any byte that differs. That
+rule is only reasonable if producing those bytes is a library call rather than an
+authoring discipline, so `ADR046-provider-001` acquires the obligation:
+
+**The toolkit MUST expose canonical emission as the only supported writer.**
+
+| Surface | Contract |
+| --- | --- |
+| `d2b_provider_toolkit::manifest::emit_canonical(&ProviderManifest) -> Vec<u8>` | Returns the exact octets section 4.9.4 digests: `d2b-cjson/v1` serialization, object keys sorted by code unit, integers only, NFC-validated strings, **no trailing newline**, no pretty-printing, no BOM |
+| `d2b_provider_toolkit::schema::emit_canonical(&RootConfigSchema) -> Vec<u8>` | The same contract for `config-schema.json` |
+| `d2b-provider-toolkit manifest emit --out <path>` | Build-script entry point writing those octets; creates the file with mode `0644` and no trailing newline |
+| `d2b-provider-toolkit manifest verify <path>` | Reads a file and reports whether it already equals its own canonical bytes, with the first divergent byte offset when it does not. This is the same predicate the resource compiler applies, so an author can answer "will Phase 2 accept this" before the build |
+
+There is deliberately **no** pretty-printing flag, no indentation option, and no
+`--newline` switch. Every one of them would produce a file the compiler refuses,
+so offering them would be offering a way to fail.
+
+**Required toolkit tests**, in `packages/d2b-provider-toolkit/tests/`:
+
+- **Round-trip:** `emit_canonical` output parses, re-serializes to byte-identical
+  output, and equals its own canonical form. This is the property section 4.9.4
+  states, asserted at the producer rather than only at the consumer.
+- **No trailing newline:** the emitted buffer's last octet is not `0x0a`, and the
+  file written by the CLI has the same length as the buffer.
+- **Digest agreement:** the SHA-256 of the emitted octets equals the
+  `manifestDigest` the resource compiler would compute for the same manifest,
+  pinned as a committed vector so a change to either side breaks the test rather
+  than silently diverging.
+- **Key-order independence:** two manifests differing only in the order fields
+  were set produce identical octets.
+- **`verify` agreement:** for a hand-mangled file with a trailing newline, with
+  reordered keys, and with two-space indentation, `verify` reports failure and
+  the reported offset matches the offset `provider-manifest-not-canonical` would
+  report.
+
+This is a toolkit obligation, not a `ADR046-zone-control-015` one, and it gates
+none of the twenty-three scenarios: `nix-build-manifest-not-canonical` is
+testable today with a deliberately non-canonical fixture and needs no toolkit.
+What the obligation buys is that the rule is satisfiable by ordinary means. Its
+absence would not block the compiler; it would push every Provider author into
+hand-canonicalizing JSON, which is the failure this section exists to prevent.
 
 ## 8. Applying this amendment: the manifests are generated
 
@@ -1162,13 +1217,16 @@ Not in scope for this amendment; recorded so it is not lost.
 
 ## 11. Implementation obligation this amendment creates
 
-Unlike section 10, these are **in scope and blocking**, so they are recorded
-separately rather than as observed drift.
+Unlike section 10, these are **in scope**, so they are recorded
+separately rather than as observed drift. Two of the three block named
+scenarios; the third blocks none and is recorded because the rule it
+discharges is otherwise satisfiable only by hand.
 
 | Obligation | Owner | Blocks |
 | --- | --- | --- |
 | `ComponentDescriptor` in `packages/d2b-contracts/src/v3/provider.rs` gains a `ComponentExecution` field carrying a validated `BinaryRef` newtype, with `Deserialize` routed through the validating parser and the flat `binaryRef` wire mapping of §4.9.3. Not `Option<BinaryRef>`: `None` would mean both "not launchable" and "launchable, field omitted". The shipped struct declares `component_id`, `component_type`, `exported_resource_types`, `exported_methods`, `allowed_domains`, `cardinality`, `config_digest`, `dependencies`, `declares_state_volume`, `state_namespaces` and no `binary_ref`, while §4.3.3 defines `binaryRef` three times as normative. The `InProcessBootstrap` arm is admissible only for the closed bootstrap-exception list, per §6.3 | W5, alongside `ADR046-zone-control-015` | `nix-build-binary-ref-unresolved`, `nix-build-component-execution-invalid`, `nix-build-executable-declaration-inconsistent`, and `nix-build-manifest-binary-ref-wire-compatible`; §4.9.3 enumerates the eighteen gated by neither obligation |
 | `d2b.lib.buildProviderElfShim` is implemented and exposed on the flake's existing `lib` output, per §4.9.3a. The flake already carries `lib = nixpkgs.lib.makeExtensible (_: { evalFixture = ...; })`, so this extends a surface rather than creating one. Framework-owned rather than a sibling flake because the framework is the party imposing the ELF rule | W5, alongside `ADR046-zone-control-015` | `nix-build-elf-shim-satisfies-the-layout`, which cannot be written before the helper exists; and it is what makes the ELF rule of §4.9.3 a supported path rather than only a prohibition |
+| Canonical artifact emission in `packages/d2b-provider-toolkit/`, per §7.5.1: `emit_canonical` for the manifest and the root config schema, a `manifest emit` / `manifest verify` CLI pair, and the five required toolkit tests. Owned by `ADR046-provider-001` rather than `-015`, because it is the producer side of the §4.9.4 canonicality rule | W5, `ADR046-provider-001` | **Nothing.** `nix-build-manifest-not-canonical` is testable with a hand-made non-canonical fixture. Recorded here because without it the rule is satisfiable only by hand-canonicalizing JSON, which is the outcome §7.5.1 exists to prevent |
 
 The `ComponentDescriptor` drift predates this amendment. Both are recorded as
 obligations rather than observed drift because §4.9.3 depends on them, and

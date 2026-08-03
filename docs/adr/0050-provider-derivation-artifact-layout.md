@@ -951,9 +951,9 @@ secret, credential, path, or process data. These codes join that table.
 | `provider-digest-mismatch` | Any pinned digest disagrees | artifact ID, which digest, expected value, actual value, and the two disagreeing sources |
 | `provider-manifest-not-canonical` | File octets are not their own canonical bytes | artifact ID, layout-relative path, byte offset of first divergence, expected and observed lengths |
 | `provider-executable-name-invalid` | A `bin/` entry violates the item 3 grammar | artifact ID, the rejected entry, the grammar |
-| `provider-executable-set-empty` | `bin/` exists but has no entries | artifact ID |
+| `provider-executable-set-empty` | `bin/` exists but has no entries | artifact ID, and both remedies, since the right one depends on intent: remove `bin/` entirely if the Provider ships no executable of its own and declare an empty `executableDigests`, or install at least one launchable ELF and declare its digest |
 | `provider-executable-not-regular` | A `bin/` entry is a symlink, directory, FIFO, socket, or device node | artifact ID, the entry, observed file type token |
-| `provider-executable-set-mismatch` | Key set and directory set differ | artifact ID, the symmetric difference and the side of each name |
+| `provider-executable-set-mismatch` | Key set and directory set differ | artifact ID; at most **four** names from the symmetric difference, in sorted order, each labelled with the side it came from and truncated to 64 bytes; and the **total mismatch count**, so the operator learns the scale even when the sample is truncated. Bounded because both sides are publisher-supplied and the difference can be arbitrarily large |
 | `provider-binary-ref-unresolved` | A `binaryRef` is not a key | artifact ID, component ID, the ref |
 
 **Four signature codes, not one, is the point.** "Signature chain invalid" is
@@ -985,6 +985,14 @@ conflict once each value is examined rather than the class assumed:
   content. Bounded by construction, and it is what makes the failure fixable.
   The remediation text is fixed: "re-emit with the toolkit canonical serializer;
   the usual cause is a trailing newline."
+- **Every set-valued payload follows one bounding discipline**, so a future code
+  inherits it rather than being fixed after a reviewer notices: at most four
+  members, sorted for determinism, each truncated to 64 bytes with an explicit
+  marker, accompanied by the true total count. The count is the real cardinality
+  and not the sample size, because "4 mismatches" and "4 of 900 mismatches" call
+  for different operator responses. This binds `provider-executable-set-mismatch`
+  and `provider-layout-entry-unexpected` today; a set-valued payload added later
+  without it is a defect in that code, not a new decision.
 - Key material, manifest contents, config values, and store paths are never
   emitted by any code above.
 
@@ -1024,14 +1032,14 @@ The missing scenarios are added to section 15.8. Each is named so
 | `nix-build-manifest-binary-ref-wire-compatible` | 2 | A component descriptor authored with the flat `binaryRef` field of section 4.3.3 parses unchanged, round-trips to identical bytes, and yields an unchanged `manifestDigest`; a `binaryRef` violating the item 3 grammar is refused during deserialization rather than after |
 | `nix-build-manifest-signature-invalid` | 2 | Four distinct cases fail with four distinct codes: unregistered publisher, unresolvable `signatureId`, a `.sig` that is not exactly 64 octets, and 64 well-formed octets that do not verify |
 | `nix-build-manifest-not-canonical` | 2 | A manifest or config schema whose octets are not their own `d2b-cjson/v1` canonical bytes fails build naming the file and the first divergent byte offset; a trailing newline alone is sufficient to fail |
-| `nix-build-executable-set-mismatch` | 2 | `executableDigests` keys unequal to the `bin/` entry set fails build naming the symmetric difference |
+| `nix-build-executable-set-mismatch` | 2 | `executableDigests` keys unequal to the `bin/` entry set fails build naming the symmetric difference. Cardinality is asserted, not assumed: a small difference reports every name; a difference of 64 names, half missing from each side and each name at the 64-byte maximum, reports exactly four sorted names with their side labels plus the true total of 64, and the whole message stays inside the section 13.4 512-byte bound. The reported count is the real difference size, not the truncated sample size |
 | `nix-build-executable-set-empty` | 2 | A derivation with a `bin/` directory containing no entries fails build, and is distinguished from a Provider that legitimately declares an empty `executableDigests` and ships no `bin/` at all, which succeeds |
 | `nix-build-executable-name-invalid` | 2 | A `bin/` entry whose name violates `^[a-z][a-z0-9-]*$`, exceeds 64 bytes, contains `/`, `.`, `..`, NUL, an ASCII control byte, or whitespace, begins with `-`, or is not valid UTF-8, fails build naming the entry; the name is checked as read from the directory, not only as declared in the manifest |
 | `nix-build-executable-not-regular-file` | 2 | A `bin/` entry that is a symlink, **a symlink to a procfs-style magic link**, a directory, FIFO, socket, or device node fails build naming the entry, with the same `RESOLVE_NO_MAGICLINKS` mask assertion at the seam |
 | `nix-build-binary-ref-unresolved` | 2 | A component `binaryRef` absent from `executableDigests` fails build naming the component and the ref |
 | `nix-build-executable-digest-mismatch` | 2 | A `bin/` file whose SHA-256 differs from its `executableDigests` value fails build naming the binary and both digests in full |
 | `nix-build-catalog-manifest-disagreement` | 2 | Operator-authored catalog digests, manifest-declared digests, and compiler-recomputed digests disagreeing on any pinned value fails build naming the two disagreeing sources and both digest values |
-| `nix-build-provider-error-redaction` | 2 | No failure message from any code in item 9 contains an absolute path, a `/nix/store` prefix, key material, manifest content, or a config value, and every message is within the section 13.4 512-byte bound |
+| `nix-build-provider-error-redaction` | 2 | No failure message from any code in item 9 contains an absolute path, a `/nix/store` prefix, key material, manifest content, or a config value, and every message is within the section 13.4 512-byte bound. The bound is asserted at each code's worst case, not at a typical one: every set-valued payload is driven at maximum cardinality with maximum-length members, and every truncation reports the true total rather than the sample size |
 
 ### 12. The scenario names two work items cite are corrected
 
@@ -1295,8 +1303,12 @@ call `execveat`" a greppable question with one answer.
 **Byte-canonical JSON files are a real authoring burden.** A publisher cannot
 hand-write `provider-manifest.json` and have it pass; it must be emitted by a
 canonicalizing serializer, with no trailing newline, which will surprise anyone
-who opens it in an editor that adds one. The toolkit has to emit both files, and
-`ADR046-provider-001` acquires that obligation. The property bought is that the
+who opens it in an editor that adds one. That burden is not left with the author:
+`ADR046-provider-001` acquires the obligation to make canonical emission the
+toolkit's only supported writer, with a `manifest verify` command that answers
+"will Phase 2 accept this" before the build, and no pretty-print or newline
+option, since either would produce a file the compiler refuses. The amendment
+states the surface and the required tests. The property bought is that the
 digest in the catalog covers exactly the bytes a reviewer reads. Item 9 makes the
 failure survivable by naming the first divergent byte offset and the remediation
 rather than saying "not canonical".
