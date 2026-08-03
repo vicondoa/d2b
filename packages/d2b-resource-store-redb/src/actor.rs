@@ -1300,6 +1300,15 @@ impl ReadPool {
         operation: &'static str,
         make: impl FnOnce(oneshot::Sender<Result<T, StoreError>>) -> ReadCommand,
     ) -> Result<T, StoreError> {
+        self.submit_with_hold(operation, make, None).await
+    }
+
+    async fn submit_with_hold<T>(
+        &self,
+        operation: &'static str,
+        make: impl FnOnce(oneshot::Sender<Result<T, StoreError>>) -> ReadCommand,
+        hold: Option<ReadHold>,
+    ) -> Result<T, StoreError> {
         let started = Instant::now();
         let permit = Arc::clone(&self.permits)
             .try_acquire_owned()
@@ -1315,6 +1324,7 @@ impl ReadPool {
                 command: make(response),
                 deadline,
                 permit,
+                hold,
             })
             .map_err(|error| match error {
                 std::sync::mpsc::TrySendError::Full(_) => backpressure(),
@@ -1392,9 +1402,22 @@ impl ReadPool {
     }
 
     #[cfg(test)]
-    pub(crate) async fn expiry_probe(&self) -> Result<(), StoreError> {
-        self.submit("scan", |response| ReadCommand::NeverRespond { response })
-            .await
+    pub(crate) async fn expiry_probe(
+        &self,
+        started: oneshot::Sender<()>,
+        release: std::sync::mpsc::Receiver<()>,
+        completed: oneshot::Sender<()>,
+    ) -> Result<(), StoreError> {
+        self.submit_with_hold(
+            "scan",
+            |response| ReadCommand::NeverRespond { response },
+            Some(ReadHold {
+                started,
+                release,
+                completed,
+            }),
+        )
+        .await
     }
 
     #[cfg(test)]
@@ -1428,7 +1451,18 @@ struct ReadWork {
     command: ReadCommand,
     deadline: Instant,
     permit: OwnedSemaphorePermit,
+    hold: Option<ReadHold>,
 }
+
+#[cfg(test)]
+struct ReadHold {
+    started: oneshot::Sender<()>,
+    release: std::sync::mpsc::Receiver<()>,
+    completed: oneshot::Sender<()>,
+}
+
+#[cfg(not(test))]
+struct ReadHold;
 
 enum ReadCommand {
     Get {
@@ -1463,6 +1497,7 @@ fn read_worker(database: Arc<Database>, receiver: std::sync::mpsc::Receiver<Read
             command,
             deadline,
             permit,
+            hold,
         }) = command
         else {
             return;
@@ -1470,8 +1505,16 @@ fn read_worker(database: Arc<Database>, receiver: std::sync::mpsc::Receiver<Read
         if Instant::now() >= deadline {
             send_read_result(command, Err(timeout()));
             drop(permit);
+            #[cfg(test)]
+            if let Some(hold) = hold {
+                let _ = hold.completed.send(());
+            }
+            #[cfg(not(test))]
+            let _ = hold;
             continue;
         }
+        #[cfg(test)]
+        let mut completed: Option<oneshot::Sender<()>> = None;
         match command {
             ReadCommand::Get { request, response } => {
                 let _ = response.send(read_get(&database, request, deadline));
@@ -1513,11 +1556,21 @@ fn read_worker(database: Arc<Database>, receiver: std::sync::mpsc::Receiver<Read
             }
             #[cfg(test)]
             ReadCommand::NeverRespond { response } => {
-                std::thread::sleep(READ_LIFETIME + Duration::from_millis(10));
+                if let Some(hold) = hold {
+                    let _ = hold.started.send(());
+                    let _ = hold.release.recv();
+                    completed = Some(hold.completed);
+                }
                 let _ = response.send(Err(timeout()));
             }
         }
         drop(permit);
+        #[cfg(test)]
+        if let Some(completed) = completed {
+            let _ = completed.send(());
+        }
+        #[cfg(not(test))]
+        let _ = hold;
     }
 }
 

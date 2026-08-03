@@ -948,14 +948,23 @@ async fn read_lifetime_is_enforced_by_the_paused_clock() {
     let (_directory, file, marker) = provisioned_store();
     let store = provision_store(file, marker, identity()).await.unwrap();
     let store = Arc::new(store);
+    let (started, started_receiver) = tokio::sync::oneshot::channel();
+    let (release, release_receiver) = std::sync::mpsc::channel();
+    let (completed, completed_receiver) = tokio::sync::oneshot::channel();
     let probe_store = Arc::clone(&store);
-    let probe = tokio::spawn(async move { probe_store.reads.expiry_probe().await });
-    tokio::task::yield_now().await;
+    let probe = tokio::spawn(async move {
+        probe_store
+            .reads
+            .expiry_probe(started, release_receiver, completed)
+            .await
+    });
+    started_receiver.await.unwrap();
     tokio::time::advance(READ_LIFETIME + std::time::Duration::from_millis(1)).await;
     let error = probe.await.unwrap().unwrap_err();
     assert_eq!(error.kind(), d2b_resource_store::StoreErrorKind::Timeout);
     assert_eq!(store.reads.available_permits(), MAX_CONCURRENT_READS - 1);
-    std::thread::sleep(READ_LIFETIME + std::time::Duration::from_millis(20));
+    release.send(()).unwrap();
+    completed_receiver.await.unwrap();
     assert_eq!(store.reads.available_permits(), MAX_CONCURRENT_READS);
 }
 
