@@ -693,20 +693,32 @@ Telling a contributor to run `git rebase origin/v3` inside an error message
 invites exactly the half-finished rebase that then fails the preflight for a
 second, unrelated reason.
 
-**Redaction is type-level, and the outer `Debug` is derived on purpose.** Every
-sensitive or internal field is wrapped in a strongly typed redacting newtype
-whose own `Debug` is safe **by construction**, so a field cannot leak by
-someone forgetting to handle it. Once policy proves that every field of the
-error enum is such a type, the enum itself **derives** `Debug`.
+**Redaction is type-level, the type set is closed, and the outer `Debug` is
+derived on purpose.** **Every** field of the panel receipt error enum, and
+every field of every type nested inside it, must come from a **closed approved
+set** of safe types: redacting newtypes, closed enums, bounded numeric,
+version or stage newtypes, and collections of typed `RemedyAction` whose own
+fields are likewise drawn from that set. No raw `String`, no `OsString`, no
+`Path` or `PathBuf`, no arbitrary map or vector of text, and no type absent
+from the approved set may appear anywhere in the tree.
 
-An earlier revision required an explicit hand-written `Debug` on the enum as a
-second layer. That is withdrawn, because with safe field types it is not a
-second layer but a liability in the other direction: a hand-written formatter
+The policy is deliberately **not** scoped to fields someone marked protected.
+"Protected" is a judgement made by whoever added the field, and the field that
+leaks is the one nobody thought to label: a `context: String` added to help
+debugging, a `path` kept for a better message. An allowlist inverts the
+default, so an unrecognised type is a failure rather than an omission, and a
+contributor adding a field either reuses an approved type or argues the new one
+onto the list in review.
+
+Only after an **exhaustive field census** passes does the enum **derive**
+`Debug`. An earlier revision required an explicit hand-written `Debug` as a
+second layer. That is withdrawn, because with a closed safe type set it is not
+a second layer but a liability in the other direction: a hand-written formatter
 is a list someone must remember to extend, so a field added later is silently
 **omitted** from the rendering, and the diagnostic a contributor needs during a
 failing panel is missing while nothing fails to warn them. A derived `Debug`
 over fields that cannot print unsafely is both complete and safe, and it stays
-correct when the enum grows. Safety comes from the types; completeness comes
+correct when the enum grows. Safety comes from the census; completeness comes
 from the derive.
 
 `Display` remains hand-written and redacting. It is not a dump of fields but a
@@ -1626,23 +1638,32 @@ and it ships planted violations it must reject.
      because extracting a plausible-looking version from attacker-influenced
      bytes is how the hostile content gets carried forward under a safe-looking
      type.
-  2. **Policy control, at the type level, with a planted control.** Two
-     assertions through the repository's existing policy-test mechanism over
-     the source or API surface: **every protected field of the panel receipt
-     error enum is one of the approved redacting newtypes**, with no raw
-     `String` and no path type among them; and the enum's **derived** `Debug`
-     rendering is what control 3 scans, so the check covers the rendering that
-     actually ships. The type assertion carries the weight, because a
-     hand-written formatter is a promise a refactor can break silently and a
-     field added later is one a formatter can silently omit, while a newtype
-     whose `Debug` is safe by construction can neither leak nor be forgotten.
+  2. **Policy control: an exhaustive field census, with a planted control.**
+     Through the repository's existing policy-test mechanism over the source or
+     API surface, the check **traverses every variant of the panel receipt
+     error enum and every field of every type nested inside it**, and asserts
+     each field's type is a member of the closed approved set: redacting
+     newtype, closed enum, bounded numeric, version or stage newtype, or a
+     collection of typed `RemedyAction` whose fields satisfy the same rule. A
+     raw `String`, `OsString`, `Path`, `PathBuf`, arbitrary text map or vector,
+     or **any type the census does not recognise**, fails, whether or not
+     anyone labelled it protected. The enum's **derived** `Debug` rendering is
+     then what control 3 scans, so the check covers the rendering that actually
+     ships.
 
-     A planted mock type carrying a raw `String` field and a path field is
-     submitted to the same policy test and must be **rejected**, on the grounds
-     that those field types are not approved redacting newtypes. The check
-     reports how many types it examined and fails closed on an empty corpus. A
-     policy test that has only ever seen compliant types has not been shown to
-     reject a non-compliant one.
+     A planted mock type is submitted to the same policy test and must be
+     **rejected** for each of: a raw `String` field carrying no protected
+     marking at all, a `PathBuf` field, and a raw `String` field on a type
+     nested two levels below the enum rather than on the enum itself. The
+     unmarked and the nested cases matter most; a census that only inspects the
+     top level, or only fields someone remembered to annotate, is the census
+     that misses the field that leaks.
+
+     The check reports the number of variants and the number of fields it
+     examined and **fails closed** on an empty corpus and on any field whose
+     type it could not resolve. Unknown is a failure, not a pass: a census that
+     silently skips what it cannot parse has counted the easy fields.
+
   3. **Rendering control, with a planted negative.** The `Debug` and `Display`
      renderings of every variant are scanned and must contain no protected
      field, no invocation or argv, and no filesystem path. A **mock error type
@@ -1818,19 +1839,51 @@ and it ships planted violations it must reject.
   record does **not** add a gate, because the target does not exist yet and a
   docs-only change must not claim one. It is an obligation on the implementing
   change: the commit that adds a real `panel-preflight` target to the
-  `Makefile` must, in that same commit, add or extend a policy test under
-  `tests/unit/meta/` that fails in **both** drift directions, and must remove
-  the notice from `docs/contributing/copilot-agents.md` and update the operator
-  command there.
+  `Makefile` must, in that same commit, extend
+  `packages/d2b-contract-tests/tests/policy_docs.rs` (or a sibling
+  `policy_*.rs` in that crate if it is cleaner there) with a **Type 5 policy
+  lint**, and must update `docs/contributing/copilot-agents.md` to match.
+  Type 5 is the repository's existing tier for exactly this kind of
+  source-and-docs consistency check, so this reuses a mechanism rather than
+  inventing one, and it adds no new gate because that crate already runs.
 
-  The test fails if the `Makefile` declares a `panel-preflight` target while
-  `docs/contributing/copilot-agents.md` still carries the "Future, not yet
-  implemented" notice or still names `node scripts/copilot/check-bindings.mjs`
-  as the operator command; and it fails if that notice is absent while no
-  `panel-preflight` target exists, since that is a doc telling contributors to
-  run a command that is not there. Both states are planted as fixtures and each
-  is observed to fail; a test exercised only against the current tree proves
-  the tree and not the check.
+  The lint reads two inputs, the presence of a `panel-preflight` target in the
+  `Makefile` and the operator command plus notice markers in the contributing
+  doc, and admits exactly two states:
+
+  | State | `Makefile` target | Docs operator command | Future notice |
+  |---|---|---|---|
+  | Current | absent | `node scripts/copilot/check-bindings.mjs` | present |
+  | Implemented | present | `make panel-preflight` | absent |
+
+  In the current state the doc must **not** present `make panel-preflight` as a
+  command to run. In the implemented state the node command may still appear,
+  but only as the underlying implementation or a debugging aid, never as the
+  operator instruction.
+
+  **Every mixed state is rejected**, and the lint plants a fixture for each so
+  the rejection is observed rather than assumed. At minimum: target absent with
+  the docs naming `make panel-preflight` as the operator command while the
+  notice is still present, which is the exact state a panel round caught in
+  this record's own history; target absent with the notice removed, which
+  leaves contributors with a doc that points at nothing; target present with
+  the node command still given as the operator instruction, which is the drift
+  that leaves half the preflight unrun; and target present with the notice
+  still there, telling contributors a shipped target does not exist.
+
+  The lint keys on stable markers rather than prose. This change adds them to
+  `docs/contributing/copilot-agents.md` now, following the repository's
+  existing `<!-- BEGIN ... -->` and `<!-- END ... -->` convention:
+  `PANEL-PREFLIGHT-COMMAND` around the operator command block and
+  `PANEL-PREFLIGHT-NOTICE` around the future notice. Adding them here costs
+  nothing and does not change the truthful current command, and it means the
+  implementing commit finds a machine-readable surface instead of grepping
+  sentences that a later edit will reword.
+
+  The lint **fails closed** when either marker pair is missing or unbalanced,
+  or when it cannot read the `Makefile`, since a consistency check that cannot
+  locate both sides has not shown consistency. It names no Gas City symbol, so
+  M1 continues to hold.
 
   This is the drift the rest of this record was written to avoid and then
   committed anyway: an earlier revision documented `make panel-preflight` as
