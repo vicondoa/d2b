@@ -176,7 +176,7 @@ fi
 if [ -n "${D2B_NIX_UNIT_WORKERS:-}" ]; then
   requested_workers=$D2B_NIX_UNIT_WORKERS
 elif [ "${GITHUB_ACTIONS:-}" = true ]; then
-  requested_workers=2
+  requested_workers=1
 else
   requested_workers=4
 fi

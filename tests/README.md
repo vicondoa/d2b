@@ -257,9 +257,9 @@ memory cap
 `max(1, floor((effective available MiB - 3072) / (limit + 2048)))`.
 The evaluator limit defaults to 4096 MiB locally and 2048 MiB on GitHub
 Actions, plus 2048 MiB of per-worker process and flake overhead. GitHub
-Actions requests two workers by default; local development requests four.
-This keeps the hosted envelope near 11 GiB while preserving useful
-parallelism and local speed.
+Actions requests one worker by default; local development requests four.
+This keeps the hosted evaluator serialized under memory pressure while
+preserving local speed.
 Effective available memory is the smaller of `MemAvailable` and the finite
 cgroup allowance after reclaimable file cache. A visible but unreadable cgroup
 controller fails closed to one worker. On the reference 12-CPU, 62-GiB host

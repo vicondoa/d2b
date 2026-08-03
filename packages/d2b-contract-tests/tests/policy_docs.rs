@@ -1064,7 +1064,7 @@ fn execution_manifest_schema_and_prose_agree_with_non_empty_discovery() {
         nix_driver.contains("reserve_mb=3072")
             && nix_driver.contains("worker_budget_mb=$((memory_mb + 2048))")
             && nix_driver.contains("GITHUB_ACTIONS")
-            && nix_driver.contains("requested_workers=2")
+            && nix_driver.contains("requested_workers=1")
             && nix_driver.contains("requested_workers=4")
             && nix_driver.contains("memory_mb=2048")
             && nix_driver.contains("memory_mb=4096"),

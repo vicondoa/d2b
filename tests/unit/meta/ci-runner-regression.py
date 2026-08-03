@@ -1007,7 +1007,7 @@ printf '%s\n' "$sanitized_line"
         )
         self.assertRegex(
             driver,
-            r'(?s)D2B_NIX_UNIT_WORKERS.*GITHUB_ACTIONS[^}]*\}.*requested_workers=2'
+            r'(?s)D2B_NIX_UNIT_WORKERS.*GITHUB_ACTIONS[^}]*\}.*requested_workers=1'
             r'.*else.*requested_workers=4',
         )
         self.assertIn("D2B_NIX_UNIT_WORKERS", driver)
