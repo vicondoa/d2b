@@ -36,6 +36,9 @@ use constant {
     PR_SET_CHILD_SUBREAPER => 36,
     RESOLVE_NO_MAGICLINKS => 0x02,
     RESOLVE_NO_SYMLINKS => 0x04,
+    SIGINT => 2,
+    SIGKILL => 9,
+    SIGTERM => 15,
     MAX_INTERRUPT_RETRIES => 16,
     SEEK_SET    => 0,
     SHUTDOWN_GRACE_SECONDS => 10,
@@ -680,8 +683,8 @@ sub run_manifest_lifecycle {
 
     my $handled_signal = 0;
     my $forwarded = 0;
-    $SIG{INT} = sub { $handled_signal ||= 2 };
-    $SIG{TERM} = sub { $handled_signal ||= 15 };
+    $SIG{INT} = sub { $handled_signal ||= SIGINT };
+    $SIG{TERM} = sub { $handled_signal ||= SIGTERM };
 
     my $pid = $process_control->{fork}->();
     fatal("could not create the Rust scheduler process") unless defined($pid);
@@ -707,7 +710,7 @@ sub run_manifest_lifecycle {
                 $sleep_fn->(0.05);
             }
             if ($process_control->{kill}->(0, -$pid)) {
-                $process_control->{kill}->(9, -$pid);
+                $process_control->{kill}->(SIGKILL, -$pid);
             }
             $process_control->{waitpid}->($pid, 0);
             drain_adopted_descendants($process_control);
