@@ -15,5 +15,13 @@ serde.workspace = true
 tokio = { workspace = true, features = ["macros", "rt", "sync", "time"] }
 
 [dev-dependencies]
+d2b-process = { path = "../d2b-process", version = "0.0.0-bootstrap" }
+d2b-process-conformance = { path = "../d2b-process-conformance", version = "0.0.0-bootstrap" }
+d2b-provider-supervisor = { path = "../d2b-provider-supervisor", version = "0.0.0-bootstrap" }
+d2b-provider-system-minijail = { path = "../d2b-provider-system-minijail", version = "0.0.0-bootstrap" }
+d2b-resource-api = { path = "../d2b-resource-api", version = "0.0.0-bootstrap" }
+d2b-resource-store-redb = { path = "../d2b-resource-store-redb", version = "0.0.0-bootstrap" }
+d2b-resource-store = { path = "../d2b-resource-store", version = "0.0.0-bootstrap" }
 serde_json.workspace = true
+tempfile = "3"
 tokio = { workspace = true, features = ["rt-multi-thread"] }
