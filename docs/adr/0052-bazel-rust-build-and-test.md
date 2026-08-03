@@ -709,9 +709,18 @@ repository/download cache. Each is bounded and each is reclaimable.
     tracked entry from `.scratch/bazel/` as appropriate, then rerun
     `make clean`.
   - `D2B-BZLCLEAN-SYMLINK` and `D2B-BZLCLEAN-ESCAPE`: run
-    `D2B_CLEAN_DRY_RUN=1 make clean`, replace the offending symlink or magic
-    link, or the escaping layout, under `.scratch/bazel/` with an ordinary
-    contained directory, then rerun `make clean`.
+    `D2B_CLEAN_DRY_RUN=1 make clean` to see the sweep without removing
+    anything, remove the offending symlink or magic link, or the escaping
+    layout, from under `.scratch/bazel/`, then rerun `make clean`. Nothing
+    has to be put in its place: `make clean` reclaims the subtree as a whole,
+    so replacing the entry with a directory is not part of the remedy and is
+    not required for the rerun to succeed. Whatever the link resolved to is
+    outside `.scratch/bazel/`, is outside managed cleanup, and is not
+    traversed, not removed and not modified by any step here; it stays
+    exactly as it was. An operator who intends to reclaim that target must
+    inspect it separately and remove it only after independently verifying
+    they own it. This remedy authorizes no recursive removal, names no path,
+    and gives no command that reaches outside the anchor.
   - `D2B-BZLCLEAN-LIVE`: close any Bazel clients running against this
     worktree, run `make bazel-shutdown`, then rerun `make clean`. Neither a
     dry run nor an edit under `.scratch/bazel/` is part of this remedy: the
@@ -719,7 +728,9 @@ repository/download cache. Each is bounded and each is reclaimable.
     exactly why nothing there may be corrected first.
 
   Every step above is repository-relative and names nothing outside
-  `.scratch/bazel/` and the two Make targets, so no remedy can leak a path, a
+  `.scratch/bazel/` and the two Make targets, and the one statement that
+  refers to something outside the anchor does so without naming it, so no
+  remedy can leak a path, a
   process identifier or an opaque handle by being followed. The dry run is the
   sanctioned place for local paths to appear, because it runs on the
   operator's own machine at their request and writes to their terminal rather
@@ -1099,11 +1110,16 @@ contributor is left to guess. The enforcement is in band and actionable.
   the wrapper's group, and signalling that group reaches the wrapper itself,
   the Make process that invoked it, and whatever else shares the invoking
   shell's job. On expiry the wrapper signals only that dedicated group:
-  SIGTERM, then SIGKILL after a fixed grace. **It reaps the direct child at
+  SIGTERM, then SIGKILL after a fixed grace. **That grace is a fixed period
+  and is waited in full, unconditionally.** Nothing the wrapper observes
+  during it shortens it, and the final group SIGKILL is sent when it expires
+  whether or not the leader is still alive. **It reaps the direct child at
   no point before that final group SIGKILL.** A process group outlives its
   leader, so a leader that exits during the grace period can still have
-  descendants running, and the escalation must therefore run to its end
-  whenever the leader exits. Holding the leader unreaped until after the
+  descendants running - descendants that are still inside their own SIGTERM
+  handling, which is precisely what the remaining grace is for - and the
+  escalation must therefore run its full course whenever the leader exits.
+  Holding the leader unreaped until after the
   final SIGKILL is a deliberately conservative requirement, and the reason is
   not the one an earlier draft of this ADR gave: reaping the leader does
   **not** by itself cost the escalation its group. Measured below, the group
@@ -1131,9 +1147,12 @@ contributor is left to guess. The enforcement is in band and actionable.
   immediately reporting no state change - `Ok(None)` from that rustix
   signature, which is a result and not an error - so the wrapper polls,
   waits against its own grace deadline, and escalates on schedule whether or
-  not the leader ever exits. An early exit may cut the grace short; nothing
-  ends the escalation early. After the final group SIGKILL, and only then, it
-  reaps the direct child.
+  not the leader ever exits. The observation is **informational only**: it
+  feeds the report and keeps the escalation's handle on the leader, and it
+  never shortens the grace and never ends the escalation early. A leader that
+  exits in the first millisecond of the grace buys nothing, because its exit
+  says nothing about the descendants it left behind. After the final group
+  SIGKILL, and only then, it reaps the direct child.
 
   Measured on the reference host on 2026-08-02, Linux 7.0.10, because this is
   the step the correction turns on. Against a still-running leader,
@@ -1378,7 +1397,8 @@ after migration; source-shape assertions extend
 workflow-shape assertions extend `packages/xtask/tests/policy_ci.rs`. That
 file today owns `APPROVED_MAKE_TARGETS` and the `ALLOWLISTED_WORKFLOWS`
 allowlist and nothing else relevant here; the cache writer-policy assertion of
-section 10 and its committed fixtures under
+section 10, the two workflow-structure assertions below, and their committed
+fixtures under
 `packages/xtask/tests/fixtures/ci/` do **not** exist there today and are added
 to it by this implementation, in the same change as the six new approved
 targets.
@@ -1441,10 +1461,14 @@ drives it with a recording fake that logs every call in sequence. It asserts
 the exact order `group SIGTERM` -> non-consuming, non-blocking observation
 across the grace -> `group SIGKILL` -> reap of the direct child; that no reap
 call appears anywhere before the group SIGKILL; that the observation calls
-carry `EXITED|NOWAIT|NOHANG` and never consume; and that every signal call
-names the dedicated group and never the wrapper's own group, group zero or
-group -1. A state-machine test over the same backend is an acceptable
-equivalent provided it asserts the same ordering and the same absence.
+carry `EXITED|NOWAIT|NOHANG` and never consume; that the full fixed grace
+elapses on the backend's clock before the group SIGKILL **even when the first
+observation already reports the leader exited**, which is what proves the
+observation is informational and cannot shorten the grace; and that every
+signal call names the dedicated group and never the wrapper's own group,
+group zero or group -1. A state-machine test over the same backend is an
+acceptable equivalent provided it asserts the same ordering, the same
+absence, and the same full grace.
 
 *The real-process cases stay, and prove what only real processes can.* A
 descendant that ignores SIGTERM and outlives the leader is dead once
@@ -1465,13 +1489,18 @@ its own bound, with a planted stub that never returns producing
 `D2B-BZLSERVER-STUCK` within that bound rather than hanging or escalating to
 a raw signal.
 
-Negative: four planted mutations, each of which a named case above must fail
+Negative: five planted mutations, each of which a named case above must fail
 against, and a guard that stays green against any of them is not enforcing.
 
 - A variant that reaps the leader as soon as it exits: the **order test**
   must fail, on the reap call preceding the group SIGKILL. This is the
   early-reap negative, and it is deliberately not carried by the
   surviving-descendant case.
+- A variant that sends the group SIGKILL as soon as the observation reports
+  the leader exited, shortening the grace: the **order test** must fail, on
+  the grace elapsed on the backend's clock. This is the informational-only
+  negative, and it is separate from the early-reap mutation because a variant
+  can hold the leader correctly and still cut the grace.
 - A variant that omits `process_group(0)` before exec, so the child inherits
   the wrapper's group: the sibling-survival case must fail, because the
   sibling planted in the wrapper's own group is killed by the expiry signal.
@@ -1510,11 +1539,70 @@ all rejected.
 identifier, a raw deadline value, and an opaque handle, and the emitted
 message is asserted to contain none of those planted values as a substring,
 to contain the exact static code, and to contain the repository-relative
-remedy that section 8 maps to that code and not the remedy of another code.
+remedy that **the section owning that code** maps to it, and not the remedy
+of another code. The mapping is read per code from its own source section,
+never from one section for all of them: section 8 owns
+`D2B-BZLCLEAN-TRACKED`, `D2B-BZLCLEAN-SYMLINK`, `D2B-BZLCLEAN-ESCAPE` and
+`D2B-BZLCLEAN-LIVE`; section 11 owns `D2B-BZLSERVER-STUCK` and the
+expired-budget and ceiling-miss reports. Each row asserts the exact steps:
+
+- `D2B-BZLCLEAN-TRACKED` (section 8): the dry run, removing or relocating the
+  unexpected tracked entry from `.scratch/bazel/`, then `make clean`.
+- `D2B-BZLCLEAN-SYMLINK` and `D2B-BZLCLEAN-ESCAPE` (section 8): the dry run,
+  removing the offending symlink, magic link or escaping layout from under
+  `.scratch/bazel/`, then `make clean`; plus the statement that any external
+  target is outside managed cleanup and stays untouched and that reclaiming
+  it requires separate inspection and independent verification of ownership.
+  The message is asserted to carry no instruction to replace the entry with a
+  directory, no recursive removal command, and no path.
+- `D2B-BZLCLEAN-LIVE` (section 8): closing other Bazel clients,
+  `make bazel-shutdown`, then `make clean`, and neither a dry run nor a
+  correction under `.scratch/bazel/`.
+- `D2B-BZLSERVER-STUCK` (section 11): closing other Bazel clients then
+  `make bazel-shutdown`, plus the refusals to delete `.scratch/bazel/` or to
+  signal any process identifier by hand.
+- Expired budget and ceiling miss (section 11): the measured duration against
+  the ceiling and only the two remedies authorized for a ceiling miss, never
+  a section 8 cleanup remedy and never "relax the ceiling".
+
 Negative: a planted message variant that interpolates
-the rejected path, one that omits the remedy, and one that answers
-`D2B-BZLCLEAN-LIVE` with the tracked-entry remedy, must all be rejected,
+the rejected path, one that omits the remedy, one that answers
+`D2B-BZLCLEAN-LIVE` with the tracked-entry remedy, one that answers
+`D2B-BZLCLEAN-SYMLINK` or `D2B-BZLCLEAN-ESCAPE` with a step that removes or
+replaces the link's external target, one that answers `D2B-BZLSERVER-STUCK`
+with a section 8 cleanup remedy, and one that answers a ceiling miss with a
+section 8 cleanup remedy, must all be rejected,
 which is what proves the redaction and per-code assertions are not vacuous.
+
+**Workflow structure.** Two assertions land in
+`packages/xtask/tests/policy_ci.rs` beside the cache writer-policy assertion
+of section 10, over the same committed fixture directory
+`packages/xtask/tests/fixtures/ci/`, which stays outside `.github/workflows/`
+so the fixtures are not real workflows:
+
+- every promoted Bazel Rust job sets the absolute deadline control section 11
+  defines, because an absent control is the unbounded local default and a
+  promoted job that omits it runs the required gate with no in-band ceiling
+  and no visible failure;
+- no `pull_request`-reachable job requests `actions: write`, which is the
+  permission the section 10 cache maintenance job holds and the one a pull
+  request must never inherit.
+
+Required negative fixtures, each asserted **rejected**, in addition to the
+four cache-writer negative fixtures of section 10, which are kept unchanged:
+
+- a Bazel Rust job invoking an approved `make test-bazel-rust-<slice>` target
+  without setting the deadline control;
+- a `pull_request`-triggered job granting `actions: write`, as two cases, one
+  granting it at job level and one at workflow level, because a
+  workflow-level grant reaches every job beneath it and a checker that only
+  reads job blocks would pass it.
+
+Required positive fixture, asserted **accepted**: a workflow whose Bazel Rust
+jobs all set the deadline control and whose `pull_request`-reachable jobs
+carry `contents: read` and nothing more. The negatives prove the checker can
+fail; the positive proves it has not been tightened into rejecting the shape
+the promoted workflow actually has.
 
 ## Consequences
 
@@ -1675,6 +1763,13 @@ provides each binary.
   unreaped until after that SIGKILL is kept as well, at a cost of one delayed
   `wait`, because it closes the identifier-reuse window by construction
   rather than by an argument that has to be re-made per kernel.
+- **Cutting the SIGTERM grace short once the leader is observed exited.**
+  Rejected for the same reason as the bullet above, and separately, because a
+  variant can hold the leader correctly and still shorten the grace: the
+  descendants still inside their own SIGTERM handling are exactly who the
+  remaining grace is for, and the leader's exit carries no information about
+  them. The observation is informational only; the grace is a fixed period
+  waited in full.
 - **Carrying the deadline as a floating-point value, or as the raw
   `/proc/uptime` field.** Rejected because the raw field is fixed-point
   decimal and fails an integer validator outright, and because a float
@@ -1753,11 +1848,16 @@ provides each binary.
     down. A deadline that has already passed at read time is an expired
     budget reported on the ceiling-miss path, not a malformed-input refusal.
     The in-band bound is always a relative duration derived from that
-    deadline at read time, never the deadline itself. The bounding wrapper
+    deadline at read time, never the deadline itself. A structural policy
+    test, with a committed negative fixture that omits the control, asserts
+    every promoted Bazel Rust job sets it. The bounding wrapper
     spawns its Bazel client into a dedicated process group created before
     exec, signals only that group, observes leader exit with a non-consuming
     and non-blocking wait (`EXITED|NOWAIT|NOHANG`) so a leader that has not
     exited cannot park the wrapper inside the wait and overrun the grace,
+    treats that observation as **informational only** so it can never shorten
+    the fixed SIGTERM grace, waits that grace in full before the final group
+    SIGKILL whether or not the leader has exited,
     holds an exited leader unreaped through the
     final group SIGKILL so its identifier cannot be reused, reaps the direct
     child only after that SIGKILL, and never signals its own process group or
@@ -1787,9 +1887,13 @@ provides each binary.
     `D2B_CLEAN_DRY_RUN=1 make clean`, to removing or relocating the
     unexpected tracked entry from `.scratch/bazel/`, then to `make clean`.
     `D2B-BZLCLEAN-SYMLINK` and `D2B-BZLCLEAN-ESCAPE` direct the operator to
-    that same dry run, to replacing the offending symlink, magic link or
-    escaping layout under `.scratch/bazel/` with an ordinary contained
-    directory, then to `make clean`. `D2B-BZLCLEAN-LIVE` directs the operator
+    that same dry run, to removing the offending symlink, magic link or
+    escaping layout from under `.scratch/bazel/`, then to `make clean`, and
+    state that any external target is outside managed cleanup, stays
+    untouched, and may be reclaimed only after separate inspection and
+    independent verification of ownership; they never direct a replacement
+    directory, never carry a recursive removal command, and never name a
+    path. `D2B-BZLCLEAN-LIVE` directs the operator
     to close other Bazel clients, run `make bazel-shutdown`, then rerun
     `make clean`, and never to inspect or correct the tree first.
     `D2B-BZLSERVER-STUCK` directs the operator to close other Bazel clients
