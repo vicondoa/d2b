@@ -1,6 +1,6 @@
 # ADR 0051: Security-key semantic backing set and the empty backing allowlist
 
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-08-02
 - Related: [ADR 0046](0046-d2b-3-provider-control-plane.md) (d2b 3.0 Provider
   control plane) and its normative decisions D089, D096, D097, and D098 in
