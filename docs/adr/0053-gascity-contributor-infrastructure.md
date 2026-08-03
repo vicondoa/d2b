@@ -415,39 +415,57 @@ behaviour large enough to be worth testing once, in a module with its own NixOS
 VM tests, rather than re-deriving per consumer inside a policy repository.
 
 **Shutdown is ordered, and the order is the specification.** Stopping these
-services in an arbitrary order loses work, corrupts nothing but strands
-plenty, and can leave the audit trail describing a state the store never
-reached. The sequence is:
+services in an arbitrary order loses work, strands runs, and can leave the
+audit trail describing a state the store never reached. The sequence is:
 
-1. **Stop admitting work.** The orchestrator stops accepting new runs and new
-   task claims. Nothing new enters the system from this point.
-2. **Park or drain the workflow.** In-flight nodes reach a durable boundary:
-   a task at a safe point is allowed to finish, anything else is parked on its
+1. **Refuse new Discord interactions, first.** Human ingress is the one path
+   that injects new authority into a running deployment, so it closes before
+   anything else moves. The ingress does not merely stop listening: while the
+   rest of the sequence runs it **actively refuses** arriving interactions, so
+   an approval submitted during shutdown is rejected rather than silently
+   dropped, half-applied, or accepted against a workflow that is already
+   draining. Closing this last, as an earlier draft did, meant a decision could
+   land against state that had already been parked.
+2. **Stop admitting work.** The orchestrator stops accepting new runs and new
+   task claims. Nothing new enters from this point.
+3. **Park or drain the workflow.** In-flight nodes reach a durable boundary: a
+   task at a safe point is allowed to finish, anything else is parked on its
    gate so it resumes rather than restarts.
-3. **Stop agent sessions with a bounded grace period.** Sessions are asked to
+4. **Stop agent sessions with a bounded grace period.** Sessions are asked to
    stop, given a bounded interval, and then terminated. The bound is
    configuration, not an open-ended wait, because an agent that will not exit
    must not prevent the host from shutting down.
-4. **Preserve durable state.** Workflow state, session records, and the
+5. **Tear down the worker network namespace only now.** Per D15 its lifetime
+   strictly contains every agent process, so the namespace, its interface, its
+   DNS proxy and its firewall rules survive until step 4 has confirmed every
+   session has exited or been killed. An agent that outlives the teardown of
+   its own confinement is an unconfined agent.
+6. **Preserve durable state.** Workflow state, session records, and the
    protected integration object store are flushed and consistent before
    anything that owns them exits.
-5. **Stop the dashboard and the Discord ingress.** Observation and human
-   ingress stop only after the state they would describe has settled, so a
-   late-arriving interaction cannot land against a half-stopped orchestrator.
-6. **Flush and close audit appends.** Every in-flight append completes or is
+7. **Stop the read-only dashboard.** It stays up through the steps above on
+   purpose, so an operator can watch a shutdown that is doing exactly the
+   thing they need to see. Being read-only under D13, it cannot mutate
+   anything while it observes. It stops once state has settled.
+8. **Flush and close audit appends.** Every in-flight append completes or is
    abandoned with its temporary unlinked per D12, and no append is left
-   acknowledged-but-unsynced.
-7. **Release the locks last.** The append-helper's single-owner lock is
+   acknowledged but unsynced.
+9. **Release the locks last.** The append-helper's single-owner lock is
    released only after every writer above has stopped, so the lock's lifetime
    strictly contains every operation it guards.
 
-**Restart adopts before it cleans.** Startup is the mirror image and the
-ordering constraint is the one that matters: a starting instance acquires
-exclusive ownership, then reads existing state, then reconciles, and only then
-resumes. It never cleans up before adopting, because a sweep by an instance
-that does not own the store can delete the in-flight state of one that does.
-D12 states that rule for the append helper's temporaries; D5 makes it the
-general shape for every stateful principal here.
+**Startup is the reverse, and adoption precedes everything.** A starting
+instance acquires exclusive ownership, then reads existing state, then
+reconciles, then brings up the orchestrator, then the worker network namespace,
+then the dashboard, and **starts Discord ingress last**. Ingress opening before
+the orchestrator has adopted and reconciled would let an approval arrive for a
+run whose state is still being recovered, which is the same defect as accepting
+one during a drain.
+
+It never cleans up before adopting, because a sweep by an instance that does
+not own the store can delete the in-flight state of one that does. D12 states
+that rule for the append helper's temporaries; D5 makes it the general shape
+for every stateful principal here.
 
 D2 still holds throughout: none of this uses `d2bd`, the broker, a microVM, or
 any other d2b component. It is systemd, Unix identities, and namespaces.
@@ -678,8 +696,10 @@ write, rewind, or truncate it directly.
     2026-08-01/                          <- sealed period
       seal-<64 hex>.rec                  <- manifest of that period
   quarantine/
-    <opaque token>/                      <- removed from history, pending
-                                            cleanup
+    00/                                  <- shard, bounded set, helper-owned
+      2026-07-01.<token>/                <- removed from history, pending
+                                            cleanup; date preserved
+    01/
 ```
 
 The helper opens the store root once, then opens or creates `periods/` and
@@ -692,21 +712,37 @@ root and never in a path a caller can address.
 
 Rotation seals the current period and switches the pinned descriptor to the new
 date. Retention operates one level up, renaming a whole child of `periods/`
-into `quarantine/`. Because `periods/` and `quarantine/` are siblings under one
-root, that rename is a directory-to-directory move within a single filesystem,
-which is what makes whole-period removal atomic.
+into a shard of `quarantine/`. Because `periods/` and the quarantine shards are
+under one root on one validated mount, that rename is a directory-to-directory
+move within a single filesystem, which is what makes whole-period removal
+atomic.
+
+**A quarantined directory keeps its date, and the seal records it too.** The
+physical name is `<YYYY-MM-DD>.<token>`: the canonical UTC date of the period
+it was, plus an opaque token that makes the name unique and unguessable. An
+opaque-only name, as an earlier draft had, meant that recovering after a crash
+required reading a directory's contents to learn what period it had been, and
+that a directory whose contents were partly removed might no longer be able to
+say. The seal manifest independently carries the same canonical UTC date, so
+the period's identity survives in two places: in the name, which recovery can
+read without opening anything, and in the manifest, which survives a rename.
+
+This changes nothing about what is observable. Surfaces still emit the period
+date and the keyed correlation digest of D12 and never the raw token or a path,
+so the date is available for operator reasoning while the token stays a
+filesystem detail.
 
 **Sealing writes a manifest, so the wholly-present invariant is falsifiable.**
 This record claims a sealed period is byte-identical to when it was sealed.
 Without something to check that against, the claim cannot be tested and a
 period that quietly lost a record would look exactly like a period that never
 had it. Sealing therefore writes one final `seal` record into the period,
-listing the sorted basenames it contained, their count, and a digest computed
-over that sorted list. The manifest is itself an immutable record, is written
-by the helper rather than by any caller, and is the last thing a period
-receives. `gascity-audit verify` checks a period against it, which is what
-makes a physically planted missing record detectable rather than merely
-forbidden.
+listing the sorted basenames it contained, their count, a digest computed over
+that sorted list, and the period's canonical UTC date. The manifest is itself
+an immutable record, is written by the helper rather than by any caller, and is
+the last thing a period receives. `gascity-audit verify` checks a period
+against it, which is what makes a physically planted missing record detectable
+rather than merely forbidden.
 
 **The helper authenticates every caller and binds it to one record kind.** Its
 Unix socket checks the peer credentials of each connection (`SO_PEERCRED`, or
@@ -929,12 +965,16 @@ the invariant above forbids and is indistinguishable from tampering. The timer
 therefore proceeds in this order:
 
 1. `renameat2(RENAME_NOREPLACE)` the whole period directory from `periods/`
-   into `quarantine/`, both descriptors pinned and both close-on-exec.
+   into a validated quarantine shard, under the name `<YYYY-MM-DD>.<token>`,
+   both descriptors pinned and both close-on-exec. A destination `EMLINK`
+   selects the next shard and retries, per the sharding rule above.
 2. `fsync` **both directories that the rename modified**: the `periods`
-   descriptor, which lost an entry, and the `quarantine` descriptor, which
-   gained one. Syncing a common parent is not equivalent and is not what this
-   requires; a cross-directory rename changes two directories and both must be
-   made durable before anything depends on the move having happened.
+   descriptor, which lost an entry, and the **selected shard** descriptor,
+   which gained one. Syncing a common parent is not equivalent and is not what
+   this requires; a cross-directory rename changes two directories and both
+   must be made durable before anything depends on the move having happened.
+   When a retry moved the destination to a different shard, the descriptor
+   synced is the shard that actually received the directory.
 3. Append the `retention-deletion` record naming the period date, its
    quarantine correlation id, its record count, and its seal digest.
 4. Only then remove the quarantined directory's contents recursively.
@@ -960,16 +1000,62 @@ follow one quarantine across a status listing, an error, and an audit record,
 without any surface publishing a path or a raw token that would invite someone
 to act on it directly.
 
-**`periods/` and `quarantine/` must share a filesystem, and `EXDEV` is a
-configuration error.** The whole-period guarantee rests on the rename being
-atomic, and a rename across filesystems is not merely unsupported, it is
-unimplementable atomically: the copy-then-delete that would substitute for it
-has a window in which the period exists in neither place or in both, which is
-precisely the partial state this design forbids. So there is no copy fallback,
-and there will not be one. The helper stats both directories at startup and at
-activation and asserts they share a `st_dev`, refusing to start with a typed
-fail-closed configuration error if they do not. An `EXDEV` observed later is
-the same typed error rather than a trigger for a degraded path.
+**The store must be one mount, validated two ways, and a copy fallback is
+refused rather than deferred.** The whole-period guarantee rests on the rename
+being atomic. A copy-then-delete substitute has a window in which the period
+exists in both places or in neither, which is exactly the partially-visible
+state this design forbids and which an earlier panel round required be
+impossible. So there is no copy fallback for either install or removal, and its
+absence is a decision rather than an omission: adding one would silently
+convert the invariant into a best-effort claim, and every later reader would
+assume the guarantee still held.
+
+Validation is therefore two-layered, because `st_dev` alone is not sufficient.
+At startup and at activation the helper stats `periods/` and every quarantine
+shard and requires both:
+
+- the same `st_dev`, and
+- the same Linux mount identifier from `statx` with `STATX_MNT_ID`.
+
+Two directories can share a device and still sit on different mounts, for
+instance across a bind mount, and a rename between them fails `EXDEV` even
+though a device comparison said they matched. Checking only the device produces
+a deployment that passes its own startup check and then fails at the first
+retention run, months later, on the one operation that must not fail.
+
+The two failures are distinct errors with distinct remediation, and are never
+collapsed into one message:
+
+- **`audit-store-cross-filesystem`** when the devices differ. The remediation
+  is to place the whole store on one filesystem.
+- **`audit-store-cross-mount`** when the devices match but the mount
+  identifiers differ. The remediation is to remove the bind mount or nested
+  mount inside the store, which is a different action and would be
+  undiscoverable from a device-oriented message.
+
+An `EXDEV` observed later maps to whichever of those two conditions the helper
+finds and **parks retention** with that error rather than degrading. Parking is
+correct here: a retention run that cannot proceed atomically leaves history
+intact and over budget, which is a reportable condition, whereas proceeding
+non-atomically risks a state no invariant covers.
+
+**Destination `EMLINK` is handled by sharding, not by copying.** A rename into
+a directory can fail `EMLINK` when the destination's link count is exhausted,
+which on some filesystems is a hard limit on subdirectory count. `quarantine/`
+is therefore a bounded set of helper-owned shard directories rather than one
+flat directory. On `EMLINK` the helper selects or creates the next shard
+fd-relatively under the same containment rules as everything else, validates
+that shard's device and mount identifier against `periods/` exactly as at
+startup, retries the atomic rename into it, and on success syncs both the
+source `periods/` descriptor and the selected shard descriptor, which are the
+two directories that rename modified.
+
+If every shard in the bounded set is exhausted, the helper emits
+`audit-quarantine-link-limit` naming the period date and its correlation
+digest, and directs the operator to `gascity-audit status` for the outstanding
+set and `gascity-audit converge` to complete the sequence once space exists. It
+does not copy, and it does not delete anything to make room, because both would
+trade the invariant for throughput on a path that is already exceptional.
 
 **Recovery resumes, and never deletes unaudited.** Under the exclusive
 ownership established at startup, the timer enumerates `quarantine/` and
@@ -1224,8 +1310,23 @@ Unix-domain sockets are not affected by the network namespace, which is why
 D14's peer-credential-checked socket remains the worker's channel to the
 orchestrator and does not require relaxing anything here.
 
-M17 tests this with planted denied targets and allowed controls, because a
-firewall that denies everything, including what the workflow needs, passes a
+**The confinement outlives every process it confines.** The namespace, its
+veth or other interface, its DNS proxy, and its firewall rules are created
+before the first agent session starts and are torn down only after the last one
+has exited or been forcibly terminated at the end of D5's grace period. There
+is no window, at shutdown or at reconfiguration, in which an agent process is
+still running while the confinement around it is being dismantled.
+
+This matters because the failure is silent and favourable to the attacker. If
+teardown races an agent that is ignoring its stop request, that agent is
+briefly a process in the host namespace with the host's routes, which is
+precisely the d2b bridge and LAN reachability D15 exists to deny, and it
+happens at the moment supervision is least attentive. Ordering teardown strictly
+after termination removes the race rather than narrowing it, and M17 tests it
+with an agent deliberately kept alive through the whole grace period.
+
+M17 tests the policy with planted denied targets and allowed controls, because
+a firewall that denies everything, including what the workflow needs, passes a
 naive "is it blocked" check while being useless.
 
 **D16. Publication is one step, gated by a human, audited on every attempt,
@@ -1724,6 +1825,18 @@ escaping change all produce a clean result that means nothing.
   deny-only check while making the workflow unusable, and a namespace that
   allows everything passes an allow-only check while providing no isolation.
 
+  **Confinement lifetime.** A third part covers the teardown race of D15. An
+  agent is started that deliberately ignores its stop request and stays alive
+  for the whole of D5's grace period. Throughout that interval, and up to the
+  instant it is forcibly terminated, it is re-tested against the denied set
+  above and must still be unable to reach any d2b bridge, guest address, LAN
+  address, link-local address, or host loopback port. The namespace, its
+  interface, its DNS proxy, and its firewall rules are then observed to be torn
+  down **only after** that process has exited, verified by ordering the
+  teardown events against the process exit rather than by a timing assumption.
+  A run in which teardown is observed before the last agent exit fails this
+  item outright.
+
 - **M18 Approval and audit history is append-only, kind-bound, authenticated,
   atomically installed, path-contained, singly-owned, and bounded to stated
   defaults.** Twelve parts.
@@ -1864,15 +1977,41 @@ escaping change all produce a clean result that means nothing.
       quarantine clears. The timer is also observed to refuse touching the
       current unsealed period.
 
-      Configuration assertions: with `periods/` and `quarantine/` on different
-      filesystems, startup **refuses** with the typed configuration error
-      rather than falling back to a copy, and a later `EXDEV` produces that
-      same typed error. With `renameat2` unavailable or `RENAME_NOREPLACE`
-      unsupported, startup refuses with a typed error rather than selecting an
-      alternative install path. Where the 256 MiB audit cap would require
-      deleting a period younger than the floor, deletion is **refused** and the
-      condition reported.
+      Mount and link-limit assertions, each producing its own distinct error
+      rather than a shared one:
 
+      - With `periods/` and a quarantine shard on **different filesystems**,
+        startup refuses with `audit-store-cross-filesystem`.
+      - With them on the **same device but different mounts**, arranged with a
+        bind mount inside the store, startup refuses with
+        `audit-store-cross-mount`. This case is the reason the check is two
+        layered: a device-only comparison passes it, so a test suite that omits
+        it would certify a deployment that fails at its first retention run.
+      - A later `EXDEV` at retention time maps to whichever of those two
+        conditions holds and **parks** retention with that error. Neither case
+        ever falls back to a copy, verified by observing that the source period
+        remains present and unmodified and that no partial copy exists at the
+        destination.
+      - A destination `EMLINK` is driven by exhausting a shard's link count,
+        and the rename is observed to **succeed into the next shard** after
+        revalidating that shard's device and mount identifier, with both the
+        `periods` descriptor and the receiving shard synced.
+      - With every shard in the bounded set exhausted, the helper refuses with
+        `audit-quarantine-link-limit` naming the period date and correlation
+        digest and pointing at `gascity-audit status` and `converge`, and is
+        observed to delete nothing to make room.
+
+      With `renameat2` unavailable or `RENAME_NOREPLACE` unsupported, startup
+      refuses with a typed error rather than selecting an alternative install
+      path. Where the 256 MiB audit cap would require deleting a period younger
+      than the floor, deletion is **refused** and the condition reported.
+
+      Quarantine naming: a quarantined directory's physical name is observed to
+      be its canonical UTC date plus an opaque token, and its seal manifest is
+      observed to carry the same date, so recovery can identify a period
+      without reading its contents. Separately, no log line, audit record,
+      error, or operator output contains the token or a path, verified
+      alongside the redaction scan of part 11.
 
 - **M19 The deployed `gc` resolves from the locked package, and no other `gc`
   is reachable.** Four parts, all on the running deployment.
@@ -1894,36 +2033,62 @@ escaping change all produce a clean result that means nothing.
      a single candidate equal to the expected store path.
   4. **No manual dependency restatement.** The configuration repository's
      module does not add `beads`, `dolt`, `flock`, `gitMinimal`, `jq`, `lsof`,
-     `procps`, or `tmux` to the service `PATH` itself, verified by scanning the
-     module for those names; the wrapped binary supplies them. A build that
-     drops the wrapper is caught by part 1 rather than masked by a duplicated
-     list.
+     `procps`, or `tmux` to the service `PATH` itself; the wrapped binary
+     supplies them. A build that drops the wrapper is caught by part 1 rather
+     than masked by a duplicated list.
+
+     Coverage and control, per the standing requirement: the scan reports the
+     number of module files and service definitions it examined, asserts each
+     is greater than zero, and fails closed on an empty set, which catches the
+     module having been relocated. A planted control injects one of those eight
+     package names into a service `PATH` in a scratch copy of the module and
+     must be rejected, so the scan is shown to detect rather than merely to
+     return clean.
 
 
-- **M20 Shutdown is ordered and restart adopts before it cleans.** Two parts.
+- **M20 Shutdown is ordered and startup adopts before it opens.** Two parts,
+  both traced.
 
-  1. **Shutdown order.** A full stop of the deployment is traced, and the seven
-     steps of D5 are observed in order: no run or task claim is admitted after
-     step 1; an in-flight task either completes or is parked such that a
-     subsequent start resumes it rather than restarting it; an agent session
-     that ignores the stop request is terminated at the configured bound rather
-     than waited on indefinitely; the dashboard and Discord ingress stop
-     accepting only after workflow state has settled, verified by a late
-     interaction arriving during shutdown and being refused rather than
-     partially applied; no append is left acknowledged but unsynced, and no
+  1. **Shutdown order.** A full stop is traced and the nine steps of D5 are
+     observed in order. The first assertion is the ingress one: a Discord
+     interaction injected **after** shutdown begins and **before** any drain
+     step has started is observed to be actively **refused**, and the trace
+     shows the refusal preceding the first park or drain event. An interaction
+     that is merely dropped, queued, or accepted-then-discarded fails this
+     item, since the operator's approval must not vanish silently.
+
+     Then: no run or task claim is admitted after step 2; an in-flight task
+     either completes or is parked such that a subsequent start resumes rather
+     than restarts it; an agent session that ignores the stop request is
+     terminated at the configured bound rather than waited on indefinitely; the
+     worker network namespace and its firewall are torn down only after that
+     termination, per M17's confinement-lifetime part; the read-only dashboard
+     is observed still serving reads during the drain and stopping only after
+     state settles; no append is left acknowledged but unsynced and no
      temporary survives a clean shutdown; and the append-helper lock is
-     observed released after every writer has exited, not before.
-  2. **Startup adoption order.** A start against a store with existing state
-     acquires exclusive ownership, reads state, reconciles, and only then
-     resumes work, verified by tracing that no unlink, no reconciliation, and
-     no period open for writing precedes lock acquisition. Combined with M9's
-     overlap case, this closes the window in which a second instance could
-     clean up a first instance's state.
+     released after every writer has exited, not before.
+
+  2. **Startup order.** A start against a store with existing state acquires
+     exclusive ownership, reads state, reconciles, brings up the orchestrator,
+     then the worker namespace, then the dashboard, and starts Discord ingress
+     **last**. An interaction arriving before ingress opens is refused rather
+     than queued into a run still being recovered. The trace shows no unlink,
+     no reconciliation, and no period open for writing preceding lock
+     acquisition. Together with M18 part 9's overlap case, this closes the
+     window in which a second instance could clean up a first instance's state.
+
+  **The trace itself must be shown to work.** Both parts assert the *absence*
+  of events in an interval, and a tracer that attached late, filtered wrongly,
+  or captured nothing at all satisfies an absence assertion trivially. Each run
+  therefore includes a planted, detectable control event of the same class it
+  is asserting about: a deliberate unlink of a scratch file inside the traced
+  interval, which the trace must capture. A run whose trace does not contain
+  the planted event is a failed run rather than a passing one, regardless of
+  what else it did or did not show.
 
   Both parts run against the generic module, not against d2b-specific
   configuration, since D5 assigns this behaviour to the module layer and it
   must hold for any consumer.
-
 
 - **M21 `gascity.nix` is generic, proven by scan rather than by review.** The
   generic module repository is checked in its own CI, and the check is subject
