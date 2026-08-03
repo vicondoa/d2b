@@ -7,8 +7,8 @@
   [ADR 0046](0046-d2b-3-provider-control-plane.md) and its validation and
   delivery contract in
   [`docs/specs/ADR-046-validation-and-delivery.md`](../specs/ADR-046-validation-and-delivery.md);
-  sections 12.2, 12.3, 12.5 and 12.6 cited here are sections of that
-  specification, not of ADR 0046. Also
+  section 12.5 cited here is a section of that specification, not of ADR 0046.
+  Also
   [ADR 0048](0048-copilot-native-agent-surface.md) (Copilot-native agent
   surface). This record changes none of them.
 - Scope: contributor workflow ownership and external configuration. It decides
@@ -436,11 +436,67 @@ Residual risk, stated: a producer that fabricates a dispatch record defeats
 this. The structural defence is unchanged, that the panel model is deliberately
 not the coding model, so a lane cannot both author and attest.
 
-**D8. Panel ingestion gains a stream, and nothing else changes.**
+**Orchestration is not authority, and one narrow protected boundary separates
+them.** Gas City sessions all share one uid (D10), so a task or reviewer agent
+can write anything another session could write. If dispatch attestations,
+approvals, panel summaries or publisher handoffs were session-written state, an
+agent could forge all four and the gate would be decoration. The expert
+simplification that removed the previous multi-principal design was right about
+the mechanisms and wrong to leave nothing in their place; this restores the
+smallest boundary that closes the forgery path, and no more.
+
+`d2b-gascity-configs` owns a **panel-and-approval controller**: a small service
+running under its **own uid, distinct from the Gas City session identity**. It
+is not in generic `gascity.nix`, which stays d2b-free, and not in d2b product
+code. Gas City formulas and check scripts reach it through a
+**peer-authenticated Unix socket**, and the controller rejects any peer whose
+credentials are not the expected orchestrator identity.
+
+It does exactly three things:
+
+1. **Dispatch.** It launches or authorizes panel dispatch under a fixed
+   provider, model and effort profile that it owns, and emits the trusted
+   dispatch record. If the seats must themselves run as Gas City sessions, the
+   trusted binding still comes from the controller's own dispatch, never from
+   session-written state. P2 must prove that; if it cannot, the Gas City panel
+   does not ship.
+2. **Approval.** It receives operator decisions from a local operator CLI and
+   writes a protected append-only approval and audit record.
+3. **Manifest.** It emits the canonical panel and publication manifest, bound
+   to the exact integration commit, carrying the panel identifiers and signoff
+   and the approval digest.
+
+**Gas City beads mirror blocking state; they are not approval authority.** A
+gate bead reflects that something is waiting and unblocks when the controller
+says so. An agent that closes a bead has closed a bead, not manufactured an
+approval, because the publisher and the gate both verify the controller's
+record rather than the bead's state.
+
+Required properties, with mechanism deferred to the spec: a distinct uid; peer
+identity checks on every call; append-only, write-once records; binding to an
+exact commit; and **no signing or approval key readable by any agent**. The
+detailed store layout, retention algorithm and sync sequence are spec-level and
+are deliberately not frozen here, which is the mistake the previous revision
+made in the other direction.
+
+**D8. Panel ingestion gains two typed inputs, and nothing else changes.**
+
 `PanelRecord` and `PanelRequest` are preserved byte-identical, including
-`deny_unknown_fields`. The single change is a neutral input stream,
-`panel-attest --records-stdin`, beside the existing `--records DIR`, both
-funnelling into the same `validate_record_set`.
+`deny_unknown_fields`. Two neutral inputs are added beside the existing
+`--records DIR`:
+
+- `--records-stdin`, a record stream; and
+- an **injectable trusted dispatch boundary**, `--dispatch-record PATH` or a
+  file descriptor, or `--dispatch-receipt-stdin`, carrying the controller's
+  dispatch record for the Gas City producer.
+
+No host path is hardcoded; the boundary is injected, so tests supply fixtures.
+Both producers converge on a **typed verifier** that re-derives the binding
+from the supplied trusted input, and only then on the existing
+`validate_record_set`. The standalone producer keeps its existing observed
+harness receipt path through the same verifier. A submission whose binding
+cannot be derived from a trusted input is refused; there is no path that
+accepts the record's own claim.
 
 No round manifest is added to xtask. The gate refuses any set containing a
 finding and has no round concept, so **rounds stay in the producer**: Gas City
@@ -469,13 +525,48 @@ and `git_push_branch` runs without `-C` while `runDiscoveredCommand` sets no
 `cmd.Dir`, so an unset working directory pushes from whatever repository the
 caller happened to be in. For a single-operator deployment v1 uses instead: a
 **repo-scoped fine-grained PAT** delivered only to the publisher unit via
-`LoadCredential=`; an explicit `WorkingDirectory=` on the integration store;
-`git -C <store> push <full-sha>:refs/heads/<branch>`; and
-`gh pr create --body-file`. P4 confirms this or routes back to the App path,
-in which case the spec must record app id, key path and mode, installation id
-and the cwd binding.
+`LoadCredential=`; an explicit handoff repository; the full-sha push command
+specified below; and create-or-edit PR handling through `gh`.
+**P4 has no App fallback.** If P4 fails, the publishing
+design is blocked and must be redesigned through a new review; it must not
+silently adopt the `github` pack App path while still claiming credential
+isolation, because that path shares a `0640` key file with the webhook and
+admin services and cannot be publisher-exclusive and functional at once. If an
+App is ever chosen, every service using the key must be isolated and D10 is
+rewritten.
+
+**The publisher verifies independently and is idempotent.** It does not trust
+claims from the Gas City caller. Before acting it verifies the controller's
+bound publication manifest and the exact approval against the commit it is
+being asked to push, and refuses on any mismatch.
+
+The push is explicit in every component:
+
+```
+git -C <handoff-repo> push origin <full-sha>:refs/heads/<branch>
+```
+
+Retry is safe. The publisher looks for an existing pull request by head branch,
+creates one if absent and edits the body if present, so a retried publication
+converges rather than failing or duplicating.
+
+**The body is transferred, not named.** A caller-supplied body path is a
+time-of-check-to-time-of-use hole: the file can be swapped between verification
+and read. The controller and publisher instead transfer the bounded manifest
+and body over the authenticated socket, on stdin, through an already-open file
+descriptor, or as a publisher-owned immutable spool object; the caller cannot
+substitute a path. Any filesystem path the publisher does own is resolved
+fd-relative and anchored, refusing symlinks and magic links, with the exact
+mechanism, such as `openat2` with `RESOLVE_BENEATH` and `RESOLVE_NO_MAGICLINKS`
+or an equivalent, left to the spec. Temporary and handoff state is removed on
+both success and failure, with bounded recovery for what a crash leaves behind.
+
+**Exactly one bounded, redacted audit record per publication attempt**, success
+or failure alike, written through the controller's append-only path. A refusal
+before the push is still an attempt.
 
 **Merging stays human.** No merge, no auto-merge, no merge queue in v1.
+
 
 **The PR body is rendered by the orchestrator from the seal**, not by the
 publisher, because delivery state is readable only by its owning uid. It
@@ -490,39 +581,50 @@ bounded in bytes. PR creation is impossible while any finding stands, a seat is
 missing, the snapshot is stale, the binding is underived, or the publication
 approval is absent or bound to different bytes.
 
-**D10. Two identities in v1, and the boundary is stated honestly.** The
+**D10. Three identities in v1, and the boundary is stated honestly.** The
 delivery state root is `0700`, uid-owned, checked by uid equality rather than
-`access(2)`, and refused inside any enclosing Git working tree. That makes a
-multi-uid design incompatible with rendering a PR body from the seal, and the
-earlier five-principal matrix unimplementable.
+`access(2)`, and refused inside any enclosing Git working tree. That makes the
+earlier five-principal matrix unimplementable, but it does not license a single
+uid either, because Gas City sessions share one identity and would otherwise be
+able to forge the very records that gate publication.
 
 - **`gascity`** owns Gas City, the delivery state root at a path outside every
   checkout, and runs the supervisor and all agent sessions.
+- **`controller`** runs D7's panel-and-approval controller: distinct uid,
+  peer-authenticated socket, append-only approval and audit records, and the
+  signing or binding key for the publication manifest. No agent can read that
+  key.
 - **`publisher`** holds the repo-scoped PAT and runs only the publish step.
 
-**Agents share the `gascity` uid.** The supported runtime is `tmux` in host
-worktrees, upstream states that configured commands are "a feature, not a
-sandbox", and no per-session uid option exists. So there is no `agent-worker`
-identity in v1, and any acceptance item written against one would pass
-vacuously against the wrong process. The honest blast radius is: a
-prompt-injected or compromised agent has everything the `gascity` identity has,
-including the delivery state root and the model credential. What it does not
-have is the publishing PAT, which is delivered only to the publisher unit.
-P8 tests the cross-uid handoff; if a stronger split is ever wanted, it requires
-the `exec:` provider with a privilege-dropping wrapper and its own record.
+Three is the minimum that closes the forgery path. Collapsing `controller` into
+`gascity` lets any agent write approvals; collapsing `publisher` into
+`controller` puts the PAT beside the approval key.
+
+**Agents share the `gascity` uid, and that is a prototype posture, not a
+production one.** The supported runtime is `tmux` in host worktrees, upstream
+states that configured commands are "a feature, not a sandbox", and no
+per-session uid option exists. So there is no `agent-worker` identity today.
+The honest blast radius is: an agent has everything `gascity` has, including
+the delivery state root and the model credential. What it does **not** have is
+the publishing PAT, the controller's approval key, or the ability to originate
+an approval or a dispatch record, because all three live behind D7's boundary.
+
+D18 records the remaining consequence: while agents share the `gascity` uid and
+the supervisor mutation endpoint is reachable from it, the configuration is
+acceptable for prototype exploration and **not** for the production unattended
+workflow. P8 is the gate that resolves it.
 
 Publication is an **orchestrator-produced, publisher-consumed handoff**: the
-orchestrator renders the body from the seal and hands the publisher exactly
-`(full commit sha, body file, approval digest)`. The publisher never reads the
+orchestrator renders the body from the seal, the controller binds it into the
+manifest, and the publisher receives the manifest, the full commit sha and the
+approval digest through the transfer of D9. The publisher never reads the
 delivery root.
 
-**Approval integrity in v1 uses Gas City gate beads plus operator action**, not
-a custom root-owned append helper. The properties that must hold are unchanged:
-the approval is bound to the exact bytes, a mismatch denies rather than warns,
-and the publisher re-verifies before acting. The append-only store, its on-disk
-period and quarantine layout, its fsync sequence and its principal matrix are
-**demoted to a follow-on spec**, to be revisited only if a prototype shows the
-gate-bead path insufficient.
+**Approval integrity is the controller's append-only record**, not Gas City
+bead state and not a custom root-owned store re-specified here. The properties
+that must hold: the approval is bound to the exact bytes, a mismatch denies
+rather than warns, the record is write-once and owned outside the `gascity`
+uid, and the publisher re-verifies before acting.
 
 **D11. Egress is filtered by owner uid or cgroup, and loopback is allowed.**
 The control plane is loopback HTTP on `127.0.0.1:8372` plus a Dolt **TCP**
@@ -560,21 +662,48 @@ that graph.
 v1.4.0's upgrade notes require it or a rig-owned graph fails before
 instantiation. The module configures it.
 
-Lifecycle **properties** are retained and their exact unit matrix is not:
-ingress stops accepting before work drains; agent sessions get a bounded grace
-period; the confinement outlives the processes it confines; durable state is
-consistent before owners exit; and startup adopts before it cleans.
+Lifecycle **properties** are retained and their exact unit matrix is not, but
+two of them need mechanism the module must actually wire rather than inherit:
+
+- **Agent sessions get a real grace period.** Do not assume systemd's defaults
+  supply it. A user-scope supervisor stopped by the system manager can take its
+  whole cgroup with it, killing tmux panes immediately, so the module must
+  configure the supervisor unit's stop behaviour so the supervisor gets time to
+  drain and adopt sessions and systemd escalates only after a bounded interval.
+  Whether `KillMode=mixed` is the right expression of that is **prototype
+  gated**, not asserted here; the property is that no immediate cgroup-wide
+  kill of agent panes occurs before the drain bound expires.
+- **The confinement outlives every process it confines**, across scopes. Once
+  P3 and P8 select the confinement mechanism, `gascity.nix` must wire or
+  supervise that ordering explicitly. Calling the egress and confinement units
+  "ordinary neighbours" is not enough: neighbours have no ordering relationship,
+  and a confinement torn down while an agent still runs is an unconfined agent
+  at the least supervised moment.
+
+The remaining properties are unchanged: ingress stops accepting before work
+drains, durable state is consistent before owners exit, and startup adopts
+before it cleans.
 
 **D13. Discord is notification, status and Q&A in v1; approvals are local.**
 `discord-interactions` requires inbound public HTTPS, which a local host does
 not have without a tunnel, and the gateway delivers events **into agent
 sessions**, which are exactly the principal that may not originate an approval.
 So in v1 Discord carries notifications, status and clarification Q&A, and the
-artifact-bound approval decision is taken by the operator locally, closing the
-gate bead with `gc bd close <bead-id>`. Ingress remains restricted to the one
-configured operator identity and channel, and a rejection emits a bounded local
-diagnostic naming its class and the configured and received identity digests
-rather than failing silently.
+artifact-bound approval decision is taken by the operator locally through the
+controller's CLI.
+
+**The CLI encodes the closed decision set** `{approve, revise, rescope, abort}`
+and each decision is recorded by the controller against the exact artifact
+identity. Only `approve` closes or advances the gate; `revise` and `rescope`
+reroute the run to the stage that can act on them, and `abort` stops it. The
+controller invokes `gc bd close <bead-id>` **after** recording an `approve`, so
+the bead reflects the decision rather than constituting it. `gc bd close` on
+its own is a bead operation and not an approval, which is precisely what stops
+an agent sharing the `gascity` uid from advancing a gate.
+
+Ingress remains restricted to the one configured operator identity and channel,
+and a rejection emits a bounded local diagnostic naming its class and the
+configured and received identity digests rather than failing silently.
 
 **P5** may prove a non-agent approval consumer without inbound public HTTPS; if
 it passes, a Discord approval adapter may be enabled later under the same
@@ -630,12 +759,26 @@ error names the remediation. Identifiers are stored as deployment-keyed digests
 rather than plaintext. Human approval is required at the constitution, spec,
 plan, task-DAG and publication gates.
 
-**Round input retention is bounded.** Exact review-input bytes are retained 30
-days or 2 GiB, whichever binds first; content addresses, evidence references
-and per-seat attestations are retained for the audit period. After the window a
-round can still be proven to have reviewed a specific artifact and may no
-longer reproduce the bytes from Gas City alone, which is the right trade when
-the bytes are recoverable from Git.
+**Round input retention is bounded and something enforces it.** Exact
+review-input bytes are retained 30 days or 2 GiB, whichever binds first;
+content addresses, evidence references and per-seat attestations are retained
+for the audit period as a floor. After the window a round can still be proven
+to have reviewed a specific artifact and may no longer reproduce the bytes from
+Gas City alone, which is the right trade when the bytes are recoverable from
+Git.
+
+Enforcement is named without freezing its layout: either a systemd timer in
+generic `gascity.nix` operating on configured state directories, or a
+pack-owned cleanup command the config repo schedules. A bound with no enforcer
+is a comment, and the previous revision's mistake was specifying the on-disk
+hierarchy instead of saying who runs the clock.
+
+**Redaction is scanned, not asserted.** No durable record, log line, error
+message or operator output contains a credential, a raw Discord id, a raw run
+handle, an opaque session or run secret, or a URL carrying authentication. The
+scan reports counted coverage over the log stream, the audit records and the
+error text, fails closed on an empty corpus, and ships planted controls for
+each category it claims to catch.
 
 **D18. The mutation surface to close is the supervisor's, not the dashboard
 proxy's.** `DASHBOARD_READONLY` is scoped to the Node BFF's transport proxy;
@@ -644,10 +787,28 @@ proxy's.** `DASHBOARD_READONLY` is scoped to the Node BFF's transport proxy;
 therefore does not stop a local process from answering its own pending
 interaction directly.
 
-v1 must either restrict the supervisor's mutation surface or state plainly that
-it relies on process trust within the `gascity` identity, and acceptance probes
-`:8372` rather than only the dashboard proxy. The earlier claim that the
-dashboard read-only flag closes this surface is withdrawn.
+**v1 must mechanically prevent agent sessions from reaching that endpoint.**
+The process-trust option an earlier revision offered is withdrawn: "we rely on
+process trust within the `gascity` identity" is not a control when the
+principals it must exclude run under that identity. The implementation gate
+selects and proves exactly one mechanism:
+
+- agents under a distinct worker uid through a session provider that can drop
+  privilege; or
+- a supervisor authentication boundary whose secret is not readable by agents;
+  or
+- a cgroup or namespace proxy that can distinguish agent sessions from the
+  orchestrator and filter the mutation routes.
+
+Same-uid `tmux` cannot satisfy any of them, so **P8 and P3 must prove the
+selected provider and isolation before ship**. Until one is proven, a one-uid
+`tmux` deployment is acceptable for **prototype exploration only** and is not
+the production unattended workflow while the mutation endpoint stays reachable.
+Whichever mechanism is chosen must preserve the loopback control traffic
+`gc bd` depends on, through a controlled channel rather than by opening the
+mutation surface again.
+
+Acceptance probes `:8372` directly rather than the dashboard proxy.
 
 **D19. Versions are a three-way pin, with a package override decision.** The
 config repo revision, the `gc` package, and `packs.lock` commits must agree.
@@ -684,13 +845,13 @@ works.
 | --- | --- | --- | --- |
 | **P0** | Resolve `check.path`'s base directory: author a formula with a relative check path, cook and run it, observe which file executes and as which uid, then attempt to overwrite it from a task worktree. | The script resolves to a pack or module-owned path and is not writable by the `gascity` session identity. | D14 becomes a hard blocker: no privileged check step may reference a rig-writable path, and implementation stops until the module owns them. |
 | **P1** | Import `gc`, `superpowers` and a two-formula `d2b-engineering` as **siblings** in a scratch city; run `gc doctor`, `gc formula show`, and cook a three-step `d2b-build` on a throwaway rig. Repeat with the packs **nested** under a composite pack. | Sibling variant resolves all agents and dispatches `gc.run_target` steps with no collision; nested variant **fails**. | D5 is wrong and the composition model must be redesigned before any pack work. |
-| **P2** | `d2b-panel` as a `check` loop whose exec script shells `xtask ... panel-attest --records-stdin` against a fixture wave; and the dispatch-record export the admission tool re-derives binding from. | Round one non-unanimous spawns attempt two from the engine; round two unanimous closes the step and writes a seal; `max_attempts` is enforced by the dispatcher; binding is re-derived from the dispatch record rather than producer JSON. | The panel becomes an external driver invoked from one step; if the dispatch record cannot be exported, the Gas City panel path does not ship and the standalone producer remains the only supported one. |
-| **P3** | From inside the proposed confinement, run `gc bd update`, `gc bd close`, a check script, and a Discord post. | All succeed, with loopback and the Dolt port reachable. | D11's rules are wrong; egress filtering is re-derived until the control plane is reachable. |
-| **P4** | Publish from a unit with an explicit `WorkingDirectory` on the integration store: push an explicit full sha and open a PR, in both the PAT-plus-`gh` and `github`-pack variants. | The branch appears at exactly that sha, the PR body renders from the seal, and an unapproved sha is refused. | D9's mechanism is reselected; if the App path is chosen the spec must record app id, key path and mode, installation id and cwd binding. |
+| **P2** | `d2b-panel` as a `check` loop whose exec script shells `xtask ... panel-attest --records-stdin --dispatch-record <fd>` against a fixture wave; and the controller-emitted dispatch record the verifier re-derives binding from, with the seats running as Gas City sessions. | Round one non-unanimous spawns attempt two from the engine; round two unanimous closes the step and writes a seal; `max_attempts` is enforced by the dispatcher; binding is re-derived from the **controller's** dispatch record, and a session-written claim cannot change it. | The panel becomes an external driver invoked from one step. If the controller cannot own dispatch for session-run seats, the Gas City panel **does not ship** and the standalone producer remains the only supported one. No fail-open. |
+| **P3** | From inside the proposed confinement, run `gc bd update`, `gc bd close`, a check script and a Discord post; then attempt the supervisor mutation endpoint and the controller socket from an agent session. | Control-plane calls succeed with loopback and the Dolt port reachable, **and** the mutation endpoint is refused while the controller socket rejects the agent peer. | D11's rules are wrong; egress filtering is re-derived until the control plane is reachable without reopening the mutation surface. |
+| **P4** | Publish from a unit with an explicit `WorkingDirectory` on the integration store: `git -C <repo> push origin <sha>:refs/heads/<branch>`, then create-or-edit the PR, retried twice; body transferred over the socket or an open fd rather than by path. | The branch appears at exactly that sha, retry converges without duplicating, the body cannot be substituted by swapping a path, and an unapproved sha is refused. | **Publishing design is blocked and returns for redesign.** There is no App fallback: adopting the shared-key `github` pack path while claiming credential isolation is forbidden. |
 | **P5** | Approve a gate end to end from Discord **without** inbound public HTTPS and without any agent session participating. | The gate bead closes and no agent session was involved. | D13 stands as written: Discord stays notification-only and approvals remain local. |
 | **P6** | Import a 120-task `tasks.md` and a dependency-heavy one. | Dependencies are enforced, over-100 is handled by phase chunking or direct bead creation, and re-import is idempotent by task id. | The importer emits beads directly with explicit edges and the drain path is abandoned. |
 | **P7** | Rerun P1 and P2 against the **v1.4.0** binary built from `llm-agents.nix`. | Behaviour matches the documented semantics the design relies on. | D19 takes the commit-pinned `packageOverride` path, or the evidence is re-measured at v1.4.0 and any divergent claim is corrected. |
-| **P8** | Delivery state: create the state root as identity A and read it as identity B; then exercise the orchestrator-rendered, publisher-consumed handoff. | B is refused, as expected, and the handoff carries `(sha, body file, approval digest)` sufficient to publish. | D10's identity split is revised before any module work. |
+| **P8** | **Session and control separation.** Prove a session provider or isolation mechanism under which an agent cannot reach the supervisor mutation endpoint or forge controller input, and separately that delivery state created as identity A is refused to identity B while the manifest handoff still publishes. | Agents are mechanically excluded from the mutation surface and from the controller's authority, and the handoff carries manifest, sha and approval digest sufficient to publish. | The production unattended workflow **does not ship**; the deployment stays prototype-only under D18 until a mechanism is proven. |
 
 ## Non-goals, and what this ADR does not authorize
 
@@ -711,6 +872,14 @@ works.
 - **No producer-asserted binding accepted as proof**, and equally **no
   fail-open**: the Gas City panel path ships with derived binding or does not
   ship.
+- **No authority in Gas City session state.** Approvals, dispatch records and
+  publication manifests are never session-written; a bead close is not an
+  approval; and no signing or approval key is readable by any agent.
+- **No process-trust exemption** for the supervisor mutation surface, and no
+  production unattended workflow while agents share a uid with a reachable
+  mutation endpoint.
+- **No caller-supplied body path** in the publication handoff, and no GitHub
+  App fallback adopted while claiming credential isolation.
 - **No claim of an agent-worker uid** while the runtime is `tmux`, and no
   acceptance item written against a process that does not exist.
 - **No confinement that blocks host loopback or the Dolt port.**
@@ -830,13 +999,14 @@ and it ships planted violations it must reject.
 - **M15 The publisher never reads delivery state.** With the publisher running
   as its own identity, an attempt to read the delivery state root, the seal or
   any panel record is refused, and publication nonetheless succeeds from the
-  orchestrator-rendered handoff of `(sha, body file, approval digest)`.
-- **M16 The supervisor mutation surface is addressed.** A local process
-  attempting to answer a pending interaction directly against
-  `127.0.0.1:8372` is either refused, or the deployment documents that it
-  relies on process trust within the `gascity` identity and the acceptance
-  records that explicitly. Probing only the dashboard proxy does not satisfy
-  this item.
+  controller-bound handoff of the exact sha, approval digest and bounded PR
+  body over the authenticated transport of D9. No caller-supplied body path is
+  accepted.
+- **M16 The supervisor mutation surface is mechanically closed.** A process in
+  an agent session attempting to answer a pending interaction directly against
+  `127.0.0.1:8372` is refused by the mechanism selected through P3 and P8.
+  Probing only the dashboard proxy, or documenting reliance on same-uid process
+  trust, does not satisfy this item.
 - **M17 Task import preserves dependencies at scale.** A 120-task `tasks.md`
   imports without `limit_exceeded`, a dependency-heavy control has every
   imported edge enforced at execution rather than run concurrently, re-import
@@ -846,6 +1016,13 @@ and it ships planted violations it must reject.
   path the locked `llm-agents.nix` revision produces, no other `gc` is on the
   path of any identity that can invoke it, and the unit PATH contains `python3`
   while the module restates none of the other eight wrapper packages.
+
+  Counted coverage over the resolved units and paths, plus planted negative
+  controls that must each be **refused**: a `packs.lock` whose recorded commit
+  no longer matches the imported pack tree; a config revision pinning a
+  different `llm-agents.nix` revision than the one that built the running
+  binary; and a `gc` whose reported version or commit disagrees with the locked
+  package. A three-way pin that cannot detect its own drift is not a pin.
 - **M19 Repository hygiene.** `.gc/` is gitignored, worktrees resolve outside
   the d2b checkout where `GC_WORKTREES_DIR` is supported, and no runtime
   evidence, state, transcript or attestation payload is committed. Planted
@@ -858,6 +1035,66 @@ and it ships planted violations it must reject.
   it confines; and startup adopts before it cleans. Traces assert against the
   real unit, and each run plants a detectable control event so an empty trace
   cannot pass.
+
+- **M21 An agent cannot forge authority.** Running as the `gascity` identity
+  with a live session, each of these is attempted and refused: writing or
+  amending a controller approval record; producing a dispatch record the
+  verifier accepts; emitting or altering a publication manifest; reading the
+  controller's signing or approval key; and connecting to the controller socket
+  as a peer other than the expected orchestrator identity. Then the end-to-end
+  case: a run that closes the publication gate bead directly with `gc bd close`
+  and invokes the publisher is **refused**, because the controller has no
+  `approve` recorded for that commit. Bead state alone advancing a gate fails
+  this item.
+- **M22 The supervisor mutation surface is closed to agents.** From an agent
+  session, a direct call to `/v0/city/{city}/session/{id}/respond` on
+  `127.0.0.1:8372` is **refused** by whichever mechanism P8 selected, while
+  `gc bd update`, `gc bd close` and a check script all still succeed from the
+  same context. Probing only the dashboard proxy, or recording that the
+  deployment "relies on process trust", does not satisfy this item.
+- **M23 Publication is idempotent and path-safe.** The publisher issues exactly
+  `git -C <handoff-repo> push origin <full-sha>:refs/heads/<branch>`, asserted
+  on the observed argument vector. Running the same publication twice creates
+  the PR once and edits its body the second time, with no duplicate and no
+  failure. A planted attempt to substitute the body by swapping a file at a
+  caller-supplied path is impossible because no path is accepted; the body
+  arrives over the socket, stdin or an open descriptor. Temporary and handoff
+  state is absent after both a successful and a failed run, and a crash
+  mid-publication leaves state a bounded recovery removes.
+- **M24 Exactly one publication audit record per attempt.** Counted across a
+  successful publication, one refused for a missing approval, one refused for a
+  stale snapshot and one refused for an underived binding: four attempts, four
+  records, each bounded and redacted, all written through the controller's
+  append-only path and none writable by the `gascity` identity.
+- **M25 Retention is enforced by something that runs.** The named enforcer, a
+  `gascity.nix` timer or a pack-owned cleanup command, is observed to run on
+  schedule and to trim exact review inputs at 30 days or 2 GiB, whichever binds
+  first, while leaving content addresses and per-seat attestations intact
+  through the audit floor. A deployment with the bounds configured and no
+  enforcer scheduled fails this item.
+- **M26 Redaction is scanned with coverage and controls.** No durable record,
+  log line, error message or operator output contains a credential, a raw
+  Discord id, a raw run handle, an opaque session or run secret, or a URL
+  carrying authentication. The scan reports the number of records, log lines
+  and error strings examined and fails closed on an empty corpus, and one
+  planted control per category is rejected.
+- **M27 The supervisor gets its grace period.** On stop, agent panes are
+  observed **not** to be killed immediately with the supervisor's cgroup; the
+  supervisor receives the configured interval to drain and adopt sessions; and
+  systemd escalates only after the bound expires. Signal delivery and timing
+  are observed rather than inferred from unit file text.
+- **M28 Confinement outlives every agent process.** With an agent deliberately
+  ignoring its stop request for the whole grace period, the confinement
+  selected by P3 and P8 is observed still in force throughout and torn down
+  only after that process exits, ordered against the process exit rather than a
+  timer. A teardown observed before the last agent exit fails this item.
+- **M29 The dispatch boundary is injectable and typed.** Admission accepts the
+  trusted dispatch input as a path, a file descriptor or stdin, with no host
+  path hardcoded, and tests supply fixtures. Three **well-formed** envelopes
+  are each rejected with their own typed semantic error rather than a parse
+  failure: dispatch record absent; dispatch record present but untrusted; and
+  dispatch record contradicting the record's claimed binding. The standalone
+  producer's observed harness path converges on the same verifier.
 
 ## Consequences
 
@@ -875,13 +1112,21 @@ renamed var or a restructured stage in a future release breaks `d2b-build`, and
 because import `version` is parsed and not enforced, nothing warns us. The pin
 is a commit and upgrading is a real task with real breakage.
 
-**The security boundary in v1 is one uid plus a credential file, and the record
-says so.** Agents share the `gascity` identity, so the only mechanical control
-is that the publishing PAT is delivered exclusively to the publisher unit.
-Everything else is scope, gating and review, which reduce the chance of a bad
-change reaching `v3` and do not contain a bad agent. An earlier revision
-claimed five mechanical exclusions; four of them were against a process that
-does not exist. This is a smaller claim and a true one.
+**The security boundary in v1 is three identities and one narrow socket, and
+the record says what each buys.** Agents share the `gascity` identity, so
+nothing inside a session is trustworthy. What is mechanical is that the
+controller owns dispatch, approvals and the publication manifest under its own
+uid behind a peer-authenticated socket, and that the publishing PAT lives with
+the publisher. An earlier revision claimed five exclusions against a process
+that did not exist; the expert simplification then removed the boundary
+entirely and let an agent forge everything the gate consumes. Three identities
+is the smallest arrangement that is both implementable and not forgeable.
+
+**And it is still not a production posture until P8.** While agents share a uid
+with a reachable supervisor mutation endpoint, an agent can answer its own
+pending interactions. D18 records that as prototype-only rather than papering
+over it, which means the honest status of the unattended workflow today is
+blocked on a prototype, not shipped with a caveat.
 
 **Discord is less capable in v1 than the design wanted.** Notification, status
 and Q&A only, with approvals taken locally. That costs the operator the
