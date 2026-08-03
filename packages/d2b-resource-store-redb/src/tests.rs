@@ -1278,6 +1278,8 @@ fn checked_mutation_constructors_and_raw_commit_path_are_not_public() {
 const PRODUCTION_RSS_RESOURCE_COUNT: usize = 10_000;
 const PRODUCTION_RSS_WATCH_COUNT: usize = 100;
 const PRODUCTION_RSS_THRESHOLD_KIB: u64 = 24_576;
+const PRODUCTION_RSS_REVISION_BATCH_SIZE: usize =
+    GROUP_COMMIT_MAX * d2b_contracts::v3::MAX_BATCH_MUTATIONS;
 const PRODUCTION_RSS_CHILD_ENV: &str = "D2B_REDB_PRODUCTION_RSS_CHILD";
 const PRODUCTION_RSS_FIXTURE_ENV: &str = "D2B_REDB_PRODUCTION_RSS_FIXTURE";
 const PRODUCTION_RSS_CHILD_MARKER: &str = "PRODUCTION_REDB_FIXTURE";
@@ -1474,33 +1476,43 @@ fn prepare_production_rss_fixture() -> tempfile::TempDir {
         let mut revisions = write
             .open_table(crate::transaction::REVISION_LOG)
             .expect("production RSS fixture revision table");
-        for index in 0..PRODUCTION_RSS_RESOURCE_COUNT {
-            let (target, uid, _, payload_digest) = hard_seed_resource(index);
-            let entry = ChangeEntry::new(
-                0,
-                ResourceTypeName::parse("Host").unwrap(),
-                target.name().clone(),
-                uid,
-                ChangeEvent::Created,
-                None,
-                Some(d2b_contracts::v3::ResourceGeneration::new(1).unwrap()),
-                None,
-                payload_digest,
-                None,
-                "production-seed-operation".to_owned(),
-                "production-seed-correlation".to_owned(),
-            )
-            .expect("production RSS fixture change entry");
+        for (batch_index, batch_start) in (0..PRODUCTION_RSS_RESOURCE_COUNT)
+            .step_by(PRODUCTION_RSS_REVISION_BATCH_SIZE)
+            .enumerate()
+        {
+            let batch_end = (batch_start + PRODUCTION_RSS_REVISION_BATCH_SIZE)
+                .min(PRODUCTION_RSS_RESOURCE_COUNT);
+            let entries = (batch_start..batch_end)
+                .enumerate()
+                .map(|(ordinal, index)| {
+                    let (target, uid, _, payload_digest) = hard_seed_resource(index);
+                    ChangeEntry::new(
+                        u32::try_from(ordinal).expect("production RSS fixture ordinal"),
+                        ResourceTypeName::parse("Host").unwrap(),
+                        target.name().clone(),
+                        uid,
+                        ChangeEvent::Created,
+                        None,
+                        Some(d2b_contracts::v3::ResourceGeneration::new(1).unwrap()),
+                        None,
+                        payload_digest,
+                        None,
+                        "production-seed-operation".to_owned(),
+                        "production-seed-correlation".to_owned(),
+                    )
+                    .expect("production RSS fixture change entry")
+                })
+                .collect();
             let batch = ChangeBatch::new(
-                d2b_contracts::v3::ZoneRevision::new((index + 1) as u64),
-                vec![entry],
+                d2b_contracts::v3::ZoneRevision::new((batch_index + 1) as u64),
+                entries,
             )
             .expect("production RSS fixture change batch");
             let value = crate::transaction::encode(ValueKind::ChangeBatch, &batch)
                 .expect("production RSS fixture revision encoding");
             revisions
                 .insert(
-                    crate::transaction::revision_key((index + 1) as u64)
+                    crate::transaction::revision_key((batch_index + 1) as u64)
                         .expect("production RSS fixture revision key")
                         .as_slice(),
                     value.as_slice(),
@@ -1510,7 +1522,8 @@ fn prepare_production_rss_fixture() -> tempfile::TempDir {
     }
     let mut meta =
         crate::transaction::current_meta(&database).expect("production RSS fixture metadata");
-    meta.current_revision = PRODUCTION_RSS_RESOURCE_COUNT as u64;
+    meta.current_revision =
+        PRODUCTION_RSS_RESOURCE_COUNT.div_ceil(PRODUCTION_RSS_REVISION_BATCH_SIZE) as u64;
     meta.clean_shutdown = true;
     let meta_value = crate::transaction::encode(ValueKind::StoreMetaScalar, &meta)
         .expect("production RSS fixture metadata encoding");
@@ -1566,7 +1579,8 @@ async fn production_backend_hard_fixture_child() {
             .expect("production backend hard fixture store"),
     );
     let issuer = Arc::new(issuer);
-    let mut current_revision = PRODUCTION_RSS_RESOURCE_COUNT as u64;
+    let mut current_revision =
+        PRODUCTION_RSS_RESOURCE_COUNT.div_ceil(PRODUCTION_RSS_REVISION_BATCH_SIZE) as u64;
 
     assert_eq!(WRITE_QUEUE_CAPACITY, 256);
     assert_eq!(GROUP_COMMIT_MAX, 16);
