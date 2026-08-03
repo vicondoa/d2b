@@ -137,10 +137,8 @@ def ci_env_block(job: dict[str, Any], spaces: int) -> str:
 # twelve nix-using jobs would fan the key space out far past that total, and the
 # steady state would be everything evicting everything - worse than not caching.
 # So only the fixture-contract job gets an entry: it owns one bounded key and
-# the narrow realized video dependency. Per-shard Nix-unit caches multiply the
-# cap by the matrix width and exceed the repository budget even when each entry
-# is individually bounded. The flake-eval shards finish in under a minute and
-# the lint/drift jobs only evaluate.
+# the narrow realized video dependency. The Nix-unit and flake-eval jobs only
+# evaluate, while the realized flake lane owns a separate targeted input cache.
 #
 # On sizing: gc-max-store-size-linux caps the UNCOMPRESSED /nix store before
 # save, which is not the size of the resulting cache entry - the entry is
@@ -483,8 +481,6 @@ def nix_unit_discover_job(job: dict[str, Any]) -> str:
       - id: list
         name: {job["displayName"]}
         run: |
-          # Same partition tool as flake-eval-discover, so this lane is handed
-          # exactly the names that lane drops from its instantiate-only matrix.
           partition=$(make -s test-flake-partition)
           echo "$partition"
           echo "$partition" >> "$GITHUB_OUTPUT"
@@ -507,10 +503,7 @@ def nix_unit_shards_job(job: dict[str, Any]) -> str:
 {nix_setup_step(job, MATRIX_CHECK_SCOPE)}
       - name: {job["displayName"]}
         env:
-          # The matrix value is data, not shell source. The driver validates it
-          # against both the safe-name grammar and the discovered check set.
           D2B_NIX_UNIT_CHECK: ${{{{ matrix.check }}}}
-          D2B_NIX_UNIT_JOBS: "1"
         run: make test-nix-unit"""
 
 

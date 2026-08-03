@@ -59,9 +59,17 @@ assert_wf "discover enumerates via make test-flake-partition" 'make -s test-flak
 # both shard lanes consume the discovered JSON (not a hardcoded list)
 assert_wf "eval matrix sourced from discover output" 'fromJSON\(needs\.flake-eval-discover\.outputs\.evalchecks\)'
 assert_wf "realized matrix sourced from discover output" 'fromJSON\(needs\.flake-eval-discover\.outputs\.realizedchecks\)'
-# the nix-unit lane is handed the class the eval matrix drops, from that same
-# partition, so the exclusion cannot silently drop a check from every lane
-assert_wf "nix-unit lane sourced from the same partition" 'checks:\s*\$\{\{\s*steps\.list\.outputs\.nixunitchecks'
+# Nix-unit CI retains the pre-change per-check matrix because the full local
+# eval-jobs runner does not fit the hosted runner memory envelope.
+assert_wf "nix-unit discovery exports the partition" 'checks:\s*\$\{\{\s*steps\.list\.outputs\.nixunitchecks'
+assert_wf "nix-unit matrix sourced from discovery" 'fromJSON\(needs\.nix-unit-discover\.outputs\.checks\)'
+assert_wf "nix-unit shard invokes make test-nix-unit" 'D2B_NIX_UNIT_CHECK'
+if grep -Eq 'D2B_NIX_UNIT_JOBS' "$wf"; then
+  fail "wiring: retired D2B_NIX_UNIT_JOBS remains in CI"
+  rc=1
+else
+  ok "wiring: retired D2B_NIX_UNIT_JOBS is absent"
+fi
 # each shard runs the make-routed single-check evaluation
 assert_wf "shard runs D2B_FLAKE_CHECK make test-flake" 'D2B_FLAKE_CHECK'
 # the required-context aggregator gates on both shard matrices

@@ -34,7 +34,14 @@ use constant {
     O_RDWR      => 0x2,
     O_WRONLY   => 0x1,
     PR_SET_CHILD_SUBREAPER => 36,
+    RESOLVE_NO_MAGICLINKS => 0x02,
+    RESOLVE_NO_SYMLINKS => 0x04,
+    SIGINT => 2,
+    SIGKILL => 9,
+    SIGTERM => 15,
     MAX_INTERRUPT_RETRIES => 16,
+    MANIFEST_LOCK_DIAGNOSTIC =>
+        "execution-manifest lock is active; wait for the active run to finish and retry.",
     SEEK_SET    => 0,
     SHUTDOWN_GRACE_SECONDS => 10,
 };
@@ -175,7 +182,12 @@ sub open_manifest_parent {
     my @parent_parts = grep { $_ ne "" && $_ ne "." } @{$parts};
     my $parent_path = @parent_parts ? join("/", @parent_parts) : ".";
     $parent_path = "/$parent_path" if $absolute;
-    my $how = pack("QQQ", O_PATH | O_DIRECTORY | O_CLOEXEC, 0, 0x06);
+    my $how = pack(
+        "QQQ",
+        O_PATH | O_DIRECTORY | O_CLOEXEC,
+        0,
+        RESOLVE_NO_MAGICLINKS | RESOLVE_NO_SYMLINKS,
+    );
     my $mutable_parent_path = "$parent_path";
     my $mutable_how = "$how";
     my $openat2_fd = syscall(
@@ -391,9 +403,7 @@ sub lock_manifest {
     my $request = pack("ssxxxxqqixxxx", F_WRLCK, SEEK_SET, 0, 0, 0);
     if (!defined(fcntl($lockfh, F_OFD_SETLK, $request))) {
         if ($! == EACCES || $! == EAGAIN) {
-            print STDERR
-                "manifest-lock-contended: execution-manifest lock is active; "
-                . "wait for the active run to finish and retry.\n";
+            print STDERR "manifest-lock-contended: " . MANIFEST_LOCK_DIAGNOSTIC . "\n";
             exit 73;
         }
         fatal("could not acquire the execution-manifest lock");
@@ -673,8 +683,8 @@ sub run_manifest_lifecycle {
 
     my $handled_signal = 0;
     my $forwarded = 0;
-    $SIG{INT} = sub { $handled_signal ||= 2 };
-    $SIG{TERM} = sub { $handled_signal ||= 15 };
+    $SIG{INT} = sub { $handled_signal ||= SIGINT };
+    $SIG{TERM} = sub { $handled_signal ||= SIGTERM };
 
     my $pid = $process_control->{fork}->();
     fatal("could not create the Rust scheduler process") unless defined($pid);
@@ -700,7 +710,7 @@ sub run_manifest_lifecycle {
                 $sleep_fn->(0.05);
             }
             if ($process_control->{kill}->(0, -$pid)) {
-                $process_control->{kill}->(9, -$pid);
+                $process_control->{kill}->(SIGKILL, -$pid);
             }
             $process_control->{waitpid}->($pid, 0);
             drain_adopted_descendants($process_control);

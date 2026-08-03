@@ -225,6 +225,63 @@ evidence without stale success. A manifest is diagnostic evidence and does not
 replace source inventory, `make test-policy`, or
 `D2B_ENABLE_FIXTURE_BUILD=1 make test-fixture-contracts`.
 
+### Nix-unit runner
+
+`make test-nix-unit` uses the established `nix-eval-jobs` runner with
+`--no-instantiate` against the locked `nixUnitJobs.<system>` flake output.
+That output contains one aggregate attr per current `*.nix` case file (45
+file jobs), plus the `nix-unit` shard/pin integrity attr. File jobs use stable
+names of the form `case-<basename>`. Each file job
+reuses the same `casesFor`/`resultsFor`/failure-report constructor as the
+seven topical `checks.<system>` leaves, so it reports every
+`FAIL <case>: <detail>` from its file without submitting installables to the
+daemon or realizing derivations.
+The seven topical checks remain the stable manifest leaves:
+`nix-unit`, `nix-unit-daemon`, `nix-unit-guest`, `nix-unit-misc`,
+`nix-unit-network`, `nix-unit-runtime`, and `nix-unit-state`.
+`nixUnitInventory.<system>` is one locked object containing sorted `caseNames`
+and sorted `jobNames`, including the integrity attr. The runner evaluates that
+inventory once, compares `jobNames` exactly with the result attrs, and compares
+`caseNames` exactly with the
+common and native-system pin files. Discovery is empty-set failure, and
+missing or unexpected names still direct operators to `run make nix-unit-pin`.
+
+If `nix-eval-jobs` or `jq` is absent, the target makes one guarded re-entry
+through `devShells.<system>.nix-unit`, a focused `mkShellNoCC` output containing
+the locked versions from this flake's `flake.lock`. An existing toolchain or
+development shell with both commands runs directly. `D2B_NIX_UNIT_JOBS` is
+retired and exits with status 2; use
+`D2B_NIX_UNIT_WORKERS=<1..4>` instead. The requested worker count is
+bounded by the CPU cap `min(4, logical CPUs, finite cgroup CPU quota)` and the
+memory cap
+`max(1, floor((effective available MiB - 3072) / (limit + 2048)))`.
+The full local runner defaults to four workers and a 4096 MiB evaluator limit,
+plus 2048 MiB of per-worker process and flake overhead.
+Effective available memory is the smaller of `MemAvailable` and the finite
+cgroup allowance after reclaimable file cache. A visible but unreadable cgroup
+controller fails closed to one worker. On the reference 12-CPU, 62-GiB host
+the effective cap preserves four workers.
+`D2B_NIX_UNIT_MEMORY_MB` may set the evaluator limit from 512 through 4096 MiB;
+the 2048 MiB overhead remains reserved. Successful full runs
+suppress raw JSONL output. Every real `FAIL <case>: <detail>` line from an
+aggregate error is printed as one concise, path-sanitized stderr entry.
+Repository and home roots become fixed placeholders; Nix store hashes are
+redacted while derivation names remain visible. Source-code template lines are
+ignored, and an aggregate with no real FAIL line receives one attributable
+fallback diagnostic. Result attributes are
+also compared exactly with the locked file-job names. Command progress uses the
+fixed path-free `d2b` flake label.
+
+`D2B_NIX_UNIT_CHECK=<name>` remains the manual single-shard selector. It
+requires one of the seven discovered aggregate checks and evaluates only that
+check without entering the eval-jobs tool shell or resource-accounting path.
+Hosted CI retains the pre-change discovery plus per-check matrix because the
+full eval-jobs path did not fit the hosted runner envelope. With execution
+evidence enabled, a full pass publishes exactly the
+seven leaves `nix-unit`, `nix-unit-daemon`, `nix-unit-guest`, `nix-unit-misc`,
+`nix-unit-network`, `nix-unit-runtime`, and `nix-unit-state`; a selected pass
+publishes only its selected leaf.
+
 `.github/workflows/pr-l1-static-fast.yml` is generated from the manifest by
 `make layer1-workflow` and checked by `make layer1-workflow-check` during
 `make test-drift`. CI runs the individual Layer-1 jobs in parallel and exposes

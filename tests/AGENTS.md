@@ -223,6 +223,62 @@ unreadable cgroup v2 memory controller fails closed to budget 1. Cargo and
 nextest quotas are derived so every active frontier stays within the effective
 budget, including budget 1. Top-level Make `-j` is not the Rust budget knob.
 
+### Nix-unit execution
+
+`make test-nix-unit` uses `nix-eval-jobs --no-instantiate` against the locked
+`nixUnitJobs.<system>` output. The output contains exactly one aggregate job
+per current `*.nix` case file (45 file jobs), named bijectively as
+`case-<basename>`, plus the `nix-unit` shard/pin integrity job. The `fileJobs`
+constructor reuses the same
+`casesFor`/`resultsFor`/failure-report semantics as the seven existing flake
+shard checks, so every file job reports all of its real
+`FAIL <case>: <detail>` lines. No installable is submitted and no derivation
+is realized.
+
+The seven existing flake checks remain the stable manifest leaves:
+`nix-unit`, `nix-unit-daemon`, `nix-unit-guest`, `nix-unit-misc`,
+`nix-unit-network`, `nix-unit-runtime`, and `nix-unit-state`.
+The single locked `nixUnitInventory.<system>` output contains sorted
+`caseNames` and sorted `jobNames`, including integrity, and does not force case
+expressions. The runner evaluates it once with a `git+file` flake reference,
+compares result attrs by exact symmetric difference with `jobNames`, and
+compares `caseNames` exactly with `tests/unit/nix/pinned/common.txt` plus the
+native-system pin file. Missing or unexpected names fail closed and retain the
+exact `run make nix-unit-pin` remedy. Do not replace this with a
+repository-specific worker loop or a second scheduler.
+
+The target enters `devShells.<system>.nix-unit` once when `nix-eval-jobs` or
+`jq` is missing. That focused shell is a standard `mkShellNoCC` output backed
+by the locked flake inputs; an existing toolchain or development shell runs
+directly. `D2B_NIX_UNIT_JOBS` is retired and returns status 2 with a migration
+message naming `D2B_NIX_UNIT_WORKERS`. Use that bounded operator-intent
+control. Its effective count is capped by four workers, logical CPUs, any
+finite cgroup CPU quota, and available memory after a 3 GiB host reserve at
+the evaluator limit plus 2048 MiB of process and flake overhead per worker.
+The full local runner defaults to four workers and a 4096 MiB evaluator limit.
+`D2B_NIX_UNIT_MEMORY_MB` may set the limit from 512 through 4096 MiB.
+Successful full runs suppress raw JSONL output. Every real `FAIL <case>:
+<detail>` line from an aggregate error is parsed and printed as one concise,
+path-sanitized stderr entry. Repository and home roots become fixed
+placeholders; Nix store hashes are hidden without removing derivation names.
+Source-code template lines such as `${result.name}` are excluded. If an
+aggregate has no real FAIL line, one final fallback diagnostic remains
+attributable to that result attribute.
+Command progress uses the fixed path-free `d2b` flake label.
+
+`D2B_NIX_UNIT_CHECK` remains the manual single-shard selector. When
+set, it exits through the selected Nix check before eval-jobs bootstrap or
+resource accounting. Hosted CI retains the pre-change discovery and
+per-check matrix because the full eval-jobs path did not fit the hosted
+runner envelope. When
+`D2B_EXECUTION_MANIFEST` is set, enter the shared secure lifecycle before Nix
+discovery or toolchain entry. A full pass records exactly these seven leaves:
+`nix-unit`, `nix-unit-daemon`, `nix-unit-guest`, `nix-unit-misc`,
+`nix-unit-network`, `nix-unit-runtime`, and `nix-unit-state`. A selected pass
+records only its selected leaf. Reuse
+`tests/tools/execution-manifest.pl`; do not weaken its locking, cleanup, or
+interruption handling.
+
 `D2B_EXECUTION_MANIFEST=<path>` opts the Rust aggregate into execution evidence.
 The binding v1 schema and secure lifecycle live in
 [`../docs/reference/test-execution-manifest.md`](../docs/reference/test-execution-manifest.md).

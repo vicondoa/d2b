@@ -730,6 +730,10 @@ store-overlay-emit/first-op-owner-uid-positive
 store-overlay-emit/first-op-size-bytes
 store-overlay-emit/first-op-target-suffix
 store-overlay-emit/planops-count
+test-infrastructure/pin-integrity-complete
+test-infrastructure/shard-coverage-complete
+test-infrastructure/shared-corpus-duplicate-name-rejected
+test-infrastructure/shared-corpus-missing-file-rejected
 usbip-gating/disabled-backend-absent
 usbip-gating/disabled-backend-firewall-rule-absent
 usbip-gating/disabled-kernel-module-absent

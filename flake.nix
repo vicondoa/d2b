@@ -41,6 +41,33 @@
           cp ${./tests/fixtures/guest-rust-workspace/Cargo.toml} \
             $out/packages/Cargo.toml
         '';
+      # The Nix-unit corpus is shared by the topical flake checks, the
+      # per-file nix-eval-jobs surface, and the locked inventory. Keep the
+      # evaluator context in one constructor so those surfaces cannot drift.
+      nixUnitCorpusFor = system:
+        let
+          pkgs = nixpkgsFor.${system};
+          d2bModule = import ./nixos-modules { inherit inputs; };
+          mkEval = modules: nixpkgs.lib.nixosSystem {
+            inherit system;
+            modules = [
+              d2bModule
+              ({ lib, ... }: {
+                d2b.site.usePrebuiltHostTools =
+                  lib.mkDefault (system == "x86_64-linux");
+              })
+            ] ++ modules;
+          };
+        in
+        import ./tests/unit/nix/eval-jobs.nix {
+          lib = pkgs.lib;
+          inherit pkgs system;
+          flakeRoot = ./.;
+          d2bLib = import ./nixos-modules/lib.nix { lib = pkgs.lib; };
+          inherit mkEval;
+          nixpkgsFlake = nixpkgs;
+          inherit d2bModule;
+        };
     in
     {
       # The public surface area - populated incrementally by the
@@ -102,6 +129,16 @@
             export SCCACHE_DIR="''${SCCACHE_DIR:-$HOME/.cache/d2b-sccache}"
             echo "d2b dev shell: rust $(sed -n 's/.*channel = "\(.*\)".*/\1/p' packages/rust-toolchain.toml) via rustup, sccache at $SCCACHE_DIR"
           '';
+        };
+        # Focused shell for the evaluation-only Nix-unit runner. Keeping this
+        # output separate lets the target acquire only its locked external
+        # tools instead of entering the full Rust development shell.
+        nix-unit = pkgs.mkShellNoCC {
+          name = "d2b-nix-unit";
+          packages = with pkgs; [
+            nix-eval-jobs
+            jq
+          ];
         };
       });
 
@@ -726,6 +763,7 @@
             "provider-catalog.nix"
             "readiness-waves.nix"
             "restart-policy.nix"
+            "test-infrastructure.nix"
             "usb-security-key.nix"
             "vm-eval-overlays.nix"
           ];
@@ -755,9 +793,7 @@
             "volume-mounts.nix"
           ];
         };
-        nixUnitCaseFileNames =
-          pkgs.lib.filter (n: pkgs.lib.hasSuffix ".nix" n)
-            (pkgs.lib.attrNames (builtins.readDir ./tests/unit/nix/cases));
+        nixUnitCaseFileNames = nixUnitCorpus.caseFileNames;
         nixUnitShardFiles = pkgs.lib.concatLists (pkgs.lib.attrValues nixUnitShardCaseFiles);
         nixUnitShardMissingFiles =
           pkgs.lib.filter (n: !(builtins.elem n nixUnitShardFiles)) nixUnitCaseFileNames;
@@ -777,78 +813,10 @@
           unknown = nixUnitShardUnknownFiles;
           duplicate = nixUnitShardDuplicateFiles;
         };
-        nixUnitCasesFor = caseFileNames: import ./tests/unit/nix {
-          lib = pkgs.lib;
-          inherit pkgs system;
-          flakeRoot = ./.;
-          d2bLib = import ./nixos-modules/lib.nix { lib = pkgs.lib; };
-          inherit mkEval;
-          # Direct-injection handles for tests/unit/nix/eval-cases/shared.nix (the
-          # minimal lib.evalModules fast evaluator) - passing the nixpkgs
-          # flake input + the d2b module set avoids a `getFlake ./.`
-          # (which would resolve to a non-git store path inside the flake).
-          nixpkgsFlake = nixpkgs;
-          inherit d2bModule;
-          inherit caseFileNames;
-        };
-        nixUnitCases = nixUnitCasesFor null;
-        nixUnitEval = name: case:
-          let
-            r = builtins.tryEval (let v = case.expr; in builtins.deepSeq v v);
-          in
-          if case ? expectedError then
-            # Bucket-B: the case must throw. `tryEval` cannot capture the
-            # message, so message-substring matching is NOT supported here:
-            # if an author sets `expectedError.msg` (expecting it enforced),
-            # fail loudly rather than give false confidence. Message-sensitive
-            # negative gates should assert over `config.assertions` data (see
-            # guest-config-containment.nix) instead.
-            if (builtins.isAttrs case.expectedError) && (case.expectedError != { }) then
-              {
-                inherit name;
-                ok = false;
-                detail = "expectedError must be `{ }` - this runner asserts only THAT the expr throws; tryEval cannot match a throw message. Move message-substring checks to config.assertions data.";
-              }
-            else
-              {
-                inherit name;
-                ok = !r.success;
-                detail =
-                  if r.success
-                  then "expected an error, but eval succeeded"
-                  else "threw as expected";
-              }
-          else
-            {
-              inherit name;
-              ok = r.success && r.value == case.expected;
-              detail =
-                if !r.success then "eval threw; expected a value"
-                else "got=${builtins.toJSON r.value} expected=${builtins.toJSON case.expected}";
-            };
-        nixUnitResultsFor = cases: pkgs.lib.mapAttrsToList nixUnitEval cases;
-        nixUnitShardCheck = checkName: caseFileNames:
-          let
-            cases = nixUnitCasesFor caseFileNames;
-            results = nixUnitResultsFor cases;
-            failures = pkgs.lib.filter (x: !x.ok) results;
-            report = pkgs.lib.concatMapStringsSep "\n"
-              (x: "FAIL ${x.name}: ${x.detail}") failures;
-            total = pkgs.lib.length results;
-          in
-          if failures != [ ] then
-            throw ''
-              ${checkName} gate FAILED (${toString (pkgs.lib.length failures)}/${toString total} cases failed) for ${system}:
-              ${report}
-            ''
-          else
-            pkgs.runCommand "d2b-${checkName}" { } ''
-              echo "${checkName}: ${toString total} cases passed"
-              mkdir -p "$out"
-              echo ok > "$out/${checkName}"
-            '';
+        nixUnitCorpus = nixUnitCorpusFor system;
+        nixUnitAggregateCheck = nixUnitCorpus.mkAggregateCheck;
         nixUnitShardChecks =
-          pkgs.lib.mapAttrs nixUnitShardCheck nixUnitShardCaseFiles;
+          pkgs.lib.mapAttrs nixUnitAggregateCheck nixUnitShardCaseFiles;
 
         # Fail-closed case-PRESENCE gate (mirrors tests/tools/assert-pinned-tests.sh
         # for the Rust layer): every pinned case name MUST still exist in the
@@ -867,7 +835,7 @@
         # (panel W2 re-review finding). The set of supported systems is the
         # flake's own `systems`, not the currently-evaluated case set (which
         # could be deleted in the same diff).
-        nixUnitCaseNames = pkgs.lib.attrNames nixUnitCases;
+        nixUnitCorpusCaseNames = nixUnitCorpus.caseNames;
         pinNames = path: pkgs.lib.filter (n: n != "" && !(pkgs.lib.hasPrefix "#" n))
           (pkgs.lib.splitString "\n" (builtins.readFile path));
         readPinsRequiredNonEmpty = path:
@@ -889,7 +857,7 @@
           (readPinsRequiredNonEmpty ./tests/unit/nix/pinned/common.txt)
           ++ (readPinsRequiredExist (./tests/unit/nix/pinned + "/${system}.txt"));
         nixUnitMissingPins =
-          pkgs.lib.filter (n: !(builtins.elem n nixUnitCaseNames)) nixUnitPinned;
+          pkgs.lib.filter (n: !(builtins.elem n nixUnitCorpusCaseNames)) nixUnitPinned;
         nixUnitMissingReport = pkgs.lib.concatMapStringsSep "\n"
           (n: "MISSING PINNED CASE: ${n} (a pinned nix-unit case was deleted - restore it or run `make nix-unit-pin`)")
           nixUnitMissingPins;
@@ -944,7 +912,7 @@
             ''
           else
             pkgs.runCommand "d2b-nix-unit" { } ''
-              echo "nix-unit: ${toString (pkgs.lib.length nixUnitCaseNames)} pinned case names present; ${toString (pkgs.lib.length (pkgs.lib.attrNames nixUnitShardCaseFiles))} shards cover ${toString (pkgs.lib.length nixUnitCaseFileNames)} case files"
+              echo "nix-unit: ${toString (pkgs.lib.length nixUnitCorpusCaseNames)} pinned case names present; ${toString (pkgs.lib.length (pkgs.lib.attrNames nixUnitShardCaseFiles))} shards cover ${toString (pkgs.lib.length nixUnitCaseFileNames)} case files"
               mkdir -p "$out"
               echo ok > "$out/nix-unit"
             '';
@@ -1337,6 +1305,32 @@
         eval-graphics = mkCheck "eval-graphics"
           (mkEval [ (import ./examples/graphics-workstation/configuration.nix) ]);
       });
+
+      # The local nix-eval-jobs surface is the middle partition: one aggregate
+      # attr per case file. The constructor lives in eval-jobs.nix and is also
+      # used by the seven topical flake checks above.
+      nixUnitJobs = forAllSystems (system:
+        let
+          nixUnitCorpus = nixUnitCorpusFor system;
+        in
+        nixUnitCorpus.fileJobs // {
+          nix-unit = self.checks.${system}.nix-unit;
+        }
+      );
+
+      # One locked, evaluation-only inventory keeps both exact source case
+      # names and the per-file job names together. Attr-name discovery does
+      # not force any case expression.
+      nixUnitInventory = forAllSystems (system:
+        let
+          nixUnitCorpus = nixUnitCorpusFor system;
+        in
+        {
+          caseNames = builtins.sort builtins.lessThan nixUnitCorpus.caseNames;
+          jobNames =
+            builtins.sort builtins.lessThan (nixUnitCorpus.jobNames ++ [ "nix-unit" ]);
+        }
+      );
 
       lib = nixpkgs.lib.makeExtensible (_: {
         evalFixture = system: self.checks.${system}.eval-fixture-contracts.fixtureData;

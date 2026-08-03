@@ -135,6 +135,32 @@
           }
         }
       }
+    },
+    {
+      "if": {
+        "properties": {
+          "target": {
+            "const": "test-nix-unit"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "completed_leaves": {
+            "items": {
+              "enum": [
+                "nix-unit",
+                "nix-unit-daemon",
+                "nix-unit-guest",
+                "nix-unit-misc",
+                "nix-unit-network",
+                "nix-unit-runtime",
+                "nix-unit-state"
+              ]
+            }
+          }
+        }
+      }
     }
   ]
 }
