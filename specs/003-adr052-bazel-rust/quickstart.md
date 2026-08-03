@@ -1139,8 +1139,10 @@ a moving base and its path filter excludes exactly the changes a divergence
 would appear in.
 
 Before the cold ceiling binds, record the W3 feasibility measurement with all
-four slice durations. If it does not clear the ceiling, the only authorized
-answers are a larger runner class or a further disjoint slice split.
+four slice durations and derive that record's duration as their maximum. A
+single feasibility run does not claim a median. If its critical-path duration
+shows the ceiling is not plausible, the only authorized answers are a larger
+runner class or a further disjoint slice split.
 
 Audit the streak and shadow cache behavior:
 

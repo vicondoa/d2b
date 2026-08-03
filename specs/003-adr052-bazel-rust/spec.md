@@ -838,7 +838,9 @@ retirement conditions independently block premature deletion.
   minutes and a maximum of at most 18 minutes.
 - **SC-008**: A recorded feasibility measurement on the real runner class
   exists, and the five most recent qualifying cold Bazel qualification records
-  have a median of at most 15 minutes and no measurement above 18 minutes.
+  each define their record duration as the maximum of the four slice job
+  durations; those five record durations have a median of at most 15 minutes
+  and no record duration above 18 minutes.
 - **SC-009**: The shadow stage creates zero shared Bazel cache entries, and
   pull-request-reachable jobs create zero cache writes and request zero
   `actions: write` permissions.
@@ -863,8 +865,8 @@ retirement conditions independently block premature deletion.
   absolute directory instead of the fixed repository-relative one, and an
   enumeration whose order is taken from the filesystem rather than sorted.
 - **SC-013**: In every observed Bazel failure, contributors can identify the
-  failing surface and the failing test case from the same invocation without
-  rerunning the complete aggregate.
+  failing surface from the same invocation without rerunning the complete
+  aggregate and, for a per-case suite, can also identify the failing test case.
 - **SC-014**: Promotion changes zero required context names and leaves all
   documented Rust leaf entry points callable with status equivalent to their
   authoritative replacement, and Cargo implementation retirement removes zero

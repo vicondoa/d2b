@@ -231,7 +231,7 @@ tests/layer1-jobs.json                 # Promotion only
 tests/ci/layer1-workflow.template.yml  # If generator input requires it
 .github/workflows/pr-bazel-rust.yml    # Added W3, deleted W5
 .github/workflows/pr-l1-static-fast.yml
-changelog.d/                           # One unique semantic fragment per code scope
+changelog.d/                           # One semantic fragment per code-changing wave/PR
 ```
 
 `gen-bazel` owns all generated BUILD files, `.bazelignore`, the governed-source

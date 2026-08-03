@@ -532,6 +532,7 @@ if an unrelated surface fails.
 | `invocation_flags` | The exact flags each sample ran under; `--test_output=streamed` invalidates the sample. |
 | `samples_seconds` | Three local samples, or the five most recent qualifying cold qualification records. |
 | `qualifying_rule` | A cold-CI sample qualifies only when no Bazel cache was restored and all four slice jobs completed with a recorded duration. |
+| `record_duration_seconds` | For `cold-ci`, the maximum of the record's four complete slice job durations. Local profiles use the measured aggregate duration. |
 | `ceiling_seconds` | 600 warm; 900 cold local and cold CI. |
 | `feasibility_ref` | Required for `cold-ci`: the W3 feasibility measurement that made the ceiling binding, or the pre-authorized remedy taken instead. |
 | `median_seconds` | Computed over all required valid samples. |

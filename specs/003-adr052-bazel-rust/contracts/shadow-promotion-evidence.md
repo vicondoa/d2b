@@ -46,7 +46,9 @@ qualification record cannot hide a contract-layer regression.
 
 A record supplies a cold continuous-integration measurement only when no Bazel
 cache of any kind was restored and all four slice jobs ran to completion with a
-recorded duration. During the shadow stage every run is cold by construction,
+recorded duration. Its scalar record duration is the maximum of those four
+slice durations, matching the workflow critical path. During the shadow stage
+every run is cold by construction,
 because nothing is published or restored, so the qualifier excludes runs that
 produced no measurement rather than selecting among warm and cold runs.
 

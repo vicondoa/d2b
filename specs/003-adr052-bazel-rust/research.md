@@ -910,7 +910,8 @@ identified by the same head commit under the same event, which is what makes
 "both paths tested the same commit" mechanically true. Each record carries the
 head commit, both run identifiers, both rollup verdicts, the same-commit
 `D2B_ENABLE_FIXTURE_BUILD=1 make test-fixture-contracts` companion verdict,
-and, for a cold-sample record, the four slice durations.
+and, for a cold-sample record, the four slice durations plus the scalar record
+duration defined as their maximum, which is the workflow critical path.
 
 **Pull-request runs stay diagnostic and stay path-filtered.**
 `refs/pull/N/merge` is recomputed against a moving base, so two workflows
