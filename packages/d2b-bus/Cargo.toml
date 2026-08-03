@@ -21,7 +21,9 @@ snow = { version = "0.10", features = ["risky-raw-split"] }
 tokio = { workspace = true, features = ["io-util", "rt", "sync", "time"] }
 
 [dev-dependencies]
+d2b-controller-toolkit = { path = "../d2b-controller-toolkit", version = "0.0.0-bootstrap" }
 d2b-resource-store = { path = "../d2b-resource-store", version = "0.0.0-bootstrap" }
+d2b-resource-store-redb = { path = "../d2b-resource-store-redb", version = "0.0.0-bootstrap" }
 quote = "1"
 serde_json.workspace = true
 syn = { version = "2", features = ["full", "visit"] }

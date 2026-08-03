@@ -410,6 +410,8 @@ impl StreamBridge {
             .get_mut(principal)
             .ok_or(StreamError::StreamClosed)?
             .credit += bytes;
+        drop(state);
+        self.notify.notify_waiters();
         Ok(())
     }
 
@@ -513,6 +515,25 @@ impl OutgoingStream {
     pub(crate) fn send(&self, payload: Vec<u8>) -> Result<(), StreamError> {
         self.bridge
             .send(&self.key.name, &self.key.principal, self.source, payload)
+    }
+
+    pub(crate) async fn send_wait(&self, payload: Vec<u8>) -> Result<(), StreamError> {
+        loop {
+            let notified = self.bridge.notify.notified();
+            let mut notified = std::pin::pin!(notified);
+            notified.as_mut().enable();
+            match self.send(payload.clone()) {
+                Ok(()) => return Ok(()),
+                Err(
+                    StreamError::CreditExceeded
+                    | StreamError::AggregateBackpressure
+                    | StreamError::PrincipalBackpressure,
+                ) => {
+                    notified.await;
+                }
+                Err(error) => return Err(error),
+            }
+        }
     }
 
     pub(crate) fn close(&mut self) {
@@ -808,6 +829,33 @@ mod tests {
         let frame = incoming.receive_next().await.unwrap();
         assert_eq!(frame.payload(), &[1; 5]);
         outgoing.send(vec![2]).unwrap();
+    }
+
+    #[tokio::test]
+    async fn bounded_watch_delivery_waits_for_transport_credit() {
+        let bridge = bridge(16);
+        let (outgoing, incoming) = bridge
+            .open_test(
+                StreamName::parse("watch:wait-credit").unwrap(),
+                SessionId(1),
+                SessionId(2),
+                2,
+            )
+            .unwrap();
+        let outgoing = Arc::new(outgoing);
+        let sender = {
+            let outgoing = Arc::clone(&outgoing);
+            tokio::spawn(async move { outgoing.send_wait(vec![1, 2, 3, 4]).await })
+        };
+        tokio::task::yield_now().await;
+        incoming.grant(outgoing.name(), 2).await.unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(1), sender)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        let frame = incoming.receive_next().await.unwrap();
+        assert_eq!(frame.payload(), &[1, 2, 3, 4]);
     }
 
     #[tokio::test]

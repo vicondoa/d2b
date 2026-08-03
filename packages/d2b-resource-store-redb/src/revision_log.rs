@@ -786,5 +786,21 @@ mod tests {
                 .unwrap(),
             0
         );
+
+        let mut coordinator = WatchCoordinator::default();
+        let selector = WatchSelector::new([ResourceTypeName::parse("Process").unwrap()], [], []);
+        let expired = coordinator
+            .register_and_replay(
+                &database,
+                ZoneRevision::new(0),
+                selector,
+                MAX_INITIAL_WATCH_CREDITS,
+            )
+            .unwrap_err();
+        assert_eq!(
+            expired.kind(),
+            d2b_resource_store::StoreErrorKind::RevisionExpired
+        );
+        assert_eq!(coordinator.signals().current_registrations, 0);
     }
 }
