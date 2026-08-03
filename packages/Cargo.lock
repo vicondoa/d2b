@@ -1347,6 +1347,9 @@ dependencies = [
  "d2b-contracts",
  "d2b-provider",
  "d2b-session",
+ "schemars",
+ "serde_json",
+ "sha2",
  "tokio",
 ]
 
