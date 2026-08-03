@@ -741,7 +741,7 @@ set -euo pipefail
                     "path-bearing flake references must not appear in progress logs",
                 )
         failure_start = driver.index("for failure in")
-        failure_end = driver.index("done", failure_start)
+        failure_end = driver.index('if [ "$tool_status"', failure_start)
         failure_reporting = driver[failure_start:failure_end]
         self.assertIn('failure=${failure//"$flake_root"/<repo>}', failure_reporting)
         self.assertIn(

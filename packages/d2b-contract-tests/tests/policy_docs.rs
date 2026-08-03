@@ -1137,7 +1137,7 @@ fn execution_manifest_schema_and_prose_agree_with_non_empty_discovery() {
     let failure_reporting = nix_driver
         .split("for failure in")
         .nth(1)
-        .and_then(|region| region.split("done").next())
+        .and_then(|region| region.split("if [ \"$tool_status\"").next())
         .expect("execution-manifest-policy: Nix-unit failure reporting loop is missing");
     assert!(
         failure_reporting.contains("failure=${failure//\"$flake_root\"/<repo>}")
