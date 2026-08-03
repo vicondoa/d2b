@@ -461,7 +461,7 @@ client were retained as invalid and excluded. Candidate artifacts are under
 | N0 - tuned Bash pool | Rejected | Four-worker warm observation: 337.13s. It exceeds the 269.445s ceiling and retains the repository-specific scheduler prohibited by the runner contract. |
 | N1 - pure aggregate | Rejected | The single evaluator remained inside whole-corpus evaluation after 610s and was terminated. No result derivation had been realized. |
 | N2 - lix-unit | Rejected | Tool acquisition took 452.48s, the fork retains the `nix-unit` binary name, and corpus evaluation repeatedly overflowed its stack. A 64 MiB stack retry still exceeded 600s. The dependency was not selected. |
-| N3 - nix-eval-jobs | Selected after refinement | Four workers with instantiation took 311.93s. Per-case `--no-instantiate` reached a 202.20s median but exhausted hosted memory. Seven shard aggregates took 543s. The selected 45-file partition reached a 182s median and a 304s two-worker hosted-shape observation. |
+| N3 - nix-eval-jobs | Selected after refinement | Four workers with instantiation took 311.93s. Per-case `--no-instantiate` reached a 202.20s median but exhausted hosted memory. Seven shard aggregates took 543s. The selected file partition plus integrity reached a 231s median and a 305s two-worker hosted-shape observation. |
 | N4 - consolidated flake check | Rejected | The command is the already measured direct `nix flake check --no-build --keep-going` path. Its 565.495s baseline warm median exceeds the target and broadens focused iteration to the full flake. |
 | N5 - nix-fast-build | Not entered | N3 removed realization from the critical path. Parallel realization and grouped build logs were therefore not material. |
 
@@ -493,19 +493,20 @@ The representative warm samples on the integrated runner were:
 | Result | Seconds |
 | --- | ---: |
 | Baseline warm median | 538.889473 |
-| Optimized warm samples | 181, 186, 182 |
-| Optimized warm median | **182** |
-| Warm reduction | **66.23%** |
-| Slowest / median | 1.0220 |
+| Optimized warm samples | 222, 233, 231 |
+| Optimized warm median | **231** |
+| Warm reduction | **57.13%** |
+| Slowest / median | 1.0087 |
 
-The optimized median is 33.77% of baseline and passes the 50%-of-baseline
-ceiling of 269.444737 seconds. The slowest valid sample is 2.2% above the
-median. Every run evaluated all 45 file attributes and compared all 893 pinned
-x86 case names through the separate inventory.
+The optimized median is 42.86% of baseline and passes the 50%-of-baseline
+ceiling of 269.444737 seconds. The slowest valid sample is less than 1% above
+the median. Every run evaluated all 45 file attributes plus shard/pin
+integrity and compared all 893 pinned x86 case names through the separate
+inventory.
 
 The final fresh-cache observation used plain `make test-nix-unit`, a newly
 created `XDG_CACHE_HOME`, and locked tool self-provisioning. It completed in
-184s, compared with the 659.700177s baseline cold median, a 72.11%
+196s, compared with the 659.700177s baseline cold median, a 70.29%
 reduction. The shared Nix store was retained. No candidate or final accepted
 sample overlapped another Nix client.
 
@@ -513,13 +514,13 @@ The final runner reserves 2048 MiB of process and flake overhead per worker
 plus 3072 MiB for the host when calculating the memory cap. GitHub Actions
 uses a 3072 MiB evaluator restart limit, while local development retains
 4096 MiB. A local two-worker hosted-shape run completed the full file
-partition in 304s. Hosted success remains a merge condition.
+partition plus integrity in 305s. Hosted success remains a merge condition.
 
 ## Nix-unit failure and coverage evidence
 
 The passing manifest is
-`.scratch/test-speedup-optimized/test-nix-unit-file-local.json` at integrated
-tip `3421c951`. It records
+`.scratch/test-speedup-optimized/test-nix-unit-file-integrity.json` at
+integrated tip `455b1648`. It records
 `run_status = "passed"`, the seven baseline leaves, no failed surface, no
 installable, and no realized check. The completed leaves are:
 
@@ -570,5 +571,5 @@ aggregate provides no real FAIL line.
 The local defaults remain four requested workers and a 4096 MiB evaluator
 limit. GitHub Actions uses 3072 MiB, allowing the existing automatic resource
 envelope to admit two workers on a 16 GiB runner. The local hosted-shape run
-completed in 304s. Actual hosted success and duration are not claimed until
+completed in 305s. Actual hosted success and duration are not claimed until
 the PR job passes.
