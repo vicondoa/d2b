@@ -483,7 +483,9 @@ artifacts, complete Story 1, and exercise each desktop companion against it.
 - **FR-045**: No intermediate release artifact MUST be published during the program. There
   is exactly one release, d2b 3.0, cut after the final wave satisfies the release gate.
   Wave merges are integration events, not releases, and MUST NOT be tagged or published as
-  consumable versions.
+  consumable versions. This does not forbid publishing the replacement *contracts* that
+  companions adapt against; FR-061 defines the contract/artifact boundary and is the
+  resolution of the apparent conflict with FR-039.
 - **FR-046**: Where the specification set's prose and the generated implementation graph or
   work-item manifest disagree on wave assignment, destination paths, or work-item identity,
   the **generated manifests are authoritative**. Any such drift MUST be recorded and raised
@@ -519,6 +521,52 @@ artifacts, complete Story 1, and exercise each desktop companion against it.
 - **FR-040**: Companion compatibility MUST be verified by exercising each companion against
   the release candidate on a live host, not by inspection of its source or version number
   alone.
+- **FR-061**: The FR-039 release blocker and the FR-045 no-intermediate-artifact rule are
+  both retained in full, and the tension between them is resolved by **publishing contracts
+  without publishing artifacts**. The distinction is binding, not editorial. A **contract**
+  is committed reference text, a committed schema, or a committed typed definition, reachable
+  at a public git ref, that a companion maintainer can read and implement against; publishing
+  one is not a release. An **artifact** is anything a consumer's build could select or fetch
+  as a version - a tag, a GitHub release, a binary archive, a substituter output, or a flake
+  output pinned to a version; publishing one is a release and remains forbidden. The program
+  MUST publish contracts early and MUST NOT publish artifacts, and the three stages MUST run
+  in this order, each refusing rather than degrading:
+
+  | Stage | Wave | Refusal if the stage is not met |
+  | --- | --- | --- |
+  | Publish the companion inventory and every replacement contract it names | W5 | The W5 exit refuses while any "surface consumed" cell in the inventory does not resolve to a committed reference document, schema, or typed definition at a public ref |
+  | Companion maintainers adapt against the published contracts | W5 through W8, external to this program | No refusal here; this program does not control the schedule of a sibling repository, which is exactly why FR-062 records it as an unvalidated assumption rather than a plan step |
+  | Verify each companion by exercising it against the release candidate on a live host | W8 | The release gate refuses while any inventory row lacks a live-host verification record naming the exact candidate, the companion revision, the surfaces exercised, and the result |
+
+  Three things MUST NOT be accepted as verification evidence in the third stage: source
+  inspection, a matching version number, and the publication of the contracts themselves.
+  Contract publication is adaptation input, never compatibility evidence, and a reviewer who
+  treats a published contract as a discharged verification has skipped the stage that FR-040
+  exists to require.
+
+  If adaptation stalls anyway, exactly two outcomes are lawful: **hold the release**, or
+  **amend FR-045** through the specification-amendment path. Amending FR-045 is a
+  specification change with its own evidence, never an integrator judgment call and never an
+  unannounced preview. Publishing any artifact without that amendment is a violation of
+  FR-045, not a pragmatic exception to it.
+- **FR-062**: The assumption underlying FR-061 - that a companion maintainer can adapt from
+  published contracts alone, with no artifact to build or test against - is **recorded as
+  unvalidated**. This program cannot validate it: doing so requires evidence from repositories
+  it does not own, and no such evidence has been gathered. The assumption MUST therefore be
+  carried as a named risk with a stated mitigation and a stated detection point, and MUST NOT
+  be restated as a fact anywhere in the program's artifacts.
+
+  - **Mitigation**: the published contracts are the actionable interface shape, not a
+    summary. Where a surface has a generated schema or a typed definition, the contract MUST
+    point at that generated source rather than paraphrase it, so a maintainer implements
+    against the same bytes the implementation validates against.
+  - **Detection point**: the first live-host verification in W8. That is the first moment the
+    assumption is tested, and it is late. A verification failure there is evidence the
+    assumption was wrong, and the response is FR-061's two lawful outcomes, not a relaxation
+    of FR-040.
+  - **Escalation**: if the assumption is found wrong for any companion, that finding MUST be
+    recorded against this requirement rather than absorbed into a wave's fix round, because
+    it changes a program-level premise and not a wave's implementation.
 
 ### Key Entities
 
@@ -713,6 +761,11 @@ Delegation is not omission. Every delegated obligation is enumerated in
   specification set with assigned work items that must reach merged for its wave to seal.
 - The integration lineage is `v3` rather than `main`. How work reaches it is a requirement,
   not an assumption; see FR-044 and FR-045.
+- Desktop companion maintainers can adapt to the v3 surfaces from published contracts alone,
+  without any artifact to build or test against. This is an **unvalidated** assumption held
+  about repositories this program does not own, and it is carried as a named risk with a
+  mitigation, a detection point, and an escalation path; see FR-062. It is stated here as an
+  assumption and nowhere in this program's artifacts as a fact.
 - Delivery state, panel transcripts, and attestation payloads remain outside the repository
   and are never committed.
 - The target remains a single trusted host with one human operator. Multi-tenant isolation,

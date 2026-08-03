@@ -58,7 +58,7 @@ Do the requirements agree with each other and with the artifacts they depend on?
 
 - [x] CHK023 Does fixing the total at 545 work items conflict with the plan's statement that the terminal wave's items are recorded later and are additional? [Conflict, Spec §SC-019, Plan §Wave sequencing]
 - [ ] CHK024 Is the relationship between the operator-perceived 2-second envelope and the tighter component-level budgets stated, or do they read as competing targets? [Consistency, Spec §SC-002]
-- [ ] CHK025 Is the tension between blocking release on external companions and forbidding a preview build they could adapt against resolved as a requirement, or only as plan-level mitigation? [Conflict, Spec §FR-039, §FR-045]
+- [x] CHK025 Is the tension between blocking release on external companions and forbidding a preview build they could adapt against resolved as a requirement, or only as plan-level mitigation? [Conflict, Spec §FR-039, §FR-045]
 - [ ] CHK026 Is the removal-proof obligation internally consistent - one required per path, the migration map supplying only 3 of 16, and every work item carrying a non-empty proof field? [Consistency, Spec §FR-023, Research §R4]
 - [x] CHK027 Do "no partial-wave advance" and "W2 entry not blocked by missing W0/W1 seals" conflict, or is the distinction between entry evidence and exit evidence stated explicitly? [Consistency, Spec §FR-025, §FR-036]
 - [x] CHK028 Is the waiver's scope unambiguous regarding the nine delivery work items that remain Planned while owned by a waived wave? [Ambiguity, Spec §FR-034, §FR-035]
@@ -91,7 +91,7 @@ Are requirements present for each scenario class, or explicitly excluded?
 
 ## Dependencies and Assumptions
 
-- [ ] CHK044 Is the assumption that companions can adapt without any published preview artifact validated or flagged as a risk with a mitigation? [Assumption, Spec §FR-045]
+- [x] CHK044 Is the assumption that companions can adapt without any published preview artifact validated or flagged as a risk with a mitigation? [Assumption, Spec §FR-045]
 - [ ] CHK045 Is the assumption that the named design corrections will recover the memory deficit flagged as unvalidated, with a decision path if they do not? [Assumption, Research §RK-1]
 - [ ] CHK046 Is the daily-driver validation risk acceptance recorded with an explicit accepter and a stated fallback? [Assumption, Spec §Assumptions]
 - [x] CHK047 Are the external dependencies required for cloud-backed Provider validation identified, including whether the necessary accounts and access exist? [Dependency, Gap, Spec §SC-022]
@@ -144,7 +144,8 @@ boundary without attestation.
   deliberate deferral naming its wave, so a scheduled obligation is never mistaken for a gap.
 - **Date-bound regardless of gate**: CHK025 must be resolved before W5 publishes replacement
   contracts, since that is the last moment companions can begin adapting. CHK047 (cloud
-  account access) is cheap now and expensive at W6.
+  account access) is cheap now and expensive at W6. **Both are now closed**; CHK047 below,
+  CHK025 with CHK044 in the W5 gate at the end of this file.
 
 ### Analysis remediation (2026-07-29)
 
@@ -218,7 +219,7 @@ the row reads **needs integrator** rather than guessing.
 | CHK021 | "Reachable through the operator surface" for deliberately unwired foundations | needs integrator | Spans W0 foundation surfaces and W6 Provider wiring; no single owning wave is evident |
 | CHK022 | Pass condition for "compatible version verified against the release candidate" | needs integrator | Same locally-added companion family as CHK018 |
 | CHK024 | 2-second operator envelope versus component-level budgets | W5 | The component budgets are measured against the W5 storage engine and its watch consumer |
-| CHK025 | Companion adaptation without a published preview artifact | W5 | Date-bound: must be resolved before W5 publishes the replacement contracts, the last moment companions can begin adapting |
+| CHK025 | Companion adaptation without a published preview artifact | W5 | **closed** - see the W5 date-bound gate below |
 | CHK026 | Removal-proof consistency - one per path, 3 of 16 supplied, non-empty proof fields | W7 | Removal proofs are consumed by the cutover and streamline waves |
 | CHK030 | Requirements per distinct cutover phase | W7 | `ADR046-reset-*` items are W7 |
 | CHK031 | A wave that repeatedly fails its panel or cannot reach unanimity | needs integrator | Partially mitigated by FR-051 through FR-053 (round-nine deferral of LOW/MEDIUM findings); the terminal non-convergence case remains a governance decision |
@@ -230,7 +231,7 @@ the row reads **needs integrator** rather than guessing.
 | CHK038 | Host continuity during the implementation waves as a requirement | needs integrator | Currently an Assumptions bullet covering W2 through W6; promoting it is a program decision, not a wave deliverable |
 | CHK041 | Every FR traces to at least one owning spec | needs integrator | Gate 1 established the mapping and surfaced four locally-added requirements; completing the trace is an integrator sweep |
 | CHK043 | Detail-preservation checklist owner and gate point | needs integrator | Requires naming an owner |
-| CHK044 | Companion-adaptation assumption validated or risk-flagged | W5 | Same date-bound trigger as CHK025 |
+| CHK044 | Companion-adaptation assumption validated or risk-flagged | W5 | **closed** - see the W5 date-bound gate below |
 | CHK045 | Memory-deficit recovery assumption and its decision path | W5 | The corrected storage design is delivered and re-measured in W5 |
 | CHK046 | Daily-driver risk acceptance - explicit accepter and fallback | W7 | The first destructive live run is the cutover in W7 |
 | CHK047 | Cloud-backed Provider validation dependencies | **closed** | Answered by the operator: access is reached through entrablau sign-in from a dev-realm VM, not host-side credentials. The cloud tier is not a wave-exit lane, so it gates only the release gate. See below |
@@ -301,3 +302,40 @@ release gate is evaluated, the alternative is a recorded reduced-scope
 validation or an explicit deferral of those five dossiers with a stated
 effect on the gate, per FR-042's rule that a capability is never retired
 silently.
+
+### The W5 date-bound gate - closed (2026-08-03)
+
+CHK025 and CHK044 are the only two items whose deadline was set by a publication event rather
+than by a wave boundary: once W5 published the replacement contracts, the choice they name had
+already been made implicitly. Both are now closed, and the order in which they were closed is
+worth recording because it was wrong.
+
+**What actually happened.** T577 and T578 published the inventory and the replacement contracts
+at `b72b205f`. T579, which was supposed to resolve the FR-039 / FR-045 tension *before* those
+contracts published, had not been done. The publication therefore encoded a resolution in
+shipped prose - `docs/reference/zone-cli-contract.md` states "This is the intended resolution of
+the FR-039 and FR-045 tension" - that no requirement in this program's spec yet said. That is
+exactly the shape CHK025 was written to catch: a conflict answered by mitigation rather than by
+a requirement.
+
+| Item | Resolution |
+| --- | --- |
+| CHK025 | **FR-061** added. The conflict is resolved as a requirement by drawing a binding boundary between a *contract* (committed text, schema, or typed definition at a public git ref - publishing one is not a release) and an *artifact* (a tag, release, binary, substituter output, or version-pinned flake output - publishing one is). FR-039 and FR-045 are both retained unchanged; they simply govern different objects. FR-061 also fixes the publish/adapt/verify order, names the refusal at each stage, and closes the escape hatches: source inspection, a version match, and the publication of the contracts themselves are each explicitly not verification evidence. If adaptation stalls, exactly two outcomes are lawful - hold the release, or amend FR-045 through the amendment path - and FR-045 now points at FR-061 so the resolution is visible from both ends. |
+| CHK044 | **FR-062** added. The assumption is **not** validated, and the requirement says so rather than papering over it: validating it needs evidence from repositories this program does not own, and none has been gathered. It is carried as a named risk with a mitigation (contracts point at the generated schema or typed definition rather than paraphrasing it, so a maintainer implements against the same bytes the implementation validates against), a detection point (the first live-host verification in W8, which is late, and the requirement says that too), and an escalation path (a failure there is recorded against FR-062 rather than absorbed into a wave fix round, because it falsifies a program premise rather than an implementation). |
+
+**The no-preview constraint is preserved, not amended.** Nothing found while closing these two
+items is evidence that FR-045 must be relaxed. What such evidence would look like is now stated
+in `contracts/companion-contracts.md`: a specific companion, a specific surface, and a specific
+reason the published contract is insufficient to implement against. Absent that, the constraint
+stands, and FR-061 makes the amendment path the only lawful way to change it.
+
+**No external repository was verified, and nothing here claims otherwise.** All five rows of the
+published inventory read "Pending live-host verification". CO-1 and CO-2 are recorded as done
+because the documents are committed and reachable; CO-3 and CO-4 are open, and they are the ones
+that carry the compatibility claim.
+
+**Still open, and deliberately not closed here**: CHK033 - requirements for partial or stalled
+adaptation as a scenario class, distinct from the binary release-block. FR-061 names the two
+lawful outcomes when adaptation stalls; it does not decide whether the release may ship with a
+companion degraded rather than absent. That is a product decision about release scope, and
+closing it inside this item would have been overreach dressed as thoroughness.
