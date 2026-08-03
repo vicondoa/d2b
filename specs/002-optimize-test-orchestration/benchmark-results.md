@@ -479,25 +479,25 @@ The representative warm samples on the integrated runner were:
 | Result | Seconds |
 | --- | ---: |
 | Baseline warm median | 538.889473 |
-| Optimized warm samples | 203.05, 203.65, 205.32 |
-| Optimized warm median | **203.65** |
-| Warm reduction | **62.21%** |
-| Slowest / median | 1.0082 |
+| Optimized warm samples | 202.71, 202.90, 199.98 |
+| Optimized warm median | **202.71** |
+| Warm reduction | **62.38%** |
+| Slowest / median | 1.0009 |
 
-The optimized median is 37.79% of baseline and passes the 50%-of-baseline
+The optimized median is 37.62% of baseline and passes the 50%-of-baseline
 ceiling of 269.444737 seconds. The slowest valid sample is less than 1% above
 the median. Every run evaluated 893 pinned x86 cases plus the integrity
 attribute with four effective workers.
 
 The final fresh-cache observation used plain `make test-nix-unit`, a newly
-created `XDG_CACHE_HOME`, locked tool self-provisioning, and
-`D2B_EXECUTION_MANIFEST`. It completed in 209.74s, compared with the
-659.700177s baseline cold median, a 68.20% reduction. The shared Nix store was
-retained. No candidate or final accepted sample overlapped another Nix client.
+created `XDG_CACHE_HOME`, and locked tool self-provisioning. It completed in
+201.22s, compared with the 659.700177s baseline cold median, a 69.50%
+reduction. The shared Nix store was retained. No candidate or final accepted
+sample overlapped another Nix client.
 
 Warm resource samples used four effective workers and the 4096 MiB
 nix-eval-jobs per-worker restart limit. Client peak RSS ranged from
-17,897,588 KiB to 20,905,300 KiB. Combining client CPU time with readable
+17,809,492 KiB to 19,944,520 KiB. Combining client CPU time with readable
 nix-daemon cgroup deltas produced approximately 96-97% utilization of the
 four-worker budget. Daemon CPU deltas were under 4.3s because the selected
 path does not instantiate or realize outputs. The final runner reserves an
@@ -508,7 +508,8 @@ memory.
 ## Nix-unit failure and coverage evidence
 
 The passing manifest is
-`.scratch/test-speedup-optimized/test-nix-unit-executed.json`. It records
+`.scratch/test-speedup-optimized/test-nix-unit-executed.json` at integrated
+tip `6d33b792215c57965d276527a3081149d7a630da`. It records
 `run_status = "passed"`, the seven baseline leaves, no failed surface, no
 installable, and no realized check. The completed leaves are:
 
