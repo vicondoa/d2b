@@ -256,7 +256,7 @@ control. Its effective count is capped by four workers, logical CPUs, any
 finite cgroup CPU quota, and available memory after a 3 GiB host reserve at
 the evaluator limit plus 2048 MiB of process and flake overhead per worker.
 The limit defaults to 4096 MiB locally and 3072 MiB on GitHub Actions, so a
-16 GiB hosted runner admits two bounded workers while four workers remain
+16 GiB hosted runner uses one requested worker while four workers remain
 available on the reference 12-CPU, 62-GiB host.
 `D2B_NIX_UNIT_MEMORY_MB` may set the limit from 512 through 4096 MiB.
 Successful full runs suppress raw JSONL output. Every real `FAIL <case>:

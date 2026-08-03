@@ -1005,6 +1005,11 @@ printf '%s\n' "$sanitized_line"
             driver,
             r'(?s)GITHUB_ACTIONS[^}]*\}.*memory_mb=3072.*else.*memory_mb=4096',
         )
+        self.assertRegex(
+            driver,
+            r'(?s)D2B_NIX_UNIT_WORKERS.*GITHUB_ACTIONS[^}]*\}.*requested_workers=1'
+            r'.*else.*requested_workers=4',
+        )
         self.assertIn("D2B_NIX_UNIT_WORKERS", driver)
         self.assertIn("D2B_NIX_UNIT_MEMORY_MB", driver)
         self.assertNotIn("D2B_NIX_EVAL_JOBS_WORKERS", driver)

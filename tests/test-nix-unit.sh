@@ -173,7 +173,13 @@ fi
 
 # `nix-eval-jobs` owns evaluation concurrency. The request is deliberately
 # bounded before it is capped by the host's CPU and available memory.
-requested_workers=${D2B_NIX_UNIT_WORKERS:-4}
+if [ -n "${D2B_NIX_UNIT_WORKERS:-}" ]; then
+  requested_workers=$D2B_NIX_UNIT_WORKERS
+elif [ "${GITHUB_ACTIONS:-}" = true ]; then
+  requested_workers=1
+else
+  requested_workers=4
+fi
 case "$requested_workers" in
   1|2|3|4) ;;
   *)
