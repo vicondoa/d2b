@@ -141,6 +141,58 @@ fn create_seal_body_with_resource(
     }
 }
 
+fn create_seal_body_with_resources(
+    operation_id: &str,
+    resources: Vec<(String, Vec<u8>)>,
+) -> MutationSealBody {
+    let mut mutations = Vec::with_capacity(resources.len());
+    let mut targets = Vec::with_capacity(resources.len());
+    for (name, canonical_resource) in resources {
+        let target = ResourceRef::parse(&format!("Host/{name}")).unwrap();
+        let payload_digest = canonical_digest(RESOURCE_ENVELOPE_DOMAIN_TAG, &canonical_resource);
+        targets.push(AdmittedAuthorizationTarget {
+            resource_type: ResourceTypeName::parse("Host").unwrap(),
+            resource_name: Some(target.name().clone()),
+            verb: AdmittedVerb::Create,
+            subresource: None,
+            execution_ref: None,
+        });
+        mutations.push(PreparedStoreMutation::new(
+            StoreMutation {
+                kind: ResourceMutationKind::Create,
+                zone: ZoneId::parse("work").unwrap(),
+                target,
+                expected: ExpectedRevision::CreateAbsent,
+                expected_uid: None,
+                owner: None,
+                canonical_resource: Some(canonical_resource),
+                add_finalizers: Vec::new(),
+                remove_finalizers: Vec::new(),
+                wait_for_reconcile: false,
+                reconcile_deadline_ms: None,
+            },
+            None,
+            Some(payload_digest),
+        ));
+    }
+    MutationSealBody {
+        mutations,
+        authorization: AdmittedAuthorization {
+            zone: ZoneId::parse("work").unwrap(),
+            subject_ref: ResourceRef::parse("Provider/system-core").unwrap(),
+            subject_uid: ResourceUid::parse("33333333-3333-4333-8333-333333333333").unwrap(),
+            targets,
+        },
+        policy_snapshot: PolicySnapshot {
+            policy_revision: 7,
+            api_catalog_revision: 8,
+            active_configuration_revision: ConfigurationGeneration::new(9).unwrap(),
+            controller_generation: None,
+        },
+        operation: operation(operation_id),
+    }
+}
+
 fn owned_file() -> (tempfile::TempDir, File) {
     let directory = tempfile::tempdir().unwrap();
     let file = OpenOptions::new()
@@ -1381,18 +1433,23 @@ async fn production_backend_hard_fixture_child() {
     let issuer = Arc::new(issuer);
     let mut current_revision = 0_u64;
 
-    for chunk_start in (0..PRODUCTION_RSS_RESOURCE_COUNT).step_by(128) {
-        let chunk_end = (chunk_start + 128).min(PRODUCTION_RSS_RESOURCE_COUNT);
+    let group_count = PRODUCTION_RSS_RESOURCE_COUNT.div_ceil(GROUP_COMMIT_MAX);
+    for chunk_start in (0..group_count).step_by(64) {
+        let chunk_end = (chunk_start + 64).min(group_count);
         let mut commits = Vec::with_capacity(chunk_end - chunk_start);
-        for index in chunk_start..chunk_end {
-            let name = format!("hard-host-{index:05}");
-            let canonical = create_body(&name);
-            let payload_digest = canonical_digest(RESOURCE_ENVELOPE_DOMAIN_TAG, &canonical);
-            let body = create_seal_body_with_resource(
-                &format!("hard-create-{index:05}"),
-                &name,
-                canonical,
-                payload_digest,
+        for group in chunk_start..chunk_end {
+            let resource_start = group * GROUP_COMMIT_MAX;
+            let resource_end =
+                (resource_start + GROUP_COMMIT_MAX).min(PRODUCTION_RSS_RESOURCE_COUNT);
+            let resources = (resource_start..resource_end)
+                .map(|index| {
+                    let name = format!("hard-host-{index:05}");
+                    (name.clone(), create_body(&name))
+                })
+                .collect();
+            let body = create_seal_body_with_resources(
+                &format!("hard-create-group-{group:04}"),
+                resources,
             );
             let store = Arc::clone(&store);
             let issuer = Arc::clone(&issuer);
