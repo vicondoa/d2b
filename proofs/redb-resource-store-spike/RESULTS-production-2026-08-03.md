@@ -10,7 +10,7 @@ No result from another crate is used as this evidence.
 
 | Item | Value |
 | --- | --- |
-| Source SHA | `112b65fa7c53026a945d84755e608b38f99deeb0` |
+| Source SHA | `3f36ecb168df8922ae2047ad1045791c00fca2a6` |
 | Measurement date | 2026-08-03 |
 | Toolchain | `rustc 1.97.0` / `cargo 1.97.0` |
 | Host shape | Linux 7.0.10 x86_64, ext4, 12 CPUs |
@@ -38,14 +38,14 @@ subtracting a baseline.
 
 | Run | Raw maximum RSS |
 | ---: | ---: |
-| 1 | 18,544 KiB |
-| 2 | 18,556 KiB |
-| 3 | 18,476 KiB |
-| **Median** | **18,544 KiB** |
+| 1 | 18,584 KiB |
+| 2 | 18,444 KiB |
+| 3 | 18,776 KiB |
+| **Median** | **18,584 KiB** |
 
 | Threshold | Result | Headroom |
 | --- | --- | ---: |
-| Whole-process maximum RSS <= 24,576 KiB | **MEASURED-PASS** | 6,032 KiB |
+| Whole-process maximum RSS <= 24,576 KiB | **MEASURED-PASS** | 5,992 KiB |
 
 Every raw run and the median are below the unchanged threshold.
 
