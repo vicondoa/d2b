@@ -452,6 +452,21 @@ code. Gas City formulas and check scripts reach it through a
 **peer-authenticated Unix socket**, and the controller rejects any peer whose
 credentials are not the expected orchestrator identity.
 
+It exposes **three separate endpoints, each with its own closed operation set**,
+because one socket with one authorization check would let the orchestrator peer
+reach approval operations and the shared uid would make that an agent-reachable
+path:
+
+| Endpoint | Authenticated peer | Permitted operations | Everything else |
+| --- | --- | --- | --- |
+| Orchestrator | `gascity` uid | Request panel dispatch; read dispatch and gate status | Refused; approval operations are **absent from this endpoint**, not merely denied |
+| Operator | operator uid | Submit a decision from the closed set; read status | Refused |
+| Publisher | `publisher` uid | Consume the bound publication manifest | Refused |
+
+An agent sharing the `gascity` uid therefore cannot issue an approval even by
+speaking the protocol correctly, because the operation does not exist on the
+endpoint its identity can reach.
+
 It does exactly three things:
 
 1. **Dispatch.** It launches or authorizes panel dispatch under a fixed
@@ -460,7 +475,7 @@ It does exactly three things:
    trusted binding still comes from the controller's own dispatch, never from
    session-written state. P2 must prove that; if it cannot, the Gas City panel
    does not ship.
-2. **Approval.** It receives operator decisions from a local operator CLI and
+2. **Approval.** It receives operator decisions on the operator endpoint and
    writes a protected append-only approval and audit record.
 3. **Manifest.** It emits the canonical panel and publication manifest, bound
    to the exact integration commit, carrying the panel identifiers and signoff
@@ -490,13 +505,35 @@ made in the other direction.
   file descriptor, or `--dispatch-receipt-stdin`, carrying the controller's
   dispatch record for the Gas City producer.
 
-No host path is hardcoded; the boundary is injected, so tests supply fixtures.
-Both producers converge on a **typed verifier** that re-derives the binding
-from the supplied trusted input, and only then on the existing
-`validate_record_set`. The standalone producer keeps its existing observed
-harness receipt path through the same verifier. A submission whose binding
-cannot be derived from a trusted input is refused; there is no path that
-accepts the record's own claim.
+No host path is hardcoded; the boundary is injected as **bounded message bytes
+on stdin or over the authenticated socket**, so tests supply fixtures. A path
+variant remains available only if the path is controller-owned and resolved
+anchored and fd-relative per D20, and descriptor passing follows D9's
+discipline if an implementation reaches for it at all.
+
+**Two variants of trusted binding evidence, one verifier.** The verifier
+accepts exactly two forms and rejects everything else:
+
+1. **`GasCityControllerDispatch`** - the record or receipt emitted by D7's
+   controller when it owned the dispatch.
+2. **`StandaloneHarnessObservation`** - the existing Copilot harness's
+   **observed** dispatch result, captured under the interactive operator
+   session. This is what the standalone skill already produces; its adapter
+   turns that observation into trusted evidence.
+
+The standalone producer therefore remains fully functional with no Gas City and
+no controller present, which D3 requires. Both variants converge on the same
+typed verifier and then on `validate_record_set`. **Raw producer strings are
+rejected for both**: a record's own claim about its binding is never evidence,
+whichever producer wrote it.
+
+Assurance is not equal across the two, and this record says so rather than
+implying it. The controller variant is a record written by a process the agent
+cannot impersonate. The standalone variant is an operator-recorded observation
+from an interactive session, so its assurance rests on the operator having run
+the harness rather than on a cryptographic proof. That is materially stronger
+than a self-asserted string and materially weaker than the controller path, and
+strengthening it is future work rather than a v1 blocker.
 
 No round manifest is added to xtask. The gate refuses any set containing a
 finding and has no round concept, so **rounds stay in the producer**: Gas City
@@ -540,26 +577,50 @@ claims from the Gas City caller. Before acting it verifies the controller's
 bound publication manifest and the exact approval against the commit it is
 being asked to push, and refuses on any mismatch.
 
-The push is explicit in every component:
+**Two push paths, neither of them a bare force.** An unconditional `+` would
+let a concurrent change on the remote be silently discarded, so the publisher
+distinguishes the two cases it can actually be in:
 
-```
-git -C <handoff-repo> push origin <full-sha>:refs/heads/<branch>
-```
+- **Initial branch.** No remote branch exists, so the push is plain:
 
-Retry is safe. The publisher looks for an existing pull request by head branch,
-creates one if absent and edits the body if present, so a retried publication
-converges rather than failing or duplicating.
+  ```
+  git -C <handoff-repo> push origin <full-sha>:refs/heads/<branch>
+  ```
 
-**The body is transferred, not named.** A caller-supplied body path is a
-time-of-check-to-time-of-use hole: the file can be swapped between verification
-and read. The controller and publisher instead transfer the bounded manifest
-and body over the authenticated socket, on stdin, through an already-open file
-descriptor, or as a publisher-owned immutable spool object; the caller cannot
-substitute a path. Any filesystem path the publisher does own is resolved
-fd-relative and anchored, refusing symlinks and magic links, with the exact
-mechanism, such as `openat2` with `RESOLVE_BENEATH` and `RESOLVE_NO_MAGICLINKS`
-or an equivalent, left to the spec. Temporary and handoff state is removed on
-both success and failure, with bounded recovery for what a crash leaves behind.
+- **Existing PR branch, after a rebase or amend.** The publisher first reads
+  the expected current remote sha, then pushes with a lease naming it:
+
+  ```
+  git -C <handoff-repo> push origin <full-sha>:refs/heads/<branch> \
+    --force-with-lease=refs/heads/<branch>:<expected-old-sha>
+  ```
+
+  If the remote has moved since that read, the lease fails and the publisher
+  **refuses** rather than retrying with a wider hammer. Unexpected remote
+  movement is a condition to report, not to overwrite.
+
+Retry is safe in both paths. The publisher looks for an existing pull request
+by head branch, creates one if absent and edits the body if present, so a
+retried publication converges rather than failing or duplicating.
+
+**The body is transferred as bounded bytes, not named.** A caller-supplied body
+path is a time-of-check-to-time-of-use hole: the file can be swapped between
+verification and read. The controller sends the bounded manifest and body to
+the publisher as **message bytes over the authenticated socket or on stdin**,
+which is the preferred form because it has no file to substitute and no
+descriptor to mismanage.
+
+Descriptor passing is not required and should not be reached for by default. If
+a chosen implementation does pass one, then exactly **one** descriptor is
+passed, it is received with `MSG_CMSG_CLOEXEC`, the receiver owns and closes
+it, the sender opens it safely, and unbounded descriptor reception is refused.
+This record does not claim that setting close-on-exec after creation is atomic,
+because it is not. A path variant remains possible only if the path is
+controller-owned and resolved anchored and fd-relative per D20; bytes over the
+socket remain preferred.
+
+Temporary and handoff state is removed on both success and failure, with
+bounded recovery for what a crash leaves behind.
 
 **Exactly one bounded, redacted audit record per publication attempt**, success
 or failure alike, written through the controller's append-only path. A refusal
@@ -692,18 +753,33 @@ So in v1 Discord carries notifications, status and clarification Q&A, and the
 artifact-bound approval decision is taken by the operator locally through the
 controller's CLI.
 
-**The CLI encodes the closed decision set** `{approve, revise, rescope, abort}`
-and each decision is recorded by the controller against the exact artifact
-identity. Only `approve` closes or advances the gate; `revise` and `rescope`
-reroute the run to the stage that can act on them, and `abort` stops it. The
-controller invokes `gc bd close <bead-id>` **after** recording an `approve`, so
-the bead reflects the decision rather than constituting it. `gc bd close` on
-its own is a bead operation and not an approval, which is precisely what stops
-an agent sharing the `gascity` uid from advancing a gate.
+**The CLI encodes the closed decision set** `{approve, revise, rescope, abort}`,
+and every one of them is a decision the controller records against the exact
+artifact identity. The gate bead is **transport**: the controller closes it
+after recording **any** valid decision, so no decision strands a run on a bead
+that nothing will ever close. A mandatory **decision-router** step then reads
+the protected record, not the bead, and routes:
 
-Ingress remains restricted to the one configured operator identity and channel,
-and a rejection emits a bounded local diagnostic naming its class and the
-configured and received identity digests rather than failing silently.
+| Decision | Router action |
+| --- | --- |
+| `approve` | Continue to the next stage |
+| `revise` | Invalidate the current artifact approval and route back to the producing stage or its fix loop |
+| `rescope` | Park or terminate the current run and start a successor route, linked to the source run, requiring its own approvals |
+| `abort` | Cancel and close the remaining workflow and stop |
+
+Two consequences worth stating. **A naked `gc bd close` is not authority**: the
+controller performs the close after recording, and the router consults the
+record, so a bead closed by anything else advances nothing. And the router
+reports actionable status, naming the stage it routed to and the command that
+resumes or inspects the run, rather than leaving the operator to infer what a
+closed bead meant.
+
+Ingress remains restricted to the one configured operator identity and channel.
+A rejection emits a bounded local diagnostic naming **only its closed rejection
+class**. Reviewer, run and Discord digests appear in the protected audit record
+and **never in ordinary logs, diagnostics or error text**, because a digest
+that is printed on every rejection accumulates in exactly the places that are
+least protected and most often shared.
 
 **P5** may prove a non-agent approval consumer without inbound public HTTPS; if
 it passes, a Discord approval adapter may be enabled later under the same
@@ -774,11 +850,30 @@ is a comment, and the previous revision's mistake was specifying the on-disk
 hierarchy instead of saying who runs the clock.
 
 **Redaction is scanned, not asserted.** No durable record, log line, error
-message or operator output contains a credential, a raw Discord id, a raw run
-handle, an opaque session or run secret, or a URL carrying authentication. The
-scan reports counted coverage over the log stream, the audit records and the
-error text, fails closed on an empty corpus, and ships planted controls for
-each category it claims to catch.
+message or operator output contains any of: a credential or token; a raw
+Discord id, user id or run handle; an opaque session or run secret; a URL
+carrying authentication; a store or host filesystem path; an argument vector,
+environment block or working directory; a socket path, unit name or PID; raw
+terminal bytes; a shell or session name; or raw command output. Audit records
+may carry approved fixed digests and closed enum values only.
+
+The scan reports the number of records, log lines and error strings examined,
+fails closed on an empty corpus, and ships one planted control per category
+above that it must reject.
+
+**A generic root-owned append sink carries the audit.** The controller's
+approval record is the **authority**; the audit is durable evidence, and the
+publisher verifies the protected approval rather than merely the audit trail.
+Both need somewhere append-only that the `gascity` uid cannot rewrite.
+
+That sink is generic: either a minimal root-owned append service supplied by
+`gascity.nix` with **no d2b schema knowledge**, taking bounded typed records
+from configured submitters, or a root-owned system service instantiated by the
+d2b configs. Its required properties are root ownership, append-only and
+write-once semantics, daily rotation, a bounded default retention, synchronous
+flush before acknowledgement, and **no update or delete API**. Its directory
+hierarchy and sync algorithm are spec-level and deliberately not frozen here;
+the previous revision's mistake was specifying those instead of the properties.
 
 **D18. The mutation surface to close is the supervisor's, not the dashboard
 proxy's.** `DASHBOARD_READONLY` is scoped to the Node BFF's transport proxy;
@@ -790,23 +885,33 @@ interaction directly.
 **v1 must mechanically prevent agent sessions from reaching that endpoint.**
 The process-trust option an earlier revision offered is withdrawn: "we rely on
 process trust within the `gascity` identity" is not a control when the
-principals it must exclude run under that identity. The implementation gate
-selects and proves exactly one mechanism:
+principals it must exclude run under that identity.
 
-- agents under a distinct worker uid through a session provider that can drop
-  privilege; or
-- a supervisor authentication boundary whose secret is not readable by agents;
-  or
-- a cgroup or namespace proxy that can distinguish agent sessions from the
-  orchestrator and filter the mutation routes.
+A distinct worker uid is **not** sufficient on its own here, and an earlier
+revision was wrong to list it as one. The endpoint is **TCP**, and a TCP socket
+carries no `SO_PEERCRED`, so the server cannot learn the caller's uid from the
+connection at all. The implementation gate must select and prove one of:
 
-Same-uid `tmux` cannot satisfy any of them, so **P8 and P3 must prove the
-selected provider and isolation before ship**. Until one is proven, a one-uid
-`tmux` deployment is acceptable for **prototype exploration only** and is not
-the production unattended workflow while the mutation endpoint stays reachable.
-Whichever mechanism is chosen must preserve the loopback control traffic
-`gc bd` depends on, through a controlled channel rather than by opening the
-mutation surface again.
+- **Move the mutation API to `AF_UNIX`** and authenticate the peer atomically
+  with `SO_PEERCRED` or `SO_PEERPIDFD`; or
+- place it behind an **authenticated proxy or token boundary** whose secret is
+  not readable by agent sessions; or
+- apply **socket-level filtering in the kernel**, such as a cgroup-attached BPF
+  hook, that distinguishes agent sessions before the connection is served.
+
+**User-space source-port to PID lookup is explicitly forbidden.** Resolving a
+TCP connection back to a process by scanning `/proc` is racy by construction:
+the port can be reused and the process can exit between the lookup and the
+decision, so it authenticates nothing. A proxy that does this is not a
+boundary.
+
+Same-uid `tmux` satisfies none of the three, so **P8 and P3 must prove the
+selected mechanism before ship**. Until one is proven, a one-uid `tmux`
+deployment is acceptable for **prototype exploration only** and is not the
+production unattended workflow while the mutation endpoint stays reachable.
+Whichever mechanism is chosen must keep the `gc bd` control traffic reachable
+through that same authenticated channel rather than by reopening the mutation
+surface.
 
 Acceptance probes `:8372` directly rather than the dashboard proxy.
 
@@ -832,6 +937,17 @@ ones; the egress rule syntax and allowlist resolution; the publisher's exact
 invocation; the Discord approval adapter, if P5 permits one. An ADR that
 freezes the hard-to-reverse details while deferring the easy ones has the
 trade backwards, which is what the previous revision did.
+
+**One filesystem property is retained, because deferring it would defer a
+vulnerability rather than a detail.** Any filesystem path a helper, controller,
+publisher or audit sink owns and resolves is resolved **anchored and
+fd-relative** from a pinned descriptor, refusing symlinks and magic links, so a
+component swapped between validation and use cannot redirect a privileged write
+or read. `openat2` with `RESOLVE_BENEATH` and `RESOLVE_NO_MAGICLINKS`, or an
+equivalent component walk with `O_DIRECTORY | O_NOFOLLOW` and verification,
+satisfies it; which one is spec-level. This repository already uses that shape
+in `packages/xtask/src/delivery/storage.rs`, so it is established practice
+rather than a novel demand.
 
 ## Prototype gates
 
@@ -880,6 +996,14 @@ works.
   mutation endpoint.
 - **No caller-supplied body path** in the publication handoff, and no GitHub
   App fallback adopted while claiming credential isolation.
+- **No unconditional force push**, and no lease-less update of an existing PR
+  branch.
+- **No user-space TCP source-port to PID lookup** as an authentication
+  mechanism anywhere in this design.
+- **No identity digests in ordinary logs, diagnostics or error text**; they
+  belong only in protected audit records.
+- **No unbounded descriptor passing**, and no claim that setting close-on-exec
+  after creation is atomic.
 - **No claim of an agent-worker uid** while the runtime is `tmux`, and no
   acceptance item written against a process that does not exist.
 - **No confinement that blocks host loopback or the Dolt port.**
@@ -1017,8 +1141,9 @@ and it ships planted violations it must reject.
   path of any identity that can invoke it, and the unit PATH contains `python3`
   while the module restates none of the other eight wrapper packages.
 
-  Counted coverage over the resolved units and paths, plus planted negative
-  controls that must each be **refused**: a `packs.lock` whose recorded commit
+  Counted coverage over the resolved units, packages and pins, **failing closed
+  when that corpus is empty** so a relocated or unresolved unit set cannot pass
+  silently. Planted negative controls that must each be **refused**: a `packs.lock` whose recorded commit
   no longer matches the imported pack tree; a config revision pinning a
   different `llm-agents.nix` revision than the one that built the running
   binary; and a `gc` whose reported version or commit disagrees with the locked
@@ -1046,55 +1171,114 @@ and it ships planted violations it must reject.
   and invokes the publisher is **refused**, because the controller has no
   `approve` recorded for that commit. Bead state alone advancing a gate fails
   this item.
+
+  **Cross-operation matrix.** Every combination of the three endpoints and the
+  three operation classes is exercised: nine cases, of which three are the
+  authorised pairs (orchestrator with dispatch and status, operator with a
+  closed decision, publisher with manifest consumption) and six are refused.
+  The orchestrator endpoint must refuse an approval attempt because the
+  operation is **absent from that endpoint**, not merely denied to that peer,
+  and the test asserts the distinction.
 - **M22 The supervisor mutation surface is closed to agents.** From an agent
   session, a direct call to `/v0/city/{city}/session/{id}/respond` on
   `127.0.0.1:8372` is **refused** by whichever mechanism P8 selected, while
   `gc bd update`, `gc bd close` and a check script all still succeed from the
   same context. Probing only the dashboard proxy, or recording that the
   deployment "relies on process trust", does not satisfy this item.
-- **M23 Publication is idempotent and path-safe.** The publisher issues exactly
-  `git -C <handoff-repo> push origin <full-sha>:refs/heads/<branch>`, asserted
-  on the observed argument vector. Running the same publication twice creates
-  the PR once and edits its body the second time, with no duplicate and no
-  failure. A planted attempt to substitute the body by swapping a file at a
-  caller-supplied path is impossible because no path is accepted; the body
-  arrives over the socket, stdin or an open descriptor. Temporary and handoff
-  state is absent after both a successful and a failed run, and a crash
-  mid-publication leaves state a bounded recovery removes.
+- **M23 Publication is idempotent, lease-safe and path-safe.** Four push cases,
+  each asserted on the observed argument vector, and none of them a bare force:
+  an **initial** push of a new branch with no lease; a **fast-forward retry**
+  of the same publication, which converges; a **non-fast-forward update** after
+  a rebase, which carries
+  `--force-with-lease=refs/heads/<branch>:<expected-old-sha>` and succeeds; and
+  a **stale lease**, where the remote moved after the expected sha was read,
+  which is **refused** rather than forced. PR create-or-edit is exercised
+  across the retry: created once, body edited the second time, never
+  duplicated.
+
+  The body arrives as bounded message bytes over the socket or stdin, so a
+  planted attempt to swap a file at a caller-supplied path has nothing to
+  swap. If the implementation passes a descriptor instead, exactly one is
+  passed, it is received with `MSG_CMSG_CLOEXEC`, the receiver closes it, and a
+  planted attempt to send two or to send an unexpected descriptor is refused.
+  Temporary and handoff state is absent after both a successful and a failed
+  run, and a crash mid-publication leaves only state a bounded recovery
+  removes.
 - **M24 Exactly one publication audit record per attempt.** Counted across a
   successful publication, one refused for a missing approval, one refused for a
   stale snapshot and one refused for an underived binding: four attempts, four
   records, each bounded and redacted, all written through the controller's
   append-only path and none writable by the `gascity` identity.
-- **M25 Retention is enforced by something that runs.** The named enforcer, a
-  `gascity.nix` timer or a pack-owned cleanup command, is observed to run on
-  schedule and to trim exact review inputs at 30 days or 2 GiB, whichever binds
-  first, while leaving content addresses and per-seat attestations intact
-  through the audit floor. A deployment with the bounds configured and no
-  enforcer scheduled fails this item.
-- **M26 Redaction is scanned with coverage and controls.** No durable record,
-  log line, error message or operator output contains a credential, a raw
-  Discord id, a raw run handle, an opaque session or run secret, or a URL
-  carrying authentication. The scan reports the number of records, log lines
-  and error strings examined and fails closed on an empty corpus, and one
-  planted control per category is rejected.
-- **M27 The supervisor gets its grace period.** On stop, agent panes are
-  observed **not** to be killed immediately with the supervisor's cgroup; the
-  supervisor receives the configured interval to drain and adopt sessions; and
-  systemd escalates only after the bound expires. Signal delivery and timing
-  are observed rather than inferred from unit file text.
+- **M25 Retention is enforced by something that runs, on both bounds.** The
+  named enforcer, a `gascity.nix` timer or a pack-owned cleanup command, is
+  observed to run on schedule. Two planted corpora are required, not one: round
+  inputs **over the 30-day age bound**, and round inputs **over the 2 GiB size
+  bound** while still inside the age window. Both are observed deleted, and in
+  both cases the content addresses, evidence references and per-seat
+  attestations survive through the audit floor. A deployment with bounds
+  configured and no enforcer scheduled fails this item, and so does one that
+  trims only by age.
+- **M26 Redaction is scanned across every category, with coverage and
+  controls.** No durable record, log line, error message or operator output
+  contains any of: a credential or token; a raw Discord id, user id or run
+  handle; an opaque session or run secret; a URL carrying authentication; a
+  store or host filesystem path; an argument vector, environment block or
+  working directory; a socket path, unit name or PID; raw terminal bytes; a
+  shell or session name; or raw command output. Audit records carry only
+  approved fixed digests and closed enum values.
+
+  The scan reports the number of records, log lines and error strings examined
+  and **fails closed on an empty corpus**. One planted control per category
+  above is required, and each must be rejected; a scan that ships fewer
+  controls than categories has not been shown to detect the categories it does
+  not test. Separately, an ordinary rejection diagnostic is asserted to carry
+  its closed class and **no digest of any kind**.
+- **M27 The supervisor gets its grace period, with a real session running.**
+  A live agent session with an active pane is started **before** the stop, so
+  the item cannot pass against an empty supervisor. On stop, that pane is
+  observed **not** killed immediately with the supervisor's cgroup; the
+  supervisor receives the configured interval to drain and adopt; and systemd
+  escalates only after the bound expires. Signal delivery and timing are
+  observed rather than inferred from unit file text, and a run in which no
+  session was active is a failed run.
 - **M28 Confinement outlives every agent process.** With an agent deliberately
   ignoring its stop request for the whole grace period, the confinement
   selected by P3 and P8 is observed still in force throughout and torn down
   only after that process exits, ordered against the process exit rather than a
   timer. A teardown observed before the last agent exit fails this item.
-- **M29 The dispatch boundary is injectable and typed.** Admission accepts the
-  trusted dispatch input as a path, a file descriptor or stdin, with no host
-  path hardcoded, and tests supply fixtures. Three **well-formed** envelopes
-  are each rejected with their own typed semantic error rather than a parse
-  failure: dispatch record absent; dispatch record present but untrusted; and
-  dispatch record contradicting the record's claimed binding. The standalone
-  producer's observed harness path converges on the same verifier.
+- **M29 Both evidence variants converge on one typed verifier.** Admission
+  accepts trusted binding evidence as bounded bytes on stdin or over the
+  socket, with no host path hardcoded, and tests supply fixtures for both
+  variants: `GasCityControllerDispatch` and `StandaloneHarnessObservation`.
+  A standalone round is driven to admission **with no controller present**,
+  proving the skill remains functional alone.
+
+  Four **well-formed** envelopes are each rejected with their own typed
+  semantic error rather than a parse failure: evidence absent; evidence present
+  but untrusted; evidence contradicting the record's claimed binding; and a
+  record carrying only its own producer strings with no evidence at all, which
+  is refused for **both** producers.
+
+- **M30 Every decision routes, and no bead is stranded.** All four decisions
+  are exercised end to end against a real gate. In each case the controller
+  records the decision **and** closes the gate bead, and the decision-router
+  step reads the protected record rather than the bead: `approve` continues to
+  the next stage; `revise` invalidates the current artifact approval and
+  returns to the producing stage or its fix loop; `rescope` parks or terminates
+  the run and starts a successor linked to it, requiring its own approvals;
+  `abort` cancels and closes the remaining workflow. After each, no gate bead
+  is left open with nothing to close it, and the router's reported status names
+  the stage it routed to and the command to resume or inspect.
+
+- **M31 The audit sink is root-owned and append-only.** Submitting a bounded
+  typed record from the controller and from the publisher succeeds; submitting
+  from the `gascity` identity is refused. Update, delete and truncate have no
+  API to call, and attempts to rewrite or truncate the store from every
+  non-sink identity fail. An acknowledged submission survives an immediate
+  power-loss simulation, demonstrating the synchronous flush. Daily rotation
+  runs and the bounded retention default is enforced. Separately, the publisher
+  is observed to verify the **controller's protected approval** and to refuse a
+  publication whose approval exists only as an audit line.
 
 ## Consequences
 
