@@ -10,4 +10,7 @@ workspace = true
 
 [dependencies]
 d2b-contracts = { path = "../d2b-contracts", version = "0.0.0-bootstrap" }
-tokio = { workspace = true, features = ["time"] }
+tokio = { workspace = true, features = ["sync", "time"] }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt", "sync", "time"] }

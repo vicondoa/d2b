@@ -42,6 +42,7 @@ mod call;
 mod client;
 mod dispatch;
 mod error;
+mod process_attach;
 mod target;
 mod zone_client;
 
@@ -53,6 +54,12 @@ pub use call::{
 pub use client::ResourceClient;
 pub use dispatch::{AttemptDisposition, AttemptTicket, CallDriver, MethodProfile, SessionFailure};
 pub use error::ClientError;
+pub use process_attach::{
+    ComponentNamedStream, ConnectedSession, MAX_PROCESS_ATTACH_MESSAGE_BYTES, NamedStream,
+    NamedStreamTransport, ProcessAttachClient, ProcessAttachKind, ProcessAttachOpenRequest,
+    ProcessAttachOptions, ProcessAttachSession, ProcessAttachStream, ProcessAttachTarget,
+    TerminalSize,
+};
 pub use target::{
     ResolvedTarget, RouteRecord, RouteTable, ServiceOwner, TargetInput, TargetResolver,
     TransportKind, TransportSelection, ZoneServiceKind,
