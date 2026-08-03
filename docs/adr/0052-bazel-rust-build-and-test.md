@@ -804,14 +804,35 @@ and invokes no shell. It:
   ignored outcomes, so BEP and the Actions test UI preserve per-case
   attribution rather than collapsing the carrier to target-level status;
 - emits only the stable case name, outcome, bounded duration and bounded
-  sanitized failure text in that JUnit document. It emits no environment
-  variable, command-line argument, absolute path, runfiles root, worktree
-  location, user identifier or opaque handle, and it does not copy raw child
-  stdout or stderr into `system-out` or `system-err`;
+  sanitized failure text in that JUnit document. The canonical forbidden set
+  is environment values, command-line arguments, absolute paths, Nix store
+  paths, socket paths, runfiles or worktree locations, systemd unit names,
+  process identifiers, user identifiers, opaque handles, terminal bytes,
+  shell names and raw child output. None enters a case element,
+  `system-out` or `system-err`;
+- leaves raw child stdout and stderr in Bazel's ordinary `test.log` artifact,
+  reached through the failed target's test-log link or Actions artifact, so
+  removing raw output from the structured test UI does not remove the
+  contributor's diagnostic path;
 - derives each child environment from the Bazel test environment, gives each
   case its own directory beneath `TEST_TMPDIR`, resolves the test binary
   through runfiles, and forwards only the declared test environment rather
   than the wrapper's incidental host environment.
+- opens `TEST_TMPDIR` once as an anchored directory with close-on-exec, creates
+  each per-case directory descriptor-relative without following symlinks or
+  magic links, and refuses an existing case directory rather than reusing it.
+  The runner opens no JUnit output descriptor until every child has been
+  reaped; the descriptor and same-directory temporary file are close-on-exec,
+  the complete document is written with bounded retry on interrupted or
+  temporarily unavailable writes, synced, and atomically renamed onto
+  `XML_OUTPUT_FILE`. Short write, `ENOSPC`, unexpected `EEXIST` and every
+  unhandled filesystem error make the carrier fail rather than publish partial
+  evidence;
+- carries a behavioral redaction test with a simulated failed case whose
+  environment, argv, output and failure text contain every member of the
+  forbidden set. The test requires every planted value absent from the JUnit
+  bytes, the stable case name/outcome/duration present, and raw output
+  recoverable only from the planted `test.log` path.
 
 Doctests and `harness = false` companions keep their own targets and are not
 routed through the case runner: doctests expose no such listing interface, and
@@ -2352,9 +2373,18 @@ closed when any `.bazelrc` line or wrapper argument sets that flag.
    `XML_OUTPUT_FILE`, uses a per-case directory beneath `TEST_TMPDIR`, resolves
    test binaries through runfiles, and preserves passed, failed and ignored
    status in BEP-visible evidence. That JUnit output is a redacted bounded
-   record: stable case name, outcome, duration and sanitized failure text only,
-   with no environment, argv, absolute path, runfiles/worktree location, user
-   identifier, opaque handle or raw child output.
+   record: stable case name, outcome, duration and sanitized failure text only.
+   The canonical forbidden set is environment values, command-line arguments,
+   absolute paths, Nix store paths, socket paths, runfiles or worktree
+   locations, systemd unit names, process identifiers, user identifiers,
+   opaque handles, terminal bytes, shell names and raw child output. The runner
+   creates per-case directories from an anchored close-on-exec `TEST_TMPDIR`
+   descriptor without link traversal, opens JUnit output only after all
+   children are reaped, writes a close-on-exec same-directory temporary with
+   bounded retry, and atomically renames it. Any incomplete write, collision or
+   filesystem failure fails the carrier. A planted behavioral test proves the
+   forbidden set is absent and that raw output remains available only through
+   Bazel's ordinary `test.log` artifact.
 6. Pull requests never publish a shared cache entry and never hold
    `actions: write`, and a structural policy test with committed negative and
    positive fixtures enforces both. Exactly one job writes, and only on a push
