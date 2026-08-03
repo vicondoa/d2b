@@ -11,8 +11,10 @@ let
   nul = builtins.fromJSON "\"\\u0000\"";
   resourcesBundle = import ./resources-bundle.nix { inherit lib; };
   providerCatalogEntries = cfg._providerCatalog.entries or [ ];
-  schemaValidation = cfg._resourceCompiler.schemaValidation or { };
-  schemaValidationPath = schemaValidation.buildValidation or null;
+  phase2 = cfg._resourceCompiler.phase2 or { };
+  compilerPackage = phase2.compiler;
+  schemaRoot = phase2.schemaRoot;
+  strictSecrets = phase2.strictSecrets or true;
   emptyArtifactCatalogPreimageJson = builtins.toJSON {
     entries = [ ];
     schemaVersion = 3;
@@ -78,7 +80,6 @@ let
     if cfg ? _artifactCatalogV3 && cfg._artifactCatalogV3 ? path
     then cfg._artifactCatalogV3.path
     else null;
-  catalogPathArg = if catalogPath == null then "" else "${catalogPath}";
 
   stripRuntime = value:
     if builtins.isAttrs value
@@ -163,6 +164,67 @@ let
         (lib.filterAttrs (_: resource: resource.type != "Zone")
           (zoneResources zoneName zone))));
 
+  providerCatalogEntry = artifactId:
+    lib.findFirst (entry: entry.id == artifactId) null providerCatalogEntries;
+
+  publisherFor = artifactId:
+    let
+      artifact = cfg.artifacts.${artifactId};
+      catalog = artifact.catalog or { };
+      providerEntry = providerCatalogEntry artifactId;
+    in
+    catalog.publisher
+      or (if providerEntry == null then null else providerEntry.entry.publisher or null);
+
+  signatureIdFor = artifactId:
+    let
+      catalog = cfg.artifacts.${artifactId}.catalog or { };
+      signature = catalog.signature or { };
+    in
+    catalog.signatureId or signature.signatureId or signature.id or "default";
+
+  signingKeyFor = zone: publisher: catalog:
+    let
+      trusted = zone.trustedPublishers.${publisher} or null;
+    in
+    if trusted == null then catalog.signingKey or "" else trusted.signingKey;
+
+  providerInputs = zone:
+    let
+      providerArtifacts = lib.filterAttrs
+        (_: artifact: artifact.type == "provider" && artifact.catalog != null)
+        (cfg.artifacts or { });
+    in
+    lib.concatMap
+      (artifactId:
+        let
+          artifact = providerArtifacts.${artifactId};
+          catalog = artifact.catalog;
+          publisher = publisherFor artifactId;
+          signingKey =
+            if publisher == null
+            then ""
+            else signingKeyFor zone publisher catalog;
+          complete =
+            publisher != null
+            && catalog ? packageDigest
+            && catalog ? executableDigest
+            && catalog ? manifestDigest
+            && catalog ? configDigest;
+        in
+        lib.optional complete {
+          artifactId = artifactId;
+          type = artifact.type;
+          storePath = "${artifact.package}";
+          inherit publisher signingKey;
+          signatureId = signatureIdFor artifactId;
+          packageDigest = catalog.packageDigest;
+          executableDigest = catalog.executableDigest;
+          manifestDigest = catalog.manifestDigest;
+          configSchemaDigest = catalog.configDigest;
+        })
+      (lib.sort lib.lessThan (lib.attrNames providerArtifacts));
+
   bundleData = zoneName: zone:
     let
       resources = resourceList zoneName zone;
@@ -183,87 +245,28 @@ let
 
   bundlePath = zoneName: data:
     let
-      resourcesJson = canonicalJson data.resources;
-      providerDigestsJson = canonicalJson data.providerSchemaDigests;
-      zoneJson = canonicalJson zoneName;
+      compilerInput = pkgs.writeText "d2b-resource-compiler-${zoneName}.json"
+        (builtins.toJSON {
+          zone = zoneName;
+          resources = data.resources;
+          providerSchemaDigests = data.providerSchemaDigests;
+          providers = providerInputs cfg.zones.${zoneName};
+          artifactCatalogPath =
+            if catalogPath == null then null else "${catalogPath}";
+          expectedArtifactCatalogDigest = catalogDigest;
+          schemaRoot = "${schemaRoot}";
+          expectedContentHash = data.contentHash;
+          inherit strictSecrets;
+        });
     in pkgs.runCommand "d2b-zone-${zoneName}-resource-bundle.json"
       {
-        inherit
-          resourcesJson
-          providerDigestsJson
-          zoneJson
-          catalogDigest
-          catalogPathArg
-          ;
-        contentHash = data.contentHash;
-        schemaValidationPathArg =
-          if schemaValidationPath == null then "" else "${schemaValidationPath}";
-        passAsFile = [ "resourcesJson" "providerDigestsJson" ];
-        nativeBuildInputs = [ pkgs.python3 ];
+        inherit compilerInput;
+        nativeBuildInputs = [ compilerPackage ];
       } ''
         set -euo pipefail
-        if [ -n "$schemaValidationPathArg" ]; then
-          test -e "$schemaValidationPathArg"
-        fi
-        python3 - "$resourcesJsonPath" "$providerDigestsJsonPath" "$zoneJson" \
-          "$catalogDigest" "$catalogPathArg" "$contentHash" "$out" <<'PY'
-        import hashlib
-        import json
-        import pathlib
-        import sys
-
-        (
-            resources_path,
-            digests_path,
-            zone_json,
-            expected_catalog_digest,
-            catalog_path,
-            expected_content_hash,
-            output,
-        ) = sys.argv[1:]
-        resources = json.loads(pathlib.Path(resources_path).read_text())
-        provider_digests = json.loads(pathlib.Path(digests_path).read_text())
-        resources_bytes = pathlib.Path(resources_path).read_bytes()
-        canonical_resources = json.dumps(
-            resources,
-            ensure_ascii=False,
-            sort_keys=True,
-            separators=(",", ":"),
-        ).encode("utf-8")
-        if canonical_resources != resources_bytes:
-            raise SystemExit("resource bundle resources are not canonical JSON")
-        content = hashlib.sha256(
-            b"d2b:v3:resource-bundle\0" + resources_bytes
-        ).hexdigest()
-        if expected_content_hash != "sha256:" + content:
-            raise SystemExit("resource bundle contentHash does not match resources")
-        catalog_digest = expected_catalog_digest
-        if catalog_path:
-            catalog_document = json.loads(
-                pathlib.Path(catalog_path).read_text()
-            )
-            realised_catalog_digest = catalog_document["catalogDigest"]
-            if realised_catalog_digest != expected_catalog_digest:
-                raise SystemExit(
-                    "resource bundle artifactCatalogDigest does not match "
-                    "the realised artifact catalog"
-                )
-            catalog_digest = realised_catalog_digest
-        document = {
-            "artifactCatalogDigest": catalog_digest,
-            "bundleVersion": 1,
-            "contentHash": "sha256:" + content,
-            "generatedAt": "1970-01-01T00:00:00.000Z",
-            "providerSchemaDigests": provider_digests,
-            "resources": resources,
-            "schemaVersion": 3,
-            "zone": json.loads(zone_json),
-        }
-        pathlib.Path(output).write_text(
-            json.dumps(document, sort_keys=True, separators=(",", ":")) + "\n",
-            encoding="utf-8",
-        )
-        PY
+        d2b-resource-compiler compile \
+          --input "$compilerInput" \
+          --output "$out"
       '';
 
   bundles = lib.mapAttrs

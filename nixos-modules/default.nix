@@ -29,6 +29,7 @@
     ./options.nix
     ./options-volumes.nix
     ./resources-zone-control.nix
+    ./resource-compiler.nix
     ./bundle-artifacts.nix
     ./options-observability.nix
     ./provider-catalog.nix
