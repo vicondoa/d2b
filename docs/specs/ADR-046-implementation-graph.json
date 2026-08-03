@@ -21630,7 +21630,7 @@
       ],
       "specId" : "ADR-046-resource-store-redb",
       "topologicalRank" : 6,
-      "validation" : "SPIKE-02 latency evidence and a corrected SPIKE-01 rerun passing the unchanged whole-process <=24 MiB gate with no baseline subtraction; deterministic watch/compaction/disconnect/fan-in tests; global-budget exhaustion and typed-admission-backpressure tests; deterministic slow-watcher eviction/resume tests; saturation-signal tests for current registrations, budget used/capacity, admission rejections, slow-watcher evictions, and replay work",
+      "validation" : "SPIKE-02 latency evidence and production whole-process RSS evidence measured on the production backend, passing the unchanged <=24 MiB gate with no baseline subtraction; the disposable proof's gated rerun does not discharge this row; deterministic watch/compaction/disconnect/fan-in tests; global-budget exhaustion and typed-admission-backpressure tests; deterministic slow-watcher eviction/resume tests; saturation-signal tests for current registrations, budget used/capacity, admission rejections, slow-watcher evictions, and replay work",
       "wave" : "W5"
     },
     {
@@ -21677,7 +21677,7 @@
       ],
       "specId" : "ADR-046-resource-store-redb",
       "topologicalRank" : 5,
-      "validation" : "Corrected SPIKE-01 evidence passing the unchanged whole-process <=24 MiB gate with no baseline subtraction; range-seek tests proving older revisions and envelopes are neither scanned nor decoded; shared immutable ChangeBatch fan-out tests; backend-signal tests for revision range seeks, replay rows scanned and decoded, shared immutable batches, fan-out references, and writer queue depth/capacity; conformance tests proving verified-only mutation, no independent write path, and the required structural and atomic checks; security review of each registered backend; unit/property/fault tests and the hard 10,000-resource/100-watch benchmark; owned-fd and `FD_CLOEXEC` checks for direct and `SCM_RIGHTS` receipt plus fork/exec inheritance probes; exact dependency/feature-policy lint; queue/pool constant assertions; paused-clock read-expiry tests; no reduced-durability call-site lint",
+      "validation" : "Production whole-process RSS evidence measured on `packages/d2b-resource-store-redb` itself, passing the unchanged <=24 MiB gate with no baseline subtraction; the disposable proof's gated rerun does not discharge this row; range-seek tests proving older revisions and envelopes are neither scanned nor decoded; shared immutable ChangeBatch fan-out tests; backend-signal tests for revision range seeks, replay rows scanned and decoded, shared immutable batches, fan-out references, and writer queue depth/capacity; conformance tests proving verified-only mutation, no independent write path, and the required structural and atomic checks; security review of each registered backend; unit/property/fault tests and the hard 10,000-resource/100-watch benchmark; owned-fd and `FD_CLOEXEC` checks for direct and `SCM_RIGHTS` receipt plus fork/exec inheritance probes; exact dependency/feature-policy lint; queue/pool constant assertions; paused-clock read-expiry tests; no reduced-durability call-site lint",
       "wave" : "W5"
     },
     {
@@ -21702,7 +21702,7 @@
       ],
       "specId" : "ADR-046-resource-store-redb",
       "topologicalRank" : 6,
-      "validation" : "Corrected SPIKE-01 evidence passing the unchanged whole-process RSS gate; marker replacement, crash publication, backup/restore/upgrade, and store-identity mismatch tests; broker wire codec/unknown-op tests; opaque-id/path-injection and signed-row mismatch rejection; provision/open idempotency; exactly-one-fd `SCM_RIGHTS` transfer with `MSG_CMSG_CLOEXEC`, `F_GETFD` verification, and fork/exec non-inheritance; audit record contains the operation/result but no host path",
+      "validation" : "Production whole-process RSS evidence measured on the production backend, passing the unchanged RSS gate; the disposable proof's gated rerun does not discharge this row; marker replacement, crash publication, backup/restore/upgrade, and store-identity mismatch tests; broker wire codec/unknown-op tests; opaque-id/path-injection and signed-row mismatch rejection; provision/open idempotency; exactly-one-fd `SCM_RIGHTS` transfer with `MSG_CMSG_CLOEXEC`, `F_GETFD` verification, and fork/exec non-inheritance; audit record contains the operation/result but no host path",
       "wave" : "W5"
     },
     {

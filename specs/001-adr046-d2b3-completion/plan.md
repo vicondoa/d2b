@@ -292,6 +292,52 @@ whole `d2b-realm-core` crate mechanically replaceable. In particular,
 not inferred by a removal slice. This blocks eventual realm-core retirement, not the three
 W5-owned stub removals above.
 
+The SPIKE-01 RSS rerun amendment landed against
+[`amendment-spike-01-rerun.md`](./amendment-spike-01-rerun.md) and produced three drift
+records worth carrying forward.
+
+The draft prescribes pinning the policy fingerprint to the wording
+`6,148 KiB below 24,576 KiB`. The committed result artifact,
+`proofs/redb-resource-store-spike/RESULTS-rerun-2026-08-02.md`, does not emit that phrase; its
+canonical measurement cell reads ``Median `18,428 KiB`, `6,148 KiB` below the threshold``. Per
+"existing code is canon" the artifact wins, and the artifact is out of scope for this change.
+The lint therefore pins the artifact's actual wording as the canonical fingerprint and pins the
+draft's phrasing as the *derived* prose the specifications restate, with the `24,576 KiB` value
+bound separately through the row's threshold key. Both numbers and the gate are still pinned;
+only the sentence that carries them differs from the draft.
+
+The draft's verbatim §3.2 replacement text says "remain W5 implementation work". The surrounding
+table uses the `ADR046-W<n>` namespace throughout, so the applied text says `ADR046-W5`. This is
+a namespace normalization, not a scope change.
+
+`plan.md`'s **Constraints** line still reads "currently MEASURED-FAIL at 25,216 KiB". That
+figure is now superseded; the corrected proof measurement is 18,428 KiB with 6,148 KiB of
+headroom below the unchanged 24,576 KiB gate and no baseline subtraction. The line is left
+unedited because this change's ownership is scoped to the Recorded-drift and Gate-status content
+here, and because the production constraint the line states - `<=24,576 KiB` with no baseline
+subtraction - is itself unchanged. The exact replacement clause a follow-up should apply is
+"currently MEASURED-PASS on the disposable proof at 18,428 KiB and unmeasured on the production
+engine".
+
+### Gate status
+
+Gate 0 has been re-evaluated a second time under FR-056; the record is
+[`gate0-reevaluation-spike-01-rss-rerun.md`](./gate0-reevaluation-spike-01-rss-rerun.md). The
+mechanical half is discharged: four member digests moved, seven work-item strings changed, and
+`ADR-046-implementation-graph.md` is byte-identical, so the specification-to-work-item bijection
+is provably untouched.
+
+The human-review half is **not** empty this time. `ADR046-W5` holds an outstanding ten-role panel
+request with imported validation evidence - including a `redb-rss-spike-observation` record -
+gathered before the amendment. FR-056 requires that evidence to be regathered rather than carried
+forward, so W5 must re-snapshot, re-import, and re-request its panel before it may seal. No wave
+has sealed under the superseded text, so no merged wave needs re-panelling.
+
+Waves W6 through W8 are unaffected. `ADR046-store-002`, `ADR046-store-004`, `ADR046-store-005`,
+and `ADR046-reconcile-003` remain `Planned` in W5: the passing rerun measures a disposable proof
+crate, not `packages/d2b-resource-store-redb`, and supplies none of those items' production
+evidence.
+
 ## Complexity Tracking
 
 | Violation | Why Needed | Simpler Alternative Rejected Because |

@@ -1023,6 +1023,12 @@ enum DerivedExpectation {
         derived: &'static str,
     },
     OutcomeSummary(&'static str),
+    /// A superseded literal a document deliberately retains as history - today
+    /// only the released changelog entry for the original RSS failure. Pinned
+    /// at its exact retained count so the copy can neither drift nor multiply,
+    /// and asserted **not** to be the current canonical measurement, so a
+    /// retained history row can never be mistaken for live evidence.
+    SupersededMeasurement(&'static str),
 }
 
 #[derive(Clone, Copy)]
@@ -1047,6 +1053,9 @@ struct MeasurementInventoryPattern {
 
 struct MeasurementSpec {
     name: &'static str,
+    /// Which committed result artifact grounds this row. Closed selector, not a
+    /// path: see [`ResultSource`].
+    result_source: ResultSource,
     threshold: &'static str,
     expected_outcome: &'static str,
     fingerprint: &'static str,
@@ -1056,6 +1065,52 @@ struct MeasurementSpec {
     mutation_needle: &'static str,
     planted_unregistered_copy: &'static str,
 }
+
+/// The committed result artifacts that may ground a canonical spike
+/// measurement. This is a **closed selector**, deliberately not a path
+/// parameter: a prototype, scratch, or re-measured file cannot become
+/// authoritative by being handed to the parser. Adding a source is a code
+/// change that a reviewer sees.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum ResultSource {
+    /// The original SPIKE-01/SPIKE-02 record. Historical and frozen; it still
+    /// grounds six of the seven rows.
+    Original,
+    /// The gated whole-process RSS rerun of 2026-08-02. It supersedes **only**
+    /// the RSS conclusion in [`ResultSource::Original`], which is preserved.
+    RssRerun20260802,
+}
+
+impl ResultSource {
+    const ALL: [ResultSource; 2] = [ResultSource::Original, ResultSource::RssRerun20260802];
+
+    fn path(self) -> &'static str {
+        match self {
+            ResultSource::Original => "proofs/redb-resource-store-spike/RESULTS.md",
+            ResultSource::RssRerun20260802 => {
+                "proofs/redb-resource-store-spike/RESULTS-rerun-2026-08-02.md"
+            }
+        }
+    }
+}
+
+/// The corrections prototype. It carries a full, plausible, MEASURED-PASS
+/// threshold table whose RSS figures (`18,468 KiB` / `6,108 KiB`) differ from
+/// the authoritative rerun (`18,428 KiB` / `6,148 KiB`) by a digit
+/// transposition. It is named here so the guard can assert it is excluded
+/// rather than merely happening not to be included.
+const PROTOTYPE_RESULT: &str = "proofs/redb-resource-store-spike/RESULTS-corrections.md";
+
+/// Canonical rows that are deliberately still present in a result source but
+/// are registered by no [`MeasurementSpec`], because a later source supersedes
+/// them. Each must remain present exactly once in its own source: preserving
+/// the superseded record is required, and citing it as current evidence is not
+/// permitted. Deleting the historical row therefore fails closed, and so does
+/// adding an eighth unaccounted row.
+const SUPERSEDED_CANONICAL_ROWS: &[(ResultSource, &str)] = &[(
+    ResultSource::Original,
+    "Median whole-process maximum RSS at or below 24 MiB",
+)];
 
 fn canonical_measurement(results: &str, threshold: &str) -> Result<CanonicalMeasurement, String> {
     let rows = results
@@ -1129,6 +1184,17 @@ fn spike_measurement_specs() -> Vec<MeasurementSpec> {
     const VALIDATION: &str = "docs/specs/ADR-046-validation-and-delivery.md";
     const WORK_ITEMS: &str = "docs/specs/ADR-046-work-items.json";
 
+    /// The one canonical derived phrase for the passing RSS rerun. Every
+    /// specification site restates the measurement in exactly this shape, so a
+    /// drifted or rounded restatement fails at a single needle instead of
+    /// hiding among six near-identical paraphrases. `source` is required to be
+    /// a substring of the artifact's own measurement cell, which is what binds
+    /// the prose to the committed result rather than to this file.
+    const RSS_RERUN_SUMMARY: DerivedExpectation = DerivedExpectation::CanonicalFragment {
+        source: "Median `18,428 KiB`, `6,148 KiB` below the threshold",
+        derived: "`18,428 KiB`, `6,148 KiB` below 24,576 KiB, with no baseline subtraction",
+    };
+
     let spike_01_summary_sites = || {
         vec![
             DerivedMeasurementSite {
@@ -1200,6 +1266,7 @@ fn spike_measurement_specs() -> Vec<MeasurementSpec> {
     vec![
         MeasurementSpec {
             name: "10k correctness",
+            result_source: ResultSource::Original,
             threshold: "10,000 resources, 5 runs, zero oracle divergence",
             expected_outcome: "MEASURED-PASS",
             fingerprint: "5/5 runs",
@@ -1215,6 +1282,7 @@ fn spike_measurement_specs() -> Vec<MeasurementSpec> {
         },
         MeasurementSpec {
             name: "watch no-gap",
+            result_source: ResultSource::Original,
             threshold: "100 watches, no misses, duplicates, or gaps",
             expected_outcome: "MEASURED-PASS",
             fingerprint: "21,866 exact ChangeBatch comparisons",
@@ -1230,6 +1298,7 @@ fn spike_measurement_specs() -> Vec<MeasurementSpec> {
         },
         MeasurementSpec {
             name: "group commit",
+            result_source: ResultSource::Original,
             threshold: "More than half of non-conflicting storm writes use a batch larger than 1",
             expected_outcome: "MEASURED-PASS",
             fingerprint: "48/50, 96%",
@@ -1296,6 +1365,7 @@ fn spike_measurement_specs() -> Vec<MeasurementSpec> {
         },
         MeasurementSpec {
             name: "crash boundaries",
+            result_source: ResultSource::Original,
             threshold: "All 13 crash boundaries recover atomically or refuse to open",
             expected_outcome: "MEASURED-PASS",
             fingerprint: "13/13",
@@ -1378,118 +1448,130 @@ fn spike_measurement_specs() -> Vec<MeasurementSpec> {
         },
         MeasurementSpec {
             name: "median RSS",
-            threshold: "Median whole-process maximum RSS at or below 24 MiB",
-            expected_outcome: "MEASURED-FAIL",
-            fingerprint: "25,216 KiB (24.625 MiB), 640 KiB or about 2.6% above 24,576 KiB",
+            // Only this row moved to the rerun artifact. The other six still
+            // read the original record, which is preserved byte for byte.
+            result_source: ResultSource::RssRerun20260802,
+            threshold: "Whole-process maximum RSS for 10,000 resources and 100 watches at or below 24,576 KiB",
+            expected_outcome: "MEASURED-PASS",
+            // The complete measurement wording the rerun artifact emits. It is
+            // deliberately NOT the amendment draft's proposed
+            // "6,148 KiB below 24,576 KiB": the artifact is the canon and says
+            // "below the threshold". The threshold value itself is pinned by
+            // `threshold` above, which must occur exactly once in the source.
+            fingerprint: "Median `18,428 KiB`, `6,148 KiB` below the threshold",
             inventory_patterns: vec![
                 MeasurementInventoryPattern {
-                    description: "25,216 KiB whole-process RSS",
-                    regex: r"(?i)\b25,?216\s+KiB\b",
+                    description: "18,428 KiB whole-process RSS median",
+                    regex: r"(?i)\b18,?428\s+KiB\b",
                     copies: 11,
                 },
                 MeasurementInventoryPattern {
-                    description: "24.625 MiB whole-process RSS",
+                    description: "6,148 KiB headroom below the threshold",
+                    regex: r"(?i)\b6,?148\s+KiB\b",
+                    copies: 11,
+                },
+                // The gate literal itself. A rounded restatement (`24 MiB`) or
+                // a baseline-subtracted variant would have to move this count.
+                MeasurementInventoryPattern {
+                    description: "24,576 KiB whole-process gate",
+                    regex: r"(?i)\b24,?576\s+KiB\b",
+                    copies: 12,
+                },
+                // The superseded failure literals. They survive at exactly one
+                // registered site each - the released changelog entry - so
+                // reintroducing the failed figure into any specification, or
+                // quietly rewriting the shipped history, both fail closed.
+                MeasurementInventoryPattern {
+                    description: "superseded 25,216 KiB whole-process RSS",
+                    regex: r"(?i)\b25,?216\s+KiB\b",
+                    copies: 1,
+                },
+                MeasurementInventoryPattern {
+                    description: "superseded 24.625 MiB whole-process RSS",
                     regex: r"(?i)\b24\.625\s+MiB\b",
-                    copies: 10,
+                    copies: 1,
                 },
                 MeasurementInventoryPattern {
-                    description: "640 KiB threshold excess",
+                    description: "superseded 640 KiB threshold excess",
                     regex: r"(?i)\b640\s+KiB\b",
-                    copies: 10,
+                    copies: 1,
                 },
                 MeasurementInventoryPattern {
-                    description: "2.6 percent excess over 24,576 KiB",
+                    description: "superseded 2.6 percent excess over 24,576 KiB",
                     regex: r"(?i)\b2\.6%\s+above\s+24,?576\s+KiB\b",
-                    copies: 10,
+                    copies: 1,
                 },
             ],
             sites: vec![
+                // History. The released entry keeps the failure verbatim; it is
+                // registered, not suppressed, and is asserted not to be the
+                // current canonical measurement.
                 DerivedMeasurementSite {
                     path: "CHANGELOG.md",
-                    expectation: DerivedExpectation::CanonicalMeasurement,
+                    expectation: DerivedExpectation::SupersededMeasurement(
+                        "25,216 KiB (24.625 MiB), 640 KiB or about 2.6% above 24,576 KiB",
+                    ),
                     copies: 1,
                 },
+                // Current evidence. One phrase, one shape, every site.
                 DerivedMeasurementSite {
                     path: FEASIBILITY,
-                    expectation: DerivedExpectation::CanonicalMeasurement,
+                    expectation: RSS_RERUN_SUMMARY,
                     copies: 4,
                 },
                 DerivedMeasurementSite {
                     path: STORE,
-                    expectation: DerivedExpectation::CanonicalMeasurement,
+                    expectation: RSS_RERUN_SUMMARY,
                     copies: 2,
                 },
                 DerivedMeasurementSite {
                     path: DECISIONS,
-                    expectation: DerivedExpectation::CanonicalMeasurement,
+                    expectation: RSS_RERUN_SUMMARY,
                     copies: 1,
                 },
                 DerivedMeasurementSite {
                     path: VALIDATION,
-                    expectation: DerivedExpectation::CanonicalMeasurement,
-                    copies: 1,
+                    expectation: RSS_RERUN_SUMMARY,
+                    copies: 3,
                 },
                 DerivedMeasurementSite {
                     path: WORK_ITEMS,
-                    expectation: DerivedExpectation::CanonicalMeasurement,
+                    expectation: RSS_RERUN_SUMMARY,
                     copies: 1,
+                },
+                // The obligation the passing proof does NOT discharge. These
+                // replace the former "SPIKE-01 failed ..." summaries: the
+                // blocker moved from a failed spike to absent production
+                // evidence, and the guard pins that it is still stated.
+                DerivedMeasurementSite {
+                    path: STORE,
+                    expectation: DerivedExpectation::OutcomeSummary(
+                        "the production backend's own whole-process RSS evidence is still unrun",
+                    ),
+                    copies: 4,
+                },
+                DerivedMeasurementSite {
+                    path: WORK_ITEMS,
+                    expectation: DerivedExpectation::OutcomeSummary(
+                        "the production backend's own whole-process RSS evidence is still unrun",
+                    ),
+                    copies: 3,
                 },
                 DerivedMeasurementSite {
                     path: FEASIBILITY,
                     expectation: DerivedExpectation::OutcomeSummary(
-                        "SPIKE-01's whole-process RSS failure",
-                    ),
-                    copies: 1,
-                },
-                DerivedMeasurementSite {
-                    path: STORE,
-                    expectation: DerivedExpectation::OutcomeSummary(
-                        "SPIKE-01 failed the whole-process RSS",
-                    ),
-                    copies: 2,
-                },
-                DerivedMeasurementSite {
-                    path: STORE,
-                    expectation: DerivedExpectation::OutcomeSummary(
-                        "SPIKE-01 executed and failed the whole-process RSS threshold",
-                    ),
-                    copies: 1,
-                },
-                DerivedMeasurementSite {
-                    path: STORE,
-                    expectation: DerivedExpectation::OutcomeSummary(
-                        "SPIKE-01 executed but failed the whole-process RSS threshold",
-                    ),
-                    copies: 1,
-                },
-                DerivedMeasurementSite {
-                    path: WORK_ITEMS,
-                    expectation: DerivedExpectation::OutcomeSummary(
-                        "SPIKE-01 failed the whole-process RSS threshold",
-                    ),
-                    copies: 1,
-                },
-                DerivedMeasurementSite {
-                    path: WORK_ITEMS,
-                    expectation: DerivedExpectation::OutcomeSummary(
-                        "SPIKE-01 executed and failed the whole-process RSS threshold",
-                    ),
-                    copies: 1,
-                },
-                DerivedMeasurementSite {
-                    path: WORK_ITEMS,
-                    expectation: DerivedExpectation::OutcomeSummary(
-                        "SPIKE-01 executed but failed the whole-process RSS threshold",
+                        "the production backend's own unrun whole-process RSS evidence",
                     ),
                     copies: 1,
                 },
             ],
             mutation_path: STORE,
-            mutation_needle: "25,216 KiB",
-            planted_unregistered_copy: "Independent RSS result: 25,216 KiB.",
+            mutation_needle: "18,428 KiB",
+            planted_unregistered_copy: "Independent RSS result: 18,428 KiB.",
         },
         MeasurementSpec {
             name: "SPIKE-02 p95",
+            result_source: ResultSource::Original,
             threshold: "Commit-to-handler p95 at or below 5,000 us in all profiles",
             expected_outcome: "MEASURED-PASS",
             fingerprint: "115.043 us / 116.195 us / 128.902 us",
@@ -1576,6 +1658,7 @@ fn spike_measurement_specs() -> Vec<MeasurementSpec> {
         },
         MeasurementSpec {
             name: "SPIKE-02 p99",
+            result_source: ResultSource::Original,
             threshold: "Commit-to-handler p99 reported; document any value above 20 ms",
             expected_outcome: "MEASURED-PASS",
             fingerprint: "134.834 us / 140.928 us / 1,009.871 us; none exceeded 20 ms",
@@ -1697,6 +1780,15 @@ fn validate_spike_measurement(
                 derived
             }
             DerivedExpectation::OutcomeSummary(summary) => summary,
+            DerivedExpectation::SupersededMeasurement(historical) => {
+                if canonical.measurement.contains(historical) {
+                    errors.push(format!(
+                        "{}: {:?} is registered as superseded history but is still the canonical measurement",
+                        spec.name, historical
+                    ));
+                }
+                historical
+            }
         };
         let actual = normalized_whitespace(content)
             .matches(&normalized_whitespace(needle))
@@ -1739,20 +1831,67 @@ fn validate_spike_measurement(
     errors
 }
 
-fn validate_spike_measurements(results: &str, documents: &BTreeMap<String, String>) -> Vec<String> {
+fn validate_spike_measurements(
+    sources: &BTreeMap<ResultSource, String>,
+    documents: &BTreeMap<String, String>,
+) -> Vec<String> {
     let specs = spike_measurement_specs();
-    let canonical_row_count = results
-        .lines()
-        .filter(|line| line.contains("| MEASURED-"))
-        .count();
     let mut errors = Vec::new();
-    if canonical_row_count != specs.len() {
-        errors.push(format!(
-            "canonical final-threshold table has {canonical_row_count} measurement rows but the guard registers {}",
-            specs.len()
-        ));
+
+    // Row accounting is per source. Every `| MEASURED-` row in a result
+    // artifact is either registered by a spec or listed as superseded; an
+    // eighth unaccounted row and a deleted historical row both fail here.
+    for source in ResultSource::ALL {
+        let Some(results) = sources.get(&source) else {
+            errors.push(format!("missing result source {}", source.path()));
+            continue;
+        };
+        let registered = specs
+            .iter()
+            .filter(|spec| spec.result_source == source)
+            .count();
+        let superseded = SUPERSEDED_CANONICAL_ROWS
+            .iter()
+            .filter(|(row_source, _)| *row_source == source)
+            .count();
+        let rows = results
+            .lines()
+            .filter(|line| line.contains("| MEASURED-"))
+            .count();
+        if rows != registered + superseded {
+            errors.push(format!(
+                "{}: canonical final-threshold table has {rows} measurement row(s) but the guard accounts for {} ({registered} registered + {superseded} superseded)",
+                source.path(),
+                registered + superseded
+            ));
+        }
     }
+
+    for (source, threshold) in SUPERSEDED_CANONICAL_ROWS {
+        if specs
+            .iter()
+            .any(|spec| spec.result_source == *source && spec.threshold == *threshold)
+        {
+            errors.push(format!(
+                "{}: superseded row {threshold:?} is also registered as current evidence",
+                source.path()
+            ));
+        }
+        let Some(results) = sources.get(source) else {
+            continue;
+        };
+        if let Err(error) = canonical_measurement(results, threshold) {
+            errors.push(format!(
+                "{}: superseded row must be preserved verbatim: {error}",
+                source.path()
+            ));
+        }
+    }
+
     for spec in &specs {
+        let Some(results) = sources.get(&spec.result_source) else {
+            continue;
+        };
         match canonical_measurement(results, spec.threshold) {
             Ok(canonical) => {
                 errors.extend(validate_spike_measurement(spec, &canonical, documents));
@@ -1761,6 +1900,22 @@ fn validate_spike_measurements(results: &str, documents: &BTreeMap<String, Strin
         }
     }
     errors
+}
+
+/// Read every registered result source. Deliberately not a directory scan: the
+/// proof directory also holds a non-authoritative corrections prototype, and a
+/// scan would pick it up the moment someone renamed it.
+fn result_sources() -> BTreeMap<ResultSource, String> {
+    let root = repo_root();
+    ResultSource::ALL
+        .into_iter()
+        .map(|source| {
+            let path = root.join(source.path());
+            let content = std::fs::read_to_string(&path)
+                .unwrap_or_else(|err| panic!("cannot read {}: {err}", source.path()));
+            (source, content)
+        })
+        .collect()
 }
 
 // ---------------------------------------------------------------------------
@@ -2362,11 +2517,9 @@ fn docs_specs_use_the_frozen_retry_scalar() {
 #[test]
 fn spike_measurement_contracts_match_and_reject_mutations() {
     let root = repo_root();
-    let results_path = root.join("proofs/redb-resource-store-spike/RESULTS.md");
-    let results = std::fs::read_to_string(&results_path)
-        .unwrap_or_else(|err| panic!("cannot read {}: {err}", rel_display(&results_path)));
+    let sources = result_sources();
     let documents = measurement_documents();
-    let errors = validate_spike_measurements(&results, &documents);
+    let errors = validate_spike_measurements(&sources, &documents);
     assert!(errors.is_empty(), "{}", errors.join("\n"));
 
     let feasibility =
@@ -2382,7 +2535,8 @@ fn spike_measurement_contracts_match_and_reject_mutations() {
     ));
 
     for spec in spike_measurement_specs() {
-        let canonical = canonical_measurement(&results, spec.threshold)
+        let results = &sources[&spec.result_source];
+        let canonical = canonical_measurement(results, spec.threshold)
             .unwrap_or_else(|error| panic!("{}: {error}", spec.name));
         let original = documents
             .get(spec.mutation_path)
@@ -2408,6 +2562,32 @@ fn spike_measurement_contracts_match_and_reject_mutations() {
         );
     }
 
+    // Perturbing the *result row itself* must fail too. Without this the guard
+    // would only prove that the documents agree with each other, which a single
+    // edit to the source artifact could satisfy while changing the measurement.
+    for spec in spike_measurement_specs() {
+        let original = &sources[&spec.result_source];
+        assert!(
+            original.contains(spec.fingerprint),
+            "{} fingerprint {:?} is absent from {}",
+            spec.name,
+            spec.fingerprint,
+            spec.result_source.path()
+        );
+        let mut mutated_sources = sources.clone();
+        mutated_sources.insert(
+            spec.result_source,
+            original.replacen(spec.fingerprint, "[mutated result row]", 1),
+        );
+        let errors = validate_spike_measurements(&mutated_sources, &documents);
+        assert!(
+            !errors.is_empty(),
+            "{} guard accepted a perturbed canonical row in {}",
+            spec.name,
+            spec.result_source.path()
+        );
+    }
+
     const UNREGISTERED_DOCUMENT: &str = "docs/explanation/unregistered-spike-copy.md";
     assert!(
         !documents.contains_key(UNREGISTERED_DOCUMENT),
@@ -2422,7 +2602,7 @@ fn spike_measurement_contracts_match_and_reject_mutations() {
             "{} plant path is unexpectedly registered",
             spec.name
         );
-        let canonical = canonical_measurement(&results, spec.threshold)
+        let canonical = canonical_measurement(&sources[&spec.result_source], spec.threshold)
             .unwrap_or_else(|error| panic!("{}: {error}", spec.name));
         let mut mutated = documents.clone();
         mutated.insert(
@@ -2438,6 +2618,62 @@ fn spike_measurement_contracts_match_and_reject_mutations() {
             spec.name,
             spec.planted_unregistered_copy,
             errors.join("\n")
+        );
+    }
+}
+
+/// The corrections prototype is a near-miss of the authoritative rerun: same
+/// table shape, same MEASURED-PASS verdict, RSS figures transposed to
+/// `18,468 KiB` / `6,108 KiB`. It is exactly the artifact a hurried author
+/// would cite. This test asserts the exclusion mechanically instead of relying
+/// on nobody reaching for it.
+#[test]
+fn the_corrections_prototype_is_never_an_authoritative_result() {
+    let root = repo_root();
+    let prototype_path = root.join(PROTOTYPE_RESULT);
+    let prototype = std::fs::read_to_string(&prototype_path)
+        .unwrap_or_else(|err| panic!("cannot read {PROTOTYPE_RESULT}: {err}"));
+
+    assert!(
+        ResultSource::ALL
+            .into_iter()
+            .all(|source| source.path() != PROTOTYPE_RESULT),
+        "the corrections prototype must not be a registered result source"
+    );
+
+    let documents = measurement_documents();
+    assert!(
+        !documents.contains_key(PROTOTYPE_RESULT),
+        "the corrections prototype must stay outside the docs/** inventory"
+    );
+
+    // Its own threshold table is written against the *original* threshold key,
+    // so a lazy repoint would silently swap in the prototype's numbers. Assert
+    // that the rerun's threshold key - the one the RSS row now reads - simply
+    // is not present in the prototype, so the repoint fails closed instead.
+    let rss = spike_measurement_specs()
+        .into_iter()
+        .find(|spec| spec.name == "median RSS")
+        .expect("the median RSS row is registered");
+    assert!(
+        canonical_measurement(&prototype, rss.threshold).is_err(),
+        "the corrections prototype must not satisfy the canonical measurement parser"
+    );
+    assert!(
+        !prototype.contains(rss.fingerprint),
+        "the corrections prototype must not carry the authoritative fingerprint"
+    );
+
+    // The prototype's transposed figures must appear in no shipped document.
+    for figure in ["18,468 KiB", "6,108 KiB"] {
+        let leaks = documents
+            .iter()
+            .filter(|(_, content)| normalized_whitespace(content).contains(figure))
+            .map(|(path, _)| path.as_str())
+            .collect::<Vec<_>>();
+        assert!(
+            leaks.is_empty(),
+            "prototype figure {figure:?} leaked into {leaks:?}"
         );
     }
 }

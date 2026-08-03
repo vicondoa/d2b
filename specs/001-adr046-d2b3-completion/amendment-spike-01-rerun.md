@@ -6,8 +6,8 @@
 | Raised under | W5 audit F4 and FR-056 |
 | Affected member spec | `ADR-046-validation-and-delivery`, section 3.2, plus the linked feasibility and store evidence rows |
 | Affected policy | `packages/d2b-contract-tests/tests/policy_adr046_spec_literals.rs` |
-| Status | Gated measurement complete; awaiting architect acceptance and the required spec panel |
-| Gate 0 | Open; this draft does not amend an Accepted member or close Gate 0 |
+| Status | **Applied.** The member amendment, regenerated manifests, and policy-literal update landed together; the spec panel is still owed |
+| Gate 0 | Re-evaluated per FR-056 in [`gate0-reevaluation-spike-01-rss-rerun.md`](./gate0-reevaluation-spike-01-rss-rerun.md); mechanical half discharged, human-review half invalidates the outstanding `ADR046-W5` panel request |
 
 ## 1. Authority and supersession
 
