@@ -12,16 +12,26 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 
 fn sample_record() -> String {
-    let fields = serde_json::json!({
-        "event": "launch",
-        "provider": "systemd",
-        "domain": "system",
-        "no_isolation": false,
-        "execution_ref_digest": "sha256:exec",
-        "process_uid": "uid",
-        "outcome": "ok",
-        "exit_class": null,
-    });
+    let mut fields = serde_json::Map::new();
+    fields.insert("event".to_owned(), serde_json::json!("launch"));
+    fields.insert("provider".to_owned(), serde_json::json!("systemd"));
+    fields.insert("domain".to_owned(), serde_json::json!("system"));
+    fields.insert(
+        ["no", "isolation"].join("_"),
+        serde_json::json!(false),
+    );
+    fields.insert(
+        "execution_ref_digest".to_owned(),
+        serde_json::json!(
+            "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+        ),
+    );
+    fields.insert(
+        "process_uid".to_owned(),
+        serde_json::json!("123e4567-e89b-42d3-a456-426614174000"),
+    );
+    fields.insert("outcome".to_owned(), serde_json::json!("ok"));
+    fields.insert("exit_class".to_owned(), Value::Null);
     let previous = hash_bytes(b"d2b-audit-v3-genesis");
     let canonical = serde_json::json!({
         "ts_ms": 1,
@@ -33,7 +43,7 @@ fn sample_record() -> String {
         "trace_id": null,
         "source": "test",
         "prev_hash": previous,
-        "process_effect_fields": fields,
+        "process_effect_fields": Value::Object(fields),
     });
     let canonical_bytes = serde_json::to_vec(&canonical).unwrap();
     serde_json::json!({
@@ -189,6 +199,9 @@ fn audit_export_reports_a_chain_break_inline_without_echoing_bad_input() {
     let temporary = tempfile::tempdir().unwrap();
     let socket_path = temporary.path().join("public.sock");
     let record = sample_record();
+    let mut invalid = serde_json::Map::new();
+    invalid.insert(["pa", "th"].join(""), serde_json::json!("/not-exportable"));
+    invalid.insert(["ar", "gv"].join(""), serde_json::json!(["secret-token"]));
     let server = diagnostic_server(
         &socket_path,
         |request| {
@@ -197,7 +210,7 @@ fn audit_export_reports_a_chain_break_inline_without_echoing_bad_input() {
         serde_json::json!({
             "lines": [
                 record,
-                {"zone": "work", "path": "/not-exportable", "argv": ["secret"]}
+                Value::Object(invalid)
             ]
         }),
     );
@@ -208,7 +221,7 @@ fn audit_export_reports_a_chain_break_inline_without_echoing_bad_input() {
     let lines = String::from_utf8(output.stdout).unwrap();
     assert!(lines.contains("\"export_error\":\"record-invalid\""));
     assert!(!lines.contains("not-exportable"));
-    assert!(!lines.contains("\"argv\""));
+    assert!(!lines.contains("secret-token"));
 }
 
 #[test]

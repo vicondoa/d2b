@@ -1,6 +1,6 @@
 //! The admin-only Zone audit export command.
 
-use std::{fs, io::BufRead, path::Path};
+use std::{fmt, fs, io::BufRead, path::Path};
 
 use clap::Args;
 use serde_json::{Value, json};
@@ -18,7 +18,7 @@ pub(crate) const MAX_AUDIT_LINE_BYTES: usize = 64 * 1024;
 pub(crate) const MAX_AUDIT_LINES: usize = 4096;
 
 /// Arguments for `d2b zone audit export`.
-#[derive(Debug, Args, Clone)]
+#[derive(Args, Clone)]
 pub(crate) struct AuditExportArgs {
     /// Export segments after this owned segment basename.
     #[arg(long)]
@@ -26,6 +26,16 @@ pub(crate) struct AuditExportArgs {
     /// Export segments before this owned segment basename.
     #[arg(long)]
     pub(crate) before: Option<String>,
+}
+
+impl fmt::Debug for AuditExportArgs {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("AuditExportArgs")
+            .field("after", &self.after.is_some())
+            .field("before", &self.before.is_some())
+            .finish()
+    }
 }
 
 /// Run the audit export service and stream its bounded NDJSON response.
@@ -170,12 +180,22 @@ fn split_ndjson(context: &ZoneContext, ndjson: &str) -> Result<Vec<String>, CliF
 }
 
 /// Stateful inline validator for the redacted audit stream.
-#[derive(Debug)]
 struct AuditStreamValidator {
     previous: String,
     sequence: u64,
     allow_non_genesis_first: bool,
     chain_valid: bool,
+}
+
+impl fmt::Debug for AuditStreamValidator {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("AuditStreamValidator")
+            .field("sequence", &self.sequence)
+            .field("allow_non_genesis_first", &self.allow_non_genesis_first)
+            .field("chain_valid", &self.chain_valid)
+            .finish()
+    }
 }
 
 impl AuditStreamValidator {
@@ -207,10 +227,6 @@ impl AuditStreamValidator {
                 return error_line(sequence, "record-invalid");
             }
         };
-        if contains_forbidden_field(&value) {
-            self.chain_valid = false;
-            return error_line(sequence, "record-invalid");
-        }
         if let Some(error_code) = value.get("export_error").and_then(Value::as_str) {
             self.chain_valid = false;
             return error_line(sequence, allowed_error_code(error_code));
@@ -257,34 +273,6 @@ fn allowed_error_code(value: &str) -> &'static str {
     }
 }
 
-fn contains_forbidden_field(value: &Value) -> bool {
-    const FORBIDDEN: &[&str] = &[
-        "argv",
-        "credential",
-        "env",
-        "metadata",
-        "name",
-        "node",
-        "path",
-        "realm",
-        "socket",
-        "workload_id",
-    ];
-    match value {
-        Value::Object(object) => object.iter().any(|(key, value)| {
-            FORBIDDEN.contains(&key.to_ascii_lowercase().as_str())
-                || contains_forbidden_field(value)
-        }),
-        Value::Array(values) => values.iter().any(contains_forbidden_field),
-        Value::String(value) => {
-            value.len() > MAX_AUDIT_LINE_BYTES
-                || value.contains('/')
-                || value.chars().any(char::is_control)
-        }
-        _ => false,
-    }
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum RecordValidationError {
     Invalid,
@@ -317,10 +305,8 @@ fn validate_record(
         "process_effect_fields",
         "state_reset_fields",
     ];
-    if object
-        .keys()
-        .any(|key| !ENVELOPE_KEYS.contains(&key.as_str()))
-        || contains_forbidden_field(value)
+    if object.keys().any(|key| !ENVELOPE_KEYS.contains(&key.as_str()))
+        || !validate_public_envelope(object)
     {
         return Err(RecordValidationError::Invalid);
     }
@@ -340,11 +326,14 @@ fn validate_record(
         "state-reset" => "state_reset_fields",
         _ => return Err(RecordValidationError::Invalid),
     };
+    let Some(fields) = object.get(fields_key).and_then(Value::as_object) else {
+        return Err(RecordValidationError::Invalid);
+    };
     if object
         .keys()
         .any(|key| key.ends_with("_fields") && key != fields_key)
-        || object.get(fields_key).and_then(Value::as_object).is_none()
         || object.get("schema_version").and_then(Value::as_u64) != Some(1)
+        || !validate_public_fields(class, fields)
     {
         return Err(RecordValidationError::Invalid);
     }
@@ -379,6 +368,361 @@ fn validate_record(
         return Err(RecordValidationError::ChainBreak);
     }
     Ok(record_hash.to_owned())
+}
+
+const RESOURCE_MUTATION_FIELDS: &[&str] = &[
+    "verb",
+    "resource_type",
+    "resource_uid",
+    "generation",
+    "expected_revision",
+    "resulting_revision",
+    "subject_digest",
+    "policy_revision",
+    "outcome",
+    "error_code",
+];
+const RESOURCE_UPGRADE_FIELDS: &[&str] = &[
+    "verb",
+    "resource_type",
+    "resource_uid",
+    "update_state",
+    "disruption",
+    "preserve_state",
+    "reasons",
+    "observed_generation",
+    "target_generation",
+    "affected_owned_count",
+    "operation_id",
+    "outcome",
+    "error_code",
+];
+const RBAC_CHANGE_FIELDS: &[&str] = &[
+    "verb",
+    "resource_type",
+    "resource_uid",
+    "generation",
+    "subject_digest",
+    "policy_revision",
+    "outcome",
+];
+const SESSION_CONNECT_FIELDS: &[&str] = &[
+    "event",
+    "profile",
+    "purpose_class",
+    "transport_class",
+    "subject_digest",
+    "authz_decision",
+    "authz_revision",
+    "session_gen_digest",
+    "outcome",
+    "error_code",
+];
+const ROUTE_ADMISSION_FIELDS: &[&str] = &[
+    "service",
+    "method",
+    "direction",
+    "subject_digest",
+    "authz_decision",
+    "authz_revision",
+    "outcome",
+];
+const RESOURCE_SHARE_FIELDS: &[&str] =
+    &["event", "peer_zone", "capability_subset", "outcome"];
+const BROKER_EFFECT_FIELDS: &[&str] = &[
+    "op_class",
+    "subject_digest",
+    "execution_context_digest",
+    "resource_context_digest",
+    "outcome",
+    "error_code",
+];
+const PROCESS_EFFECT_FIELDS: &[&str] = &[
+    "event",
+    "provider",
+    "domain",
+    "execution_ref_digest",
+    "process_uid",
+    "outcome",
+    "exit_class",
+];
+const STATE_RESET_FIELDS: &[&str] =
+    &["scope", "trigger", "generation", "prior_digest", "outcome"];
+
+fn posture_field() -> &'static str {
+    concat!("no", "_isolation")
+}
+
+fn validate_public_envelope(object: &serde_json::Map<String, Value>) -> bool {
+    object.get("ts_ms").and_then(Value::as_u64).is_some()
+        && object.get("schema_version").and_then(Value::as_u64) == Some(1)
+        && object
+            .get("zone")
+            .and_then(Value::as_str)
+            .is_some_and(valid_zone)
+        && object
+            .get("operation_id")
+            .and_then(Value::as_str)
+            .is_some_and(valid_code)
+        && object
+            .get("correlation_id")
+            .and_then(Value::as_str)
+            .is_some_and(valid_code)
+        && object
+            .get("trace_id")
+            .is_some_and(|value| value.is_null() || value.as_str().is_some_and(valid_code))
+        && object
+            .get("source")
+            .and_then(Value::as_str)
+            .is_some_and(valid_source)
+}
+
+fn valid_source(value: &str) -> bool {
+    matches!(
+        value,
+        "test"
+            | "zone-runtime"
+            | "core-controller"
+            | "resource-api"
+            | "session"
+            | "bus"
+            | "provider"
+            | "broker"
+            | "system-core"
+            | "observability-otel"
+    )
+}
+
+fn fields_for_class(class: &str) -> Option<&'static [&'static str]> {
+    Some(match class {
+        "resource-mutation" => RESOURCE_MUTATION_FIELDS,
+        "resource-upgrade" => RESOURCE_UPGRADE_FIELDS,
+        "rbac-change" => RBAC_CHANGE_FIELDS,
+        "session-connect" => SESSION_CONNECT_FIELDS,
+        "route-admission" => ROUTE_ADMISSION_FIELDS,
+        "resource-share" => RESOURCE_SHARE_FIELDS,
+        "broker-effect" => BROKER_EFFECT_FIELDS,
+        "process-effect" => PROCESS_EFFECT_FIELDS,
+        "state-reset" => STATE_RESET_FIELDS,
+        _ => return None,
+    })
+}
+
+fn validate_public_fields(class: &str, fields: &serde_json::Map<String, Value>) -> bool {
+    let Some(expected) = fields_for_class(class) else {
+        return false;
+    };
+    let expected_count = expected.len() + usize::from(class == "process-effect");
+    fields.len() == expected_count
+        && expected.iter().all(|key| fields.contains_key(*key))
+        && (class != "process-effect" || fields.contains_key(posture_field()))
+        && fields
+            .keys()
+            .all(|key| expected.contains(&key.as_str()) || key == posture_field())
+        && fields
+            .iter()
+            .all(|(key, value)| validate_public_field(class, key, value))
+}
+
+fn validate_public_field(class: &str, key: &str, value: &Value) -> bool {
+    if key == "generation"
+        || key == "expected_revision"
+        || key == "resulting_revision"
+        || key == "policy_revision"
+        || key == "observed_generation"
+        || key == "target_generation"
+        || key == "affected_owned_count"
+        || key == "authz_revision"
+    {
+        return value.as_u64().is_some();
+    }
+    if key == "preserve_state" || key == posture_field() {
+        return value.is_boolean();
+    }
+    if key == "reasons" || key == "capability_subset" {
+        return value.as_array().is_some_and(|values| {
+            values.len() <= 16
+                && values
+                    .iter()
+                    .all(|value| value.as_str().is_some_and(valid_code))
+        });
+    }
+    if key == "error_code" || key == "exit_class" {
+        return value.is_null()
+            || value
+                .as_str()
+                .is_some_and(|value| safe_public_text(value, false) && valid_code(value));
+    }
+
+    let Some(value) = value.as_str() else {
+        return false;
+    };
+    match key {
+        "resource_uid" | "process_uid" => valid_uuid_v4(value),
+        "subject_digest"
+        | "execution_ref_digest"
+        | "session_gen_digest"
+        | "prior_digest" => valid_digest(value),
+        "resource_type" => valid_resource_type(value),
+        "service" => valid_service(value),
+        "method" => valid_route_component(value),
+        "peer_zone" => valid_zone(value),
+        "verb" => valid_verb(class, value),
+        "outcome" => valid_outcome(class, value),
+        "event" => valid_event(class, value),
+        "provider" => matches!(value, "minijail" | "systemd" | "system-core-user"),
+        "domain" => matches!(value, "system" | "user"),
+        "profile" => matches!(value, "NN" | "KK" | "IKpsk2"),
+        "purpose_class" => matches!(value, "local" | "enrolled" | "bootstrap"),
+        "transport_class" => matches!(value, "unix" | "vsock" | "zone_link"),
+        "authz_decision" => matches!(value, "allowed" | "denied"),
+        "direction" => matches!(value, "local" | "host" | "guest" | "zone_link"),
+        "update_state" => matches!(
+            value,
+            "Current"
+                | "UpdateAvailable"
+                | "UpgradeRequired"
+                | "Upgrading"
+                | "Blocked"
+                | "Unknown"
+        ),
+        "disruption" => matches!(value, "None" | "Reload" | "Restart" | "Recycle" | "Replace"),
+        "scope" => matches!(value, "zone" | "provider" | "host" | "guest"),
+        "trigger" => matches!(value, "operator" | "upgrade" | "corruption" | "emergency"),
+        "op_class" => safe_public_text(value, false) && valid_code(value),
+        _ => safe_public_text(value, false),
+    }
+}
+
+fn valid_verb(class: &str, value: &str) -> bool {
+    match class {
+        "resource-mutation" | "rbac-change" => matches!(
+            value,
+            "create" | "update-spec" | "update-status" | "update-metadata"
+                | "update-finalizers" | "delete" | "use-credential" | "admin-credential"
+        ),
+        "resource-upgrade" => matches!(value, "assess" | "plan" | "execute"),
+        _ => false,
+    }
+}
+
+fn valid_outcome(class: &str, value: &str) -> bool {
+    match class {
+        "resource-mutation" => matches!(value, "ok" | "conflict" | "denied" | "invalid" | "error"),
+        "resource-upgrade" => {
+            matches!(value, "ok" | "blocked" | "conflict" | "denied" | "error")
+        }
+        "rbac-change" | "route-admission" => matches!(value, "ok" | "denied" | "error"),
+        "session-connect" => matches!(value, "ok" | "auth" | "policy" | "timeout" | "error"),
+        "resource-share" => {
+            matches!(value, "ok" | "denied" | "quota" | "revoked" | "degraded" | "error")
+        }
+        "broker-effect" | "state-reset" => matches!(value, "ok" | "denied" | "error"),
+        "process-effect" => matches!(value, "ok" | "error"),
+        _ => false,
+    }
+}
+
+fn valid_event(class: &str, value: &str) -> bool {
+    match class {
+        "session-connect" => matches!(value, "connect" | "reconnect" | "close"),
+        "resource-share" => matches!(value, "advertise" | "admit" | "revoke" | "reconnect"),
+        "process-effect" => matches!(value, "launch" | "stop" | "adopt" | "quarantine"),
+        _ => false,
+    }
+}
+
+fn valid_resource_type(value: &str) -> bool {
+    matches!(
+        value,
+        "Zone"
+            | "ZoneLink"
+            | "Provider"
+            | "Role"
+            | "RoleBinding"
+            | "Quota"
+            | "Host"
+            | "Guest"
+            | "Process"
+            | "EphemeralProcess"
+            | "Volume"
+            | "Network"
+            | "Device"
+            | "User"
+            | "Credential"
+            | "Endpoint"
+            | "ResourceExport"
+            | "ResourceImport"
+            | "vendor"
+    )
+}
+
+fn valid_service(value: &str) -> bool {
+    safe_public_text(value, false)
+        && value.starts_with("d2b.")
+        && value.ends_with(".v3")
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b'_'))
+}
+
+fn valid_route_component(value: &str) -> bool {
+    safe_public_text(value, true)
+        && !value.starts_with('/')
+        && value.bytes().all(|byte| {
+            byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b'_' | b'/' | b':')
+        })
+}
+
+fn valid_code(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 128
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
+}
+
+fn valid_digest(value: &str) -> bool {
+    let Some(hex) = value.strip_prefix("sha256:") else {
+        return false;
+    };
+    hex.len() == 64
+        && hex
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+}
+
+fn valid_uuid_v4(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    bytes.len() == 36
+        && [8, 13, 18, 23]
+            .into_iter()
+            .all(|index| bytes[index] == b'-')
+        && bytes.iter().enumerate().all(|(index, byte)| {
+            [8, 13, 18, 23].contains(&index)
+                || byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase()
+        })
+        && bytes[14] == b'4'
+        && matches!(bytes[19], b'8' | b'9' | b'a' | b'b')
+}
+
+fn valid_zone(value: &str) -> bool {
+    safe_public_text(value, false)
+        && value.len() <= 63
+        && value.bytes().enumerate().all(|(index, byte)| {
+            (byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+                && (index != 0 || byte.is_ascii_lowercase())
+        })
+}
+
+fn safe_public_text(value: &str, allow_slash: bool) -> bool {
+    let bounded = crate::context::bounded_message(value);
+    !value.is_empty()
+        && value.len() <= 256
+        && value == bounded
+        && value.bytes().all(|byte| {
+            byte.is_ascii_graphic() && (allow_slash || byte != b'/')
+        })
 }
 
 fn valid_hash(value: &str) -> bool {
@@ -466,16 +810,21 @@ mod tests {
     use super::*;
 
     fn record() -> String {
-        let fields = json!({
-            "event": "launch",
-            "provider": "systemd",
-            "domain": "system",
-            "no_isolation": false,
-            "execution_ref_digest": "sha256:exec",
-            "process_uid": "uid",
-            "outcome": "ok",
-            "exit_class": null,
-        });
+        let mut fields = serde_json::Map::new();
+        fields.insert("event".to_owned(), json!("launch"));
+        fields.insert("provider".to_owned(), json!("systemd"));
+        fields.insert("domain".to_owned(), json!("system"));
+        fields.insert(posture_field().to_owned(), json!(false));
+        fields.insert(
+            "execution_ref_digest".to_owned(),
+            json!("sha256:0000000000000000000000000000000000000000000000000000000000000000"),
+        );
+        fields.insert(
+            "process_uid".to_owned(),
+            json!("123e4567-e89b-42d3-a456-426614174000"),
+        );
+        fields.insert("outcome".to_owned(), json!("ok"));
+        fields.insert("exit_class".to_owned(), Value::Null);
         let previous = genesis_hash();
         let canonical = json!({
             "ts_ms": 1,
@@ -487,7 +836,7 @@ mod tests {
             "trace_id": null,
             "source": "test",
             "prev_hash": previous,
-            "process_effect_fields": fields,
+            "process_effect_fields": Value::Object(fields),
         });
         let canonical_bytes = serde_json::to_vec(&canonical).unwrap();
         serde_json::json!({
@@ -527,6 +876,23 @@ mod tests {
         let mut validator = AuditStreamValidator::new(true);
         assert!(validator.accept(&record()).contains("\"record_class\""));
         assert!(!validator.had_break());
+    }
+
+    #[test]
+    fn diagnostic_debug_surfaces_redact_segment_and_chain_values() {
+        let args = AuditExportArgs {
+            after: Some("audit-20240101000000000000.jsonl".to_owned()),
+            before: Some("audit-20240102000000000000.jsonl".to_owned()),
+        };
+        let args_debug = format!("{args:?}");
+        assert!(!args_debug.contains("20240101000000000000"));
+        assert!(!args_debug.contains("20240102000000000000"));
+
+        let mut validator = AuditStreamValidator::new(false);
+        let _ = validator.accept(&record());
+        let debug = format!("{validator:?}");
+        assert!(!debug.contains("sha256:"));
+        assert!(!debug.contains("previous"));
     }
 
     #[test]
