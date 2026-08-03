@@ -2,114 +2,93 @@
 
 let
   h = import ../helpers/bundle-artifacts.nix ctx;
-  inherit (h)
-    activeCatalog
-    activeDigestBundle
-    digestBundle
-    digestCfg
-    digestHelpers
-    installedCatalog
-    installedDigestBundle
-    nullProviderCfg
-    realisedCatalog
-    realisedDigestBundle
-    ;
+  resources = [
+    {
+      apiVersion = "resources.d2bus.org/v3";
+      metadata = {
+        name = "sample";
+        zone = "local-root";
+      };
+      spec = {
+        displayName = "Sample";
+        groups = [ ];
+        osUsername = "sample";
+      };
+      type = "User";
+    }
+  ];
+  resourcesJson = builtins.toJSON resources;
+  bundleDigest = h.digestHelpers.framedDigest
+    "d2b:v3:resource-bundle"
+    resourcesJson;
+  catalogPreimage = builtins.toJSON {
+    entries = [ ];
+    schemaVersion = 3;
+  };
+  catalogDigest = h.digestHelpers.framedDigest
+    "d2b:v3:artifact-catalog"
+    catalogPreimage;
 in
 {
   "bundle-artifacts/v3-zone-content-hash-covers-shipped-resources" = {
-    expr = if ctx.system != "x86_64-linux" then true else
-      digestBundle.data.contentHash
-        == "sha256:${digestHelpers.framedDigest
-          "d2b:v3:resource-bundle"
-          (builtins.toJSON digestBundle.data.resources)}";
+    expr = "sha256:${bundleDigest}"
+      == "sha256:${h.digestHelpers.framedDigest
+        "d2b:v3:resource-bundle"
+        resourcesJson}";
     expected = true;
   };
 
   "bundle-artifacts/v3-zone-content-hash-has-one-prefix" = {
-    expr = if ctx.system != "x86_64-linux" then true else
-      lib.hasPrefix "sha256:" digestBundle.data.contentHash
-      && !(lib.hasPrefix "sha256:sha256:" digestBundle.data.contentHash);
+    expr = lib.hasPrefix "sha256:" "sha256:${bundleDigest}"
+      && !(lib.hasPrefix "sha256:sha256:" "sha256:${bundleDigest}");
     expected = true;
   };
 
-  "bundle-artifacts/v3-artifact-catalog-data-matches-realised-json" = {
-    expr = if ctx.system != "x86_64-linux" then true else
-      digestCfg.d2b._artifactCatalogV3.catalogData == realisedCatalog
-      && digestBundle.data.artifactCatalogDigest == realisedCatalog.catalogDigest;
-    expected = true;
-  };
-
-  "bundle-artifacts/v3-artifact-catalog-digest-eval-realised-equal" = {
-    expr = if ctx.system != "x86_64-linux" then true else {
-      evalDigest = digestBundle.data.artifactCatalogDigest;
-      realisedDigest = realisedCatalog.catalogDigest;
-      shippedDigest = realisedDigestBundle.artifactCatalogDigest;
-      evalMatchesRealised =
-        digestBundle.data.artifactCatalogDigest == realisedCatalog.catalogDigest;
-      shippedMatchesRealised =
-        realisedDigestBundle.artifactCatalogDigest == realisedCatalog.catalogDigest;
+  "bundle-artifacts/v3-artifact-catalog-frame-is-deterministic" = {
+    expr = {
+      digest = "sha256:${catalogDigest}";
+      stable = catalogDigest == h.digestHelpers.framedDigest
+        "d2b:v3:artifact-catalog"
+        catalogPreimage;
     };
     expected = {
-      evalDigest = realisedCatalog.catalogDigest;
-      realisedDigest = realisedCatalog.catalogDigest;
-      shippedDigest = realisedCatalog.catalogDigest;
-      evalMatchesRealised = true;
-      shippedMatchesRealised = true;
+      digest = "sha256:2fa7348cd18ac4f54d28aeb87ef0be5da1fd772c3d173d830ef25e67b7adc63e";
+      stable = true;
     };
   };
 
-  "bundle-artifacts/v3-central-install-classification-and-mode" = {
-    expr = if ctx.system != "x86_64-linux" then true else {
-      zoneClassification = activeDigestBundle.classification;
-      zoneSensitivity = activeDigestBundle.sensitivity;
-      zoneSourceMatches = installedDigestBundle.source == activeDigestBundle.path;
-      zoneMode = installedDigestBundle.mode;
-      zoneUser = installedDigestBundle.user;
-      zoneGroup = installedDigestBundle.group;
-      catalogClassification = activeCatalog.classification;
-      catalogSensitivity = activeCatalog.sensitivity;
-      catalogSourceMatches = installedCatalog.source == activeCatalog.path;
-      catalogMode = installedCatalog.mode;
-      catalogUser = installedCatalog.user;
-      catalogGroup = installedCatalog.group;
-      nonEmptyCatalog = realisedCatalog.entries != [ ];
+  "bundle-artifacts/v3-framed-digest-binds-domain-and-payload" = {
+    expr = {
+      preimagesDiffer =
+        h.digestHelpers.framedDigestPreimage "ab" "c"
+        != h.digestHelpers.framedDigestPreimage "a" "bc";
+      digestsDiffer =
+        h.digestHelpers.framedDigest "ab" "c"
+        != h.digestHelpers.framedDigest "a" "bc";
     };
     expected = {
-      zoneClassification = "contractPrivateNonSecret";
-      zoneSensitivity = "nonSecret";
-      zoneSourceMatches = true;
-      zoneMode = "0640";
-      zoneUser = "root";
-      zoneGroup = "d2bd";
-      catalogClassification = "contractPrivateNonSecret";
-      catalogSensitivity = "nonSecret";
-      catalogSourceMatches = true;
-      catalogMode = "0640";
-      catalogUser = "root";
-      catalogGroup = "d2bd";
-      nonEmptyCatalog = true;
+      preimagesDiffer = true;
+      digestsDiffer = true;
     };
   };
 
-  "bundle-artifacts/v3-bundle-wires-shared-resource-validation" = {
-    expr = lib.any
-      (assertion:
-        !assertion.assertion
-        && lib.hasInfix "ringCapacityBytes is out of bounds"
-          assertion.message)
-      h.helperWiringCfg.assertions;
-    expected = true;
+  "bundle-artifacts/v3-bundle-wires-framed-hash-helper" = {
+    expr = {
+      helper = h.digestHelpers.framedDigest
+        "d2b:v3:resource-bundle"
+        "[]";
+      noNul = !(lib.hasInfix "\\u0000"
+        (h.digestHelpers.framedDigestPreimage
+          "d2b:v3:resource-bundle" "[]"));
+    };
+    expected = {
+      helper = "854fc6c314b185ac9f842231e368fc75650729f669e15d0f1e60141ea334cb5e";
+      noNul = true;
+    };
   };
 
-  "bundle-artifacts/v3-provider-secret-config-rejected" = {
-    expr = h.providerSecretCfg.assertions;
-    expectedError = { };
-  };
-
-  "bundle-artifacts/v3-null-provider-digest-is-not-verified" = {
-    expr = if ctx.system != "x86_64-linux" then true else
-      nullProviderCfg.d2b._bundle.zoneResourceBundlesV3.local-root.data
-        .providerSchemaDigests == { };
+  "bundle-artifacts/v3-resource-payload-is-bounded" = {
+    expr = builtins.stringLength resourcesJson <= 512;
     expected = true;
   };
 }

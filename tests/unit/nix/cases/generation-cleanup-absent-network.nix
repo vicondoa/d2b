@@ -82,9 +82,9 @@ in
       identicalNetworkRedeclared = builtins.elem "Network" firstTypes
         && builtins.elem "Network" redeclaredTypes
         && firstBundle.data.resources == redeclaredBundle.data.resources
-        && toString firstBundle.path == toString redeclaredBundle.path;
+        && firstBundle.data.contentHash == redeclaredBundle.data.contentHash;
       removedNetworkChangesArtifact =
-        toString firstBundle.path != toString secondBundle.path;
+        firstBundle.data.contentHash != secondBundle.data.contentHash;
       absentResourceAction = cleanup.transition.absentResourceAction;
       pendingCondition = cleanup.transition.pendingCondition;
       directDeleteOwner = cleanup.ownership.eligibleValue;

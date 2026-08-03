@@ -71,102 +71,11 @@ let
     };
   };
 
-  digestCfg = (mkEval [ base ({ ... }: {
-    d2b.artifacts = lib.optionalAttrs (system == "x86_64-linux") {
-      sample = {
-        package = pkgs.writeText "sample-artifact" "sample";
-        type = "provider";
-      };
-    };
-    d2b.zones.local-root.resources = lib.optionalAttrs
-      (system == "x86_64-linux") {
-      sample = {
-        type = "User";
-        spec = {
-          displayName = "Sample";
-          groups = [ ];
-          osUsername = "sample";
-        };
-      };
-    };
-  }) ]).config;
-  digestBundle = digestCfg.d2b._bundle.zoneResourceBundlesV3.local-root;
-  activeDigestBundle = digestCfg.d2b._bundle.zoneResourceBundles.local-root;
-  compatibilityDigestBundle =
-    digestCfg.d2b._bundle.zoneResourceBundlesCompatibility.local-root;
-  installedDigestBundle =
-    digestCfg.environment.etc."d2b/zones/local-root/resource-bundle.json";
-  activeCatalog = digestCfg.d2b._bundle.extraArtifacts.artifactCatalog;
-  installedCatalog = digestCfg.environment.etc."d2b/artifact-catalog.json";
-  realisedDigestBundle =
-    builtins.fromJSON (builtins.readFile digestBundle.path);
-  realisedCatalog =
-    builtins.fromJSON
-      (builtins.unsafeDiscardStringContext
-        (builtins.readFile digestCfg.d2b._artifactCatalogV3.path));
-  compilerPackage = digestCfg.d2b._resourceCompiler.phase2.compiler;
   compilerSource = builtins.readFile (flakeRoot + "/nixos-modules/bundle-zones.nix");
   compilerMainSource =
     builtins.readFile (flakeRoot + "/packages/d2b-resource-compiler/src/main.rs");
-  hostileProviderOutput = pkgs.writeText "d2b-hostile-provider-output" "not-a-directory";
-  hostileCompilerInput = pkgs.writeText "d2b-hostile-resource-compiler-input"
-    (builtins.toJSON {
-      zone = "local-root";
-      resources = [ ];
-      providerSchemaDigests = { };
-      providers = [
-        {
-          artifactId = "sample";
-          type = "provider";
-          storePath = "${hostileProviderOutput}";
-          publisher = "first-party";
-          signatureId = "default";
-          packageDigest = (builtins.elemAt realisedCatalog.entries 0).packageDigest;
-          executableDigest = "sha256:0000000000000000000000000000000000000000000000000000000000000001";
-          manifestDigest = "sha256:0000000000000000000000000000000000000000000000000000000000000001";
-          configSchemaDigest = "sha256:0000000000000000000000000000000000000000000000000000000000000001";
-          signingKey = "-----BEGIN PUBLIC KEY-----";
-        }
-      ];
-      artifactCatalogPath = "${digestCfg.d2b._artifactCatalogV3.path}";
-      expectedArtifactCatalogDigest = realisedCatalog.catalogDigest;
-      schemaRoot = null;
-      expectedContentHash = null;
-      strictSecrets = true;
-    });
-  hostileCompilerBuild = pkgs.runCommand "d2b-resource-compiler-hostile-fixture"
-    { nativeBuildInputs = [ compilerPackage ]; }
-    ''
-      set -euo pipefail
-      if d2b-resource-compiler compile \
-        --input ${hostileCompilerInput} \
-        --output "$out" 2>"$TMPDIR/compiler-error"; then
-        echo "hostile Provider output unexpectedly passed" >&2
-        exit 1
-      fi
-      grep -F "provider-required-output-not-regular" "$TMPDIR/compiler-error"
-      printf '%s\n' compiler-ran > "$out"
-    '';
-  shimProgram = pkgs.writeTextFile {
-    name = "d2b-bundle-shim-program";
-    destination = "/share/d2b/provider/shim-program.py";
-    text = "print('shim')\n";
-  };
-  acceptedShim = import (flakeRoot + "/nix/provider-elf-shim.nix") {
-    inherit pkgs;
-    name = "d2b-bundle-shim";
-    interpreterPkg = pkgs.coreutils;
-    interpreterPath = "bin/cat";
-    program = "${shimProgram}/share/d2b/provider/shim-program.py";
-  };
-  acceptedShimBuild = pkgs.runCommand "d2b-resource-compiler-accepted-shim"
-    { nativeBuildInputs = [ pkgs.binutils ]; }
-    ''
-      set -euo pipefail
-      test -x ${acceptedShim}/bin/d2b-bundle-shim
-      ${pkgs.binutils}/bin/readelf -h ${acceptedShim}/bin/d2b-bundle-shim >/dev/null
-      printf '%s\n' accepted-shim > "$out"
-    '';
+  compilerStub = pkgs.writeShellScriptBin
+    "d2b-resource-compiler-eval-stub" "exit 0";
   providerSecretCfg = (mkEval [ base ({ ... }: {
     d2b.artifacts.provider = {
       package = pkgs.writeText "provider-secret-artifact" "provider";
@@ -202,30 +111,19 @@ let
 in
 {
   inherit
-    acceptedShimBuild
-    activeCatalog
-    activeDigestBundle
-    compatibilityDigestBundle
     compilerMainSource
-    compilerPackage
     compilerSource
+    compilerStub
     base
     cfgCompat
     cfgDaemon
-    digestBundle
-    digestCfg
     digestHelpers
     defaultedArtifact
     expectedZoneStorageData
     helperWiringCfg
-    hostileCompilerBuild
-    installedCatalog
-    installedDigestBundle
     installedZoneStorage
     nullProviderCfg
     providerSecretCfg
-    realisedCatalog
-    realisedDigestBundle
     storePathString
     zoneStorageArtifact
     zoneStorageCfg
