@@ -1008,6 +1008,12 @@ esac
             )
             assert budget_match is not None
             effective_budget = budget_match.group(1)
+            self.assertGreaterEqual(int(effective_budget), 1)
+            self.assertLessEqual(
+                int(effective_budget),
+                int(overrides["D2B_RUST_BUDGET"]),
+                msg=f"{target} exceeded the requested Rust budget",
+            )
             self.assertIn(
                 f'D2B_RUST_CARGO_JOBS="{effective_budget}"',
                 output,
