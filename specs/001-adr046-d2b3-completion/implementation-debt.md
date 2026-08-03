@@ -2202,3 +2202,55 @@ resource handling is spread across `options-zones.nix`,
 `resources-zones-volumes.nix` and `generated/`, and `index.nix` already computes
 `declaredZones` and `zoneRows`. The integrator must bind the destination to that
 set or accept a new file; it is not decided here.
+
+### 20.3 A normative numeric conflict: the configuration-cleanup stall threshold
+
+**Class: specification drift, and an unmet reconciliation obligation.** Full
+record in
+[`amendment-w5-destination-drift.md`](./amendment-w5-destination-drift.md)
+section 7; only what a later reader must not miss is restated here.
+
+The configuration-cleanup stall threshold has two published defaults.
+`packages/d2b-core-controller/src/cleanup.rs:257` carries
+`CONFIGURATION_CLEANUP_STALL_THRESHOLD_MS_DEFAULT = 600_000`, ten minutes, and
+`ADR-046-resources-host-guest-process-user` agrees. Three statements in
+`ADR-046-resources-zone-control`, one in `ADR-046-security-and-threat-model`,
+and `ADR046-zone-control-016`'s `detailedDesign` all say five minutes.
+
+**Ruling: committed passing code is canon for this wave. The constant stands at
+600,000 ms and no runtime behaviour changes.** FR-046 does not decide it -
+`ADR046-exec-015` carries "10 min default" and `ADR046-zone-control-016` carries
+"default 5 min", both inside `detailedDesign` in the same generated manifest, so
+both sides are the manifest. Nothing in the specification set gives one member
+standing over another on a shared default, which is why an amendment is required
+rather than a reading.
+
+Three things worth carrying forward.
+
+- **Nothing production reads the constant.** Its only two call sites are inside
+  one `#[cfg(test)]` unit test, `cleanup_stall_due` takes the threshold as a
+  parameter, and `cleanupStuckThreshold` appears nowhere outside `docs/specs/` -
+  no Nix option, no schema field, no CLI surface. No operator is affected today
+  in either direction, and the conflict is therefore cheap now and expensive
+  once the option is wired, when changing it becomes a consumer-visible default
+  change under the deprecation policy.
+- **The failing test is the guard.** `ADR046-zone-control-016`'s destination
+  explicitly names `packages/d2b-core-controller/src/cleanup.rs` while its design
+  says five minutes, so an implementer working it literally will edit the
+  constant and break
+  `configuration_stall_clock_is_bounded_and_clock_injected`, which pins the
+  transition at exactly `00:10:00.000`. Retuning that test to five minutes is the
+  tempting repair and is exactly how a halved operator-visible default ships
+  green and unrecorded. That test is the only artifact in the tree asserting what
+  the default is.
+- **Standing instruction for W5**: do not move the constant, do not retune the
+  test, do not wire the option. A candidate snapshot that does any of the three
+  is out of scope and should be rejected at review.
+
+The amendment must pick one value. The recommendation recorded, and it is a
+recommendation only, is five minutes with the code changed to match in a
+deliberate separate change carrying a changelog entry: crossing this threshold
+sets a Degraded condition and never refuses or force-clears a finalizer, so a
+false positive costs one investigation while a false negative hides a stuck
+finalizer for twice as long, and the shorter window is the fail-closed direction
+for a threshold that surfaces rather than denies.

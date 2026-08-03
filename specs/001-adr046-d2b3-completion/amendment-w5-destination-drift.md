@@ -2,12 +2,13 @@
 
 | Field | Value |
 | --- | --- |
-| Scope | Work-item **destination paths** for eleven W5 items plus two already-`Merged` items, across five crate renames and one policy-file family |
+| Scope | Work-item **destination paths** for eleven W5 items plus two already-`Merged` items, across five crate renames and one policy-file family; widened in section 7 to a **normative value** conflict on the configuration-cleanup stall threshold |
 | Raised under | FR-046, and the "existing code is canon" rule where FR-046 does not reach |
-| Affected member specs | `ADR-046-resources-host-guest-process-user`, `ADR-046-resources-zone-control`, `ADR-046-resources-volume`, `ADR-046-provider-state` |
+| Affected member specs | `ADR-046-resources-host-guest-process-user`, `ADR-046-resources-zone-control`, `ADR-046-resources-volume`, `ADR-046-provider-state`, `ADR-046-security-and-threat-model` (section 7 only) |
 | Affected manifests | `ADR-046-work-items.json`, `ADR-046-implementation-graph.json` |
 | Status | Recorded and raised to the integrator; awaiting a separate specification amendment |
 | Snapshot verified against | `a7f4a6a4` on `adr046-w5-audit-docs` |
+| Runtime behaviour changed by this document | **None.** No code is edited; section 7.6 is a standing instruction not to edit it |
 
 ## 1. Why this is a separate file
 
@@ -330,6 +331,10 @@ that a directory listing cannot speak to - golden vectors, deny-unknown-field
 decode assertions, fingerprint stability across builds, tombstone expiry - and
 none of them is asserted here.
 
+**It changes no runtime behaviour.** No code is edited by this document. Section
+7 records a conflict over a committed numeric default and explicitly instructs
+W5 to leave that default, and the test that pins it, alone.
+
 **It edits no manifest and no member specification.** The mappings are
 instructions to implementers and to reviewers, standing until a dedicated
 amendment carries the prose change with its own validation and panel evidence.
@@ -352,3 +357,239 @@ untouched; nothing here needed a reference into them.
   (`ProcessAttachClient`, `nixos-modules/options-volumes.nix`) plus the partly
   covered `resources-zone-control.nix` remain outstanding obligations against
   their `Planned` items.
+- Section 7's numeric conflict is raised on the same amendment, which acquires
+  `ADR-046-security-and-threat-model` as a fifth affected member spec. Until it
+  lands, `CONFIGURATION_CLEANUP_STALL_THRESHOLD_MS_DEFAULT` stays at 600,000 ms
+  and `configuration_stall_clock_is_bounded_and_clock_injected` keeps its pinned
+  ten-minute boundary; a W5 candidate that moves either is out of scope and
+  should be rejected at review.
+
+## 7. Scope widened: a normative numeric conflict in the same member specs
+
+This document was opened for destination paths. A second drift of a different
+kind was found in the same wave, in two of the same member specifications, and
+is absorbed here on the precedent
+[`amendment-w2-destination-drift.md`](./amendment-w2-destination-drift.md)
+section 6 set: batch when the batching is genuinely free, and say where the
+boundary now sits.
+
+The batching is close to free here. This amendment already re-opens
+`ADR-046-resources-host-guest-process-user` and `ADR-046-resources-zone-control`;
+absorbing this conflict adds exactly one further member spec,
+`ADR-046-security-and-threat-model`. Filing it separately would pay three
+re-openings where batching pays one.
+
+**The boundary.** Section 7 covers a **normative value** conflict - the same
+named default given two different numbers by different members of the set - as
+distinct from sections 3 and 4, which cover destination paths. A third class,
+such as a frozen-contract amendment, still files separately.
+
+### 7.1 The conflict, with all five sources quoted
+
+The configuration-cleanup stall threshold has two different published defaults.
+
+| Source | Kind | Value |
+| --- | --- | --- |
+| `packages/d2b-core-controller/src/cleanup.rs:257` | committed, passing code | `600_000` ms (10 min) |
+| `ADR-046-resources-host-guest-process-user.md:2604`, carried into `ADR046-exec-015`'s manifest `detailedDesign` | normative prose plus generated manifest | 10 min |
+| `ADR-046-resources-zone-control.md:247`, `:3024`, `:4046` | normative prose, three separate places | 5 minutes |
+| `ADR-046-resources-zone-control.md:4939`, carried into `ADR046-zone-control-016`'s manifest `detailedDesign` | normative prose plus generated manifest | 5 min |
+| `ADR-046-security-and-threat-model.md:1502` | normative prose | 5 minutes |
+
+Verbatim, so no side is paraphrased into agreement:
+
+```
+$ sed -n '257p' packages/d2b-core-controller/src/cleanup.rs
+pub const CONFIGURATION_CLEANUP_STALL_THRESHOLD_MS_DEFAULT: u64 = 600_000;
+```
+
+> `ADR046-exec-015` detailed design: "Cleanup-stuck threshold: **10 min
+> default**; configurable; stuck resources remain Degraded without blocking
+> later activations."
+
+> `ADR-046-resources-zone-control` section 2.5: "`GenerationCleanupFailed=True`
+> is additionally set when a candidate is stuck beyond `cleanupStuckThreshold`
+> (**default 5 minutes**) with no controller progress."
+
+> `ADR046-zone-control-016` detailed design: "stuck-cleanup
+> `GenerationCleanupFailed=True` at `cleanupStuckThreshold` (**default 5 min**)
+> with exponential backoff retry".
+
+> `ADR-046-security-and-threat-model`: "if a cleanup candidate exceeds
+> `cleanupStuckThreshold` (**default 5 minutes**), a `GenerationCleanupFailed`
+> condition is set - the runtime never force-removes finalizers to clear it".
+
+Both `ADR046-exec-015` and `ADR046-zone-control-016` are **W5** and **Planned**,
+and both name the `d2b-core-controller` configuration and cleanup surfaces as
+destinations. The wave that must reconcile this is the wave now in flight.
+
+### 7.2 FR-046 does not decide this either, for the same reason as section 2
+
+The two published values are not prose against a manifest. `ADR046-exec-015`
+carries "10 min default" and `ADR046-zone-control-016` carries "default 5 min",
+both inside `detailedDesign` in `ADR-046-work-items.json`:
+
+```
+$ jq -r '.items[] | select(.workItemId=="ADR046-exec-015") | .detailedDesign' \
+    docs/specs/ADR-046-work-items.json | grep -o 'Cleanup-stuck threshold: [^;]*;'
+Cleanup-stuck threshold: 10 min default;
+
+$ jq -r '.items[] | select(.workItemId=="ADR046-zone-control-016") | .detailedDesign' \
+    docs/specs/ADR-046-work-items.json | grep -o 'cleanupStuckThreshold` (default [^)]*)'
+cleanupStuckThreshold` (default 5 min)
+```
+
+Consulting "the manifest" returns both answers, exactly as in section 2. The
+generator is not at fault; it faithfully carried two member specs that were
+authored against different numbers.
+
+### 7.3 Ruling: code is canon for this wave; 600,000 ms stands
+
+**`CONFIGURATION_CLEANUP_STALL_THRESHOLD_MS_DEFAULT` is not changed, and this
+record changes no runtime behaviour.** The committed constant is 600,000 ms, it
+is covered by a passing test, and existing passing code is canon.
+
+That the code happens to match one of the two normative values is a coincidence
+worth naming rather than leaning on. Code wins here because it is committed and
+passing, not because `ADR-046-resources-host-guest-process-user` outranks
+`ADR-046-resources-zone-control`. Nothing in the specification set gives one
+member standing over another on a shared default, which is precisely why this
+needs an amendment rather than a reading.
+
+### 7.4 What the constant actually reaches today, measured
+
+This is the fact that makes the conflict cheap now and expensive later, and it
+is not visible from the specifications:
+
+```
+$ git grep -n 'CONFIGURATION_CLEANUP_STALL_THRESHOLD_MS_DEFAULT' -- packages
+packages/d2b-core-controller/src/cleanup.rs:257:pub const CONFIGURATION_CLEANUP_STALL_THRESHOLD_MS_DEFAULT: u64 = 600_000;
+packages/d2b-core-controller/src/cleanup.rs:1095:                CONFIGURATION_CLEANUP_STALL_THRESHOLD_MS_DEFAULT,
+packages/d2b-core-controller/src/cleanup.rs:1103:                CONFIGURATION_CLEANUP_STALL_THRESHOLD_MS_DEFAULT,
+
+$ git grep -l 'cleanupStuckThreshold' -- . | grep -v '^docs/specs/'
+(no match)
+```
+
+Both call sites are inside one `#[cfg(test)]` unit test,
+`configuration_stall_clock_is_bounded_and_clock_injected`, which pins the
+boundary at exactly ten minutes: `00:09:59.999` is not stalled and
+`00:10:00.000` is. There is **no production caller**. `cleanup_stall_due` takes
+the threshold as a parameter and is clock-injected and side-effect free, and the
+controller's own stall path is caller-driven through `mark_cleanup_stalled`
+rather than derived from this constant. `cleanupStuckThreshold` exists nowhere
+outside `docs/specs/`: no Nix option, no schema field, no CLI surface, no
+reference page.
+
+Three consequences follow, and they should be read together:
+
+1. **No operator is affected today**, in either direction. Neither value is
+   reachable from a running system, so neither the record nor a future
+   correction is currently a behaviour change.
+2. **The constant is a default, not a policy.** Because the threshold is a
+   parameter, the eventual disagreement is about what default the Zone
+   configuration surface publishes, not about what the predicate computes. An
+   amendment that only edits a number has answered the smaller question.
+3. **The window closes when the surface is wired.** Once `cleanupStuckThreshold`
+   becomes an operator-visible option with a published default, changing it is a
+   consumer-facing default change under the deprecation policy rather than a
+   specification correction. It is cheap in W5 and expensive after.
+
+### 7.5 The specific failure this record exists to prevent
+
+`ADR046-zone-control-016`'s destination is:
+
+> `packages/d2b-core-controller/src/configuration/{mod,bundle_apply,generation_transition}.rs`
+> (Phase 3 activation, diff, delete dispatch);
+> **`packages/d2b-core-controller/src/cleanup.rs`** (pending tracking, status,
+> stuck detection, rollback verb handler)
+
+It names the exact file holding the 600,000 ms constant, and its detailed design
+says the default is 5 min. A W5 implementer working that item literally will
+edit `600_000` to `300_000`, and
+`configuration_stall_clock_is_bounded_and_clock_injected` will fail, because it
+asserts the transition at `00:10:00.000` rather than tolerating a range.
+
+**The failing test is the guard, and it must not be retuned to accommodate the
+edit.** The tempting repair - move the test's timestamps from ten minutes to
+five and carry on - halves the stall window that reaches every future operator,
+inside a slice whose stated scope was cleanup wiring, with a green gate and no
+record. That is the concrete, specific way this drift ships silently, and it is
+the reason this section names the file rather than describing the conflict in
+the abstract.
+
+The test is not incidental coverage. It is the only artifact in the tree that
+asserts what the default is.
+
+### 7.6 Standing instruction for W5
+
+Fail closed on the constant:
+
+- **Do not change `CONFIGURATION_CLEANUP_STALL_THRESHOLD_MS_DEFAULT` in this
+  wave.** A W5 candidate snapshot that alters it is out of scope and should be
+  rejected at review, in the same way section 2's corollary rejects a candidate
+  that creates a crate named in a stale destination cell.
+- **Do not retune
+  `configuration_stall_clock_is_bounded_and_clock_injected`.** If a slice finds
+  itself editing that test's timestamps, the slice has changed a default, and
+  that is an amendment, not an implementation choice, per FR-047.
+- **A slice implementing `ADR046-zone-control-016` writes the rest of its
+  destination** - pending tracking, status, stuck detection, the rollback verb
+  handler - and passes the threshold as the parameter it already is, leaving the
+  default where it stands.
+- **Neither wiring the option nor publishing a default is authorised here**,
+  because doing so would pick a winner between two member specs by
+  implementation.
+
+### 7.7 Recommendation to the amendment, explicitly not applied
+
+The amendment must choose one value; it cannot ship both. A recommendation is
+recorded so the decision starts from a position rather than from a fresh
+argument, and it is a recommendation only.
+
+**Recommend 5 minutes, and change the code to match as a deliberate, separate
+change.** Two reasons, neither of them a document headcount:
+
+- **The failure is asymmetric in the safe direction.** Crossing the threshold
+  sets `GenerationCleanupFailed=True` and holds the Zone `Degraded`. The
+  specifications are explicit that this reports rather than refuses: stuck
+  resources "remain Degraded without blocking later activations", and "the
+  runtime never force-removes finalizers to clear it". A false positive
+  therefore costs an operator one investigation of a cleanup that was merely
+  slow; a false negative hides a genuinely stuck finalizer for twice as long.
+  Where a threshold governs surfacing rather than denying, the shorter window is
+  the fail-closed choice.
+- **The security and threat model is one of the three sources saying 5
+  minutes**, and it states the value while explaining why the runtime never
+  force-clears finalizers. That is the document whose numbers should not be
+  quietly relaxed by a controller default drifting the other way.
+
+Against that: 10 min is what is committed and tested, and the amendment may
+reasonably prefer the value the code already carries. Either choice is
+defensible; what is not defensible is leaving both published.
+
+**If the amendment selects 5 minutes, one change must land all of:** the
+constant at `cleanup.rs:257`, the pinned boundary in
+`configuration_stall_clock_is_bounded_and_clock_injected`, and a changelog entry
+naming the halved default - because the moment the option is wired, this is a
+consumer-visible default change, and FR-042's rule that nothing changes silently
+applies to a default just as it does to a capability.
+
+**If the amendment selects 10 minutes**, three normative statements in
+`ADR-046-resources-zone-control` plus one in
+`ADR-046-security-and-threat-model` change, and `ADR046-zone-control-016`'s
+`detailedDesign` changes with them. No code changes.
+
+### 7.8 One more destination drift found in passing
+
+`ADR046-exec-015`'s destination names
+`packages/d2b-core-controller/src/configuration.rs`. That path is a **directory
+module** at `packages/d2b-core-controller/src/configuration/`, per the ruling
+already recorded in
+[`implementation-debt.md`](./implementation-debt.md) section 14.3.
+`ADR046-zone-control-016`'s destination already spells it as
+`configuration/{mod,bundle_apply,generation_transition}.rs`, so the two items
+disagree on the module shape as well as on the number. Same resolution as
+section 3: existing code is canon, the destination is the directory module, and
+the cell is drift. Recorded here rather than in section 4 because it was found
+through this conflict and shares its amendment.
