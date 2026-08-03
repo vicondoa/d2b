@@ -1,14 +1,16 @@
 //! Security-key Device Provider contracts.
 //!
-//! This crate owns the unprivileged relay/frontend Process declarations and
-//! the bounded lease/session protocol. Core alone resolves the physical
-//! hidraw effect and places the returned fd in the relay LaunchTicket.
+//! This crate owns the catalog-derived semantic Service/Binding descriptor,
+//! the unprivileged relay/frontend Process declarations, and the bounded
+//! lease/session protocol. Core alone resolves the physical hidraw effect and
+//! places the returned fd in the relay LaunchTicket.
 
 #![deny(missing_docs)]
 
 mod authority;
 mod cid;
 mod controller;
+mod descriptor;
 mod lease;
 mod process;
 mod session_ring;
@@ -20,6 +22,12 @@ pub use authority::{
 pub use cid::{CidTranslationError, GuestCid, RelayCid, SecurityKeyCidTranslator};
 pub use controller::{
     SecurityKeyController, SecurityKeyControllerError, SecurityKeyReconcileOutcome,
+};
+pub use descriptor::{
+    SECURITY_KEY_BINDING_RESOURCE_TYPE, SECURITY_KEY_PROJECTION_PROTOCOL_VERSION,
+    SECURITY_KEY_SERVICE_RESOURCE_TYPE, SecurityKeySemanticDescriptor,
+    security_key_factory_fingerprint, security_key_projection_factory,
+    security_key_projection_schema_fingerprint, security_key_semantic_descriptor,
 };
 pub use lease::{LeaseState, SecurityKeyLease, SecurityKeyLeaseError, SecurityKeySessionId};
 pub use process::{

@@ -11,12 +11,15 @@ resolves physical authority and supplies opaque effect tickets.
 | --- | --- |
 | Provider name | `device-security-key` |
 | Provider reference | `Provider/device-security-key` |
-| ResourceType | `Device` |
+| ResourceTypes | `Device`, `security-key.d2bus.org.SecurityKeyService`, `security-key.d2bus.org.SecurityKeyBinding` |
 | Package | `packages/d2b-provider-device-security-key/` |
 
 The Provider is bound to the Device's Zone through Core's same-Zone resource
-references. Semantic Service/Binding projection and backing-set selection are
-not implemented by this crate.
+references. Its semantic Service/Binding descriptor is derived from the
+shared catalog. The security-key Service has `NoBacking`: its signed
+`allowedBackingRefTypes` is an empty deny-all set, because physical Device and
+relay Endpoint references are implementation children rather than semantic
+base backing references.
 
 ## Config schema
 
@@ -37,8 +40,12 @@ checks.
 
 ## Exported resource types
 
-The crate exports the standard `Device` implementation contracts and the
-Provider-owned `HostRelay` and `GuestFrontend` Process declaration helpers.
+The crate exports the standard `Device` implementation contracts, the
+catalog-derived semantic Service/Binding descriptor and projection factory,
+and the Provider-owned `HostRelay` and `GuestFrontend` Process declaration
+helpers. The descriptor binds protocol `1.1`, the catalog projection schema
+fingerprint, the catalog factory fingerprint, and the exact Service and
+Binding base fingerprints.
 `FrontendProcessDeclaration` accepts only a same-Zone `Guest` ResourceRef and
 derives the deterministic `device-<uid-short>-sk-frontend` name. The relay
 uses `device-<uid-short>-sk-relay`.
@@ -66,9 +73,10 @@ and is constructed only from a `Guest` execution reference. ResourceRefs are
 same-Zone by contract, so the Provider never resolves a cross-Zone Guest or
 accepts a caller-supplied transport address.
 
-The crate depends on `d2b-contracts` for neutral resource identity and on
-`serde` for test-side bounded settings. It has no daemon, broker, host
-lifecycle, semantic projection factory, or sibling Provider dependency.
+The crate depends on `d2b-contracts` for neutral resource identity and the
+catalog-derived semantic descriptor, and on `serde` for descriptor and
+test-side bounded settings. It has no daemon, broker, host lifecycle, or
+sibling Provider dependency.
 
 ## RBAC requirements
 

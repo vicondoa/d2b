@@ -7,6 +7,8 @@ opening a host device, resolving a transport address, or owning credentials.
 
 The scenario covers:
 
+- catalog-derived semantic Service/Binding descriptor and projection branch;
+- empty semantic backing allowlist denial;
 - physical backing admission before the relay open;
 - one active lease and terminal release;
 - same-Zone Guest frontend placement;

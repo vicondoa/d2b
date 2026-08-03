@@ -7,10 +7,11 @@
 use d2b_contracts::v3::{ResourceRef, ResourceUid};
 use d2b_provider_device_security_key::{
     FrontendProcessDeclaration, GuestCid, LeaseState, PhysicalAuthorityLease,
-    PhysicalUsbBackingClaim, PhysicalUsbBackingToken, RelayLaunchTicket, SecurityKeyCidTranslator,
-    SecurityKeyController, SecurityKeyEffectError, SecurityKeyEffectPort, SecurityKeyOpenIntent,
-    SecurityKeyProcessRole, SecurityKeySessionId, SessionRecord, SessionResult, SessionRing,
-    security_key_process_name,
+    PhysicalUsbBackingClaim, PhysicalUsbBackingToken, RelayLaunchTicket,
+    SECURITY_KEY_PROJECTION_PROTOCOL_VERSION, SECURITY_KEY_SERVICE_RESOURCE_TYPE,
+    SecurityKeyCidTranslator, SecurityKeyController, SecurityKeyEffectError, SecurityKeyEffectPort,
+    SecurityKeyOpenIntent, SecurityKeyProcessRole, SecurityKeySessionId, SessionRecord,
+    SessionResult, SessionRing, security_key_process_name, security_key_projection_factory,
 };
 
 #[derive(Default)]
@@ -104,4 +105,25 @@ fn cid_and_session_records_stay_opaque_and_bounded() {
     );
     assert_eq!(ring.entries().count(), 1);
     assert_eq!(ring.entries().next().unwrap().id(), session);
+}
+
+#[test]
+fn semantic_descriptor_is_catalog_derived_and_has_no_physical_backing_set() {
+    let factory = security_key_projection_factory().expect("catalog factory is constructible");
+    assert_eq!(
+        factory.service_type().as_str(),
+        SECURITY_KEY_SERVICE_RESOURCE_TYPE
+    );
+    assert_eq!(
+        factory.projection_protocol_version().as_str(),
+        SECURITY_KEY_PROJECTION_PROTOCOL_VERSION
+    );
+    assert!(factory.allowed_backing_ref_types().is_empty());
+    assert_eq!(factory.allowed_binding_target_ref_types().len(), 2);
+    assert!(
+        factory
+            .factory_fingerprint()
+            .as_str()
+            .starts_with("sha256:")
+    );
 }
