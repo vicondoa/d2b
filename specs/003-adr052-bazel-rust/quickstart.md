@@ -70,6 +70,23 @@ refute() {
     test "$rc" -eq 1 || fail "grep exited $rc while checking: $desc"
   fi
 }
+
+# One presence claim, the mirror of refute and subject to the same exit-code
+# rule: exit 0 passes, exit 1 is the missing thing, and exit 2 or higher is an
+# inspection failure that is never a pass. Never end a presence claim in a
+# pipeline; a pipeline reports the last command's status, so `| head` would
+# turn a deleted guard into a pass.
+require_match() {
+  local desc="$1" rc
+  shift
+  if grep "$@"; then
+    :
+  else
+    rc=$?
+    test "$rc" -eq 1 || fail "grep exited $rc while checking: $desc"
+    fail "$desc"
+  fi
+}
 HELPERS
 . .scratch/adr052-assert.sh
 ```
@@ -319,14 +336,17 @@ W0 also fixes the dependency direction among the three internal crates this
 migration adds. `packages/d2b-bazel-support/` is neutral and holds what more
 than one consumer needs: the `FileSystem` boundary, the `RunfilesView`
 boundary, and, from W2, the one startup-option construction. The runner, the
-locator, and `xtask` all read it, and nothing reads the runner. Check the
-authority first and the two manifests second:
+locator, and `xtask` read it as a non-dev dependency,
+`packages/d2b-contract-tests` reads it as a dev-dependency for the wave-note
+lint, and nothing reads the runner. Check the
+authority first and the three manifests second:
 
 ```bash
 set -e
 . .scratch/adr052-assert.sh
 require_input tests/unit/meta/w0-dep-direction.sh \
   packages/d2b-bazel-support/Cargo.toml \
+  packages/d2b-contract-tests/Cargo.toml \
   packages/xtask/Cargo.toml
 tests/unit/meta/w0-dep-direction.sh
 refute 'the support crate declares a first-party dependency' \
@@ -335,6 +355,9 @@ refute 'the support crate declares a first-party dependency' \
 refute 'xtask declares the runner or the locator' \
   -nE '^[[:space:]]*d2b-(bazel-runner|test-locator)[[:space:]]*=' \
   packages/xtask/Cargo.toml
+require_match 'the contract-tests crate lost its dev edge to the boundary' \
+  -nE '^[[:space:]]*d2b-bazel-support[[:space:]]*=' \
+  packages/d2b-contract-tests/Cargo.toml
 ```
 
 The gate is the authority and the two `refute` calls are only a fast local
@@ -344,6 +367,62 @@ entry that a manifest grep would miss, and it already fails closed when the
 resolver is unavailable. Running it directly here is deliberate; `make
 test-policy` above ran it too, and a contributor who is about to add a helper
 to the runner wants the answer before the wave, not after.
+
+W0 also fixes how a first-party binary is located and run, and that is one
+operation rather than two. The boundary opens the provider exactly once, every
+check runs against that open descriptor, and the same descriptor is executed
+with `execveat` and `AT_EMPTY_PATH`. Nothing on this path stats a name and then
+spawns the name. The reason is measurable rather than theoretical: replace a
+provider path after the descriptor is open and the retained descriptor still
+runs the original verified bytes, while a freshly path-opened descriptor runs
+the replacement, so a check-then-spawn locator verifies one file and runs
+another and exits zero. `packages/target/` holds real, out-of-date binaries for
+the whole shadow stage, and a concurrent Cargo build replaces entries in it by
+rename, so the window is not hypothetical here.
+
+```bash
+set -e
+. .scratch/adr052-assert.sh
+require_input packages/d2b-bazel-support/src/fsops.rs \
+  packages/d2b-bazel-support/tests/provider_handle.rs \
+  packages/d2b-bazel-runner/tests/exec_handle.rs \
+  packages/d2b-bazel-runner/src/bin/d2b-exec-probe.rs
+require_match 'the boundary does not execute a verified descriptor' \
+  -nE 'execveat' packages/d2b-bazel-support/src/fsops.rs
+require_match 'the exec is not AT_EMPTY_PATH on the open descriptor' \
+  -nE 'AT_EMPTY_PATH' packages/d2b-bazel-support/src/fsops.rs
+require_match 'the provider open no longer refuses magic links' \
+  -nE 'RESOLVE_NO_MAGICLINKS' packages/d2b-bazel-support/src/fsops.rs
+require_match 'the post-open path-rebind negative is gone' \
+  -nE 'rebound|rebind' packages/d2b-bazel-support/tests/provider_handle.rs
+refute 'a first-party provider is spawned by path' \
+  -rnE 'Command::new|fexecve|/proc/self/fd' \
+  packages/d2b-bazel-support/src/fsops.rs \
+  packages/d2b-test-locator/src \
+  packages/d2b-bazel-runner/src/topology.rs
+```
+
+Then run the two provider suites and read what they claim, because a green
+target says nothing about which cases ran:
+
+```bash
+set -e
+cargo test -p d2b-bazel-support --test provider_handle -- --nocapture
+cargo test -p d2b-bazel-runner --test exec_handle -- --nocapture
+```
+
+`provider_handle.rs` is hermetic: every provider negative is a state of the
+`FileSystem` fake, which models inodes rather than paths, so "the path now
+names a different file" is representable. `exec_handle.rs` is the one
+deliberately non-hermetic test in the design, and it is deliberate because
+every claim above about `execveat`, close-on-exec inheritance, and executing
+one descriptor repeatedly is a claim about the kernel, which a fake cannot
+prove. It opens a handle on the first-party probe binary, requires the exec to
+succeed, requires the provider inode to be absent from the child's descriptor
+table, requires a second exec of the same handle to succeed so process-per-case
+survives, and requires a deliberately non-close-on-exec control descriptor to
+be present, so the absence assertion is proven able to fail. It arranges
+nothing on the host and writes no executable anywhere.
 
 Each of the two commands refuses an exported repin control, and each refusal
 ends on the command that was refused rather than on a shared template. Check
@@ -470,62 +549,68 @@ executed. Do not hand-roll a shell scan over the notes and do not plant a note
 file, tracked or untracked, to see the scan fail: the lint refuses an empty
 corpus and refuses any entry in that directory that is not a readable
 `w<digits>.md` note, so a stray file is caught either way, and the lint's own
-planted cases live in-test. `tests/test-rust.sh` excludes `d2b-contract-tests`
+planted cases live in the injected fake and in test literals.
+`tests/test-rust.sh` excludes `d2b-contract-tests`
 from every workspace leaf and `tests/test-policy.sh` runs seven contract-test
 binaries that do not include `policy_docs`, so this is the only lane that runs
-it. Confirm the lint is present, reaches the notes, and carries the case that
-polices its own refusals, and confirm the wave's
-own note exists:
+it. Confirm the lint is present, reaches the notes through the shared
+filesystem boundary rather than through the standard library, carries both
+violation shapes, and carries the two cases that police its own refusals:
 
 ```bash
 set -e
 . .scratch/adr052-assert.sh
 require_input packages/d2b-contract-tests/tests/policy_docs.rs \
   specs/003-adr052-bazel-rust/wave-notes/
-if grep -n 'specs/003-adr052-bazel-rust/wave-notes' \
-    packages/d2b-contract-tests/tests/policy_docs.rs; then
-  :
-else
-  rc=$?
-  test "$rc" -eq 1 || fail "grep exited $rc while inspecting policy_docs.rs"
-  fail 'the wave-note lint no longer names the notes directory'
-fi
-if grep -n 'wave_note_violations' \
-    packages/d2b-contract-tests/tests/policy_docs.rs; then
-  :
-else
-  rc=$?
-  test "$rc" -eq 1 || fail "grep exited $rc while inspecting policy_docs.rs"
-  fail 'the wave-note scanner was removed from the policy carrier'
-fi
-if grep -n 'wave_note_refusals_carry_no_path_token' \
-    packages/d2b-contract-tests/tests/policy_docs.rs; then
-  :
-else
-  rc=$?
-  test "$rc" -eq 1 || fail "grep exited $rc while inspecting policy_docs.rs"
-  fail 'the scanner no longer refuses its own rendered refusals'
-fi
+require_match 'the wave-note lint no longer names the notes directory' \
+  -n 'specs/003-adr052-bazel-rust/wave-notes' \
+  packages/d2b-contract-tests/tests/policy_docs.rs
+require_match 'the wave-note scanner was removed from the policy carrier' \
+  -n 'wave_note_violations' \
+  packages/d2b-contract-tests/tests/policy_docs.rs
+require_match 'the corpus is no longer read through the shared boundary' \
+  -n 'wave_note_entries' \
+  packages/d2b-contract-tests/tests/policy_docs.rs
+require_match 'the two violation shapes collapsed back into one' \
+  -nE 'PathLeak' packages/d2b-contract-tests/tests/policy_docs.rs
+require_match 'the read-failure shape was removed' \
+  -nE 'ReadError' packages/d2b-contract-tests/tests/policy_docs.rs
+require_match 'the scanner no longer refuses its own rendered refusals' \
+  -n 'wave_note_refusals_carry_no_path_token' \
+  packages/d2b-contract-tests/tests/policy_docs.rs
+require_match 'the per-shape remedy case is gone' \
+  -n 'wave_note_refusals_carry_only_their_own_remedy' \
+  packages/d2b-contract-tests/tests/policy_docs.rs
+refute 'the lint reads the corpus with the standard library' \
+  -nE 'std::fs::read_dir|std::fs::read_to_string|read_dir\(' \
+  packages/d2b-contract-tests/tests/policy_docs.rs
 ```
 
-Read one refusal before trusting the lint. It must name the note and the
-one-based line, give the one remediation, and stop: it must not print the
-offending token. A refusal is republished into the target's output, into panel
-comments, and into PR bodies, so a message that echoes the leaked path has
-spread it further than the note did. The third check above is the mechanical
-half of that rule, because it names the case that runs every rendered refusal
-back through the scanner's own path-token and worktree-substring tests.
+Read one refusal of each shape before trusting the lint. A `PathLeak` must name
+the note and the one-based line and give the rewrite-or-drop remedy; a
+`ReadError` must name the note and its errno and give the file-level remedy;
+neither may print the offending token, and neither may carry the other's
+remedy. A refusal is republished into the target's output, into panel comments,
+and into PR bodies, so a message that echoes the leaked path has spread it
+further than the note did, and a message that carries the wrong remedy sends a
+contributor to fix a line that is not the problem. The last two `require_match`
+calls above are the mechanical half of both rules: one names the case that runs
+every rendered refusal back through the scanner's own path-token and
+worktree-substring tests, the other names the case that asserts each shape
+renders its own remedy and none of the other three.
 
-The other half is not greppable and is deliberately left to the compiler and
-the tests: the entry API returns `std::io::Result` at both levels, one for
-reading the directory and one per entry holding exactly what `read_to_string`
-returned, so an unreadable directory is a refusal rather than an empty corpus
-and a committed subdirectory, a dangling symlink, a permission denial, and
-non-UTF-8 content are four distinguishable errnos. A grep over a Rust signature
-that may wrap across lines is exactly the fragile check the rest of this guide
-argues against, so do not add one.
+Two halves are not greppable and are deliberately left to the compiler and the
+tests. The first is the shape of the enumeration API: it returns a corpus error
+for an unreadable or empty directory and a `std::io::Result` per entry holding
+exactly what the boundary read returned, so a committed subdirectory, a
+symlink, a permission denial, and non-UTF-8 content stay four distinguishable
+errnos. The second is that `PathLeak` has no error member and `ReadError` has
+no line member, which is what makes a cross-rendered remedy unrepresentable
+rather than merely tested. A grep over a Rust signature that may wrap across
+lines is exactly the fragile check the rest of this guide argues against, so do
+not add one.
 
-All three checks are presence claims and none ends in `| head`: a
+Every check above is a presence or absence claim and none ends in `| head`: a
 pipeline
 reports the last command's status, so a `head` on the end would turn a deleted
 lint into a pass. In the W1 and W2 sections the same target covers `w1.md` and
@@ -591,9 +676,10 @@ The W1 aggregate checks:
 - two independent schema generations against the generated census;
 - the nightly API census, including the toolchain version the action actually
   used compared against the committed pin;
-- binary existence, executability, freshness, and identity through the
-  dual-mode locator, every one of them read through the injected `FileSystem`
-  boundary rather than by touching a live path.
+- binary existence, kind, executability, freshness, and identity through the
+  dual-mode locator, every one of them read from the one descriptor the
+  provider was opened on rather than by touching a live path, and the same
+  descriptor executed with `execveat` and `AT_EMPTY_PATH`.
 
 Run the carriers:
 
@@ -621,7 +707,10 @@ Two negative controls matter more than the positive ones:
   injected `RunfilesView` fake reports no entry, so the Bazel arm must fail
   naming the expected runfiles path rather than passing against the stale
   provider. Nothing is written to `packages/target/` to produce it: that
-  directory is the hazard, not the fixture;
+  directory is the hazard, not the fixture. Beside it, the planted
+  path-rebind case rebinds the provider path to a different inode after the
+  open and requires the verified descriptor's bytes to be the ones that ran,
+  which is the failure a check-then-spawn-by-path locator has and cannot see;
 - the planted redaction fixture, which must first prove every forbidden value
   is present in the unredacted fixture and then prove every one absent from the
   result document.
@@ -740,6 +829,8 @@ jq -e '
     .exclusive and .consecutive_passes == 20) and
   .locator_migration.unresolved_files == 0 and
   .locator_migration.injected_stale_provider_refused_in_bazel_mode and
+  .locator_migration.rebound_provider_path_did_not_change_executed_bytes and
+  .locator_migration.exec_handle_conformance_passed and
   (.locator_migration.live_paths_written == 0)
 ' specs/003-adr052-bazel-rust/evidence/qualification.json
 ```
@@ -767,11 +858,14 @@ child-reap ordering.
 
 Every one of those states is supplied through an injected boundary, not
 arranged on the host. Cleanup, the result writer, the topology provider checks,
-and the locator share the `FileSystem`
+the locator, and the wave-note policy lint share the `FileSystem`
 trait in `packages/d2b-bazel-support/src/fsops.rs`, the locator and the runner
 share `RunfilesView` in `packages/d2b-bazel-support/src/runfiles.rs`, and the
 deadline path takes
-`Clock` and `UptimeSource` from `packages/d2b-bazel-runner/src/clock.rs`. When
+`Clock` and `UptimeSource` from `packages/d2b-bazel-runner/src/clock.rs`. The
+one exception is `packages/d2b-bazel-runner/tests/exec_handle.rs`, which drives
+the host-backed implementation on purpose because its subject is kernel
+behavior a fake cannot establish. When
 reviewing W2, check that no test fills a disk, requires a privileged mount,
 sleeps to reach an expiry, or reads the host clock; a test that does is not
 reproducible and will be disabled later:

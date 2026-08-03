@@ -700,9 +700,11 @@ code-specific recovery.
 **Cleanup and result publication share one injectable filesystem boundary.**
 `packages/d2b-bazel-support/src/fsops.rs` owns `openat2`, the forced
 component-walk fallback, `open`, `write`, `fsync`, `renameat`, `unlinkat`,
-directory enumeration, and the metadata reads the provider checks need, and the
-JUnit writer, cleanup, the topology provider checks, and the locator all call
-through it. Two reasons, and neither is stylistic. The first is that these
+directory enumeration by name, the anchored provider open, the metadata and
+byte reads the provider checks need, and the `execveat` of a verified handle,
+and the JUnit writer, cleanup, the topology provider checks, the locator, and
+the wave-note policy lint all call through it. Two reasons, and neither is
+stylistic. The first is that these
 subsystems enforce the *same* properties on the same syscalls: anchored
 close-on-exec
 descriptors, refusal of symlink and magic-link parents, refusal of an anchored
@@ -710,14 +712,41 @@ descriptors, refusal of symlink and magic-link parents, refusal of an anchored
 twice means the planted mutations only prove one copy is correct, and a future
 change fixes one caller. The second is that every negative in this design is an
 errno at an exact call ordering, and the only reliable way to produce
-`ENOSPC`, a short write, an `EINTR` retry, an `EEXIST` collision, or a
-replacement race on a shared reference host is to inject it. A test that needs
-a genuinely full disk is a test that will be marked ignored within a quarter.
+`ENOSPC`, a short write, an `EINTR` retry, an `EEXIST` collision, a
+replacement race, or a provider path rebound between the open and the exec on a
+shared reference host is to inject it. A test that needs a genuinely full disk
+is a test that will be marked ignored within a quarter.
+
+**The resolve policy is a parameter, because the call sites genuinely differ.**
+Paths the runner creates and files the repository commits are opened with
+`RESOLVE_BENEATH|RESOLVE_NO_SYMLINKS|RESOLVE_NO_MAGICLINKS`; providers are
+opened with `RESOLVE_NO_MAGICLINKS` alone. That is not a relaxation for
+convenience. Measured against a runfiles-shaped symlink whose target lies
+outside the anchor, the strict policy fails `EXDEV` or `ELOOP`, so applying it
+to providers would refuse every real Bazel provider; and measured against a
+plain committed directory, the strict policy refuses a symlink with `ELOOP`, a
+`..` escape with `EXDEV`, and a mode `0000` entry with `EACCES` while a
+subdirectory opens and reads `EISDIR`, which is exactly the four-way
+distinguishability the wave-note lint needs. The fake supplies both routes and
+each caller's choice is asserted, so a site cannot silently inherit the other's
+policy.
+
+**The wave-note lint reads its corpus through the same boundary.** It does not
+call `std::fs::read_dir`, does not call `std::fs::read_to_string`, and never
+concatenates a `DirEntry` onto a parent path. A guard whose own reads follow a
+symlink out of the directory it is policing, or which resolves that directory a
+second time between enumeration and read, is the check-then-use shape the rest
+of this design refuses, performed by the code that exists to catch leaks.
+`packages/d2b-contract-tests` reaches the boundary as a dev-dependency only,
+which keeps the support crate's non-dev consumer list at the runner, the
+locator, and `xtask`.
 
 **The boundary lives in a neutral crate, not in the runner.**
 `packages/d2b-bazel-support/` is an internal build-tooling crate that declares
-no first-party dependency at all. Three crates read it: the runner, the
-locator, and, from W2, `xtask`. Putting the trait in the runner instead would
+no first-party dependency at all. Three crates read it as a non-dev dependency,
+the runner, the locator, and, from W2, `xtask`, and one more,
+`packages/d2b-contract-tests`, reads it as a dev-dependency for the wave-note
+lint. Putting the trait in the runner instead would
 have forced `xtask -> d2b-bazel-runner` as soon as the repin and module-refresh
 commands needed the one shared startup-option construction, and that edge runs
 the wrong way: `xtask` is the generator, and the runner's own Bazel targets are
@@ -731,12 +760,14 @@ to plant a missing entry without editing a real runfiles tree.
 The boundary is a W0-frozen module path, not a W2 refactor, and W0 lands it
 whole, so the W1 runner and locator scopes and the W2 cleanup, result
 publication, and deadline scopes all open against one stable trait surface with
-one fake, and the slices stay file-disjoint.
+one fake, and the slices stay file-disjoint. The W0 `generator` scope, which
+owns the wave-note lint, opens against the same surface from the same prep tip.
 
 **Time does not move with it.** `Clock` and `UptimeSource` stay in
 `packages/d2b-bazel-runner/src/clock.rs`, because only the deadline and process
 paths read them: the locator has no clock dependency, since provider staleness
-is a comparison of two timestamps the filesystem boundary already returns, and
+is a comparison of two timestamps the filesystem boundary already returns from
+the provider's own descriptor, and
 `xtask` has none either. A boundary shared by one crate belongs in that crate;
 moving it into the neutral crate would buy nothing and would widen a surface
 three crates then have to agree on.
@@ -1093,27 +1124,78 @@ runfiles entry is a hard failure naming the expected runfiles path, and it
 never falls back to the Cargo arm. Chaining is the failure that matters:
 `packages/target/` holds real, executable, out-of-date binaries for the whole
 shadow stage, so a fallback would find one and the test would go green against
-the wrong binary. Every located binary is still checked to exist, to be
-executable, to be no older than its newest declared input, and to report the
-expected identity before use, where identity is the digest of the provider's
-bytes compared against the value the coverage map records. Identity is a read,
-not an execution, which is what lets every provider check run against supplied
-state.
+the wrong binary.
+
+**One open, one descriptor, one execution.** The locator does not return a
+path. It returns a verified descriptor, and the caller executes that
+descriptor. Both arms produce an anchor plus one declared relative component,
+the boundary performs exactly one
+`openat2(anchor, relative, O_RDONLY|O_CLOEXEC, RESOLVE_NO_MAGICLINKS)`, and
+every check runs against that open descriptor: `fstat` for regular-file kind,
+executable mode and modification time; `pread` from offset zero for the byte
+digest the coverage map records; and a second `fstat` that must agree with the
+first on `st_dev`, `st_ino`, `st_size`, `st_mtim`, and `st_ctim`. Execution is
+`execveat(fd, "", argv, envp, AT_EMPTY_PATH)` on the same descriptor. There is
+no `std::process::Command` by path, no `fexecve`, and no `/proc/self/fd/<n>`
+fallback; an `ENOSYS` from `execveat` is a refusal, not a reason to reopen.
+
+The earlier draft stated the provider and then spawned by path, which is two
+resolutions of one name with a window between them. That is not theoretical
+here: `packages/target/` is the directory the shadow stage keeps full of stale
+binaries, and a concurrent Cargo build replaces entries in it by rename while
+the gate runs. Measured on this host rather than reasoned about:
+
+- after the provider path is replaced by a different executable, executing a
+  retained descriptor still runs the original verified bytes, while a freshly
+  path-opened descriptor runs the replacement, which is the check-then-spawn
+  defect observed end to end;
+- `execveat` with `AT_EMPTY_PATH` succeeds on an `O_RDONLY|O_CLOEXEC`
+  descriptor, and that descriptor is absent from the child's descriptor table,
+  while a control descriptor opened without `O_CLOEXEC` is present;
+- the same descriptor execs repeatedly, so process-per-case is preserved with
+  one open and one digest per provider per carrier invocation;
+- `pread` on an `O_PATH` descriptor returns `EBADF` although `execveat` on it
+  succeeds, so `O_PATH` cannot carry identity and is rejected;
+- `RESOLVE_BENEATH` fails `EXDEV` and `RESOLVE_NO_SYMLINKS` fails `ELOOP` on a
+  runfiles-shaped symlink whose target lies outside the anchor, so the provider
+  open uses `RESOLVE_NO_MAGICLINKS` alone and relies on handle identity rather
+  than on link refusal, while `RESOLVE_NO_MAGICLINKS` still refuses a
+  `/proc/<pid>/fd/<n>` path with `ELOOP`;
+- writing into an already-open regular file changes the bytes a later `pread`
+  returns and moves `st_mtim` with `st_ino` unchanged, which is what the second
+  `fstat` catches;
+- `execveat` returns `EACCES` for a mode `0644` regular file and for a
+  directory descriptor, so the kernel stays the authoritative permission
+  decision and the mode check is the better-named early refusal;
+- a `#!` script executed from a close-on-exec descriptor fails `ENOENT`,
+  because the interpreter reopens the descriptor by its `/proc` path. First
+  party providers are compiled binaries, so this is recorded as a measured
+  limitation with a named refusal rather than worked around.
 
 **Every provider negative is injected, and nothing is planted on disk.** The
-absent, non-executable, stale, and wrong-identity providers are states of the
+absent, non-regular, non-executable, stale, and wrong-identity providers, and
+the path rebound to a different inode after the open, are states of the
 `FileSystem` fake in `packages/d2b-bazel-support/`, and the removed runfiles
-entry is a state of the `RunfilesView` fake beside it. The guard that proves
-the guard is therefore a fake filesystem that reports an out-of-date,
-wrong-digest executable at the Cargo path while the fake runfiles view reports
-no entry, run in Bazel mode, requiring failure. An earlier draft wrote a real
-stale executable into the Cargo path. That is the one arrangement this design
-must not use: `packages/target/` is exactly the directory whose real,
-out-of-date binaries are the hazard being guarded against, so a test that
-plants one there has manufactured the hazard on the shared reference host, and
-an interrupted run leaves it behind for whatever runs next. The same reasoning
-that keeps `ENOSPC` and `EINTR` off the real disk keeps a stale provider off
-the real path.
+entry is a state of the `RunfilesView` fake beside it. The fake models inodes
+rather than paths, so a rebind after the open is representable and its effect
+is observable. The guard that proves the guard is therefore a fake filesystem
+that reports an out-of-date, wrong-digest executable at the Cargo path while
+the fake runfiles view reports no entry, run in Bazel mode, requiring failure.
+An earlier draft wrote a real stale executable into the Cargo path. That is the
+one arrangement this design must not use: `packages/target/` is exactly the
+directory whose real, out-of-date binaries are the hazard being guarded
+against, so a test that plants one there has manufactured the hazard on the
+shared reference host, and an interrupted run leaves it behind for whatever runs
+next. The same reasoning that keeps `ENOSPC` and `EINTR` off the real disk keeps
+a stale provider off the real path.
+
+One test is deliberately not injected, because the list above is a list of
+kernel behaviors and a fake cannot prove a kernel.
+`packages/d2b-bazel-runner/tests/exec_handle.rs` drives the host-backed
+implementation against `packages/d2b-bazel-runner/src/bin/d2b-exec-probe.rs`, a
+first-party probe binary that prints its own descriptor table with the device
+and inode each descriptor names. It arranges nothing on the host; it executes a
+declared input the graph already builds.
 
 **All fixture reads become declared data**, resolved through the same locator.
 A check that needs the repository *inventory* rather than a file consumes a
@@ -1139,6 +1221,22 @@ first-party code change the migration requires.
   first-party build-script surface this workspace measurably does not have.
 - Put the Cargo arm in a shared library crate: rejected; it captures the wrong
   environment and compiles cleanly while resolving nothing.
+- Return a path from the locator and let the caller run
+  `Command::new(path)`: rejected; the check and the spawn then resolve the same
+  name twice and the second resolution wins, which was measured to run a
+  replacement binary while the verification had passed on the original.
+- Keep the path but re-stat immediately before the spawn: rejected; it narrows
+  the window without closing it, and a narrowed race is the class of guard that
+  passes review and fails in production.
+- Verify with one boundary and execute through a second injectable boundary:
+  rejected; a composition can satisfy both fakes while still executing by path,
+  so verification and execution stay operations on one trait.
+- Hold the provider open with `O_PATH` and exec that: rejected; measured,
+  `pread` on an `O_PATH` descriptor returns `EBADF`, so identity would need a
+  second open and the gap returns.
+- Use `fexecve` from libc: rejected; glibc falls back to
+  `/proc/self/fd/<n>` when `execveat` is unavailable, which is a reopen by
+  path, and the fallback is silent.
 
 ## Decision 16: Measure third-party build scripts and pin the action environment
 

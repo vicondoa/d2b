@@ -24,8 +24,9 @@ Global invariants, formerly modelled as always-true or always-false fields:
 - Every carrier reports an independent verdict.
 - No fixture-backed identifier is part of this model; the two fixture surfaces
   stay on the Cargo and Nix path.
-- The two locator arms never chain, and no located path is an absolute
-  execution-root path.
+- The two locator arms never chain, no located path is an absolute
+  execution-root path, and a located provider is opened once and executed
+  through that same descriptor.
 - Concurrency is always derived from `D2B_RUST_BUDGET`, which remains the only
   resource control.
 - Under Bazel, every binary is resolved through declared runfiles, and only the
@@ -82,7 +83,7 @@ Common to both variants:
 | `declared_outputs` | Exact outputs, if any; generated outputs must be nonempty. |
 | `handwritten_fragments` | Every non-generated BUILD fragment used. |
 | `runfiles_data` | Every binary and fixture this carrier's actions locate, as declared data. |
-| `binary_identities` | The expected identity of every executable in `runfiles_data`, one per executable, no more and no fewer. |
+| `binary_identities` | The expected byte digest of every executable in `runfiles_data`, one per executable, no more and no fewer. Each is compared against the descriptor the provider was opened on, never against a second open. |
 
 Variants:
 
@@ -177,30 +178,109 @@ Four boundaries exist so that failure states are supplied rather than
 provoked. All are W0-frozen module paths, so later scopes open against a stable
 surface. The first two live in `packages/d2b-bazel-support/`, the neutral
 internal crate that declares no first-party dependency, because the runner, the
-locator, and `xtask` all read them; the crate exists so that no consumer has to
-depend on another consumer to reach a boundary.
+locator, `xtask`, and, as a dev-dependency only, `packages/d2b-contract-tests`
+all read them; the crate exists so that no consumer has to depend on another
+consumer to reach a boundary.
 
 | Boundary | Path | Serves | Supplied states |
 | --- | --- | --- | --- |
-| `FileSystem` | `packages/d2b-bazel-support/src/fsops.rs` | Per-case result publication, scratch cleanup, and every provider existence, mode, freshness, and identity check | `openat2` and forced component-walk routes, symlink and magic-link parents, anchored `..` escape, `EEXIST` collision, short write, `EINTR`, `EAGAIN`, `ENOSPC`, replacement race, tracked entry, foreign decoy, and an absent, non-executable, out-of-date, or wrong-digest provider |
+| `FileSystem` | `packages/d2b-bazel-support/src/fsops.rs` | Per-case result publication, scratch cleanup, wave-note corpus enumeration, and every provider open, check, and execution | `openat2` and forced component-walk routes, both resolve policies, symlink and magic-link parents, anchored `..` escape, `EEXIST` collision, short write, `EINTR`, `EAGAIN`, `ENOSPC`, replacement race, tracked entry, foreign decoy, an unreadable and an empty note corpus, note entries failing `EACCES`, `EISDIR`, `ELOOP`, and non-UTF-8, an absent, non-regular, non-executable, out-of-date, or wrong-digest provider, a path rebound to a different inode after the provider open, handle metadata that changes across the digest read, and `spawn_verified` returning `ENOSYS`, `EACCES`, `ENOEXEC`, `ENOENT`, or `ETXTBSY` |
 | `RunfilesView` | `packages/d2b-bazel-support/src/runfiles.rs` | The locator's Bazel arm and the runner's child-binary resolution | A declared entry present, a declared entry missing, and a runfiles environment that indicates no Bazel test at all |
 | `Clock` and `UptimeSource` | `packages/d2b-bazel-runner/src/clock.rs` | Deadline parsing, remaining-budget arithmetic, child duration, expiry escalation | Every accepted and rejected uptime field, truncate on capture and round up on read, exactly-zero remaining budget, overflow, expiry reached without sleeping |
 | `YankedIndex` | `packages/xtask/src/bazel_yanked.rs` | The reviewed networked yanked-snapshot refresh | All-clear index, a yanked version, a key the locks declare and the index omits, a key no lock declares, a missing index revision, a transport failure, a malformed payload |
 
+Execution of a verified provider is an operation on `FileSystem` rather than a
+fifth boundary. Splitting verification and execution across two injectable
+traits would let a composition satisfy both fakes while still executing by
+path, which is the exact defect the single-open rule removes; keeping them on
+one trait makes "holds a verified handle" and "can reach an execution route"
+the same reachability question.
+
 `Clock` and `UptimeSource` stay in the runner rather than moving to the support
 crate, because only the runner's deadline and process paths read them. The
 locator needs no clock: provider freshness compares two timestamps the
-`FileSystem` boundary already returns, and provider identity is a byte digest
-read through the same boundary rather than an execution.
+`FileSystem` boundary already returns from the provider's own descriptor, and
+provider identity is a byte digest read from that same descriptor rather than
+an execution.
 
-No test of cleanup, result publication, deadline handling, or provider
-resolution may depend on live host filesystem state, a full disk, a privileged
-mount, or the host clock. A property that can only be exercised by arranging
-host state is a property that will be marked ignored, which is the same as not
-testing it. That applies with particular force to the stale-provider case: a
-test that writes an out-of-date executable into `packages/target/` has planted
-the exact hazard the locator exists to refuse, on the host every other suite
-shares, and leaves it there if the run is interrupted.
+## Verified Executable Handle
+
+The record that makes provider verification and provider execution one
+operation rather than two resolutions of one name.
+
+| Field | Rule |
+| --- | --- |
+| `anchor` | Close-on-exec directory descriptor: the runfiles root under Bazel, the parent of the `CARGO_BIN_EXE_<name>` value under Cargo. |
+| `relative` | One declared relative path, never absolute, never empty, never carrying `..`. |
+| `descriptor` | Exactly one `O_RDONLY` plus `O_CLOEXEC` open of `relative` beneath `anchor`, resolved with `RESOLVE_NO_MAGICLINKS`. `O_PATH` is invalid here because identity requires reading the bytes. |
+| `stat_before` and `stat_after` | `fstat` on the descriptor immediately before and immediately after the digest read; `st_dev`, `st_ino`, `st_size`, `st_mtim`, and `st_ctim` must agree. |
+| `kind_and_mode` | Regular file with an executable mode, from `stat_before`. The kernel's `EACCES` at exec time maps to the same refusal. |
+| `freshness` | `stat_before.st_mtim` at least the newest declared input's, each input read from its own descriptor through the same boundary. |
+| `identity` | Digest of `stat_before.st_size` bytes read from the descriptor at offset zero, equal to the value the coverage map records for this provider. |
+| `execution` | `execveat(descriptor, "", argv, envp, AT_EMPTY_PATH)` in a forked child. No `Command`, no `fexecve`, no `/proc/self/fd/<n>`, and no fallback on `ENOSYS`. |
+| `ownership` | The parent holds the descriptor for the whole carrier invocation and closes it through the boundary after the last child using it is reaped, still before any output descriptor opens. |
+| `child_inheritance` | The three stdio descriptors only. Close-on-exec removes the provider descriptor from the child; a non-close-on-exec control descriptor proves the assertion can fail. |
+
+There is no `path` field and no accessor that yields one, because a path is
+what a second resolution would need. The type has no public constructor: it is
+produced only by consuming a provider handle that passed every check above, so
+"unverified executable" is not a representable state and a compile-level test
+asserts it. One handle serves every case of a process-per-case topology, which
+is what makes "every case ran the bytes that were digested" true rather than
+merely likely.
+
+## Wave-Note Lint Refusal
+
+The type-5 policy lint's outputs, modelled because an earlier draft rendered
+one remedy for two unrelated conditions.
+
+Corpus level, returned instead of an entry list:
+
+| Variant | Members | Remedy |
+| --- | --- | --- |
+| `Unreadable` | The real `std::io::Error` from the anchored open or the entry enumeration | Restore the notes directory and its permissions. |
+| `Empty` | none | Add the wave's note before validating. |
+
+Entry level:
+
+| Variant | Members | Remedy |
+| --- | --- | --- |
+| `PathLeak` | Note name and the one-based line | Rewrite the path as a `<worktree>`-rooted shape or drop it. |
+| `ReadError` | Note name and the preserved `std::io::Error` | Fix the entry's permissions or remove the invalid entry. |
+
+`PathLeak` has no error member to be absent and `ReadError` has no line member
+to be zero, so neither impossible state is expressible. No variant carries the
+offending token and none renders an absolute path. The note name is itself run
+through the lint's own path-token and worktree-substring rules before it is
+rendered; a name that fails them is replaced by the entry's one-based
+enumeration position. Remedies cannot be borrowed across variants, and a test
+asserts per variant that the other three remedies are absent.
+
+`ReadError` preserves the boundary's error unchanged for `EACCES`, `EISDIR`,
+`ELOOP`, and non-UTF-8 content. The one constructed error is
+`ErrorKind::InvalidInput` for an entry whose name does not match `w<digits>.md`
+and which is therefore never opened; a test pins the exact `raw_os_error` of
+the other four so this stays the only construction.
+
+No test of cleanup, result publication, deadline handling, wave-note corpus
+enumeration, or provider resolution may depend on live host filesystem state, a
+full disk, a privileged mount, or the host clock. A property that can only be
+exercised by arranging host state is a property that will be marked ignored,
+which is the same as not testing it. That applies with particular force to the
+stale-provider case: a test that writes an out-of-date executable into
+`packages/target/` has planted the exact hazard the locator exists to refuse,
+on the host every other suite shares, and leaves it there if the run is
+interrupted.
+
+One test is exempt, deliberately and by name. Every claim the Verified
+Executable Handle makes about `execveat`, close-on-exec inheritance, and
+repeated execution of one descriptor is a claim about the kernel, and a fake
+cannot prove a kernel. `packages/d2b-bazel-runner/tests/exec_handle.rs` drives
+the host-backed implementation against the first-party probe binary
+`packages/d2b-bazel-runner/src/bin/d2b-exec-probe.rs`, which reports its own
+descriptor table. It arranges nothing on the host and writes no executable
+anywhere; it executes a declared input the graph already builds, which is what
+the runner does in normal operation.
 
 The same rule holds for the network. `IndexClient` is the single networked
 implementation of `YankedIndex` and the only site permitted to open a socket
@@ -228,7 +308,7 @@ Variants:
 
 | Variant | Members |
 | --- | --- |
-| `Migrated` | `bazel_runfiles_path` and the `data` label providing it; `cargo_call_site_crate`, the test crate the Cargo arm expands in; for a `binary-location` site, the identity the located executable must report before use. |
+| `Migrated` | `bazel_runfiles_path` and the `data` label providing it; `cargo_call_site_crate`, the test crate the Cargo arm expands in; for a `binary-location` site, the Verified Executable Handle record, whose digest the located descriptor must match before that same descriptor is executed. |
 | `NoMigrationNeeded` | `reason`: the recorded reason this file needs no change. |
 
 The affected set is enumerated, not sampled: 25 files locating binaries through
@@ -237,13 +317,15 @@ compile-time Cargo environment expansion and 20 test files resolving
 is in neither variant is a gap the coverage map makes visible. Both arms stay
 green on the Cargo path for the whole shadow stage.
 
-Provider negatives are supplied, never arranged. The absent, non-executable,
-out-of-date, and wrong-identity providers, and the missing runfiles entry that
-turns a Bazel-mode lookup into a refusal, are all states of the `FileSystem`
-and `RunfilesView` fakes in `packages/d2b-bazel-support/`. No record in this
-set is proven by writing an executable to `packages/target/` or to any other
-live path, and no provider check executes the located file: identity is the
-digest of its bytes read through the same boundary.
+Provider negatives are supplied, never arranged. The absent, non-regular,
+non-executable, out-of-date, and wrong-identity providers, the path rebound to
+a different inode after the open, and the missing runfiles entry that turns a
+Bazel-mode lookup into a refusal, are all states of the `FileSystem` and
+`RunfilesView` fakes in `packages/d2b-bazel-support/`. No record in this set is
+proven by writing an executable to `packages/target/` or to any other live
+path, no provider check executes a provider to learn its identity, and no
+migrated call site spawns by path: identity is the digest of the descriptor's
+bytes, and execution is `execveat` on that same descriptor.
 
 ## Hermeticity Inventory
 
@@ -425,7 +507,7 @@ Promotion Evidence Set before executor authority changes.
 | `qualification_records` | Ten consecutive matching push-to-`v3` records, each with one shared `head_sha`, both run IDs, and a passing fixture-contract verdict. |
 | `seeded_failures` | Exact eighteen-record set. |
 | `topology_proofs` | Main, guest, and three broker suites; exact generator-derived censuses and ignored counts, plus per-case result publication. |
-| `locator_migration_proof` | Every enumerated file migrated or recorded as needing none, plus the passing injected stale-provider negative in which the `FileSystem` fake reports an out-of-date, wrong-digest executable at the Cargo path while the `RunfilesView` fake reports the entry missing. |
+| `locator_migration_proof` | Every enumerated file migrated or recorded as needing none, plus the passing injected stale-provider negative in which the `FileSystem` fake reports an out-of-date, wrong-digest executable at the Cargo path while the `RunfilesView` fake reports the entry missing, plus the passing injected post-open path-rebind negative, plus the host-backed `execveat` conformance result. |
 | `broker_repetitions` | Twenty consecutive passes per broker suite with exclusivity. |
 | `performance_sets` | Three valid profiles. Local sets bind the candidate; cold-CI samples carry their own `head_sha` values and reference the W3 feasibility measurement. |
 | `supply_chain_comparison` | Three locks, no differing enforcing outcome, with the yanked carrier landed and `cargo xtask bazel-yanked-check` passing offline against all three. |
@@ -522,7 +604,10 @@ Carrier Target (TestCarrier) 1 -- 1 Test Topology
 Carrier Target (TestCarrier) 1 -- 1 Per-Case Result Document
 Carrier Target many -- 1 CI Slice
 Injected Boundaries 2 -- many Carrier Targets and cleanup paths
+Carrier Target 1 -- 1..n Verified Executable Handles
+Test Locator Migration (Migrated, binary-location) 1 -- 1 Verified Executable Handle
 Coverage Map 1 -- many Test Locator Migration records
+Wave-Note Lint Refusal many -- 1 wave-note corpus
 Hermeticity Inventory 4 -- 1 Coverage Map
 Qualification Record many -- many protected-v3 push events
 Seeded Failure Record 18 -- 1 Qualification Evidence Record

@@ -215,9 +215,12 @@ packages/xtask/tests/policy_ci.rs
 packages/xtask/tests/fixtures/ci/
 packages/d2b-contract-tests/tests/policy_docs.rs # W0 wave-note lint; W2 source-shape tests
 specs/003-adr052-bazel-rust/wave-notes/ # w0.md, w1.md, w2.md; one writer each
-packages/d2b-bazel-support/src/fsops.rs    # Injectable FileSystem: writer, cleanup, providers
+packages/d2b-bazel-support/src/fsops.rs    # Injectable FileSystem: writer, cleanup, providers, notes
 packages/d2b-bazel-support/src/runfiles.rs # Injectable RunfilesView for locator and runner
 packages/d2b-bazel-support/src/startup.rs  # The one absolute startup-option construction
+packages/d2b-bazel-support/tests/provider_handle.rs # Fake-driven provider open, verify, exec lifecycle
+packages/d2b-bazel-runner/src/bin/d2b-exec-probe.rs # Probe binary for the execveat conformance test
+packages/d2b-bazel-runner/tests/exec_handle.rs      # Host-backed execveat and CLOEXEC conformance
 packages/d2b-bazel-runner/src/clock.rs # Injectable Clock and UptimeSource for deadlines
 tests/unit/meta/w0-dep-direction.sh    # Extended with the build-tooling direction rule
 packages/                             # Support, runner, locator crate paths fixed by W0 prep
@@ -246,6 +249,7 @@ closed set rather than a convention:
 packages/d2b-bazel-support/   <- packages/d2b-bazel-runner/
                               <- packages/d2b-test-locator/
                               <- packages/xtask/            (from W2)
+                              <- packages/d2b-contract-tests/ (dev only)
 ```
 
 `d2b-bazel-support` is neutral: it declares no first-party dependency at all.
@@ -257,6 +261,14 @@ command surface, and the runner is a consumer of the graph `xtask` generates,
 so a runner dependency makes the generator's own build depend on the thing it
 generates targets for. Moving the shared construction into a neutral crate is
 what removes the temptation rather than documenting it away.
+
+`packages/d2b-contract-tests` is the fourth consumer and the only one that
+reaches the support crate as a **dev-dependency**, because the wave-note policy
+lint reads its corpus through the same anchored filesystem boundary rather than
+through `std::fs::read_dir` and `std::fs::read_to_string`. That edge is
+dev-only by construction: the crate ships no non-test target that needs it, and
+the direction gate refuses it in any non-dev kind, which keeps the support
+crate's non-dev consumer list at exactly the runner, the locator, and `xtask`.
 
 The rule is enforced by the repository's existing crate-granular gate,
 `tests/unit/meta/w0-dep-direction.sh`, which `tests/test-policy.sh` and
@@ -275,7 +287,9 @@ no `d2b`-prefixed crate; `d2b-bazel-runner` and `d2b-test-locator` declare
 runner nor the locator in any dependency kind, so a dev-dependency cannot
 smuggle the edge back through `packages/xtask/tests/`; the only members that
 may declare `d2b-bazel-support` as a non-dev dependency are the runner, the
-locator, and `xtask`, and no member at all may declare `d2b-bazel-runner`
+locator, and `xtask`, so `d2b-contract-tests` declaring it in any non-dev kind
+is refused while its dev edge is permitted; and no member at all may declare
+`d2b-bazel-runner`
 outside the runner's own targets; and the gate carries a required-crate list
 naming all three and refuses when any of them is absent from the resolver's
 member set, rather than falling through its existing "not a workspace member
@@ -314,6 +328,10 @@ gate already filters dev edges out of the direction check.
 | An earlier plan draft put the shared absolute startup-option construction in `packages/d2b-bazel-runner/` and had `packages/xtask/Cargo.toml` take a path dependency on the runner to reach it. | Dependency direction: `xtask` generates the graph the runner's targets live in, so `xtask -> d2b-bazel-runner` inverts the relationship. | The construction moves to the neutral `packages/d2b-bazel-support/`, which declares no first-party dependency; `xtask`, the runner, and the locator all consume it, and `tests/unit/meta/w0-dep-direction.sh` refuses the runner edge in every dependency kind. |
 | An earlier plan draft proved the locator's stale-provider negative by writing an out-of-date executable to the live Cargo path and removing a runfiles entry. | A guard whose setup writes an executable into `packages/target/` leaves that executable behind when the run is interrupted, in the one directory the shadow stage keeps full of real binaries. | The absent, non-executable, stale, and wrong-identity providers are all supplied states on the injected `FileSystem`, and the missing runfiles entry is a state on the injected `RunfilesView`. No provider test writes to or executes a live path. |
 | An earlier plan draft had the wave-note refusal name the whole offending token and modeled absent note content as `Option<String>`. | A refusal is republished into CI output, panel comments, and PR bodies, so echoing the token spreads the leak; and a failed read is a diagnosable error, not a blank. | The refusal carries the note, the one-based line, and one remediation only, proven by running the rendered refusals back through the scanner's own rules; the entry API returns `std::io::Result` at both levels and keeps the real error. |
+| An earlier plan draft had the locator check a provider by path and then let the caller run it by path. | Measured on the reference host: after the provider path is replaced, executing a retained descriptor runs the original verified bytes while a freshly path-opened descriptor runs the replacement. A check and a spawn that both resolve the same name are two resolutions, and the second one wins. | The locator opens the provider once with `openat2(O_RDONLY\|O_CLOEXEC, RESOLVE_NO_MAGICLINKS)`, runs mode, kind, freshness, digest, and a bracketing `fstat` comparison against that descriptor, returns a `VerifiedExecutable` with no path accessor, and executes it with `execveat(fd, "", argv, envp, AT_EMPTY_PATH)`. No `Command` by path, no `fexecve`, no `/proc/self/fd` fallback. |
+| An earlier plan draft applied one link-refusal policy to every anchored open. | Measured: on a runfiles-shaped symlink whose target lies outside the anchor, `RESOLVE_BENEATH` fails `EXDEV` and `RESOLVE_NO_SYMLINKS` fails `ELOOP`, so the strict policy would refuse every real Bazel provider. | The policy is a per-call-site parameter. Runner-created directories and committed files use `RESOLVE_BENEATH\|RESOLVE_NO_SYMLINKS\|RESOLVE_NO_MAGICLINKS`; providers use `RESOLVE_NO_MAGICLINKS` and rely on handle identity instead of link refusal. Each site's choice is asserted. |
+| An earlier plan draft had the wave-note lint enumerate its corpus with `std::fs::read_dir` and read each entry with `std::fs::read_to_string` on a concatenated `DirEntry` path. | A guard that follows a symlink out of the directory it polices, and that resolves that directory a second time between enumeration and read, is the check-then-use shape the rest of this design refuses. | The lint reads the corpus through the shared `FileSystem` boundary: one anchored close-on-exec directory descriptor with `RESOLVE_BENEATH\|RESOLVE_NO_SYMLINKS\|RESOLVE_NO_MAGICLINKS`, enumeration by name only, and descriptor-relative reads. `packages/d2b-contract-tests` gains a dev-dependency on `packages/d2b-bazel-support` and the direction gate refuses any non-dev form of it. |
+| An earlier plan draft carried one wave-note violation type holding a line and an error together. | A permission denial has no line, and a leaked path token has no errno, so one type renders a line remedy for a file-level failure. | The type splits into `PathLeak`, carrying note name and one-based line and rendering the `<worktree>` rewrite-or-drop remedy, and `ReadError`, carrying note name and the preserved `std::io::Error` and rendering the fix-permissions-or-remove-the-entry remedy. An unreadable or empty corpus becomes a corpus-level error the enumerator returns instead of a list. Cross-rendering any remedy is a test failure. |
 
 There is no eighteen-surface drift: committed code publishes eighteen with
 `D2B_SKIP_FIXTURE_BUILD=1` and two fixture surfaces when enabled.
@@ -390,12 +408,36 @@ allowlisted as a permitted real absolute path, `/dev/null` included, because a
 note records a shape and not a transcript. The substring rule is what catches a
 leak that arrives with no leading slash at all.
 
-**The refusal itself is redacted.** A violation names the note file, the
-one-based line number, and one remediation sentence, and stops there. It never
-prints the offending token, not truncated, not summarized, not "first segment
-only". This is not a new rule: FR-029 already forbids a refusal message from
-carrying an absolute path, and a refusal that echoes the leaked token is
-exactly such a message. It is also the worse case, because a lint refusal
+**The lint reads the corpus through the shared boundary.** It does not call
+`std::fs::read_dir`, does not call `std::fs::read_to_string`, and never builds
+a path by concatenating a `DirEntry` onto a parent. It opens the notes
+directory once as an anchored close-on-exec descriptor beneath the repository
+root with `RESOLVE_BENEATH`, `RESOLVE_NO_SYMLINKS`, and
+`RESOLVE_NO_MAGICLINKS`, enumerates entries as names rather than as
+reconstructed paths, and opens each entry descriptor-relative from that same
+anchor under the same policy, all through the `FileSystem` trait in
+`packages/d2b-bazel-support/src/fsops.rs` that cleanup, the result writer, the
+locator, and the topology provider checks already use. A guard that follows a
+symlink out of the directory it polices, and that resolves that directory a
+second time between enumeration and read, is the check-then-use shape the rest
+of this plan refuses, performed by the code whose whole job is catching leaks.
+The kernel's `d_type` is advisory and is not trusted for classification,
+because it is `DT_UNKNOWN` on some filesystems; the authoritative answer is the
+errno the descriptor-relative open or read returns. That policy was measured
+against exactly this shape: a regular note opens, a symlink and a dangling
+symlink are refused `ELOOP`, a committed subdirectory opens and reads `EISDIR`,
+a `..` escape is refused `EXDEV`, and a mode `0000` entry is refused `EACCES`,
+which is the four-way distinguishability the rule below requires.
+`packages/d2b-contract-tests` reaches the boundary as a dev-dependency only,
+and the direction gate refuses any non-dev form of that edge.
+
+**The refusal itself is redacted, and there are two shapes of it.** A violation
+names the note, the one thing that identifies the condition, and one
+remediation sentence, and stops there. It never prints the offending token, not
+truncated, not summarized, not "first segment only". This is not a new rule:
+FR-029 already forbids a refusal message from carrying an absolute path, and a
+refusal that echoes the leaked token is exactly such a message. It is also the
+worse case, because a lint refusal
 travels further than the file it refused: it lands in the
 `test-fixture-contracts` output, is pasted into panel comments, and is quoted
 into PR bodies and wave notes. A refusal that echoes the leaked absolute path
@@ -403,23 +445,50 @@ has published it into three more artifacts than the note did, which is the
 exact escape this lint exists to close, and it would do so at the moment
 everyone is looking. `w1.md:37` plus "rewrite the path as a `<worktree>`-rooted
 shape or drop it" is enough to fix it, because the contributor already has the
-file open. The scanner therefore refuses its own rendered refusals: one test
-runs every violation's rendered text back through the same path-token and
-worktree-substring rules and requires no violation, so a future change that
-adds the token to the message fails the lint that added it.
+file open.
 
-**Absent content is an error, not a blank.** The enumerator returns
-`std::io::Result` at both levels: one for reading the directory, and one per
-entry holding exactly what `read_to_string` returned for it. It does not
-collapse a failed read into `None` or into an empty string. The difference
-matters twice. A directory the lint cannot read is a fail-closed refusal rather
+The two shapes are structural, not a tag on one record:
+
+- `PathLeak` carries the note name and the one-based line, and nothing else. It
+  renders the line and the single remedy, rewrite the path as a
+  `<worktree>`-rooted shape or drop it.
+- `ReadError` carries the note name and the preserved `std::io::Error`, and no
+  line. It renders the error and the single file-level remedy, fix the entry's
+  permissions or remove the invalid entry.
+
+An unreadable or empty corpus names no note at all, so it is not a violation:
+the enumerator returns a corpus error instead of a list, `Unreadable` carrying
+the real errno from the anchored open or the enumeration and `Empty` carrying
+nothing, each with its own remedy. One type holding an optional line beside an
+optional error would render a line remedy for a permission denial, which is a
+message that sends a contributor to fix a line that is not the problem.
+
+The scanner refuses its own rendered refusals: one test runs every rendered
+refusal back through the same path-token and worktree-substring rules and
+requires no violation, so a future change that adds the token to the message
+fails the lint that added it. A second test asserts, per shape, that the right
+remedy is present and that each of the other three is absent, so no refactor
+can borrow a remedy across shapes. The entry name is the only borrowed text any
+refusal prints and it is checked before it is printed: a name that fails the
+lint's own rules is replaced by the entry's one-based enumeration position,
+which is what makes the self-application test a property rather than a
+coincidence about the names that happen to be committed.
+
+**Absent content is an error, not a blank.** The per-entry content field holds
+exactly what the boundary read returned and is never collapsed into `None` or
+into an empty string, and the corpus error is returned rather than folded into
+an empty list. A directory the lint cannot read is a fail-closed refusal rather
 than a corpus that happens to look empty, and an entry that is a directory, a
-dangling symlink, a permission denial, or non-UTF-8 is refused with its real
-errno rather than with one indistinguishable "absent" state, so a reviewer can
-tell "someone committed a subdirectory here" from "the file is unreadable in
-CI". Preserving the real `std::io::Error` is also what stops a later refactor
-from quietly mapping every failure onto the same benign-looking value; an
-`Option` has exactly one way to be empty and a `Result` has to say why.
+symlink, a permission denial, or non-UTF-8 is refused with its real errno
+rather than with one indistinguishable "absent" state, so a reviewer can tell
+"someone committed a subdirectory here" from "the file is unreadable in CI".
+Preserving the real `std::io::Error` is also what stops a later refactor from
+quietly mapping every failure onto the same benign-looking value; an `Option`
+has exactly one way to be empty and a `Result` has to say why. The one
+constructed error is `ErrorKind::InvalidInput` for an entry whose name does not
+match `w<digits>.md` and which is therefore never opened, and a test pins the
+exact `raw_os_error` of `EACCES`, `EISDIR`, and `ELOOP` and the `InvalidData`
+kind of non-UTF-8 content so that stays the only construction.
 
 The lint runs in the one lane that reaches that crate,
 `D2B_ENABLE_FIXTURE_BUILD=1 make test-fixture-contracts`. That is measured, not
@@ -428,19 +497,20 @@ d2b-contract-tests)`, and `tests/test-policy.sh` runs seven fixture-independent
 contract-test binaries, none of which is `policy_docs`. No new gate, shell
 script, or `tests/test-policy.sh` entry is added, per FR-053.
 
-The lint carries its own proof that it can fail, and it carries it in-test
-rather than on disk. One case plants the generic absolute path
+The lint carries its own proof that it can fail, and it carries it in the
+injected fake rather than on disk. The enumeration negatives are supplied
+states of the `FileSystem` fake: an unreadable directory, an empty corpus, an
+entry refused `EACCES`, an entry refused `ELOOP`, a subdirectory whose read
+returns `EISDIR`, and non-UTF-8 content. The line-rule negatives are in-test
+note bodies: the generic absolute path
 `/home/planted-d2b-note-leak/adr052/.scratch/bazel`, which belongs to no
-machine in this run; one passes an empty corpus; one plants the worktree path
-with its leading slash removed; one plants a non-note entry name and an entry
-whose content is a real `std::io::Error`; and one requires `<worktree>` in
-exactly that spelling by refusing `<WORKTREE>`, `<worktree-root>`, and a
-`file:` URI while accepting a placeholder-rooted path that carries a nested
-`<base>` segment. All five are observed failing against an inert scanner before
-the real one lands. A sixth case, the self-application above, requires every
-rendered refusal from those same planted inputs to name the entry, the line
-where a line exists, and the remediation, and to carry no path token and no
-worktree substring of its own.
+machine in this run; the worktree path with its leading slash removed; a
+non-note entry name; an entry name that itself carries a leak; and the
+placeholder-spelling case that refuses `<WORKTREE>`, `<worktree-root>`, and a
+`file:` URI while accepting a placeholder-rooted path with a nested `<base>`
+segment. All of them are observed failing against inert seams before the
+real one lands, alongside the self-application case and the per-shape remedy
+case.
 
 No wave plants a note fixture in the real directory any more. An untracked leak
 file there is either named like a note, in which case the lint reads it, or
@@ -505,9 +575,10 @@ generator, the schema output prerequisite, the generated first-party graph, the
 coverage-map structure, the third-party build-script and action-environment
 inventory, the wave-note policy lint that carries the command-shape rule, and
 the frozen support, runner, and locator crate decisions, including the shared
-`FileSystem` and `RunfilesView` boundaries, the frozen `startup` seam, the
-runner-local `clock` boundary, and the dependency-direction guard that pins the
-edges between the three. Cargo remains authoritative.
+`FileSystem` and `RunfilesView` boundaries with the provider open, verify, and
+`execveat` operations and the two resolve policies, the frozen `startup` seam,
+the runner-local `clock` boundary, and the dependency-direction guard that pins
+the edges between the three. Cargo remains authoritative.
 
 **Ownership**:
 
@@ -529,27 +600,37 @@ edges between the three. Cargo remains authoritative.
   measurement writes together with the lint that polices it;
   and its generated outputs including `.bazelignore` and the derived censuses.
 - `schema`: schema generator, its tests, and the current schema leaf only.
-- `runner`: `packages/d2b-bazel-support/` and `packages/d2b-bazel-runner/`, plus
-  `tests/unit/meta/w0-dep-direction.sh`. It lands the support crate complete:
-  the `FileSystem` trait with the operation set the runner-environment and
-  recovery contracts fix, its host-backed implementation, its in-memory fake,
-  the `RunfilesView` trait with its runfiles-backed implementation and its
-  in-memory fake, and the empty W0-frozen `startup` module W2 fills. It lands
+- `runner`: `packages/d2b-bazel-runner/`, plus
+  `tests/unit/meta/w0-dep-direction.sh`. It opens no file under
+  `packages/d2b-bazel-support/`, which the prep commit lands whole. It lands
   the runner crate as a skeleton with the runner-local `clock` boundary W2
-  implements against. It also extends the dependency-direction gate, because
+  implements against, plus the probe binary
+  `packages/d2b-bazel-runner/src/bin/d2b-exec-probe.rs` and the one host-backed
+  conformance test `packages/d2b-bazel-runner/tests/exec_handle.rs` that
+  measures `execveat`, close-on-exec inheritance, and repeated execution of one
+  descriptor, because those are kernel claims and a fake cannot prove a kernel.
+  It also extends the dependency-direction gate, because
   FR-051 puts an enforcing guard in the same wave as the plumbing it
-  constrains. One scope authoring both crates does not make the support crate
-  less neutral: neutrality here is a dependency property that the gate decides
-  mechanically, not an authorship property, and no other W0 scope owns a file
-  under either directory.
+  constrains.
 - `locator`: the frozen locator crate skeleton and its own tests. It consumes
   the support boundaries and declares no other first-party dependency.
 - Integrator prep: `Makefile`, Cargo workspace membership,
   `packages/xtask/src/main.rs` seams, the `YankedIndex` trait declaration in
-  `packages/xtask/src/bazel_yanked.rs`, coverage-map format, the
-  `packages/d2b-bazel-support/` directory and its module files so runner and
-  locator open against one resolvable crate, support, runner, and locator crate
-  selection, generated output reconciliation, and shared changelog folding.
+  `packages/xtask/src/bazel_yanked.rs`, coverage-map format,
+  `packages/d2b-bazel-support/` whole, meaning `src/fsops.rs` and
+  `src/runfiles.rs` complete with their host-backed implementations and their
+  in-memory fakes, `src/startup.rs` empty and W0-frozen for W2, and
+  `tests/provider_handle.rs`, because four consumers read those boundaries and
+  a shared trait plus its fake arriving inside one parallel scope's worktree is
+  the coupling the prep rule exists to remove; the `d2b-bazel-support`
+  dev-dependency in `packages/d2b-contract-tests/Cargo.toml` so the
+  `generator` scope's lint opens against a resolvable edge; runner and locator
+  crate selection, generated output reconciliation, and shared changelog
+  folding.
+
+No W0 scope owns a file under `packages/d2b-bazel-support/`, for the same
+reason no W1 scope does. If a scope finds the boundary short an operation it
+lands in a second prep commit and nowhere else.
 
 **Validation**: `make check-tier0`, `make test-lint`, `make test-rust-schema`,
 `make test-rust-inventory`, `make test-drift`, `make test-policy`,
@@ -586,17 +667,35 @@ notes record both measured invocations as command shapes with `<worktree>`
 placeholders and the wave-note policy lint in
 `packages/d2b-contract-tests/tests/policy_docs.rs` passes over every entry of
 that directory under `D2B_ENABLE_FIXTURE_BUILD=1 make test-fixture-contracts`,
-with its planted absolute-path, empty-corpus, non-note-entry,
-worktree-substring, and placeholder-spelling cases all present and each
-observed failing against the inert scanner before the real one landed, its
-entry API returning `std::io::Result` at both levels rather than an `Option`,
-and its rendered refusals carrying the note, the line, and the remediation and
-no offending token, proven by running those refusals back through the
-scanner's own rules; `packages/d2b-bazel-support/` declares no first-party
+reading that corpus through one anchored close-on-exec descriptor with
+`RESOLVE_BENEATH`, `RESOLVE_NO_SYMLINKS`, and `RESOLVE_NO_MAGICLINKS` and never
+through `std::fs::read_dir`, `std::fs::read_to_string`, or a concatenated
+`DirEntry` path, with its planted absolute-path, empty-corpus, unreadable
+corpus, `EACCES`, `ELOOP`, `EISDIR`, non-UTF-8, non-note-entry,
+leaking-entry-name, worktree-substring, and placeholder-spelling cases all
+present and each observed failing against the inert seams before the real ones
+landed, its violation type split into `PathLeak` carrying note and line and
+`ReadError` carrying note and the preserved `std::io::Error`, its corpus error
+returned rather than folded into an empty list, and its rendered refusals
+carrying the correct remedy for their own shape, none of the other three
+remedies, and no offending token, proven by running those refusals back through
+the scanner's own rules; `packages/d2b-bazel-support/` declares no first-party
 dependency, the runner and the locator declare it and nothing else first-party,
-and `tests/unit/meta/w0-dep-direction.sh` refuses a planted
-`xtask -> d2b-bazel-runner` edge and a planted first-party edge out of the
-support crate, both observed failing and reverted;
+`packages/d2b-contract-tests` declares it as a dev-dependency only, and
+`tests/unit/meta/w0-dep-direction.sh` refuses a planted
+`xtask -> d2b-bazel-runner` edge, a planted first-party edge out of the
+support crate, and a planted non-dev `d2b-contract-tests -> d2b-bazel-support`
+edge, all observed failing and reverted;
+the support crate's provider path opens exactly once with `O_RDONLY`,
+`O_CLOEXEC`, and `RESOLVE_NO_MAGICLINKS`, runs kind, mode, freshness, digest,
+and the bracketing `fstat` comparison against that descriptor, returns a
+`VerifiedExecutable` with no path accessor and no public constructor, and
+executes it with `execveat(fd, "", argv, envp, AT_EMPTY_PATH)`, with the
+fake-driven lifecycle cases in
+`packages/d2b-bazel-support/tests/provider_handle.rs`, which the prep commit
+landed test-first, and the host-backed conformance run in
+`packages/d2b-bazel-runner/tests/exec_handle.rs` both
+passing and the post-open path-rebind mutation observed failing;
 Cargo remains authoritative and green; the ten-role panel and wave PR are
 sealed and merged.
 
@@ -636,7 +735,8 @@ guard, the manifest adapter, and the six ADR Make targets.
   the `bazel-yanked-check` CLI seam in `packages/xtask/src/main.rs`, and the
   locator's public macro surface, which the migration scope consumes.
 
-No W1 scope owns a file under `packages/d2b-bazel-support/`. W0 landed that
+No W1 scope owns a file under `packages/d2b-bazel-support/`. The W0 prep commit
+landed that
 crate complete, which is what lets the `runner` and `locator` scopes, whose
 provider and result-file tests both drive the same fake, open in parallel
 without one waiting on the other's worktree. If W1 discovers the boundary is
@@ -672,10 +772,13 @@ scan and no planted note added here,
 its drift refusal names refresh, review and commit, then the check, and it
 reports under the existing `rust-deny-*` identifiers without adding a
 nineteenth surface; every migrated test resolves its binary
-and fixtures through the locator, the four provider negatives and the
-stale-provider case are all supplied by the injected `FileSystem` and
-`RunfilesView` fakes with no executable written into `packages/target/` or any
-other live path, and both arms stay green under Cargo;
+and fixtures through the locator, every located provider is opened once and
+executed through that same descriptor with no `Command` by path and no
+`/proc/self/fd` reopen, every provider negative, the stale-provider case,
+and the post-open path-rebind case are all supplied by the injected
+`FileSystem` and `RunfilesView` fakes with no executable written into
+`packages/target/` or any other live path, and both arms stay green under
+Cargo;
 per-case JUnit results are published with the canonical redaction set absent
 and raw output only in `test.log`; failed and interrupted runs publish partial
 evidence; repository-owned runner execution uses no shell, with the
@@ -718,7 +821,8 @@ control. W5 removes that helper after W4 qualification is complete.
   `packages/d2b-bazel-runner/src/clock.rs`. Both are W0-frozen module paths
   whose operation set W0 fixed and W1 consumed, so this scope owns only the W2
   changes to `fsops.rs`, which should be none, and `clock.rs` with its
-  in-memory fake; the `fsops` and `runfiles` fakes already exist from W0.
+  in-memory fake; the `fsops` and `runfiles` fakes already exist from the W0
+  prep commit.
   Cleanup, result publication, and
   deadline handling consume those traits rather than calling the standard
   library directly and rather than adding operations to these two files. No
@@ -908,8 +1012,10 @@ possible, each with the guard that catches it.
 | Failure | Guard | Rollback |
 | --- | --- | --- |
 | A sandboxed scan or generator passes because it scanned nothing, or scanned a tree it could not see. | Generator-derived exact census, declared-input equality in both directions, parsed count equal to declared count, `test-drift`, planted violation. | Revert the carrier; Cargo remains the authority. |
-| The locator misses under Bazel and silently finds a stale binary in `packages/target/`, which holds real executables for the whole shadow stage. | Mode is selected once and the arms never chain; a Bazel-mode miss fails naming the expected runfiles path; identity is asserted before use; and the planted case supplies a stale, wrong-identity provider at the Cargo path through the injected `FileSystem` while the injected `RunfilesView` reports the entry missing, so the refusal is proven without any test writing an executable into a live path. | Revert the locator migration scope; the Cargo arm is unchanged. |
-| A provider negative is arranged on disk instead of injected, so the shadow stage's own `packages/target/` becomes test scaffolding and one abandoned run leaves a stale executable behind that a later Cargo test finds. | All four provider negatives are supplied states on the shared `FileSystem` and `RunfilesView` fakes; the locator and topology never call the standard library directly, and no provider test executes the planted file, because identity is a digest read through the same boundary. | Revert the locator or topology scope; nothing was written outside the fake. |
+| The locator misses under Bazel and silently finds a stale binary in `packages/target/`, which holds real executables for the whole shadow stage. | Mode is selected once and the arms never chain; a Bazel-mode miss fails naming the expected runfiles path; identity is asserted on the one descriptor the provider was opened on and before that same descriptor is executed; and the planted case supplies a stale, wrong-identity provider at the Cargo path through the injected `FileSystem` while the injected `RunfilesView` reports the entry missing, so the refusal is proven without any test writing an executable into a live path. | Revert the locator migration scope; the Cargo arm is unchanged. |
+| A provider negative is arranged on disk instead of injected, so the shadow stage's own `packages/target/` becomes test scaffolding and one abandoned run leaves a stale executable behind that a later Cargo test finds. | Every provider negative, absent, non-regular, non-executable, out of date, wrong identity, and the post-open path rebind, is a supplied state on the shared `FileSystem` and `RunfilesView` fakes; the locator and topology never call the standard library directly, and no provider check executes the planted file, because identity is a digest read from the descriptor the checks already hold. | Revert the locator or topology scope; nothing was written outside the fake. |
+| The locator verifies one binary and the test runs another, because the provider path was rebound between the digest read and the spawn. `packages/target/` is replaced by rename during a concurrent Cargo build for the whole shadow stage, so the window is real, and the failure is silent and green. | The provider is opened once through the boundary and every check binds to that descriptor; `VerifiedExecutable` has no path accessor and no public constructor, so no caller can spawn by name; execution is `execveat(fd, "", argv, envp, AT_EMPTY_PATH)` on the same descriptor with no `Command`, no `fexecve`, and no `/proc/self/fd` fallback. The fake rebinds the path to a different inode after the open and requires the original bytes to run; mutations that re-resolve at exec time, digest from a second open, or fall back on `ENOSYS` all fail. `packages/d2b-bazel-runner/tests/exec_handle.rs` measures the kernel half against a first-party probe binary rather than asserting it. | Revert the locator or topology scope; the boundary is a W0-frozen module path, so the seam does not move. |
+| The provider handle leaks into the child, so a test's own descriptor table differs under Bazel and a later change silently depends on the inherited descriptor. | Every descriptor on this path is close-on-exec, and the conformance test asserts the provider inode is absent from the child while a deliberately non-close-on-exec control descriptor is present, so the assertion is proven able to fail. | Revert the runner scope; the descriptor policy is one boundary operation. |
 | The channel transition silently stops applying in a `rules_rust` bump, so the census renders on stable and still looks correct. | The census emits the toolchain version the action actually used as a declared output, and a test compares it to the committed pin. | Revert the `api` scope; the census stays on the Cargo path. |
 | The channel flag is set globally instead, so every first-party crate compiles on nightly while the gate stays green. | A guard fails closed on any `.bazelrc` line or wrapper argument that sets the channel flag. | Remove the flag; the guard blocks the merge before it ships. |
 | The vendor tree is quietly short a crate, so `licenses` harvests fewer files, reports fewer findings, and exits zero. | Total classification with named refusals for mirrors and checksum-less non-git entries, plus an assertion that the materialized package count equals the lock's before any tool runs. | Revert the vendor rule; the Cargo supply-chain leaf remains authoritative. |
@@ -921,7 +1027,9 @@ possible, each with the guard that catches it.
 | A yanked snapshot is refreshed over the network, reviewed, committed, and never validated, so a key set that does not match the locks reaches continuous integration. | The drift recovery ends on `cargo xtask bazel-yanked-check`, the same offline validator the three carriers run, so the contributor sees the same message in their own shell. | Rerun the refresh and the check; the snapshot is committed and revertible. |
 | A cleanup or deadline guard is written against the live host filesystem or clock, so its planted negative silently never runs and the guard is decorative. | `fsops` in `packages/d2b-bazel-support/` and `clock` in `packages/d2b-bazel-runner/` are injected boundaries; every negative is produced by the fake, and the mutation tests assert errno mapping, ownership state, call ordering, and rounding without a full disk, a privileged mount, or a manipulated host clock. | Revert the affected W2 scope; the boundary is a W0-frozen module path, so reverting an implementation does not move the seam. |
 | The shared startup-option construction is put in the runner because that is where the wrapper lives, so `xtask` takes a dependency on the crate whose build targets `xtask` itself generates, and the next shared helper follows it there. | The construction lives in the neutral `packages/d2b-bazel-support/`, and `tests/unit/meta/w0-dep-direction.sh` refuses `xtask -> d2b-bazel-runner` in every dependency kind and refuses any first-party edge out of the support crate, resolving names with `cargo metadata` so a rename or a target-specific entry cannot evade it. | Move the helper into the support crate; the guard blocks the merge before the edge ships. |
-| The wave-note lint refuses a leaked absolute path and prints the token, so the leak is copied into CI output, a panel comment, and a PR body by the guard that caught it. | The refusal carries the note name, the one-based line, and one remediation and nothing else, and one test runs every rendered refusal back through the scanner's own path-token and worktree-substring rules. | Fix the message; the note itself never merged, because the lint refusal is merge-blocking. |
+| The wave-note lint refuses a leaked absolute path and prints the token, so the leak is copied into CI output, a panel comment, and a PR body by the guard that caught it. | The refusal carries the note name, the one identifying detail for its shape, and one remediation and nothing else, and one test runs every rendered refusal back through the scanner's own path-token and worktree-substring rules. | Fix the message; the note itself never merged, because the lint refusal is merge-blocking. |
+| The wave-note lint enumerates its corpus with `std::fs::read_dir` and reads each entry by a concatenated `DirEntry` path, so a symlink committed into the notes directory makes the guard read a file outside it, and the directory is resolved a second time between enumeration and read. | The lint reads through the shared `FileSystem` boundary: one anchored close-on-exec descriptor with `RESOLVE_BENEATH`, `RESOLVE_NO_SYMLINKS`, and `RESOLVE_NO_MAGICLINKS`, enumeration by name only, and descriptor-relative reads. The symlink, subdirectory, permission, and non-UTF-8 negatives are supplied states of the fake and were measured to produce four distinguishable errnos under exactly that flag set. | Revert the lint scope; the boundary is W0-frozen and the corpus was never read by another route. |
+| One wave-note violation type carries an optional line beside an optional error, so a permission denial renders the line remedy and a contributor is told to rewrite a line that is not the problem. | The type splits into `PathLeak`, note plus line, and `ReadError`, note plus preserved `std::io::Error`, with an unreadable or empty corpus returned as a corpus error instead of a violation. A test asserts per shape that the right remedy is present and the other three are absent. | Fix the rendering; the split is structural, so the cross-remedy state stops being expressible. |
 | The coverage guard is green while half its invariants never executed, because a Bazel test cannot query the graph. | Analysis-time dependency edges prove label existence; completeness and query drift run in the wrapper and `test-drift` over a committed drift-checked query result; no Bazel test invokes `bazel query`. | Revert the guard split; do not weaken either half. |
 | The disk cache is measured before asynchronous trimming finishes, so a compliant run refuses to publish forever. | An explicit synchronous on-demand collector runs as a named step before measurement and save; the size refusal stays a backstop. | Revert to the previous snapshot; the maintenance verdict is outside the Rust verdict. |
 | A cache-key input changes without changing the key, restoring a subtly stale cache. | The key binds all four hub locks, all four per-hub Bazel-side locks, the guest lock, the generator sha256, `.bazelignore`, the startup and symlink configuration, the build-script and action-environment digest, and the generated BUILD digest. | Rotate the restore prefix; a stale generation is superseded and deleted by the maintenance job. |
@@ -946,7 +1054,7 @@ and size, and refuses unsafe cleanup.
 | --- | --- | --- | --- | --- |
 | None | None | None | None | None |
 
-Only LOW and MEDIUM findings may be deferred from round nine. CRITICAL and HIGH
+Only LOW and MEDIUM findings may be deferred from round ten. CRITICAL and HIGH
 block.
 
 ### Friction log

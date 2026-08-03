@@ -22,8 +22,9 @@ Each row contains:
   its reason;
 - `testTargets`: all transitively carried Rust tests;
 - `handwrittenFragments`: all non-generated BUILD fragments;
-- `binaryProviders`: expected provider label, runfiles path, and binary
-  identity;
+- `binaryProviders`: expected provider label, runfiles path, and the byte
+  digest the located descriptor must match before that same descriptor is
+  executed;
 - `locatorFiles`: the migrated first-party files this surface's tests use, each
   `migrated` or `no-migration-needed` with a reason;
 - `deliberateDifferences`: applicable ADR section 13 entries;
@@ -123,9 +124,11 @@ The guard rejects:
 - an out-of-census manifest entry with no recorded reason;
 - a schema generation differing from the generated nonempty valid-JSON census
   before content comparison;
-- a binary provider that is absent, non-executable, stale, or of the wrong
-  identity, where each of those four states is supplied through the injected
-  `FileSystem` and `RunfilesView` boundaries rather than arranged on disk;
+- a binary provider that is absent, non-regular, non-executable, stale, or of
+  the wrong identity, or whose path is rebound to a different file after the
+  single anchored open, where each of those states is supplied through the
+  injected `FileSystem` and `RunfilesView` boundaries rather than arranged on
+  disk;
 - a locator file that is neither migrated nor recorded as needing no
   migration;
 - an emitted census toolchain version that differs from the committed pin;

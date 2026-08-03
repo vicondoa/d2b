@@ -102,3 +102,41 @@
   refusal, not new requirements. Task count stays 174 and no task was renumbered.
   No functional requirement or success criterion was added or removed; the set
   remains FR-001 through FR-055 and SC-001 through SC-015.
+- Revalidated after the round-nine panel. Three defect classes, no requirement
+  added or removed. First, the locator and the topology runner stated a
+  provider by path and then executed the path, which is two resolutions of one
+  name; they now open the provider exactly once through the injected
+  filesystem boundary, run kind, mode, freshness, digest, and a bracketing
+  `fstat` comparison against that descriptor, and execute that same descriptor
+  with `execveat` and `AT_EMPTY_PATH`, with no `Command` by path, no `fexecve`,
+  and no `/proc/self/fd` reopen. FR-018 now states the single-resolution rule
+  explicitly, FR-029 states that a refusal carries only its own condition's
+  remedy, FR-052 states that a directory-reading guard reads through the same
+  anchored boundary, and SC-012 names the provider-handle and wave-note guards
+  and their new planted negatives; the requirement set is unchanged in size and
+  the identifiers are unchanged. Second, the wave-note policy lint enumerated
+  its corpus with `std::fs::read_dir` and read entries by concatenated
+  `DirEntry` paths; it now reads through one anchored close-on-exec descriptor
+  under `RESOLVE_BENEATH`, `RESOLVE_NO_SYMLINKS`, and `RESOLVE_NO_MAGICLINKS`,
+  reached by a dev-dependency on `packages/d2b-bazel-support` that the
+  dependency-direction gate refuses in any non-dev kind. Third, its single
+  violation type carried an optional line beside an optional error and could
+  render a line remedy for a permission denial; it splits structurally into
+  `PathLeak` and `ReadError`, with an unreadable or empty corpus returned as a
+  corpus error rather than as a violation of a note that does not exist. Every
+  substrate claim behind the first change was measured on the reference host
+  rather than taken from documentation: the path-replacement divergence between
+  a retained descriptor and a reopened path, `execveat` succeeding on an
+  `O_RDONLY|O_CLOEXEC` descriptor with that descriptor absent from the child
+  while a non-close-on-exec control descriptor is present, `pread` returning
+  `EBADF` on an `O_PATH` descriptor, `RESOLVE_BENEATH` and
+  `RESOLVE_NO_SYMLINKS` refusing a runfiles-shaped symlink, an in-place rewrite
+  moving `st_mtim` with `st_ino` unchanged, `execveat` returning `EACCES` for a
+  non-executable file and a directory, a close-on-exec script failing `ENOENT`,
+  and the four distinguishable note-corpus errnos. Ownership of
+  `packages/d2b-bazel-support/` moved from the W0 `runner` scope to the W0
+  integrator prep commit, because four consumers now read the boundary and a
+  shared trait plus its fake arriving inside one parallel scope's worktree is
+  the coupling the prep rule exists to remove. Task count stays 174 and no task
+  was renumbered. No functional requirement or success criterion was added or
+  removed; the set remains FR-001 through FR-055 and SC-001 through SC-015.

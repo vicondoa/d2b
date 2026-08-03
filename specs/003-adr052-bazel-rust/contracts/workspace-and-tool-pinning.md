@@ -469,36 +469,112 @@ rather than parsed, because a `file:` URI is an absolute path wearing a scheme.
 No real absolute path is allowlisted, `/dev/null` included: a note records a
 shape, not a transcript.
 
-Every refusal names the note, the one-based line where a line applies, and the
-one remediation, which is to rewrite the path as a `<worktree>`-rooted shape or
-drop it. It never names the offending token. FR-029 already forbids a refusal
-message from carrying an absolute path, and a refusal that echoes the leaked
-token is one. It is also republished:
-into the `test-fixture-contracts` output, into panel comments, and into PR
-bodies. A refusal that echoes the leaked absolute path has copied it into three
-artifacts the note never reached, which is the escape this lint exists to
-close, performed by the guard that caught it. `w1.md:37` plus the remediation
-is sufficient, because the contributor has the file. The scanner proves this
-about itself: one test runs every rendered refusal back through the same
-path-token and worktree-substring rules and requires no violation, so a change
-that adds the token to a message fails the lint that added it.
+### The lint reads the corpus through the shared filesystem boundary
 
-The enumeration API returns `std::io::Result` at both levels, one for reading
-the directory and one per entry carrying exactly what `read_to_string`
-returned. It never collapses a failed read to `None` or to an empty string. An
-unreadable directory is then a fail-closed refusal rather than a corpus that
-looks empty, and a committed subdirectory, a dangling symlink, a permission
-denial, and non-UTF-8 content are four distinguishable errnos rather than one
-indistinguishable "absent" state. Keeping the real `std::io::Error` is also
-what stops a later refactor from mapping every failure onto the same
-benign-looking value.
+The lint does not call `std::fs::read_dir`, does not call
+`std::fs::read_to_string`, and never builds a path by concatenating a
+`DirEntry` onto a parent. It reads the corpus through the same `FileSystem`
+trait in `packages/d2b-bazel-support/src/fsops.rs` that cleanup, the result
+writer, the locator, and the topology provider checks use, reached as a
+**dev-dependency only**, which keeps the support crate neutral and keeps
+`packages/d2b-contract-tests` off the non-dev consumer list the
+dependency-direction gate pins.
+
+- The notes directory is opened once as an anchored close-on-exec directory
+  descriptor beneath the repository root, with
+  `RESOLVE_BENEATH|RESOLVE_NO_SYMLINKS|RESOLVE_NO_MAGICLINKS`.
+- Entries are enumerated from that descriptor as **names**, never as
+  reconstructed paths. The kernel's `d_type` is advisory and is not trusted for
+  classification, because it is `DT_UNKNOWN` on some filesystems; the
+  authoritative answer is the errno the descriptor-relative open or read
+  returns.
+- Each entry is opened descriptor-relative from that same anchor under the same
+  resolve policy and read through the boundary. Nothing reopens the directory,
+  and no absolute path is ever constructed.
+
+That policy is not decoration; it is what makes the four failure states
+distinguishable, and each was measured against this exact flag set on a plain
+committed directory: a regular note opens; a symlink, valid or dangling, is
+refused `ELOOP`; a committed subdirectory opens and its read returns `EISDIR`;
+a `..` escape is refused `EXDEV`; and a mode `0000` entry is refused `EACCES`.
+A `read_to_string` over a concatenated `DirEntry` path would follow a symlink
+out of the directory and read whatever it pointed at, and would resolve the
+directory a second time between enumeration and read. It is the same
+check-then-use shape the provider rules refuse, applied to the guard that
+polices leaks.
+
+### Two violation shapes, two remedies, one corpus error
+
+A refusal is a shipped operator-facing message, and the remedy has to match
+what actually went wrong. One violation type carrying an optional line and an
+optional error can render a line remedy for a permission denial. The type is
+therefore split, and the split is structural:
+
+| Shape | Carries | Renders |
+| --- | --- | --- |
+| `PathLeak` | note name and the one-based line, and nothing else | the line, then the single remedy: rewrite the path as a `<worktree>`-rooted shape or drop it |
+| `ReadError` | note name and the preserved `std::io::Error` | the error, then the single file-level remedy: fix the entry's permissions or remove the invalid entry |
+
+`PathLeak` has no error field to be `None` and `ReadError` has no line field to
+be zero, so neither of the two impossible states is expressible and no
+validator has to re-derive the invariant. Neither renders the offending token,
+and neither renders an absolute path: FR-029 already forbids a refusal message
+from carrying one, and a refusal that echoes the leaked token is one. A lint
+refusal is republished into the `test-fixture-contracts` output, into panel
+comments, and into PR bodies, so a message that echoes the leaked absolute path
+has copied it into three artifacts the note never reached, performed by the
+guard that caught it. `w1.md:37` plus the remedy is sufficient, because the
+contributor has the file.
+
+`ReadError` preserves the boundary's error unchanged in every case that has
+one: `EACCES` for a permission denial, `EISDIR` for a committed subdirectory,
+`ELOOP` for a symlink or a dangling symlink, and `ErrorKind::InvalidData` for
+non-UTF-8 content. The single exception is an entry whose name does not match
+`w<digits>.md`, which is never opened and so has no errno; that one case
+constructs `ErrorKind::InvalidInput` with a fixed message naming the required
+name shape, and a test asserts that this is the only constructed error by
+requiring the exact `raw_os_error` for the other four.
+
+An unreadable or empty corpus is not a violation of a note, because there is no
+note to name. It is a corpus-level error the enumerator returns instead of a
+list: `Unreadable` carries the real errno from the anchored open or the entry
+enumeration, so a directory the lint cannot read is a fail-closed refusal
+rather than a corpus that merely looks empty, and `Empty` carries no error
+because none occurred. Each renders its own remedy, restore the notes directory
+and its permissions, or add the wave's note, and cross-rendering any of the
+four remedies is a test failure.
+
+The entry name is the only borrowed text any refusal prints, and it is checked
+before it is printed. The renderer runs the entry name through the same
+`/`-rooted-token and worktree-substring rules the note lines face; if the name
+itself carries a leak, the refusal names the entry by its one-based enumeration
+position instead and says so. Without that, the self-application test below
+would hold only for entry names that happen to be clean, which is a coincidence
+rather than a property.
+
+The scanner proves all of this about itself: one test runs every rendered
+refusal, from every planted input, back through the same path-token and
+worktree-substring rules and requires no violation, so a change that adds the
+token to a message fails the lint that added it. A second test asserts, per
+variant, that the correct remedy is present and that each of the other three
+remedies is absent, so a refactor cannot borrow a remedy across shapes.
+
+The enumeration API returns a corpus `Result` at the outer level and a
+`std::io::Result` per entry carrying exactly what the boundary read returned.
+It never collapses a failed read to `None` or to an empty string. Keeping the
+real `std::io::Error` is also what stops a later refactor from mapping every
+failure onto the same benign-looking value.
 
 The lint proves it can refuse before its pass is treated as evidence, and it
-does so against in-test planted entries rather than files written into the
-notes directory: a planted generic absolute path belonging to no machine in the
-run, an empty corpus, a worktree substring with no leading slash, a non-note
-entry name beside an entry whose content is a real `std::io::Error`, and the
-two near-miss placeholder spellings plus the `file:` URI.
+does so against injected corpora rather than files written into the notes
+directory: the enumeration negatives are supplied states of the `FileSystem`
+fake, and the line-rule negatives are in-test note bodies. The planted set is a
+generic absolute path belonging to no machine in the run, an empty corpus, an
+unreadable directory, a worktree substring with no leading slash, a non-note
+entry name beside an entry whose read failed with `EACCES`, a symlinked entry
+refused `ELOOP`, a subdirectory entry refused `EISDIR`, non-UTF-8 content, an
+entry name that itself carries a leak, and the two near-miss placeholder
+spellings plus the `file:` URI.
 The one lane that executes it is
 `D2B_ENABLE_FIXTURE_BUILD=1 make test-fixture-contracts`, because
 `tests/test-rust.sh` excludes `d2b-contract-tests` from every workspace leaf

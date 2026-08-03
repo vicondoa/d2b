@@ -75,8 +75,12 @@ produced no measurement rather than selecting among warm and cold runs.
 9. zero shadow cache restore, save, or publication;
 10. the complete locator migration record set, every file migrated or recorded
     as needing no migration, with the injected stale-provider negative failing
-    in Bazel mode as required, supplied through the `FileSystem` and
-    `RunfilesView` fakes rather than by an executable written to a live path;
+    in Bazel mode as required and the injected post-open path-rebind negative
+    proving the verified descriptor's bytes are the ones that ran, both
+    supplied through the `FileSystem` and
+    `RunfilesView` fakes rather than by an executable written to a live path,
+    plus the host-backed `execveat` conformance result, which is the one
+    provider property a fake cannot establish;
 11. positive and all required negative workflow, cache, deadline, cleanup,
     per-case-redaction, and result-filesystem controls passing.
 

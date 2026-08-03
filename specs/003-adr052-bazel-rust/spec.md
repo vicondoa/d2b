@@ -395,6 +395,8 @@ retirement conditions independently block premature deletion.
   digests.
 - A binary-locating test resolves to a missing, non-executable, stale, or
   wrong binary.
+- A binary-locating test verifies one binary and executes another, because the
+  provider path was rebound between the check and the spawn.
 - A binary-locating test misses its declared entry under the new executor and
   silently falls back to a stale artifact left by the other executor.
 - A broker suite is accidentally allowed to overlap another test process.
@@ -448,6 +450,13 @@ retirement conditions independently block premature deletion.
 - A cleanup, result-file, or deadline guard depends on live host filesystem
   state or the host clock, so the planted negative it claims to reject cannot
   actually be produced on the reference host.
+- A documentation policy guard enumerates the directory it polices with the
+  standard library and reads each entry by a reconstructed path, so it follows
+  a symlink out of that directory and resolves it a second time between
+  enumeration and read.
+- A refusal renders the remedy of a different condition, so a contributor
+  fixing a permission denial is told to rewrite a line that is not the
+  problem.
 - The networked snapshot updater is written against a client it constructs
   itself, so no test can supply a partial, revisionless, or malformed index
   answer, and every refusal path it owns stays unproven until it first fires in
@@ -561,9 +570,16 @@ retirement conditions independently block premature deletion.
   fallback to the other executor's mechanism, MUST NOT resolve anything by an
   absolute build-execution-root path, MUST declare each located binary and
   fixture as a declared input, and MUST prove that the selected binary exists,
-  is executable, and has the expected identity before exercising it. A check
-  that needs the repository inventory rather than a specific file MUST consume
-  a generated drift-checked manifest as a declared input.
+  is executable, is no older than its newest declared input, and has the
+  expected identity before exercising it. Those proofs and the execution MUST
+  bind to a **single** resolution of the binary: the locator MUST open the
+  provider exactly once through the injected filesystem boundary, MUST perform
+  every check against that open handle, MUST NOT expose a path a caller could
+  spawn by, and MUST execute that same handle. Re-resolving the provider by
+  name at execution time, spawning it by path, or recovering a path from a
+  verified handle is a defect, not a style choice. A check that needs the
+  repository inventory rather than a specific file MUST consume a generated
+  drift-checked manifest as a declared input.
 - **FR-019**: Dependency bans, licenses, sources, and advisories MUST remain
   enforcing across the three Rust workspace locks they cover today, with no
   network access from any build or test action. The dependency tree the policy
@@ -616,7 +632,9 @@ retirement conditions independently block premature deletion.
   condition.
 - **FR-029**: Refusal and timeout messages MUST exclude absolute paths,
   output-state hashes, user identifiers, process identifiers, raw deadline
-  values, opaque handles, and unsafe recursive-removal instructions.
+  values, opaque handles, and unsafe recursive-removal instructions, MUST NOT
+  echo the offending value a scan refused, and MUST carry the remedy for the
+  condition actually observed and no other condition's remedy.
 - **FR-030**: The shadow continuous-integration workflow MUST remain
   non-required, MUST keep the existing required graph unchanged, and MUST
   publish no shared cache entry.
@@ -708,7 +726,10 @@ retirement conditions independently block premature deletion.
   absolute time, and over networked registry-index responses MUST be exercised
   through injectable boundaries, so every planted negative is reproducible
   without depending on live host filesystem state, a full disk, a privileged
-  mount, the host clock, or a reachable network. The one networked
+  mount, the host clock, or a reachable network. A guard that reads a
+  repository directory MUST read it through that filesystem boundary, anchored
+  and refusing symlinks and magic links, rather than by enumerating and
+  concatenating paths through the standard library. The one networked
   implementation of an index boundary MUST be exercised only by the explicit
   contributor-run operation that owns it, outside the gate, and that run MUST
   be recorded as a measured observation rather than repeated as a gate
@@ -819,8 +840,11 @@ retirement conditions independently block premature deletion.
   whose offline key-set drift check passes for all three locks.
 - **SC-012**: Every cleanup, timeout, deadline, message-redaction,
   per-case-result redaction, result-file filesystem, binary-locator,
-  cache-policy, and workflow-policy guard rejects all of its planted negative
-  variants and accepts its compliant positive case.
+  provider-handle, wave-note-lint, cache-policy, and workflow-policy guard
+  rejects all of its planted negative variants and accepts its compliant
+  positive case. For the provider-handle guard that set includes a provider
+  path rebound to a different file after the open, and for the wave-note lint
+  it includes each variant's remedy rendered for the wrong variant.
 - **SC-013**: In every observed Bazel failure, contributors can identify the
   failing surface and the failing test case from the same invocation without
   rerunning the complete aggregate.
