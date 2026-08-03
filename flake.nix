@@ -21,6 +21,7 @@
       systems = [ "x86_64-linux" "aarch64-linux" ];
       forAllSystems = nixpkgs.lib.genAttrs systems;
       nixpkgsFor = forAllSystems (system: import nixpkgs { inherit system; });
+      providerElfShim = import ./nix/provider-elf-shim.nix;
       mkGuestRustPackagesSrc = pkgs:
         pkgs.runCommand "d2b-guest-rust-src" { } ''
           mkdir -p $out/packages
@@ -722,6 +723,7 @@
             "ifname-nix-rust-parity.nix"
             "observability.nix"
             "provider-catalog.nix"
+            "provider-elf-shim.nix"
             "provider-projection-exportability.nix"
             "provider-projection-fields.nix"
             "readiness-waves.nix"
@@ -1341,6 +1343,7 @@
 
       lib = nixpkgs.lib.makeExtensible (_: {
         evalFixture = system: self.checks.${system}.eval-fixture-contracts.fixtureData;
+        buildProviderElfShim = providerElfShim;
       });
 
       overlays.default = _final: _prev: { };
