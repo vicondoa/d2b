@@ -352,7 +352,7 @@ mapfile -t failures < <(
   jq -r '
     select(type == "object" and (.error? != null))
     | (.attr // ((.attrPath // []) | join(".")))
-      + ": " + (.error | tostring)
+      + ": " + (.error | tostring | gsub("\n"; " ") | gsub("\r"; " "))
   ' "$result_file"
 )
 result_count=$(jq -s 'length' "$result_file")

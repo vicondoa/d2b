@@ -636,6 +636,11 @@ set -euo pipefail
         )
         self.assertRegex(
             driver,
+            r'gsub\("\\n";\s*" "\).*gsub\("\\r";\s*" "\)',
+            msg="each multiline evaluator error must remain one failure entry",
+        )
+        self.assertRegex(
+            driver,
             r"(?is)(?:for|while).{0,120}(?:failure|failed).{0,300}"
             r"(?:log|printf|echo|report)",
         )
