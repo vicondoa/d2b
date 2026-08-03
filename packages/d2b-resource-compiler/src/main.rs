@@ -697,7 +697,7 @@ impl SchemaCache {
         let Some(root) = &self.root else {
             return Ok(None);
         };
-        if !valid_name(resource_type) && !resource_type.contains(".d2bus.org.") {
+        if !valid_schema_name(resource_type) {
             return Err(CliError::new(
                 "resource-compiler-resource-type-invalid",
                 "resource type is not a supported schema name",
@@ -974,6 +974,16 @@ fn valid_name(value: &str) -> bool {
         && bytes[1..]
             .iter()
             .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || *byte == b'-')
+}
+
+fn valid_schema_name(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    valid_name(value)
+        || value.contains(".d2bus.org.")
+        || (!bytes.is_empty()
+            && bytes.len() <= 63
+            && bytes[0].is_ascii_uppercase()
+            && bytes[1..].iter().all(|byte| byte.is_ascii_alphanumeric()))
 }
 
 fn safe_token(value: &str) -> String {
