@@ -56,12 +56,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "bytes"
-version = "1.12.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8ae3f5d315924270530207e2a68396c3cc547f6dca3fbdca317cfb1a51edb593"
-
-[[package]]
 name = "cfg-if"
 version = "1.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -126,8 +120,6 @@ dependencies = [
  "async-trait",
  "d2b-contracts",
  "d2b-core",
- "d2b-realm-core",
- "d2b-realm-provider",
  "libc",
  "miniz_oxide",
  "nix",
@@ -164,18 +156,6 @@ version = "0.0.0-bootstrap"
 dependencies = [
  "schemars",
  "serde",
-]
-
-[[package]]
-name = "d2b-realm-provider"
-version = "0.0.0-bootstrap"
-dependencies = [
- "async-trait",
- "d2b-realm-core",
- "schemars",
- "serde",
- "tokio",
- "tracing",
 ]
 
 [[package]]
@@ -712,7 +692,6 @@ version = "1.52.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8fc7f01b389ac15039e4dc9531aa973a135d7a4135281b12d7c1bc79fd57fffe"
 dependencies = [
- "bytes",
  "libc",
  "mio",
  "pin-project-lite",
