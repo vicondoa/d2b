@@ -3203,7 +3203,7 @@ struct MigrateContext {
     would_conflict: Vec<&'static str>,
 }
 
-#[derive(PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq)]
 enum MigrateOutcome {
     /// The branch moves onto the fetched target ref, and onto nothing else.
     Rebase {
@@ -3212,23 +3212,6 @@ enum MigrateOutcome {
         onto: ObjectName,
     },
     Refuse(MigrateRefusal),
-}
-
-impl std::fmt::Debug for MigrateOutcome {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Rebase { target_ref, .. } => f
-                .debug_struct("MigrateOutcome::Rebase")
-                .field("target_ref", target_ref)
-                .field("from", &ObjectName("<redacted>"))
-                .field("onto", &ObjectName("<redacted>"))
-                .finish(),
-            Self::Refuse(refusal) => f
-                .debug_tuple("MigrateOutcome::Refuse")
-                .field(refusal)
-                .finish(),
-        }
-    }
 }
 
 #[derive(PartialEq, Eq)]
