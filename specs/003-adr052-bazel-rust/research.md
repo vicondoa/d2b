@@ -536,6 +536,32 @@ of reimplementing the comparison per carrier, and a contributor runs the same
 command in a shell and reads the same bytes before pushing. The drift recovery
 therefore reads: refresh, review and commit the snapshot, then run the check.
 
+**The refresh reaches the index through an injected boundary.** The refresh is
+the only command in this migration that opens a socket, and its interesting
+failures are all shapes of answer the index can return: a key the three locks
+declare that the index does not know, a key the index knows that no lock
+declares, an answer with no revision, a transport failure part-way through, a
+malformed payload. None of those can be arranged locally, and reaching the live
+index to produce them would put a network dependency inside the test suite this
+migration requires to have none.
+
+So `packages/xtask/src/bazel_yanked.rs` declares `trait YankedIndex` with
+exactly the surface the refresh needs, the observed index revision and the
+yanked state of one `(name, version)` key, and carries `IndexClient` as its
+single networked implementation. The refresh is written against the trait and
+receives the implementation from the command-line routing seam; its unit tests
+inject a fake that returns canned responses for every case above. The offline
+`bazel-yanked-check` names neither the trait nor the client, so it is offline by
+construction and not by discipline, and a structural guard asserts that.
+
+This is the same rule already applied to the filesystem and to time, extended
+to the one remaining ambient dependency in the design. What the fake cannot
+prove is that `IndexClient` talks to the real index correctly, and that is
+deliberately measured somewhere else: the reviewed contributor-run refresh
+produces a snapshot whose diff and observed revision the committing wave
+records. One measured observation outside the gate is the right price for a
+gate that opens no socket.
+
 Schema reproducibility gains `gen-schemas --out-dir`, performs two sequential
 independent generations in one action, and checks the exact generated census
 for nonempty valid JSON before digest comparison. The no-bash carrier uses the
@@ -571,6 +597,18 @@ already present in the current schema leaf.
 - Reimplementing the key-set comparison inside each of the three carriers:
   rejected because three implementations produce three messages that drift, and
   a contributor would have no way to reproduce any of them locally.
+- Construct the index client inline inside `bazel-yanked-refresh`: rejected
+  because it makes every refusal path in the refresh unreachable from a test.
+  A command whose error handling can only be exercised by the index
+  misbehaving is a command whose error handling is unproven.
+- Assert refresh behavior against the live index in a test: rejected because it
+  puts a network dependency and a moving third party inside a suite whose whole
+  claim is that it opens no socket, and because it fails for reasons unrelated
+  to the change under review.
+- Put `YankedIndex` in a separate crate: rejected as premature. One trait with
+  two methods, one networked implementation, and one fake all live beside the
+  only command that uses them; a crate boundary buys nothing and costs a
+  dependency edge the direction gate would have to be argued about.
 
 ## Decision 7: Bind Bazel results to execution-manifest v1
 

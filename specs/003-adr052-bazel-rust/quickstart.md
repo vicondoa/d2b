@@ -120,9 +120,10 @@ grep -c 'skip_cargo_lockfile_overwrite = True' MODULE.bazel
 ! grep -rqE 'CARGO_BAZEL_REPIN|CARGO_BAZEL_REPIN_ONLY|(^|[^A-Z_])REPIN=' \
   Makefile .github/workflows/
 
-# None of the four contributor-only commands is reachable from Make or CI.
-! grep -rqE 'xtask (bazel-repin|bazel-module-refresh|bazel-yanked-refresh|bazel-evidence)' \
-  Makefile .github/workflows/
+# None of the five contributor-only commands is reachable from Make or CI.
+contributor_only='bazel-repin|bazel-module-refresh|bazel-yanked-refresh'
+contributor_only="$contributor_only|bazel-yanked-check|bazel-evidence"
+! grep -rqE "xtask ($contributor_only)" Makefile .github/workflows/
 
 # The only site that may assign a repin control to a process environment.
 grep -rnE '\.env\("(CARGO_BAZEL_REPIN|CARGO_BAZEL_REPIN_ONLY|REPIN)"' \
@@ -201,6 +202,26 @@ Confirm neither lock command is reachable from a build entry point:
 ! grep -rqE 'xtask (bazel-repin|bazel-module-refresh)' \
   Makefile .github/workflows/
 ```
+
+Each of the two commands refuses an exported repin control, and each refusal
+ends on the command that was refused rather than on a shared template. Check
+both, because a single templated remedy would have to name a `--hub` that
+`bazel-module-refresh` never takes:
+
+```bash
+CARGO_BAZEL_REPIN=1 cargo xtask bazel-repin --hub main 2>&1 \
+  | grep -qF 'then run `cargo xtask bazel-repin --hub main`.'
+CARGO_BAZEL_REPIN=1 cargo xtask bazel-module-refresh 2>&1 \
+  | grep -qF 'then run `cargo xtask bazel-module-refresh`.'
+CARGO_BAZEL_REPIN=1 cargo xtask bazel-module-refresh 2>&1 \
+  | grep -q 'bazel-repin' && exit 1
+```
+
+The last check is the one that matters, and it is written as a refusal: the
+module-lock command's output must not mention `bazel-repin` at all. A shared
+row would have put it there, sending a contributor who was updating the module
+lock off to repin a hub they never named. The exported value `1` must appear
+nowhere in any of the three outputs.
 
 Confirm `make test-rust` still invokes Cargo and remains authoritative:
 
@@ -369,6 +390,31 @@ cargo xtask bazel-yanked-check
 Ending on the check rather than on the refresh is the point. A refreshed
 snapshot nobody validated is how a mismatched key set reaches continuous
 integration instead of your shell.
+
+The refresh is the only command here that opens a socket, and it does so
+through one boundary so its failure paths are testable without a network.
+Confirm the boundary is where it is claimed to be:
+
+```bash
+# The trait and its single networked implementation live together.
+grep -q 'trait YankedIndex' packages/xtask/src/bazel_yanked.rs
+grep -q 'struct IndexClient' packages/xtask/src/bazel_yanked.rs
+
+# Only the refresh and its routing seam name the networked implementation.
+grep -rn 'IndexClient' packages/xtask/src/ | cut -d: -f1 | sort -u
+
+# Every refresh case runs against an injected fake, so this passes offline.
+cargo test -p xtask bazel_yanked
+```
+
+The `grep -rn` must print exactly `packages/xtask/src/bazel_yanked.rs` and
+`packages/xtask/src/main.rs`, and nothing on the validator's path may name
+`YankedIndex` or `IndexClient`. The `cargo test` line is the real check: every
+refresh case in that module supplies its index answer through an injected fake,
+so it must pass with no route to the index at all. Run it that way. What no
+fake can prove is that `IndexClient` speaks to the real index correctly; that
+is measured once, by the reviewed refresh above, whose command shape and
+observed index revision the wave that committed the snapshot recorded.
 
 Seeded failures are made on eighteen disposable, committed evidence branches,
 one protected condition per branch. Each branch runs only its owning approved

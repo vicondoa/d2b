@@ -173,18 +173,29 @@ injected boundaries below rather than by arranging host state.
 
 ## Injected Boundaries
 
-Two traits exist so that failure states are supplied rather than provoked.
-Both are W0-frozen module paths, so W2 scopes open against a stable surface.
+Three boundaries exist so that failure states are supplied rather than
+provoked. All are W0-frozen module paths, so later scopes open against a stable
+surface.
 
 | Boundary | Path | Serves | Supplied states |
 | --- | --- | --- | --- |
 | `FileSystem` | `packages/d2b-bazel-runner/src/fsops.rs` | Per-case result publication and scratch cleanup | `openat2` and forced component-walk routes, symlink and magic-link parents, anchored `..` escape, `EEXIST` collision, short write, `EINTR`, `EAGAIN`, `ENOSPC`, replacement race, tracked entry, foreign decoy |
 | `Clock` and `UptimeSource` | `packages/d2b-bazel-runner/src/clock.rs` | Deadline parsing, remaining-budget arithmetic, child duration, expiry escalation | Every accepted and rejected uptime field, truncate on capture and round up on read, exactly-zero remaining budget, overflow, expiry reached without sleeping |
+| `YankedIndex` | `packages/xtask/src/bazel_yanked.rs` | The reviewed networked yanked-snapshot refresh | All-clear index, a yanked version, a key the locks declare and the index omits, a key no lock declares, a missing index revision, a transport failure, a malformed payload |
 
 No test of cleanup, result publication, or deadline handling may depend on
 live host filesystem state, a full disk, a privileged mount, or the host clock.
 A property that can only be exercised by arranging host state is a property
 that will be marked ignored, which is the same as not testing it.
+
+The same rule holds for the network. `IndexClient` is the single networked
+implementation of `YankedIndex` and the only site permitted to open a socket
+for the refresh; every unit test of the refresh injects a fake instead, so no
+test resolves a name or reaches the live index. `bazel-yanked-check` names
+neither the trait nor its networked implementation, which is what makes the
+offline validator offline by construction. Real-index behavior is measured
+separately, by the reviewed contributor-run refresh whose diff and observed
+index revision the committing wave records.
 
 ## Test Locator Migration
 

@@ -94,7 +94,11 @@ reach it, and a structural guard allowlists exactly that one construction site.
 `cargo xtask bazel-evidence prepare-cold-local` are likewise not Make targets
 and unreachable from any workflow; `cargo xtask bazel-yanked-check` is offline,
 runs inside the three supply-chain carriers as a declared-input action, and is
-also not a Make target.
+also not a Make target. The structural guard refuses all five by name in
+`Makefile` and in `.github/workflows/`.
+`bazel-yanked-refresh` is the one repository command that opens a socket, and
+it does so only through the `IndexClient` implementation of the
+`YankedIndex` boundary; no gate action reaches that boundary.
 Every hub sets `lockfile`, `cargo_lockfile`, and
 `skip_cargo_lockfile_overwrite = True`, because the last of those defaults to
 false at `rules_rust` 0.73.0 and a repin would otherwise rewrite the
@@ -103,7 +107,7 @@ argument sets `@rules_rust//rust/toolchain/channel`. `.bazelrc` carries only
 `common`, `build`, `test`, and `build:<config>` lines; every startup option is
 supplied by the wrapper as an absolute path and is byte-identical across
 `build`, `test`, `query`, `info`, `shutdown`, `clean`, and, from W2, the
-repin child.
+repin and module-refresh children.
 `D2B_RUST_BUDGET` remains the only resource control, and custom Bazel local
 resources are inert because `--local_test_jobs` discards tag-derived resources.
 `--test_output=streamed` is forbidden during any measured run. Any change to
@@ -204,7 +208,7 @@ ci/rust/BUILD.bazel                   # ADR-fixed carriers, guard, and aggregate
 packages/**/BUILD.bazel               # Generated first-party targets
 tests/tools/no-bash-ast-walker/BUILD.bazel   # Generated; fourth hub consumer
 packages/xtask/src/bazel.rs           # gen-bazel, gen-bazel --check, bazel-repin, bazel-module-refresh
-packages/xtask/src/bazel_yanked.rs    # bazel-yanked-refresh, bazel-yanked-check
+packages/xtask/src/bazel_yanked.rs    # Yanked refresh and check; YankedIndex seam
 packages/xtask/tests/bazel_module_refresh.rs # Real-Bazel module lock drift and remediation
 packages/xtask/src/                   # Schema output and evidence helpers
 packages/xtask/tests/policy_ci.rs
@@ -282,7 +286,9 @@ invalidate prior signoffs.
 ### Wave notes record command shapes, not local values
 
 Several waves record a measured invocation in their wave notes: W0 records the
-one that repins exactly one hub and the one that updates the module lock, and
+one that repins exactly one hub and the one that updates the module lock, W1
+records the reviewed networked yanked-snapshot refresh together with the index
+revision it observed, and
 W2 records the consolidated startup-option construction. Every such note
 records the command as a **shape** with placeholders, for example
 `<worktree>/.scratch/bazel` for the output user root and
@@ -354,7 +360,9 @@ inventory, and the frozen runner and locator crate decisions, including the
   commits; the other three must be byte-identical across integration.
 - `generator`: `packages/xtask/src/bazel.rs`, including `gen-bazel`,
   `gen-bazel --check`, `bazel-repin`, and `bazel-module-refresh`;
-  `packages/xtask/src/bazel_yanked.rs`, including `bazel-yanked-refresh`;
+  `packages/xtask/src/bazel_yanked.rs`, including `bazel-yanked-refresh`
+  written against the prep-frozen `YankedIndex` boundary, its `IndexClient`
+  implementation, and its fake;
   `packages/xtask/tests/bazel_module_refresh.rs`; their tests;
   and its generated outputs including `.bazelignore` and the derived censuses.
 - `schema`: schema generator, its tests, and the current schema leaf only.
@@ -362,7 +370,8 @@ inventory, and the frozen runner and locator crate decisions, including the
   boundary modules W2 implements against.
 - `locator`: the frozen locator crate skeleton and its own tests.
 - Integrator prep: `Makefile`, Cargo workspace membership,
-  `packages/xtask/src/main.rs` seams, coverage-map format, runner and locator
+  `packages/xtask/src/main.rs` seams, the `YankedIndex` trait declaration in
+  `packages/xtask/src/bazel_yanked.rs`, coverage-map format, runner and locator
   crate selection, generated output reconciliation, and shared changelog
   folding.
 
@@ -391,8 +400,11 @@ asserted by a test in the module that emits it; the `cargo-bazel` URL and
 sha256 are pinned and the source
 bootstrap is refused; `.bazelrc` contains no startup line and no channel flag;
 generated `.bazelignore` covers `.scratch/` and every Cargo output directory,
-proven by a drift mutation; `gen-bazel --check` is clean; both schema
-generations report the exact generated nonempty valid census; the build-script
+proven by a drift mutation; `gen-bazel --check` is clean; `bazel-yanked-refresh`
+reaches the index only through the `YankedIndex` boundary, every one of its unit
+tests supplies a fake response and none opens a socket, and `IndexClient` is the
+one site that may; both schema generations report the exact generated nonempty
+valid census; the build-script
 and action-environment inventory is committed and drift-checked; the W0 wave
 notes record both measured invocations as command shapes with `<worktree>`
 placeholders and contain no real absolute path; Cargo remains
@@ -450,10 +462,13 @@ actually used and the guard compares it to the pin; a global channel flag is
 rejected by a guard; the vendor rule refuses an unclassifiable lock entry and
 asserts materialized package count equals the lock's; the committed
 lock-bounded yanked snapshot exists, `cargo xtask bazel-yanked-check` passes
-offline for all three locks from both the carriers and a contributor shell, its
-drift refusal names refresh, review and commit, then the check, and it reports
-under the existing `rust-deny-*` identifiers without adding a nineteenth
-surface; every migrated test resolves its binary
+offline for all three locks from both the carriers and a contributor shell,
+that validator names neither `YankedIndex` nor `IndexClient` so it cannot reach
+the index at all, the wave notes record the reviewed networked refresh that
+produced the snapshot as a command shape plus the index revision it observed,
+its drift refusal names refresh, review and commit, then the check, and it
+reports under the existing `rust-deny-*` identifiers without adding a
+nineteenth surface; every migrated test resolves its binary
 and fixtures through the locator, the planted stale-binary negative fixture
 fails under Bazel, and both arms stay green under Cargo;
 per-case JUnit results are published with the canonical redaction set absent
@@ -513,7 +528,10 @@ proven byte-identical across `build`, `test`, `query`, `info`, `shutdown`, and
 `clean`, with a mutation that perturbs one of them failing closed; the trim
 step is synchronous and its completion is observed before any size measurement;
 every cleanup, result-file, and deadline property is proven through the
-injected `fsops` and `clock` boundaries with no live-host dependency;
+injected `fsops` and `clock` boundaries with no live-host dependency; the W2
+wave notes record the consolidated startup-option construction as a command
+shape with `<worktree>` placeholders and a validation step proves no real
+absolute path appears in them;
 panel and PR are sealed and merged.
 
 ### W3 - Shadow CI

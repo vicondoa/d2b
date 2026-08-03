@@ -231,7 +231,10 @@ Its contract, all of it enforcing:
 - It refuses to start when the ambient environment carries `CARGO_BAZEL_REPIN`,
   `REPIN`, or `CARGO_BAZEL_REPIN_ONLY`, for the same reason `bazel-repin` does:
   the child it spawns would otherwise repin every hub as a side effect of a
-  module-lock update.
+  module-lock update. That refusal carries its own recovery row rather than
+  sharing one with `bazel-repin`, because the remedy has to end on the command
+  the contributor was actually running, and a shared row would have to name a
+  `--hub` value this command does not have and cannot infer.
 - It is **not** a Make target, no workflow may invoke it, and the guard refuses
   any `Makefile` recipe or workflow step that names it.
 - It is the exact remediation for module lock drift. There is no documented
@@ -267,6 +270,43 @@ prevent. A refresh that is reviewed but leaves a key the locks no longer
 declare still fails the gate, and the contributor finds that out in their own
 shell rather than in continuous integration.
 
+### The index boundary the refresh calls through
+
+`bazel-yanked-refresh` is the only command in this contract that opens a
+socket, so it is the only one whose failure modes cannot be reached by
+arranging local state. A test that wants to see what the command does with a
+partial index answer would otherwise have to reach the live index, which makes
+the test a network dependency, non-deterministic, and unavailable to anyone
+reviewing offline. The refresh therefore calls the index through a trait rather
+than through a client it constructs inline:
+
+- `packages/xtask/src/bazel_yanked.rs` declares `trait YankedIndex`. Its
+  surface is exactly what the refresh needs and nothing more: the revision of
+  the index it observed, and the yanked state of one `(name, version)` key.
+- The same file carries `IndexClient`, the single networked implementation of
+  that trait. It is the only site in the repository permitted to open a socket
+  on behalf of this command, and it holds no snapshot-shaping logic, so a
+  reviewer reading the refresh reads no transport code.
+- The refresh is written against `YankedIndex` and receives its implementation
+  from the command-line routing seam. Its unit tests supply an in-process fake
+  that returns canned responses: an all-clear index, an index reporting a
+  yanked version, a response omitting a key the locks declare, a response
+  carrying a key no lock declares, a response with no revision, a transport
+  failure, and a malformed payload. No unit test opens a socket, resolves a
+  name, or reaches the live index.
+- `bazel-yanked-check` never names `YankedIndex` and never constructs
+  `IndexClient`. The offline validator is offline by construction rather than
+  by discipline, and a structural guard asserts that neither name appears on
+  its path.
+
+What a fake cannot prove is that `IndexClient` speaks correctly to the real
+index. That is measured separately and explicitly: the contributor who runs the
+reviewed networked refresh produces a snapshot whose diff against the committed
+one, together with the index revision it recorded, is the observation, and the
+offline check that follows is the verdict. The wave that commits the snapshot
+records that observation in its wave notes as a command shape and a revision,
+never as a live assertion the gate repeats.
+
 ## Actionable failure contract
 
 Every row's text is the operator-facing recovery string the refusal must
@@ -277,7 +317,8 @@ observation about the strings is below the table.
 | --- | --- |
 | Stale Bazel-side hub lock | Run `cargo xtask bazel-repin --hub <hub>`, review and commit the regenerated lock under `bazel/cargo/`, then rerun the failed command. |
 | `bazel-repin` changed tracked files other than the named hub's lock | Commit or restore the listed repository-relative paths, then run `cargo xtask bazel-repin --hub <hub>`. |
-| Ambient `CARGO_BAZEL_REPIN`, `REPIN`, or `CARGO_BAZEL_REPIN_ONLY` | Unset `CARGO_BAZEL_REPIN`, `REPIN`, and `CARGO_BAZEL_REPIN_ONLY`, then run `cargo xtask bazel-repin --hub <hub>`. |
+| `bazel-repin` refused an ambient `CARGO_BAZEL_REPIN`, `REPIN`, or `CARGO_BAZEL_REPIN_ONLY` | Unset `CARGO_BAZEL_REPIN`, `REPIN`, and `CARGO_BAZEL_REPIN_ONLY`, then run `cargo xtask bazel-repin --hub <hub>`. |
+| `bazel-module-refresh` refused an ambient `CARGO_BAZEL_REPIN`, `REPIN`, or `CARGO_BAZEL_REPIN_ONLY` | Unset `CARGO_BAZEL_REPIN`, `REPIN`, and `CARGO_BAZEL_REPIN_ONLY`, then run `cargo xtask bazel-module-refresh`. |
 | Generated BUILD, governed-source, `.bazelignore`, harness-free or doctest census, or hermeticity-inventory drift | Run `cargo xtask gen-bazel`, review and commit the generated diff, then run `cargo xtask gen-bazel --check`. |
 | Module lock drift | Run `cargo xtask bazel-module-refresh`, review and commit `MODULE.bazel.lock`, then rerun the failed command. |
 | `bazel-module-refresh` changed tracked files other than `MODULE.bazel.lock` | Commit or restore the listed repository-relative paths, then run `cargo xtask bazel-module-refresh`. |
@@ -285,12 +326,18 @@ observation about the strings is below the table.
 
 Observations about that table, none of which belong in any string in it:
 
-- `<hub>` is the only substitution any of these strings takes. The refusal
-  prints the refused hub name in its place; the literal five characters never
-  reach an operator.
-- No refusal echoes an environment value. The ambient-control row names the
+- `<hub>` is the only substitution any of these strings takes, and it appears
+  only in the three rows whose remedy is `bazel-repin`. The refusal prints the
+  refused hub name in its place; the literal five characters never reach an
+  operator. No other row is a template: each names one command with the exact
+  arguments a contributor is meant to type.
+- No refusal echoes an environment value. Each ambient-control row names the
   three variables because a contributor has to unset them by name; what they
-  were set to is never printed.
+  were set to is never printed. There are two such rows and not one because the
+  remedy differs: the row a `bazel-repin` refusal emits ends on
+  `bazel-repin --hub <hub>`, and the row a `bazel-module-refresh` refusal emits
+  ends on `bazel-module-refresh`. Collapsing them would send a contributor who
+  was updating the module lock off to repin a hub they never named.
 - No refusal prints an absolute path. The two unrelated-change rows list the
   paths that changed and list them repository-relative, because that message is
   read in review as often as in the shell that produced it, and because an
@@ -311,9 +358,9 @@ Observations about that table, none of which belong in any string in it:
 Tests follow the emitter, not the table:
 
 - `packages/xtask/src/bazel.rs` carries the table-driven message test for the
-  generator, stale-hub-lock, ambient-control, and both unrelated-change rows,
-  because it emits those strings itself. It carries no test for a message it
-  does not emit.
+  generator, stale-hub-lock, both ambient-control, and both unrelated-change
+  rows, because it emits those strings itself. It carries no test for a message
+  it does not emit.
 - The module-lock row is proved by an integration test that plants real module
   drift, runs the pinned Bazel under `--lockfile_mode=error`, and asserts the
   repository's recovery line beside the real upstream diagnostic. Asserting
@@ -337,6 +384,14 @@ is read by every later wave and quoted into review comments; a real home
 directory path in one is a local value that has escaped, in the same way an
 echoed environment value would be. The redaction rule that governs refusal text
 governs the notes that describe how those refusals were measured.
+
+Two later notes obey the same rule. The wave that commits the yanked snapshot
+records the reviewed networked refresh the same way, as a command shape plus
+the index revision it observed, which is the only part of that run worth
+carrying forward. The wave that consolidates every startup option into one
+construction records the resulting invocation as a shape with `<worktree>`
+placeholders only, because a consolidated construction is exactly the note a
+later reader is most likely to copy verbatim.
 
 ## Tool acquisition
 

@@ -244,6 +244,16 @@ findings with the current Cargo path for all three lock files.
     it fails, lists the unrelated changed paths repository-relative and never
     absolute, and names committing or restoring those paths followed by
     rerunning the same scoped command as the recovery.
+11. **Given** an exported dependency-regeneration control in the ambient
+    environment, **When** either the single-hub lock regeneration command or
+    the no-argument module-lock refresh command is run, **Then** each refuses
+    to start, names the three variables to unset, and ends its own recovery on
+    the exact command that was refused rather than on a shared alternative that
+    would have to ask for an argument the refused command does not take.
+12. **Given** the reviewed networked snapshot updater, **When** its handling of
+    index answers is tested, **Then** every answer is supplied through an
+    injectable boundary and no test opens a socket, and the offline validator
+    can reach neither that boundary nor its networked implementation.
 
 ---
 
@@ -438,6 +448,13 @@ retirement conditions independently block premature deletion.
 - A cleanup, result-file, or deadline guard depends on live host filesystem
   state or the host clock, so the planted negative it claims to reject cannot
   actually be produced on the reference host.
+- The networked snapshot updater is written against a client it constructs
+  itself, so no test can supply a partial, revisionless, or malformed index
+  answer, and every refusal path it owns stays unproven until it first fires in
+  a contributor's shell.
+- The offline snapshot validator can reach the same networked client the
+  updater uses, so a future change makes the gate's drift check open a socket
+  without any guard noticing.
 - The nightly toolchain selection fails to apply to the census, or applies to
   the whole build so every first-party crate compiles off the stable pin.
 - Graph discovery traverses scratch or Cargo output directories inside the
@@ -566,11 +583,15 @@ retirement conditions independently block premature deletion.
   yanked-state snapshot MUST be explicit committed inputs; an ignore MUST
   retain its current workspace and advisory scope; refreshing a snapshot MUST
   be an explicit reviewed networked operation outside the gate through one
-  repository-owned command; and the gate's own drift check MUST be a separate
-  offline repository-owned command that proves exact key-set equality with the
-  committed locks rather than regenerating state, is the single implementation
-  and the single message for that comparison, and is runnable unchanged both by
-  the gate carriers and by a contributor in a shell.
+  repository-owned command; that command MUST reach the index through a single
+  injectable boundary whose one networked implementation is the only site
+  permitted to open a socket for it, so every refusal it can produce is
+  provable from supplied responses; and the gate's own drift check MUST be a
+  separate offline repository-owned command that proves exact key-set equality
+  with the committed locks rather than regenerating state, MUST NOT be able to
+  reach that boundary or its networked implementation at all, is the single
+  implementation and the single message for that comparison, and is runnable
+  unchanged both by the gate carriers and by a contributor in a shell.
 - **FR-022**: The API census, pinned test inventory, scanner controls, and
   other non-compilation checks MUST each have a planted failure that proves
   the check can reject a violating input.
@@ -683,10 +704,15 @@ retirement conditions independently block premature deletion.
   controls MUST land with the plumbing they constrain.
 - **FR-052**: Every new guard MUST include a positive case and a planted
   negative fixture or mutation that proves the guard fails when its protected
-  invariant is removed. Guards over filesystem effects and over elapsed or
-  absolute time MUST be exercised through injectable boundaries, so every
-  planted negative is reproducible without depending on live host filesystem
-  state, a full disk, a privileged mount, or the host clock.
+  invariant is removed. Guards over filesystem effects, over elapsed or
+  absolute time, and over networked registry-index responses MUST be exercised
+  through injectable boundaries, so every planted negative is reproducible
+  without depending on live host filesystem state, a full disk, a privileged
+  mount, the host clock, or a reachable network. The one networked
+  implementation of an index boundary MUST be exercised only by the explicit
+  contributor-run operation that owns it, outside the gate, and that run MUST
+  be recorded as a measured observation rather than repeated as a gate
+  assertion.
 - **FR-053**: The feature MUST use existing Rust, policy, and workflow test
   surfaces for its guards and MUST NOT add a new top-level shell gate,
   Layer-1 job, or independent required context.

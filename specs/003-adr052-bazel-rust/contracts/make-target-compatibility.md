@@ -51,6 +51,14 @@ command in a shell to get the same message before pushing. It is still not a
 Make target and still not a workflow step: workflows reach it only through the
 approved aggregate and slice targets that build those carriers.
 
+The structural guard therefore refuses **five** command names, not four. The
+four above plus `cargo xtask bazel-yanked-check` are each rejected by name in
+any `Makefile` recipe and in any file under `.github/workflows/`. Leaving the
+validator out of that list would be the easy mistake, because it is the one a
+workflow author would reach for in good faith to "also check the snapshot", and
+the result would be a second, unattributed execution of a check the carriers
+already own.
+
 ## Promotion
 
 - Required context remains `test-rust`.
