@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# tests/test-nix-unit.sh - `make test-nix-unit`: build the nix-unit corpus checks
-# (`flake.checks.<system>.nix-unit*`) for the native system.
+# tests/test-nix-unit.sh - `make test-nix-unit`: evaluate the complete
+# Nix-unit corpus through nix-eval-jobs, or build one CI-selected shard.
 #
 # This is both the focused target for iterating on the declarative value/throw
 # corpus under tests/unit/nix/ and explicit Layer-1 evidence. `test-flake` also
@@ -21,16 +21,29 @@ export ROOT D2B_LOG
 export NIX_CONFIG="${NIX_CONFIG:-experimental-features = nix-command flakes}"
 cd "$ROOT"
 
+flake_root=$(git rev-parse --show-toplevel)
+flake_ref="git+file://$flake_root"
 system=$(nix eval --raw --impure --expr builtins.currentSystem)
-mapfile -t checks < <(
-  nix eval --raw ".#checks.$system" --apply '
+
+if [ -n "${D2B_NIX_UNIT_CHECK:-}" ] \
+  && ! [[ "$D2B_NIX_UNIT_CHECK" =~ ^[A-Za-z0-9._-]+$ ]]; then
+  fail "D2B_NIX_UNIT_CHECK contains an unsafe check name" || true
+  exit 2
+fi
+
+check_dir=$(d2b_mktemp ".d2b-nix-unit-checks.XXXXXX")
+check_list="$check_dir/checks"
+if ! nix eval --raw "${flake_ref}#checks.$system" --apply '
     cs:
       builtins.concatStringsSep "\n"
         (builtins.filter
           (name: name == "nix-unit" || builtins.substring 0 9 name == "nix-unit-")
           (builtins.sort builtins.lessThan (builtins.attrNames cs)))
-  '
-)
+  ' >"$check_list"; then
+  fail "nix-unit corpus ($system): check discovery failed" || true
+  exit 1
+fi
+mapfile -t checks <"$check_list"
 
 if [ "${#checks[@]}" -eq 0 ]; then
   fail "nix-unit corpus ($system): no nix-unit* checks found"
@@ -56,85 +69,101 @@ if [ -n "${D2B_NIX_UNIT_CHECK:-}" ]; then
   fi
 fi
 
-# Two evaluators are the conservative default on development hosts. Four is
-# the hard ceiling everywhere: larger local fan-out exhausts ordinary hosts,
-# and CI expresses the same ceiling as the shard matrix's max-parallel value.
-jobs=${D2B_NIX_UNIT_JOBS:-2}
-case "$jobs" in
+# `D2B_NIX_UNIT_JOBS` remains a compatibility alias for the established CI
+# selector while local evaluation uses nix-eval-jobs' own worker control.
+workers=${D2B_NIX_EVAL_JOBS_WORKERS:-${D2B_NIX_UNIT_JOBS:-4}}
+case "$workers" in
   1|2|3|4) ;;
   *)
-    fail "D2B_NIX_UNIT_JOBS must be an integer from 1 through 4 (got ${jobs@Q})" || true
+    fail "nix-eval-jobs workers must be an integer from 1 through 4" || true
     exit 2
     ;;
 esac
+memory_mb=${D2B_NIX_EVAL_JOBS_MEMORY_MB:-${D2B_NIX_UNIT_MEMORY_MB:-4096}}
+if ! [[ "$memory_mb" =~ ^[0-9]+$ ]] \
+  || [ "$memory_mb" -lt 512 ] \
+  || [ "$memory_mb" -gt 8192 ]; then
+  fail "nix-eval-jobs per-worker memory must be between 512 and 8192 MiB" || true
+  exit 2
+fi
 
-# Every discovered check gets one process, one log, and one wait. The bounded
-# scheduler overlaps independent pure-eval shards without changing the corpus
-# or allowing a fast failure to cancel slower siblings. Logs are replayed in
-# discovery order so parallel output never interleaves and every failing shard
-# is reported in one run.
-log_dir=$(d2b_mktemp ".d2b-nix-unit-logs.XXXXXX")
-declare -a pids=() labels=() logs=()
-failures=()
-next_to_wait=0
-running=0
-
-stop_running_checks() {
-  local pid
-  for pid in "${pids[@]:-}"; do
-    [ -n "$pid" ] || continue
-    kill "$pid" 2>/dev/null || true
-  done
-}
-add_cleanup stop_running_checks
-
-launch_check() {
-  local check="$1" ordinal=${#pids[@]}
-  [[ "$check" =~ ^[A-Za-z0-9._-]+$ ]] || {
-    fail "nix-unit discovered an unsafe check name: ${check@Q}"
-    exit 1
-  }
-  local output="$log_dir/$ordinal.log"
-  log "--> nix build .#checks.$system.$check"
-  (
-    nix build --no-link --print-out-paths ".#checks.$system.$check"
-  ) >"$output" 2>&1 &
-  pids+=("$!")
-  labels+=("$check")
-  logs+=("$output")
-  running=$((running + 1))
-}
-
-reap_next() {
-  local index=$next_to_wait check=${labels[$next_to_wait]}
-  local output=${logs[$next_to_wait]}
-  if wait "${pids[$next_to_wait]}"; then
-    pids[$next_to_wait]=""
-    cat "$output"
+if [ -n "${D2B_NIX_UNIT_CHECK:-}" ]; then
+  check="$D2B_NIX_UNIT_CHECK"
+  log "--> nix build --no-link ${flake_ref}#checks.${system}.${check}"
+  if nix build --no-link --print-out-paths \
+    "${flake_ref}#checks.${system}.${check}"; then
     ok "nix-unit check $check ($system)"
   else
-    pids[$next_to_wait]=""
-    log "nix-unit check $check FAILED - captured output follows:"
-    cat "$output" >&2 || true
-    failures+=("$check")
+    fail "nix-unit check $check ($system) failed" || true
+    exit 1
   fi
-  next_to_wait=$((index + 1))
-  running=$((running - 1))
-}
+  log "test-nix-unit OK (selected $check; duration: $((SECONDS - suite_started))s)"
+  exit 0
+fi
 
-for check in "${checks[@]}"; do
-  while [ "$running" -ge "$jobs" ]; do
-    reap_next
-  done
-  launch_check "$check"
-done
-while [ "$running" -gt 0 ]; do
-  reap_next
-done
+if ! command -v nix-eval-jobs >/dev/null 2>&1; then
+  fail "nix-eval-jobs is required for local corpus evaluation; acquire it explicitly with 'nix shell nixpkgs#nix-eval-jobs'" || true
+  exit 2
+fi
+if ! command -v jq >/dev/null 2>&1; then
+  fail "jq is required to report every nix-eval-jobs attribute result" || true
+  exit 2
+fi
 
-if [ "${#failures[@]}" -ne 0 ]; then
-  fail "nix-unit corpus ($system): ${#failures[@]} check(s) failed: ${failures[*]}"
+# nix-eval-jobs owns the evaluator worker pool. It instantiates only the
+# dedicated per-case derivations; this path never invokes nix build.
+result_dir=$(d2b_mktemp ".d2b-nix-eval-jobs.XXXXXX")
+result_file="$result_dir/results.jsonl"
+log "--> nix-eval-jobs --flake ${flake_ref}#nixUnitJobs.${system} --workers $workers --max-memory-size $memory_mb"
+if nix-eval-jobs \
+  --flake "${flake_ref}#nixUnitJobs.${system}" \
+  --workers "$workers" \
+  --max-memory-size "$memory_mb" \
+  --show-trace >"$result_file"; then
+  tool_status=0
+else
+  tool_status=$?
+fi
+
+if [ ! -s "$result_file" ] || ! jq -s -e '
+  length > 0
+  and all(.[]; type == "object"
+    and ((.attr? != null) or (.attrPath? != null)))
+' "$result_file" >/dev/null; then
+  cat "$result_file" >&2 || true
+  fail "nix-eval-jobs returned no valid JSON-lines attribute results" || true
   exit 1
 fi
 
-log "test-nix-unit OK (${#checks[@]} checks, up to $jobs workers; duration: $((SECONDS - suite_started))s)"
+cat "$result_file"
+mapfile -t failures < <(
+  jq -r '
+    select(type == "object" and (.error? != null))
+    | (.attr // ((.attrPath // []) | join(".")))
+      + ": " + (.error | tostring)
+  ' "$result_file"
+)
+result_count=$(jq -s 'length' "$result_file")
+integrity_count=$(jq -s '
+  [ .[]
+    | select(((.attrPath // []) | join(".")) == "__nix_unit_integrity")
+  ] | length
+' "$result_file")
+
+if [ "$integrity_count" -ne 1 ]; then
+  log "  FAIL: nix-unit integrity attribute was not evaluated exactly once"
+fi
+for failure in "${failures[@]:-}"; do
+  log "  FAIL: nix-unit attribute $failure"
+done
+if [ "$tool_status" -ne 0 ]; then
+  log "  FAIL: nix-eval-jobs exited with status $tool_status"
+fi
+if [ "${#failures[@]}" -ne 0 ] \
+  || [ "$tool_status" -ne 0 ] \
+  || [ "$integrity_count" -ne 1 ]; then
+  fail "nix-unit corpus ($system): ${#failures[@]} attribute failure(s) across $result_count results" || true
+  exit 1
+fi
+
+log "test-nix-unit OK ($result_count attributes, $workers workers, ${memory_mb}MiB per worker; duration: $((SECONDS - suite_started))s)"

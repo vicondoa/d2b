@@ -778,7 +778,7 @@
           unknown = nixUnitShardUnknownFiles;
           duplicate = nixUnitShardDuplicateFiles;
         };
-        nixUnitCasesFor = caseFileNames: import ./tests/unit/nix {
+        nixUnitCorpus = import ./tests/unit/nix/eval-jobs.nix {
           lib = pkgs.lib;
           inherit pkgs system;
           flakeRoot = ./.;
@@ -790,44 +790,11 @@
           # (which would resolve to a non-git store path inside the flake).
           nixpkgsFlake = nixpkgs;
           inherit d2bModule;
-          inherit caseFileNames;
         };
-        nixUnitCases = nixUnitCasesFor null;
-        nixUnitEval = name: case:
-          let
-            r = builtins.tryEval (let v = case.expr; in builtins.deepSeq v v);
-          in
-          if case ? expectedError then
-            # Bucket-B: the case must throw. `tryEval` cannot capture the
-            # message, so message-substring matching is NOT supported here:
-            # if an author sets `expectedError.msg` (expecting it enforced),
-            # fail loudly rather than give false confidence. Message-sensitive
-            # negative gates should assert over `config.assertions` data (see
-            # guest-config-containment.nix) instead.
-            if (builtins.isAttrs case.expectedError) && (case.expectedError != { }) then
-              {
-                inherit name;
-                ok = false;
-                detail = "expectedError must be `{ }` - this runner asserts only THAT the expr throws; tryEval cannot match a throw message. Move message-substring checks to config.assertions data.";
-              }
-            else
-              {
-                inherit name;
-                ok = !r.success;
-                detail =
-                  if r.success
-                  then "expected an error, but eval succeeded"
-                  else "threw as expected";
-              }
-          else
-            {
-              inherit name;
-              ok = r.success && r.value == case.expected;
-              detail =
-                if !r.success then "eval threw; expected a value"
-                else "got=${builtins.toJSON r.value} expected=${builtins.toJSON case.expected}";
-            };
-        nixUnitResultsFor = cases: pkgs.lib.mapAttrsToList nixUnitEval cases;
+        nixUnitCasesFor = nixUnitCorpus.casesFor;
+        nixUnitCases = nixUnitCorpus.cases;
+        nixUnitEval = nixUnitCorpus.evalCase;
+        nixUnitResultsFor = nixUnitCorpus.resultsFor;
         nixUnitShardCheck = checkName: caseFileNames:
           let
             cases = nixUnitCasesFor caseFileNames;
@@ -1338,6 +1305,39 @@
         eval-graphics = mkCheck "eval-graphics"
           (mkEval [ (import ./examples/graphics-workstation/configuration.nix) ]);
       });
+
+      # A separate derivation attrset is the local nix-eval-jobs surface. The
+      # integrity attr keeps the existing fail-closed pin and shard-coverage
+      # check in the same invocation without adding a second scheduler or
+      # broadening the realized-check set.
+      nixUnitJobs = forAllSystems (system:
+        let
+          pkgs = nixpkgsFor.${system};
+          d2bModule = import ./nixos-modules { inherit inputs; };
+          mkEval = modules: nixpkgs.lib.nixosSystem {
+            inherit system;
+            modules = [
+              d2bModule
+              ({ lib, ... }: {
+                d2b.site.usePrebuiltHostTools =
+                  lib.mkDefault (system == "x86_64-linux");
+              })
+            ] ++ modules;
+          };
+          nixUnitCorpus = import ./tests/unit/nix/eval-jobs.nix {
+            lib = pkgs.lib;
+            inherit pkgs system;
+            flakeRoot = ./.;
+            d2bLib = import ./nixos-modules/lib.nix { lib = pkgs.lib; };
+            inherit mkEval;
+            nixpkgsFlake = nixpkgs;
+            inherit d2bModule;
+          };
+        in
+        {
+          __nix_unit_integrity = self.checks.${system}.nix-unit;
+        } // nixUnitCorpus.jobs
+      );
 
       lib = nixpkgs.lib.makeExtensible (_: {
         evalFixture = system: self.checks.${system}.eval-fixture-contracts.fixtureData;
