@@ -30,6 +30,10 @@ const RUST_LEAF_MODES: &[&str] = &[
     "inventory-stub",
     "fixture-contracts",
 ];
+const REQUIRED_NEXTTEST_BENCH_SOURCES: &[&str] = &[
+    "packages/d2b-zone-routing/benches/route_decision.rs",
+    "packages/d2b-controller-toolkit/benches/reaction.rs",
+];
 const RUST_BASELINE_LEAF_IDS: &[&str] = &[
     "rust-api-surface",
     "rust-main-format",
@@ -415,11 +419,17 @@ fn rust_companion_violations(driver: &str, harness_targets: &[String]) -> Vec<St
         violations.push("Rust doctests are not explicitly retained".to_owned());
     }
     for required in [
+        "has(\"rust-suites\")",
+        "has(\"packages\")",
+        "workspace_members",
+        "cargo metadata",
         "cargo nextest list",
         "kind == \"test\"",
+        "kind == \"bench\"",
         "testcases | length",
         "cargo test",
         "--test",
+        "--bench",
     ] {
         if !driver.contains(required) {
             violations.push(format!(
@@ -726,6 +736,13 @@ fn rust_companion_surfaces_are_retained_and_fail_closed() {
             "Rust companion execution must retain doctest and harness=false coverage for {workspace}"
         );
     }
+    let tracked = git_tracked_files();
+    for required in REQUIRED_NEXTTEST_BENCH_SOURCES {
+        assert!(
+            tracked.iter().any(|path| path == required),
+            "Rust companion policy must keep the assertion-bearing bench target tracked: {required}"
+        );
+    }
 }
 
 #[test]
@@ -734,12 +751,16 @@ fn rust_companion_policy_rejects_mutated_or_empty_discovery_fixtures() {
     let good = r#"
 run_companions() {
   cargo test --doc
+  metadata=$(cargo metadata --format-version 1 --no-deps --manifest-path packages/Cargo.toml)
+  jq -e 'has("packages") and has("workspace_members")' <<<"$metadata"
   listing=$(cargo nextest list --message-format json)
-  jq -r '.["rust-suites"][] | select(.kind == "test") | select((.testcases | length) == 0)'
+  jq -e 'has("rust-suites")' <<<"$listing"
+  jq -r '.["rust-suites"][] | select(.kind == "test" or .kind == "bench") | select((.testcases | length) == 0)'
   cargo test --test smoke
+  cargo test --bench reaction
   targets="discovered"
   if [ -z "$targets" ]; then
-    fail "empty harness-free discovery"
+    fail "empty nextest-unrunnable discovery"
     exit 1
   fi
 }
@@ -751,10 +772,13 @@ run_companions() {
 
     for (needle, label) in [
         ("cargo test --doc", "doctest"),
+        ("cargo metadata", "Cargo metadata discovery"),
         ("cargo nextest list", "harness discovery"),
+        ("kind == \"bench\"", "bench-kind discovery"),
+        ("--bench", "bench selector"),
         (
             r#"if [ -z "$targets" ]; then
-    fail "empty harness-free discovery"
+    fail "empty nextest-unrunnable discovery"
     exit 1
   fi"#,
             "empty-discovery failure",

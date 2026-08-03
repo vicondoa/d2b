@@ -178,11 +178,13 @@ back into a single invocation:
 - **Doctests.** nextest does not run them. Several here are `compile_fail`
   capability seals (`AdmittedMutation`, `OwnerIndexMutation`), so dropping
   them removes a trust boundary without failing anything.
-- **`harness = false` binaries.** They expose no libtest interface, so nextest
-  builds them and reports zero test cases. `d2b-core-smoke` is one and carries
-  real fail-closed minijail assertions. The set is derived from `nextest list`
-  (kind `test` with zero cases) rather than pinned, so a new one cannot
-  silently drop out of the gate.
+- **Harness-free test and bench targets.** They expose no nextest execution
+  surface, so nextest builds them but does not run their assertions.
+  `d2b-core-smoke` is a test target and the routing and reaction benchmarks
+  are bench targets; all carry real assertions. The set is derived from
+  `nextest list` zero-case test suites plus Cargo metadata bench targets rather
+  than pinned, and each target is run once with its matching `--test` or
+  `--bench` selector, so a new one cannot silently drop out of the gate.
 
 The privileged broker workspace stays on `cargo test`. Its tests are not
 process-per-test safe, and it runs 528 tests in about 1.4 s, so nextest has

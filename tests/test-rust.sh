@@ -373,13 +373,15 @@ assert_pinned_rust_toolchain
 #     load-bearing: the `compile_fail` doctests on AdmittedMutation and
 #     OwnerIndexMutation are capability seals (see the "Capability mint surface
 #     allowlist" row in AGENTS.md). A bare nextest swap deletes them silently.
-#   * harness=false BINARIES. They expose no libtest interface, so nextest
-#     filters them out (see packages/.config/nextest.toml). `cargo test` runs
-#     them, so they need an explicit invocation to stay gated.
+#   * HARNESS-FREE TEST AND BENCH TARGETS. Zero-case kind "test" suites expose
+#     no libtest interface, while kind "bench" targets are not nextest test
+#     surfaces. `cargo test` runs both with their matching target selector, so
+#     they need explicit invocations to stay gated.
 #
-# Both companions are wired per workspace, and the harness=false set is
-# DISCOVERED from cargo metadata rather than hard-coded, so a newly added
-# harness=false target cannot silently drop out of the gate.
+# Both companions are wired per workspace. The zero-case test set is
+# DISCOVERED from nextest JSON and the bench set from Cargo metadata rather
+# than hard-coded, so a newly added nextest-unrunnable target cannot silently
+# drop out of the gate.
 require_nextest() {
   if cargo nextest --version >/dev/null 2>&1; then
     return 0
@@ -394,24 +396,183 @@ require_nextest() {
   exit 1
 }
 
-# Emit the harness=false test targets of a workspace as "<package>\t<binary>"
-# rows, for execution with a plain `cargo test --test`.
+# Emit nextest-unrunnable test and bench targets as
+# "<kind>\t<package>\t<target>" rows. A zero-case kind "test" suite exposes no
+# libtest interface, so cargo-nextest builds it but never runs it. A kind
+# "bench" target is not a nextest test surface at all; Cargo metadata is the
+# authoritative target inventory for those targets because listing a
+# harness=false bench would execute its assertion-bearing binary while nextest
+# tries to enumerate it.
 #
-# Such a target exposes no libtest interface, so cargo-nextest builds it but
-# reports zero test cases and never runs it. Selecting on kind == "test" is what
-# separates it from an ordinary binary crate that simply contains no unit tests:
-# nextest reports zero cases for those too, but they are kind "bin" and `cargo
-# test --test <name>` would not address them.
-#
-# Deriving this set rather than pinning it means a newly added harness=false
+# Deriving both sets rather than pinning them means a newly added harness-free
 # target cannot silently drop out of the gate.
+nextest_bench_targets_from_metadata() {
+  local manifest_path="$1"
+  shift
+
+  local metadata
+  if ! metadata=$(cargo metadata --format-version 1 --no-deps \
+      --manifest-path "$manifest_path"); then
+    fail "cargo metadata failed while discovering bench targets"
+    return 1
+  fi
+  # Validate the metadata fields used below before querying them. In
+  # particular, an absent workspace_members or target kind must not look like
+  # a workspace with no benches.
+  if ! printf '%s' "$metadata" | jq -e '
+        type == "object"
+        and (has("packages")
+          and (."packages" | type == "array" and length > 0))
+        and (has("workspace_members")
+          and (."workspace_members" | type == "array" and length > 0))
+        and all(."packages"[];
+          type == "object"
+          and has("id") and (.id | type == "string")
+          and has("name") and (.name | type == "string")
+          and has("manifest_path") and (.manifest_path | type == "string")
+          and has("targets") and (.targets | type == "array")
+          and all(.targets[];
+            type == "object"
+            and has("name") and (.name | type == "string")
+            and has("kind")
+              and (.kind | type == "array" and length > 0
+                and all(.[]; type == "string"))
+            and has("test") and (.test | type == "boolean")
+          )
+        )
+      ' >/dev/null; then
+    fail "cargo metadata JSON did not match the expected workspace shape; refusing to infer an empty bench set"
+    return 1
+  fi
+
+  local workspace_selected=0
+  local -a selected_packages=() excluded_packages=()
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --workspace|--all)
+        workspace_selected=1
+        ;;
+      -p|--package)
+        [ "$#" -ge 2 ] || {
+          fail "package selector is missing its package name while discovering bench targets"
+          return 1
+        }
+        selected_packages+=( "$2" )
+        shift
+        ;;
+      --package=*)
+        selected_packages+=( "${1#*=}" )
+        ;;
+      -p*)
+        selected_packages+=( "${1#-p}" )
+        ;;
+      --exclude)
+        [ "$#" -ge 2 ] || {
+          fail "workspace exclusion is missing its package name while discovering bench targets"
+          return 1
+        }
+        excluded_packages+=( "$2" )
+        shift
+        ;;
+      --exclude=*)
+        excluded_packages+=( "${1#*=}" )
+        ;;
+    esac
+    shift
+  done
+
+  local manifest_real
+  manifest_real=$(readlink -f -- "$manifest_path")
+  local workspace_packages
+  workspace_packages=$(printf '%s' "$metadata" | jq -r '
+        . as $metadata
+        | $metadata.packages[]
+        | select(.id as $id | $metadata.workspace_members | index($id))
+        | [.name, .manifest_path]
+        | @tsv
+      ') || {
+    fail "cargo metadata workspace package discovery failed"
+    return 1
+  }
+
+  declare -A selected_set=() excluded_set=()
+  local package_name
+  for package_name in "${selected_packages[@]}"; do
+    selected_set["$package_name"]=1
+  done
+  for package_name in "${excluded_packages[@]}"; do
+    excluded_set["$package_name"]=1
+  done
+
+  local selected_count=0 package_manifest include excluded
+  while IFS=$'\t' read -r package_name package_manifest; do
+    [ -n "$package_name" ] || continue
+    include=0
+    if [ "${#selected_packages[@]}" -gt 0 ]; then
+      [ "${selected_set[$package_name]+yes}" = yes ] && include=1
+    elif [ "$workspace_selected" -eq 1 ]; then
+      include=1
+    elif [ "$package_manifest" = "$manifest_real" ]; then
+      include=1
+    fi
+    excluded=0
+    [ "${excluded_set[$package_name]+yes}" = yes ] && excluded=1
+    if [ "$include" -eq 1 ] && [ "$excluded" -eq 0 ]; then
+      selected_count=$((selected_count + 1))
+    fi
+  done <<<"$workspace_packages"
+  if [ "$selected_count" -eq 0 ]; then
+    fail "cargo metadata selected no workspace packages while discovering bench targets"
+    return 1
+  fi
+
+  local all_bench_targets
+  all_bench_targets=$(printf '%s' "$metadata" | jq -r '
+        . as $metadata
+        | $metadata.packages[]
+        | select(.id as $id | $metadata.workspace_members | index($id))
+        | .name as $package_name
+        | .targets[]
+        | select((.kind | index("bench")) != null)
+        | [$package_name, .name]
+        | @tsv
+      ') || {
+    fail "cargo metadata bench target discovery failed"
+    return 1
+  }
+  while IFS=$'\t' read -r package_name target_name; do
+    [ -n "$package_name" ] || continue
+    include=0
+    if [ "${#selected_packages[@]}" -gt 0 ]; then
+      [ "${selected_set[$package_name]+yes}" = yes ] && include=1
+    elif [ "$workspace_selected" -eq 1 ]; then
+      include=1
+    else
+      while IFS=$'\t' read -r workspace_package workspace_manifest; do
+        if [ "$workspace_package" = "$package_name" ] \
+          && [ "$workspace_manifest" = "$manifest_real" ]; then
+          include=1
+          break
+        fi
+      done <<<"$workspace_packages"
+    fi
+    excluded=0
+    [ "${excluded_set[$package_name]+yes}" = yes ] && excluded=1
+    if [ "$include" -eq 1 ] && [ "$excluded" -eq 0 ]; then
+      printf 'bench\t%s\t%s\n' "$package_name" "$target_name"
+    fi
+  done <<<"$all_bench_targets"
+}
+
 nextest_unrunnable_targets() {
+  local manifest_path="$1"
+  shift
   local listing
   # No stderr suppression and an explicit status check: this discovers a gate
   # surface, so a listing that errors must fail the gate rather than silently
-  # yield an empty set and let the companion report "0 harness=false binaries".
-  if ! listing=$(cargo nextest list "$@" --message-format json); then
-    fail "cargo nextest list failed while discovering harness=false targets"
+  # yield an empty set and let the companion report a passing surface.
+  if ! listing=$(cargo nextest list --manifest-path "$manifest_path" "$@" --message-format json); then
+    fail "cargo nextest list failed while discovering nextest-unrunnable targets"
     return 1
   fi
   # Validate the shape the filter below actually reads, not just the top-level
@@ -419,26 +580,47 @@ nextest_unrunnable_targets() {
   # nothing and exit 0, which reads identically to "this workspace has no
   # harness-free targets" and would silently empty the gate surface.
   if ! printf '%s' "$listing" | jq -e '
-        ."rust-suites" | length > 0
-        and (to_entries | all(.value
-          | has("kind") and has("testcases")
-            and has("package-name") and has("binary-name")))
+        type == "object"
+        and (has("rust-suites")
+          and (."rust-suites" | type == "object" and length > 0
+            and (to_entries | all(.value
+              | type == "object"
+              and has("kind") and (.kind | type == "string")
+              and has("testcases")
+                and (.testcases | type == "object" or type == "array")
+              and has("package-name") and (.["package-name"] | type == "string")
+              and has("binary-name") and (.["binary-name"] | type == "string"))))
+        )
       ' >/dev/null; then
-    fail "cargo nextest list JSON did not match the expected suite shape; refusing to infer an empty harness=false set"
+    fail "cargo nextest list JSON did not match the expected suite shape; refusing to infer an empty nextest-unrunnable set"
     return 1
   fi
-  printf '%s' "$listing" | jq -r '
+  local nextest_targets metadata_targets
+  nextest_targets=$(printf '%s' "$listing" | jq -r '
         ."rust-suites"
         | to_entries[]
         | .value
-        | select(.kind == "test")
-        | select((.testcases | length) == 0)
-        | "\(.["package-name"])\t\(.["binary-name"])"
-      '
+        | select(
+            (.kind == "test" and ((.testcases | length) == 0))
+            or .kind == "bench"
+          )
+        | "\(.kind)\t\(.["package-name"])\t\(.["binary-name"])"
+      ') || {
+    fail "cargo nextest target extraction failed"
+    return 1
+  }
+  metadata_targets=$(nextest_bench_targets_from_metadata "$manifest_path" "$@") || return 1
+
+  # `nextest list` may gain native bench records in a future release. The
+  # metadata fallback is still required for the current harness=false benches,
+  # so de-duplicate the two authoritative views before execution.
+  printf '%s\n%s\n' "$nextest_targets" "$metadata_targets" \
+    | awk 'NF' \
+    | LC_ALL=C sort -u
 }
 
-# Run the surfaces cargo-nextest cannot: doctests, then any harness=false
-# binaries. `label` names the workspace for the log line; the remaining
+# Run the surfaces cargo-nextest cannot: doctests, then any nextest-unrunnable
+# test or bench targets. `label` names the workspace for the log line; the remaining
 # arguments select the workspace and feature set and are shared with the
 # preceding nextest invocation.
 run_nextest_companions() {
@@ -450,24 +632,50 @@ run_nextest_companions() {
   # `set -e`, so discovering through `done < <(...)` would let a failed listing
   # look like an empty one.
   local targets
-  targets=$(nextest_unrunnable_targets --manifest-path "$manifest_path" "$@") || {
-    fail "$label: could not discover harness=false targets"
+  targets=$(nextest_unrunnable_targets "$manifest_path" "$@") || {
+    fail "$label: could not discover nextest-unrunnable targets"
     exit 1
   }
-  local pkg bin ran=0
-  while IFS=$'\t' read -r pkg bin; do
-    [ -n "$bin" ] || continue
-    log "  --> cargo test -p $pkg --test $bin ($label; harness=false, not a nextest surface)"
+  local kind pkg target cargo_selector ran=0 test_targets=0 bench_targets=0
+  while IFS=$'\t' read -r kind pkg target; do
+    [ -n "$kind" ] || continue
+    case "$kind" in
+      test)
+        cargo_selector=--test
+        test_targets=$((test_targets + 1))
+        ;;
+      bench)
+        cargo_selector=--bench
+        bench_targets=$((bench_targets + 1))
+        ;;
+      *)
+        fail "$label: discovery returned unknown target kind '$kind'"
+        exit 1
+        ;;
+    esac
+    [ -n "$pkg" ] && [ -n "$target" ] || {
+      fail "$label: discovery returned an incomplete $kind target row"
+      exit 1
+    }
+    log "  --> cargo test -p $pkg $cargo_selector $target ($label; $kind, not a nextest surface)"
     # Forward the same selectors the listing used, so the companion runs the
     # configuration that produced it rather than a default-feature rebuild.
-    cargo test --jobs "$D2B_RUST_CARGO_JOBS" --manifest-path "$manifest_path" "$@" -p "$pkg" --test "$bin"
+    cargo test --jobs "$D2B_RUST_CARGO_JOBS" --manifest-path "$manifest_path" "$@" -p "$pkg" "$cargo_selector" "$target"
     ran=$((ran + 1))
   done <<<"$targets"
   if [ "$ran" -eq 0 ] && [ "$label" = "main workspace" ]; then
-    fail "$label: harness=false discovery was empty; refusing to report a passing companion surface"
+    fail "$label: nextest-unrunnable discovery was empty; refusing to report a passing companion surface"
     return 1
   fi
-  ok "$label companions (doctests + $ran harness=false binaries)"
+  if [ "$label" = "main workspace" ] && [ "$test_targets" -eq 0 ]; then
+    fail "$label: zero-case test discovery was empty; refusing to report a passing companion surface"
+    return 1
+  fi
+  if [ "$label" = "main workspace" ] && [ "$bench_targets" -eq 0 ]; then
+    fail "$label: bench discovery was empty; refusing to report a passing companion surface"
+    return 1
+  fi
+  ok "$label companions (doctests + $test_targets test targets + $bench_targets bench targets)"
 }
 
 # The privileged broker is a SEPARATE workspace with three independent feature
