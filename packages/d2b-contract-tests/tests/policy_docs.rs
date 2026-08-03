@@ -1023,7 +1023,7 @@ fn execution_manifest_schema_and_prose_agree_with_non_empty_discovery() {
 // Panel-preflight doc / Makefile truth table.
 //
 // The contributing doc tells a contributor how to run the panel preflight. The
-// spelling it gives has to be the spelling that exists: an earlier revision
+// spelling it gives has to be the spelling that exists: an earlier draft
 // documented `make panel-preflight` before any such target was written, and
 // nothing was looking. This lint looks.
 //
@@ -2363,17 +2363,40 @@ fn safe_type_census_fails_closed_on_a_root_set_that_governs_nothing() {
 // only argument `git add` may carry is the literal placeholder
 // `<resolved-paths-for-this-stop>`.
 //
+// The third is the *absence* of an instruction. A fetch that resolves no
+// `origin/v3` was refused with a command-free "restore access to the remote",
+// which reads as a transport fault and almost never is one: `origin` is the
+// contributor's fork, a fork carries no protected `v3`, and a generic access
+// message sends someone to debug a network that is working. The supported
+// repair keeps the fork under its own name, puts canonical `vicondoa/d2b` back
+// on `origin`, fetches, and reruns. It prints **no rebase**: nothing has been
+// attempted and the target does not resolve yet, so a rebase there is a
+// sequence the contributor cannot finish. Two things are load-bearing on that
+// path. A remote URL is written verbatim into plain `.git/config`, so a URL
+// carrying a userinfo component, a token, or an `x-access-token` form is a
+// credential put on disk by a tool the contributor trusted - the only admitted
+// URL is one exact literal. And if a remote named `fork` already exists, the
+// rename fails on the occupied name, so that is its own typed refusal: naming
+// the collision and asking for a name the contributor chooses, never guessing
+// `fork2` and handing back a remote layout nobody asked for.
+//
 // So the audit below is deliberately two-sided. Positive: a conflict refusal
 // must print the exact sorted paths it already computed, then `git fetch
 // origin`, `git rebase origin/v3`, the per-stop `git status --short` /
 // `git add <resolved-paths-for-this-stop>` / `git rebase --continue` sequence,
 // the `git rebase --abort` way out, and the `make panel-migrate` rerun, in an
-// order that works when run. Negative: every command line is **parsed** rather
+// order that works when run; a fork on `origin` must print
+// `git remote rename origin fork`, `git remote add origin <canonical>`,
+// `git fetch origin` and the rerun, in that order, because adding `origin`
+// before the fork is renamed off it is an add onto an occupied name. Negative:
+// every command line is **parsed** rather
 // than keyword-scanned. An unrecognised subcommand or flag is a rejection, not
 // a token to skip; a 40-hex object name anywhere on the line is a rejection,
 // including inside `--onto=<sha>`, which is the backwards rebase wearing a
 // flag; and a refusal that mutates nothing and offers no way forward yet may
-// not carry a git command at all.
+// not carry a git command at all. The URL a `git remote add` names is checked
+// the same way: one exact literal, with a userinfo or token form called out as
+// the credential it is.
 //
 // **Wiring contract for the implementation commit.** The commit that writes the
 // wrapper renders its refusals through a real renderer and feeds that output to
@@ -2384,8 +2407,17 @@ fn safe_type_census_fails_closed_on_a_root_set_that_governs_nothing() {
 const PANEL_MIGRATE_COMMAND: &str = "make panel-migrate";
 /// The only ref a refusal may name as a rebase target.
 const PANEL_MIGRATE_TARGET_REF: &str = "origin/v3";
-/// The only remote a refusal may name.
+/// The remote a refusal may fetch from, and the one name the repair may rename
+/// it onto.
 const PANEL_MIGRATE_REMOTE: &str = "origin";
+const PANEL_MIGRATE_FORK_REMOTE: &str = "fork";
+/// The only URL a refusal may name. Exact, and carrying no credential: a remote
+/// URL is written verbatim into plain `.git/config`, so userinfo or a token
+/// printed into one is a credential put on disk by a tool the contributor
+/// trusted.
+const PANEL_MIGRATE_CANONICAL_URL: &str = "https://github.com/vicondoa/d2b.git";
+const PANEL_MIGRATE_REMOTE_RENAME: &str = "git remote rename origin fork";
+const PANEL_MIGRATE_REMOTE_ADD: &str = "git remote add origin https://github.com/vicondoa/d2b.git";
 /// `git fetch origin`, not `git fetch origin v3`: the refspec form updates
 /// `FETCH_HEAD` without reliably updating `refs/remotes/origin/v3` on every
 /// supported Git configuration, and the next line resolves `origin/v3`.
@@ -2402,8 +2434,29 @@ const PANEL_MIGRATE_STASH_POP: &str = "git stash pop";
 const PANEL_MIGRATE_ADD_PLACEHOLDER: &str = "<resolved-paths-for-this-stop>";
 const PANEL_MIGRATE_ADD: &str = "git add <resolved-paths-for-this-stop>";
 /// The only git subcommands a refusal may name. Unrecognised is a rejection.
-const PANEL_MIGRATE_SUBCOMMANDS: &[&str] = &["fetch", "rebase", "status", "add", "stash"];
+const PANEL_MIGRATE_SUBCOMMANDS: &[&str] = &["fetch", "rebase", "status", "add", "stash", "remote"];
 const OBJECT_NAME_LEN: usize = 40;
+
+/// The typed diagnosis each refusal about a missing target has to carry. The
+/// condition is specifically that `origin` is not canonical, or specifically
+/// that it is and the branch is still absent; one message covering a fork, a
+/// deleted branch and a broken transport at once explains none of them.
+const PANEL_MIGRATE_FORK_DIAGNOSIS: &str = "this checkout's origin is not canonical vicondoa/d2b";
+const PANEL_MIGRATE_CANONICAL_DIAGNOSIS: &str = "origin is canonical vicondoa/d2b";
+
+/// Phrasings that diagnose nothing. Each one covers a fork on `origin`, a
+/// branch that is not there, and an unreachable network at once, and sends a
+/// contributor to debug connectivity that is working. A genuine transport
+/// failure fails at `git fetch origin` and is reported by git itself, which
+/// already says it better than a wrapper would.
+const PANEL_MIGRATE_GENERIC_ACCESS_PHRASES: &[&str] = &[
+    "restore access",
+    "check your network",
+    "check your connection",
+    "check your credentials",
+    "network connectivity",
+    "try again later",
+];
 
 /// A 40-hex object name. Modelled as its own type because the entire point of
 /// this fixture is that an object name is a precondition and never a target.
@@ -2426,6 +2479,17 @@ const PLANTED_CONFLICT_PATHS: &[&str] = &[
     "skills/panel/SKILL.md",
 ];
 
+/// What `origin` points at. The supported migration lands on `origin/v3`, and
+/// a fork's refs are not the protected branch, so this is a precondition on the
+/// remote layout and not a detail of the diagnosis.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum OriginRemote {
+    /// Canonical `vicondoa/d2b`.
+    Canonical,
+    /// Some other repository. In practice the contributor's own fork.
+    Fork,
+}
+
 /// What the wrapper found before deciding. `Conflicting` is the state this
 /// fixture exists for; `Clean` is the only one that proceeds.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -2439,6 +2503,11 @@ enum TreeState {
 /// caller: nothing is read from a repository.
 #[derive(Debug, Clone)]
 struct MigrateContext {
+    /// What `origin` points at, as far as the caller could tell.
+    origin: OriginRemote,
+    /// Whether a remote named `fork` already exists. The repair renames
+    /// `origin` onto that name, and renaming onto an occupied name fails.
+    fork_remote_exists: bool,
     current_origin_v3: ObjectName,
     /// `origin/v3` as this run's fetch resolved it. `None` models a fetch that
     /// produced no such ref: no target, so no rebase.
@@ -2466,9 +2535,26 @@ enum MigrateOutcome {
 
 #[derive(Debug, PartialEq, Eq)]
 enum MigrateRefusal {
-    /// The fetch produced no `origin/v3`. There is no supported place to land,
-    /// and the pin is not a substitute for one.
+    /// `origin` is not canonical, so there is no protected `origin/v3` here to
+    /// land on whatever the fetch resolved. The repair keeps the fork under its
+    /// own name and puts canonical `vicondoa/d2b` back on `origin`; it names no
+    /// rebase, because nothing has been attempted and the target does not
+    /// resolve yet.
     TargetUnavailable {
+        current: ObjectName,
+    },
+    /// The same condition with the repair's destination name already occupied.
+    /// The rename would fail, and picking another name hands back a remote
+    /// layout the contributor never chose, so this refusal mutates nothing and
+    /// asks for a name they pick themselves.
+    ForkRemoteNameTaken {
+        current: ObjectName,
+        taken: &'static str,
+    },
+    /// `origin` is canonical and the fetch still produced no `origin/v3`. No
+    /// change of remote layout repairs a branch that is not there, so this
+    /// refusal carries no git command either.
+    CanonicalTargetMissing {
         current: ObjectName,
     },
     /// The required migration is not reachable from the fetched target: it has
@@ -2501,9 +2587,10 @@ enum MigrateFault {
 
 /// The decision, as a pure function of the facts.
 ///
-/// Order matters: with no fetched target there is nothing to compare against,
-/// and with the migration unpublished there is nothing supported to land on, so
-/// both precede any statement about the working tree.
+/// Order matters: a fork on `origin` has no protected branch to offer whatever
+/// its refs resolve to, with no fetched target there is nothing to compare
+/// against, and with the migration unpublished there is nothing supported to
+/// land on, so all three precede any statement about the working tree.
 fn plan_migration(ctx: &MigrateContext) -> Result<MigrateOutcome, MigrateFault> {
     match ctx.state {
         TreeState::Conflicting if ctx.would_conflict.is_empty() => {
@@ -2515,10 +2602,28 @@ fn plan_migration(ctx: &MigrateContext) -> Result<MigrateOutcome, MigrateFault> 
         _ => {}
     }
 
-    let Some(fetched) = ctx.fetched_origin_v3 else {
-        return Ok(MigrateOutcome::Refuse(MigrateRefusal::TargetUnavailable {
-            current: ctx.current_origin_v3,
+    // Checked before the fetched target, not after it: a fork that does carry a
+    // `v3` branch resolves `origin/v3` to a ref that is not the protected
+    // branch, so landing on it is the same mistake with a worse disguise.
+    if ctx.origin != OriginRemote::Canonical {
+        return Ok(MigrateOutcome::Refuse(if ctx.fork_remote_exists {
+            MigrateRefusal::ForkRemoteNameTaken {
+                current: ctx.current_origin_v3,
+                taken: PANEL_MIGRATE_FORK_REMOTE,
+            }
+        } else {
+            MigrateRefusal::TargetUnavailable {
+                current: ctx.current_origin_v3,
+            }
         }));
+    }
+
+    let Some(fetched) = ctx.fetched_origin_v3 else {
+        return Ok(MigrateOutcome::Refuse(
+            MigrateRefusal::CanonicalTargetMissing {
+                current: ctx.current_origin_v3,
+            },
+        ));
     };
     if !ctx.migration_reachable {
         return Ok(MigrateOutcome::Refuse(
@@ -2548,33 +2653,86 @@ fn plan_migration(ctx: &MigrateContext) -> Result<MigrateOutcome, MigrateFault> 
     })
 }
 
+/// The line every refusal opens with.
+const PANEL_MIGRATE_REFUSING: &str =
+    "panel-migrate: refusing to migrate; nothing has been changed.";
+
+/// The diagnosis both fork-shaped refusals carry: the specific typed condition,
+/// and where this checkout's tracking ref stands.
+fn fork_diagnosis_lines(current: ObjectName) -> [String; 2] {
+    [
+        format!(
+            "There is no supported {PANEL_MIGRATE_TARGET_REF} to land on: \
+             {PANEL_MIGRATE_FORK_DIAGNOSIS}, and a fork's refs are not the protected branch."
+        ),
+        format!(
+            "This checkout still has {PANEL_MIGRATE_TARGET_REF} at {}.",
+            current.0
+        ),
+    ]
+}
+
+/// The collision this refusal is about, built from the name that is taken so
+/// the audited needle and the rendered text cannot drift apart.
+fn fork_taken_diagnosis(taken: &str) -> String {
+    format!("a remote named {taken} already exists")
+}
+
 /// Render one refusal. Object names appear only in prose diagnosis, never in a
 /// command; the rebase target is spelled `origin/v3` at every site; and the
 /// predicted paths are printed as a list and never pasted into a command.
 fn render_refusal(refusal: &MigrateRefusal) -> Vec<String> {
     match refusal {
-        MigrateRefusal::TargetUnavailable { current } => vec![
-            "panel-migrate: refusing to migrate; nothing has been changed.".to_string(),
+        MigrateRefusal::TargetUnavailable { current } => {
+            let mut out = vec![PANEL_MIGRATE_REFUSING.to_string()];
+            out.extend(fork_diagnosis_lines(*current));
+            out.push(
+                "Keep the fork under its own name and put the canonical repository back on \
+                 origin:"
+                    .to_string(),
+            );
+            out.push(format!("  {PANEL_MIGRATE_REMOTE_RENAME}"));
+            out.push(format!("  {PANEL_MIGRATE_REMOTE_ADD}"));
+            out.push(format!("  {PANEL_MIGRATE_FETCH}"));
+            out.push("Then rerun:".to_string());
+            out.push(format!("  {PANEL_MIGRATE_COMMAND}"));
+            out
+        }
+        MigrateRefusal::ForkRemoteNameTaken { current, taken } => {
+            let mut out = vec![PANEL_MIGRATE_REFUSING.to_string()];
+            out.extend(fork_diagnosis_lines(*current));
+            out.push(format!(
+                "The repair cannot run here: {}, and renaming onto an occupied name fails.",
+                fork_taken_diagnosis(taken)
+            ));
+            out.push("Rename one of those remotes to a name you choose, then rerun:".to_string());
+            out.push(format!("  {PANEL_MIGRATE_COMMAND}"));
+            out
+        }
+        MigrateRefusal::CanonicalTargetMissing { current } => vec![
+            PANEL_MIGRATE_REFUSING.to_string(),
             format!(
-                "Fetching {PANEL_MIGRATE_TARGET_REF} produced no such ref, so there is no \
-                 supported branch to move onto."
+                "Fetching {PANEL_MIGRATE_TARGET_REF} produced no such ref, and \
+                 {PANEL_MIGRATE_CANONICAL_DIAGNOSIS}, so no change of remote layout would \
+                 repair it."
             ),
             format!(
                 "This checkout still has {PANEL_MIGRATE_TARGET_REF} at {}.",
                 current.0
             ),
-            "Restore access to the remote, then rerun:".to_string(),
+            "There is nothing here to land on until that branch resolves again. Then rerun:"
+                .to_string(),
             format!("  {PANEL_MIGRATE_COMMAND}"),
         ],
         MigrateRefusal::UnpublishedMigration { required, fetched } => vec![
-            "panel-migrate: refusing to migrate; nothing has been changed.".to_string(),
+            PANEL_MIGRATE_REFUSING.to_string(),
             format!(
                 "The required panel migration {} is not reachable from the fetched \
                  {PANEL_MIGRATE_TARGET_REF} {}.",
                 required.0, fetched.0
             ),
-            "It has not been published yet. That revision names the migration that must be \
-             present, not a place to land: moving this branch onto it would drop every \
+            "It has not been published yet. That object name identifies the migration that must \
+             be present, not a place to land: moving this branch onto it would drop every \
              protected commit merged since."
                 .to_string(),
             format!("Wait for the migration to reach {PANEL_MIGRATE_TARGET_REF}, then rerun:"),
@@ -2594,7 +2752,7 @@ fn render_refusal(refusal: &MigrateRefusal) -> Vec<String> {
         ],
         MigrateRefusal::ConflictingUpdate { paths, .. } => {
             let mut out = vec![
-                "panel-migrate: refusing to migrate; nothing has been changed.".to_string(),
+                PANEL_MIGRATE_REFUSING.to_string(),
                 format!(
                     "Updating onto {PANEL_MIGRATE_TARGET_REF} is predicted to conflict in these \
                      paths:"
@@ -2664,13 +2822,43 @@ enum RefusalReject {
     BulkAddOverPredictedPaths { paths: Vec<String> },
     /// A `git add` argument that is not the per-stop placeholder.
     AddArgumentNotPlaceholder { argument: String },
+    /// A `git remote` operation that is neither the rename nor the add. A
+    /// `set-url` rewrites the remote the contributor still needs, and a
+    /// `remove` discards the fork the repair exists to preserve.
+    UnknownRemoteOperation { operation: String },
+    /// A remote name that is not the one this operation may touch: renaming
+    /// something other than `origin`, renaming onto a name nobody chose, or
+    /// adding the canonical URL under some other name.
+    UnexpectedRemoteName { operation: String, name: String },
+    /// A remote URL that is not the exact canonical literal: another repository,
+    /// another scheme, or the canonical path with something appended.
+    RemoteUrlNotCanonical { url: String },
+    /// A remote URL carrying a credential - a userinfo component, a token
+    /// parameter, or the `x-access-token` form. A remote URL is written
+    /// verbatim into plain `.git/config`, so this is a secret the contributor's
+    /// tool put on disk for them.
+    CredentialBearingUrl { url: String },
+    /// A remote name the wrapper picked rather than the contributor choosing
+    /// it. `fork2` is a remote layout nobody asked for, in a checkout they have
+    /// to keep working in.
+    GeneratedRemoteName { name: String },
     /// A line the audit cannot place: it names a program without being a
     /// command line the parser accepts.
     UnclassifiedLine { line: String },
+    /// A bare single-token line in a refusal that prints no path list. Only the
+    /// conflict refusal prints bare lines; anywhere else a lone token is an
+    /// unlabelled URL, remote name, or ref that no parse has vouched for.
+    BareLineInRefusal { line: String },
     /// A refusal with no supported way forward yet printed a git command.
     GitCommandInBlockedRefusal { command: String },
     /// A refusal that is not about conflicts told the contributor to rebase.
     UnexpectedRebaseInstruction { command: String },
+    /// A step that has no place in the refusal that printed it: a per-stop
+    /// conflict instruction, or a stash, where no rebase has been started.
+    UnexpectedStepInRefusal { command: String },
+    /// Prose that diagnoses nothing and misroutes the common case into a
+    /// network investigation.
+    GenericAccessDiagnosis { phrase: String },
     /// The output omits a command the contributor needs.
     MissingCommand { command: String },
     /// Two commands are printed in an order that does not work when run.
@@ -2716,6 +2904,8 @@ fn object_name_on_line(line: &str) -> Option<String> {
 /// The steps a refusal is allowed to name.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum GitStep {
+    RemoteRename,
+    RemoteAdd,
     Fetch,
     Rebase,
     Status,
@@ -2731,6 +2921,8 @@ enum GitStep {
 /// string, or it is not that step.
 fn step_command(step: GitStep) -> &'static str {
     match step {
+        GitStep::RemoteRename => PANEL_MIGRATE_REMOTE_RENAME,
+        GitStep::RemoteAdd => PANEL_MIGRATE_REMOTE_ADD,
         GitStep::Fetch => PANEL_MIGRATE_FETCH,
         GitStep::Rebase => PANEL_MIGRATE_REBASE,
         GitStep::Status => PANEL_MIGRATE_STATUS,
@@ -2745,7 +2937,8 @@ fn step_command(step: GitStep) -> &'static str {
 
 /// The exact flags each allowed subcommand may carry. Everything else fails
 /// closed, including `--onto`, which is how a backwards rebase gets printed
-/// without a bare revision in an argument position.
+/// without a bare object name in an argument position, and every `git remote`
+/// flag, since the repair is two exact forms and no variation of them.
 fn allowed_flags(subcommand: &str) -> &'static [&'static str] {
     match subcommand {
         "rebase" => &["--continue", "--abort"],
@@ -2753,6 +2946,48 @@ fn allowed_flags(subcommand: &str) -> &'static [&'static str] {
         "stash" => &["-u", "-m"],
         _ => &[],
     }
+}
+
+/// Accept the one URL a `git remote add` may name, or say what is wrong with
+/// it. The credential shapes are checked first so the rejection names the
+/// danger - a secret written into plain `.git/config` - rather than reporting
+/// it as one more string that is not the literal.
+fn check_remote_url(url: &str) -> Result<(), RefusalReject> {
+    let after_scheme = url.split_once("://").map_or(url, |(_, rest)| rest);
+    let authority = after_scheme.split('/').next().unwrap_or_default();
+    let query = url.split_once('?').map_or("", |(_, rest)| rest);
+    // A userinfo component covers `https://user@…`, the `x-access-token:…@…`
+    // token form, and the scp-style `git@github.com:…` spelling at once.
+    if authority.contains('@') || query.contains("token=") || url.contains("x-access-token") {
+        return Err(RefusalReject::CredentialBearingUrl {
+            url: url.to_string(),
+        });
+    }
+    if url != PANEL_MIGRATE_CANONICAL_URL {
+        return Err(RefusalReject::RemoteUrlNotCanonical {
+            url: url.to_string(),
+        });
+    }
+    Ok(())
+}
+
+/// A remote name the wrapper generated rather than the contributor choosing it:
+/// `fork2`, `fork-2`, `fork_3`. Scanned over prose as well as commands, because
+/// "rename it to fork2" is the same guess with the command left off.
+fn generated_remote_name(line: &str) -> Option<String> {
+    line.split_whitespace()
+        .map(|token| token.trim_matches(|c: char| c.is_ascii_punctuation() && c != '-' && c != '_'))
+        .find(|token| {
+            token
+                .strip_prefix(PANEL_MIGRATE_FORK_REMOTE)
+                .is_some_and(|suffix| {
+                    suffix.chars().any(|c| c.is_ascii_digit())
+                        && suffix
+                            .chars()
+                            .all(|c| c.is_ascii_digit() || c == '-' || c == '_')
+                })
+        })
+        .map(str::to_string)
 }
 
 /// The command a line gives an operator, if it gives one.
@@ -2899,6 +3134,46 @@ fn parse_command(command: &str, predicted: &[&str]) -> Result<GitStep, RefusalRe
                 Err(unexpected())
             }
         }
+        "remote" => {
+            let Some((operation, operands)) = rest.split_first() else {
+                return Err(unexpected());
+            };
+            match *operation {
+                "rename" => {
+                    let [from, to] = operands else {
+                        return Err(unexpected());
+                    };
+                    for (name, allowed) in [
+                        (from, PANEL_MIGRATE_REMOTE),
+                        (to, PANEL_MIGRATE_FORK_REMOTE),
+                    ] {
+                        if *name != allowed {
+                            return Err(RefusalReject::UnexpectedRemoteName {
+                                operation: (*operation).to_string(),
+                                name: (*name).to_string(),
+                            });
+                        }
+                    }
+                    Ok(GitStep::RemoteRename)
+                }
+                "add" => {
+                    let [name, url] = operands else {
+                        return Err(unexpected());
+                    };
+                    if *name != PANEL_MIGRATE_REMOTE {
+                        return Err(RefusalReject::UnexpectedRemoteName {
+                            operation: (*operation).to_string(),
+                            name: (*name).to_string(),
+                        });
+                    }
+                    check_remote_url(url)?;
+                    Ok(GitStep::RemoteAdd)
+                }
+                other => Err(RefusalReject::UnknownRemoteOperation {
+                    operation: other.to_string(),
+                }),
+            }
+        }
         other => Err(RefusalReject::UnknownSubcommand {
             subcommand: other.to_string(),
         }),
@@ -2986,7 +3261,8 @@ fn audit_refusal_output(
 
     // Every line is placed before anything is required of the output: the
     // parse is what rejects an object name, an unknown subcommand or flag, a
-    // foreign ref, and a literal path pasted into `git add`.
+    // foreign ref, a credential-bearing URL, and a literal path pasted into
+    // `git add`.
     let mut printed: Vec<&str> = Vec::new();
     let mut steps: Vec<(GitStep, usize)> = Vec::new();
     for (index, line) in output.iter().enumerate() {
@@ -2995,6 +3271,32 @@ fn audit_refusal_output(
             RefusalLine::Path(path) => printed.push(path),
             RefusalLine::Command(step) => steps.push((step, index)),
         }
+    }
+
+    // No refusal here is about connectivity, so none of them may say so. This
+    // runs before anything else is required of the output: a generic message is
+    // wrong even in output that is otherwise complete and correctly ordered.
+    for phrase in PANEL_MIGRATE_GENERIC_ACCESS_PHRASES {
+        if output
+            .iter()
+            .any(|line| line.to_ascii_lowercase().contains(*phrase))
+        {
+            return Err(RefusalReject::GenericAccessDiagnosis {
+                phrase: (*phrase).to_string(),
+            });
+        }
+    }
+
+    // Only the conflict refusal prints bare lines. Anywhere else a lone token
+    // is an unlabelled URL, remote name, or ref that no parse has vouched for.
+    let bare = match refusal {
+        MigrateRefusal::ConflictingUpdate { .. } => None,
+        _ => printed.first(),
+    };
+    if let Some(line) = bare {
+        return Err(RefusalReject::BareLineInRefusal {
+            line: (*line).to_string(),
+        });
     }
 
     let require = |step: GitStep| -> Result<usize, RefusalReject> {
@@ -3039,11 +3341,74 @@ fn audit_refusal_output(
             None => Ok(()),
         }
     };
+    let only_steps = |allowed: &[GitStep]| -> Result<(), RefusalReject> {
+        match steps
+            .iter()
+            .map(|(step, _)| *step)
+            .find(|step| !allowed.contains(step))
+        {
+            Some(step) => Err(RefusalReject::UnexpectedStepInRefusal {
+                command: step_command(step).to_string(),
+            }),
+            None => Ok(()),
+        }
+    };
+    let no_generated_remote_name = || -> Result<(), RefusalReject> {
+        match output.iter().find_map(|line| generated_remote_name(line)) {
+            Some(name) => Err(RefusalReject::GeneratedRemoteName { name }),
+            None => Ok(()),
+        }
+    };
 
     match refusal {
         MigrateRefusal::TargetUnavailable { current } => {
             mention(PANEL_MIGRATE_TARGET_REF)?;
+            mention(PANEL_MIGRATE_FORK_DIAGNOSIS)?;
             mention(current.0)?;
+            no_generated_remote_name()?;
+            // Nothing has been attempted and the target does not resolve yet,
+            // so no branch of the rebase remedy - and no per-stop instruction
+            // out of one - belongs in this output.
+            no_rebase()?;
+            only_steps(&[
+                GitStep::RemoteRename,
+                GitStep::RemoteAdd,
+                GitStep::Fetch,
+                GitStep::Rerun,
+            ])?;
+
+            let rename = require(GitStep::RemoteRename)?;
+            let add = require(GitStep::RemoteAdd)?;
+            let fetch = require(GitStep::Fetch)?;
+            let rerun = require(GitStep::Rerun)?;
+            // Adding canonical `origin` before the fork is renamed off it is an
+            // add onto an occupied name, which fails and leaves the contributor
+            // where they started.
+            ordered_steps(&[
+                (GitStep::RemoteRename, rename),
+                (GitStep::RemoteAdd, add),
+                (GitStep::Fetch, fetch),
+                (GitStep::Rerun, rerun),
+            ])?;
+        }
+        MigrateRefusal::ForkRemoteNameTaken { current, taken } => {
+            mention(PANEL_MIGRATE_TARGET_REF)?;
+            mention(PANEL_MIGRATE_FORK_DIAGNOSIS)?;
+            mention(current.0)?;
+            mention(&fork_taken_diagnosis(taken))?;
+            // The one repair this condition blocks is the rename onto the
+            // occupied name, and every other name is a guess, so this refusal
+            // carries no git command at all.
+            no_generated_remote_name()?;
+            no_git_commands()?;
+            require(GitStep::Rerun)?;
+        }
+        MigrateRefusal::CanonicalTargetMissing { current } => {
+            mention(PANEL_MIGRATE_TARGET_REF)?;
+            mention(PANEL_MIGRATE_CANONICAL_DIAGNOSIS)?;
+            mention(current.0)?;
+            // `origin` is already the remote it should be, so a remote repair
+            // here would rearrange a layout that is not the problem.
             no_git_commands()?;
             require(GitStep::Rerun)?;
         }
@@ -3127,10 +3492,13 @@ fn audit_refusal_output(
 
 // --- in-memory fixtures for the refusal corpus -----------------------------
 
-/// A self-consistent context: fetched target present, migration published, and
-/// would-conflict paths exactly when the state is `Conflicting`.
+/// A self-consistent context: canonical `origin` with the fork name free, the
+/// fetched target present, the migration published, and would-conflict paths
+/// exactly when the state is `Conflicting`.
 fn migrate_context(state: TreeState) -> MigrateContext {
     MigrateContext {
+        origin: OriginRemote::Canonical,
+        fork_remote_exists: false,
         current_origin_v3: CURRENT_ORIGIN_V3,
         fetched_origin_v3: Some(FETCHED_ORIGIN_V3),
         required_migration: PINNED_MIGRATION,
@@ -3143,13 +3511,24 @@ fn migrate_context(state: TreeState) -> MigrateContext {
     }
 }
 
-/// The five states the model distinguishes: the one that proceeds, and the four
+/// The common case behind an unavailable target: `origin` is the contributor's
+/// fork, which carries no `v3`, so the fetch resolved nothing.
+fn fork_origin_context() -> MigrateContext {
+    let mut ctx = migrate_context(TreeState::Clean);
+    ctx.origin = OriginRemote::Fork;
+    ctx.fetched_origin_v3 = None;
+    ctx
+}
+
+/// The seven states the model distinguishes: the one that proceeds, and the six
 /// typed refusals. Labelled so the counted corpus reports what it examined.
 fn migrate_corpus() -> Vec<(&'static str, MigrateContext)> {
     let mut unpublished = migrate_context(TreeState::Clean);
     unpublished.migration_reachable = false;
-    let mut unavailable = migrate_context(TreeState::Clean);
-    unavailable.fetched_origin_v3 = None;
+    let mut fork_taken = fork_origin_context();
+    fork_taken.fork_remote_exists = true;
+    let mut canonical_missing = migrate_context(TreeState::Clean);
+    canonical_missing.fetched_origin_v3 = None;
 
     vec![
         ("clean tree", migrate_context(TreeState::Clean)),
@@ -3159,7 +3538,9 @@ fn migrate_corpus() -> Vec<(&'static str, MigrateContext)> {
             migrate_context(TreeState::Conflicting),
         ),
         ("unpublished migration", unpublished),
-        ("target unavailable", unavailable),
+        ("fork on origin", fork_origin_context()),
+        ("fork remote name taken", fork_taken),
+        ("canonical branch missing", canonical_missing),
     ]
 }
 
@@ -3175,9 +3556,48 @@ fn conflict_refusal() -> MigrateRefusal {
 }
 
 fn unavailable_refusal() -> MigrateRefusal {
+    refusal_for(&fork_origin_context())
+}
+
+fn fork_taken_refusal() -> MigrateRefusal {
+    let mut ctx = fork_origin_context();
+    ctx.fork_remote_exists = true;
+    refusal_for(&ctx)
+}
+
+fn canonical_missing_refusal() -> MigrateRefusal {
     let mut ctx = migrate_context(TreeState::Clean);
     ctx.fetched_origin_v3 = None;
     refusal_for(&ctx)
+}
+
+/// Drop every line that contains `needle`, asserting it dropped exactly one.
+/// The count is the point: a fixture that quietly removed nothing would make
+/// the assertion below pass over the accepted output.
+fn without_line_containing(output: &[String], needle: &str) -> Vec<String> {
+    let stripped: Vec<String> = output
+        .iter()
+        .filter(|line| !line.contains(needle))
+        .cloned()
+        .collect();
+    assert_eq!(
+        stripped.len(),
+        output.len() - 1,
+        "the planted fixture must drop exactly the one line carrying `{needle}`"
+    );
+    stripped
+}
+
+/// Replace the one line containing `needle` with `replacement`, which is how a
+/// diagnosis line is swapped for one that says something else.
+fn replacing_line_containing(output: &[String], needle: &str, replacement: &str) -> Vec<String> {
+    let mut planted = output.to_vec();
+    let index = planted
+        .iter()
+        .position(|line| line.contains(needle))
+        .unwrap_or_else(|| panic!("the line carrying `{needle}` is in the output"));
+    planted[index] = replacement.to_string();
+    planted
 }
 
 /// Drop every line whose command starts with `prefix`.
@@ -3906,19 +4326,534 @@ fn panel_migrate_unpublished_migration_refuses_without_a_mutation() {
 }
 
 #[test]
-fn panel_migrate_target_unavailable_refuses_without_naming_a_command() {
+fn panel_migrate_fork_on_origin_prints_the_exact_remote_repair() {
     let refusal = unavailable_refusal();
     assert_eq!(
         refusal,
         MigrateRefusal::TargetUnavailable {
             current: CURRENT_ORIGIN_V3,
         },
-        "no fetched target is a refusal, not a fallback to the pinned revision"
+        "a fork on origin is its own typed refusal, not a fallback to the pinned commit"
     );
 
-    let output = render_refusal(&refusal);
+    // Exact content and exact order. The repair keeps the fork - renaming it
+    // off `origin` rather than discarding it - then puts the canonical
+    // repository back where the migration expects it, and only then fetches.
+    let rendered = render_refusal(&refusal);
     assert_eq!(
-        audit_refusal_output(&refusal, &output),
+        rendered,
+        vec![
+            "panel-migrate: refusing to migrate; nothing has been changed.",
+            "There is no supported origin/v3 to land on: this checkout's origin is not canonical \
+             vicondoa/d2b, and a fork's refs are not the protected branch.",
+            "This checkout still has origin/v3 at 1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a.",
+            "Keep the fork under its own name and put the canonical repository back on origin:",
+            "  git remote rename origin fork",
+            "  git remote add origin https://github.com/vicondoa/d2b.git",
+            "  git fetch origin",
+            "Then rerun:",
+            "  make panel-migrate",
+        ]
+    );
+
+    // The URL is the canonical literal, over https, carrying no userinfo. A
+    // remote URL is written verbatim into plain `.git/config`.
+    let add = rendered
+        .iter()
+        .find(|line| line.trim().starts_with("git remote add"))
+        .expect("the repair adds the canonical remote");
+    assert_eq!(add.trim(), PANEL_MIGRATE_REMOTE_ADD);
+    assert!(
+        add.contains(PANEL_MIGRATE_CANONICAL_URL) && !add.contains('@'),
+        "the added URL is the canonical literal and carries no credential: {add}"
+    );
+
+    // No rebase on this path: the migration has not been attempted and the
+    // target does not resolve, so a rebase is a sequence nobody can finish.
+    assert!(
+        !rendered.iter().any(|line| line.contains("rebase")),
+        "nothing has been attempted here, so there is no rebase to name: {rendered:?}"
+    );
+
+    assert_eq!(
+        audit_refusal_output(&refusal, &rendered),
+        Ok(RefusalAudit {
+            lines: 9,
+            commands: 4,
+            paths: 0,
+        })
+    );
+}
+
+#[test]
+fn panel_migrate_fork_repair_names_no_rebase_and_no_per_stop_step() {
+    let refusal = unavailable_refusal();
+    let accepted = render_refusal(&refusal);
+
+    // Every branch of the rebase remedy, which belongs to a migration that has
+    // started, not to one whose target does not resolve.
+    for planted in [
+        PANEL_MIGRATE_REBASE,
+        PANEL_MIGRATE_CONTINUE,
+        PANEL_MIGRATE_ABORT,
+    ] {
+        let mut planted_output = accepted.clone();
+        planted_output.push(format!("  {planted}"));
+        assert_eq!(
+            audit_refusal_output(&refusal, &planted_output),
+            Err(RefusalReject::UnexpectedRebaseInstruction {
+                command: planted.to_string(),
+            })
+        );
+    }
+
+    // And every other step that belongs to some other refusal: the per-stop
+    // review, the per-stop add, and the dirty-tree stash.
+    for planted in [
+        PANEL_MIGRATE_STATUS,
+        PANEL_MIGRATE_ADD,
+        PANEL_MIGRATE_STASH_PUSH,
+        PANEL_MIGRATE_STASH_POP,
+    ] {
+        let mut planted_output = accepted.clone();
+        planted_output.push(format!("  {planted}"));
+        assert_eq!(
+            audit_refusal_output(&refusal, &planted_output),
+            Err(RefusalReject::UnexpectedStepInRefusal {
+                command: planted.to_string(),
+            })
+        );
+    }
+}
+
+#[test]
+fn panel_migrate_rejects_a_remote_command_that_is_not_the_repair() {
+    let refusal = unavailable_refusal();
+    let accepted = render_refusal(&refusal);
+
+    let cases: Vec<(&str, &str, String, RefusalReject)> = vec![
+        (
+            "a rename onto a name the wrapper picked",
+            PANEL_MIGRATE_REMOTE_RENAME,
+            "git remote rename origin fork2".to_string(),
+            RefusalReject::UnexpectedRemoteName {
+                operation: "rename".to_string(),
+                name: "fork2".to_string(),
+            },
+        ),
+        (
+            "a rename of some remote other than origin",
+            PANEL_MIGRATE_REMOTE_RENAME,
+            "git remote rename upstream fork".to_string(),
+            RefusalReject::UnexpectedRemoteName {
+                operation: "rename".to_string(),
+                name: "upstream".to_string(),
+            },
+        ),
+        (
+            "a rename missing its destination",
+            PANEL_MIGRATE_REMOTE_RENAME,
+            "git remote rename origin".to_string(),
+            RefusalReject::UnexpectedCommandForm {
+                command: "git remote rename origin".to_string(),
+            },
+        ),
+        (
+            "a set-url, which rewrites the remote the contributor still needs",
+            PANEL_MIGRATE_REMOTE_RENAME,
+            format!("git remote set-url origin {PANEL_MIGRATE_CANONICAL_URL}"),
+            RefusalReject::UnknownRemoteOperation {
+                operation: "set-url".to_string(),
+            },
+        ),
+        (
+            "a remove, which discards the fork the repair exists to preserve",
+            PANEL_MIGRATE_REMOTE_RENAME,
+            "git remote remove origin".to_string(),
+            RefusalReject::UnknownRemoteOperation {
+                operation: "remove".to_string(),
+            },
+        ),
+        (
+            "a remote flag nobody allowed",
+            PANEL_MIGRATE_REMOTE_ADD,
+            format!("git remote add -f origin {PANEL_MIGRATE_CANONICAL_URL}"),
+            RefusalReject::UnknownFlag {
+                subcommand: "remote".to_string(),
+                flag: "-f".to_string(),
+            },
+        ),
+        (
+            "the canonical URL added under some other name",
+            PANEL_MIGRATE_REMOTE_ADD,
+            format!("git remote add upstream {PANEL_MIGRATE_CANONICAL_URL}"),
+            RefusalReject::UnexpectedRemoteName {
+                operation: "add".to_string(),
+                name: "upstream".to_string(),
+            },
+        ),
+        (
+            "a different repository",
+            PANEL_MIGRATE_REMOTE_ADD,
+            "git remote add origin https://github.com/someone-else/d2b.git".to_string(),
+            RefusalReject::RemoteUrlNotCanonical {
+                url: "https://github.com/someone-else/d2b.git".to_string(),
+            },
+        ),
+        (
+            "a noncanonical path on the right host",
+            PANEL_MIGRATE_REMOTE_ADD,
+            "git remote add origin https://github.com/vicondoa/d2b".to_string(),
+            RefusalReject::RemoteUrlNotCanonical {
+                url: "https://github.com/vicondoa/d2b".to_string(),
+            },
+        ),
+        (
+            "cleartext http",
+            PANEL_MIGRATE_REMOTE_ADD,
+            "git remote add origin http://github.com/vicondoa/d2b.git".to_string(),
+            RefusalReject::RemoteUrlNotCanonical {
+                url: "http://github.com/vicondoa/d2b.git".to_string(),
+            },
+        ),
+        (
+            "an ssh URL, which is not the form this repair names",
+            PANEL_MIGRATE_REMOTE_ADD,
+            "git remote add origin ssh://github.com/vicondoa/d2b.git".to_string(),
+            RefusalReject::RemoteUrlNotCanonical {
+                url: "ssh://github.com/vicondoa/d2b.git".to_string(),
+            },
+        ),
+        (
+            "a fragment appended to the canonical URL",
+            PANEL_MIGRATE_REMOTE_ADD,
+            format!("git remote add origin {PANEL_MIGRATE_CANONICAL_URL}#v3"),
+            RefusalReject::RemoteUrlNotCanonical {
+                url: format!("{PANEL_MIGRATE_CANONICAL_URL}#v3"),
+            },
+        ),
+        (
+            "a userinfo component",
+            PANEL_MIGRATE_REMOTE_ADD,
+            "git remote add origin https://contributor@github.com/vicondoa/d2b.git".to_string(),
+            RefusalReject::CredentialBearingUrl {
+                url: "https://contributor@github.com/vicondoa/d2b.git".to_string(),
+            },
+        ),
+        (
+            "the x-access-token form, a secret written into .git/config",
+            PANEL_MIGRATE_REMOTE_ADD,
+            "git remote add origin \
+             https://x-access-token:placeholder@github.com/vicondoa/d2b.git"
+                .to_string(),
+            RefusalReject::CredentialBearingUrl {
+                url: "https://x-access-token:placeholder@github.com/vicondoa/d2b.git".to_string(),
+            },
+        ),
+        (
+            "a token in the query string",
+            PANEL_MIGRATE_REMOTE_ADD,
+            format!("git remote add origin {PANEL_MIGRATE_CANONICAL_URL}?access_token=placeholder"),
+            RefusalReject::CredentialBearingUrl {
+                url: format!("{PANEL_MIGRATE_CANONICAL_URL}?access_token=placeholder"),
+            },
+        ),
+        (
+            "the scp-style ssh spelling, which carries userinfo of its own",
+            PANEL_MIGRATE_REMOTE_ADD,
+            "git remote add origin git@github.com:vicondoa/d2b.git".to_string(),
+            RefusalReject::CredentialBearingUrl {
+                url: "git@github.com:vicondoa/d2b.git".to_string(),
+            },
+        ),
+        (
+            "a remote command the parser cannot place",
+            PANEL_MIGRATE_REMOTE_ADD,
+            format!("sudo git remote add origin {PANEL_MIGRATE_CANONICAL_URL}"),
+            RefusalReject::UnclassifiedLine {
+                line: format!("sudo git remote add origin {PANEL_MIGRATE_CANONICAL_URL}"),
+            },
+        ),
+    ];
+
+    for (label, target, planted, expected) in cases {
+        assert_eq!(
+            audit_refusal_output(&refusal, &planting(&accepted, target, &planted)),
+            Err(expected),
+            "a remote command that is not the exact repair must fail closed ({label})"
+        );
+    }
+
+    // The accepted output names the exact repair, so none of the above is
+    // rejected for some incidental reason.
+    assert!(audit_refusal_output(&refusal, &accepted).is_ok());
+}
+
+#[test]
+fn panel_migrate_rejects_fork_repair_output_missing_or_reordered() {
+    let refusal = unavailable_refusal();
+    let accepted = render_refusal(&refusal);
+
+    let cases: Vec<(&str, Vec<String>, RefusalReject)> = vec![
+        (
+            "the rename that preserves the fork dropped",
+            without_command(&accepted, PANEL_MIGRATE_REMOTE_RENAME),
+            RefusalReject::MissingCommand {
+                command: PANEL_MIGRATE_REMOTE_RENAME.to_string(),
+            },
+        ),
+        (
+            "the canonical remote never added",
+            without_command(&accepted, PANEL_MIGRATE_REMOTE_ADD),
+            RefusalReject::MissingCommand {
+                command: PANEL_MIGRATE_REMOTE_ADD.to_string(),
+            },
+        ),
+        (
+            "the fetch that resolves the new origin dropped",
+            without_command(&accepted, PANEL_MIGRATE_FETCH),
+            RefusalReject::MissingCommand {
+                command: PANEL_MIGRATE_FETCH.to_string(),
+            },
+        ),
+        (
+            "rerun dropped",
+            without_command(&accepted, PANEL_MIGRATE_COMMAND),
+            RefusalReject::MissingCommand {
+                command: PANEL_MIGRATE_COMMAND.to_string(),
+            },
+        ),
+        (
+            "the canonical remote added before the fork is renamed off origin",
+            swapping(
+                &accepted,
+                PANEL_MIGRATE_REMOTE_RENAME,
+                PANEL_MIGRATE_REMOTE_ADD,
+            ),
+            RefusalReject::CommandsOutOfOrder {
+                earlier: PANEL_MIGRATE_REMOTE_RENAME.to_string(),
+                later: PANEL_MIGRATE_REMOTE_ADD.to_string(),
+            },
+        ),
+        (
+            "the fetch before the remote it fetches from exists",
+            swapping(&accepted, PANEL_MIGRATE_REMOTE_ADD, PANEL_MIGRATE_FETCH),
+            RefusalReject::CommandsOutOfOrder {
+                earlier: PANEL_MIGRATE_REMOTE_ADD.to_string(),
+                later: PANEL_MIGRATE_FETCH.to_string(),
+            },
+        ),
+        (
+            "the rerun before the repair it depends on",
+            swapping(&accepted, PANEL_MIGRATE_FETCH, PANEL_MIGRATE_COMMAND),
+            RefusalReject::CommandsOutOfOrder {
+                earlier: PANEL_MIGRATE_FETCH.to_string(),
+                later: PANEL_MIGRATE_COMMAND.to_string(),
+            },
+        ),
+    ];
+
+    for (label, planted, expected) in cases {
+        assert_eq!(
+            audit_refusal_output(&refusal, &planted),
+            Err(expected),
+            "an incomplete or unrunnable repair sequence is not a remedy ({label})"
+        );
+    }
+}
+
+#[test]
+fn panel_migrate_fork_repair_rejects_a_generic_access_diagnosis() {
+    let refusal = unavailable_refusal();
+    let accepted = render_refusal(&refusal);
+
+    // The message this path used to print. It reads as a transport fault, and
+    // the common cause is a fork on `origin`, so it sends a contributor to
+    // debug a network that is working.
+    assert_eq!(
+        audit_refusal_output(
+            &refusal,
+            &replacing_line_containing(
+                &accepted,
+                "Keep the fork",
+                "Restore access to the remote, then rerun:"
+            )
+        ),
+        Err(RefusalReject::GenericAccessDiagnosis {
+            phrase: "restore access".to_string(),
+        })
+    );
+    assert_eq!(
+        audit_refusal_output(
+            &refusal,
+            &replacing_line_containing(
+                &accepted,
+                PANEL_MIGRATE_FORK_DIAGNOSIS,
+                "The remote could not be reached; check your network and try again."
+            )
+        ),
+        Err(RefusalReject::GenericAccessDiagnosis {
+            phrase: "check your network".to_string(),
+        })
+    );
+
+    // Dropping the typed diagnosis entirely is the same failure without the
+    // misleading prose: the refusal has to name the condition it found.
+    assert_eq!(
+        audit_refusal_output(
+            &refusal,
+            &without_line_containing(&accepted, PANEL_MIGRATE_FORK_DIAGNOSIS)
+        ),
+        Err(RefusalReject::MissingDiagnosis {
+            needle: PANEL_MIGRATE_FORK_DIAGNOSIS.to_string(),
+        })
+    );
+    assert_eq!(
+        audit_refusal_output(
+            &refusal,
+            &without_line_containing(&accepted, CURRENT_ORIGIN_V3.0)
+        ),
+        Err(RefusalReject::MissingDiagnosis {
+            needle: CURRENT_ORIGIN_V3.0.to_string(),
+        })
+    );
+
+    // A URL printed as a bare line is not a command the parser vouched for, so
+    // nothing has checked what it points at.
+    let mut bare = accepted.clone();
+    bare.insert(4, format!("  {PANEL_MIGRATE_CANONICAL_URL}"));
+    assert_eq!(
+        audit_refusal_output(&refusal, &bare),
+        Err(RefusalReject::BareLineInRefusal {
+            line: PANEL_MIGRATE_CANONICAL_URL.to_string(),
+        })
+    );
+}
+
+#[test]
+fn panel_migrate_existing_fork_remote_refuses_without_guessing_a_name() {
+    let refusal = fork_taken_refusal();
+    assert_eq!(
+        refusal,
+        MigrateRefusal::ForkRemoteNameTaken {
+            current: CURRENT_ORIGIN_V3,
+            taken: PANEL_MIGRATE_FORK_REMOTE,
+        },
+        "an occupied destination name is its own typed refusal, not a reason to pick another"
+    );
+
+    let rendered = render_refusal(&refusal);
+    assert_eq!(
+        rendered,
+        vec![
+            "panel-migrate: refusing to migrate; nothing has been changed.",
+            "There is no supported origin/v3 to land on: this checkout's origin is not canonical \
+             vicondoa/d2b, and a fork's refs are not the protected branch.",
+            "This checkout still has origin/v3 at 1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a.",
+            "The repair cannot run here: a remote named fork already exists, and renaming onto \
+             an occupied name fails.",
+            "Rename one of those remotes to a name you choose, then rerun:",
+            "  make panel-migrate",
+        ]
+    );
+    assert_eq!(
+        audit_refusal_output(&refusal, &rendered),
+        Ok(RefusalAudit {
+            lines: 6,
+            commands: 1,
+            paths: 0,
+        })
+    );
+
+    // The rename would fail on the occupied name and every other name is a
+    // guess, so this refusal mutates nothing at all.
+    assert!(
+        rendered
+            .iter()
+            .all(|line| migrate_command(line).is_none_or(|command| !command.starts_with("git "))),
+        "a refusal that cannot run its own repair may not print one: {rendered:?}"
+    );
+    assert!(
+        !rendered.iter().any(|line| line.contains("fork2")),
+        "the contributor picks the name; the wrapper does not: {rendered:?}"
+    );
+
+    let cases: Vec<(&str, String, RefusalReject)> = vec![
+        (
+            "the guessed name, as a command",
+            "git remote rename origin fork2".to_string(),
+            RefusalReject::UnexpectedRemoteName {
+                operation: "rename".to_string(),
+                name: "fork2".to_string(),
+            },
+        ),
+        (
+            "some other name the wrapper chose instead",
+            "git remote rename origin fork-backup".to_string(),
+            RefusalReject::UnexpectedRemoteName {
+                operation: "rename".to_string(),
+                name: "fork-backup".to_string(),
+            },
+        ),
+        (
+            "the rename this condition blocks",
+            PANEL_MIGRATE_REMOTE_RENAME.to_string(),
+            RefusalReject::GitCommandInBlockedRefusal {
+                command: PANEL_MIGRATE_REMOTE_RENAME.to_string(),
+            },
+        ),
+        (
+            "the add, which needs a rename that cannot happen",
+            PANEL_MIGRATE_REMOTE_ADD.to_string(),
+            RefusalReject::GitCommandInBlockedRefusal {
+                command: PANEL_MIGRATE_REMOTE_ADD.to_string(),
+            },
+        ),
+        (
+            "the guessed name in prose, which is the same guess with the command left off",
+            "Rename it to fork2 yourself and rerun:".to_string(),
+            RefusalReject::GeneratedRemoteName {
+                name: "fork2".to_string(),
+            },
+        ),
+    ];
+
+    for (label, planted, expected) in cases {
+        let mut planted_output = rendered.clone();
+        planted_output.push(format!("  {planted}"));
+        assert_eq!(
+            audit_refusal_output(&refusal, &planted_output),
+            Err(expected),
+            "this refusal names no remote mutation and no name it picked ({label})"
+        );
+    }
+}
+
+#[test]
+fn panel_migrate_canonical_origin_without_the_branch_names_no_remote_repair() {
+    let refusal = canonical_missing_refusal();
+    assert_eq!(
+        refusal,
+        MigrateRefusal::CanonicalTargetMissing {
+            current: CURRENT_ORIGIN_V3,
+        },
+        "a canonical origin with no v3 is a missing branch, not a remote layout to repair"
+    );
+
+    let rendered = render_refusal(&refusal);
+    assert_eq!(
+        rendered,
+        vec![
+            "panel-migrate: refusing to migrate; nothing has been changed.",
+            "Fetching origin/v3 produced no such ref, and origin is canonical vicondoa/d2b, so \
+             no change of remote layout would repair it.",
+            "This checkout still has origin/v3 at 1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a.",
+            "There is nothing here to land on until that branch resolves again. Then rerun:",
+            "  make panel-migrate",
+        ]
+    );
+    assert_eq!(
+        audit_refusal_output(&refusal, &rendered),
         Ok(RefusalAudit {
             lines: 5,
             commands: 1,
@@ -3926,22 +4861,20 @@ fn panel_migrate_target_unavailable_refuses_without_naming_a_command() {
         })
     );
     assert!(
-        output
+        !rendered
             .iter()
-            .all(|line| migrate_command(line).is_none_or(|command| !command.starts_with("git "))),
-        "there is nothing to rebase onto, so a printed sequence would be instructing a \
-         contributor to run commands that cannot succeed: {output:?}"
+            .any(|line| line.contains(PANEL_MIGRATE_FORK_DIAGNOSIS)),
+        "this condition is not the fork one, and one message covering both explains neither: \
+         {rendered:?}"
     );
 
-    // Every git command is rejected here, including the ones the conflict
-    // refusal is required to print.
+    // Renaming remotes here rearranges a layout that is already correct.
     for planted in [
+        PANEL_MIGRATE_REMOTE_RENAME,
+        PANEL_MIGRATE_REMOTE_ADD,
         PANEL_MIGRATE_FETCH,
-        PANEL_MIGRATE_REBASE,
-        PANEL_MIGRATE_STATUS,
-        PANEL_MIGRATE_ADD,
     ] {
-        let mut planted_output = output.clone();
+        let mut planted_output = rendered.clone();
         planted_output.push(format!("  {planted}"));
         assert_eq!(
             audit_refusal_output(&refusal, &planted_output),
@@ -3950,24 +4883,24 @@ fn panel_migrate_target_unavailable_refuses_without_naming_a_command() {
             })
         );
     }
+}
 
-    // The refusal has to say what is missing and where this checkout stands.
-    let stripped: Vec<String> = output
-        .iter()
-        .filter(|line| !line.contains(CURRENT_ORIGIN_V3.0))
-        .cloned()
-        .collect();
-    assert_eq!(
-        stripped.len(),
-        output.len() - 1,
-        "the planted fixture must actually drop the diagnosis line"
-    );
-    assert_eq!(
-        audit_refusal_output(&refusal, &stripped),
-        Err(RefusalReject::MissingDiagnosis {
-            needle: CURRENT_ORIGIN_V3.0.to_string(),
-        })
-    );
+#[test]
+fn panel_migrate_fork_on_origin_never_lands_on_a_fork_ref() {
+    // A fork that does carry a `v3` branch. `origin/v3` resolves, and it is not
+    // the protected branch, so the refusal is the same one: the remote layout
+    // is checked before anything the fetch produced.
+    for state in [TreeState::Clean, TreeState::Dirty, TreeState::Conflicting] {
+        let mut ctx = migrate_context(state);
+        ctx.origin = OriginRemote::Fork;
+        assert_eq!(
+            plan_migration(&ctx),
+            Ok(MigrateOutcome::Refuse(MigrateRefusal::TargetUnavailable {
+                current: CURRENT_ORIGIN_V3,
+            })),
+            "a fork's refs are not the protected branch, whatever the fetch resolved ({state:?})"
+        );
+    }
 }
 
 #[test]
@@ -3998,8 +4931,8 @@ fn panel_migrate_refusal_corpus_is_counted_and_non_empty() {
     let corpus = migrate_corpus();
     assert_eq!(
         corpus.len(),
-        5,
-        "the wrapper is modelled on five paths: one that proceeds and four typed refusals"
+        7,
+        "the wrapper is modelled on seven paths: one that proceeds and six typed refusals"
     );
 
     let mut proceeded = 0usize;
@@ -4055,7 +4988,23 @@ fn panel_migrate_refusal_corpus_is_counted_and_non_empty() {
                 },
             ),
             (
-                "target unavailable",
+                "fork on origin",
+                RefusalAudit {
+                    lines: 9,
+                    commands: 4,
+                    paths: 0,
+                },
+            ),
+            (
+                "fork remote name taken",
+                RefusalAudit {
+                    lines: 6,
+                    commands: 1,
+                    paths: 0,
+                },
+            ),
+            (
+                "canonical branch missing",
                 RefusalAudit {
                     lines: 5,
                     commands: 1,
@@ -4071,9 +5020,9 @@ fn panel_migrate_refusal_corpus_is_counted_and_non_empty() {
             .iter()
             .map(|(_, audit)| audit.commands)
             .sum::<usize>(),
-        13,
-        "the audited command total: 7 for the conflict refusal, 4 for the dirty tree, and the \
-         rerun for each blocked one"
+        18,
+        "the audited command total: 7 for the conflict refusal, 4 for the dirty tree, 4 for the \
+         fork repair, and the rerun for each blocked one"
     );
     assert_eq!(
         audits.iter().map(|(_, audit)| audit.paths).sum::<usize>(),
