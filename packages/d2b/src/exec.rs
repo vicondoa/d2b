@@ -209,17 +209,7 @@ fn attach(
             69,
         ));
     }
-    let value = context.invoke(
-        "OpenTerminal",
-        json!({
-            "kind": "exec",
-            "resourceRef": resource_ref.to_canonical_string(),
-            "interactive": args.interactive,
-            "tty": args.tty,
-        }),
-        deadline,
-        mode,
-    )?;
+    let value = context.attach_process(resource_ref, args.interactive, args.tty, deadline, mode)?;
     context.emit(&value, mode)?;
     Ok(0)
 }
@@ -425,4 +415,49 @@ fn with_unsafe_posture(mut value: Value, resource_ref: &d2b_contracts::v3::Resou
         );
     }
     value
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::context::OutputMode;
+
+    #[test]
+    fn attach_rejects_non_ephemeral_resources_with_the_existing_exit_code() {
+        let context = ZoneContext::local_only();
+        let args = ExecAttachArgs {
+            resource_ref: "Process/not-attachable".to_owned(),
+            interactive: false,
+            tty: false,
+        };
+        let error = attach(
+            &context,
+            &args,
+            OutputMode::Json,
+            ZoneContext::deadline(Some("30s")).unwrap(),
+        )
+        .unwrap_err();
+        assert_eq!(error.exit_code, 2);
+        assert!(error.message.contains("EphemeralProcess"));
+        assert!(!error.message.contains("not-attachable"));
+    }
+
+    #[test]
+    fn json_tty_attach_is_refused_before_transport_access() {
+        let context = ZoneContext::local_only();
+        let args = ExecAttachArgs {
+            resource_ref: "EphemeralProcess/command".to_owned(),
+            interactive: true,
+            tty: true,
+        };
+        let error = attach(
+            &context,
+            &args,
+            OutputMode::Json,
+            ZoneContext::deadline(Some("30s")).unwrap(),
+        )
+        .unwrap_err();
+        assert_eq!(error.exit_code, 2);
+        assert!(error.message.contains("--tty"));
+    }
 }

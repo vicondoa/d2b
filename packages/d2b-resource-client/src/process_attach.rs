@@ -634,6 +634,31 @@ where
         )
         .await
     }
+
+    /// Establish and close one attachment without exposing the stream handle.
+    ///
+    /// This is useful for operator surfaces whose current command contract
+    /// reports establishment rather than proxying byte I/O. The session
+    /// adapter still performs the authorized named-stream open and close.
+    pub async fn attach_and_close(
+        &self,
+        target: ProcessAttachTarget,
+        attach_options: ProcessAttachOptions,
+        call_options: CallOptions,
+        selection: TransportSelection,
+        cancellation: &CancellationToken,
+    ) -> Result<(), ClientError> {
+        let stream = self
+            .attach(
+                target,
+                attach_options,
+                call_options,
+                selection,
+                cancellation,
+            )
+            .await?;
+        stream.close().await
+    }
 }
 
 async fn await_with_cancellation<F, T>(

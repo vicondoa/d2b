@@ -8,7 +8,7 @@ use std::{
     path::{Path, PathBuf},
     sync::{
         Arc, Mutex,
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
     },
     task::{Context as TaskContext, Poll, Wake, Waker},
     thread,
@@ -20,11 +20,12 @@ use d2b_contracts::v3::{
     identity::STANDARD_RESOURCE_TYPES,
 };
 use d2b_resource_client::{
-    CallOptions, CancellationToken, ClientError, ConnectedZoneSession, MetadataInput,
-    ResourceCallOptions, ResourceVerb, RetryPolicy, RouteRecord, RouteTable, ServiceOwner,
-    SystemClock, TargetInput, TransportKind, TransportSelection, WallClock, ZoneClient,
-    ZonePeerIdentity, ZoneServiceKind, ZoneSessionConnector, ZoneSessionPin, ZoneSocketConnector,
-    resource_verb_is_mutating,
+    CallOptions, CancellationToken, ClientError, ConnectedSession, ConnectedZoneSession,
+    MetadataInput, NamedStreamTransport, ProcessAttachClient, ProcessAttachOpenRequest,
+    ProcessAttachOptions, ProcessAttachTarget, ResourceCallOptions, ResourceVerb, RetryPolicy,
+    RouteRecord, RouteTable, ServiceOwner, SystemClock, TargetInput, TerminalSize, TransportKind,
+    TransportSelection, WallClock, ZoneClient, ZonePeerIdentity, ZoneServiceKind,
+    ZoneSessionConnector, ZoneSessionPin, ZoneSocketConnector, resource_verb_is_mutating,
 };
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -334,6 +335,42 @@ impl ZoneContext {
             .invoke_service(operation, payload, deadline, service, Some(session_verb))
             .map_err(|error| self.client_failure(error, mode))?;
         self.decorate_response(value)
+    }
+
+    /// Open and close one typed Process attachment through the Zone session.
+    ///
+    /// The current CLI command reports establishment rather than proxying
+    /// stream bytes. The resource client still owns target validation,
+    /// session pinning, attach authorization, cancellation, and named-stream
+    /// close; this facade does not fall back to the old OpenTerminal request.
+    pub(crate) fn attach_process(
+        &self,
+        resource_ref: ResourceRef,
+        interactive: bool,
+        tty: bool,
+        deadline: RequestDeadline,
+        mode: OutputMode,
+    ) -> Result<Value, CliFailure> {
+        #[cfg(test)]
+        let result = self.backend.canonical.attach_process(
+            resource_ref.clone(),
+            interactive,
+            tty,
+            deadline,
+            self.backend.injected.clone(),
+        );
+        #[cfg(not(test))]
+        let result =
+            self.backend
+                .canonical
+                .attach_process(resource_ref.clone(), interactive, tty, deadline);
+        result.map_err(|error| self.client_failure(error, mode))?;
+        self.decorate_response(json!({
+            "attached": true,
+            "interactive": interactive,
+            "resourceRef": resource_ref.to_canonical_string(),
+            "tty": tty,
+        }))
     }
 
     #[cfg(test)]
@@ -714,6 +751,105 @@ impl CanonicalZoneBackend {
         serde_json::from_slice(&response.to_canonical_bytes())
             .map_err(|_| ClientError::ContractViolation)
     }
+
+    #[cfg(test)]
+    fn attach_process(
+        &self,
+        resource_ref: ResourceRef,
+        interactive: bool,
+        tty: bool,
+        deadline: RequestDeadline,
+        injected: Option<Arc<dyn SessionClient>>,
+    ) -> Result<(), ClientError> {
+        self.attach_process_inner(resource_ref, interactive, tty, deadline, injected)
+    }
+
+    #[cfg(not(test))]
+    fn attach_process(
+        &self,
+        resource_ref: ResourceRef,
+        interactive: bool,
+        tty: bool,
+        deadline: RequestDeadline,
+    ) -> Result<(), ClientError> {
+        self.attach_process_inner(resource_ref, interactive, tty, deadline)
+    }
+
+    #[cfg(test)]
+    fn attach_process_inner(
+        &self,
+        resource_ref: ResourceRef,
+        interactive: bool,
+        tty: bool,
+        deadline: RequestDeadline,
+        injected: Option<Arc<dyn SessionClient>>,
+    ) -> Result<(), ClientError> {
+        let mut connector = CliZoneConnector::new(
+            self.zone_name.clone(),
+            self.zone_path.clone(),
+            self.socket_path.clone(),
+            ZoneServiceKind::Zone,
+            "Attach".to_owned(),
+            Some("attach".to_owned()),
+            deadline.duration(),
+        );
+        connector.injected = injected;
+        self.attach_process_with_connector(resource_ref, interactive, tty, deadline, connector)
+    }
+
+    #[cfg(not(test))]
+    fn attach_process_inner(
+        &self,
+        resource_ref: ResourceRef,
+        interactive: bool,
+        tty: bool,
+        deadline: RequestDeadline,
+    ) -> Result<(), ClientError> {
+        let connector = CliZoneConnector::new(
+            self.zone_name.clone(),
+            self.zone_path.clone(),
+            self.socket_path.clone(),
+            ZoneServiceKind::Zone,
+            "Attach".to_owned(),
+            Some("attach".to_owned()),
+            deadline.duration(),
+        );
+        self.attach_process_with_connector(resource_ref, interactive, tty, deadline, connector)
+    }
+
+    fn attach_process_with_connector(
+        &self,
+        resource_ref: ResourceRef,
+        interactive: bool,
+        tty: bool,
+        deadline: RequestDeadline,
+        connector: CliZoneConnector,
+    ) -> Result<(), ClientError> {
+        let target = ProcessAttachTarget::ephemeral_process(self.zone_path.clone(), resource_ref)?;
+        let initial_size = if tty {
+            let (rows, cols) =
+                crate::exec_client::current_window_size().ok_or(ClientError::InvalidMetadata)?;
+            Some(TerminalSize::new(
+                u16::try_from(rows).map_err(|_| ClientError::InvalidMetadata)?,
+                u16::try_from(cols).map_err(|_| ClientError::InvalidMetadata)?,
+            )?)
+        } else {
+            None
+        };
+        let attach_options = ProcessAttachOptions::new(interactive, tty, initial_size)?;
+        let owner = owner_for_zone(&self.zone_path);
+        let resolver = RouteTable::new(vec![RouteRecord::new(owner, TransportKind::LocalUnix)]);
+        let client = ProcessAttachClient::new(resolver, connector);
+        let call_options = call_options(deadline, ResourceVerb::Get)?;
+        let cancellation = CancellationToken::default();
+        block_on(client.attach_and_close(
+            target,
+            attach_options,
+            call_options,
+            TransportSelection::exact(TransportKind::LocalUnix),
+            &cancellation,
+        ))
+    }
 }
 
 /// The CLI's private bridge from the local authenticated session endpoint to
@@ -727,6 +863,8 @@ struct CliZoneConnector {
     operation: String,
     session_verb: Option<String>,
     handshake_timeout: Duration,
+    #[cfg(test)]
+    injected: Option<Arc<dyn SessionClient>>,
 }
 
 impl std::fmt::Debug for CliZoneConnector {
@@ -760,6 +898,8 @@ impl CliZoneConnector {
             session_verb,
             handshake_timeout: request_timeout
                 .min(Duration::from_millis(LOCAL_HANDSHAKE_DEADLINE_MS)),
+            #[cfg(test)]
+            injected: None,
         }
     }
 
@@ -781,6 +921,26 @@ impl CliZoneConnector {
             return Err(ClientError::TransportPolicyMismatch);
         }
         let operation = validate_operation(service, &self.operation, self.session_verb.as_deref())?;
+        #[cfg(test)]
+        if self.injected.is_some() {
+            let peer = ZonePeerIdentity::from_observed_static_key(
+                self.zone_path.clone(),
+                peer_fingerprint(&self.zone_name),
+            );
+            let pin = ZoneSessionPin::new(peer, service, TransportKind::LocalUnix, 1, [0xA5; 32])?;
+            return Ok((
+                CliConnectedSession {
+                    zone_name: self.zone_name.clone(),
+                    service,
+                    operation,
+                    session_verb: self.session_verb.clone(),
+                    socket: None,
+                    #[cfg(test)]
+                    injected: self.injected.clone(),
+                },
+                pin,
+            ));
+        }
         let mut socket =
             SeqpacketUnixSocket::connect(&self.socket_path).map_err(classify_client_io_error)?;
         socket
@@ -824,7 +984,9 @@ impl CliZoneConnector {
                 service,
                 operation,
                 session_verb: self.session_verb.clone(),
-                socket: Arc::new(Mutex::new(socket)),
+                socket: Some(Arc::new(Mutex::new(socket))),
+                #[cfg(test)]
+                injected: self.injected.clone(),
             },
             pin,
         ))
@@ -849,12 +1011,52 @@ struct CliConnectedSession {
     service: ZoneServiceKind,
     operation: String,
     session_verb: Option<String>,
-    socket: Arc<Mutex<SeqpacketUnixSocket>>,
+    socket: Option<Arc<Mutex<SeqpacketUnixSocket>>>,
+    #[cfg(test)]
+    injected: Option<Arc<dyn SessionClient>>,
 }
 
 impl std::fmt::Debug for CliConnectedSession {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter.write_str("CliConnectedSession(<authenticated>)")
+    }
+}
+
+/// Establishment-only stream adapter for the current CLI command contract.
+///
+/// The public CLI currently reports an accepted attachment and does not proxy
+/// byte I/O. It therefore refuses stream data operations instead of creating
+/// a second transport. The authenticated session remains responsible for the
+/// attach admission; `close` releases the client-side named-stream lease.
+struct CliAttachStream {
+    closed: AtomicBool,
+}
+
+impl CliAttachStream {
+    fn new() -> Self {
+        Self {
+            closed: AtomicBool::new(false),
+        }
+    }
+}
+
+impl NamedStreamTransport for CliAttachStream {
+    fn send(&self, _bytes: Vec<u8>) -> impl Future<Output = Result<(), ClientError>> + Send {
+        ready(Err(ClientError::ContractViolation))
+    }
+
+    fn receive(&self) -> impl Future<Output = Result<Vec<u8>, ClientError>> + Send {
+        ready(Err(ClientError::ContractViolation))
+    }
+
+    fn close(&self) -> impl Future<Output = Result<(), ClientError>> + Send {
+        self.closed.store(true, Ordering::Release);
+        ready(Ok(()))
+    }
+
+    fn cancel(&self) -> impl Future<Output = Result<(), ClientError>> + Send {
+        self.closed.store(true, Ordering::Release);
+        ready(Ok(()))
     }
 }
 
@@ -880,7 +1082,54 @@ impl ConnectedZoneSession for CliConnectedSession {
     }
 }
 
+impl ConnectedSession for CliConnectedSession {
+    type Stream = CliAttachStream;
+
+    fn open_named_stream(
+        &self,
+        request: ProcessAttachOpenRequest,
+        relative_timeout_nanos: u64,
+    ) -> impl Future<Output = Result<Self::Stream, ClientError>> + Send {
+        let result = self.open_process_attach(request, relative_timeout_nanos);
+        ready(result)
+    }
+}
+
 impl CliConnectedSession {
+    fn open_process_attach(
+        &self,
+        request: ProcessAttachOpenRequest,
+        relative_timeout_nanos: u64,
+    ) -> Result<CliAttachStream, ClientError> {
+        if self.service != ZoneServiceKind::Zone
+            || self.operation != "Attach"
+            || self.session_verb.as_deref() != Some("attach")
+        {
+            return Err(ClientError::TransportPolicyMismatch);
+        }
+        let options = request.options();
+        let initial_size = options.initial_size().map(|size| {
+            json!({
+                "cols": size.cols(),
+                "rows": size.rows(),
+            })
+        });
+        let payload = serde_json::to_vec(&json!({
+            "interactive": options.interactive(),
+            "initialSize": initial_size,
+            "tty": options.tty(),
+        }))
+        .map_err(|_| ClientError::ContractViolation)?;
+        let payload =
+            CanonicalJsonObject::parse(&payload).map_err(|_| ClientError::ContractViolation)?;
+        self.invoke(
+            Some(request.target().resource_ref().clone()),
+            payload,
+            relative_timeout_nanos,
+        )?;
+        Ok(CliAttachStream::new())
+    }
+
     fn invoke(
         &self,
         target: Option<ResourceRef>,
@@ -922,8 +1171,27 @@ impl CliConnectedSession {
         }
         let request = serde_json::to_vec(&request).map_err(|_| ClientError::ContractViolation)?;
         let timeout = Duration::from_nanos(relative_timeout_nanos.max(1));
+        #[cfg(test)]
+        if let Some(client) = &self.injected {
+            let response = client
+                .invoke(&request, RequestDeadline(timeout))
+                .map_err(|error| match error {
+                    TransportError::Unavailable | TransportError::Io => ClientError::SessionLost,
+                    TransportError::DeadlineExceeded => ClientError::DeadlineExpired,
+                    TransportError::InvalidResponse
+                    | TransportError::OversizedResponse
+                    | TransportError::AncillaryData => ClientError::ContractViolation,
+                    TransportError::AuthRejected => ClientError::Remote {
+                        kind: ResourceErrorKind::AuthorizationDenied,
+                        retry: RetryClass::Never,
+                    },
+                })?;
+            return decode_cli_response(&response);
+        }
         let mut socket = self
             .socket
+            .as_ref()
+            .ok_or(ClientError::TransportFailed)?
             .lock()
             .map_err(|_| ClientError::TransportFailed)?;
         socket
@@ -933,26 +1201,30 @@ impl CliConnectedSession {
             .send_frame(&request)
             .map_err(classify_client_io_error)?;
         let response = socket.recv_frame().map_err(classify_client_io_error)?;
-        if response.len() > MAX_FRAME_BYTES {
-            return Err(ClientError::ContractViolation);
-        }
-        let value: Value =
-            serde_json::from_slice(&response).map_err(|_| ClientError::ContractViolation)?;
-        if !value.is_object() {
-            return Err(ClientError::ContractViolation);
-        }
-        if matches!(
-            value.get("type").and_then(Value::as_str),
-            Some("error" | "helloRejected")
-        ) || value
-            .get("ok")
-            .and_then(Value::as_bool)
-            .is_some_and(|ok| !ok)
-        {
-            return Err(remote_client_error(&value));
-        }
-        CanonicalJsonObject::parse(&response).map_err(|_| ClientError::ContractViolation)
+        decode_cli_response(&response)
     }
+}
+
+fn decode_cli_response(response: &[u8]) -> Result<CanonicalJsonObject, ClientError> {
+    if response.len() > MAX_FRAME_BYTES {
+        return Err(ClientError::ContractViolation);
+    }
+    let value: Value =
+        serde_json::from_slice(response).map_err(|_| ClientError::ContractViolation)?;
+    if !value.is_object() {
+        return Err(ClientError::ContractViolation);
+    }
+    if matches!(
+        value.get("type").and_then(Value::as_str),
+        Some("error" | "helloRejected")
+    ) || value
+        .get("ok")
+        .and_then(Value::as_bool)
+        .is_some_and(|ok| !ok)
+    {
+        return Err(remote_client_error(&value));
+    }
+    CanonicalJsonObject::parse(response).map_err(|_| ClientError::ContractViolation)
 }
 
 fn zone_path(zone_name: &str) -> Result<d2b_contracts::v3::zone_routing::ZonePath, ()> {
@@ -979,6 +1251,7 @@ fn validate_operation(
         | (ZoneServiceKind::Support, "SupportService/GenerateBundle", Some("support-bundle")) => {
             Ok(operation.to_owned())
         }
+        (ZoneServiceKind::Zone, "Attach", Some("attach")) => Ok(operation.to_owned()),
         (ZoneServiceKind::Audit | ZoneServiceKind::Support, ..) => Err(ClientError::InvalidMethod),
         (_, _, Some(_)) => Err(ClientError::InvalidMethod),
         (_, operation, None)
@@ -1615,6 +1888,82 @@ mod tests {
         let request: Value = serde_json::from_slice(&request[0]).unwrap();
         assert_eq!(request["method"], "List");
         assert_eq!(request["zoneRef"], "Zone/dev");
+    }
+
+    #[test]
+    fn injected_process_attach_uses_the_typed_zone_attach_operation() {
+        let client = Arc::new(MockClient {
+            requests: Mutex::new(Vec::new()),
+            response: br#"{"ok":true}"#.to_vec(),
+        });
+        let context =
+            ZoneContext::with_client("dev", "/run/d2b/zones/dev/public.sock", client.clone())
+                .unwrap();
+        let response = context
+            .attach_process(
+                ResourceRef::parse("EphemeralProcess/command").unwrap(),
+                false,
+                false,
+                ZoneContext::deadline(Some("30s")).unwrap(),
+                OutputMode::Json,
+            )
+            .unwrap();
+        assert_eq!(response["attached"], true);
+        let requests = client.requests.lock().unwrap();
+        assert_eq!(requests.len(), 1);
+        let request: Value = serde_json::from_slice(&requests[0]).unwrap();
+        assert_eq!(request["method"], "Attach");
+        assert_eq!(request["service"], "d2b.zone.v3");
+        assert_eq!(request["sessionVerb"], "attach");
+        assert_eq!(request["resourceRef"], "EphemeralProcess/command");
+        assert!(!request.to_string().contains("OpenTerminal"));
+        assert!(!request.to_string().contains("subject"));
+        assert!(!request.to_string().contains("user"));
+    }
+
+    #[test]
+    fn cli_attach_stream_closes_idempotently_and_refuses_unowned_bytes() {
+        let stream = CliAttachStream::new();
+        assert_eq!(
+            block_on(stream.send(vec![1])).unwrap_err(),
+            ClientError::ContractViolation
+        );
+        assert_eq!(
+            block_on(stream.receive()).unwrap_err(),
+            ClientError::ContractViolation
+        );
+        block_on(stream.close()).unwrap();
+        block_on(stream.close()).unwrap();
+        assert!(stream.closed.load(Ordering::Acquire));
+    }
+
+    #[test]
+    fn injected_process_attach_redacts_remote_reason() {
+        let client = Arc::new(MockClient {
+            requests: Mutex::new(Vec::new()),
+            response:
+                br#"{"ok":false,"errorClass":"authorization-denied","message":"secret-subject"}"#
+                    .to_vec(),
+        });
+        let context =
+            ZoneContext::with_client("dev", "/run/d2b/zones/dev/public.sock", client).unwrap();
+        let error = context
+            .attach_process(
+                ResourceRef::parse("EphemeralProcess/command").unwrap(),
+                false,
+                false,
+                ZoneContext::deadline(Some("30s")).unwrap(),
+                OutputMode::Json,
+            )
+            .unwrap_err();
+        assert_eq!(error.exit_code, 1);
+        assert!(!error.message.contains("secret-subject"));
+        assert!(
+            !error
+                .rendered_stderr
+                .unwrap_or_default()
+                .contains("secret-subject")
+        );
     }
 
     #[test]
