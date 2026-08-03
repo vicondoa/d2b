@@ -1016,7 +1016,12 @@ dependencies = [
 name = "d2b-controller-toolkit"
 version = "0.0.0-bootstrap"
 dependencies = [
+ "d2b-bus",
  "d2b-contracts",
+ "d2b-process",
+ "d2b-process-conformance",
+ "d2b-provider-supervisor",
+ "d2b-provider-system-minijail",
  "d2b-resource-api",
  "d2b-resource-store",
  "d2b-resource-store-redb",
