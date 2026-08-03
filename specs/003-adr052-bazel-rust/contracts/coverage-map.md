@@ -75,7 +75,9 @@ These are not generated and must each appear exactly once in
   version the action actually used;
 - the vendor repository rule that materializes the offline dependency tree;
 - the yanked-state carrier fragment that consumes the committed lock-bounded
-  snapshot and reports under `rust-deny-main`, `rust-deny-broker`, and
+  snapshot, runs the repository-owned offline `bazel-yanked-check` validator
+  over it and the three committed locks as declared inputs, and reports under
+  `rust-deny-main`, `rust-deny-broker`, and
   `rust-deny-guest`, which exists unconditionally and adds no nineteenth ID;
 - the aggregate, slice, carrier, and guard fragments under `bazel/` and
   `ci/rust/`.

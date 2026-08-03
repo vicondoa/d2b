@@ -223,15 +223,20 @@ green on the Cargo path for the whole shadow stage.
 | `action_env_allowlist` | The explicit minimal set of host environment values any action may observe. |
 | `bazelignore_entries` | `.scratch/` plus every Cargo output directory any workspace or tool creates. |
 | `symlink_prefix` | Absolute path beneath `.scratch/`. |
-| `startup_options` | Absolute values supplied by the wrapper, byte-identical across build, test, query, info, shutdown, clean, and, from W2, the repin child. |
+| `startup_options` | Absolute values supplied by the wrapper, byte-identical across build, test, query, info, shutdown, clean, and, from W2, the repin and module-refresh children. |
 | `generator_pin` | `cargo-bazel` URL plus sha256; source bootstrap refused. |
+| `module_lock_modes` | `.bazelrc` carries `common --lockfile_mode=error` and `common --check_direct_dependencies=error`; neither may be relaxed by a wrapper argument. |
 
 Repin controls are absent from the wrapper and from every
 continuous-integration environment. The single scoped exception is the child
 environment `cargo xtask bazel-repin --hub <name>` constructs, which sets
 `CARGO_BAZEL_REPIN` and `CARGO_BAZEL_REPIN_ONLY=<hub>` for that one process,
 writes only that hub's Bazel-side lock, and fails when any other tracked
-derived artifact changed.
+derived artifact changed. `cargo xtask bazel-module-refresh` sets no repin
+control at all, refuses to run when one is ambient, writes only
+`MODULE.bazel.lock`, fails when any other tracked derived artifact changed, and
+changes nothing on an already-current tree. Neither command is a Make target or
+reachable from a workflow.
 
 Every field here is a cache-key input. A change to `action_env_allowlist`
 invalidates the entire action cache and is reviewed against the promoted size
@@ -390,7 +395,7 @@ Promotion Evidence Set before executor authority changes.
 | `locator_migration_proof` | Every enumerated file migrated or recorded as needing none, plus the passing stale-binary negative fixture. |
 | `broker_repetitions` | Twenty consecutive passes per broker suite with exclusivity. |
 | `performance_sets` | Three valid profiles. Local sets bind the candidate; cold-CI samples carry their own `head_sha` values and reference the W3 feasibility measurement. |
-| `supply_chain_comparison` | Three locks, no differing enforcing outcome, with the yanked carrier landed and its offline key-set drift check passing. |
+| `supply_chain_comparison` | Three locks, no differing enforcing outcome, with the yanked carrier landed and `cargo xtask bazel-yanked-check` passing offline against all three. |
 | `cache_shadow_proof` | Zero shadow publications. |
 | `workflow_policy_proof` | Positive and every required negative fixture pass. |
 | `status` | `collecting`, `qualified`, or `invalidated`. |

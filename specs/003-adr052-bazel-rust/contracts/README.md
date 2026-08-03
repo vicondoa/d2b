@@ -20,7 +20,10 @@ Files:
 - `runner-environment.md` - child environment, per-case result document,
   filesystem semantics, and the scope of the no-shell rule.
 - `workspace-and-tool-pinning.md` - startup options, workspace boundary, the
-  four dependency hubs and their locks, and permitted tool acquisition.
+  four dependency hubs and their locks, the repository-owned commands that
+  regenerate each committed lock and validate the yanked snapshot, the exact
+  operator-facing recovery text every refusal must carry, and permitted tool
+  acquisition.
 - `execution-manifest-binding.md` - executor-to-existing-contract binding.
 - `shadow-promotion-evidence.md` - qualification records, evidence, and
   lifecycle gates.

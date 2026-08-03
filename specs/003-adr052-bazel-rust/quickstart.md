@@ -49,7 +49,13 @@ line, must already name protected `v3` as the promotion,
 cache-maintenance, cache-publication, streak, and post-promotion lineage, with
 the cold measurement set drawn from qualifying cold qualification records, must
 state that the section 6 yanked carrier lands unconditionally, and must name
-`cargo xtask bazel-repin` as the one supported lock regeneration path.
+`cargo xtask bazel-repin` as the one supported hub-lock regeneration path.
+
+The ADR names no command for the module lock; it requires only that
+`--lockfile_mode=error` fail "with a named remediation". This feature supplies
+that name as `cargo xtask bazel-module-refresh`, which is an addition inside
+the ADR's own terms rather than a change to them, so no further amendment is a
+prerequisite here.
 
 Resolve the amendment commit from history rather than pasting a hash, so the
 check keeps working after any rebase or backport:
@@ -101,6 +107,10 @@ Check the pinning and boundary invariants that are easy to get wrong quietly:
 ! grep -qE '^[[:space:]]*startup[[:space:]]' .bazelrc
 ! grep -q 'rust/toolchain/channel' .bazelrc
 
+# Both module-graph checks fail closed rather than warn.
+grep -q '^common --lockfile_mode=error$' .bazelrc
+grep -q '^common --check_direct_dependencies=error$' .bazelrc
+
 # All four hubs declare a Bazel-side lock, a Cargo lock, and the overwrite opt-out.
 grep -c 'lockfile' MODULE.bazel
 grep -c 'cargo_lockfile' MODULE.bazel
@@ -108,6 +118,10 @@ grep -c 'skip_cargo_lockfile_overwrite = True' MODULE.bazel
 
 # No repin escape hatch anywhere on the gate path.
 ! grep -rqE 'CARGO_BAZEL_REPIN|CARGO_BAZEL_REPIN_ONLY|(^|[^A-Z_])REPIN=' \
+  Makefile .github/workflows/
+
+# None of the four contributor-only commands is reachable from Make or CI.
+! grep -rqE 'xtask (bazel-repin|bazel-module-refresh|bazel-yanked-refresh|bazel-evidence)' \
   Makefile .github/workflows/
 
 # The only site that may assign a repin control to a process environment.
@@ -151,6 +165,42 @@ review. The run that must report a changed lock is the one immediately after a
 Cargo workspace membership or dependency change; a command wired to the wrong
 Bazel invocation shows up there, as a repin that changed nothing when something
 had to change.
+
+The module lock has its own command, and it is the only supported way to move
+`MODULE.bazel.lock`:
+
+```bash
+cargo xtask bazel-module-refresh
+git status --short
+cargo xtask bazel-module-refresh
+git status --short
+```
+
+Run it twice on purpose. The second run must print nothing, because the command
+is required to be idempotent; a second run that changes the lock again means
+the invocation is not deterministic and the pin is not a pin. On a tree whose
+module lock is already current, both runs are empty. The command takes no
+arguments, refuses to start when any repin control is exported, and fails
+rather than succeeds if it changed any tracked file other than
+`MODULE.bazel.lock`.
+
+Do not copy the refresh line out of a Bazel error. Bazel's own module-lock
+diagnostic names `bazel mod deps --lockfile_mode=update`, which is correct
+about the mode and silent about every startup option this repository requires;
+running it as printed starts a second server and writes a second output base
+under your home directory instead of `.scratch/`. Confirm the repository
+remediation is what actually ships:
+
+```bash
+grep -rq 'cargo xtask bazel-module-refresh' packages/xtask/src/bazel.rs
+```
+
+Confirm neither lock command is reachable from a build entry point:
+
+```bash
+! grep -rqE 'xtask (bazel-repin|bazel-module-refresh)' \
+  Makefile .github/workflows/
+```
 
 Confirm `make test-rust` still invokes Cargo and remains authoritative:
 
@@ -293,13 +343,32 @@ whether or not the recorded comparison found a difference:
 ls bazel/supply_chain/
 jq -e 'has("entries") and (.entries | length) > 0' \
   bazel/supply_chain/yanked-snapshot.json
+cargo xtask bazel-yanked-check
 make test-drift
 ```
 
 An all-clear snapshot with no yanked entry is the expected result and is still
 committed. What must fail is a snapshot whose `(name, version)` key set differs
-from the three committed locks in either direction; `test-drift` proves that
-offline and never contacts the index.
+from the three committed locks in either direction.
+
+The snapshot has two commands and they are not interchangeable.
+`cargo xtask bazel-yanked-refresh` is the reviewed networked update that
+rewrites the snapshot; `cargo xtask bazel-yanked-check` is the offline
+validator that proves the committed snapshot still matches the three locks. The
+check is what the three Bazel carriers run as a declared-input action, so the
+command above prints the same bytes the gate would, without contacting the
+index. When the check refuses, the recovery is exactly:
+
+```bash
+cargo xtask bazel-yanked-refresh
+git diff -- bazel/supply_chain/yanked-snapshot.json
+git add bazel/supply_chain/yanked-snapshot.json
+cargo xtask bazel-yanked-check
+```
+
+Ending on the check rather than on the refresh is the point. A refreshed
+snapshot nobody validated is how a mismatched key set reaches continuous
+integration instead of your shell.
 
 Seeded failures are made on eighteen disposable, committed evidence branches,
 one protected condition per branch. Each branch runs only its owning approved

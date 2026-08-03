@@ -27,7 +27,8 @@ API census. The nightly channel is reached by a repository-owned per-target
 transition over the census subgraph, never by a global channel flag.
 
 **Primary Dependencies**: Bazel 8.6.0 from pinned nixpkgs; Bzlmod with
-`MODULE.bazel.lock` under `common --lockfile_mode=error`; `rules_rust` 0.73.0
+`MODULE.bazel.lock` under `common --lockfile_mode=error` and
+`common --check_direct_dependencies=error`; `rules_rust` 0.73.0
 as the initial explicit pin, including `crate_universe`, subject to a W0
 measurement scoped to this repository's graph rather than to basic version
 compatibility, which upstream already publishes; the `cargo-bazel` generator
@@ -89,6 +90,11 @@ Make wrapper or in continuous integration. The single exception is the scoped
 child environment `cargo xtask bazel-repin --hub <name>` constructs for the one
 Bazel process it spawns; that command is not a Make target, no workflow may
 reach it, and a structural guard allowlists exactly that one construction site.
+`cargo xtask bazel-module-refresh`, `cargo xtask bazel-yanked-refresh`, and
+`cargo xtask bazel-evidence prepare-cold-local` are likewise not Make targets
+and unreachable from any workflow; `cargo xtask bazel-yanked-check` is offline,
+runs inside the three supply-chain carriers as a declared-input action, and is
+also not a Make target.
 Every hub sets `lockfile`, `cargo_lockfile`, and
 `skip_cargo_lockfile_overwrite = True`, because the last of those defaults to
 false at `rules_rust` 0.73.0 and a repin would otherwise rewrite the
@@ -197,7 +203,9 @@ bazel/carriers/                       # Carrier fragments consumed by ci/rust
 ci/rust/BUILD.bazel                   # ADR-fixed carriers, guard, and aggregate
 packages/**/BUILD.bazel               # Generated first-party targets
 tests/tools/no-bash-ast-walker/BUILD.bazel   # Generated; fourth hub consumer
-packages/xtask/src/bazel.rs           # gen-bazel, gen-bazel --check, bazel-repin
+packages/xtask/src/bazel.rs           # gen-bazel, gen-bazel --check, bazel-repin, bazel-module-refresh
+packages/xtask/src/bazel_yanked.rs    # bazel-yanked-refresh, bazel-yanked-check
+packages/xtask/tests/bazel_module_refresh.rs # Real-Bazel module lock drift and remediation
 packages/xtask/src/                   # Schema output and evidence helpers
 packages/xtask/tests/policy_ci.rs
 packages/xtask/tests/fixtures/ci/
@@ -237,6 +245,10 @@ parallel worktrees open.
 | An earlier plan draft validated a wave with `make test-rust-main` or `make test-policy` alone after editing a file the `d2b-contract-tests` crate reads. | `tests/test-rust.sh` sets `workspace_test_excludes=(--exclude d2b-contract-tests)`, and `policy_broker_schema.rs` walks every `.rs` file under `packages/`, so that crate executes only under `D2B_ENABLE_FIXTURE_BUILD=1 make test-fixture-contracts` and every wave that touches `packages/` is inside its input set. | Every code-changing wave now runs the fixture-contract target in its validation. The rule and the command that derives the input set are in the delivery rules above and in `tasks.md`. |
 | An earlier plan draft treated the yanked-state carrier as conditional on the recorded comparison. | The amended ADR 0052 section 6 makes the snapshot and the three carriers unconditional. | The carrier lands in W1 either way; the comparison keeps its promotion-blocking force but no longer decides whether the capability exists. |
 | An earlier plan draft forbade the repin controls without naming any supported regeneration path. | `rules_rust` 0.73.0 `determine_repin` treats `CARGO_BAZEL_REPIN_ONLY` as an exact-match comma-delimited hub allowlist, and `skip_cargo_lockfile_overwrite` defaults to false. | `cargo xtask bazel-repin --hub <name>` is the one supported path; the environment prohibition in Make and continuous integration is unchanged, and every hub sets `skip_cargo_lockfile_overwrite = True` so a repin cannot rewrite the authoritative Cargo lock. |
+| An earlier plan draft left module lock drift with no named command, so the refusal could only point at Bazel's own diagnostic. | Measured at Bazel 8.6.0: `--lockfile_mode=error` exits 48 naming `bazel mod deps --lockfile_mode=update`, an invocation that carries no startup options and would run against the default output user root under the home directory. | `cargo xtask bazel-module-refresh` issues the measured invocation with the repository's absolute startup options, writes only `MODULE.bazel.lock`, and is the exact remediation the refusal names. ADR 0052 needs no amendment: it names `bazel-repin` as the supported path for a *hub* lock, and the module lock is the separately kept mechanism the ADR already distinguishes. |
+| Planning prose treated `--lockfile_mode=error` as sufficient to fail closed on any module-input change. | Measured at Bazel 8.6.0: a direct `bazel_dep` version the graph absorbs produces a warning and exit zero; only a missing registry file checksum fails. | `.bazelrc` gains `common --check_direct_dependencies=error`. A check that warns is not a pin, and W0 proves the negative. |
+| Planning prose required byte-identical options across every Bazel invocation without distinguishing startup options from command options. | Measured at Bazel 8.6.0: `bazel mod` rejects `--symlink_prefix` as unrecognized. | The identity requirement binds the startup-option set that selects the server and output base. `--symlink_prefix` is supplied to the commands that accept it, and the module-refresh child is held only to startup-option identity. |
+| An earlier plan draft ended the yanked drift remedy at `bazel-yanked-refresh`, leaving verification to continuous integration. | The gate check must be offline and must not regenerate state, so it is a different operation from the networked refresh. | `cargo xtask bazel-yanked-check` is the offline validator, the three carriers run it as a declared-input action, and the recovery text ends on it. |
 
 There is no eighteen-surface drift: committed code publishes eighteen with
 `D2B_SKIP_FIXTURE_BUILD=1` and two fixture surfaces when enabled.
@@ -266,6 +278,24 @@ and `rules_rust` expert, because every finding that forced the ADR amendment
 was substrate-level. All ten must sign off with no recommendations. Reviewers
 inspect supplied evidence and do not rerun validation. Content changes
 invalidate prior signoffs.
+
+### Wave notes record command shapes, not local values
+
+Several waves record a measured invocation in their wave notes: W0 records the
+one that repins exactly one hub and the one that updates the module lock, and
+W2 records the consolidated startup-option construction. Every such note
+records the command as a **shape** with placeholders, for example
+`<worktree>/.scratch/bazel` for the output user root and
+`<worktree>/.scratch/bazel/<base>` for the output base. A real absolute path
+from the machine the measurement ran on is never written into a note, a PR
+body, a panel comment, or an evidence file.
+
+This is the same rule that keeps absolute paths and environment values out of
+refusal text, applied to the artifacts that describe how those refusals were
+measured. A wave note is quoted forward into later waves and into review, so a
+home directory path in one has escaped just as surely as an echoed variable
+would have. Panels check notes for this, and the redaction fixtures that cover
+message text list the note paths in the same forbidden set.
 
 ### Fixture-dependent validation rule
 
@@ -305,7 +335,8 @@ intersection against its final owned path set rather than inheriting this list.
 
 **Deliverable**: Verified amendment ancestry, pinned Bazel and Bzlmod state,
 four `crate_universe` hubs with committed per-hub locks, the scoped
-single-hub repin command, the reviewed networked yanked-snapshot refresh
+single-hub repin command, the no-argument module-lock refresh command, the
+reviewed networked yanked-snapshot refresh
 command, the pinned
 `cargo-bazel` acquisition, the generated workspace boundary, the Cargo-derived
 generator, the schema output prerequisite, the generated first-party graph, the
@@ -322,7 +353,9 @@ inventory, and the frozen runner and locator crate decisions, including the
   after workspace membership changes, which only the integrator regenerates and
   commits; the other three must be byte-identical across integration.
 - `generator`: `packages/xtask/src/bazel.rs`, including `gen-bazel`,
-  `gen-bazel --check`, `bazel-repin`, and `bazel-yanked-refresh`, its tests,
+  `gen-bazel --check`, `bazel-repin`, and `bazel-module-refresh`;
+  `packages/xtask/src/bazel_yanked.rs`, including `bazel-yanked-refresh`;
+  `packages/xtask/tests/bazel_module_refresh.rs`; their tests;
   and its generated outputs including `.bazelignore` and the derived censuses.
 - `schema`: schema generator, its tests, and the current schema leaf only.
 - `runner`: the frozen runner crate skeleton, including the `fsops` and `clock`
@@ -340,18 +373,29 @@ fixture-dependent validation rule, and a Cargo-authoritative
 `D2B_SKIP_FIXTURE_BUILD=1 make test-rust`.
 
 **Done when**: the amended ADR commit is an ancestor of the W0 base; Bazel is
-8.6.0; module lock mode is `error`; all four hubs declare `lockfile`,
+8.6.0; module lock mode is `error` and direct-dependency checking is `error`;
+all four hubs declare `lockfile`,
 `cargo_lockfile`, and `skip_cargo_lockfile_overwrite = True`, and a stale-lock
 mutation fails closed; no repin environment control exists in the
 wrapper or CI; `cargo xtask bazel-repin --hub <name>` refuses an unknown hub,
 refuses an ambient repin control, changes only the named hub's lock, and fails
-when any other generated artifact changed; the `cargo-bazel` URL and sha256 are
-pinned and the source
+when any other generated artifact changed; `cargo xtask bazel-module-refresh`
+takes no arguments, refuses an ambient repin control, changes only
+`MODULE.bazel.lock`, fails when any other tracked derived file changed, and
+exits zero having changed nothing on an already-current tree; planted module
+drift makes the pinned Bazel fail under `--lockfile_mode=error` and the
+repository surfaces the exact `cargo xtask bazel-module-refresh` remediation
+beside that failure; neither command is named in `Makefile` or in any workflow;
+every row of the actionable failure contract is triggered and its exact string
+asserted by a test in the module that emits it; the `cargo-bazel` URL and
+sha256 are pinned and the source
 bootstrap is refused; `.bazelrc` contains no startup line and no channel flag;
 generated `.bazelignore` covers `.scratch/` and every Cargo output directory,
 proven by a drift mutation; `gen-bazel --check` is clean; both schema
 generations report the exact generated nonempty valid census; the build-script
-and action-environment inventory is committed and drift-checked; Cargo remains
+and action-environment inventory is committed and drift-checked; the W0 wave
+notes record both measured invocations as command shapes with `<worktree>`
+placeholders and contain no real absolute path; Cargo remains
 authoritative and green; the ten-role panel and wave PR are sealed and merged.
 
 ### W1 - Coverage carriers
@@ -372,15 +416,21 @@ guard, the manifest adapter, and the six ADR Make targets.
   for the global-channel-flag refusal.
 - `broker`: three feature carriers and their exclusivity.
 - `aux`: the guest runner carrier and the offline supply-chain carriers,
-  including the vendor repository rule and the unconditional lock-bounded
-  yanked-state snapshot and its three carriers.
+  including the vendor repository rule, the unconditional lock-bounded
+  yanked-state snapshot and its three carriers, and
+  `packages/xtask/src/bazel_yanked.rs` for the offline `bazel-yanked-check`
+  validator those carriers run and its message tests.
 - `runner`: only the frozen runner crate, its environment and per-case evidence
   implementation, and its tests.
 - `locator`: the locator crate and the enumerated first-party migration.
 - `coverage`: `ci/rust/BUILD.bazel`, the coverage JSON, the committed query
   result, and the split guard.
+- `generator`: `packages/xtask/src/bazel.rs` only, for the W1 emission
+  extension. It does not touch `packages/xtask/src/bazel_yanked.rs`, which
+  `aux` owns for W1, so the two `xtask` scopes stay file-disjoint.
 - Integrator prep: `Makefile`, approved targets, the manifest adapter boundary,
-  and the locator's public macro surface, which the migration scope consumes.
+  the `bazel-yanked-check` CLI seam in `packages/xtask/src/main.rs`, and the
+  locator's public macro surface, which the migration scope consumes.
 
 Generated BUILD outputs remain generator-owned and are regenerated once after
 scope merges.
@@ -399,9 +449,11 @@ are exact and generator-derived; the census emits the toolchain version it
 actually used and the guard compares it to the pin; a global channel flag is
 rejected by a guard; the vendor rule refuses an unclassifiable lock entry and
 asserts materialized package count equals the lock's; the committed
-lock-bounded yanked snapshot exists, its offline key-set drift check passes for
-all three locks, and it reports under the existing `rust-deny-*` identifiers
-without adding a nineteenth surface; every migrated test resolves its binary
+lock-bounded yanked snapshot exists, `cargo xtask bazel-yanked-check` passes
+offline for all three locks from both the carriers and a contributor shell, its
+drift refusal names refresh, review and commit, then the check, and it reports
+under the existing `rust-deny-*` identifiers without adding a nineteenth
+surface; every migrated test resolves its binary
 and fixtures through the locator, the planted stale-binary negative fixture
 fails under Bazel, and both arms stay green under Cargo;
 per-case JUnit results are published with the canonical redaction set absent
@@ -426,9 +478,12 @@ control. W5 removes that helper after W4 qualification is complete.
 - `process-control`: deadline, process group, wait ordering, shutdown tests.
 - `cleanup`: cleanup modules and tests, plus its `policy_docs.rs` marker block.
 - `local-wrapper`: `Makefile`, `.bazelrc`, startup-option construction, the
-  synchronous trim step, scratch budgets, and `packages/xtask/Cargo.toml` plus
+  synchronous trim step, scratch budgets, `packages/xtask/Cargo.toml`,
   `packages/xtask/src/bazel.rs` solely to replace the minimal W0 startup-option
-  derivation inside `bazel-repin` with the one shared construction. That
+  derivation inside `bazel-repin` and `bazel-module-refresh` with the one shared
+  construction, and `packages/xtask/tests/bazel_module_refresh.rs` solely to add
+  the case proving every command the wrapper issues surfaces the same
+  module-lock remediation. That
   replacement adds a `d2b-bazel-runner` path dependency, which changes the
   generated graph, so W2 gains an integrator regeneration step and
   `make test-drift` in validation.
@@ -619,6 +674,10 @@ possible, each with the guard that catches it.
 | The vendor tree is quietly short a crate, so `licenses` harvests fewer files, reports fewer findings, and exits zero. | Total classification with named refusals for mirrors and checksum-less non-git entries, plus an assertion that the materialized package count equals the lock's before any tool runs. | Revert the vendor rule; the Cargo supply-chain leaf remains authoritative. |
 | The decomposed supply-chain pair loses yanked-state detection and nothing notices, because the migration comparison happened to run on a lock set with no yanked crate. | The lock-bounded snapshot and its three carriers land in W1 unconditionally, so the capability exists before the first finding; the comparison still blocks promotion on any differing enforcing outcome, and the offline key-set drift check ties the snapshot to the three locks. | Fix the snapshot or the drift check; omitting the carrier is not authorized in either direction. |
 | A contributor hits the stale-lock refusal, finds no supported regeneration path, and runs `CARGO_BAZEL_REPIN=1 make ...`, rewriting every hub lock and, at the 0.73.0 default, the authoritative `Cargo.lock` as well. | `cargo xtask bazel-repin --hub <name>` is the one supported path: closed hub set, `CARGO_BAZEL_REPIN_ONLY` scoped to that hub, controls set only on the spawned child, `skip_cargo_lockfile_overwrite = True` on every hub, and a post-check that fails unless the named hub lock is the only changed tracked file. The Make and workflow prohibition is unchanged and the guard allowlists exactly one construction site. | Discard the worktree change; the refusal is fail-closed and the lock is committed. |
+| A contributor hits the module lock refusal and copies the invocation Bazel prints, which carries no startup options, so a second server starts against the worktree and a second output base lands outside `.scratch/` under the home directory. | The repository's own remediation names `cargo xtask bazel-module-refresh` and nothing else. That command issues the measured invocation with the repository's absolute startup options, writes only `MODULE.bazel.lock`, and refuses when any other tracked derived file changed. The module-lock integration test plants real drift, runs the pinned Bazel, and asserts the repository line is present beside the upstream one. | Delete the stray output base and rerun the repository command; the lock was never rewritten by the failing run. |
+| A `bazel_dep` version disagreement is absorbed by the resolved graph, so `--lockfile_mode=error` warns and exits zero and the module lock records a version nobody declared. | `.bazelrc` carries `common --check_direct_dependencies=error`, and W0 proves the negative by planting a direct-dependency version the graph would otherwise absorb. | Correct the declared version or the pin; the build refuses until they agree. |
+| A repin or module refresh quietly carries an unrelated tracked change into the same commit, so a review reads one lock update and merges two. | Both commands digest every committed derived artifact before the child runs and fail afterwards on any other tracked change, listing the affected paths repository-relative. The recovery is to commit or restore those paths and rerun the same scoped command. | Nothing was committed; the command refused before writing a result. |
+| A yanked snapshot is refreshed over the network, reviewed, committed, and never validated, so a key set that does not match the locks reaches continuous integration. | The drift recovery ends on `cargo xtask bazel-yanked-check`, the same offline validator the three carriers run, so the contributor sees the same message in their own shell. | Rerun the refresh and the check; the snapshot is committed and revertible. |
 | A cleanup or deadline guard is written against the live host filesystem or clock, so its planted negative silently never runs and the guard is decorative. | `fsops` and `clock` are injected boundaries; every negative is produced by the fake, and the mutation tests assert errno mapping, ownership state, call ordering, and rounding without a full disk, a privileged mount, or a manipulated host clock. | Revert the affected W2 scope; the boundary is a W0-frozen module path, so reverting an implementation does not move the seam. |
 | The coverage guard is green while half its invariants never executed, because a Bazel test cannot query the graph. | Analysis-time dependency edges prove label existence; completeness and query drift run in the wrapper and `test-drift` over a committed drift-checked query result; no Bazel test invokes `bazel query`. | Revert the guard split; do not weaken either half. |
 | The disk cache is measured before asynchronous trimming finishes, so a compliant run refuses to publish forever. | An explicit synchronous on-demand collector runs as a named step before measurement and save; the size refusal stays a backstop. | Revert to the previous snapshot; the maintenance verdict is outside the Rust verdict. |

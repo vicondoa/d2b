@@ -64,9 +64,11 @@ conflating them loses one of them:
 
 - `MODULE.bazel.lock` pins the module graph, including the transitive registry
   modules `rules_rust` brings in. `common --lockfile_mode=error` is what makes
-  a drifted module resolution a failure instead of a silent rewrite. This is
-  the mechanism that pins the transitive modules; `MODULE.bazel` alone does
-  not.
+  a drifted module resolution a failure instead of a silent rewrite, and
+  `common --check_direct_dependencies=error` is what keeps a declared direct
+  version that the graph absorbs from passing as a warning. This is the
+  mechanism that pins the transitive modules; `MODULE.bazel` alone does
+  not. Its one regeneration path is `cargo xtask bazel-module-refresh`.
 - Each hub's committed Bazel-side lock is the `--locked` equivalent for
   crates. `crate_universe` re-runs its generator query and fails with a named
   remediation when the committed lock is stale. That check exists **only when
@@ -126,7 +128,58 @@ WORKSPACE-era control, while the bzlmod code default for `regen_command` is
 records the invocation observed to actually repin exactly one hub on Bazel
 8.6.0 with this module graph, and the command asserts the outcome rather than
 trusting the docstring. The invariant that must hold is "exactly one hub lock
-changed", and that is checked, not assumed.
+changed", and that is checked, not assumed. W0 records that invocation in its
+wave notes as a command shape with `<worktree>` placeholders, not as the real
+absolute path of the worktree it was measured in; a wave note is quoted forward
+into later waves and into review, so a real home directory path in one has
+escaped exactly the way an echoed environment value would have.
+
+**The module lock has its own regeneration command, because the diagnostic
+that names one names the wrong one.** The four hub locks and
+`MODULE.bazel.lock` are different mechanisms, so the module lock needs its own
+repository-owned command rather than a mode flip or a hand edit:
+`cargo xtask bazel-module-refresh`. Three things measured directly against
+Bazel 8.6.0 on a scratch module graph forced its shape.
+
+First, `--lockfile_mode=error` does not fail merely because `MODULE.bazel`
+changed. It fails when the resolution needs a registry file whose checksum the
+lock does not carry, and it exits 48 with:
+
+```text
+ERROR: Error computing the main repository mapping: Missing checksum for
+registry file https://bcr.bazel.build/modules/<name>/<version>/MODULE.bazel
+not permitted with --lockfile_mode=error. Please run `bazel mod deps
+--lockfile_mode=update` to update your lockfile.
+```
+
+The lock is not rewritten by the failing run, which is the fail-closed property
+the pin depends on.
+
+Second, the invocation that diagnostic names is correct as far as it goes and
+dangerous as written. `bazel mod deps --lockfile_mode=update` does update only
+`MODULE.bazel.lock`, creates and removes no other file, and changes nothing on
+a second identical run. But the line a contributor copies out of the terminal
+carries no startup options, so it runs against the default output user root
+under the home directory: a second server on the worktree and a second output
+base outside `.scratch/`, defeating the workspace-boundary and bounded-scratch
+rules in one paste. The repository therefore ships its own command, which
+issues that invocation with the same absolute output user root and output base
+as everything else, verifies afterwards that `MODULE.bazel.lock` was the only
+tracked file that changed, and exits zero having changed nothing when the tree
+is already current. `bazel mod` rejects `--symlink_prefix`, so what this child
+shares with the build commands is the startup-option set that selects the
+server, not every command option.
+
+Third, and separately from the lock, a direct dependency whose declared version
+loses to a higher one elsewhere in the graph produces a `WARNING` and exit zero
+under `--lockfile_mode=error` alone. That is a check that degrades rather than
+denies, so `.bazelrc` also carries `common --check_direct_dependencies=error`.
+Without it the module lock faithfully records a resolution nobody declared.
+
+W0 re-measures the update invocation against this repository's real module
+graph before the remediation message ships, for the same reason it measures the
+repin invocation: the measurement above was taken on a two-module scratch graph
+with no `rules_rust` and no `crate_universe` extension.
 
 **The generator binary is a pinned tool too.** `crate_universe` executes a
 `cargo-bazel` binary. The registry release form of `rules_rust` carries an
@@ -179,6 +232,21 @@ weakening of that rule; it is what keeps the rule from being bypassed.
   from a workflow and the approved-target policy would then have to carve out
   an exception; an `xtask` subcommand is reachable only from a shell a
   contributor typed into.
+- Naming Bazel's own `bazel mod deps --lockfile_mode=update` line as the
+  module-lock remediation: rejected on the measurement above. That invocation
+  is right about the mode and silent about every startup option this
+  repository requires, so following it puts a second server and a second output
+  base on the worktree.
+- Flipping `--lockfile_mode` to `update` in `.bazelrc` so drift self-heals:
+  rejected because it converts the only pin on the transitive module graph into
+  an automatic rewrite, which is the same failure the repin prohibition exists
+  to prevent, one level up.
+- Hand-editing `MODULE.bazel.lock`: rejected because the lock carries registry
+  file checksums and extension results that no human can compute by inspection.
+- Folding the module-lock update into `cargo xtask bazel-repin`: rejected
+  because it gives one command two authorities and makes "exactly one hub lock
+  changed" unprovable; the two locks are separate mechanisms and each gets one
+  command.
 - Leaving regeneration undocumented: rejected as the failure mode the repin
   sub-decision exists to prevent.
 
@@ -446,11 +514,27 @@ carriers land in the shadow stage either way, reporting under the existing
 `rust-deny-main`, `rust-deny-broker`, and `rust-deny-guest` identifiers rather
 than as a nineteenth surface. An all-clear snapshot is the expected normal case
 and is still committed; it is the baseline the next diff line is read against.
-The snapshot is refreshed only by an explicit reviewed networked `xtask` update
-outside the gate; the gate's own drift check is offline and proves exact
-`(name, version)` key-set equality with the three committed locks. The
-comparison keeps its full promotion-blocking force; what it no longer decides
-is whether the detection exists.
+The comparison keeps its full promotion-blocking force; what it no longer
+decides is whether the detection exists.
+
+**The snapshot gets one updater and one validator, and they are different
+commands.** `cargo xtask bazel-yanked-refresh` is the explicit reviewed
+networked update outside the gate: it reaches the index, rewrites
+`bazel/supply_chain/yanked-snapshot.json` with one entry per `(name, version)`
+in the three committed locks plus the index revision it observed, and writes
+nothing else. `cargo xtask bazel-yanked-check` is the offline exact key-set
+validator: it reads the committed snapshot and the three committed locks,
+proves `(name, version)` equality in both directions, opens no socket, and
+writes nothing.
+
+Splitting them is what makes the recovery text end somewhere useful. A remedy
+that stops at `bazel-yanked-refresh` tells a contributor to regenerate and
+commit, then leaves them to discover in continuous integration whether what
+they committed actually satisfies the check. The validator is one binary with
+one message, the three Bazel carriers run it as a declared-input action instead
+of reimplementing the comparison per carrier, and a contributor runs the same
+command in a shell and reads the same bytes before pushing. The drift recovery
+therefore reads: refresh, review and commit the snapshot, then run the check.
 
 Schema reproducibility gains `gen-schemas --out-dir`, performs two sequential
 independent generations in one action, and checks the exact generated census
@@ -481,6 +565,12 @@ already present in the current schema leaf.
   promotion window where the cheapest answer is not to.
 - Pin a full crates.io index snapshot: rejected because the state needed is
   bounded by three committed locks, so the artifact is bounded by them too.
+- One command that refreshes and then validates: rejected because it makes the
+  networked path the easy path. The check must be runnable, and must be run,
+  without touching the network or the committed snapshot.
+- Reimplementing the key-set comparison inside each of the three carriers:
+  rejected because three implementations produce three messages that drift, and
+  a contributor would have no way to reproduce any of them locally.
 
 ## Decision 7: Bind Bazel results to execution-manifest v1
 
@@ -523,6 +613,8 @@ creates a literal `%workspace%` directory. Therefore:
 - `.bazelrc` carries only `common`, `build`, `test`, and `build:<config>`
   lines. `common --lockfile_mode=error` is valid there, because `common`
   applies to every command that supports an option and ignores it elsewhere.
+  `common --check_direct_dependencies=error` sits beside it, because that check
+  warns by default and a warning is not a pin.
 - The Make and Rust wrapper supplies every startup option as an absolute path
   derived from the worktree, and supplies **byte-identical** startup options to
   `build`, `test`, `query`, `info`, `shutdown`, and `clean`. That is what makes
@@ -1003,7 +1095,11 @@ reader does not re-derive them from documentation that disagrees.
 | `skip_cargo_lockfile_overwrite` defaults to `False`, so a repin writes the plain `Cargo.lock` back unless the hub opts out | `rules_rust` `crate_universe/extensions.bzl` at `refs/tags/0.73.0` |
 | The extension reports itself reproducible only when both `lockfile` and `cargo_lockfile` are set, which is what makes `--lockfile_mode=error` bind it | `rules_rust` `crate_universe/extensions.bzl` at `refs/tags/0.73.0` |
 | The 0.73.0 docstring recommends `bazel sync --only=<hub>` while the bzlmod `regen_command` default is `bazel mod show_repo`, so neither can be trusted as the repin invocation without measurement | `rules_rust` `crate_universe/extensions.bzl` at `refs/tags/0.73.0` |
-| `--lockfile_mode=error` never rewrites `MODULE.bazel.lock` and fails instead | Bazel 8.6.0 external-dependency lockfile documentation |
+| `--lockfile_mode=error` never rewrites `MODULE.bazel.lock` and fails instead | Bazel 8.6.0 external-dependency lockfile documentation, confirmed by measurement in this worktree |
+| `--lockfile_mode=error` fails on a missing registry file checksum, not on a changed `MODULE.bazel`, and exits 48 naming `bazel mod deps --lockfile_mode=update` | Measured at Bazel 8.6.0 on a scratch module graph in this worktree |
+| `bazel mod deps --lockfile_mode=update` with absolute startup options changes only `MODULE.bazel.lock`, adds and removes no file, and changes nothing on a second identical run | Measured at Bazel 8.6.0 on a scratch module graph in this worktree |
+| `bazel mod` rejects `--symlink_prefix` as an unrecognized option, so command-option identity cannot span `mod` and the build commands; startup-option identity can | Measured at Bazel 8.6.0 in this worktree |
+| A direct `bazel_dep` version the graph absorbs produces only a warning and exit zero under `--lockfile_mode=error`, so `--check_direct_dependencies=error` is required to fail closed | Measured at Bazel 8.6.0 on a scratch module graph in this worktree |
 | `cargo-bazel` is downloaded by URL and sha256 in the registry release form, and built from source through a non-reproducible bootstrap otherwise | `rules_rust` `crate_universe/private/urls.bzl` and `internal_extensions.bzl` at `refs/tags/0.73.0` |
 | Stable and nightly toolchains register together, one version per channel | `rules_rust` `rust/extensions.bzl` at `refs/tags/0.73.0` |
 | The toolchain channel is a universal-scope global build setting with no public per-target transition | `rules_rust` `rust/toolchain/channel/BUILD.bazel` and `rust/private/unpretty.bzl` at `refs/tags/0.73.0` |

@@ -30,14 +30,26 @@ positive integer and remains the only resource budget. Cold-local evidence
 preparation is an internal, temporary W2 xtask helper, not a Make target or
 environment contract, and is removed in W5.
 
-Two other operations are deliberately **not** Make targets and never become
+Four other operations are deliberately **not** Make targets and never become
 approved targets, because every approved target is reachable from a workflow:
 
 - `cargo xtask bazel-repin --hub <name>`, the single-hub lock regeneration
   described in `workspace-and-tool-pinning.md`;
+- `cargo xtask bazel-module-refresh`, the `MODULE.bazel.lock` update described
+  in the same contract;
+- `cargo xtask bazel-yanked-refresh`, the reviewed networked yanked-snapshot
+  update;
 - `cargo xtask bazel-evidence prepare-cold-local`, the temporary W2 helper.
 
-The workflow guard rejects any workflow that invokes either one.
+The workflow guard rejects any workflow that invokes any of them, and the
+approved-target guard rejects any `Makefile` recipe that names one.
+
+`cargo xtask bazel-yanked-check` is the one exception in shape but not in
+policy. It is the offline key-set validator the three Bazel supply-chain
+carriers run as a declared-input action, and a contributor runs the same
+command in a shell to get the same message before pushing. It is still not a
+Make target and still not a workflow step: workflows reach it only through the
+approved aggregate and slice targets that build those carriers.
 
 ## Promotion
 

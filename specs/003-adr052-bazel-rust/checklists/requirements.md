@@ -44,3 +44,14 @@
   added for the same three changes, and SC-011 gained the committed snapshot
   and its offline drift check so the unconditional rule is measurable rather
   than asserted.
+- Revalidated after the round-three plan panel. FR-004 gained the separate
+  no-argument module-lock refresh command and the fail-closed
+  direct-dependency requirement; FR-021 gained the offline validator that the
+  gate carriers and a contributor shell both run. Two acceptance scenarios and
+  four edge cases were added for module lock drift, the upstream diagnostic
+  that names an unsafe invocation, the warn-only direct-dependency check, and
+  an unvalidated snapshot refresh. No functional requirement or success
+  criterion was added or removed; the set remains FR-001 through FR-055 and
+  SC-001 through SC-015. The three substrate claims behind these changes were
+  measured against Bazel 8.6.0 rather than taken from documentation, and are
+  recorded with their sources in `research.md`.

@@ -78,7 +78,8 @@ Rust rollup. The detailed mechanisms and safety invariants in
   executor that used to carry the outcome. Promotion still records the
   comparison and still blocks on any differing enforcing outcome, refresh stays
   an explicit reviewed networked update outside the gate, and the gate's drift
-  check stays offline key-set equality.
+  check stays offline key-set equality run by one repository-owned validator
+  that a contributor can run in a shell and get the same message from.
 - Q: How is a committed dependency-resolution lock regenerated if the
   re-resolution environment controls are forbidden?
   -> A: Through one repository-owned command that names a single hub from the
@@ -90,6 +91,15 @@ Rust rollup. The detailed mechanisms and safety invariants in
   controls in a build entry point or continuous-integration environment is
   unchanged; a supported narrow path exists so the prohibition is not routed
   around under deadline.
+- Q: The build-system module lock is a different mechanism from a hub lock. How
+  is that one regenerated?
+  -> A: Through its own repository-owned command, which takes no arguments,
+  reuses the same absolute startup values, writes only the module lock, refuses
+  when any other tracked derived file changed, and changes nothing on a tree
+  that is already current. It is the exact remediation the module-lock refusal
+  names, so the refusal never leaves a contributor to reconstruct an invocation
+  from an upstream diagnostic that omits every startup option this repository
+  requires.
 
 ## User Scenarios & Testing *(mandatory)*
 
@@ -215,13 +225,25 @@ findings with the current Cargo path for all three lock files.
    its three carriers are present under the existing dependency-policy
    identifiers whether or not the recorded comparison found a yanked
    difference, and the snapshot's offline key set equals the three locks' key
-   set exactly.
+   set exactly as proved by the repository-owned offline validator the carriers
+   and a contributor shell both run.
 8. **Given** a committed dependency-resolution lock that no longer matches its
    Cargo lock, **When** a contributor regenerates it, **Then** the only
    supported path is the repository-owned single-hub command, that command
    changes only the named hub's lock, and the same regeneration control set in
    a build entry point or continuous-integration environment is still
    rejected.
+9. **Given** a build-system module resolution the committed module lock does
+   not cover, **When** any build entry point runs, **Then** the run fails
+   without rewriting the lock and names the repository-owned no-argument
+   refresh command as the recovery, and running that command updates only the
+   module lock, leaves every other tracked derived file unchanged, and changes
+   nothing when it is run a second time.
+10. **Given** a repository-owned lock regeneration that also modified a tracked
+    file it does not own, **When** the command completes its post-check, **Then**
+    it fails, lists the unrelated changed paths repository-relative and never
+    absolute, and names committing or restoring those paths followed by
+    rerunning the same scoped command as the recovery.
 
 ---
 
@@ -399,6 +421,18 @@ retirement conditions independently block premature deletion.
   environment override instead of the reviewed repository-owned command, so a
   lock is rewritten silently, a second build server is started, or an unrelated
   generated artifact changes in the same operation.
+- The build system's own drift diagnostic names a raw refresh invocation that
+  carries none of the server-selecting startup values this repository requires,
+  so following the diagnostic literally starts a second build server and
+  populates persistent state outside the managed scratch subtree.
+- A declared direct build-system dependency disagrees with the resolved graph,
+  and the resolution absorbs the difference with a warning and a zero exit, so
+  the committed lock records a version nobody declared as though it were
+  intended.
+- A yanked-state snapshot is refreshed by the networked updater and committed
+  without anyone running the offline validator, so a snapshot whose key set
+  does not match the locks reaches continuous integration instead of the
+  contributor's shell.
 - A regeneration intended for one dependency hub rewrites another hub's lock or
   rewrites the authoritative Cargo lock the migration froze.
 - A cleanup, result-file, or deadline guard depends on live host filesystem
@@ -441,16 +475,23 @@ retirement conditions independently block premature deletion.
   unavailable through an unpinned fallback, an unpinned source bootstrap, or a
   re-resolution escape hatch in any local or continuous-integration
   environment. Transitive build-system modules MUST be pinned by a committed
-  resolution lock that fails closed rather than silently updating. Regenerating
+  resolution lock that fails closed rather than silently updating, including
+  when a declared direct dependency disagrees with the resolved graph.
+  Regenerating
   a committed dependency-resolution lock MUST be possible only through a
   repository-owned command that names exactly one dependency hub from a closed
   set, applies the re-resolution control solely to the environment of the
   single child process it spawns, reuses the same absolute server-selecting
   startup values the wrapper supplies, writes only that hub's committed lock,
   and fails when any other generated or committed derived artifact changes.
-  That command MUST NOT be reachable from a build entry point or a workflow,
-  and no build entry point or continuous-integration environment MAY set a
-  re-resolution control.
+  Regenerating the committed build-system module resolution lock MUST likewise
+  be possible only through a separate repository-owned command that takes no
+  arguments, reuses the same absolute server-selecting startup values, writes
+  only that lock, fails when any other tracked derived artifact changes,
+  completes with no change on an already-current tree, and is the exact
+  remediation the module-lock refusal names. Neither command MAY be reachable
+  from a build entry point or a workflow, and no build entry point or
+  continuous-integration environment MAY set a re-resolution control.
 - **FR-005**: The feature MUST add a local Bazel Rust aggregate and the
   ADR-defined slice and shutdown entry points while leaving the existing
   authoritative Rust target unchanged during the shadow stage.
@@ -524,9 +565,12 @@ retirement conditions independently block premature deletion.
 - **FR-021**: Advisory database freshness, advisory ignores, and the
   yanked-state snapshot MUST be explicit committed inputs; an ignore MUST
   retain its current workspace and advisory scope; refreshing a snapshot MUST
-  be an explicit reviewed operation outside the gate; and the gate's own drift
-  check MUST be offline and MUST prove exact key-set equality with the
-  committed locks rather than regenerating state.
+  be an explicit reviewed networked operation outside the gate through one
+  repository-owned command; and the gate's own drift check MUST be a separate
+  offline repository-owned command that proves exact key-set equality with the
+  committed locks rather than regenerating state, is the single implementation
+  and the single message for that comparison, and is runnable unchanged both by
+  the gate carriers and by a contributor in a shell.
 - **FR-022**: The API census, pinned test inventory, scanner controls, and
   other non-compilation checks MUST each have a planted failure that proves
   the check can reject a violating input.
