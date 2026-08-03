@@ -1,10 +1,10 @@
 use std::collections::BTreeMap;
 
 use d2b_contracts::{
-    BundleMetadata, BundleResource, ZoneBundle,
+    BundleMetadata, BundleResource, ZoneBundle, ZoneBundleError,
     v3::{
         CanonicalJsonObject, ResourceBundleGenerationId, ResourceName, ResourceTypeName,
-        SchemaFingerprint, Timestamp, ZoneId, ZoneRevision,
+        ResourceUid, SchemaFingerprint, Timestamp, ZoneId, ZoneRevision,
     },
 };
 use d2b_core_controller::{
@@ -693,4 +693,100 @@ fn generation_rejected_emits_audit_record() {
         .expect("schema rejection is authoritative audit");
     assert_eq!(event.event(), "generation-rejected");
     assert_eq!(event.reason(), Some(AuditReason::SchemaValidationFailed));
+}
+
+#[test]
+fn invalid_provider_config_does_not_block_unrelated_resource_activation() {
+    let mut controller = ZoneConfigController::with_defaults(zone());
+    let provider_key = key("Provider", "broken-provider");
+    let result = controller
+        .activate(
+            BundleActivation::new(bundle(
+                'd',
+                [
+                    input("Provider", "broken-provider", "invalid"),
+                    input("Device", "unrelated", "valid"),
+                ],
+            ))
+            .with_invalid_provider_config([provider_key.clone()]),
+            &[],
+            &timestamp(),
+        )
+        .unwrap();
+
+    assert_eq!(result.state().invalid_provider_config_count(), 1);
+    assert_eq!(result.state().active_generation().unwrap().get(), 1);
+    assert!(result.effects().iter().any(|effect| matches!(
+        effect,
+        BundleApplyEffect::MarkProviderConfigInvalid { key } if key == &provider_key
+    )));
+    assert!(result.effects().iter().any(|effect| matches!(
+        effect,
+        BundleApplyEffect::PersistResource {
+            resource,
+            operation: ResourceApplyOperation::Create,
+            ..
+        } if resource.key() == &key("Device", "unrelated")
+    )));
+    let meta_index = result
+        .effects()
+        .iter()
+        .position(|effect| matches!(effect, BundleApplyEffect::RecordStoreMeta(_)))
+        .expect("store_meta is recorded after the generation commit");
+    let first_resource_index = result
+        .effects()
+        .iter()
+        .position(|effect| matches!(effect, BundleApplyEffect::PersistResource { .. }))
+        .expect("resource effects are present");
+    assert!(meta_index < first_resource_index);
+}
+
+#[test]
+fn zone_uid_and_artifact_catalog_mismatch_fail_before_activation() {
+    let uid = ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").unwrap();
+    let other_uid = ResourceUid::parse("123e4567-e89b-42d3-a456-426614174001").unwrap();
+    let mut controller = ZoneConfigController::with_defaults(zone());
+    controller.set_artifact_catalog_digest(digest('f'));
+    let catalog_error = controller
+        .activate(BundleActivation::new(bundle('a', [])), &[], &timestamp())
+        .unwrap_err();
+    assert_eq!(
+        catalog_error,
+        d2b_core_controller::configuration::ActivationError::ArtifactCatalogMismatch
+    );
+
+    let mut controller = ZoneConfigController::with_defaults(zone());
+    controller
+        .activate(
+            BundleActivation::new(bundle('a', [input("Device", "gpu", "first")]))
+                .with_zone_uid(Some(uid)),
+            &[],
+            &timestamp(),
+        )
+        .unwrap();
+    let error = controller
+        .activate(
+            BundleActivation::new(bundle('b', [input("Device", "gpu", "second")]))
+                .with_zone_uid(Some(other_uid)),
+            &[],
+            &timestamp(),
+        )
+        .unwrap_err();
+    assert_eq!(
+        error,
+        d2b_core_controller::configuration::ActivationError::ZoneUidMismatch
+    );
+}
+
+#[test]
+fn tampered_content_hash_is_rejected_before_configuration_activation() {
+    let original = bundle('a', [input("Device", "gpu", "configured")]);
+    let mut wire: serde_json::Value =
+        serde_json::from_slice(&original.canonical_bytes().unwrap()).unwrap();
+    wire["contentHash"] = serde_json::Value::String(format!("sha256:{}", "f".repeat(64)));
+    let tampered = serde_json::to_vec(&wire).unwrap();
+    assert_eq!(
+        ZoneBundle::from_json(&tampered),
+        Err(ZoneBundleError::IntegrityFailure)
+    );
 }

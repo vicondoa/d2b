@@ -7,7 +7,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use d2b_contracts::v3::{
-    ResourceBundleGenerationId, Timestamp, ZoneRevision, execution_policy::DurationMs,
+    ConfigurationGeneration, ResourceBundleGenerationId, ResourceTypeName, Timestamp, ZoneRevision,
+    execution_policy::DurationMs,
 };
 
 use crate::{
@@ -93,6 +94,11 @@ impl PendingCleanupCondition {
         "pending-cleanup"
     }
 
+    /// Return the normative Zone condition type.
+    pub const fn zone_condition_type(&self) -> &'static str {
+        "GenerationCleanupPending"
+    }
+
     /// Return the condition state.
     pub const fn state(&self) -> PendingCleanupState {
         self.state
@@ -109,6 +115,20 @@ impl PendingCleanupCondition {
             PendingCleanupState::True => "ConfigRemoved",
             PendingCleanupState::False => "CleanupComplete",
         }
+    }
+
+    /// Return the normative Zone condition reason.
+    pub const fn zone_condition_reason(&self) -> &'static str {
+        "PendingCleanup"
+    }
+
+    /// Render the bounded status message for a committed generation.
+    pub fn message(&self, generation: ConfigurationGeneration) -> String {
+        format!(
+            "{} config-owned resources from generation {} completing deletion",
+            self.pending_count,
+            generation.get()
+        )
     }
 
     /// Return the cleanup-derived aggregate phase.
@@ -157,6 +177,25 @@ impl CleanupStallCondition {
     /// Return the phase imposed by a cleanup stall.
     pub const fn phase(self) -> CleanupZonePhase {
         CleanupZonePhase::Degraded
+    }
+
+    /// Return the normative Zone condition type.
+    pub const fn zone_condition_type(self) -> &'static str {
+        "GenerationCleanupFailed"
+    }
+
+    /// Return the normative Zone condition reason.
+    pub const fn zone_condition_reason(self) -> &'static str {
+        "CleanupStuck"
+    }
+
+    /// Render a message that names only the ResourceType, never its resource
+    /// name or desired content.
+    pub fn message(self, resource_type: &ResourceTypeName) -> String {
+        format!(
+            "{} resource has been awaiting deletion beyond threshold",
+            resource_type.as_str()
+        )
     }
 }
 
@@ -256,11 +295,85 @@ pub const EPHEMERAL_PROCESS_FAILED_TTL_MS_DEFAULT: u64 = 86_400_000;
 /// Default configuration-owned cleanup stall threshold, in milliseconds.
 pub const CONFIGURATION_CLEANUP_STALL_THRESHOLD_MS_DEFAULT: u64 = 600_000;
 
+/// Initial delay for a configuration cleanup retry.
+pub const CONFIGURATION_CLEANUP_RETRY_BASE_DELAY_MS_DEFAULT: u64 = 1_000;
+
+/// Hard upper bound for one retry delay, independent of caller input.
+pub const CONFIGURATION_CLEANUP_RETRY_MAX_DELAY_MS: u64 = 60_000;
+
 /// Closed failure from cleanup-stall clock evaluation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CleanupStallError {
     /// One of the supplied timestamps was not a canonical UTC timestamp.
     InvalidTimestamp,
+    /// No configuration cleanup is tracked for the requested resource.
+    NotTracked,
+}
+
+/// Result of one bounded configuration-cleanup retry calculation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ConfigurationCleanupRetry {
+    /// Retry the owning finalizer/controller before the stuck threshold.
+    Retry {
+        /// The next clock instant at which a notification may be attempted.
+        at: Timestamp,
+        /// The one-based attempt number represented by this retry.
+        attempt: u32,
+    },
+    /// The threshold has elapsed; set `GenerationCleanupFailed` and stop
+    /// retrying automatically.
+    Stuck,
+}
+
+/// Return the bounded exponential delay for one cleanup attempt.
+///
+/// Attempt zero receives the base delay.  Saturating arithmetic and both the
+/// configured threshold and fixed maximum keep a malformed or unbounded
+/// attempt from producing an overflow or an unbounded timer.
+pub const fn cleanup_retry_delay_ms(attempt: u32, threshold_ms: u64) -> u64 {
+    if threshold_ms == 0 {
+        return 0;
+    }
+    let shift = if attempt < 31 { attempt } else { 31 };
+    let multiplier = 1u64 << shift;
+    let mut exponential =
+        CONFIGURATION_CLEANUP_RETRY_BASE_DELAY_MS_DEFAULT.saturating_mul(multiplier);
+    if exponential > CONFIGURATION_CLEANUP_RETRY_MAX_DELAY_MS {
+        exponential = CONFIGURATION_CLEANUP_RETRY_MAX_DELAY_MS;
+    }
+    if exponential > threshold_ms {
+        threshold_ms
+    } else {
+        exponential
+    }
+}
+
+/// Compute the next cleanup retry without scheduling beyond the stuck bound.
+pub fn configuration_cleanup_retry(
+    requested_at: &Timestamp,
+    now: &Timestamp,
+    attempt: u32,
+    threshold_ms: u64,
+) -> Result<ConfigurationCleanupRetry, CleanupStallError> {
+    let requested = timestamp_millis(requested_at).ok_or(CleanupStallError::InvalidTimestamp)?;
+    let current = timestamp_millis(now).ok_or(CleanupStallError::InvalidTimestamp)?;
+    let threshold = i128::from(threshold_ms);
+    let deadline = requested
+        .checked_add(threshold)
+        .ok_or(CleanupStallError::InvalidTimestamp)?;
+    if current >= deadline {
+        return Ok(ConfigurationCleanupRetry::Stuck);
+    }
+    let remaining = deadline - current;
+    let delay = i128::from(cleanup_retry_delay_ms(attempt, threshold_ms)).min(remaining);
+    let next = current
+        .checked_add(delay)
+        .ok_or(CleanupStallError::InvalidTimestamp)?;
+    let at = timestamp_from_millis(next).map_err(|_| CleanupStallError::InvalidTimestamp)?;
+    Ok(ConfigurationCleanupRetry::Retry {
+        at,
+        attempt: attempt.saturating_add(1),
+    })
 }
 
 impl CleanupStallError {
@@ -268,6 +381,7 @@ impl CleanupStallError {
     pub const fn label(self) -> &'static str {
         match self {
             Self::InvalidTimestamp => "cleanup-stall-timestamp-invalid",
+            Self::NotTracked => "cleanup-stall-resource-not-tracked",
         }
     }
 }
@@ -1104,5 +1218,51 @@ mod ephemeral_cleanup_tests {
             )
             .unwrap()
         );
+    }
+
+    #[test]
+    fn configuration_cleanup_retries_exponentially_then_stops_at_threshold() {
+        let requested = timestamp("2026-08-01T00:00:00.000Z");
+        let now = timestamp("2026-08-01T00:00:00.000Z");
+        assert_eq!(cleanup_retry_delay_ms(0, 600_000), 1_000);
+        assert_eq!(cleanup_retry_delay_ms(1, 600_000), 2_000);
+        assert_eq!(cleanup_retry_delay_ms(7, 600_000), 60_000);
+        assert_eq!(cleanup_retry_delay_ms(0, 500), 500);
+        assert_eq!(
+            configuration_cleanup_retry(&requested, &now, 0, 600_000).unwrap(),
+            ConfigurationCleanupRetry::Retry {
+                at: timestamp("2026-08-01T00:00:01.000Z"),
+                attempt: 1,
+            }
+        );
+        assert_eq!(
+            configuration_cleanup_retry(
+                &requested,
+                &timestamp("2026-08-01T00:10:00.000Z"),
+                4,
+                600_000,
+            )
+            .unwrap(),
+            ConfigurationCleanupRetry::Stuck
+        );
+    }
+
+    #[test]
+    fn configuration_conditions_expose_normative_names_without_identity() {
+        let condition = PendingCleanupCondition::from_count(2);
+        assert_eq!(condition.zone_condition_type(), "GenerationCleanupPending");
+        assert_eq!(condition.zone_condition_reason(), "PendingCleanup");
+        assert_eq!(
+            condition.message(ConfigurationGeneration::new(7).unwrap()),
+            "2 config-owned resources from generation 7 completing deletion"
+        );
+
+        let stuck = CleanupStallCondition::new(AuditReason::FinalizerBlocked);
+        assert_eq!(stuck.zone_condition_type(), "GenerationCleanupFailed");
+        assert_eq!(stuck.zone_condition_reason(), "CleanupStuck");
+        let resource_type = ResourceTypeName::parse("Credential").unwrap();
+        let message = stuck.message(&resource_type);
+        assert!(message.contains("Credential"));
+        assert!(!message.contains("name"));
     }
 }

@@ -45,10 +45,10 @@
 //! store transaction: it is released only from the committed cleanup proof and
 //! deduplicated by committed revision, so recovery replay appends exactly once.
 //!
-//! This is a directory module so that the work items extending it each own a
-//! distinct file. [`bundle_apply`] and [`generation_transition`] are empty
-//! scaffolds; every item landed so far lives here in `mod.rs`, unmoved, and
-//! `mod.rs` stays the single re-export point for the module's public surface.
+//! This is a directory module so that the activation adapter and post-commit
+//! transition planner stay separate from the lower-level lifecycle state
+//! machine.  `mod.rs` remains the single public surface for the module's core
+//! types.
 
 pub mod bundle_apply;
 pub mod generation_transition;
@@ -65,7 +65,10 @@ use d2b_contracts::{
 
 use crate::{
     audit::{AuditError, AuditEvent, AuditLedger, AuditReason},
-    cleanup::{CleanupStallCondition, PendingCleanupCondition},
+    cleanup::{
+        CleanupStallCondition, ConfigurationCleanupRetry, PendingCleanupCondition,
+        configuration_cleanup_retry,
+    },
 };
 
 /// Default number of retained prior generation bundles (D119).
@@ -512,6 +515,56 @@ impl GenerationRecord {
     }
 }
 
+/// The part of `store_meta` that must follow the committed generation record.
+///
+/// The routing owner commits `GenerationRecord` first.  This value is emitted
+/// afterwards so the store adapter can idempotently advance its redb pointer
+/// before it applies resource intents or admits requests.
+#[derive(Clone, PartialEq, Eq)]
+pub struct StoreMetaConfiguration {
+    active_content_hash: ResourceBundleGenerationId,
+    configuration_generation: ConfigurationGeneration,
+}
+
+impl StoreMetaConfiguration {
+    /// Build the redb configuration pointer for one committed record.
+    pub fn new(
+        active_content_hash: ResourceBundleGenerationId,
+        configuration_generation: ConfigurationGeneration,
+    ) -> Self {
+        Self {
+            active_content_hash,
+            configuration_generation,
+        }
+    }
+
+    /// Borrow the committed active content hash.
+    pub const fn active_content_hash(&self) -> &ResourceBundleGenerationId {
+        &self.active_content_hash
+    }
+
+    /// Return the committed activation ordinal.
+    pub const fn configuration_generation(&self) -> ConfigurationGeneration {
+        self.configuration_generation
+    }
+
+    /// Return whether an observed pointer already represents this commit.
+    pub fn is_current(&self, observed: &Self) -> bool {
+        self == observed
+    }
+}
+
+impl core::fmt::Debug for StoreMetaConfiguration {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("StoreMetaConfiguration")
+            .field(
+                "configuration_generation",
+                &self.configuration_generation.get(),
+            )
+            .finish_non_exhaustive()
+    }
+}
+
 /// One queued configuration intent.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ConfigurationIntent {
@@ -550,6 +603,11 @@ impl ConfigurationIntent {
 /// One post-commit configuration effect.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ConfigurationEffect {
+    /// Idempotently record the committed pointer in redb `store_meta`.
+    ///
+    /// This is deliberately released before any resource intent.  It is not
+    /// a second generation commit and carries no filesystem authority.
+    RecordStoreMeta(StoreMetaConfiguration),
     /// Hand one intent to the reconcile queue.
     QueueIntent(ConfigurationIntent),
     /// Prune one retained prior bundle from the ring.
@@ -631,6 +689,8 @@ pub struct GenerationCommitProof {
 /// One cleanup step for a pending-delete resource.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum CleanupStep {
+    /// Credential lease revocation must complete before finalizer drain.
+    RevokeCredential,
     /// Registered finalizers must release first.
     DrainFinalizers,
     /// Live controller-created children must acknowledge teardown first.
@@ -643,6 +703,7 @@ impl CleanupStep {
     /// Return the closed label for this step.
     pub const fn label(self) -> &'static str {
         match self {
+            Self::RevokeCredential => "revoke-credential",
             Self::DrainFinalizers => "drain-finalizers",
             Self::CascadeChildren => "cascade-children",
             Self::CommitDeletion => "commit-deletion",
@@ -655,6 +716,8 @@ impl CleanupStep {
 pub struct CleanupObservation {
     pending_finalizers: u32,
     live_controller_children: u32,
+    credential_revocation_required: bool,
+    credential_revoked: bool,
 }
 
 impl CleanupObservation {
@@ -663,13 +726,29 @@ impl CleanupObservation {
         Self {
             pending_finalizers,
             live_controller_children,
+            credential_revocation_required: false,
+            credential_revoked: false,
         }
+    }
+
+    /// Require the Credential provider revocation step before finalizer
+    /// clearance.  The completion flag is supplied by a fresh observation,
+    /// never inferred from an attempted notification.
+    pub const fn with_credential_revocation(mut self, required: bool, revoked: bool) -> Self {
+        self.credential_revocation_required = required;
+        self.credential_revoked = revoked;
+        self
     }
 }
 
 /// One post-commit cleanup effect.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CleanupEffect {
+    /// Invoke the Credential provider's revocation operation.
+    RevokeCredential {
+        key: ResourceKey,
+        finalizer: &'static str,
+    },
     /// Notify every finalizer holder to release.
     NotifyFinalizerHolders,
     /// Notify the owning controller to tear down its children.
@@ -948,6 +1027,9 @@ impl ConfigurationService {
             .clone()
             .unwrap_or_else(|| generation_id.clone());
         let mut effects = Vec::with_capacity(plan.intents.len() + plan.prunes.len() + 2);
+        effects.push(ConfigurationEffect::RecordStoreMeta(
+            StoreMetaConfiguration::new(generation_id.clone(), plan.next_record.active_ordinal()),
+        ));
         for intent in &plan.intents {
             match intent {
                 ConfigurationIntent::Create(key) | ConfigurationIntent::UpdateSpec(key) => {
@@ -1010,6 +1092,30 @@ impl ConfigurationService {
         }
     }
 
+    /// Return the store-meta pointer that must be reconciled after commit.
+    pub fn store_meta_configuration(&self) -> Option<StoreMetaConfiguration> {
+        self.record.as_ref().map(|record| {
+            StoreMetaConfiguration::new(record.active_generation_id.clone(), record.active_ordinal)
+        })
+    }
+
+    /// Return the idempotent store-meta repair required for a restart.
+    ///
+    /// The durable generation record is authoritative.  An equal observed
+    /// pointer produces no write, while a missing or stale redb pointer is
+    /// repaired before any activation effects are released.
+    pub fn reconcile_store_meta(
+        &self,
+        observed: Option<&StoreMetaConfiguration>,
+    ) -> Option<StoreMetaConfiguration> {
+        let desired = self.store_meta_configuration()?;
+        if observed.is_some_and(|current| desired.is_current(current)) {
+            None
+        } else {
+            Some(desired)
+        }
+    }
+
     /// Mark one Create or UpdateSpec intent complete.
     pub fn complete_intent(&mut self, key: &ResourceKey) -> Result<(), ConfigurationError> {
         if self.outstanding_intents.remove(key) {
@@ -1036,7 +1142,12 @@ impl ConfigurationService {
         {
             return Err(ConfigurationError::CleanupInFlight);
         }
-        let step = if observed.pending_finalizers > 0 {
+        let credential = key.type_name().as_str() == "Credential";
+        let step = if (credential || observed.credential_revocation_required)
+            && !observed.credential_revoked
+        {
+            CleanupStep::RevokeCredential
+        } else if observed.pending_finalizers > 0 {
             CleanupStep::DrainFinalizers
         } else if observed.live_controller_children > 0 {
             CleanupStep::CascadeChildren
@@ -1084,6 +1195,10 @@ impl ConfigurationService {
         self.cleanup_open.remove(&pass.key);
 
         let effects = match pass.step {
+            CleanupStep::RevokeCredential => vec![CleanupEffect::RevokeCredential {
+                key: pass.key.clone(),
+                finalizer: bundle_apply::CORE_CREDENTIAL_REVOKE_FINALIZER,
+            }],
             CleanupStep::DrainFinalizers => vec![CleanupEffect::NotifyFinalizerHolders],
             CleanupStep::CascadeChildren => vec![CleanupEffect::NotifyControllerCascade],
             CleanupStep::CommitDeletion => {
@@ -1108,7 +1223,8 @@ impl ConfigurationService {
                 if step == CleanupStep::CommitDeletion
                     && let Some(revision) = effects.iter().find_map(|effect| match effect {
                         CleanupEffect::AppendCleanupAudit(revision) => Some(revision.get()),
-                        CleanupEffect::NotifyFinalizerHolders
+                        CleanupEffect::RevokeCredential { .. }
+                        | CleanupEffect::NotifyFinalizerHolders
                         | CleanupEffect::NotifyControllerCascade => None,
                     })
                 {
@@ -1410,6 +1526,7 @@ pub struct BundleActivation {
     artifact_catalog_digest: Option<SchemaFingerprint>,
     installed_provider_schema_digests: BTreeMap<String, SchemaFingerprint>,
     schema_validation_failed: bool,
+    invalid_provider_config: BTreeSet<ResourceKey>,
 }
 
 impl BundleActivation {
@@ -1423,6 +1540,7 @@ impl BundleActivation {
             artifact_catalog_digest: None,
             installed_provider_schema_digests: BTreeMap::new(),
             schema_validation_failed: false,
+            invalid_provider_config: BTreeSet::new(),
         }
     }
 
@@ -1463,6 +1581,19 @@ impl BundleActivation {
         self
     }
 
+    /// Mark Provider resources whose runtime config-schema check failed.
+    ///
+    /// The resource remains part of the newly committed generation.  The
+    /// resulting status effect is scoped to the marked Provider, so unrelated
+    /// resources are not held behind one invalid Provider config.
+    pub fn with_invalid_provider_config(
+        mut self,
+        keys: impl IntoIterator<Item = ResourceKey>,
+    ) -> Self {
+        self.invalid_provider_config = keys.into_iter().collect();
+        self
+    }
+
     /// Borrow the candidate bundle.
     pub const fn bundle(&self) -> &ZoneBundle {
         &self.bundle
@@ -1488,6 +1619,10 @@ impl core::fmt::Debug for BundleActivation {
                 &self.installed_provider_schema_digests.len(),
             )
             .field("schema_validation_failed", &self.schema_validation_failed)
+            .field(
+                "invalid_provider_config_count",
+                &self.invalid_provider_config.len(),
+            )
             .finish_non_exhaustive()
     }
 }
@@ -1820,6 +1955,7 @@ pub struct GenerationState {
     pending_cleanup_count: u32,
     cleanup_failed: bool,
     cleanup_stall_reason: Option<AuditReason>,
+    invalid_provider_config_count: u32,
     last_activation_error: Option<ActivationError>,
 }
 
@@ -1835,6 +1971,7 @@ impl GenerationState {
             pending_cleanup_count: 0,
             cleanup_failed: false,
             cleanup_stall_reason: None,
+            invalid_provider_config_count: 0,
             last_activation_error: None,
         }
     }
@@ -1869,9 +2006,26 @@ impl GenerationState {
         self.pending_cleanup_count
     }
 
+    /// Whether the Zone must publish `GenerationCleanupPending=True`.
+    pub const fn generation_cleanup_pending(&self) -> bool {
+        self.pending_cleanup_count != 0
+    }
+
+    /// Whether the active generation passed the configuration publication
+    /// checks.  Cleanup does not make activation non-current.
+    pub const fn configuration_current(&self) -> bool {
+        self.active_content_hash.is_some() && self.last_activation_error.is_none()
+    }
+
     /// Whether the cleanup-failed condition is set.
     pub const fn cleanup_failed(&self) -> bool {
         self.cleanup_failed
+    }
+
+    /// Return the number of Provider resources whose config validation
+    /// failed in the active generation.
+    pub const fn invalid_provider_config_count(&self) -> u32 {
+        self.invalid_provider_config_count
     }
 
     /// Return the cleanup-stall condition, when a bounded stall was observed.
@@ -1880,6 +2034,11 @@ impl GenerationState {
             Some(reason) => Some(CleanupStallCondition::new(reason)),
             None => None,
         }
+    }
+
+    /// Alias for the normative `GenerationCleanupFailed` condition.
+    pub const fn generation_cleanup_failed(&self) -> bool {
+        self.cleanup_failed
     }
 
     /// Return the last activation refusal, if one was recorded.
@@ -1991,6 +2150,31 @@ impl ZoneConfigController {
         controller
     }
 
+    /// Restore a controller and adopt the retained bundle files discovered by
+    /// the storage owner.
+    ///
+    /// The controller does not discover paths or read files.  The caller
+    /// supplies already integrity-verified bundles, and only identities still
+    /// named by the committed retention ring are admitted as rollback
+    /// targets.
+    pub fn restore_with_bundles(
+        zone: ZoneId,
+        record: GenerationRecord,
+        staged: StagedBundleIntegrity,
+        bundles: impl IntoIterator<Item = ZoneBundle>,
+    ) -> Self {
+        let retained = record.retention_ring().to_vec();
+        let mut controller = Self::restore(zone, record, staged);
+        controller.active_bundles = bundles
+            .into_iter()
+            .filter(|bundle| {
+                bundle.zone() == controller.zone() && retained.contains(bundle.content_hash())
+            })
+            .map(|bundle| (bundle.content_hash().clone(), bundle))
+            .collect();
+        controller
+    }
+
     /// Configure the installed private artifact-catalog digest.
     pub fn set_artifact_catalog_digest(&mut self, digest: SchemaFingerprint) {
         self.artifact_catalog_digest = Some(digest);
@@ -2019,9 +2203,47 @@ impl ZoneConfigController {
         &self.service
     }
 
+    /// Return the idempotent redb pointer required after the committed
+    /// generation record is adopted.
+    pub fn store_meta_configuration(&self) -> Option<StoreMetaConfiguration> {
+        self.service.store_meta_configuration()
+    }
+
+    /// Reconcile a redb pointer from the committed generation record before
+    /// admitting requests after restart.
+    pub fn reconcile_store_meta(
+        &self,
+        observed: Option<&StoreMetaConfiguration>,
+    ) -> Option<StoreMetaConfiguration> {
+        self.service.reconcile_store_meta(observed)
+    }
+
     /// Borrow pending configuration cleanup records in canonical key order.
     pub fn pending_cleanup(&self) -> Vec<&PendingCleanup> {
         self.pending_cleanup.values().collect()
+    }
+
+    /// Calculate one bounded retry for a pending cleanup notification.
+    ///
+    /// Once the configured threshold is reached this returns
+    /// [`ConfigurationCleanupRetry::Stuck`]; callers must then publish the
+    /// failed condition and stop automatic retries.
+    pub fn cleanup_retry(
+        &self,
+        key: &ResourceKey,
+        now: &Timestamp,
+        attempt: u32,
+    ) -> Result<ConfigurationCleanupRetry, crate::cleanup::CleanupStallError> {
+        let pending = self
+            .pending_cleanup
+            .get(key)
+            .ok_or(crate::cleanup::CleanupStallError::NotTracked)?;
+        configuration_cleanup_retry(
+            pending.requested_at(),
+            now,
+            attempt,
+            crate::cleanup::CONFIGURATION_CLEANUP_STALL_THRESHOLD_MS_DEFAULT,
+        )
     }
 
     /// Borrow the retained bundle for an authorized rollback caller.
@@ -2127,6 +2349,17 @@ impl ZoneConfigController {
                 now,
             );
         }
+        let content_hash_valid = ZoneBundle::compute_content_hash(bundle.resources())
+            .map(|computed| &computed == bundle.content_hash())
+            .unwrap_or(false);
+        if !content_hash_valid {
+            return self.reject(
+                ActivationError::BundleIntegrityFailed,
+                AuditReason::BundleIntegrityFailed,
+                bundle,
+                now,
+            );
+        }
         if let Some(expected) = self.artifact_catalog_digest.as_ref()
             && bundle.artifact_catalog_digest() != expected
         {
@@ -2174,8 +2407,16 @@ impl ZoneConfigController {
         let diff = GenerationDiff::compute(bundle, stored);
         let outcome_result = if rollback {
             bundle_apply::begin_bundle_rollback(&mut self.service, bundle, stored, now)
-        } else {
+        } else if candidate.invalid_provider_config.is_empty() {
             bundle_apply::begin_bundle_apply(&mut self.service, bundle, stored, now)
+        } else {
+            bundle_apply::begin_bundle_apply_with_provider_config_invalid(
+                &mut self.service,
+                bundle,
+                stored,
+                now,
+                candidate.invalid_provider_config.clone(),
+            )
         };
         let outcome = match outcome_result {
             Ok(outcome) => outcome,
@@ -2226,6 +2467,18 @@ impl ZoneConfigController {
                 _ => None,
             })
             .collect();
+        self.state.invalid_provider_config_count = u32::try_from(
+            effects
+                .iter()
+                .filter(|effect| {
+                    matches!(
+                        effect,
+                        bundle_apply::BundleApplyEffect::MarkProviderConfigInvalid { .. }
+                    )
+                })
+                .count(),
+        )
+        .unwrap_or(u32::MAX);
 
         if self.state.zone_uid.is_none() {
             self.state.zone_uid = candidate.zone_uid.clone();
@@ -2479,7 +2732,7 @@ impl ZoneConfigController {
 
     fn sync_state(&mut self, _prior_generation: Option<ResourceBundleGenerationId>) {
         let record = self.service.record();
-        self.state.active_content_hash = record.map(|record| record.active_generation_id.clone());
+        self.state.active_content_hash = self.service.serving_generation().cloned();
         self.state.active_generation = record.map(|record| record.active_ordinal);
         self.state.pending_cleanup_count =
             u32::try_from(self.pending_cleanup.len()).unwrap_or(u32::MAX);
@@ -2487,11 +2740,12 @@ impl ZoneConfigController {
             self.state.cleanup_failed = false;
             self.state.cleanup_stall_reason = None;
         }
-        self.state.phase = if !self.pending_cleanup.is_empty() {
-            GenerationPhase::Degraded
-        } else {
-            self.service.phase()
-        };
+        self.state.phase =
+            if !self.pending_cleanup.is_empty() || self.state.invalid_provider_config_count != 0 {
+                GenerationPhase::Degraded
+            } else {
+                self.service.phase()
+            };
     }
 }
 
@@ -2773,6 +3027,41 @@ mod tests {
         assert!(effects.contains(&ConfigurationEffect::AppendAudit(
             ConfigurationAuditKind::GenerationActivate
         )));
+        assert!(matches!(
+            effects.first(),
+            Some(ConfigurationEffect::RecordStoreMeta(pointer))
+                if pointer.configuration_generation().get() == 2
+        ));
+    }
+
+    #[test]
+    fn store_meta_reconciliation_is_idempotent_and_generation_record_wins() {
+        let mut service = ConfigurationService::empty(zone(), RetainedGenerations::default_value());
+        let plan = planned(
+            service
+                .begin_activation(&bundle(2, &[]), &[], &now())
+                .expect("planning succeeds"),
+        );
+        let proof = service
+            .commit_activation(plan, &now())
+            .expect("commit succeeds");
+        service
+            .release_activation_effects(proof)
+            .expect("effects release");
+        let desired = service
+            .store_meta_configuration()
+            .expect("committed generation has a pointer");
+        assert!(service.reconcile_store_meta(Some(&desired)).is_none());
+        let stale = StoreMetaConfiguration::new(
+            digest(1),
+            ConfigurationGeneration::new(1).expect("nonzero"),
+        );
+        assert_eq!(
+            service
+                .reconcile_store_meta(Some(&stale))
+                .expect("stale pointer is repaired"),
+            desired
+        );
     }
 
     #[test]
@@ -3079,6 +3368,85 @@ mod tests {
             service.record_cleanup_audit_appended(ZoneRevision::new(11)),
             Err(ConfigurationError::AuditAlreadyAppended)
         );
+    }
+
+    #[test]
+    fn credential_cleanup_revokes_before_finalizer_drain() {
+        let credential_key = ResourceKey::new(
+            ResourceTypeName::parse("Credential").expect("valid type"),
+            ResourceName::parse("access").expect("valid name"),
+        );
+        let credential_spec = spec("credential");
+        let first = ResourceBundle::new(
+            zone(),
+            digest(1),
+            vec![BundleResource::new(
+                credential_key.clone(),
+                credential_spec.clone(),
+            )],
+        )
+        .expect("valid credential bundle");
+        let mut service = ConfigurationService::empty(zone(), RetainedGenerations::default_value());
+        let plan = planned(
+            service
+                .begin_activation(&first, &[], &now())
+                .expect("first activation plans"),
+        );
+        let proof = service
+            .commit_activation(plan, &now())
+            .expect("first activation commits");
+        service
+            .release_activation_effects(proof)
+            .expect("first effects release");
+        service
+            .complete_intent(&credential_key)
+            .expect("credential create completes");
+
+        let second =
+            ResourceBundle::new(zone(), digest(2), Vec::new()).expect("valid empty bundle");
+        let stored = [StoredResource::new(
+            credential_key.clone(),
+            ManagementAgent::Configuration,
+            Some(digest(1)),
+            credential_spec,
+        )];
+        let plan = planned(
+            service
+                .begin_activation(&second, &stored, &now())
+                .expect("delete activation plans"),
+        );
+        let proof = service
+            .commit_activation(plan, &now())
+            .expect("delete activation commits");
+        service
+            .release_activation_effects(proof)
+            .expect("delete effects release");
+
+        let pass = service
+            .begin_cleanup(
+                &credential_key,
+                CleanupObservation::new(1, 0).with_credential_revocation(true, false),
+            )
+            .expect("revocation pass opens");
+        assert_eq!(pass.step(), CleanupStep::RevokeCredential);
+        let proof = service
+            .commit_cleanup(pass, ZoneRevision::new(12))
+            .expect("revocation commits");
+        assert_eq!(
+            service.release_cleanup_effects(proof).unwrap(),
+            vec![CleanupEffect::RevokeCredential {
+                key: credential_key.clone(),
+                finalizer: bundle_apply::CORE_CREDENTIAL_REVOKE_FINALIZER,
+            }]
+        );
+
+        let pass = service
+            .begin_cleanup(
+                &credential_key,
+                CleanupObservation::new(1, 0).with_credential_revocation(true, true),
+            )
+            .expect("finalizer pass opens after revocation");
+        assert_eq!(pass.step(), CleanupStep::DrainFinalizers);
     }
 
     #[test]
