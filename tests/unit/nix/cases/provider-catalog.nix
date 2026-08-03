@@ -608,31 +608,25 @@ in
         spec = {
           providerRef = "Provider/credential-entra";
           scope = {
-            executionRef = null;
             domainFilter = "user";
             userRef = "User/alice";
           };
           audience = "azure-resource-manager";
           consumerRef = "Provider/display-wayland";
-          allowedOperations = [ "acquire-token" "refresh-token" ];
+          allowedOperations = [ "refresh-token" "acquire-token" ];
           rotation = {
             policy = "proactive";
             proactiveWindowMs = 300000;
             maxLeaseLifetimeMs = 3600000;
           };
-          expiry.hardDeadlineMs = 0;
-          revocation = {
-            onOwnerDelete = "immediate";
-            onProviderGeneration = "immediate";
-          };
-          identityGuestRef = null;
-          loginEndpointRef = null;
         };
       };
 
       order = [ "Credential" "Provider" "Provider" "User" ];
       evalBundleFields = [
+        "artifactCatalogDigest"
         "bundleVersion"
+        "contentHash"
         "generatedAt"
         "providerSchemaDigests"
         "resources"
