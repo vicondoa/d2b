@@ -1143,12 +1143,28 @@ because both would trade the invariant for throughput on a path that is
 already exceptional.
 
 **Recovery resumes, and never deletes unaudited.** Under the exclusive
-ownership established at startup, the timer enumerates `quarantine/` and
-finishes what it finds: if the `retention-deletion` record for a quarantined
-period is absent it appends it, then completes the recursive removal. If the
-append fails, for any reason including the append helper being unavailable, the
-quarantined directory is **retained and retried** rather than removed, because
-a period deleted without its record is a gap the history cannot explain.
+ownership established at startup, the timer enumerates the quarantine shards
+and, for **every** quarantined period it finds, applies the same two-stage rule
+without exception:
+
+1. **If the `retention-deletion` record for that period is absent, append it.**
+   If that append cannot be made, for any reason including the append helper
+   being unavailable, stop here: the quarantined directory is **retained and
+   retried** rather than removed, because a period deleted without its record
+   is a gap the history cannot explain.
+2. **Once the record is present, complete the removal unconditionally.** It
+   makes no difference whether the record was already there from an earlier
+   attempt or was appended a moment ago; in both cases the timer resumes and
+   finishes the recursive content removal, unlinks the now-empty period
+   directory from its shard, and `fsync`s that shard.
+
+The wording matters because the earlier phrasing read as though removal
+followed only from the append, leaving the already-audited case undefined.
+That case is the common one after a crash or a repaired helper, and leaving it
+ambiguous is how audited quarantines accumulate forever while every individual
+step looks correct: the record exists, so nothing appends, and removal never
+runs because nothing triggered it. Recovery is idempotent by construction, and
+an already-audited quarantine is work owed rather than work done.
 
 **A retained quarantine is reported, not merely accumulated.** Letting the
 256 MiB backstop be the first signal would surface a broken append helper as a
@@ -2046,13 +2062,23 @@ escaping change all produce a clean result that means nothing.
 
       Injected crashes are exercised at four points and the invariant checked
       after each: before the rename, leaving the original sealed directory
-      intact and visible; after the rename but before either `fsync`; after
-      both `fsync` calls but before the record is appended, which recovery
-      finishes by appending the record and then removing; and after the record
-      but before removal completes, which recovery finishes by removing. At no
-      point does a `retention-deletion` record exist for a period still visible
-      in `periods/`, and at no point is a visible sealed period observed to
-      fail `verify --period`.
+      intact and visible; after the rename but before either `fsync`, which is
+      the exactly-one-location case above; after both `fsync` calls but before
+      the record is appended, which recovery finishes by appending the record
+      and then removing; and after the record but before removal completes,
+      which recovery finishes by removing **without appending a second
+      record**, since the record is already present and stage 2 of the recovery
+      rule runs unconditionally on that basis. At no point does a
+      `retention-deletion` record exist for a period still visible in
+      `periods/`, and at no point is a visible sealed period observed to fail
+      `verify --period`.
+
+      The already-audited case is asserted on its own, not only as a crash
+      outcome: a quarantine whose `retention-deletion` record is already
+      present at the start of a recovery pass is observed to be removed
+      completely, with its empty period directory unlinked and its shard
+      `fsync`ed, and with no duplicate record appended. A pass that leaves such
+      a quarantine in place fails this item.
 
       Failure handling is tested directly: with the append helper made
       unavailable, a due deletion renames into quarantine, fails to append,
@@ -2089,20 +2115,33 @@ escaping change all produce a clean result that means nothing.
         `fsync`ed before the period is moved into it. The injection that
         establishes why is placed **after the period has been renamed into the
         newly created shard and before the later source and destination
-        directory syncs**. After recovery the period is reachable through the
-        shard, because the shard's own directory entry in `quarantine/` was
-        already durable when the rename happened. Remove the parent sync and
-        the same injection loses the period entirely: the shard entry never
-        reached disk, so the directory that now contains the period is itself
-        not there, and the period is reachable from neither `periods/` nor
-        `quarantine/`.
+        directory syncs**.
+
+        At that point neither directory has been made durable, so the rename
+        may or may not have reached disk, and both outcomes are legitimate. The
+        assertion is therefore not that the period ends up in quarantine. It is
+        that after recovery the period is durably reachable from **exactly one**
+        valid location: either its original `periods/<date>`, if the rename did
+        not persist, or the durable quarantine shard, if it did. Never neither,
+        never both, and never an orphan reachable from no tracked parent.
+
+        The parent sync is what makes the second branch safe. If the rename
+        persisted, the shard that now contains the period is itself durable,
+        because its directory entry in `quarantine/` was synced before anything
+        moved into it. Remove that sync and the same injection admits the
+        forbidden outcome: the rename persists, the shard entry does not, and
+        the period is reachable from neither `periods/` nor `quarantine/`. That
+        is the failure this assertion exists to detect, and it is invisible to
+        any test that merely checks the period is somewhere.
 
         A crash injected **before** the rename is a control only. It leaves the
         period in `periods/` untouched, which is a correct outcome under every
         variant of this code including one with no parent sync at all, so it
         demonstrates nothing about the sync and must not be reported as
         covering it. Both injections are run, and only the post-rename one is
-        credited with the property.      - With every shard in the bounded set exhausted, the helper refuses with
+        credited with the property.
+
+      - With every shard in the bounded set exhausted, the helper refuses with
         `audit-quarantine-link-limit` naming the period date and correlation
         digest and pointing at `gascity-audit status` and `converge`, and is
         observed to delete nothing to make room.
