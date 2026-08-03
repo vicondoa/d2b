@@ -903,7 +903,6 @@ esac
                 {"D2B_RUST_BUDGET": "4"},
                 (
                     "1 active lane(s), api profile",
-                    'D2B_RUST_CARGO_JOBS="4"',
                     "bash tests/test-rust.sh api-surface",
                 ),
                 (),
@@ -916,7 +915,6 @@ esac
                 },
                 (
                     "1 active lane(s), main profile",
-                    'D2B_RUST_CARGO_JOBS="4"',
                     "bash tests/test-rust.sh main-workspace",
                 ),
                 (
@@ -930,7 +928,6 @@ esac
                 {"D2B_RUST_BUDGET": "4"},
                 (
                     "1 active lane(s), broker profile",
-                    'D2B_RUST_CARGO_JOBS="4"',
                     "bash tests/test-rust.sh broker",
                 ),
                 ("bash tests/test-rust.sh inventory-stub",),
@@ -940,7 +937,6 @@ esac
                 {"D2B_RUST_BUDGET": "4"},
                 (
                     "1 active lane(s), guest profile",
-                    'D2B_RUST_CARGO_JOBS="4"',
                     "bash tests/test-rust.sh guest-shell-runner",
                 ),
                 (),
@@ -950,7 +946,6 @@ esac
                 {"D2B_RUST_BUDGET": "4"},
                 (
                     "1 active lane(s), no-bash profile",
-                    'D2B_RUST_CARGO_JOBS="4"',
                     "bash tests/test-rust.sh no-bash-ast",
                 ),
                 (),
@@ -960,7 +955,6 @@ esac
                 {"D2B_RUST_BUDGET": "4"},
                 (
                     "1 active lane(s), schema profile",
-                    'D2B_RUST_CARGO_JOBS="4"',
                     "bash tests/test-rust.sh schema-reproducibility",
                 ),
                 ("bash tests/test-rust.sh inventory-stub",),
@@ -970,7 +964,6 @@ esac
                 {"D2B_RUST_BUDGET": "4"},
                 (
                     "1 active lane(s), inventory profile",
-                    'D2B_RUST_CARGO_JOBS="4"',
                     "bash tests/test-rust.sh inventory-stub",
                 ),
                 (),
@@ -980,7 +973,6 @@ esac
                 {"D2B_RUST_BUDGET": "4"},
                 (
                     "1 active lane(s), supply profile",
-                    'D2B_RUST_CARGO_JOBS="4"',
                     "bash tests/test-rust.sh supply-chain",
                 ),
                 (),
@@ -1006,6 +998,26 @@ esac
             output = result.stdout + result.stderr
             for marker in required:
                 self.assertIn(marker, output, msg=f"{target} missing {marker}")
+            budget_match = re.search(
+                r"Rust effective runtime budget: ([0-9]+) job",
+                output,
+            )
+            self.assertIsNotNone(
+                budget_match,
+                msg=f"{target} did not report its effective budget",
+            )
+            assert budget_match is not None
+            effective_budget = budget_match.group(1)
+            self.assertIn(
+                f'D2B_RUST_CARGO_JOBS="{effective_budget}"',
+                output,
+                msg=f"{target} did not pass the effective Cargo budget",
+            )
+            self.assertIn(
+                f'D2B_RUST_NEXTEST_THREADS="{effective_budget}"',
+                output,
+                msg=f"{target} did not pass the effective nextest budget",
+            )
             for marker in forbidden:
                 self.assertNotIn(marker, output, msg=f"{target} duplicated {marker}")
 
