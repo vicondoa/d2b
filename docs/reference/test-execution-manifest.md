@@ -26,6 +26,24 @@ fragment publication error after a successful sub-surface fails that leaf with
 a static retry diagnostic; when the test surface already failed, recording its
 failed fragment is best effort and the original test status is preserved.
 
+The Nix-unit target uses the same lifecycle. Its full pass invokes the locked
+`nix-eval-jobs` tool on the `nixUnitJobs.<system>` attrset with
+`--no-instantiate`. That attrset contains one result for each case and the
+`__nix_unit_integrity` result, so the runner evaluates the complete current
+x86 corpus of 893 cases and reports every result without realizing a
+derivation. A selected `D2B_NIX_UNIT_CHECK` pass evaluates only that
+discovered check's `drvPath`, retaining the single-shard interface without
+realizing its output.
+
+Because both Nix-unit paths are evaluation-only, they submit no installables
+to the Nix daemon and realize no checks. Their manifest evidence therefore
+keeps `installables` and `realized_checks` empty. The completed leaf fragments
+are the coverage evidence: a full pass publishes exactly `nix-unit`,
+`nix-unit-daemon`, `nix-unit-guest`, `nix-unit-misc`, `nix-unit-network`,
+`nix-unit-runtime`, and `nix-unit-state`; a selected pass publishes only the
+selected leaf. A failed evaluation records the stable failed Nix-unit surface
+best effort and preserves the original target status.
+
 ## Schema version
 
 The binding schema version is **1**. The top-level `version` field is the
@@ -43,8 +61,8 @@ silently drift.
 | `run_status` | `passed`, `failed`, or `interrupted`. |
 | `completed_leaves` | Sorted leaf identifiers whose required command completed successfully. |
 | `failed_surfaces` | Sorted leaf or scheduler identifiers that failed before finalization. |
-| `installables` | Sorted Nix installables submitted by the target. Rust currently emits an empty list. |
-| `realized_checks` | Sorted flake checks actually realized by the target. Rust currently emits an empty list. |
+| `installables` | Sorted Nix installables submitted by the target. Rust and the evaluation-only Nix-unit target emit an empty list. |
+| `realized_checks` | Sorted flake checks actually realized by the target. Rust and the evaluation-only Nix-unit target emit an empty list. |
 | `source_inventory_digest` | SHA-256 digest of the matching source inventory, or an empty value when the target has no digest. |
 | `external_contention` | One closed contention code: `not-measured`, `none`, `nix-daemon-shared`, or `host-busy`. |
 
@@ -147,3 +165,10 @@ They overlap a bounded prebuild frontier, then run fixture, inventory and
 schema as a full-budget chain. CI alone uses the shared API census target
 and runs API, main, broker, guest, no-bash, schema, inventory and supply chain
 as separate full-budget Make jobs before the stable `test-rust` join.
+
+For Nix-unit, compare the seven completed leaves listed above with the
+baseline execution manifest, then compare the source case inventory
+separately. A passing full run must contain all seven leaves and 893 case
+results plus the integrity result; a selected run must contain only its one
+selected leaf. A failed or interrupted record is diagnostic partial evidence
+and cannot satisfy coverage acceptance.

@@ -14,6 +14,13 @@
 - Use `D2B_RUST_BUDGET` as the supported local Rust budget control. Top-level
   Make `-j` does not cap inner Cargo concurrency; the Rust target derives
   Cargo and nextest quotas from the effective CPU and memory budget.
+- Run the complete Nix-unit corpus through locked `nix-eval-jobs
+  --no-instantiate`, with focused toolchain self-provisioning, bounded worker
+  control, and complete multi-failure reporting.
+- Use `D2B_NIX_EVAL_JOBS_WORKERS` for Nix-unit worker requests and retire
+  `D2B_NIX_UNIT_JOBS` with an actionable migration error.
+- Record Nix-unit execution evidence as the seven stable baseline leaves while
+  keeping evaluation-only runs free of installables and realized checks.
 - Keep the separate enforcing fixture lane from duplicating the aggregate by
   honoring `D2B_SKIP_FIXTURE_BUILD=1` in the Layer-1 orchestration.
 - Keep the measured parallel profile for warm local runs, retain its API cache

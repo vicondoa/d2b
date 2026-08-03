@@ -711,6 +711,39 @@ fn execution_manifest_schema_prose_versions_agree(schema: &Value, prose: &str) -
     schema_version.is_some() && schema_version == prose_version
 }
 
+fn execution_manifest_completed_leaf_enum(schema: &Value, target: &str) -> BTreeSet<String> {
+    let clauses = schema
+        .get("allOf")
+        .and_then(Value::as_array)
+        .expect("execution-manifest schema allOf");
+    let matching: Vec<&Value> = clauses
+        .iter()
+        .filter(|clause| {
+            clause
+                .pointer("/if/properties/target/const")
+                .and_then(Value::as_str)
+                == Some(target)
+        })
+        .collect();
+    assert_eq!(
+        matching.len(),
+        1,
+        "execution-manifest-policy: expected one completed-leaf rule for {target}"
+    );
+    matching[0]
+        .pointer("/then/properties/completed_leaves/items/enum")
+        .and_then(Value::as_array)
+        .expect("execution-manifest-policy: completed-leaf enum is missing")
+        .iter()
+        .map(|value| {
+            value
+                .as_str()
+                .expect("execution-manifest-policy: completed-leaf enum value is a string")
+                .to_string()
+        })
+        .collect()
+}
+
 #[test]
 fn execution_manifest_schema_and_prose_agree_with_non_empty_discovery() {
     let schema_rel = "docs/reference/schemas/test-execution-manifest-v1.json";
@@ -735,6 +768,9 @@ fn execution_manifest_schema_and_prose_agree_with_non_empty_discovery() {
     let helper = read_repo_file(helper_rel);
     let makefile = read_repo_file("Makefile");
     let rust_driver = read_repo_file("tests/test-rust.sh");
+    let nix_driver = read_repo_file("tests/test-nix-unit.sh");
+    let nix_jobs = read_repo_file("tests/unit/nix/eval-jobs.nix");
+    let flake = read_repo_file("flake.nix");
     let api_driver = read_repo_file("tests/tools/api-surface-json.sh");
     assert_eq!(
         schema.get("$id").and_then(Value::as_str),
@@ -910,5 +946,116 @@ fn execution_manifest_schema_and_prose_agree_with_non_empty_discovery() {
             && helper.contains("finalization failed after scheduler success")
             && helper.contains("preserving the scheduler status"),
         "execution-manifest-policy: finalization errors do not distinguish scheduler status"
+    );
+
+    let nix_unit_baseline_leaves = [
+        "nix-unit",
+        "nix-unit-daemon",
+        "nix-unit-guest",
+        "nix-unit-misc",
+        "nix-unit-network",
+        "nix-unit-runtime",
+        "nix-unit-state",
+    ];
+    let expected_nix_unit_leaves: BTreeSet<String> = nix_unit_baseline_leaves
+        .iter()
+        .map(|leaf| (*leaf).to_string())
+        .collect();
+    let schema_nix_unit_leaves = execution_manifest_completed_leaf_enum(&schema, "test-nix-unit");
+    assert_eq!(
+        schema_nix_unit_leaves, expected_nix_unit_leaves,
+        "execution-manifest-policy: Nix-unit completed-leaf enum drifted"
+    );
+    for leaf in nix_unit_baseline_leaves {
+        assert!(
+            nix_driver.contains(leaf),
+            "execution-manifest-policy: Nix-unit emitter does not name baseline leaf {leaf}"
+        );
+        assert!(
+            prose.contains(&format!("`{leaf}`")),
+            "execution-manifest-policy: reference prose does not document Nix-unit leaf {leaf}"
+        );
+    }
+    assert!(
+        nix_driver.contains("nix_unit_baseline_leaves=("),
+        "execution-manifest-policy: Nix-unit emitter must publish a fixed baseline leaf set"
+    );
+    assert!(
+        nix_driver.contains("nix-eval-jobs")
+            && nix_driver.contains("--no-instantiate")
+            && nix_driver.contains("nixUnitJobs"),
+        "execution-manifest-policy: Nix-unit emitter must use the evaluation-only nix-eval-jobs surface"
+    );
+    assert!(
+        nix_jobs.contains("builtins.tryEval")
+            && nix_jobs.contains("jobsFor")
+            && flake.contains("nixUnitJobs = forAllSystems"),
+        "execution-manifest-policy: Nix-unit corpus and jobs attrset are not wired together"
+    );
+    for marker in [
+        "nix-eval-jobs",
+        "--no-instantiate",
+        "nixUnitJobs.<system>",
+        "installables",
+        "realized_checks",
+        "893",
+    ] {
+        assert!(
+            prose.contains(marker),
+            "execution-manifest-policy: Nix-unit reference prose is missing emitter marker {marker}"
+        );
+    }
+    assert!(
+        flake.contains("nix-unit = pkgs.mkShellNoCC")
+            && flake.contains("nix-eval-jobs")
+            && flake.contains("jq"),
+        "execution-manifest-policy: focused locked Nix-unit dev shell is missing"
+    );
+    assert!(
+        nix_driver.contains("D2B_NIX_EVAL_JOBS_WORKERS")
+            && nix_driver.contains("D2B_NIX_EVAL_JOBS_MEMORY_MB")
+            && nix_driver.contains("cpu_cap")
+            && nix_driver.contains("memory_cap")
+            && nix_driver.contains("--workers")
+            && nix_driver.contains("--max-memory-size")
+            && nix_driver.contains("4096"),
+        "execution-manifest-policy: Nix-unit resource controls are incomplete"
+    );
+    assert!(
+        nix_driver.contains("D2B_NIX_UNIT_JOBS is retired")
+            && !nix_driver.contains("${D2B_NIX_UNIT_JOBS:-"),
+        "execution-manifest-policy: retired Nix-unit worker knob is still accepted"
+    );
+    let retired_knob = nix_driver
+        .find("D2B_NIX_UNIT_JOBS is retired")
+        .expect("execution-manifest-policy: retired knob diagnostic is missing");
+    assert!(
+        nix_driver[retired_knob..].contains("exit 2"),
+        "execution-manifest-policy: retired Nix-unit worker knob must exit 2"
+    );
+
+    // Lifecycle entry must precede every Nix evaluator, runner, or toolchain
+    // process. Ignore comments so the ordering check follows executable text.
+    let executable_nix_driver = nix_driver
+        .lines()
+        .filter(|line| !line.trim_start().starts_with('#'))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let lifecycle_index = executable_nix_driver
+        .find("execution-manifest.pl\" run")
+        .expect("execution-manifest-policy: Nix-unit lifecycle entry is missing");
+    let first_nix_process = Regex::new(r"\bnix\s+(?:eval|develop|build|flake)\b|\bnix-eval-jobs\b")
+        .expect("valid Nix-unit lifecycle ordering regex")
+        .find(&executable_nix_driver)
+        .expect("execution-manifest-policy: Nix-unit evaluator or runner is missing")
+        .start();
+    assert!(
+        lifecycle_index < first_nix_process,
+        "execution-manifest-policy: Nix-unit lifecycle must begin before Nix evaluation or runner entry"
+    );
+    assert!(
+        nix_driver.contains("D2B_NIX_UNIT_MANIFEST_LIFECYCLE=1")
+            && nix_driver.contains("D2B_NIX_UNIT_TOOLCHAIN_REENTRY"),
+        "execution-manifest-policy: Nix-unit lifecycle or toolchain re-entry guard is missing"
     );
 }

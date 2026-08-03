@@ -225,6 +225,38 @@ evidence without stale success. A manifest is diagnostic evidence and does not
 replace source inventory, `make test-policy`, or
 `D2B_ENABLE_FIXTURE_BUILD=1 make test-fixture-contracts`.
 
+### Nix-unit runner
+
+`make test-nix-unit` uses the established `nix-eval-jobs` runner with
+`--no-instantiate` against the locked
+`nixUnitJobs.<system>` flake output. It evaluates every current x86 case
+without submitting installables to the daemon or realizing derivations. The
+full corpus currently contains 893 cases plus one integrity result, and the
+runner reports every JSON-lines failure before returning a failure status.
+Discovery is empty-set failure and pin or shard integrity remains enforcing.
+
+If `nix-eval-jobs` or `jq` is absent, the target makes one guarded re-entry
+through `devShells.<system>.nix-unit`, a focused `mkShellNoCC` output containing
+the locked versions from this flake's `flake.lock`. An existing toolchain or
+development shell with both commands runs directly. `D2B_NIX_UNIT_JOBS` is
+retired and exits with status 2; use
+`D2B_NIX_EVAL_JOBS_WORKERS=<1..4>` instead. The requested worker count is
+bounded by the CPU cap `min(4, logical CPUs, finite cgroup CPU quota)` and the
+memory cap `max(1, floor((effective available MiB - 2048) / 4096))`.
+Effective available memory is the smaller of `MemAvailable` and the finite
+cgroup allowance after reclaimable file cache. A visible but unreadable cgroup
+controller fails closed to one worker. On the reference 12-CPU, 62-GiB host
+the effective cap preserves four workers.
+`D2B_NIX_EVAL_JOBS_MEMORY_MB` may lower the retained 4096 MiB per-worker limit
+but cannot raise it.
+
+`D2B_NIX_UNIT_CHECK=<name>` remains the manual single-shard selector. It
+requires a discovered `nix-unit` or `nix-unit-*` check and evaluates only that
+check. With execution evidence enabled, a full pass publishes exactly the
+seven leaves `nix-unit`, `nix-unit-daemon`, `nix-unit-guest`, `nix-unit-misc`,
+`nix-unit-network`, `nix-unit-runtime`, and `nix-unit-state`; a selected pass
+publishes only its selected leaf.
+
 `.github/workflows/pr-l1-static-fast.yml` is generated from the manifest by
 `make layer1-workflow` and checked by `make layer1-workflow-check` during
 `make test-drift`. CI runs the individual Layer-1 jobs in parallel and exposes

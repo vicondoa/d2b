@@ -223,6 +223,34 @@ unreadable cgroup v2 memory controller fails closed to budget 1. Cargo and
 nextest quotas are derived so every active frontier stays within the effective
 budget, including budget 1. Top-level Make `-j` is not the Rust budget knob.
 
+### Nix-unit execution
+
+`make test-nix-unit` uses `nix-eval-jobs --no-instantiate` against the locked
+`nixUnitJobs.<system>` output. It evaluates the complete 893-case x86 corpus
+and the integrity attribute without realizing derivations, reports every
+observed attribute failure, and fails closed on empty discovery, missing or
+duplicate shard coverage, and missing pinned cases. Do not replace it with a
+repository-specific worker loop or a second scheduler.
+
+The target enters `devShells.<system>.nix-unit` once when `nix-eval-jobs` or
+`jq` is missing. That focused shell is a standard `mkShellNoCC` output backed
+by the locked flake inputs; an existing toolchain or development shell runs
+directly. `D2B_NIX_UNIT_JOBS` is retired and returns status 2 with a migration
+message. Use the bounded `D2B_NIX_EVAL_JOBS_WORKERS` control. Its effective
+count is capped by four workers, logical CPUs, any finite cgroup CPU quota, and
+available memory after a 2 GiB reserve at 4096 MiB per worker, so four workers
+remain available on the reference 12-CPU, 62-GiB host while smaller runners
+are capped safely.
+
+`D2B_NIX_UNIT_CHECK` remains the manual single-shard selector. When
+`D2B_EXECUTION_MANIFEST` is set, enter the shared secure lifecycle before Nix
+discovery or toolchain entry. A full pass records exactly these seven leaves:
+`nix-unit`, `nix-unit-daemon`, `nix-unit-guest`, `nix-unit-misc`,
+`nix-unit-network`, `nix-unit-runtime`, and `nix-unit-state`. A selected pass
+records only its selected leaf. Reuse
+`tests/tools/execution-manifest.pl`; do not weaken its locking, cleanup, or
+interruption handling.
+
 `D2B_EXECUTION_MANIFEST=<path>` opts the Rust aggregate into execution evidence.
 The binding v1 schema and secure lifecycle live in
 [`../docs/reference/test-execution-manifest.md`](../docs/reference/test-execution-manifest.md).

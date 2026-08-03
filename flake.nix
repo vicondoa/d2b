@@ -103,6 +103,16 @@
             echo "d2b dev shell: rust $(sed -n 's/.*channel = "\(.*\)".*/\1/p' packages/rust-toolchain.toml) via rustup, sccache at $SCCACHE_DIR"
           '';
         };
+        # Focused shell for the evaluation-only Nix-unit runner. Keeping this
+        # output separate lets the target acquire only its locked external
+        # tools instead of entering the full Rust development shell.
+        nix-unit = pkgs.mkShellNoCC {
+          name = "d2b-nix-unit";
+          packages = with pkgs; [
+            nix-eval-jobs
+            jq
+          ];
+        };
       });
 
       packages = forAllSystems (system: let
