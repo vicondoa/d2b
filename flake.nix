@@ -726,6 +726,7 @@
             "provider-catalog.nix"
             "readiness-waves.nix"
             "restart-policy.nix"
+            "test-infrastructure.nix"
             "usb-security-key.nix"
             "vm-eval-overlays.nix"
           ];
