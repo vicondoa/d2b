@@ -1524,7 +1524,7 @@ async fn production_backend_hard_fixture_child() {
     let backend_before_fanout = store.signals();
     let fanout_commit =
         commit_fixture_resource(&store, &issuer, "production-hard-fanout", "hard-fanout").await;
-    let mut shared_batch = None;
+    let mut shared_batch: Option<SharedChangeBatch> = None;
     for watcher in &mut watchers {
         let batch = watcher
             .recv()
