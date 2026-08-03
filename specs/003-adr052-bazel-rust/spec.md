@@ -30,6 +30,17 @@ binaries, cross-compilation, remote execution, or any Layer-1 job outside the
 Rust rollup. The detailed mechanisms and safety invariants in
 `docs/adr/0052-bazel-rust-build-and-test.md` remain binding.
 
+## Clarifications
+
+### Session 2026-08-02
+
+- Q: Which branch owns promotion evidence, cache maintenance, and publication?
+  -> A: The protected `v3` integration lineage, after ADR 0052 is amended
+  before implementation.
+- Q: Which runs supply the cold continuous-integration measurement set?
+  -> A: The five most recent qualifying Bazel shadow runs for pull requests
+  merged into `v3`.
+
 ## User Scenarios & Testing *(mandatory)*
 
 ### User Story 1 - Run a complete Bazel Rust gate beside Cargo (Priority: P1)
@@ -203,7 +214,7 @@ workflow-policy fixtures.
 2. **Given** a pull-request-triggered job, **When** workflow policy is
    evaluated, **Then** the job has read-only repository permission, cannot
    write Actions cache state, and cannot request `actions: write`.
-3. **Given** a default-branch promotion run, **When** retired caches must be
+3. **Given** a `v3` promotion run, **When** retired caches must be
    removed, **Then** a separate maintenance verdict deletes only authorized
    cache generations, verifies repository headroom, and remains outside the
    Rust test verdict.
@@ -232,7 +243,7 @@ retirement conditions independently block premature deletion.
 
 **Acceptance Scenarios**:
 
-1. **Given** fewer than ten consecutive matching default-branch shadow
+1. **Given** fewer than ten consecutive matching `v3` shadow
    verdicts, an incomplete seeded-failure matrix, a missed performance
    ceiling, or any failed census or topology proof, **When** promotion is
    evaluated, **Then** promotion is blocked.
@@ -244,10 +255,12 @@ retirement conditions independently block premature deletion.
    promotion, **When** the compatibility alias runs, **Then** it forwards to
    the authoritative target, returns the same status, and prints the named
    replacement.
-4. **Given** the promotion commit has not shipped in a release or the promoted
-   default branch has not completed ten consecutive green runs, **When**
-   alias removal or Cargo implementation retirement is proposed, **Then** the
-   change is blocked.
+4. **Given** the promotion commit has not shipped in a release, **When** alias
+   removal is proposed, **Then** alias removal is blocked independently of the
+   promoted-run count.
+5. **Given** the promoted `v3` lineage has not completed ten consecutive green
+   runs, **When** Cargo implementation retirement is proposed, **Then**
+   retirement is blocked independently of release containment or alias state.
 
 ### Edge Cases
 
@@ -378,11 +391,11 @@ retirement conditions independently block premature deletion.
   separate, MUST never cache the output base, and MUST bind cache keys to all
   dependency, toolchain, policy, module, and generated-build inputs named by
   ADR 0052.
-- **FR-034**: A default-branch-only maintenance verdict MUST remove only
+- **FR-034**: A `v3`-only maintenance verdict MUST remove only
   authorized retired or superseded cache generations, paginate completely,
   verify headroom, and remain independent of the Rust test verdict.
 - **FR-035**: Pull requests MUST restore caches read-only, and exactly one
-  authorized default-branch job MAY publish a new cache generation.
+  authorized protected-`v3` job MAY publish a new cache generation.
 - **FR-036**: Repository cache usage plus the planned promoted snapshot MUST
   be at or below 8 GiB before publication, and publication MUST refuse if
   headroom changes before save.
@@ -413,7 +426,7 @@ retirement conditions independently block premature deletion.
   enforcement, surface removal, or a relaxed ceiling.
 - **FR-045**: Promotion MUST be blocked until all coverage, census, topology,
   supply-chain, cache, and performance requirements pass, ten consecutive
-  default-branch shadow verdicts match the Cargo verdict, and an
+  `v3` shadow verdicts match the Cargo verdict, and an
   eighteen-surface seeded-failure matrix proves each carrier fails
   independently.
 - **FR-046**: Promotion MUST preserve the required context name `test-rust`,
@@ -429,8 +442,7 @@ retirement conditions independently block premature deletion.
   documented change.
 - **FR-050**: The Cargo implementation for the eighteen migrated surfaces MUST
   NOT be retired until the promoted path has completed ten consecutive green
-  default-branch runs, and retirement MUST leave the fixture-contract mode
-  intact.
+  `v3` runs, and retirement MUST leave the fixture-contract mode intact.
 - **FR-051**: The enforcing guards for cleanup, timeout, deadline, recovery
   messages, workflow permissions, cache writers, and required deadline
   controls MUST land with the plumbing they constrain.
@@ -475,7 +487,7 @@ retirement conditions independently block premature deletion.
 - **SC-001**: All 18 baseline Rust surface identifiers have exactly one valid
   carrier, and the coverage guard reports zero unmapped identifiers, targets,
   test targets, process topologies, exact censuses, or hand-written fragments.
-- **SC-002**: Ten consecutive default-branch shadow runs produce the same
+- **SC-002**: Ten consecutive `v3` shadow runs produce the same
   pass or fail verdict from the Bazel and Cargo Rust rollups.
 - **SC-003**: An 18-case seeded-failure matrix causes the intended carrier to
   fail in all 18 cases and causes zero unrelated Rust surfaces to fail.
@@ -488,14 +500,15 @@ retirement conditions independently block premature deletion.
   minutes and a maximum of at most 12 minutes.
 - **SC-007**: Three cold local measurements have a median of at most 15
   minutes and a maximum of at most 18 minutes.
-- **SC-008**: The last five scheduled cold continuous-integration measurements
-  have a median of at most 15 minutes and no measurement above 18 minutes.
+- **SC-008**: The five most recent qualifying cold Bazel shadow runs for pull
+  requests merged into `v3` have a median of at most 15 minutes and no
+  measurement above 18 minutes.
 - **SC-009**: The shadow stage creates zero shared Bazel cache entries, and
   pull-request-reachable jobs create zero cache writes and request zero
   `actions: write` permissions.
 - **SC-010**: Before the first promoted cache save, measured repository cache
   usage plus the planned snapshot is at most 8 GiB, with one authorized
-  default-branch writer and zero cached output-base trees.
+  protected-`v3` writer and zero cached output-base trees.
 - **SC-011**: All three supply-chain workspaces produce identical enforcing
   findings before and after decomposition, with zero network-dependent Bazel
   actions and zero broadened advisory ignores.
@@ -527,6 +540,9 @@ retirement conditions independently block premature deletion.
   contributor contracts that must survive promotion.
 - The shadow period intentionally carries two working Rust execution paths and
   accepts the temporary maintenance and disk cost.
+- ADR 0052 must be amended before W0 to replace its repository-default-branch
+  assumptions with the protected `v3` promotion lineage and merged-PR cold
+  measurement source.
 - Detailed cleanup, timeout, deadline, cache, and process-control mechanics are
   implemented exactly as constrained by ADR 0052 and are not redesigned by
   this feature specification.
@@ -539,8 +555,8 @@ retirement conditions independently block premature deletion.
   collection.
 - The pinned development environment must provide the accepted Bazel and
   companion tool versions.
-- Promotion depends on default-branch shadow history and repository cache
+- Promotion depends on `v3` shadow history and repository cache
   maintenance capabilities that cannot be demonstrated by a source diff
   alone.
-- Alias removal depends on a release containing the promotion commit, and
-  Cargo retirement depends on post-promotion default-branch history.
+- Alias removal depends only on a release containing the promotion commit, and
+  Cargo retirement depends only on post-promotion `v3` history.
