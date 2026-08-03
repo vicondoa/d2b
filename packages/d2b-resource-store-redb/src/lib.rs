@@ -5,6 +5,7 @@ pub mod audit;
 pub mod backup;
 pub mod keys;
 pub mod metrics;
+pub mod migration;
 pub mod ownership;
 pub mod revision_log;
 pub mod schema;
@@ -44,6 +45,11 @@ pub use backup::{
 pub use keys::{
     DecodedKey, DecodedKeyComponent, EncodedKey, KeyCodecError, KeyComponent, KeySpace,
     MAX_ENCODED_KEY_BYTES, MAX_KEY_COMPONENTS, MAX_TEXT_COMPONENT_BYTES, encode_key,
+};
+pub use migration::{
+    CURRENT_PHYSICAL_SCHEMA_VERSION, DEFAULT_ACTIVE_FILE_NAME, DEFAULT_PRIOR_FILE_NAME,
+    DEFAULT_STAGED_FILE_NAME, MigrationOutcome, MigrationStep, REGISTERED_MIGRATIONS,
+    RecoveryOutcome, recover_owned, restore_owned, upgrade_owned,
 };
 pub use ownership::{
     MAX_OWNER_CHAIN_DEPTH, OwnerBinding, OwnerIndex, OwnerIndexMutation, OwnershipError,
@@ -532,7 +538,7 @@ pub fn write_provisioning_marker(
         .map_err(|error| error.with_store_slot(slot))
 }
 
-fn validate_provisioning_marker(
+pub(crate) fn validate_provisioning_marker(
     marker: &mut File,
     identity: &StoreIdentity,
 ) -> Result<(), StoreError> {
