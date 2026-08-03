@@ -53,3 +53,14 @@
   execute: a mapped label that does not exist fails when the build graph is
   analysed, and completeness across the graph is checked by the existing drift
   tooling instead of from inside a test.
+- The repository-owned case runner publishes one JUnit case per Rust test,
+  preserves ignored outcomes, and gives each case its own temporary directory,
+  so Bazel event data and continuous-integration test results retain the same
+  failure attribution contributors have today.
+- The repository development shell supplies the pinned Bazel tools, the
+  `cargo-bazel` generator cannot fall back to an unpinned source bootstrap, and
+  the pinned git dependency is fetched with both its revision and integrity
+  hash.
+- Retiring the Cargo executor does not retire the public `test-rust` or focused
+  Rust Make targets. They continue to invoke the Bazel carriers, while the
+  fixture-contract lane remains an enforcing Cargo and Nix companion.

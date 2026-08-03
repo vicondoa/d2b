@@ -291,7 +291,10 @@ ADR justified by measured prototypes, and this ADR authorizes no such move.
 - The Bazel binary is `bazel_8` (8.6.0) from the repository's pinned nixpkgs,
   reached through the dev shell or `nix shell --inputs-from .`. `.bazelversion`
   records `8.6.0` for tooling that reads it, and the Make wrapper fails closed
-  when `bazel --version` disagrees with `.bazelversion`.
+  when `bazel --version` disagrees with `.bazelversion`. Adding the shadow
+  target is blocked until `flake.nix` exposes `bazel_8` and
+  `bazel-buildtools` in the repository dev shell. Bazelisk is not required in
+  that shell because it is not on the gate path.
 - Bazelisk is not used to fetch a Bazel binary. ADR 0009 established that the
   gate's tools come from the pinned flake input rather than an ad hoc fetch,
   and a downloader that silently swaps the build system's own version is
@@ -301,6 +304,12 @@ ADR justified by measured prototypes, and this ADR authorizes no such move.
   `common --lockfile_mode=error`. The default is `update`, which silently
   rewrites the lock on a resolution change; `error` makes an unpinned or
   drifted module resolution a failure with a named remediation instead.
+- The `cargo-bazel` generator that `crate_universe` executes is also a pinned
+  tool. The module consumes the BCR release form carrying an explicit
+  `cargo-bazel` URL and sha256, and a structural guard refuses the
+  non-reproducible source-bootstrap fallback. No `CARGO_BAZEL_REPIN`, `REPIN`,
+  or `CARGO_BAZEL_REPIN_ONLY` control is set by the Make wrapper or continuous
+  integration.
 - `rules_rust` is pinned to a single explicit version in `MODULE.bazel` (0.73.0
   is the newest release on the Bazel Central Registry as of this date; the
   implementer pins whatever is newest and compatible with Bazel 8.6.0 at
@@ -468,8 +477,10 @@ committed flake path already produces, yielding the `cargo vendor`-shaped tree
 of extracted crate sources that `cargo-deny` needs.
 
 **The single pinned git source is handled explicitly.** `wl-proxy` is fetched
-at repository-rule time by its pinned rev, its checksum file carries
-`"package": null`, and the generated config carries the matching
+at repository-rule time by its pinned rev **and** a committed archive sha256,
+which is cross-checked against the existing `outputHashes."wl-proxy-0.1.2"`
+pin in `flake.nix`. Its checksum file carries `"package": null`, and the
+generated config carries the matching
 `[source."git+<url>?rev=<rev>#<rev>"]` replacement pointing at
 `vendored-sources`. This mirrors the committed flake exactly, including the
 shape of the source key.
@@ -538,10 +549,13 @@ pressure at that moment is to drop the outcome.
 - If it shows a difference, a **yanked-crate check against a committed,
   lock-bounded index snapshot** lands before promotion. The snapshot records,
   for every `(name, version)` in the three locks, its yanked state and the
-  index revision identifier the generator observed it at. It is produced by a
-  repository-owned `xtask` subcommand that reads the index outside the gate, is
-  committed, and is drift-checked against the locks the same way every other
-  `xtask gen-*` output is; the Bazel action consumes it as a declared input and
+  index revision identifier the generator observed it at. It is refreshed by a
+  repository-owned `xtask` subcommand that reads the index only during an
+  explicit reviewed update, outside the gate, and the result is committed.
+  The enforcing drift check is offline: it verifies that the snapshot's
+  `(name, version)` key set exactly equals the key set derived from the three
+  committed locks and never regenerates yanked state from the live index.
+  The Bazel action consumes the committed snapshot as a declared input and
   runs offline. A full index snapshot is rejected: the state the check needs is
   bounded by three committed locks, so the artifact is bounded by three
   committed locks.
@@ -784,7 +798,15 @@ and invokes no shell. It:
   the gate uses (section 8), and never lets per-target concurrency multiply
   `--local_test_jobs` into an unbounded process count;
 - reports per-case results against the surface identifier the coverage map
-  names, so a single failing case names itself rather than naming a suite.
+  names, so a single failing case names itself rather than naming a suite;
+- writes one JUnit document to the path Bazel supplies in `XML_OUTPUT_FILE`,
+  with one case element per enumerated case and explicit passed, failed and
+  ignored outcomes, so BEP and the Actions test UI preserve per-case
+  attribution rather than collapsing the carrier to target-level status;
+- derives each child environment from the Bazel test environment, gives each
+  case its own directory beneath `TEST_TMPDIR`, resolves the test binary
+  through runfiles, and forwards only the declared test environment rather
+  than the wrapper's incidental host environment.
 
 Doctests and `harness = false` companions keep their own targets and are not
 routed through the case runner: doctests expose no such listing interface, and
@@ -1607,9 +1629,15 @@ hold. Each is mechanically checkable.
    included.
 2. **Equivalence, positive.** Ten consecutive matching qualification records as
    section 9 defines them: ten consecutive push-to-`v3` records in which the
-   Bazel rollup and the Cargo `test-rust` rollup reached the same verdict at
-   the same `head_sha`. Pull-request, `main`-push, scheduled and dispatched
-   runs never enter the streak, and the reset rules in section 9 apply.
+   Bazel rollup and the Cargo
+   `D2B_SKIP_FIXTURE_BUILD=1 make test-rust` rollup reached the same verdict at
+   the same `head_sha`, and the separate enforcing
+   `D2B_ENABLE_FIXTURE_BUILD=1 make test-fixture-contracts` lane passed on that
+   same commit. The fixture lane is not compared to Bazel because its two
+   surfaces remain explicitly outside this migration; it is a required
+   companion verdict so a qualification record cannot hide a contract-layer
+   regression. Pull-request, `main`-push, scheduled and dispatched runs never
+   enter the streak, and the reset rules in section 9 apply.
 3. **Equivalence, negative.** A recorded seeded-failure matrix: for each of the
    eighteen surfaces, a deliberately broken tree makes exactly that Bazel
    target fail and does not make an unrelated surface fail. This is recorded
@@ -1675,12 +1703,15 @@ promotion. Removal lands its own fragment. Until removal, a structural
 assertion forbids any workflow from calling the aliases, so they remain a
 human convenience and can never quietly become the gate path.
 
-Retirement of the Cargo implementation, meaning deletion of the eighteen
-surfaces' leaf modes from `tests/test-rust.sh` and their Make leaves, happens
-in a further change after promotion has been green for ten consecutive
-push-to-`v3` runs. The `fixture-contracts` mode stays. Until that deletion,
-the old path is recoverable by reverting one commit, which is the point of
-sequencing it separately.
+Retirement of the Cargo implementation, meaning deletion of only the eighteen
+surfaces' Cargo leaf modes from `tests/test-rust.sh` and unreachable
+Cargo-specific plumbing, happens in a further change after promotion has been
+green for ten consecutive push-to-`v3` runs. The public `make test-rust` and
+eight `make test-rust-<leaf>` names remain and continue to forward to the
+authoritative Bazel carriers; deleting them or leaving `test-rust` with only
+the fixture leaf is forbidden. The `fixture-contracts` mode stays. Until the
+Cargo implementation deletion, the old executor is recoverable by reverting
+one commit, which is the point of sequencing it separately.
 
 ### 13. Deliberate differences, recorded rather than discovered
 
@@ -2311,7 +2342,11 @@ closed when any `.bazelrc` line or wrapper argument sets that flag.
 4. Every logical check is an independently reported Bazel target. No aggregate
    shell wrapper may collapse several surfaces into one result.
 5. The versioned execution-manifest contract is unchanged: the same surface
-   identifiers, the same partial evidence on failure and interruption.
+   identifiers, the same partial evidence on failure and interruption. The
+   repository-owned case runner writes per-case JUnit results to
+   `XML_OUTPUT_FILE`, uses a per-case directory beneath `TEST_TMPDIR`, resolves
+   test binaries through runfiles, and preserves passed, failed and ignored
+   status in BEP-visible evidence.
 6. Pull requests never publish a shared cache entry and never hold
    `actions: write`, and a structural policy test with committed negative and
    positive fixtures enforces both. Exactly one job writes, and only on a push
@@ -2351,8 +2386,9 @@ closed when any `.bazelrc` line or wrapper argument sets that flag.
     against the pinned database, and no Bazel action is authorized to use the
     network. That vendored tree is produced by a repository-owned repository
     rule that re-declares each locked registry crate by its URL and the
-    checksum `Cargo.lock` records, and the single pinned git source by rev; it
-    is never read out of the Bazel repository cache, which has no enumeration
+    checksum `Cargo.lock` records, and the single pinned git source by rev and
+    committed archive sha256 cross-checked with the Nix output hash; it is
+    never read out of the Bazel repository cache, which has no enumeration
     interface. Every lock entry is classified as a first-party path dependency,
     a default-index registry package with a checksum, or that git source, and
     anything else is a named refusal; the action asserts the materialized
@@ -2364,7 +2400,10 @@ closed when any `.bazelrc` line or wrapper argument sets that flag.
     section 6 carrier against a committed, lock-bounded, drift-checked index
     snapshot reporting under `rust-deny-main`, `rust-deny-broker` and
     `rust-deny-guest`; dropping the outcome, or recording it as a section 13
-    deliberate difference, is not authorized.
+    deliberate difference, is not authorized. The yanked snapshot is refreshed
+    only by an explicit reviewed networked update; the gate's drift check is
+    offline and proves exact `(name, version)` key equality with the committed
+    locks.
 15. A missed performance ceiling blocks promotion or fails a job in band with
     the measured duration and the two remedies authorized for a ceiling miss.
     It never licenses reducing coverage, reclassifying an enforcing surface as
@@ -2463,7 +2502,9 @@ closed when any `.bazelrc` line or wrapper argument sets that flag.
     Cargo run does is a mismatch and resets it; a record where neither side
     reaches a verdict does not exist. Pull-request, `main`-push, scheduled and
     dispatched runs are diagnostic and never enter a streak or a measurement
-    set.
+    set. Each qualification record also carries a passing
+    `test-fixture-contracts` verdict for the same commit; fixture surfaces
+    remain outside the Bazel comparison but cannot regress invisibly.
 22. No first-party test under Bazel locates a binary through compile-time
     `env!("CARGO_BIN_EXE_*")`, resolves a repository path by walking out of
     `CARGO_MANIFEST_DIR`, or resolves anything by an absolute execroot path.
@@ -2486,6 +2527,15 @@ closed when any `.bazelrc` line or wrapper argument sets that flag.
 24. The section 13 list of deliberate differences is closed. An unlisted
     divergence from the Cargo path is a defect; adding an entry amends this
     ADR.
+25. The repository dev shell provides pinned `bazel_8` and
+    `bazel-buildtools` before any Bazel target lands. `cargo-bazel` is fetched
+    only from its BCR-pinned URL and sha256; the non-reproducible source
+    bootstrap fallback and repin environment controls are forbidden on the
+    gate path.
+26. Cargo implementation retirement never removes the public `test-rust` or
+    `test-rust-<leaf>` Make targets. Those names continue to invoke the
+    authoritative Bazel carriers, while `fixture-contracts` remains the
+    unchanged Cargo/Nix companion.
 
 ## References
 
