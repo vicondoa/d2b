@@ -57,3 +57,7 @@ same-Zone `Provider/transport-*` resource and an exact child Zone name.
 Role resource verbs and ComponentSession verbs are closed sets; `relay` is
 session-only and requires an exact bounded ZoneLink grant. RoleBindings have
 no expiry field.
+
+The eval-time refusals for `Zone`, `ZoneLink`, `Provider`, `Role`,
+`RoleBinding`, `Quota`, and `EmergencyPolicy` are enumerated in
+[Zone-control Nix authoring](./zone-control-nix.md).
