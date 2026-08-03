@@ -548,26 +548,90 @@ publication gates. Analysis and per-task review are autonomous with escalation.
 **History is append-only and nobody may rewrite it.** A mutable approval log
 cannot prove that a human authorised anything, because the proof and the thing
 it constrains are then editable by the same run. The store is written **only**
-by D13's root-owned `append-helper`, which exposes exactly one operation,
-"append this record", and no update, replace, truncate, or delete operation of
-any kind. Records are content-addressed by their own digest and created with
-`O_CREAT | O_EXCL` so an existing record can never be overwritten, each append
-is `fsync`ed before it is acknowledged, and the containing directory is owned
-by the helper. Neither `agent-worker` nor `orchestrator` nor
-`approval-controller` nor `publisher` may write, rewind, or truncate it
-directly.
+by D13's root-owned `append-helper`, which exposes one append operation and no
+update, replace, truncate, or per-record delete operation of any kind. Neither
+`agent-worker` nor `orchestrator` nor `approval-controller` nor `publisher` may
+write, rewind, or truncate it directly.
 
-**The helper authenticates its callers and accepts a narrow set from each.**
-Its Unix socket checks the peer credentials of every connection
-(`SO_PEERCRED`, or the platform equivalent) and admits exactly two callers for
-exactly two record kinds: an approval append is accepted **only** from
-`approval-controller`, and a publication audit append is accepted **only** from
-`publisher`. A connection from `agent-worker` or `orchestrator` is rejected
-outright, and so is a caller presenting the wrong record kind for its identity,
-so a compromised publisher cannot forge an approval and a compromised
-controller cannot forge a publication audit trail. Neither can erase or alter
-anything already written. The publisher re-reads and verifies the record it
-acts on rather than trusting a value passed to it.
+**The helper authenticates every caller and binds it to one record kind.** Its
+Unix socket checks the peer credentials of each connection (`SO_PEERCRED`, or
+the platform equivalent) against a closed matrix. There are three record kinds
+and three permitted callers, and the mapping is one to one:
+
+| Caller | Peer identity | May append | Any other kind |
+| --- | --- | --- | --- |
+| Approval controller | `approval-controller` | `approval` | reject |
+| Publisher | `publisher` | `publication-attempt` | reject |
+| Retention timer | uid 0 | `retention-deletion` | reject |
+| Anyone else, including `agent-worker` and `orchestrator` | any | nothing | reject |
+
+Cross-kind requests are the point of the matrix, not an afterthought: a
+compromised publisher cannot forge an approval, a compromised controller cannot
+forge a publication audit trail, and neither can synthesise a retention record
+to explain away a period it removed. The retention timer is admitted precisely
+because D11's retention rule requires it to record its own deletions, and a
+deletion it could not record would otherwise force either an unaudited gap or a
+second write path. Being uid 0 grants it no additional kinds. No caller can
+erase or alter anything already written, and the publisher re-reads and
+verifies the record it acts on rather than trusting a value passed to it.
+
+**The helper derives the record name; the caller never supplies a path.** A
+caller submits canonical record bytes and nothing else: no filename, no path,
+no path component, no period selector, and no directory hint. The helper bounds
+the byte length, canonicalises the encoding, computes the digest itself, and
+derives the basename from that digest as fixed-length lowercase hexadecimal
+with a fixed suffix. Before use it validates the derived basename against that
+exact shape, so even a defect in derivation cannot produce a name containing a
+separator, a traversal component, a leading dot, or anything but the permitted
+alphabet.
+
+**Resolution is anchored and fd-relative.** The helper pre-opens the store
+directory once and performs every subsequent operation relative to that pinned
+descriptor, using `openat2` with
+`RESOLVE_BENEATH | RESOLVE_NO_MAGICLINKS | RESOLVE_NO_SYMLINKS`, falling back
+where the kernel lacks `openat2` to a component walk with
+`O_DIRECTORY | O_NOFOLLOW` and `fstat` verification of each opened directory.
+No ancestor is ever re-resolved by name. This is the shape this repository
+already uses for its own root-adjacent writer,
+`packages/xtask/src/delivery/storage.rs`, whose module documentation records
+the same anchoring and the same reason: a pathname write is atomic only within
+whichever directory each syscall happens to resolve, so an attacker who
+replaces an intermediate component between validation and use can redirect the
+write elsewhere.
+
+**An append installs atomically and is durable before it is acknowledged.**
+Writing the final name directly with `O_CREAT | O_EXCL` was wrong on two
+counts: a reader can observe a short record while the write is still in
+progress, and an acknowledged record can lose its directory entry to a power
+loss because the parent was never synced. The sequence is instead:
+
+1. create a temporary file in the **same directory** as the final name, with
+   `O_CREAT | O_EXCL | O_NOFOLLOW`, mode `0600`, verified by `fstat` to be a
+   regular file owned by the helper;
+2. write the complete bounded record and `fsync` the file;
+3. install it under the content-addressed final name with
+   `renameat2(RENAME_NOREPLACE)` against the same pinned parent descriptor, or
+   where that flag is unavailable, a `linkat` of the temp to the final name
+   followed by `unlinkat` of the temp, which fails the same way on collision;
+4. `fsync` the parent directory;
+5. only then acknowledge the append.
+
+A collision on the final name means the identical bytes are already present,
+since the name is their digest; the append is refused rather than replacing
+anything. Because the temporary never bears a valid record name, a partially
+written record is never visible as history.
+
+**Readers open final names only.** Temporary files carry a prefix that cannot
+occur in a derived basename, and every reader enumerates the store accepting
+only names matching the record shape. A temporary is never opened, never
+counted, and never treated as history.
+
+**Stale temporaries are reclaimed, and that is not a history mutation.** A
+crash between steps 1 and 3 leaves a temporary with no final name. On start,
+and on its periodic sweep, the helper unlinks temporaries older than a bounded
+threshold that no live append holds. This does not contradict append-only: a
+file that never received a final name was never a record, is invisible to every
+reader, and its removal changes no history that anything could have observed.
 
 **Retention is bounded by stated defaults.** "Bounded" is not a default, so the
 first deployment ships these, and the asymmetry between them is deliberate:
@@ -595,19 +659,46 @@ through `.d2b-orchestration.toml`, a d2b option, or any surface inside this
 repository, per D1.
 
 **Retention and append-only are reconciled by deleting whole periods and
-nothing else.** The append API has no update, replace, truncate, or delete
-operation, and gains none. Enforcement is instead a separate root-owned
-retention timer, which may do exactly one thing: unlink an entire sealed period
+nothing else.** The append API has no update, replace, truncate, or per-record
+delete operation, and gains none. Enforcement is instead a separate root-owned
+retention timer, which may do exactly one thing: remove an entire sealed period
 once the retention floor has passed for it. It may never truncate a period,
 never rewrite or re-encode one, never remove an individual record from within
 one, and never touch the current unsealed period. A period is therefore either
 wholly present and byte-identical to when it was sealed, or wholly absent.
 
-Each retention deletion is itself recorded, by appending a record to the
-current period naming the deleted period, its record count, and its digest, so
-the history explains its own gaps rather than merely having them. That record
-is written through the same append path as everything else and is equally
-immutable.
+**Removal is a rename first, a delete second.** Deleting a populated directory
+in place is not atomic: a power loss part way through leaves a visible sealed
+period missing an arbitrary subset of its records, which is exactly the state
+the invariant above forbids and is indistinguishable from tampering. The timer
+therefore proceeds in this order:
+
+1. `renameat2(RENAME_NOREPLACE)` the whole period directory to a fresh name
+   under a sibling quarantine directory, then `fsync` the parent of the
+   periods directory. After this step the period is atomically no longer
+   visible as history.
+2. Append the `retention-deletion` record naming the quarantined period, its
+   record count, and its digest.
+3. Only then remove the quarantined directory's contents recursively.
+
+A crash leaves exactly one of two states: the original sealed directory,
+untouched and still visible, or a quarantined directory that is no longer part
+of history. There is no third state in which a visible sealed period is
+partially deleted.
+
+**Recovery resumes, and never deletes unaudited.** On start the timer
+enumerates the quarantine directory and finishes what it finds: if the
+`retention-deletion` record for a quarantined period is absent it appends it,
+then completes the recursive removal. If the append in step 2 fails, for any
+reason including the append helper being unavailable, the quarantined directory
+is **retained and retried** rather than removed, because a period deleted
+without its record is a gap the history cannot explain. Quarantine is bounded
+by the same retention accounting as the periods themselves, so a persistently
+failing append surfaces as a reported condition rather than as silent growth.
+
+Each retention deletion is therefore recorded through the same append path as
+everything else, is equally immutable, and is written by the one caller
+authorised for that kind.
 
 **Only the approval controller may originate a record, and it is not the
 worker.** A record reaches the append helper only from D13's
@@ -673,7 +764,7 @@ host contributor infrastructure and involves no d2b component.
 | `agent-worker` | Model credential, its own worktrees, a restricted network namespace (D14) | Read orchestrator state or memory, write the integration store, write approvals, publish |
 | `approval-controller` | Discord ingress, the verifying key, the allowlist | Hold a GitHub credential, run agent code, rewrite approval history |
 | `publisher` | The one GitHub credential scoped to `vicondoa/d2b` | Run agent code, accept a mutable ref, write approvals |
-| `append-helper` | Root-owned; sole writer of the approval and audit store | Expose any update or delete operation |
+| `append-helper` | Root-owned; sole writer of the approval and audit store, admitting three authorised caller-and-kind pairs per D11 | Expose any update, replace, truncate, or per-record delete operation |
 
 Four dedicated unprivileged identities plus one root-owned helper service is
 cheap on one machine: the four are `users.users` entries with units, the helper
@@ -949,9 +1040,14 @@ The first two items are the load-bearing ones.
 - **No worker-writable approval store**, and no design in which the publisher
   trusts an approval assertion supplied by its caller rather than reading and
   verifying the record itself.
-- **No mutable approval history.** No update, replace, truncate, or delete
-  operation is exposed by the append helper to any principal, and no rotation
-  scheme rewrites a sealed period.
+- **No mutable approval history.** No update, replace, truncate, or per-record
+  delete operation is exposed by the append helper to any principal, no
+  rotation scheme rewrites a sealed period, and no retention path deletes a
+  visible sealed period in place or without its `retention-deletion` record.
+- **No caller-supplied paths into the store.** The append helper derives every
+  record name from the record bytes it was given, resolves fd-relative from a
+  pinned store descriptor with symlink and magic-link refusal, and rejects any
+  request carrying a filename, path, path component, or period selector.
 - **No mutable ref in the publication path.** The publisher accepts a full
   immutable commit hash only, and rejects branch names, tag names, `HEAD`,
   symbolic refs, and anything resolving through one.
@@ -1234,41 +1330,76 @@ escaping change all produce a clean result that means nothing.
   deny-only check while making the workflow unusable, and a namespace that
   allows everything passes an allow-only check while providing no isolation.
 
-- **M18 Approval and audit history is append-only, authenticated, and bounded
-  to stated defaults.** Five parts.
+- **M18 Approval and audit history is append-only, authenticated, atomically
+  installed, path-contained, and bounded to stated defaults.** Seven parts.
 
   1. **Immutability.** Attempts to modify history fail from every principal
-     that is not the append helper, including `approval-controller` and
-     `publisher`: overwriting an existing record, truncating the store,
-     deleting a record, and re-appending a record whose content address already
-     exists are each refused. An append is durable across an immediate
-     power-loss simulation, demonstrating the `fsync`.
-  2. **Caller authentication.** The helper's socket rejects a connection from
-     `agent-worker` and from `orchestrator` on peer-credential grounds; accepts
-     an approval append from `approval-controller` and rejects a publication
-     audit append from that same identity; and accepts a publication audit
-     append from `publisher` and rejects an approval append from it. Done when
-     all six outcomes are observed, since the cross-kind rejections are what
-     stop a compromised controller or publisher from forging the other's
-     records.
-  3. **Publication audit completeness.** Every publication attempt, success and
-     failure alike, produces exactly one audit record, verified by counting
-     records across a successful publication, a publication refused for a
-     missing approval, and a publication refused for a ref rather than a hash.
-  4. **Redaction.** No durable record contains a raw Discord id, a raw run
+     that is not the append helper, including `approval-controller`,
+     `publisher`, and the retention timer: overwriting an existing record,
+     truncating the store, deleting an individual record, and re-appending a
+     record whose content address already exists are each refused.
+  2. **Caller and kind authorization.** The helper's socket enforces the D11
+     matrix, observed as eleven outcomes: three accepts, one per authorised
+     pair (`approval-controller` with `approval`, `publisher` with
+     `publication-attempt`, uid 0 retention timer with `retention-deletion`);
+     six cross-kind rejections, being each of those three callers offering
+     each of the two kinds it does not own; and two identity rejections, from
+     `agent-worker` and from `orchestrator`, for any kind. The cross-kind
+     rejections are the ones that matter, since they are what stop a
+     compromised publisher forging an approval or a compromised timer
+     synthesising a record to explain a period it removed.
+  3. **Append atomicity and durability.** A reader concurrent with an append
+     never observes a partial record, verified by enumerating the store
+     throughout a large append and confirming every visible name is a complete
+     record. Injected crashes are exercised at three points: after the
+     temporary is created, after it is written and `fsync`ed, and after the
+     rename but before the parent `fsync`. The first two leave no visible
+     record and a reclaimable temporary; the third leaves a complete, readable
+     record. An acknowledged append survives immediate power loss, which is the
+     parent-directory `fsync` doing its job. On restart, stale temporaries are
+     reclaimed, no reader has ever counted one, and the reclamation appends no
+     record because a temporary was never history.
+  4. **Path containment.** The caller supplies record bytes only; a request
+     carrying a filename, a path, a path component, or a period selector is
+     rejected. Planted controls are placed in the store directory and must not
+     divert a write: a symlinked record name, a symlinked period directory, a
+     symlinked store root, a name containing `..`, an absolute name, and a
+     name outside the lowercase-hexadecimal shape. Each is refused, and after
+     each attempt no file exists outside the store. Done with counted
+     coverage over the planted set.
+  5. **Publication audit completeness.** Every publication attempt, success and
+     failure alike, produces exactly one `publication-attempt` record, verified
+     by counting records across a successful publication, a publication refused
+     for a missing approval, and a publication refused for a ref rather than a
+     hash.
+  6. **Redaction.** No durable record contains a raw Discord id, a raw run
      handle, a credential, or a remote URL carrying authentication, verified by
      scanning the store with counted coverage and a planted control.
-  5. **Retention.** Daily rotation runs on schedule. Event logs are trimmed at
+  7. **Retention.** Daily rotation runs on schedule. Event logs are trimmed at
      whichever of 14 days, 512 MiB aggregate, or the 64 MiB per-file cap binds
      first. Approval and publication audit periods older than the 365-day floor
-     are removed by the root-owned retention timer as **whole sealed periods**,
-     with each deletion leaving its own record in the current period naming the
-     deleted period, its record count, and its digest. The timer is observed to
-     refuse a partial deletion, to refuse deleting the current unsealed period,
-     and to leave every surviving sealed period byte-identical to its sealed
-     state. Where the 256 MiB audit cap would require deleting a period younger
-     than the floor, deletion is **refused** and the condition reported, which
-     is verified by driving the store past the cap with synthetic records.
+     are removed as **whole sealed periods** by the root-owned retention timer,
+     never in place: the period is first renamed into quarantine with
+     `RENAME_NOREPLACE`, the periods parent is `fsync`ed, the
+     `retention-deletion` record is appended, and only then are the contents
+     removed.
+
+     Injected crashes are exercised at three points and the invariant checked
+     after each: before the rename, which must leave the original sealed
+     directory intact and visible; after the rename but before the record is
+     appended, which must leave a quarantined directory that recovery finishes
+     by appending the record and then removing; and after the record but before
+     removal completes, which recovery finishes by removing. At no point is a
+     **visible** sealed period observed missing any record it held when sealed.
+
+     Failure handling is tested directly: with the append helper made
+     unavailable, a due deletion renames into quarantine, fails to append, and
+     **retains the quarantine for retry** rather than removing it, so nothing
+     is deleted unaudited. The timer is also observed to refuse a partial
+     deletion and to refuse touching the current unsealed period. Where the
+     256 MiB audit cap would require deleting a period younger than the floor,
+     deletion is **refused** and the condition reported, verified by driving
+     the store past the cap with synthetic records.
 
 ## Consequences
 
