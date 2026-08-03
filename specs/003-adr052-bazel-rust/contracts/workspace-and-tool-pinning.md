@@ -483,12 +483,17 @@ dependency-direction gate pins.
 - The notes directory is opened once as an anchored close-on-exec directory
   descriptor beneath the repository root, with
   `RESOLVE_BENEATH|RESOLVE_NO_SYMLINKS|RESOLVE_NO_MAGICLINKS`.
-- Entries are enumerated from that descriptor as **names**, never as
-  reconstructed paths. The kernel's `d_type` is advisory and is not trusted for
+- Entries are enumerated from that descriptor as **raw names**, never as
+  reconstructed paths and never as decoded text. A name is a
+  `std::ffi::OsString` holding exactly the bytes the enumeration returned,
+  because a Linux directory entry is any NUL-free, `/`-free byte string and
+  `String` cannot hold every name the corpus may contain. The kernel's `d_type`
+  is advisory and is not trusted for
   classification, because it is `DT_UNKNOWN` on some filesystems; the
   authoritative answer is the errno the descriptor-relative open or read
   returns.
-- The enumerated names are **sorted by unsigned byte order before any entry is
+- The enumerated names are **sorted by unsigned byte order over
+  `OsStr::as_bytes()` before any entry is
   opened**, and both the returned entry sequence and every one-based position
   the renderer can fall back to derive from that sorted sequence. Directory
   order is not an order. Measured on the reference host, the same seven note
@@ -496,7 +501,12 @@ dependency-direction gate pins.
   `w3 w11 w1 w0 w2 w10 w9` on tmpfs, so an unsorted position label names a
   different entry in CI than it does locally and neither run is reproducible
   from the other's message. Byte order is used rather than a locale collation
-  because it is total over raw directory-entry bytes and identical everywhere.
+  because it is total over raw directory-entry bytes and identical everywhere,
+  and totality is what a corpus containing a name no collation is defined over
+  actually needs. The key is `as_bytes()` rather than `OsString`'s own `Ord`,
+  which the standard library does not promise equals the raw-byte relation on
+  every target; measured here the two agree, and naming the bytes is what stops
+  that agreement from being load-bearing.
 - Each entry is opened descriptor-relative from that same anchor under the same
   resolve policy and read through the boundary. Nothing reopens the directory,
   and no absolute path is ever constructed.
@@ -531,8 +541,11 @@ therefore split, and the split is structural:
 | `PathLeak` | note label and the one-based line, and nothing else | the label, the line, then the single remedy: rewrite the path as a `<worktree>`-rooted shape or drop it |
 | `ReadError` | note label and the preserved `std::io::Error` | the label, the error, then the single file-level remedy: fix the entry's permissions or remove the invalid entry |
 
-The label is the entry name when the name passes the lint's own rules, and the
-entry's one-based position in the sorted enumeration when it does not.
+The label is the entry name when the name renders and passes the lint's own
+rules, and the entry's one-based position in the sorted enumeration when it
+does not. "Renders" is a check, not an assumption: the entry name is an
+`OsString`, and `Name` is constructed only where `OsStr::to_str()` returned
+`Some`.
 
 `PathLeak` has no error field to be `None` and `ReadError` has no line field to
 be zero, so neither of the two impossible states is expressible and no
@@ -581,15 +594,33 @@ per-variant assertion is on the whole remedy sentence and never on the shared
 directory text.
 
 The entry name is the only borrowed text any refusal prints, and it is checked
-before it is printed. The renderer runs the entry name through the same
-`/`-rooted-token and worktree-substring rules the note lines face; a name that
-fails them, or that is not valid UTF-8 and therefore cannot be rendered as a
-name at all, is replaced by the entry's one-based position in the **sorted**
+before it is printed. The renderer first asks `OsStr::to_str()` for a rendering
+at all, then runs that `&str` through the same
+`/`-rooted-token and worktree-substring rules the note lines face; a name whose
+`to_str()` is `None`, or one that fails those rules, is replaced by the entry's
+one-based position in the **sorted**
 enumeration, and the refusal says so. Without the check, the self-application
 test below would hold only for entry names that happen to be clean, which is a
 coincidence rather than a property. Without the sort, the position would be a
 different entry on ext4 than on tmpfs, and a refusal a contributor cannot
 reproduce is a refusal that gets ignored.
+
+**Holding the name as `OsString` is what keeps the corpus rule fail-closed.**
+The name-shape rule is what makes anything other than a `w<digits>.md` note in
+that directory a refusal, and it runs over the raw bytes: `w\xff9.md` fails
+`^w[0-9]+\.md$` because `0xff` is not a digit, so the entry is refused
+`ErrorKind::InvalidInput` without ever being opened and is labelled by
+position. A `String` name field cannot reach that state. It leaves the
+enumerator two options and both are defects. Dropping the entry removes it from
+the corpus, so the one entry a contributor could not have named by accident is
+the one entry the name-shape refusal never sees. Lossy conversion keeps the
+entry and corrupts the label: measured, the distinct raw names `w\xff9.md` and
+`w\xfe9.md` produce identical lossy text, so two entries share one rendered
+label and one sort key and the tie falls back to directory order; and raw
+`w\x80.md` sorts before the valid UTF-8 name `w\xc3\xa9.md` while their lossy
+forms sort the other way, because `U+FFFD` encodes to `0xEF 0xBF 0xBD`. The
+second measurement is the one that matters most: a lossy sort moves the
+position label of entries that were never broken.
 
 The scanner proves all of this about itself: one test runs every rendered
 refusal and every rendered corpus error, from every planted input, back through
@@ -602,13 +633,23 @@ shapes. A third supplies one corpus in two different enumeration orders and
 requires the returned entry sequence, the violation order, and every assigned
 position to be identical, with the removed sort planted as the mutation it must
 reject. A fourth requires each corpus error to carry the fixed
-repository-relative directory literal and no absolute path.
+repository-relative directory literal and no absolute path. A fifth supplies a
+corpus mixing raw names that are not valid UTF-8 with a valid non-ASCII one and
+requires the sorted sequence, the violation order, and every assigned position
+to follow the raw-byte relation, with a sort over the lossy rendering planted
+as the mutation it must reject. A sixth requires an entry whose raw name has no
+UTF-8 rendering to be refused `ErrorKind::InvalidInput` without being opened
+and labelled by position, with both the dropped-entry and the
+lossy-name-as-label mutations planted and required to fail.
 
 The enumeration API returns a corpus `Result` at the outer level and a
-`std::io::Result` per entry carrying exactly what the boundary read returned.
-It never collapses a failed read to `None` or to an empty string. Keeping the
+`std::io::Result` per entry carrying exactly what the boundary read returned,
+beside an `OsString` name carrying exactly what the enumeration returned.
+It never collapses a failed read to `None` or to an empty string, and it never
+drops or launders a name it cannot decode. Keeping the
 real `std::io::Error` is also what stops a later refactor from mapping every
-failure onto the same benign-looking value.
+failure onto the same benign-looking value; keeping the raw name is what stops
+one from mapping every unrepresentable entry onto absence.
 
 The lint proves it can refuse before its pass is treated as evidence, and it
 does so against injected corpora rather than files written into the notes
@@ -618,7 +659,10 @@ generic absolute path belonging to no machine in the run, an empty corpus, an
 unreadable directory, a worktree substring with no leading slash, a non-note
 entry name beside an entry whose read failed with `EACCES`, a symlinked entry
 refused `ELOOP`, a subdirectory entry refused `EISDIR`, non-UTF-8 content, an
-entry name that itself carries a leak, and the two near-miss placeholder
+entry name that itself carries a leak, an entry whose raw name is not valid
+UTF-8, a second such name that differs from the first only in bytes a lossy
+conversion collapses, an invalid raw name ordered against a valid non-ASCII
+one, and the two near-miss placeholder
 spellings plus the `file:` URI.
 The one lane that executes it is
 `D2B_ENABLE_FIXTURE_BUILD=1 make test-fixture-contracts`, because

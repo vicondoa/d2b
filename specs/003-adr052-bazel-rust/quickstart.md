@@ -147,18 +147,56 @@ the ADR's own terms rather than a change to them, so no further amendment is a
 prerequisite here.
 
 Resolve the amendment commit from history rather than pasting a hash, so the
-check keeps working after any rebase or backport:
+check keeps working after any rebase or backport. Capture and validate the
+history before iterating over it; the pipeline form of this loop cannot fail:
 
 ```bash
-git rev-list --reverse HEAD -- docs/adr/0052-bazel-rust-build-and-test.md \
-  | while read -r sha; do
-      if git show "$sha:docs/adr/0052-bazel-rust-build-and-test.md" \
-           | grep -q '^- Amended: 2026-08-03\.'; then
-        printf '%s\n' "$sha"
-        break
-      fi
-    done
+set -e
+. .scratch/adr052-assert.sh
+require_input docs/adr/0052-bazel-rust-build-and-test.md
+
+shas=$(git rev-list --reverse HEAD \
+  -- docs/adr/0052-bazel-rust-build-and-test.md) \
+  || fail 'git rev-list failed on the ADR 0052 path'
+test -n "$shas" || fail 'ADR 0052 has no history reachable from HEAD'
+
+amendment=
+while read -r sha; do
+  test -n "$sha" || continue
+  body=$(git show "$sha:docs/adr/0052-bazel-rust-build-and-test.md") \
+    || fail "cannot read ADR 0052 at $sha"
+  if printf '%s\n' "$body" | grep -q '^- Amended: 2026-08-03\.'; then
+    amendment=$sha
+    break
+  else
+    rc=$?
+    test "$rc" -eq 1 || fail "grep exited $rc reading ADR 0052 at $sha"
+  fi
+done <<EOF
+$shas
+EOF
+test -n "$amendment" \
+  || fail 'no commit in that history introduces the 2026-08-03 amendment'
+printf '%s\n' "$amendment"
 ```
+
+The shape matters more than it looks. `git rev-list ... | while read` reports
+only the exit status of the `while`, so a `rev-list` that failed, a path that
+no longer exists in this checkout, and a history that genuinely carries no
+amendment are all one silent empty result, and the block that consumes it
+records "no SHA" as if that were an answer. Capturing first splits those three
+into a transport failure, an empty history, and an unresolved amendment, each
+with its own `fail`. The loop also reads from a here-document rather than from
+a pipe, because a piped `while` runs in a subshell where `amendment` is
+assigned and then discarded, which would turn a successful resolution into the
+same empty result. Both were measured rather than assumed: the piped form
+returns an empty variable where the here-document form returns the value, and
+`false | while read -r x; do :; done` exits zero. The `git show` refusal inside
+the loop is a backstop and is unreachable on any history that carries the
+amendment, since `--reverse` reaches the amendment commit before any later
+commit that could have removed the file; it fires only if the object store
+cannot produce a blob the commit list just named, which is a condition to stop
+on rather than to skip past.
 
 Record that resolved SHA as evidence and require it to be an ancestor of the
 W0 base. If any of `.bazelversion`, `.bazelrc`, `.bazelignore`, `MODULE.bazel`,
@@ -608,9 +646,19 @@ require_match 'the stable-enumeration-order case is gone' \
 require_match 'the fixed corpus-directory case is gone' \
   -n 'wave_note_corpus_errors_name_the_repository_relative_directory' \
   packages/d2b-contract-tests/tests/policy_docs.rs
+require_match 'the raw-byte ordering case is gone' \
+  -n 'wave_note_entries_sort_raw_names_by_unsigned_byte_order' \
+  packages/d2b-contract-tests/tests/policy_docs.rs
+require_match 'the non-UTF-8 entry-name case is gone' \
+  -n 'wave_note_refusal_label_falls_back_to_position_for_a_non_utf8_entry_name' \
+  packages/d2b-contract-tests/tests/policy_docs.rs
 refute 'the lint reads the corpus with the standard library' \
   -nE 'std::fs::read_dir|std::fs::read_to_string|read_dir\(' \
   packages/d2b-contract-tests/tests/policy_docs.rs
+require_match 'the entry name is no longer held as raw bytes' \
+  -n 'OsString' packages/d2b-contract-tests/tests/policy_docs.rs
+require_match 'the enumeration no longer sorts on the raw name bytes' \
+  -n 'as_bytes' packages/d2b-contract-tests/tests/policy_docs.rs
 ```
 
 Read one refusal of each shape before trusting the lint. A `PathLeak` must name
@@ -624,15 +672,22 @@ neither may print the offending token, and neither may carry the other's
 remedy. A refusal is republished into the target's output, into panel comments,
 and into PR bodies, so a message that echoes the leaked path has spread it
 further than the note did, and a message that carries the wrong remedy sends a
-contributor to fix a line that is not the problem. The four `require_match`
+contributor to fix a line that is not the problem. The six named-case
+`require_match`
 calls above are the mechanical half of those rules: one names the case that
 runs every rendered refusal and every rendered corpus error back through the
 scanner's own path-token and
 worktree-substring tests, the second names the case that asserts each shape
 renders its own remedy and none of the other three, the third names the case
 that supplies one corpus in two enumeration orders and requires identical entry
-order, violation order, and position labels, and the fourth names the case that
-pins the corpus directory literal.
+order, violation order, and position labels, the fourth names the case that
+pins the corpus directory literal, the fifth names the case that requires the
+sort to run over the raw name bytes, and the sixth names the case that requires
+a position-labelled refusal for an entry whose raw name has no UTF-8 rendering.
+The two trailing presence claims are regression tripwires rather than proofs:
+they catch a change that reverts the name field to `String` or the sort key to
+a rendered form, which is the shape of the defect this section exists to
+prevent.
 
 Why that literal is fixed rather than rendered is the same self-application
 argument: the enumerator resolves the corpus beneath `repo_root()`, so a
@@ -648,6 +703,17 @@ seven note names enumerate as `w2 w0 w1 w11 w3 w10 w9` on ext4 and as
 `w3 w11 w1 w0 w2 w10 w9` on tmpfs, so a position label taken from raw
 enumeration names a different entry in CI than it does locally, and a refusal
 nobody can reproduce is a refusal that gets ignored.
+
+The name type is part of the same argument. A directory entry on Linux is any
+NUL-free, `/`-free byte string, so the entry name is a `std::ffi::OsString`
+holding those bytes and the sort key is `OsStr::as_bytes()`. A `String` field
+would have to drop such an entry, which makes the `w<digits>.md` refusal blind
+to the one entry nobody creates by accident, or convert it lossily, which was
+measured to give the distinct names `w\xff9.md` and `w\xfe9.md` one shared
+label and one shared sort key, and to sort raw `w\x80.md` after the valid UTF-8
+name `w\xc3\xa9.md` when the bytes order it before. UTF-8 is required only at
+the renderer, where `NoteLabel::Name` is built solely from a successful
+`OsStr::to_str()` whose `&str` then passes the lint's own rules.
 
 Two halves are not greppable and are deliberately left to the compiler and the
 tests. The first is the shape of the enumeration API: it returns a corpus error

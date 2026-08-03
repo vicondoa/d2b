@@ -305,6 +305,53 @@ makes it a **dev-dependency** of every first-party crate whose tests locate a
 binary or a fixture, which is the whole point of the crate, and the existing
 gate already filters dev edges out of the direction check.
 
+### Provider resolution is a read over a declared forest, not a path mutation
+
+The two resolve policies are asked about often enough that the asymmetry is
+recorded here rather than re-derived each round.
+
+A provider lookup opens one artifact that Bazel has already declared as a
+`data` dependency and already materialized into the runfiles tree for this
+test. The runner creates nothing there, renames nothing there, and unlinks
+nothing there; it supplies an anchor plus one declared relative component,
+reads, and executes. A runfiles tree is a symlink forest **by construction** -
+that is the interface Bazel publishes, not an anomaly at this call site - so
+the leaf a provider open reaches is a symlink in the ordinary case, not the
+exceptional one. Measured on the reference host against a runfiles-shaped leaf
+symlink whose target lies outside the anchor, `RESOLVE_BENEATH` fails `EXDEV`
+and `RESOLVE_NO_SYMLINKS` fails `ELOOP`. A policy that refuses every legitimate
+input is not a fail-closed guard; it is a guard that gets switched off, and the
+switch is the actual hole.
+
+What binds which bytes execute is therefore identity, not link refusal, and
+identity is bound by five things on one descriptor: a single
+`openat2(anchor, relative, O_RDONLY|O_CLOEXEC, RESOLVE_NO_MAGICLINKS)`, which
+still refuses a `/proc/<pid>/fd/<n>` body with `ELOOP`; an `fstat` for
+regular-file kind, executable mode, and freshness against the newest declared
+input; a digest of `st_size` bytes read from offset zero and compared against
+the value the coverage map records for that provider; a second `fstat` that
+must agree with the first on `st_dev`, `st_ino`, `st_size`, `st_mtim`, and
+`st_ctim`; and `execveat(fd, "", argv, envp, AT_EMPTY_PATH)` on that same
+descriptor, with no `Command`, no `fexecve`, and no `/proc/self/fd` reopen. A
+symlink can decide which inode is reached. It cannot make the wrong inode's
+bytes digest to the recorded value, and it cannot substitute an inode after the
+digest read without the bracketing `fstat` refusing.
+
+The strict callers are the mirror image and that is the whole reason the policy
+is a per-call-site parameter rather than a global: cleanup targets, the
+per-case directories, the `XML_OUTPUT_FILE` parent, and the wave-note corpus
+are paths the runner itself creates or the repository itself commits. No link
+belongs on any of them, refusing one costs nothing, and there is no digest to
+fall back on, so link refusal is the only identity those sites have. Applying
+the provider's policy there would accept a symlinked note; applying the strict
+policy to providers would refuse every provider. A guard that silently used the
+other site's policy is exactly what the asserted policy parameter and the
+walk-route leaf tests exist to catch.
+
+This is a decision, not an open finding. The strict no-symlink prescription is
+declined for providers, and it is declined because adopting it would trade a
+measured, tested identity proof for an unusable one.
+
 ## Spec Corrections
 
 | Drift | Canon retained | Treatment |
@@ -335,6 +382,8 @@ gate already filters dev edges out of the direction check.
 | An earlier plan draft described the forced component-walk route as `O_NOFOLLOW` on every component except the final one, unconditionally. | Measured: `openat` on a runfiles-shaped leaf symlink without `O_NOFOLLOW` opens and returns the same `st_ino` that `openat2` with `RESOLVE_NO_MAGICLINKS` returns, while the same open with `O_NOFOLLOW` fails `ELOOP`. The leaf flag is the whole policy difference on that route, so hardcoding the exemption handed cleanup, the two output-path opens, and the wave-note lint a weaker guarantee on one of their two routes. | The resolve policy decides the leaf. Intermediate components stay `O_NOFOLLOW` under both policies; the strict policy adds `O_NOFOLLOW` on the leaf and the provider policy does not. `RESOLVE_NO_MAGICLINKS` has no `openat` equivalent, so the one property the walk route cannot reproduce is recorded with its measurement rather than approximated by a partial check, bounded by unchanged handle identity and by ADR 0008's `6.6`/`6.9` kernel floor, which puts `openat2` on every supported host. |
 | An earlier plan draft derived the wave-note position label from raw directory enumeration and rendered no directory in either corpus error. | Measured: the same seven note names enumerate as `w2 w0 w1 w11 w3 w10 w9` on ext4 and `w3 w11 w1 w0 w2 w10 w9` on tmpfs, so a position label names a different entry per filesystem; and a corpus error names no entry, so a remedy with no directory asks a contributor to repair something unnamed. | Names are sorted by unsigned byte order before any entry is opened, and the entry sequence, violation order, and every position derive from that. Both corpus remedies carry the fixed repository-relative literal `specs/003-adr052-bazel-rust/wave-notes/`, never the path resolved beneath `repo_root()`, which would be an absolute path FR-029 forbids and which the lint's own self-application case would catch. |
 | An earlier draft said a provider refusal names the expected runfiles path while the canonical redaction rule forbade a refusal from carrying a runfiles location. | Two different things wore one name. The string a `data` declaration produces is repository content, identical on every machine; the directory it resolves beneath is a local value. | The artifacts use "declared runfiles-relative path" for the permitted string and "runfiles root" or "resolved absolute runfiles location" for the forbidden one, and FR-029 states the split so the permission and the prohibition cannot be read as contradicting each other. |
+| An earlier plan draft typed the wave-note entry name as `String` while also requiring a position label for a name that is not valid UTF-8, which is a state that type cannot hold. | Measured with the pinned stable toolchain: a Linux directory entry is any NUL-free byte string, `to_str()` returns `None` for `w\xff9.md`, `w\xff9.md` and `w\xfe9.md` produce identical lossy text, and raw `w\x80.md` sorts before valid UTF-8 `w\xc3\xa9.md` while their lossy forms sort the other way. | The name field is `std::ffi::OsString` holding the raw bytes, the sort key is `OsStr::as_bytes()`, and `NoteLabel::Name` is constructed only where `to_str()` returns `Some` and that `&str` passes the lint's own rules. T009 gains a non-UTF-8-name label case and a raw-byte ordering case, both with planted mutations. |
+| An earlier plan draft gave T042 no forced component-walk assertion, while `runner-environment.md` already required the strict leaf refusal for the per-case directory and the `XML_OUTPUT_FILE` parent. | The contract is the binding artifact and the wave-note and cleanup tasks already carry the same requirement; T042 was the only strict caller whose task omitted it. | T042 requires the walk-route leaf-symlink `ELOOP` assertion for both strict opens and the planted hardcoded-leaf-exemption mutation, matching T009 and T083. |
 
 There is no eighteen-surface drift: committed code publishes eighteen with
 `D2B_SKIP_FIXTURE_BUILD=1` and two fixture surfaces when enabled.
@@ -416,8 +465,9 @@ leak that arrives with no leading slash at all.
 a path by concatenating a `DirEntry` onto a parent. It opens the notes
 directory once as an anchored close-on-exec descriptor beneath the repository
 root with `RESOLVE_BENEATH`, `RESOLVE_NO_SYMLINKS`, and
-`RESOLVE_NO_MAGICLINKS`, enumerates entries as names rather than as
-reconstructed paths, and opens each entry descriptor-relative from that same
+`RESOLVE_NO_MAGICLINKS`, enumerates entries as raw names rather than as
+reconstructed paths or as decoded text, and opens each entry
+descriptor-relative from that same
 anchor under the same policy, all through the `FileSystem` trait in
 `packages/d2b-bazel-support/src/fsops.rs` that cleanup, the result writer, the
 locator, and the topology provider checks already use. A guard that follows a
@@ -441,13 +491,17 @@ component under the strict policy, because the resolve policy is what decides
 the leaf. A route that exempted the leaf would let this lint follow a symlinked
 note out of the directory it polices, which is the escape it exists to refuse,
 performed by the lint. And the enumerated names are sorted by unsigned byte
-order before any entry is opened, with the returned entry sequence, the
+order over `OsStr::as_bytes()`
+before any entry is opened, with the returned entry sequence, the
 violation order, and every one-based position label derived from that sorted
 sequence. Directory order is not an order: measured, the same seven note names
 enumerate as `w2 w0 w1 w11 w3 w10 w9` on ext4 and as `w3 w11 w1 w0 w2 w10 w9`
 on tmpfs, so a position taken from raw enumeration names a different entry in
 CI than it does locally and no contributor can reproduce the message they were
-handed.
+handed. The key is the raw bytes rather than `OsString`'s own `Ord`, whose
+equality with the byte relation the standard library does not promise across
+targets; measured here they agree, and naming `as_bytes()` is what keeps that
+agreement out of the load path.
 
 **The refusal itself is redacted, and there are two shapes of it.** A violation
 names the note, the one thing that identifies the condition, and one
@@ -504,11 +558,35 @@ no refactor can borrow a remedy across shapes. A third supplies one corpus in
 two different enumeration orders and requires identical entry order, violation
 order, and position values, with the removed sort as the planted mutation. The
 note label is the only borrowed text any refusal prints and it is checked
-before it is printed: a name that fails the lint's own rules, or that is not
-valid UTF-8 and so cannot be rendered as a name, is replaced by the entry's
+before it is printed: a name whose `OsStr::to_str()` is `None`, or one that
+fails the lint's own rules, is replaced by the entry's
 one-based position in the sorted enumeration, which is what makes the
 self-application test a property rather than a coincidence about the names that
 happen to be committed.
+
+**The entry name is `std::ffi::OsString`, and that is a correctness choice
+rather than a fastidious one.** A Linux directory entry is any NUL-free,
+`/`-free byte string, so a `String` name field cannot represent part of the
+corpus the lint is responsible for, and an enumerator that cannot represent an
+entry has exactly two moves, both defects. Dropping it is fail-open in the
+guard's fail-closed position: the `w<digits>.md` name-shape rule is what makes
+*anything else in this directory* a refusal, so the one entry a contributor
+could not have produced by accident is the one entry that rule never sees.
+Converting it lossily corrupts the label instead. Measured on this host with
+the pinned stable toolchain: the distinct raw names `w\xff9.md` and `w\xfe9.md`
+convert to identical lossy text, so two entries share one rendered label and
+one sort key and the tie falls back to the directory order the sort exists to
+remove; and raw `w\x80.md` sorts before the valid UTF-8 name `w\xc3\xa9.md`
+while their lossy forms sort the other way, because `U+FFFD` encodes to
+`0xEF 0xBF 0xBD` and outranks `0xC3`. That second one is the sharper failure,
+because it moves the position label of entries that were never broken. With
+`OsString` the name-shape rule runs over the raw bytes, `w\xff9.md` is refused
+`ErrorKind::InvalidInput` without being opened and labelled by position, the
+sort key is `OsStr::as_bytes()`, and UTF-8 is required only at the renderer,
+which is the only place it was ever needed. Measured alongside: the enumeration
+returns such names unchanged and `CString::new(name.as_bytes())` round-trips
+each one for the descriptor-relative open, so nothing about the boundary
+changes.
 
 **Absent content is an error, not a blank.** The per-entry content field holds
 exactly what the boundary read returned and is never collapsed into `None` or
@@ -524,7 +602,11 @@ has exactly one way to be empty and a `Result` has to say why. The one
 constructed error is `ErrorKind::InvalidInput` for an entry whose name does not
 match `w<digits>.md` and which is therefore never opened, and a test pins the
 exact `raw_os_error` of `EACCES`, `EISDIR`, and `ELOOP` and the `InvalidData`
-kind of non-UTF-8 content so that stays the only construction.
+kind of non-UTF-8 content so that stays the only construction. A non-UTF-8
+*name* is a different condition from non-UTF-8 *content* and is not folded into
+it: content is decoded and fails `InvalidData` on an entry that was opened, a
+name is never decoded and fails the byte-level shape rule on an entry that was
+not.
 
 The lint runs in the one lane that reaches that crate,
 `D2B_ENABLE_FIXTURE_BUILD=1 make test-fixture-contracts`. That is measured, not
@@ -537,7 +619,11 @@ The lint carries its own proof that it can fail, and it carries it in the
 injected fake rather than on disk. The enumeration negatives are supplied
 states of the `FileSystem` fake: an unreadable directory, an empty corpus, an
 entry refused `EACCES`, an entry refused `ELOOP`, a subdirectory whose read
-returns `EISDIR`, and non-UTF-8 content. The line-rule negatives are in-test
+returns `EISDIR`, non-UTF-8 content, an entry whose raw name is not valid
+UTF-8, a second raw name differing from it only in bytes a lossy conversion
+collapses, and an invalid raw name enumerated against a valid non-ASCII one so
+the byte order and the lossy order disagree. The line-rule negatives are
+in-test
 note bodies: the generic absolute path
 `/home/planted-d2b-note-leak/adr052/.scratch/bazel`, which belongs to no
 machine in this run; the worktree path with its leading slash removed; a
@@ -706,14 +792,19 @@ that directory under `D2B_ENABLE_FIXTURE_BUILD=1 make test-fixture-contracts`,
 reading that corpus through one anchored close-on-exec descriptor with
 `RESOLVE_BENEATH`, `RESOLVE_NO_SYMLINKS`, and `RESOLVE_NO_MAGICLINKS` and never
 through `std::fs::read_dir`, `std::fs::read_to_string`, or a concatenated
-`DirEntry` path, sorting enumerated names by unsigned byte order before opening
+`DirEntry` path, holding each enumerated name as a `std::ffi::OsString` and
+sorting them by unsigned byte order over `OsStr::as_bytes()` before opening
 any entry, with its planted absolute-path, empty-corpus, unreadable
-corpus, `EACCES`, `ELOOP`, `EISDIR`, non-UTF-8, non-note-entry,
+corpus, `EACCES`, `ELOOP`, `EISDIR`, non-UTF-8-content, non-UTF-8-name,
+non-note-entry,
 leaking-entry-name, worktree-substring, placeholder-spelling,
-stable-enumeration-order, and fixed-corpus-directory cases all
+stable-enumeration-order, raw-byte-ordering, and fixed-corpus-directory cases
+all
 present and each observed failing against the inert seams before the real ones
 landed, its violation type split into `PathLeak` carrying label and line and
-`ReadError` carrying label and the preserved `std::io::Error`, its corpus error
+`ReadError` carrying label and the preserved `std::io::Error`, its `NoteLabel`
+constructing `Name` only where `OsStr::to_str()` returns `Some` and that `&str`
+passes the lint's own rules, its corpus error
 returned rather than folded into an empty list and rendering the fixed
 repository-relative `specs/003-adr052-bazel-rust/wave-notes/` rather than any
 resolved path, and its rendered refusals
@@ -1077,6 +1168,7 @@ possible, each with the guard that catches it.
 | The shared boundary's fallback route exempts the leaf from `O_NOFOLLOW` for every caller, so on that route a symlinked wave note, a symlinked per-case directory, or a symlinked `XML_OUTPUT_FILE` parent is followed out of its anchor and the lint's four-way errno distinguishability collapses, while every openat2-route test stays green. | The resolve policy decides the leaf on the walk route, and the fake supplies both routes for both policies. `packages/d2b-bazel-support/tests/provider_handle.rs` carries the strict-leaf refusal, the provider-leaf acceptance whose handle still passes kind, mode, freshness, digest, and the bracketing `fstat`, and the intermediate-symlink refusal, and both hardcoded-leaf mutations must fail. | Revert the boundary change in a second W0 prep commit; the trait is a W0-frozen module path and no scope owns it. |
 | A wave-note refusal falls back to a position label taken from raw directory enumeration, so the entry a message names differs between the contributor's ext4 checkout and the CI filesystem and neither run reproduces the other. | Names are sorted by unsigned byte order before any entry is opened, and the entry sequence, violation order, and every position derive from that sorted sequence. One test supplies the same corpus in two enumeration orders and requires identical output, with the removed sort as the planted mutation. | Revert the lint scope; the sort is inside the enumerator and nothing else derives an ordinal from the corpus. |
 | One wave-note violation type carries an optional line beside an optional error, so a permission denial renders the line remedy and a contributor is told to rewrite a line that is not the problem. | The type splits into `PathLeak`, note plus line, and `ReadError`, note plus preserved `std::io::Error`, with an unreadable or empty corpus returned as a corpus error instead of a violation. A test asserts per shape that the right remedy is present and the other three are absent. | Fix the rendering; the split is structural, so the cross-remedy state stops being expressible. |
+| The wave-note enumerator types its name field as `String`, so an entry whose raw name is not valid UTF-8 is either dropped, which makes the `w<digits>.md` refusal blind to the one entry nobody could have created by accident, or lossily converted, which gives two distinct entries one label and one sort key and inverts the order against valid non-ASCII names. | The name is `std::ffi::OsString`, the shape rule and the sort key run over the raw bytes, and `NoteLabel::Name` exists only where `OsStr::to_str()` returns `Some`. T009 adds a case requiring a position-labelled `InvalidInput` refusal for a non-UTF-8 name and a case requiring raw-byte ordering across a corpus mixing invalid names with a valid non-ASCII one, each with the lossy-conversion mutation planted and required to fail. | Revert the lint scope; the name type is internal to the enumerator and its label renderer, and no other caller reads the field. |
 | The coverage guard is green while half its invariants never executed, because a Bazel test cannot query the graph. | Analysis-time dependency edges prove label existence; completeness and query drift run in the wrapper and `test-drift` over a committed drift-checked query result; no Bazel test invokes `bazel query`. | Revert the guard split; do not weaken either half. |
 | The disk cache is measured before asynchronous trimming finishes, so a compliant run refuses to publish forever. | An explicit synchronous on-demand collector runs as a named step before measurement and save; the size refusal stays a backstop. | Revert to the previous snapshot; the maintenance verdict is outside the Rust verdict. |
 | A cache-key input changes without changing the key, restoring a subtly stale cache. | The key binds all four hub locks, all four per-hub Bazel-side locks, the guest lock, the generator sha256, `.bazelignore`, the startup and symlink configuration, the build-script and action-environment digest, and the generated BUILD digest. | Rotate the restore prefix; a stale generation is superseded and deleted by the maintenance job. |

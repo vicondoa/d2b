@@ -184,7 +184,7 @@ consumer to reach a boundary.
 
 | Boundary | Path | Serves | Supplied states |
 | --- | --- | --- | --- |
-| `FileSystem` | `packages/d2b-bazel-support/src/fsops.rs` | Per-case result publication, scratch cleanup, wave-note corpus enumeration, and every provider open, check, and execution | `openat2` and forced component-walk routes, both resolve policies on each route, a leaf symlink and an intermediate symlink under each policy, magic-link parents, anchored `..` escape, `EEXIST` collision, short write, `EINTR`, `EAGAIN`, `ENOSPC`, replacement race, tracked entry, foreign decoy, an unreadable and an empty note corpus, note-directory enumeration returned in two different orders, note entries failing `EACCES`, `EISDIR`, `ELOOP`, and non-UTF-8, an absent, non-regular, non-executable, out-of-date, or wrong-digest provider, a path rebound to a different inode after the provider open, handle metadata that changes across the digest read, and `spawn_verified` returning `ENOSYS`, `EACCES`, `ENOEXEC`, `ENOENT`, or `ETXTBSY` |
+| `FileSystem` | `packages/d2b-bazel-support/src/fsops.rs` | Per-case result publication, scratch cleanup, wave-note corpus enumeration, and every provider open, check, and execution | `openat2` and forced component-walk routes, both resolve policies on each route, a leaf symlink and an intermediate symlink under each policy, magic-link parents, anchored `..` escape, `EEXIST` collision, short write, `EINTR`, `EAGAIN`, `ENOSPC`, replacement race, tracked entry, foreign decoy, an unreadable and an empty note corpus, note-directory enumeration returned in two different orders, note entries failing `EACCES`, `EISDIR`, `ELOOP`, and non-UTF-8 content, a note entry whose raw name is not valid UTF-8 and a second whose raw name differs from it only in bytes a lossy conversion would collapse, an absent, non-regular, non-executable, out-of-date, or wrong-digest provider, a path rebound to a different inode after the provider open, handle metadata that changes across the digest read, and `spawn_verified` returning `ENOSYS`, `EACCES`, `ENOEXEC`, `ENOENT`, or `ETXTBSY` |
 | `RunfilesView` | `packages/d2b-bazel-support/src/runfiles.rs` | The locator's Bazel arm and the runner's child-binary resolution | A declared entry present, a declared entry missing, and a runfiles environment that indicates no Bazel test at all |
 | `Clock` and `UptimeSource` | `packages/d2b-bazel-runner/src/clock.rs` | Deadline parsing, remaining-budget arithmetic, child duration, expiry escalation | Every accepted and rejected uptime field, truncate on capture and round up on read, exactly-zero remaining budget, overflow, expiry reached without sleeping |
 | `YankedIndex` | `packages/xtask/src/bazel_yanked.rs` | The reviewed networked yanked-snapshot refresh | All-clear index, a yanked version, a key the locks declare and the index omits, a key no lock declares, a missing index revision, a transport failure, a malformed payload |
@@ -250,6 +250,40 @@ decides what is proved about the descriptor that comes back.
 The type-5 policy lint's outputs, modelled because an earlier draft rendered
 one remedy for two unrelated conditions.
 
+Entry, as the enumerator returns it:
+
+| Field | Type | Why this type |
+| --- | --- | --- |
+| `name` | `std::ffi::OsString` | The raw directory-entry name, exactly the bytes the enumeration returned. A Linux directory entry is any NUL-free, `/`-free byte string; it is not a `str`. |
+| `content` | `std::io::Result<String>` | Exactly what the boundary read returned, never mapped onto `None` and never onto an empty string. |
+
+**The name is raw bytes because `String` cannot hold every name the kernel
+permits.** An enumerator whose name field is `String` has only two ways to
+handle an entry the directory really contains and UTF-8 cannot represent, and
+both break a fail-closed guard. Dropping the entry is the worse one: the
+`w<digits>.md` name-shape refusal is what makes *anything else in this
+directory* a refusal, so an entry the enumerator never returns is an entry that
+rule never sees, and a guard that silently omits the one entry a contributor
+could not name is fail-open in the position it is fail-closed everywhere else.
+Lossy conversion is the other, and it is not benign either. Measured on this
+host with the pinned stable toolchain: the distinct raw names `w\xff9.md` and
+`w\xfe9.md` both convert to the identical lossy text, so two entries collapse
+onto one rendered label and onto one sort key, and the tie is then broken by
+directory order, which is the exact irreproducibility the sort exists to
+remove. Lossy conversion also inverts the order against clean names, not only
+against other broken ones: raw `w\x80.md` sorts before the perfectly valid
+UTF-8 name `w\xc3\xa9.md`, while their lossy forms sort the other way, because
+`U+FFFD` encodes to `0xEF 0xBF 0xBD` and outranks `0xC3`. A `Position` label
+derived from a lossy sort therefore names the wrong entry for entries that were
+never broken.
+
+Holding `OsString` costs nothing at the boundary. Measured: the enumeration
+returns those names unchanged, `CString::new(name.as_bytes())` round-trips each
+one for the descriptor-relative open, and a mode `0000` or symlinked entry with
+a non-UTF-8 name still yields its own `EACCES` or `ELOOP`. The type change
+moves where UTF-8 is required, from the corpus to the renderer, which is the
+only place it was ever needed.
+
 Corpus level, returned instead of an entry list:
 
 | Variant | Members | Remedy |
@@ -264,12 +298,15 @@ Entry level:
 | `PathLeak` | `NoteLabel` and the one-based line | Rewrite the path as a `<worktree>`-rooted shape or drop it. |
 | `ReadError` | `NoteLabel` and the preserved `std::io::Error` | Fix the entry's permissions or remove the invalid entry. |
 
-`NoteLabel` is `Name(String)` or `Position(NonZeroUsize)`:
+`NoteLabel` is `Name(String)` or `Position(NonZeroUsize)`. The `String` in
+`Name` is a rendered label, never the stored name: it exists only where
+`OsStr::to_str()` on the raw name returned `Some`, so the conversion is a check
+that can fail rather than one that launders.
 
 | Variant | When |
 | --- | --- |
-| `Name` | The entry name is valid UTF-8 and passes the lint's own `/`-rooted-token and worktree-substring rules. |
-| `Position` | Anything else: a name that carries a leak, or a name that is not valid UTF-8 and therefore cannot be rendered as one. The value is the entry's one-based index in the **sorted** enumeration. |
+| `Name` | `OsStr::to_str()` on the raw name returns `Some`, and that `&str` passes the lint's own `/`-rooted-token and worktree-substring rules. |
+| `Position` | Anything else: a name that carries a leak, or a name whose `to_str()` is `None` and which therefore has no rendering. The value is the entry's one-based index in the **sorted** enumeration. |
 
 `PathLeak` has no error member to be absent and `ReadError` has no line member
 to be zero, so neither impossible state is expressible. No variant carries the
@@ -292,20 +329,36 @@ safe under the lint's rules by construction, because every `/` in it is
 preceded by an ordinary path character and so is not a `/`-rooted token.
 
 **Enumeration order is defined, not inherited.** The enumerator sorts entry
-names by unsigned byte order before opening anything, and the returned entry
-sequence, the violation order, and every `Position` value derive from that
-sorted sequence. Measured, the same seven note names enumerate as
+names by unsigned byte order over `OsStr::as_bytes()` before opening anything,
+and the returned entry sequence, the violation order, and every `Position`
+value derive from that sorted sequence. The comparison names `as_bytes()`
+rather than leaning on `OsString`'s own `Ord`, whose relation to the raw bytes
+the standard library does not promise across targets; measured here the two
+agree and `0x80` sorts above `0x7f`, and pinning the byte comparison is what
+keeps that agreement from being load-bearing. Measured, the same seven note
+names enumerate as
 `w2 w0 w1 w11 w3 w10 w9` on ext4 and `w3 w11 w1 w0 w2 w10 w9` on tmpfs, so an
 unsorted `Position` names a different entry in CI than it does locally and the
 refusal is not reproducible from the message. Byte order rather than a locale
 collation, because it is total over raw directory-entry bytes and identical
-everywhere.
+everywhere. Total is the operative word: the corpus may hold a name no locale
+collation is defined over, which is the second reason the sort key is the raw
+bytes and not a rendered string.
 
 `ReadError` preserves the boundary's error unchanged for `EACCES`, `EISDIR`,
 `ELOOP`, and non-UTF-8 content. The one constructed error is
 `ErrorKind::InvalidInput` for an entry whose name does not match `w<digits>.md`
 and which is therefore never opened; a test pins the exact `raw_os_error` of
 the other four so this stays the only construction.
+
+A non-UTF-8 *name* and non-UTF-8 *content* are different conditions and must
+not be conflated. Content is read and its decoding failure is
+`ErrorKind::InvalidData` on an entry the lint did open. A name is never
+decoded: the shape rule runs over the raw bytes, so `w\xff9.md` fails
+`^w[0-9]+\.md$` because `0xff` is not a digit, and the entry is refused
+`ErrorKind::InvalidInput` without being opened, carrying a `Position` label
+because it has no rendering. One planted entry, one refusal, no silent
+omission. This is the state the previous `String` name field could not reach.
 
 No test of cleanup, result publication, deadline handling, wave-note corpus
 enumeration, or provider resolution may depend on live host filesystem state, a

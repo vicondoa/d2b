@@ -700,7 +700,7 @@ code-specific recovery.
 **Cleanup and result publication share one injectable filesystem boundary.**
 `packages/d2b-bazel-support/src/fsops.rs` owns `openat2`, the forced
 component-walk fallback, `open`, `write`, `fsync`, `renameat`, `unlinkat`,
-directory enumeration by name, the anchored provider open, the metadata and
+directory enumeration by raw name, the anchored provider open, the metadata and
 byte reads the provider checks need, and the `execveat` of a verified handle,
 and the JUnit writer, cleanup, the topology provider checks, the locator, and
 the wave-note policy lint all call through it. Two reasons, and neither is
@@ -730,6 +730,36 @@ subdirectory opens and reads `EISDIR`, which is exactly the four-way
 distinguishability the wave-note lint needs. The fake supplies both routes and
 each caller's choice is asserted, so a site cannot silently inherit the other's
 policy.
+
+**A provider open is a read and an exec over a declared forest, not a mutation
+of a host path.** This is the framing the policy split rests on, so it is
+stated rather than implied. The artifact was declared as a `data` dependency
+and materialized into this test's runfiles tree by the executor; the runner
+creates, renames, and unlinks nothing there. It supplies an anchor plus one
+declared relative component, reads, and executes. A runfiles tree is a symlink
+forest by construction, which makes a symlinked leaf the ordinary case at this
+call site rather than the exceptional one, and a policy that refuses every
+legitimate input is not fail-closed - it is a policy that gets disabled, and
+the disabling is the real hole.
+
+Identity is what binds which bytes run, and it survives the symlink untouched.
+One `openat2(anchor, relative, O_RDONLY|O_CLOEXEC, RESOLVE_NO_MAGICLINKS)`,
+which still refuses a `/proc/<pid>/fd/<n>` body with `ELOOP`; `fstat` for
+regular-file kind, executable mode, and freshness against the newest declared
+input; a digest of `st_size` bytes from offset zero compared against the
+coverage map's recorded value; a second `fstat` that must agree on `st_dev`,
+`st_ino`, `st_size`, `st_mtim`, and `st_ctim`; and
+`execveat(fd, "", argv, envp, AT_EMPTY_PATH)` on that same descriptor. A
+symlink decides which inode is reached; it cannot make a different inode's
+bytes digest to the recorded value, and it cannot substitute an inode after the
+digest read without the bracketing `fstat` refusing. The strict callers have no
+recorded digest to fall back on: their subjects are directories, files the
+runner has not created yet, and committed corpus entries the coverage map does
+not describe, so for them link refusal *is* the identity. That asymmetry is the
+reason the policy is a parameter
+rather than one global setting. Prescribing `RESOLVE_NO_SYMLINKS` for providers
+is therefore declined rather than deferred: it would replace a measured,
+injectable identity proof with a guard that cannot run.
 
 **The same parameter decides the leaf on the forced component-walk route.**
 An earlier draft of the runner-environment contract described that route as
@@ -770,8 +800,10 @@ that floor unconditionally in
 No supported host takes the walk route; it exists so the walk's ordering and
 errno mapping are provable through the fake.
 
-**Directory order is not an order.** The wave-note lint sorts enumerated entry
-names by unsigned byte order before it opens anything, and both the returned
+**Directory order is not an order, and a name is not a string.** The wave-note
+lint sorts enumerated entry
+names by unsigned byte order over `OsStr::as_bytes()` before it opens anything,
+and both the returned
 entry sequence and any one-based position label derive from that sorted
 sequence. Measured on the reference host, the same seven note names enumerate
 as `w2 w0 w1 w11 w3 w10 w9` on ext4 and as `w3 w11 w1 w0 w2 w10 w9` on tmpfs.
@@ -779,6 +811,29 @@ A position label taken from raw enumeration therefore names a different entry
 in CI than it does locally, and a contributor handed such a refusal cannot
 reproduce it. Byte order rather than a locale collation, because it is total
 over raw directory-entry bytes and identical on every machine.
+
+Totality is the reason the entry name is `std::ffi::OsString` rather than
+`String`. A Linux directory entry is any NUL-free, `/`-free byte string, so a
+`String` field cannot represent part of the corpus this lint is responsible
+for, and an enumerator that cannot represent an entry either drops it or
+launders it. Dropping is fail-open exactly where the guard is meant to be
+fail-closed: the `w<digits>.md` shape rule is what makes anything else in that
+directory a refusal, so the one entry nobody produced by accident is the one
+entry that rule never sees. Laundering is measured, with the pinned stable
+toolchain, to be no better. `w\xff9.md` and `w\xfe9.md` are distinct raw names
+that convert to identical lossy text, so two entries collapse onto one label
+and one sort key and the tie falls back to the directory order the sort exists
+to remove; and raw `w\x80.md` sorts before the valid UTF-8 name `w\xc3\xa9.md`
+while their lossy forms sort the other way, because `U+FFFD` encodes to
+`0xEF 0xBF 0xBD` and outranks `0xC3`, so a lossy sort moves the position label
+of entries that were never broken. Measured alongside: `to_str()` returns
+`None` for those names, the enumeration returns them unchanged,
+`CString::new(name.as_bytes())` round-trips each one for the
+descriptor-relative open, and `as_bytes()` ordering agrees with `OsString`'s
+own `Ord` on this host while the standard library promises no such equality
+across targets, which is why the sort names the bytes. UTF-8 is required only
+at the renderer, where `NoteLabel::Name` is constructed solely from a
+successful `to_str()` whose `&str` then passes the lint's own rules.
 
 **The wave-note lint reads its corpus through the same boundary.** It does not
 call `std::fs::read_dir`, does not call `std::fs::read_to_string`, and never
@@ -1302,6 +1357,16 @@ first-party code change the migration requires.
 - Use `fexecve` from libc: rejected; glibc falls back to
   `/proc/self/fd/<n>` when `execveat` is unavailable, which is a reopen by
   path, and the fallback is silent.
+- Open providers under `RESOLVE_NO_SYMLINKS` like the strict callers:
+  rejected, and rejected on measurement rather than on taste. A runfiles tree
+  is a symlink forest by construction, and the strict policy fails `EXDEV` or
+  `ELOOP` on a runfiles-shaped leaf, so the rule would refuse every real
+  provider on every host. The provider open is a read and an exec over an
+  artifact the executor already declared and materialized, not a mutation of a
+  host path, and what binds which bytes run is the single open, the kind, mode,
+  and freshness `fstat`, the offset-zero digest against the coverage map, the
+  bracketing `fstat`, and `execveat` on that same descriptor. A symlink chooses
+  which inode is reached and changes none of those.
 
 ## Decision 16: Measure third-party build scripts and pin the action environment
 
