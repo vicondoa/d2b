@@ -242,6 +242,17 @@
           doCheck = false;
           meta.mainProgram = "d2b-unsafe-local-helper";
         };
+        d2b-resource-compiler = rustWorkspace {
+          pname = "d2b-resource-compiler";
+          cargoBuildFlags = [
+            "--package"
+            "d2b-resource-compiler"
+            "--bin"
+            "d2b-resource-compiler"
+          ];
+          doCheck = false;
+          meta.mainProgram = "d2b-resource-compiler";
+        };
 
         signoz = import ./pkgs/signoz { inherit pkgs; };
         signozOtelCollector = import ./pkgs/signoz-otel-collector { inherit pkgs; };
