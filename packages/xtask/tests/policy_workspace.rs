@@ -11,6 +11,9 @@ const RUST_DRIVER: &str = "tests/test-rust.sh";
 const RUST_DAG_LEAVES: &[&str] = &[
     "test-rust-leaf-api-surface",
     "test-rust-leaf-main-workspace",
+    "test-rust-leaf-schema",
+    "test-rust-leaf-inventory",
+    "test-rust-leaf-fixture-contracts",
     "test-rust-leaf-broker",
     "test-rust-leaf-guest-shell-runner",
     "test-rust-leaf-no-bash-ast",
@@ -1022,6 +1025,14 @@ public_target="$target_root/public-census"
             .iter()
             .any(|violation| violation.contains("`main` profile")),
         "removing the main CI profile must fail: {violations:?}"
+    );
+    let mutated_api = api_driver.replace("public_target=\"$target_root/public-census\"", "");
+    let violations = rust_profile_violations(makefile, driver, &mutated_api);
+    assert!(
+        violations
+            .iter()
+            .any(|violation| violation.contains("separate CI and local")),
+        "removing the local API target must fail: {violations:?}"
     );
 }
 
