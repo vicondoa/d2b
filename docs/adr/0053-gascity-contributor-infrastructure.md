@@ -584,6 +584,7 @@ applies:
 | --- | --- |
 | `HarnessResolverMissing` | Install or configure a supported resolver; run the preflight |
 | `HarnessVersionUnsupported { current, supported }` | Upgrade to the pinned Copilot CLI version, both values shown as parsed versions |
+| `HarnessVersionUnparseable` | The harness produced an unparseable version banner; upgrade to the pinned version |
 | `HarnessReceiptUnresolvable` | The locator did not resolve; re-run the round so the harness issues a fresh receipt |
 | `HarnessReceiptBindingMismatch` | The resolved binding contradicts the record; the panel must be re-run under the pinned binding |
 | `SelfAssertedBindingRejected` | A record supplied binding strings instead of a locator; update the adapter to capture the receipt |
@@ -594,50 +595,77 @@ version preflight, and it is what must pass **before any seat is dispatched**.
 Contributors get one command to remember rather than a list, and every error
 variant below names it.
 
-Every variant renders an **exact** remedy as a sequence of fixed repository
-commands. A message saying "update the adapter" is not a remedy; the
-contributor has to know which command, in which order.
+Every variant carries a **structured remedy**, not a prose string. Each error
+holds a `RemedyAction` list drawn from a closed set, currently
+`RunPanelPreflight`, `RunPanelMigrate`, `UpgradePinnedHarness` and
+`RerunOriginalPanelCommand`, and `Display` renders that list into the fixed
+command text. Callers and tests match on the actions; nothing parses a message
+to decide what to do, and no action carries argv.
 
-**No error prints the panel invocation or its arguments.** An earlier revision
-required the exact active `/d2b-panel-round <mode> ...` line to appear in the
-error text. That is withdrawn: argv carries paths, branch names and free-form
-operator input, and an error is copied into terminals, issues and logs, so
-printing it reintroduces exactly the values D17 excludes from every other
-surface. Resumption is instead addressed by the bounded correlation alias.
+**No error prints the panel invocation or its arguments, and none stores it
+either.** An earlier revision required the exact active
+`/d2b-panel-round <mode> ...` line in the error text; a later one replaced that
+with an alias and a protected invocation mapping so the command could be
+replayed. Both are withdrawn. Printing argv reintroduces the paths and
+free-form operator input D17 excludes from every other surface, and storing it
+buys a resume that a contributor already has: the standalone panel is started
+from an interactive shell, so the original command is in shell history. A
+protected store of invocations is retention burden and a new secret-adjacent
+surface bought to solve a problem the terminal already solved.
 
-`make panel-resume PANEL_REF=<alias>` reads protected local panel state and
-replays the stored invocation **without printing it**. The alias has the same
-fixed grammar and bounded length as D17's correlation alias, so it is safe in
-an error, a log line and a terminal, and it is actionable only through the
-protected mapping.
+The two producers therefore recover differently, because their situations
+differ:
 
-- `HarnessResolverMissing` and
-  `HarnessVersionUnsupported { current, supported }`: install or upgrade to the
-  pinned supported Copilot CLI per the repository setup documentation, then
-  `make panel-preflight`, then
-  `make panel-resume PANEL_REF=<alias>`.
+- **Standalone**: `RunPanelPreflight`, then `RerunOriginalPanelCommand`, whose
+  rendered text tells the contributor to rerun the original panel command from
+  their shell history. It does **not** echo that command.
+- **Gas City**: the error names the formula stage and the retry route, which
+  Gas City already holds durably in beads. No alias and no mapping are needed
+  because the orchestrator knows where the run is.
+
+The remedy sequences are:
+
+- `HarnessResolverMissing`, `HarnessVersionUnsupported { current, supported }`
+  and `HarnessVersionUnparseable`: `UpgradePinnedHarness`, then
+  `RunPanelPreflight`, then the producer-appropriate rerun above.
 - `HarnessReceiptUnresolvable` and `HarnessReceiptBindingMismatch`:
-  `make panel-preflight`, then `make panel-resume PANEL_REF=<alias>`.
-- `SelfAssertedBindingRejected`: `make panel-migrate`, then
-  `make panel-preflight`, then `make panel-resume PANEL_REF=<alias>`.
+  `RunPanelPreflight`, then the producer-appropriate rerun.
+- `SelfAssertedBindingRejected`: `RunPanelMigrate`, then `RunPanelPreflight`,
+  then the producer-appropriate rerun.
 
 **`make panel-migrate` is a wrapper that fails closed**, not a documented pair
 of git commands. It brings the checked-out standalone skill and adapter to the
-pinned supported revision, and it **refuses** rather than proceeding when the
-working tree is dirty or when the update would conflict, reporting which of the
-two it hit and leaving the tree untouched. Telling a contributor to run
-`git rebase origin/v3` inside an error message invites exactly the
-half-finished rebase that then fails the preflight for a second, unrelated
-reason; a wrapper that refuses on a dirty tree keeps the operator surface
-stable and the failure legible.
+pinned supported revision, and it **detects conflicts before it starts**,
+refusing with the tree untouched rather than leaving a half-finished rebase.
+Its two refusals name exact commands and mutate nothing:
 
-**The whole error enum carries a custom redacting `Debug`, not just one
-variant.** A derived `Debug` on the enum leaks whatever any variant happens to
-hold today and, worse, whatever a field added next year happens to hold;
-protecting one variant leaves the others one refactor away from a leak. So the
-entire panel receipt error enum implements `Debug` explicitly and redactingly,
-and `Display` exposes only a closed reason, the bounded alias, the fixed
-remedy commands, and bounded safe version newtypes where the variant has them.
+- **Dirty tree**: run `git status --short`; then either commit the changes, or
+  `git stash push -u -m panel-migrate`; then rerun `make panel-migrate`; and
+  after it succeeds, `git stash pop` if that path was taken.
+- **Conflicting update**: run `git status` to see the conflicting paths, and
+  resolve them before rerunning. Because detection happens before any rebase
+  starts, there is no in-progress state to continue or abort. If a future
+  implementation cannot detect conflicts up front and must start the rebase,
+  it states the exact in-progress state and names `git add <paths>` then
+  `git rebase --continue`, or `git rebase --abort`; the preferred design
+  detects first and never reaches that.
+
+Telling a contributor to run `git rebase origin/v3` inside an error message
+invites exactly the half-finished rebase that then fails the preflight for a
+second, unrelated reason.
+
+**Redaction is type-level first, formatting second.** Every sensitive or
+internal field is wrapped in a strongly typed redacting newtype whose own
+`Debug` is safe **by construction**, so a field cannot leak by someone
+forgetting to handle it. The enum additionally implements `Debug` explicitly
+and redactingly rather than deriving it, but that manual implementation is the
+second layer, not the guarantee: a custom `Debug` is a promise a refactor can
+break silently, while a newtype cannot be printed unsafely at all. Policy tests
+assert both, including that no protected field is a raw `String` or path type.
+
+`Display` exposes only a closed reason, the fixed remedy commands rendered from
+the `RemedyAction` list, and bounded safe version newtypes where the variant
+has them.
 
 `HarnessVersionUnsupported` in particular carries `current` and `supported` as
 bounded parsed version newtypes or equally closed-safe fields, never raw
@@ -1068,6 +1096,12 @@ text may carry; the audit record carries a digest. An operator resolves it with
 the authorized run and branch mapping locally. Every log line and error that
 references a run names the alias **and** that command, so the alias is
 actionable rather than merely opaque.
+
+This alias exists for **background log correlation only**, and its mapping is
+bounded and expires under the same retention as the records that reference it.
+It is deliberately not a resume handle: D8 stores no panel invocation and
+offers no replay, so nothing here retains a command to be replayed and there is
+no second, longer-lived mapping to keep.
 
 The scan reports the number of records, log lines and error strings examined,
 fails closed on an empty corpus, and ships one planted control per category
@@ -1537,16 +1571,28 @@ and it ships planted violations it must reject.
   because there was nothing to leak, not because `Debug` redacted anything.
 
   1. **Parser control.** A hostile or unparseable version banner, carrying a
-     secret-shaped token and control bytes, is rejected or normalized, and the
-     resulting value is asserted to retain **none** of the hostile bytes.
-  2. **Policy control.** The panel receipt error enum is asserted, through the
+     secret-shaped token and control bytes, is **rejected** with
+     `HarnessVersionUnparseable`. There is no normalization path: the parser
+     does not salvage a version substring out of a banner it could not parse,
+     because extracting a plausible-looking version from attacker-influenced
+     bytes is how the hostile content gets carried forward under a safe-looking
+     type.
+  2. **Policy control, at the type level.** Two assertions through the
      repository's existing policy-test mechanism over the source or API
-     surface, to carry an **explicit** `Debug` implementation and **not** a
-     derived one. This is the control that survives a future field being added
-     to a variant nobody re-scanned.
-  3. **Rendering control.** The `Debug` and `Display` renderings of every
-     variant are scanned and must contain no protected field, no invocation or
-     argv, and no filesystem path.
+     surface: the panel receipt error enum carries an **explicit** `Debug`
+     implementation and not a derived one; and **every protected field is a
+     redacting newtype**, with no raw `String` or path type among them. The
+     second is the one that matters most, because manual formatting is a
+     promise a refactor can break silently while a newtype whose `Debug` is
+     safe by construction cannot be leaked by forgetting.
+  3. **Rendering control, with a planted negative.** The `Debug` and `Display`
+     renderings of every variant are scanned and must contain no protected
+     field, no invocation or argv, and no filesystem path. A **mock error type
+     carrying an unredacted protected field, a path and an argv** is then
+     routed through the same rendering check and must be **rejected**. Without
+     that control the scan passes trivially because the real enum happens to
+     hold only safe values today, which proves the enum's current contents and
+     not the check.
 
   All three are required; passing only the third is the vacuity this split
   exists to prevent.
@@ -1601,26 +1647,29 @@ and it ships planted violations it must reject.
 
   - no resolver configured returns `HarnessResolverMissing`;
   - an unsupported harness returns
-    `HarnessVersionUnsupported { current, supported }` carrying both values;
+    `HarnessVersionUnsupported { current, supported }` carrying both values as
+    parsed newtypes;
+  - a hostile or unparseable version banner returns
+    `HarnessVersionUnparseable`, and **no** version value is extracted from it;
   - a locator that does not resolve returns `HarnessReceiptUnresolvable`;
   - a resolved binding contradicting the record returns
     `HarnessReceiptBindingMismatch`;
   - a submission carrying model and effort strings instead of a locator returns
     `SelfAssertedBindingRejected`.
 
-  **Each variant's remedy sequence is asserted exactly**, for all five
-  including `SelfAssertedBindingRejected`: `make panel-preflight` and
-  `make panel-resume PANEL_REF=<alias>` in every case; the pinned Copilot CLI
-  upgrade instruction additionally for `HarnessResolverMissing` and
-  `HarnessVersionUnsupported`; and `make panel-migrate` as the first step for
-  `SelfAssertedBindingRejected`. The alias in each message is asserted to match
-  the bounded grammar, and `make panel-resume PANEL_REF=<alias>` is run against
-  it and observed to replay the stored invocation **without printing it**.
+  **Each variant's remedy is asserted as structured actions, not text.** Tests
+  match on the `RemedyAction` list rather than parsing a message: every variant
+  carries `RunPanelPreflight`; `HarnessResolverMissing`,
+  `HarnessVersionUnsupported` and `HarnessVersionUnparseable` additionally
+  carry `UpgradePinnedHarness`; `SelfAssertedBindingRejected` additionally
+  carries `RunPanelMigrate` first; and the standalone producer's list ends with
+  `RerunOriginalPanelCommand` while the Gas City producer's names the formula
+  stage and retry route instead. No action carries argv.
 
   **No rendered message contains an invocation, argv, or a path**, asserted by
-  scanning every one of the five rendered messages. A test that accepts any
-  refusal, or any remedy string, for any of these five cases does not satisfy
-  this item.
+  scanning every rendered message across all six variants. A test that accepts
+  any refusal, or any remedy list, for any of these cases does not satisfy this
+  item.
 
   `make panel-migrate` is separately exercised: it brings the skill and adapter
   to the pinned revision on a clean tree, and it **refuses** on a dirty tree

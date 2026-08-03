@@ -173,19 +173,25 @@ plausible-looking artifact rather than an error, which is the worst shape a
 failure can take on an attestation gate. Three layers defend it:
 
 1. the dispatch tables, which make it rarely happen;
-2. `scripts/copilot/check-bindings.mjs`, which rejects a mispinned or illegal
-   effort before a run;
+2. `make panel-preflight`, which rejects a mispinned or illegal effort before a
+   run;
 3. the record helper, which takes the **observed** effort as input and fails
    closed rather than defaulting to the policy string.
 
 `gemini-3.1-pro-preview` supports `low`, `medium` and `high` only, so `high`
 is both the policy and the ceiling for the panel.
 
-### Running check-bindings
+### Running the panel preflight
 
 ```
-node scripts/copilot/check-bindings.mjs
+make panel-preflight
 ```
+
+That is the operator command. It runs the binding checker and, once the
+standalone harness receipt work of
+[ADR 0053](../adr/0053-gascity-contributor-infrastructure.md) lands, the
+harness receipt resolver and version checks alongside it, so one command
+covers everything that must hold before seats are dispatched.
 
 It fails on: an agent with no binding row, an effort or tier a model does not
 support, a panel row disagreeing with the delivery policy constants, a seat
@@ -193,6 +199,11 @@ missing from the roster or one not in it, a panel agent granted write tools,
 any effort-like key in frontmatter, a frontmatter and table model
 disagreement, and a repo-scope settings file carrying keys that scope cannot
 honour.
+
+The underlying binding checker is `node scripts/copilot/check-bindings.mjs`.
+Call it directly only when debugging the checker itself; for running a panel,
+use the target, because a second operator-facing spelling is how someone ends
+up running only half the preflight.
 
 ## Panel seats
 
