@@ -12,8 +12,9 @@
   [ADR 0008](0008-supported-platforms-and-rejected-targets.md) (supported
   platforms), which bounds the host platform this graph builds for
 - Scope: the eight Rust leaves behind the required `test-rust` context, the
-  eighteen execution-manifest surfaces they publish, one new Make target, and
-  one new side-by-side GitHub Actions workflow. Rust only.
+  eighteen execution-manifest surfaces they publish, the new local Make entry
+  points in section 8, and one new side-by-side GitHub Actions workflow. Rust
+  only.
 - Non-scope: Bazel-to-Nix packaging, `nix` package overrides, flake and
   `nix-unit` check migration, VM and image work, release-artifact migration,
   static guest binaries, and cross-compilation. Section 1 lists these as
@@ -604,9 +605,14 @@ committed comment demands.
 
 `make test-rust` is unchanged and stays authoritative. `make test-bazel-rust`
 is added as a peer, plus four slice targets `make test-bazel-rust-main`,
-`-api`, `-broker` and `-aux`. All five are added to `APPROVED_MAKE_TARGETS` in
-`packages/xtask/tests/policy_ci.rs` in the same change, because that list is a
-closed set and a workflow calling an unlisted target fails the policy test.
+`-api`, `-broker` and `-aux`, plus `make bazel-shutdown`, the dedicated
+server-shutdown target that section 11's stuck-server remedy names. All six
+are added to `APPROVED_MAKE_TARGETS` in `packages/xtask/tests/policy_ci.rs` in
+the same change, because that list is a closed set and a workflow calling an
+unlisted target fails the policy test. `make bazel-shutdown` issues
+`bazel shutdown` with the same startup options every other target uses and
+does nothing else; it deletes nothing, which is what makes it safe to run
+while a cleanup refusal or a stuck server is still unresolved.
 
 Locally, `make test-bazel-rust` is one Bazel invocation over the whole Rust
 suite. There is one machine and one cache; splitting it would only defeat the
@@ -654,26 +660,51 @@ repository/download cache. Each is bounded and each is reclaimable.
   resolution can invalidate is not a check. Deletion is instead performed by
   repository-owned cleanup plumbing that resolves once and never returns to
   string path resolution afterwards. It opens the worktree scratch anchor
-  `<worktree>/.scratch/` exactly once and holds that descriptor for the whole
-  operation; it resolves the Bazel subtree beneath that anchor
-  descriptor-relative, refusing any symlink or magic link at any component
-  and refusing any escape above the anchor (`openat2` with
-  `RESOLVE_BENEATH|RESOLVE_NO_SYMLINKS|RESOLVE_NO_MAGICLINKS`, or the
-  equivalent component-by-component `openat` fd-walk with
+  `<worktree>/.scratch/` exactly once, with `O_PATH|O_DIRECTORY|O_CLOEXEC`,
+  and holds that descriptor for the whole operation; it resolves the Bazel
+  subtree `.scratch/bazel/` beneath that anchor descriptor-relative, refusing
+  any symlink or magic link at any component and refusing any escape above the
+  anchor (`openat2` with
+  `RESOLVE_BENEATH|RESOLVE_NO_SYMLINKS|RESOLVE_NO_MAGICLINKS` and
+  `O_PATH|O_DIRECTORY|O_CLOEXEC` in the `open_how` flags, or the equivalent
+  component-by-component `openat` fd-walk with
   `O_PATH|O_DIRECTORY|O_NOFOLLOW|O_CLOEXEC` and a per-descriptor type check
   where that syscall is unavailable); and it removes entries with `unlinkat`
   relative to the directory descriptor that enumerated them, never by
-  reconstructing a path string. This is the idiom already committed in
-  `tests/tools/execution-manifest.pl`, whose policy test in
-  `packages/d2b-contract-tests/tests/policy_docs.rs` requires the `openat` and
-  `unlinkat` markers and forbids path-based recursive cleanup outright, so
+  reconstructing a path string. `O_CLOEXEC` is explicit on every descriptor
+  the cleanup path opens, on the `openat2` route exactly as on the fallback:
+  the anchor, every traversal descriptor, and the
+  `O_DIRECTORY|O_RDONLY|O_CLOEXEC` descriptor that each directory is reopened
+  as for enumeration, which an `O_PATH` descriptor cannot serve. No cleanup
+  descriptor is inherited across an exec, so nothing this path spawns - the
+  `git ls-files` probe behind the tracked-file refusal, or anything else -
+  ever holds the anchor or a directory beneath it open. This is the idiom
+  already committed in `tests/tools/execution-manifest.pl`, whose policy test
+  in `packages/d2b-contract-tests/tests/policy_docs.rs` requires the `openat`
+  and `unlinkat` markers and forbids path-based recursive cleanup outright, so
   this is reuse of a proved mechanism rather than a new one. Two refusals
   from the earlier contract are preserved: the subtree must hold no
   git-tracked file (the `assert_removable` guard in
   `tests/tools/clean-worktree.sh`), and only the Bazel subtree beneath the
   anchor is ever a target, never the anchor itself and never anything above
-  it. A refused resolution names the requested path and deletes nothing; it
-  never widens. Nothing is deleted against a live server tree. This is local
+  it. A refused resolution deletes nothing and never widens, and it reports
+  without echoing anything that identifies the machine or the operator. The
+  message is a stable static error code plus a fixed sentence naming the class
+  of refusal - `D2B-BZLCLEAN-TRACKED` for a git-tracked file inside the
+  subtree, `D2B-BZLCLEAN-SYMLINK` for a symlinked or magic-link component,
+  `D2B-BZLCLEAN-ESCAPE` for a resolution that leaves the anchor,
+  `D2B-BZLCLEAN-LIVE` for a tree a server still owns - and nothing else. It
+  never prints the rejected absolute path, the worktree location, the output
+  base or its hash, a user identifier, a process identifier, or any opaque
+  handle, because a refusal gets pasted into issues and chat and those values
+  describe a person's machine rather than the defect. The remediation is
+  exact, repository-relative, and the same three steps under every code: run
+  `D2B_CLEAN_DRY_RUN=1 make clean` to see the sweep without removing anything,
+  correct the tracked or symlinked entries it reports under `.scratch/bazel/`,
+  then rerun `make clean`. That dry run is the sanctioned place for local
+  paths to appear, because it runs on the operator's own machine at their
+  request and writes to their terminal rather than into a shared log. Nothing
+  is deleted against a live server tree. This is local
   developer disk reclamation, running as the invoking user inside a
   gitignored directory it already owns: it is deliberately not a privileged
   operation, not a broker op, and not a new host mutation surface.
@@ -935,20 +966,40 @@ contributor is left to guess. The enforcement is in band and actionable.
   beside it only for the human-readable report. It exports through
   `$GITHUB_ENV` exactly one control, and that control is an **absolute
   deadline** in the same boot-relative `/proc/uptime` domain, computed as
-  `anchor + ceiling - checkout allowance`. It is a point in time, not a
-  duration, and no consumer may treat it as one.
+  `anchor + ceiling - checkout allowance`, where the anchor is necessarily
+  read after checkout has completed. It is a point in time, not a duration,
+  and no consumer may treat it as one. The next bullet writes the arithmetic
+  out, because that subtraction is correct only on the post-checkout reading
+  of the anchor and wrong on any other.
 - *Where the anchor can sit, measured.* The anchor cannot precede checkout.
   `tests/unit/meta/ci-coverage.sh` requires every `shell:` declaration in
   every workflow to be exactly `shell: sh tests/tools/ci-shell {0}`, and
   `tests/tools/ci-shell` is a repository file, so no `run:` step can execute
   before `actions/checkout` has placed it. The anchor is therefore the first
-  step after checkout, and the checkout step carries its own
-  `timeout-minutes: 2`. The deadline handed to Make is therefore the anchor
-  plus the ceiling minus that allowance, so the bounded checkout plus the
-  bounded remainder is provably at or under the ceiling, and the ceiling still
-  covers checkout, Nix and Bazel setup, fetch, analysis, build and tests.
-  Nothing is carved out; the only change is that one bounded segment is
-  bounded by its own step timeout.
+  step after checkout, forced there by the mandated workflow shell living in
+  the repository, and the checkout step carries its own `timeout-minutes: 2`.
+  The deadline consequently bounds the post-checkout window only. Written out
+  once for the 15-minute continuous-integration ceiling, so no reader can take
+  the anchor for a pre-checkout one:
+
+  ```text
+  anchor          = /proc/uptime, read in the first step after checkout
+  deadline        = anchor + (15 minutes - 2 minutes) = anchor + 13 minutes
+  checkout_actual <= 2 minutes    bounded by the checkout step timeout
+  post_checkout   <= 13 minutes   bounded by the deadline above
+  total job time  = checkout_actual + post_checkout <= 2 + 13 = 15 minutes
+  ```
+
+  Checkout is bounded once, by its own step timeout, and subtracted once, from
+  the window the anchor opens. It is not subtracted twice: the anchor never
+  covers checkout, so there is no second segment for the allowance to come out
+  of, and `checkout_actual` enters the total at its real value rather than at
+  a reduced one. The alternative reading, `deadline = anchor + ceiling`,
+  bounds the job at `checkout_actual + 15`, which is up to 17 minutes and
+  exceeds the ceiling; it is rejected. Nothing is carved out - the ceiling
+  still covers checkout, Nix and Bazel setup, fetch, analysis, build and tests
+  - and the only change is that one bounded segment is bounded by its own step
+  timeout.
 - *Handoff.* The approved Make target reads that **absolute deadline**, not a
   remaining duration. It validates the value the way `D2B_RUST_BUDGET` is
   validated: a positive integer, an actionable message on a bad value, and no
@@ -968,25 +1019,55 @@ contributor is left to guess. The enforcement is in band and actionable.
   unbounded, which is the local default; a structural assertion requires every
   Bazel Rust job in the promoted workflow to set it.
 - *Bounding.* The target bounds the Bazel invocation with that computed
-  remaining duration. On expiry the wrapper signals only its own direct child,
-  the Bazel client process it spawned, and that child's process group: SIGTERM,
-  then SIGKILL after a fixed grace, then reap. It owns that identity by the
-  parent-child relationship, so it cannot be aiming at a recycled process
-  identifier. It never reads a server PID file and never signals a server
-  process identifier, because that process is detached, is not this wrapper's
-  child, is not reaped by it, and its identifier may already have been reused
-  between the file being written and the signal being sent; signalling it is a
-  signal aimed at whatever now holds that number. Server termination is
+  remaining duration. The Bazel client is spawned into a **new dedicated
+  process group**, created between fork and exec by repository-owned Rust
+  plumbing (`Command::process_group(0)`, the idiom already committed in
+  `packages/d2b-exec-runner/src/service_mode.rs`) and never by a shell, a
+  `setsid` helper or any other external gate, which ADR 0017 forbids anyway.
+  The group identifier is then the child's own process identifier and the
+  wrapper is not a member of that group. Creating the group before exec is
+  precisely what makes group signalling safe: without it the child inherits
+  the wrapper's group, and signalling that group reaches the wrapper itself,
+  the Make process that invoked it, and whatever else shares the invoking
+  shell's job. On expiry the wrapper signals only that dedicated group -
+  SIGTERM, then SIGKILL after a fixed grace - and then reaps the direct child.
+  It signals only after establishing that the child is still live and
+  unreaped, checking the child before each signal and treating an
+  already-exited, already-reaped child as nothing left to signal; the group
+  identifier cannot be recycled while its unreaped leader still holds it,
+  which is the reuse argument the committed `signal_process_group` comment
+  records, and the wrapper stops signalling the instant it reaps. It never
+  signals its own process group, and never signals group zero or -1. It owns
+  the child identity by the parent-child relationship, so it cannot be aiming
+  at a recycled process identifier. It never reads a server PID file and never
+  signals a server process identifier, because that process is detached, is
+  not this wrapper's child, is not reaped by it, and its identifier may
+  already have been reused between the file being written and the signal being
+  sent; signalling it is a signal aimed at whatever now holds that number.
+  Server termination is
   requested only after the client is reaped, and only through `bazel shutdown`
   with the same startup options, which is the interface that owns server
   identity. That shutdown carries its own short bound; if it does not complete
-  within that bound, the wrapper reports the stuck server and its output base
-  and fails, and does not escalate to a raw signal against a detached
-  identifier. The job-level `timeout-minutes` below stays the backstop for a
-  runner still stuck after all of that. In every path the target prints the
-  measured duration against the ceiling and the target that was executing, and
-  exits nonzero naming only the two pre-authorized remedies below. It never
-  prints "relax the ceiling", because that is not an available remedy.
+  within that bound the wrapper fails with the stable static code
+  `D2B-BZLSERVER-STUCK` and a fixed message, and does not escalate to a raw
+  signal against a detached identifier. That message carries no output base,
+  no output-base hash, no path, no user identifier and no process identifier.
+  It states that a Bazel server did not shut down within its bound and gives
+  two exact steps: close any other Bazel client running against this worktree,
+  then run `make bazel-shutdown`, which reissues the shutdown with the same
+  startup options and reports either success or the same code. While the
+  condition is unresolved the message forbids two things outright: deleting
+  `.scratch/bazel/`, because a live server still owns that tree, and
+  signalling any process identifier by hand, because the server is detached
+  and its identifier may already belong to something else. If
+  `make bazel-shutdown` does not clear it, the escalation is a bug report
+  carrying that code, not a manual kill. The job-level `timeout-minutes` below
+  stays the backstop for a runner still stuck after all of that. In every path
+  the target prints the measured duration against the ceiling and the target
+  that was executing - never the raw deadline value, an output base, a path or
+  a process identifier - and exits nonzero naming only the two pre-authorized
+  remedies below. It never prints "relax the ceiling", because that is not an
+  available remedy.
 - *Backstop.* The job keeps a `timeout-minutes` slightly above the ceiling,
   17 against a 15-minute ceiling with a 2-minute checkout allowance, purely so
   a dead runner is still reaped. The in-band deadline is the failure a
@@ -1332,22 +1413,40 @@ provides each binary.
 15. A missed performance ceiling blocks promotion or fails a job in band with
     the measured duration and the two authorized remedies. It never licenses
     reducing coverage, reclassifying an enforcing surface as advisory, or
-    relaxing the ceiling. The in-band bound is always a relative duration
-    derived from the exported absolute deadline at read time, never the
-    deadline itself, and the bounding wrapper signals only its own Bazel
-    client child and that child's process group, never a server process
-    identifier read from a file.
+    relaxing the ceiling. The exported control is the absolute deadline
+    `anchor + ceiling - checkout allowance` with the anchor taken after
+    checkout, so `checkout_actual + post_checkout` stays at or under the
+    ceiling. The in-band bound is always a relative duration derived from that
+    deadline at read time, never the deadline itself. The bounding wrapper
+    spawns its Bazel client into a dedicated process group created before
+    exec, signals only that group and only while the child is live and
+    unreaped, reaps the direct child, and never signals its own process group
+    or a server process identifier read from a file.
 16. Local Bazel state lives inside the worktree scratch tree, is size and age
     bounded, and is never deleted without first shutting the server down with
     the same startup options. Deletion is anchored on a descriptor for the
     worktree scratch tree, resolves the Bazel subtree beneath that descriptor
     with no symlink or magic-link traversal, unlinks descriptor-relative
     without returning to string path resolution, refuses any subtree holding a
-    git-tracked file, and reaches nothing but the Bazel subtree.
+    git-tracked file, and reaches nothing but the Bazel subtree. Every
+    descriptor the cleanup path opens is opened `O_CLOEXEC`, on the `openat2`
+    route as well as the fallback, so no cleanup descriptor is inherited
+    across an exec.
 17. The required continuous-integration context name `test-rust` does not
     change across promotion.
 18. `.github/workflows/pr-bazel-rust.yml` existing means promotion is
     incomplete.
+19. A cleanup refusal and a stuck Bazel server each fail with a stable static
+    error code and a fixed message that carries no absolute path, output base
+    or output-base hash, user identifier, process identifier, raw deadline
+    value, or opaque handle, and each names its exact repository-relative
+    recovery. A refusal directs the operator to
+    `D2B_CLEAN_DRY_RUN=1 make clean`, to correcting the tracked or symlinked
+    entries under `.scratch/bazel/`, and then to `make clean`. A stuck server
+    directs the operator to close other Bazel clients and run
+    `make bazel-shutdown`. Deleting `.scratch/bazel/` or signalling any
+    process identifier by hand while a shutdown is unresolved is never an
+    authorized remedy.
 
 ## References
 
