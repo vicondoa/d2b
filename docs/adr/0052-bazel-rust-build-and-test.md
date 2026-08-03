@@ -858,7 +858,12 @@ telemetry. A carrier whose tests pass but whose required structured result
 cannot be published fails rather than returning a success-shaped result with
 missing BEP evidence. When tests already failed, a JUnit publication failure
 preserves the test failure as the primary diagnosis and reports the publication
-failure as an additional bounded runner error.
+failure as an additional bounded runner error. Two injected outcome tests bind
+that ordering: one starts from an all-passing case set and forces publication
+failure, requiring a nonzero carrier result; the other starts from a planted
+test failure and forces publication failure, requiring the original test
+failure and exit classification to remain primary rather than being replaced
+by the exporter error.
 
 Doctests and `harness = false` companions keep their own targets and are not
 routed through the case runner: doctests expose no such listing interface, and
@@ -2421,7 +2426,9 @@ closed when any `.bazelrc` line or wrapper argument sets that flag.
    short-write and collision handling, sync-before-rename, close-on-exec,
    child-reap ordering, cleanup and atomic replacement. JUnit publication is
    enforcing evidence: inability to publish fails an otherwise passing
-   carrier, while an existing test failure remains the primary diagnosis.
+   carrier, while an existing test failure remains the primary diagnosis. Two
+   injected outcome cases prove both branches and reject a mutation that
+   returns success without evidence or overwrites the original test failure.
 6. Pull requests never publish a shared cache entry and never hold
    `actions: write`, and a structural policy test with committed negative and
    positive fixtures enforces both. Exactly one job writes, and only on a push
