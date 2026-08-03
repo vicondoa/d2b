@@ -850,7 +850,7 @@ fn rust_dag_orders_leaves_that_share_the_cargo_target_directory() {
 #[test]
 fn rust_dag_policy_rejects_a_missing_shared_target_edge_fixture() {
     let good = r#"
-test-rust: test-rust-leaf-api-surface test-rust-leaf-main-workspace test-rust-leaf-broker test-rust-leaf-guest-shell-runner test-rust-leaf-no-bash-ast test-rust-leaf-supply-chain
+test-rust: test-rust-leaf-api-surface test-rust-leaf-main-workspace test-rust-leaf-schema test-rust-leaf-inventory test-rust-leaf-fixture-contracts test-rust-leaf-broker test-rust-leaf-guest-shell-runner test-rust-leaf-no-bash-ast test-rust-leaf-supply-chain
 test-rust-leaf-api-surface:
 D2B_RUST_MAIN_PREREQS_aggregate := test-rust-leaf-schema
 D2B_RUST_MAIN_PREREQS_cold :=
