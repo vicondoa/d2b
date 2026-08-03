@@ -1497,8 +1497,10 @@ name = "d2b-resource-store-redb"
 version = "0.0.0-bootstrap"
 dependencies = [
  "d2b-audit",
+ "d2b-bus",
  "d2b-contracts",
  "d2b-controller-toolkit",
+ "d2b-resource-api",
  "d2b-resource-store",
  "d2b-telemetry",
  "redb",
