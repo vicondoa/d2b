@@ -6,6 +6,12 @@
 | Cross-referenced | `docs/specs/ADR-046-work-items.json`, `docs/specs/ADR-046-implementation-graph.json` |
 | Satisfies | FR-023 |
 | Status | Inventory of missing removal proofs; each gap assigned to the wave that removes its path |
+| Proofs supplied so far | W5 only, in [`removal-proof-w5.md`](./removal-proof-w5.md) |
+
+**This file is a census, not an evidence store.** It counts rows that lack a
+proof. When a wave supplies one, the proof itself lives in that wave's own
+record and this file records only the resulting change to the count. Section
+3.5 carries the W5 deltas.
 
 ## 1. Why this exists
 
@@ -91,7 +97,9 @@ Wave ownership is derived from the implementation graph's wave for the work item
 the row names. Where a row names no work item, the owner is
 `unassigned-needs-integrator`.
 
-### 3.1 `DELETE` rows lacking a removal proof - 11 rows
+### 3.1 `DELETE` rows lacking a removal proof - 10 rows
+
+Originally 11. Line 735 was retired as naming no path; see section 3.5.
 
 | Line | Path / symbol | Work item | Owning wave |
 | --- | --- | --- | --- |
@@ -104,10 +112,12 @@ the row names. Where a row names no work item, the owner is
 | 621 | `options-realms-workloads.nix` - `vmsRef` link to `d2b.vms.<vm>` | `ADR046-identities-002` | W0 - see note below |
 | 631 | `allocator-json.nix` | `ADR046-core-001` | W4 |
 | 654 | `/etc/d2b/allocator.json` generated artifact | none - artifact table carries no work-item column | unassigned-needs-integrator; same subject as line 631, so W4 is the natural owner if the integrator binds it |
-| 735 | `d2b userd *` CLI verb | `ADR046-primitives-003` | W2 |
+| 735 | `d2b userd *` CLI verb | `ADR046-primitives-003` | **retired - names no path; see 3.5** |
 | 750 | `/run/d2b/allocator.sock` | `ADR046-core-001` | W4 |
 
-### 3.2 `REPLACE` rows lacking a removal proof - 25 rows
+### 3.2 `REPLACE` rows lacking a removal proof - 23 rows
+
+Originally 25. Lines 479 and 527 were proved by W5; see section 3.5.
 
 | Line | Path / symbol | Work item | Owning wave |
 | --- | --- | --- | --- |
@@ -129,12 +139,12 @@ the row names. Where a row names no work item, the owner is
 | 462 | `StreamMux` | `ADR046-session-001` | W1 - see note below |
 | 476 | `d2b-provider-aca` - `AcaWorkloadProvider` + `GuestControlEndpointProvider` impl | `ADR046-session-001` | W1 - see note below |
 | 478 | `d2b-provider-relay` - `AzureRelayTransportProvider` | `ADR046-provider-001` | W3 |
-| 479 | `d2b-host-providers` | `ADR046-primitives-003` | W2 |
+| 479 | `d2b-host-providers` | `ADR046-primitives-003` | **proved by W5; see 3.5** |
 | 481 | `d2b-realm-codec-protobuf` | `ADR046-session-001` | W1 - see note below |
 | 500 | `TransportListener` impl (`d2b-realm-transport`) | `ADR046-provider-001` | W3 |
 | 501 | Other transport types (`d2b-realm-transport`) | `ADR046-session-001` | W1 - see note below |
 | 525 | `d2b-guestd` - PAM login, workload user exec, `ExecOp` handler | `ADR046-session-001` | W1 - see note below |
-| 527 | `d2b-userd` | `ADR046-primitives-003` | W2 |
+| 527 | `d2b-userd` | `ADR046-primitives-003` | **proved by W5; see 3.5** |
 | 570 | `GuestControlForwarder` | `ADR046-session-001` | W1 - see note below |
 
 ### 3.3 Rows whose owning wave is already delivered
@@ -165,19 +175,58 @@ when it is removed, and the wave performing that removal owns it.
 
 | Owner | Rows lacking a proof |
 | --- | --- |
-| W2 (`ADR046-primitives-002`, `ADR046-primitives-003`) | 6 |
+| W2 (`ADR046-primitives-002`, `ADR046-primitives-003`) | 3 |
 | W3 (`ADR046-provider-001`) | 11 |
 | W4 (`ADR046-core-001`) | 5 |
 | W1 (`ADR046-session-001`) - wave closed, needs rebinding | 12 |
 | W0 (`ADR046-identities-002`) - wave closed, needs rebinding | 1 |
 | unassigned-needs-integrator | 1 (line 654) |
-| **Total** | **36** |
+| **Total** | **33** |
 
-This table reconciles with section 3: 11 unproofed DELETE rows plus 25 unproofed
-REPLACE rows is 36, and 36 unproofed plus 12 proofed is the 48 rows scheduled
-for removal. An earlier revision of this table recorded W3 as 10 and W1 as 11,
-which summed to 37 rather than the 39 it claimed at the time; both counts are
-corrected here.
+This table reconciles with section 3: 10 unproofed DELETE rows plus 23
+unproofed REPLACE rows is 33, and 33 unproofed plus 12 previously proofed plus
+the 2 proofed by W5 plus the 1 retired row is the 48 rows scheduled for
+removal. An earlier revision of this table recorded W3 as 10 and W1 as 11,
+which summed to 37 rather than the 39 it claimed at the time; both counts were
+corrected. The W2 count fell from 6 to 3 and the total from 36 to 33 in the W5
+pass; section 3.5 shows the three rows that moved.
+
+### 3.5 Deltas from the W5 removals
+
+W5 removed three Rust crates. The evidence is in
+[`removal-proof-w5.md`](./removal-proof-w5.md); this section records only what
+that evidence does to the census.
+
+| Line | Row | Was | Now | Basis |
+| --- | --- | --- | --- | --- |
+| 479 | `d2b-host-providers` | REPLACE, no proof, owner W2 | proof recorded, performed by W5 | FR-060 binds the proof to the removing wave, not the wave the map names |
+| 527 | `d2b-userd` | REPLACE, no proof, owner W2 | proof recorded, performed by W5 | Same |
+| 735 | `d2b userd *` CLI verb | DELETE, no proof, owner W2 | **owes no proof** | The verb does not exist at the map's own baseline `b5ddbed6`, in the `d2b` CLI crate or in `docs/reference/cli-contract.md`, and no commit on this lineage ever added or removed it from `packages/d2b/src` |
+| 463, 480 | `d2b-daemon-access` | ADAPT - outside this census entirely | removed in W5, proof recorded | An ADAPT row schedules no removal, so the crate never appeared here. It was removed anyway. Disposition drift, raised not corrected |
+
+Three points that a later reader should not have to reconstruct.
+
+**Line 735 is retired, not waived.** FR-023 binds removals. A row scheduling
+the deletion of a surface that was never present schedules no removal, so there
+is nothing to prove. The row is a migration-map defect - a
+`production-reachable` classification against a verb absent from the CLI crate
+at the map's own baseline - and it is recorded rather than edited because the
+map is a member specification and editing it re-triggers Gate 0 under FR-056.
+
+**The `d2b-daemon-access` disposition is stale for the source path only.** Its
+ADAPT half completed: the adaptation landed under `ADR046-api-001`, which is
+`Merged`. The source crate was then an orphan and was deleted. The map cell
+should say the source is retired after adaptation; it does not. Same handling,
+same reason: raised under FR-046, not corrected inside a wave.
+
+**Two proved rows are not two closed migrations.** Both crates were unreachable
+when they were deleted, so their removal withdrew no operator-facing
+capability. The successors the map names for them - `Provider/system-core`,
+`Provider/runtime-cloud-hypervisor`, `Provider/display-wayland`, and the fixed
+user supervisor `Process` under `Provider/system-systemd` - do not exist. The
+trait-level rows at lines 456, 457 and 458 remain open against their own
+owners and are still counted above.
+
 
 ## 4. Item-level removal conditions are not per-path proofs
 
@@ -205,7 +254,15 @@ path-specific and executable - for example `ADR046-audio-001`'s
 "`d2b-core/src/audio_policy.rs` deleted when no `d2bd` caller references it;
 confirmed by `cargo check --no-default-features`" and `ADR046-activation-007`'s
 enumeration of the exact functions deleted from `packages/d2b/src/lib.rs`. That
-shape is the standard the 36 outstanding rows should be brought up to.
+shape is the standard the 33 outstanding rows should be brought up to, and it
+is the shape [`removal-proof-w5.md`](./removal-proof-w5.md) uses for the three
+paths W5 removed.
+
+Note also that `ADR046-api-001`'s `removalProof` cell above does not cover the
+`d2b-daemon-access` deletion. It reads "Old command/resource-equivalent paths
+removed only per integration wave", which is a sequencing precondition for the
+*command* paths that item replaces; it names no crate and no check. The crate's
+proof is in the W5 record, not in this field.
 
 ## 5. What each wave owes
 
@@ -219,3 +276,10 @@ For every row assigned to it above, a wave must, before removing the path:
 
 Rows marked `unassigned-needs-integrator`, and the closed-wave rows in section
 3.3, must be bound to an owning wave before the path they name is removed.
+
+W5 is the first wave to discharge this. Its three proofs are the worked example
+of clauses 1 through 3, including the two failure modes a later wave should
+expect: a reverse-dependency scan run at a commit where the crate had already
+left the workspace proves nothing, and a Cargo-only scan misses Nix, lock,
+fixture, golden and policy surfaces. See
+[`removal-proof-w5.md`](./removal-proof-w5.md) sections 2 and 5.
