@@ -54,6 +54,9 @@ pub const PROVIDER_RESOURCE_TYPE: &str = "Provider";
 /// Maximum bytes in one artifact identifier.
 pub const MAX_ARTIFACT_ID_BYTES: usize = 63;
 
+/// Maximum bytes in one component binary reference.
+pub const MAX_BINARY_REF_BYTES: usize = 64;
+
 /// Maximum bytes in one publisher identifier.
 pub const MAX_PUBLISHER_ID_BYTES: usize = 63;
 
@@ -219,6 +222,48 @@ redacted_debug!(ArtifactId);
 string_schema!(ArtifactId, 1, MAX_ARTIFACT_ID_BYTES);
 
 impl<'de> Deserialize<'de> for ArtifactId {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        Self::parse(String::deserialize(deserializer)?).map_err(serde::de::Error::custom)
+    }
+}
+
+/// A validated component binary name.
+///
+/// This is a distinct namespace from [`ArtifactId`] and component IDs even
+/// though the grammars currently overlap. A `BinaryRef` can only name one
+/// regular entry directly beneath an artifact's `bin/` directory.
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
+#[serde(transparent)]
+pub struct BinaryRef(String);
+
+impl BinaryRef {
+    /// Parse a `^[a-z][a-z0-9-]*$` binary reference.
+    pub fn parse(value: impl Into<String>) -> Result<Self, ProviderContractError> {
+        let value = value.into();
+        if value.is_empty() || value.len() > MAX_BINARY_REF_BYTES {
+            return Err(ProviderContractError::InvalidPrimitive);
+        }
+        let mut bytes = value.bytes();
+        let head_ok = matches!(bytes.next(), Some(b'a'..=b'z'));
+        let tail_ok =
+            bytes.all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-');
+        if head_ok && tail_ok {
+            Ok(Self(value))
+        } else {
+            Err(ProviderContractError::InvalidPrimitive)
+        }
+    }
+
+    /// Borrow the canonical binary name.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+redacted_debug!(BinaryRef);
+string_schema!(BinaryRef, 1, MAX_BINARY_REF_BYTES);
+
+impl<'de> Deserialize<'de> for BinaryRef {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         Self::parse(String::deserialize(deserializer)?).map_err(serde::de::Error::custom)
     }
@@ -1036,6 +1081,59 @@ pub struct DependencyDeclaration {
     pub required: bool,
 }
 
+/// How a Provider component is executed by the Zone runtime.
+///
+/// The flat `binaryRef` wire field is mapped to this enum exactly once at the
+/// deserialization boundary. Keeping the absent case named prevents callers
+/// from confusing an in-process bootstrap component with a launchable
+/// component whose reference was omitted.
+#[derive(Clone, PartialEq, Eq)]
+pub enum ComponentExecution {
+    /// Create a Process and launch `<out>/bin/<binary_ref>`.
+    Launchable { binary_ref: BinaryRef },
+    /// Run the component's handlers inside a fixed bootstrap process.
+    InProcessBootstrap,
+}
+
+impl ComponentExecution {
+    /// Return the binary reference for a launchable component.
+    pub const fn binary_ref(&self) -> Option<&BinaryRef> {
+        match self {
+            Self::Launchable { binary_ref } => Some(binary_ref),
+            Self::InProcessBootstrap => None,
+        }
+    }
+
+    /// Whether this component creates a Process of its own.
+    pub const fn is_launchable(&self) -> bool {
+        matches!(self, Self::Launchable { .. })
+    }
+}
+
+impl core::fmt::Debug for ComponentExecution {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::Launchable { .. } => f.write_str("ComponentExecution::Launchable(<redacted>)"),
+            Self::InProcessBootstrap => f.write_str("ComponentExecution::InProcessBootstrap"),
+        }
+    }
+}
+
+#[derive(Clone, Default, PartialEq, Eq, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ComponentExecutionWire {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    binary_ref: Option<BinaryRef>,
+}
+
+impl From<&ComponentExecution> for ComponentExecutionWire {
+    fn from(execution: &ComponentExecution) -> Self {
+        Self {
+            binary_ref: execution.binary_ref().cloned(),
+        }
+    }
+}
+
 /// One component descriptor from the signed manifest.
 ///
 /// Core ProviderDeployment creates every component's static Process from
@@ -1044,6 +1142,10 @@ pub struct DependencyDeclaration {
 #[derive(Clone, PartialEq, Eq, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ComponentDescriptor {
+    #[serde(flatten)]
+    execution_wire: ComponentExecutionWire,
+    #[serde(skip)]
+    execution: ComponentExecution,
     component_id: BoundedToken,
     component_type: ComponentType,
     exported_resource_types: BTreeSet<ResourceTypeName>,
@@ -1119,6 +1221,8 @@ impl ComponentDescriptor {
             ComponentType::Controller => {}
         }
         Ok(Self {
+            execution: ComponentExecution::InProcessBootstrap,
+            execution_wire: ComponentExecutionWire::default(),
             component_id,
             component_type,
             exported_resource_types,
@@ -1130,6 +1234,18 @@ impl ComponentDescriptor {
             declares_state_volume,
             state_namespaces: Vec::new(),
         })
+    }
+
+    /// Set the execution mode encoded by the signed descriptor.
+    pub fn with_execution(mut self, execution: ComponentExecution) -> Self {
+        self.execution_wire = ComponentExecutionWire::from(&execution);
+        self.execution = execution;
+        self
+    }
+
+    /// Return the component's launch mode.
+    pub const fn execution(&self) -> &ComponentExecution {
+        &self.execution
     }
 
     /// Add the signed state namespace declarations to this descriptor.
@@ -1225,6 +1341,8 @@ impl<'de> Deserialize<'de> for ComponentDescriptor {
         #[derive(Deserialize)]
         #[serde(rename_all = "camelCase", deny_unknown_fields)]
         struct Wire {
+            #[serde(default)]
+            binary_ref: Option<BinaryRef>,
             component_id: BoundedToken,
             component_type: ComponentType,
             #[serde(default)]
@@ -1242,6 +1360,10 @@ impl<'de> Deserialize<'de> for ComponentDescriptor {
             state_namespaces: Vec<ComponentStateNamespace>,
         }
         let wire = Wire::deserialize(deserializer)?;
+        let execution = match wire.binary_ref {
+            Some(binary_ref) => ComponentExecution::Launchable { binary_ref },
+            None => ComponentExecution::InProcessBootstrap,
+        };
         if wire.declares_state_volume == wire.state_namespaces.is_empty() {
             let error = if wire.declares_state_volume {
                 ProviderContractError::MissingRequiredField
@@ -1261,6 +1383,7 @@ impl<'de> Deserialize<'de> for ComponentDescriptor {
             wire.dependencies,
             false,
         )
+        .map(|descriptor| descriptor.with_execution(execution))
         .and_then(|descriptor| descriptor.with_state_namespaces(wire.state_namespaces))
         .map_err(serde::de::Error::custom)
     }
@@ -2429,6 +2552,46 @@ mod tests {
         let parsed: ComponentDescriptor = serde_json::from_slice(&bytes).unwrap();
         assert!(parsed.state_namespaces().is_empty());
         assert!(!parsed.declares_state_volume());
+        assert_eq!(parsed.execution(), &ComponentExecution::InProcessBootstrap);
+    }
+
+    #[test]
+    fn binary_ref_is_validated_and_flat_wire_execution_round_trips() {
+        let descriptor = controller().with_execution(ComponentExecution::Launchable {
+            binary_ref: BinaryRef::parse("d2b-provider-controller").unwrap(),
+        });
+        let bytes = canonical_json_bytes(&descriptor).unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(value["binaryRef"], "d2b-provider-controller");
+        assert!(!value.as_object().unwrap().contains_key("execution"));
+        let parsed: ComponentDescriptor = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(parsed, descriptor);
+        assert_eq!(canonical_json_bytes(&parsed).unwrap(), bytes);
+        assert_eq!(
+            parsed.execution().binary_ref().unwrap().as_str(),
+            "d2b-provider-controller"
+        );
+    }
+
+    #[test]
+    fn binary_ref_deserialization_rejects_untrusted_names() {
+        for value in [
+            "",
+            "Provider",
+            "D2B-provider",
+            "-provider",
+            "provider/name",
+            "provider.name",
+            "provider name",
+            &"a".repeat(MAX_BINARY_REF_BYTES + 1),
+        ] {
+            assert!(
+                serde_json::from_value::<BinaryRef>(serde_json::json!(value)).is_err(),
+                "accepted invalid binary ref {value:?}"
+            );
+        }
+        assert!(BinaryRef::parse("a").is_ok());
+        assert!(BinaryRef::parse(&"a".repeat(MAX_BINARY_REF_BYTES)).is_ok());
     }
 
     #[test]
