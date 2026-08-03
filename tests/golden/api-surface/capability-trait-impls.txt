@@ -33,6 +33,7 @@ d2b_bus::d2b_bus::router::BusIngress	struct	core::core::fmt::Debug	trait	impl co
 d2b_bus::d2b_bus::router::BusIngress	struct	core::core::ops::drop::Drop	trait	impl core::ops::drop::Drop for d2b_bus::router::BusIngress
 d2b_bus::d2b_bus::router::BusStream	struct	core::core::fmt::Debug	trait	impl core::fmt::Debug for d2b_bus::router::BusStream
 d2b_bus::d2b_bus::router::BusStream	struct	core::core::ops::drop::Drop	trait	impl core::ops::drop::Drop for d2b_bus::router::BusStream
+d2b_bus::d2b_bus::router::BusStream	struct	d2b_resource_api::d2b_resource_api::watch::WatchSink	trait	impl d2b_resource_api::watch::WatchSink for d2b_bus::router::BusStream
 d2b_bus::d2b_bus::router::ComponentEndpoint	struct	d2b_bus::d2b_bus::registry::BusEndpoint	trait	private explicit impl d2b_bus::registry::BusEndpoint for d2b_bus::router::ComponentEndpoint negative=false generic-params=0 where-predicates=0
 d2b_bus::d2b_bus::router::ComponentSessionAdmission	struct	core::core::fmt::Debug	trait	impl core::fmt::Debug for d2b_bus::router::ComponentSessionAdmission
 d2b_bus::d2b_bus::router::ComponentSessionAdmission	struct	d2b_session::d2b_session::admission::SessionRegistrationCapability	trait	private explicit impl d2b_session::admission::SessionRegistrationCapability for d2b_bus::router::ComponentSessionAdmission negative=false generic-params=0 where-predicates=0
@@ -1519,12 +1520,34 @@ d2b_resource_api::d2b_resource_api::store::RedbBackend	struct	core::core::fmt::D
 d2b_resource_api::d2b_resource_api::store::RedbBackend	struct	d2b_resource_api::d2b_resource_api::store::ResourceStoreBackend	trait	impl d2b_resource_api::ResourceStoreBackend for d2b_resource_api::RedbBackend
 d2b_resource_api::d2b_resource_api::watch::ResourceWatch	struct	core::core::fmt::Debug	trait	impl core::fmt::Debug for d2b_resource_api::watch::ResourceWatch
 d2b_resource_api::d2b_resource_api::watch::ResourceWatch	struct	core::core::ops::drop::Drop	trait	impl core::ops::drop::Drop for d2b_resource_api::watch::ResourceWatch
+d2b_resource_api::d2b_resource_api::watch::WatchFrame	struct	core::core::clone::Clone	trait	impl core::clone::Clone for d2b_resource_api::watch::WatchFrame
+d2b_resource_api::d2b_resource_api::watch::WatchFrame	struct	core::core::cmp::Eq	trait	impl core::cmp::Eq for d2b_resource_api::watch::WatchFrame
+d2b_resource_api::d2b_resource_api::watch::WatchFrame	struct	core::core::cmp::PartialEq	trait	impl core::cmp::PartialEq for d2b_resource_api::watch::WatchFrame
+d2b_resource_api::d2b_resource_api::watch::WatchFrame	struct	core::core::fmt::Debug	trait	impl core::fmt::Debug for d2b_resource_api::watch::WatchFrame
+d2b_resource_api::d2b_resource_api::watch::WatchFrame	struct	core::core::marker::StructuralPartialEq	trait	impl core::marker::StructuralPartialEq for d2b_resource_api::watch::WatchFrame
+d2b_resource_api::d2b_resource_api::watch::WatchOwnerHint	struct	core::core::clone::Clone	trait	impl core::clone::Clone for d2b_resource_api::watch::WatchOwnerHint
+d2b_resource_api::d2b_resource_api::watch::WatchOwnerHint	struct	core::core::cmp::Eq	trait	impl core::cmp::Eq for d2b_resource_api::watch::WatchOwnerHint
+d2b_resource_api::d2b_resource_api::watch::WatchOwnerHint	struct	core::core::cmp::PartialEq	trait	impl core::cmp::PartialEq for d2b_resource_api::watch::WatchOwnerHint
+d2b_resource_api::d2b_resource_api::watch::WatchOwnerHint	struct	core::core::fmt::Debug	trait	impl core::fmt::Debug for d2b_resource_api::watch::WatchOwnerHint
+d2b_resource_api::d2b_resource_api::watch::WatchOwnerHint	struct	core::core::marker::StructuralPartialEq	trait	impl core::marker::StructuralPartialEq for d2b_resource_api::watch::WatchOwnerHint
 d2b_resource_api::d2b_resource_api::watch::WatchService	struct	core::core::fmt::Debug	trait	impl core::fmt::Debug for d2b_resource_api::watch::WatchService
 d2b_resource_api::d2b_resource_api::zone_service::ZoneCallContext	struct	core::core::clone::Clone	trait	impl core::clone::Clone for d2b_resource_api::zone_service::ZoneCallContext
 d2b_resource_api::d2b_resource_api::zone_service::ZoneCallContext	struct	core::core::cmp::Eq	trait	impl core::cmp::Eq for d2b_resource_api::zone_service::ZoneCallContext
 d2b_resource_api::d2b_resource_api::zone_service::ZoneCallContext	struct	core::core::cmp::PartialEq	trait	impl core::cmp::PartialEq for d2b_resource_api::zone_service::ZoneCallContext
 d2b_resource_api::d2b_resource_api::zone_service::ZoneCallContext	struct	core::core::fmt::Debug	trait	impl core::fmt::Debug for d2b_resource_api::zone_service::ZoneCallContext
 d2b_resource_api::d2b_resource_api::zone_service::ZoneCallContext	struct	core::core::marker::StructuralPartialEq	trait	impl core::marker::StructuralPartialEq for d2b_resource_api::zone_service::ZoneCallContext
+d2b_resource_client::d2b_resource_client::process_attach::ProcessAttachOpenRequest	struct	core::core::clone::Clone	trait	impl core::clone::Clone for d2b_resource_client::ProcessAttachOpenRequest
+d2b_resource_client::d2b_resource_client::process_attach::ProcessAttachOpenRequest	struct	core::core::cmp::Eq	trait	impl core::cmp::Eq for d2b_resource_client::ProcessAttachOpenRequest
+d2b_resource_client::d2b_resource_client::process_attach::ProcessAttachOpenRequest	struct	core::core::cmp::PartialEq	trait	impl core::cmp::PartialEq for d2b_resource_client::ProcessAttachOpenRequest
+d2b_resource_client::d2b_resource_client::process_attach::ProcessAttachOpenRequest	struct	core::core::fmt::Debug	trait	impl core::fmt::Debug for d2b_resource_client::ProcessAttachOpenRequest
+d2b_resource_client::d2b_resource_client::process_attach::ProcessAttachOpenRequest	struct	core::core::marker::StructuralPartialEq	trait	impl core::marker::StructuralPartialEq for d2b_resource_client::ProcessAttachOpenRequest
+d2b_resource_client::d2b_resource_client::process_attach::ProcessAttachStream	struct	core::core::fmt::Debug	trait	impl<S> core::fmt::Debug for d2b_resource_client::ProcessAttachStream<S>
+d2b_resource_client::d2b_resource_client::process_attach::ProcessAttachStream	struct	core::core::ops::drop::Drop	trait	impl<S> core::ops::drop::Drop for d2b_resource_client::ProcessAttachStream<S>
+d2b_resource_client::d2b_resource_client::process_attach::ProcessAttachTarget	enum	core::core::clone::Clone	trait	impl core::clone::Clone for d2b_resource_client::ProcessAttachTarget
+d2b_resource_client::d2b_resource_client::process_attach::ProcessAttachTarget	enum	core::core::cmp::Eq	trait	impl core::cmp::Eq for d2b_resource_client::ProcessAttachTarget
+d2b_resource_client::d2b_resource_client::process_attach::ProcessAttachTarget	enum	core::core::cmp::PartialEq	trait	impl core::cmp::PartialEq for d2b_resource_client::ProcessAttachTarget
+d2b_resource_client::d2b_resource_client::process_attach::ProcessAttachTarget	enum	core::core::fmt::Debug	trait	impl core::fmt::Debug for d2b_resource_client::ProcessAttachTarget
+d2b_resource_client::d2b_resource_client::process_attach::ProcessAttachTarget	enum	core::core::marker::StructuralPartialEq	trait	impl core::marker::StructuralPartialEq for d2b_resource_client::ProcessAttachTarget
 d2b_resource_client::d2b_resource_client::target::ResolvedTarget	struct	core::core::clone::Clone	trait	impl core::clone::Clone for d2b_resource_client::ResolvedTarget
 d2b_resource_client::d2b_resource_client::target::ResolvedTarget	struct	core::core::cmp::Eq	trait	impl core::cmp::Eq for d2b_resource_client::ResolvedTarget
 d2b_resource_client::d2b_resource_client::target::ResolvedTarget	struct	core::core::cmp::PartialEq	trait	impl core::cmp::PartialEq for d2b_resource_client::ResolvedTarget
@@ -1694,3 +1717,28 @@ d2b_zone_routing::d2b_zone_routing::router::DurableExecTable	struct	core::core::
 d2b_zone_routing::d2b_zone_routing::router::DurableExecTable	struct	core::core::fmt::Debug	trait	impl core::fmt::Debug for d2b_zone_routing::router::DurableExecTable
 d2b_zone_routing::d2b_zone_routing::router::ZoneOperationRouter	struct	core::core::default::Default	trait	impl core::default::Default for d2b_zone_routing::router::ZoneOperationRouter
 d2b_zone_routing::d2b_zone_routing::router::ZoneOperationRouter	struct	core::core::fmt::Debug	trait	impl core::fmt::Debug for d2b_zone_routing::router::ZoneOperationRouter
+d2bd::d2bd::BrokerPerEnvUsbipdSpawner	struct	d2bd::d2bd::usbipd_perenv_autostart::PerEnvUsbipdSpawner	trait	private explicit impl d2bd::usbipd_perenv_autostart::PerEnvUsbipdSpawner for d2bd::BrokerPerEnvUsbipdSpawner negative=false generic-params=0 where-predicates=0
+d2bd::d2bd::BrokerPidfdOpener	struct	d2bd::d2bd::supervisor::state::PidfdOpener	trait	private explicit impl d2bd::supervisor::state::PidfdOpener for d2bd::BrokerPidfdOpener negative=false generic-params=0 where-predicates=0
+d2bd::d2bd::BrokerVmStarter	struct	d2bd::d2bd::autostart::VmStarter	trait	private explicit impl d2bd::autostart::VmStarter for d2bd::BrokerVmStarter negative=false generic-params=0 where-predicates=0
+d2bd::d2bd::DaemonProviderLifecycleEffect	struct	d2bd::d2bd::provider_effects::ProviderLifecycleEffectPort	trait	private explicit impl d2bd::provider_effects::ProviderLifecycleEffectPort for d2bd::DaemonProviderLifecycleEffect negative=false generic-params=0 where-predicates=0
+d2bd::d2bd::DaemonRotateKnownHostBroker	struct	d2bd::d2bd::known_hosts_refresh::RotateKnownHostBroker	trait	private explicit impl d2bd::known_hosts_refresh::RotateKnownHostBroker for d2bd::DaemonRotateKnownHostBroker negative=false generic-params=0 where-predicates=0
+d2bd::d2bd::DaemonUsbipStartReconcileExecutor	struct	d2bd::d2bd::usbip_reconcile_state::UsbipVmStartReconcileExecutor	trait	private explicit impl d2bd::usbip_reconcile_state::UsbipVmStartReconcileExecutor for d2bd::DaemonUsbipStartReconcileExecutor negative=false generic-params=0 where-predicates=0
+d2bd::d2bd::DaemonUsbipStopCleanupExecutor	struct	d2bd::d2bd::usbip_reconcile_state::UsbipVmStopCarrierCleanup	trait	private explicit impl d2bd::usbip_reconcile_state::UsbipVmStopCarrierCleanup for d2bd::DaemonUsbipStopCleanupExecutor negative=false generic-params=0 where-predicates=0
+d2bd::d2bd::ServerState	struct	core::core::clone::Clone	trait	private explicit impl core::clone::Clone for d2bd::ServerState negative=false generic-params=0 where-predicates=0
+d2bd::d2bd::ServerState	struct	core::core::fmt::Debug	trait	private explicit impl core::fmt::Debug for d2bd::ServerState negative=false generic-params=0 where-predicates=0
+d2bd::d2bd::VmStartRunner	struct	d2bd::d2bd::supervisor::dag::NodeRunner	trait	private explicit impl d2bd::supervisor::dag::NodeRunner for d2bd::VmStartRunner negative=false generic-params=0 where-predicates=0
+d2bd::d2bd::provider_effects::GuestLifecycleRequest	struct	core::core::clone::Clone	trait	impl core::clone::Clone for d2bd::provider_effects::GuestLifecycleRequest
+d2bd::d2bd::provider_effects::GuestLifecycleRequest	struct	core::core::cmp::Eq	trait	impl core::cmp::Eq for d2bd::provider_effects::GuestLifecycleRequest
+d2bd::d2bd::provider_effects::GuestLifecycleRequest	struct	core::core::cmp::PartialEq	trait	impl core::cmp::PartialEq for d2bd::provider_effects::GuestLifecycleRequest
+d2bd::d2bd::provider_effects::GuestLifecycleRequest	struct	core::core::fmt::Debug	trait	impl core::fmt::Debug for d2bd::provider_effects::GuestLifecycleRequest
+d2bd::d2bd::provider_effects::GuestLifecycleRequest	struct	core::core::marker::StructuralPartialEq	trait	impl core::marker::StructuralPartialEq for d2bd::provider_effects::GuestLifecycleRequest
+d2bd::d2bd::provider_effects::ProviderLifecycleDispatch	struct	core::core::fmt::Debug	trait	impl core::fmt::Debug for d2bd::provider_effects::ProviderLifecycleDispatch
+d2bd::d2bd::provider_registry::ActiveProviderRuntime	struct	core::core::fmt::Debug	trait	private explicit impl core::fmt::Debug for d2bd::provider_registry::ActiveProviderRuntime negative=false generic-params=0 where-predicates=0
+d2bd::d2bd::provider_registry::ProviderBinding	struct	core::core::clone::Clone	trait	impl core::clone::Clone for d2bd::provider_registry::ProviderBinding
+d2bd::d2bd::provider_registry::ProviderBinding	struct	core::core::cmp::Eq	trait	impl core::cmp::Eq for d2bd::provider_registry::ProviderBinding
+d2bd::d2bd::provider_registry::ProviderBinding	struct	core::core::cmp::PartialEq	trait	impl core::cmp::PartialEq for d2bd::provider_registry::ProviderBinding
+d2bd::d2bd::provider_registry::ProviderBinding	struct	core::core::fmt::Debug	trait	impl core::fmt::Debug for d2bd::provider_registry::ProviderBinding
+d2bd::d2bd::provider_registry::ProviderBinding	struct	core::core::marker::StructuralPartialEq	trait	impl core::marker::StructuralPartialEq for d2bd::provider_registry::ProviderBinding
+d2bd::d2bd::provider_registry::ProviderRuntime	struct	core::core::default::Default	trait	impl core::default::Default for d2bd::provider_registry::ProviderRuntime
+d2bd::d2bd::provider_registry::ProviderRuntime	struct	core::core::fmt::Debug	trait	impl core::fmt::Debug for d2bd::provider_registry::ProviderRuntime
+d2bd::d2bd::provider_registry::ProviderRuntimeState	enum	core::core::fmt::Debug	trait	private explicit impl core::fmt::Debug for d2bd::provider_registry::ProviderRuntimeState negative=false generic-params=0 where-predicates=0

@@ -1252,6 +1252,7 @@ impl d2b_bus::zone_route::RequestFingerprint
 impl d2b_bus::zone_route::ZoneLinkDedupNamespace
 impl d2b_bus::zone_route::ZoneLinkIdempotencyKey
 impl d2b_bus::zone_route::ZoneRouteQuery
+impl d2b_resource_api::watch::WatchSink for d2b_bus::router::BusStream
 impl<'a> core::marker::Freeze for d2b_bus::audit::BusAuditWriter<'a>
 impl<'a> core::marker::Freeze for d2b_bus::relay::RelayHopRequest<'a>
 impl<'a> core::marker::Send for d2b_bus::audit::BusAuditWriter<'a>
@@ -3702,6 +3703,7 @@ pub fn d2b_bus::router::BusStream::fmt(&self, &mut core::fmt::Formatter<'_>) -> 
 pub fn d2b_bus::router::BusStream::from(T) -> T
 pub fn d2b_bus::router::BusStream::into(self) -> U
 pub fn d2b_bus::router::BusStream::name(&self) -> &d2b_bus::streams::StreamName
+pub fn d2b_bus::router::BusStream::send(&self, d2b_resource_api::watch::WatchFrame) -> impl core::future::future::Future<Output = core::result::Result<(), d2b_resource_api::watch::WatchSinkError>> + core::marker::Send
 pub fn d2b_bus::router::BusStream::try_from(U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
 pub fn d2b_bus::router::BusStream::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
 pub fn d2b_bus::router::BusStream::type_id(&self) -> core::any::TypeId
