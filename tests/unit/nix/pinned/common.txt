@@ -617,6 +617,7 @@ principal-uid-collision/principal-count
 provider-catalog/empty-by-default
 provider-catalog/entry-fields-are-the-frozen-set
 provider-catalog/excluded-mechanisms-recorded
+provider-catalog/framed-digest-separates-domain-and-payload-boundaries
 provider-catalog/inexact-digest-rejected
 provider-catalog/missing-field-rejected
 provider-catalog/order-independent
