@@ -18,6 +18,7 @@ pub mod controllers;
 pub mod coordinator;
 pub mod dependencies;
 pub mod export_import;
+pub mod export_import_projection;
 pub mod hints;
 pub mod main;
 pub mod metrics;
@@ -44,6 +45,11 @@ pub use dependencies::{DependencyError, DependencyIndex, DependencyTrigger, Upgr
 pub use export_import::{
     AdmittedExport, AdmittedImport, ExportImportError, ProjectionServiceIdentity,
     admit_binding_target, admit_export, admit_factory_pair, admit_import, projection_identity,
+};
+pub use export_import_projection::{
+    ProjectionAction, ProjectionController, ProjectionLeaseState, ProjectionLifecycleError,
+    ProjectionObservation, ProjectionPhase, ProjectionPlan, ProjectionRouteState,
+    ProjectionService, ProjectionServiceObservation,
 };
 pub use hints::{
     ChangeField, ChangeRecord, ControllerBinding, ControllerHint, ControllerLeaseKey,
