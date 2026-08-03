@@ -271,6 +271,24 @@ def source_near(source: str, needle: str, radius: int = 1200) -> str:
     return source[max(0, index - radius) : index + radius]
 
 
+def workflow_job_block(workflow: str, job_id: str) -> str:
+    """Return one generated job without depending on its neighboring jobs."""
+    match = re.search(rf"(?m)^  {re.escape(job_id)}:\n", workflow)
+    if match is None:
+        raise AssertionError(f"generated workflow job {job_id!r} is missing")
+    remainder = workflow[match.end() :]
+    next_job = re.search(r"(?m)^  [A-Za-z0-9_-]+:\n", remainder)
+    end = match.end() + (next_job.start() if next_job else len(remainder))
+    return workflow[match.start() : end]
+
+
+def executable_shell_source(source: str) -> str:
+    """Drop full-line shell comments before checking executable contracts."""
+    return "\n".join(
+        line for line in source.splitlines() if not line.lstrip().startswith("#")
+    )
+
+
 def load_layer1_jobs() -> types.ModuleType:
     spec = importlib.util.spec_from_file_location("d2b_layer1_jobs", LAYER1_JOBS)
     if spec is None or spec.loader is None:
@@ -525,86 +543,108 @@ set -euo pipefail
 
     def test_fixture_lane_owns_the_only_bounded_nix_store_cache(self) -> None:
         workflow = load_layer1_jobs().render_workflow(load_layer1_jobs().load_manifest())
-        fixture_job = workflow.split("  test-fixture-contracts:", 1)[1].split("\n  test-proofs:", 1)[0]
-        nix_unit_job = workflow.split("  nix-unit-shards:", 1)[1].split("\n  test-nix-unit:", 1)[0]
+        fixture_job = workflow_job_block(workflow, "test-fixture-contracts")
+        nix_unit_job = workflow_job_block(workflow, "test-nix-unit")
         self.assertIn("Nix store cache", fixture_job)
         self.assertIn("gc-max-store-size-linux: 4G", fixture_job)
+        self.assertEqual(workflow.count("- name: Nix store cache"), 1)
         self.assertNotIn("Nix store cache", nix_unit_job)
         self.assertNotIn("nix-store --import", fixture_job)
 
-    def test_nix_unit_ci_uses_one_runner_per_discovered_shard(self) -> None:
+    def test_nix_unit_ci_is_one_enforcing_simple_job(self) -> None:
         layer1_jobs = load_layer1_jobs()
         manifest = layer1_jobs.load_manifest()
         workflow = layer1_jobs.render_workflow(manifest)
 
+        jobs = manifest["jobs"]
+        ci_jobs = manifest["ci"]["jobs"]
+        for obsolete in ("nix-unit-discover", "nix-unit-shards"):
+            self.assertNotIn(obsolete, jobs)
+            self.assertNotIn(obsolete, ci_jobs)
+
+        nix_unit = jobs["test-nix-unit"]
+        self.assertEqual(nix_unit["ciKind"], "simple-nix")
+        self.assertEqual(nix_unit["needs"], ["tier0"])
+        self.assertEqual(nix_unit["runsOn"], "ubuntu-latest")
+        self.assertGreaterEqual(nix_unit["timeoutMinutes"], 15)
+        self.assertNotEqual(nix_unit.get("enforcement"), "advisory")
+        self.assertEqual(ci_jobs.count("test-nix-unit"), 1)
+        self.assertEqual(manifest["ci"]["rollupNeeds"].count("test-nix-unit"), 1)
+
+        nix_unit_job = workflow_job_block(workflow, "test-nix-unit")
+        self.assertNotIn("strategy:", nix_unit_job)
+        self.assertNotIn("matrix:", nix_unit_job)
+        self.assertNotIn("D2B_NIX_UNIT_CHECK", nix_unit_job)
+        self.assertNotIn("D2B_NIX_UNIT_JOBS", nix_unit_job)
+        self.assertNotIn("Nix store cache", nix_unit_job)
         self.assertEqual(
-            manifest["jobs"]["test-nix-unit"]["needs"],
-            ["nix-unit-discover", "nix-unit-shards"],
+            re.findall(r"(?m)^\s+run:\s*(.+)$", nix_unit_job),
+            ["make test-nix-unit"],
         )
-        self.assertIn("matrix:", workflow)
-        self.assertIn(
-            "check: ${{ fromJSON(needs.nix-unit-discover.outputs.checks) }}",
-            workflow,
-        )
-        self.assertIn("D2B_NIX_UNIT_CHECK: ${{ matrix.check }}", workflow)
-        self.assertIn(
-            "checks: ${{ steps.list.outputs.nixunitchecks }}",
-            workflow,
-        )
-        self.assertEqual(manifest["jobs"]["nix-unit-shards"]["maxParallel"], 4)
-        self.assertIn("      max-parallel: 4", workflow)
-        self.assertIn('D2B_NIX_UNIT_JOBS: "1"', workflow)
-        self.assertIn("Every discovered Nix-unit shard passed.", workflow)
-        self.assertNotIn("run: make test-nix-unit\n\n  flake-eval-discover", workflow)
+        self.assertIn("cachix/install-nix-action@", nix_unit_job)
 
-    def test_nix_unit_driver_is_bounded_and_waits_every_discovered_check(self) -> None:
-        driver = source_text(NIX_UNIT_DRIVER)
+    def test_nix_unit_driver_uses_one_full_corpus_eval_jobs_path(self) -> None:
+        driver = executable_shell_source(source_text(NIX_UNIT_DRIVER))
+        flake = (ROOT / "flake.nix").read_text(encoding="utf-8")
 
-        self.assertIn("D2B_NIX_UNIT_CHECK", driver)
-        self.assertRegex(
-            driver,
-            r"(?is)(?:bound|ceiling|maximum|limit|workers?|cores?|jobs?).{0,500}"
-            r"(?:1|2|3|4|four|external|runner)",
+        runner_calls = list(
+            re.finditer(r"(?m)^\s*(?:if\s+)?nix-eval-jobs\b", driver)
         )
-        self.assertRegex(
-            driver,
-            r"(?is)(?:all|every|each|discovered|selected).{0,500}"
-            r"(?:check|shard).{0,500}(?:wait|result|failure|report)",
+        self.assertEqual(
+            len(runner_calls),
+            1,
+            "the aggregate must have one established nix-eval-jobs invocation",
         )
-        self.assertRegex(
-            driver,
-            r"(?is)(?:failures|failed_surfaces|failure_set).{0,500}"
-            r"(?:fail|report|summary|exit)",
+        invocation = re.sub(
+            r"\\\s*\n",
+            " ",
+            driver[runner_calls[0].start() :],
         )
+        self.assertIn("--no-instantiate", invocation)
+        self.assertRegex(
+            invocation,
+            r"--flake\s+[^\n]*nixUnitJobs[^\n]*"
+            r"--workers\s+[\"']?\$[A-Za-z_][A-Za-z0-9_]*[\"']?[^\n]*"
+            r"--max-memory-size\s+[\"']?\$[A-Za-z_][A-Za-z0-9_]*[\"']?",
+        )
+
+        jobs_match = re.search(r"(?m)^\s*nixUnitJobs\s*=", flake)
+        self.assertIsNotNone(jobs_match, "flake must expose the eval-jobs attrset")
+        assert jobs_match is not None
+        jobs_tail = flake[jobs_match.start() :]
+        jobs_block = jobs_tail
+        self.assertRegex(
+            jobs_block,
+            r"(?s)nixUnitCorpus\s*=\s*import\s+[^;]*eval-jobs\.nix",
+        )
+        self.assertIn("nixUnitCorpus.jobs", jobs_block)
+        self.assertIn("__nix_unit_integrity", jobs_block)
 
     def test_nix_unit_reports_all_failures_and_rejects_empty_discovery(self) -> None:
-        driver = source_text(NIX_UNIT_DRIVER)
+        driver = executable_shell_source(source_text(NIX_UNIT_DRIVER))
 
         # The aggregate must finish observing every selected check before it
         # decides the final status. A first-failure exit would hide siblings.
         self.assertRegex(
             driver,
-            r"(?is)(?:failure|failed).{0,260}"
-            r"(?:all|every|each|observed|captured).{0,260}"
-            r"(?:failure|check|shard)",
+            r"(?is)(?:mapfile|readarray|while\s+read).{0,300}"
+            r"(?:jq|json).{0,500}(?:error|failed)",
         )
         self.assertRegex(
             driver,
-            r"(?m)^\s*(?:failures|failed_surfaces|failure_set)"
-            r"\s*(?:\+=|=|\.append|push|add)",
+            r"(?is)(?:select|filter).{0,180}(?:\.error|error\?)",
         )
         self.assertRegex(
             driver,
-            r"(?is)(?:failures|failed_surfaces|failure_set).{0,500}"
-            r"(?:report|summary|fail|exit)",
+            r"(?is)(?:for|while).{0,120}(?:failure|failed).{0,300}"
+            r"(?:log|printf|echo|report)",
         )
-        self.assertIn('if [ "${#checks[@]}" -eq 0 ]; then', driver)
-        empty_region = driver.split(
-            'if [ "${#checks[@]}" -eq 0 ]; then',
-            1,
-        )[1].split("fi", 1)[0]
-        self.assertRegex(empty_region, r"(?i)(?:no|empty|zero)")
-        self.assertRegex(empty_region, r"(?m)\s+exit\s+1\b")
+        self.assertRegex(
+            driver,
+            r"(?is)(?:checks|discovered|jobs).{0,260}"
+            r"(?:-eq\s+0|==\s*0|length\s*[=!]=\s*0|empty).{0,260}"
+            r"(?:no|empty|zero|discovered).{0,260}(?:exit|return)\s+1\b",
+        )
 
     def test_nix_unit_invalidates_requested_manifest_before_nix_evaluation(self) -> None:
         driver = source_text(NIX_UNIT_DRIVER)
@@ -736,8 +776,8 @@ set -euo pipefail
                     msg="manifest lock diagnostics must remain path-free",
                 )
 
-    def test_nix_unit_retains_selector_empty_discovery_and_bounded_resources(self) -> None:
-        driver = source_text(NIX_UNIT_DRIVER)
+    def test_nix_unit_retains_selector_and_bounded_effective_resources(self) -> None:
+        driver = executable_shell_source(source_text(NIX_UNIT_DRIVER))
 
         self.assertIn("D2B_NIX_UNIT_CHECK", driver)
         self.assertRegex(
@@ -752,53 +792,66 @@ set -euo pipefail
             r"(?:unsafe|unknown|not a discovered|not found)",
         )
 
-        # Either a compatibility worker control remains, or the selected
-        # established runner exposes an explicit bounded worker/cores option.
-        bounded_control = re.search(
-            r"(?is)(?:D2B_NIX_UNIT_JOBS|--(?:workers?|max-jobs|cores)|"
-            r"\b(?:jobs|workers|cores)\b).{0,500}"
-            r"(?:bound|ceiling|max(?:imum)?|limit|1\|2|1\.\.4|four|4)",
+        # The selected evaluator owns concurrency. The shell only validates
+        # effective values and passes explicit worker and memory ceilings.
+        self.assertRegex(
             driver,
+            r"(?is)(?:workers?|worker_count).{0,500}"
+            r"(?:case|bound|ceiling|maximum|limit|between).{0,500}"
+            r"(?:1|4|integer)",
         )
-        self.assertIsNotNone(
-            bounded_control,
-            "Nix-unit concurrency must remain explicitly bounded",
+        self.assertRegex(
+            driver,
+            r"(?is)(?:memory|memory_mb|memory_size).{0,500}"
+            r"(?:minimum|maximum|bound|ceiling|limit|between).{0,500}"
+            r"(?:512|4096|8192|MiB|MB)",
+        )
+        self.assertRegex(
+            driver,
+            r"--workers\s+[\"']?\$[A-Za-z_][A-Za-z0-9_]*[\"']?",
+        )
+        self.assertRegex(
+            driver,
+            r"--max-memory-size\s+[\"']?\$[A-Za-z_][A-Za-z0-9_]*[\"']?",
+        )
+        self.assertRegex(
+            driver,
+            r"(?is)(?:log|echo|printf).{0,300}\$[A-Za-z_][A-Za-z0-9_]*"
+            r".{0,180}(?:worker|memory|MiB|MB)",
         )
 
     def test_nix_unit_handles_retired_worker_knobs_actionably(self) -> None:
-        driver = source_text(NIX_UNIT_DRIVER)
+        driver = executable_shell_source(source_text(NIX_UNIT_DRIVER))
         knob = "D2B_NIX_UNIT_JOBS"
+        self.assertIn(
+            knob,
+            driver,
+            "the retired variable needs an explicit migration diagnostic",
+        )
         retirement = re.search(
-            rf"(?is)(?:{re.escape(knob)}.{{0,300}}"
-            r"(?:retir|remov|deprecat|migration|no longer supported)|"
-            rf"(?:retir|remov|deprecat|migration|no longer supported).{{0,300}}"
-            rf"{re.escape(knob)})",
+            rf"(?is){re.escape(knob)}.{{0,700}}"
+            r"(?:retir|remov|deprecat|migration|no longer supported|unsupported)",
             driver,
         )
-        if retirement is not None:
-            region = driver[
-                max(0, retirement.start() - 500) : retirement.end() + 500
-            ]
-            self.assertRegex(region, r"(?m)\b(?:exit|return)\s+2\b")
-            self.assertRegex(
-                region,
-                r"(?i)(?:migration|replace|use|supported|instead|control)",
-            )
-            return
-
-        # Keeping the knob is permitted only as a validated compatibility
-        # control. An implementation that removes it must take the branch
-        # above rather than silently ignoring an operator's setting.
-        self.assertIn(knob, driver)
-        compatibility = source_text(NIX_UNIT_DRIVER)
+        self.assertIsNotNone(
+            retirement,
+            "D2B_NIX_UNIT_JOBS must be rejected, not used as a compatibility alias",
+        )
+        assert retirement is not None
+        region = driver[max(0, retirement.start() - 500) : retirement.end() + 500]
+        self.assertRegex(region, r"(?m)\b(?:exit|return)\s+2\b")
         self.assertRegex(
-            compatibility,
-            rf"(?is){re.escape(knob)}.{{0,500}}"
-            r"(?:positive|integer|bound|ceiling|max|1\|2|1\.\.4|four|4)",
+            region,
+            r"(?i)(?:migration|replace|use|supported|instead|control)",
+        )
+        self.assertNotRegex(
+            driver,
+            rf"\$\{{[^}}\n]*{re.escape(knob)}[^}}\n]*:-",
+            "the retired variable must not remain a worker fallback",
         )
 
     def test_nix_unit_does_not_add_a_repository_specific_scheduler(self) -> None:
-        driver = source_text(NIX_UNIT_DRIVER)
+        driver = executable_shell_source(source_text(NIX_UNIT_DRIVER))
         for marker in (
             "declare -a pids",
             "launch_check()",
@@ -813,6 +866,11 @@ set -euo pipefail
                 driver,
                 msg=f"repository-specific Nix scheduler marker remains: {marker}",
             )
+        self.assertNotRegex(
+            driver,
+            r"(?m)^\s*(?:[A-Za-z_][A-Za-z0-9_]*\s*=\s*)?[^#\n]*&\s*$",
+            "the Nix-unit driver must not launch a shell worker pool",
+        )
         self.assertRegex(
             driver,
             r"(?i)(?:nix-unit|lix-unit|nix-eval-jobs|"
@@ -910,9 +968,9 @@ set -euo pipefail
         for raw in ('is not a quoted name: $token', '[A-Za-z0-9._-]: $name'):
             self.assertNotIn(raw, partition)
 
-        # Both discovery jobs read the same partition, so the names dropped
-        # from the eval matrix are exactly the names the Nix-unit lane runs.
-        self.assertEqual(workflow.count("partition=$(make -s test-flake-partition)"), 2)
+        # The remaining flake discovery job is the single source for both
+        # matrix classes. Nix-unit no longer consumes a partitioned selector.
+        self.assertEqual(workflow.count("partition=$(make -s test-flake-partition)"), 1)
 
     def test_disk_reclaim_is_conditional_but_still_fails_safe(self) -> None:
         workflow = load_layer1_jobs().render_workflow(load_layer1_jobs().load_manifest())
