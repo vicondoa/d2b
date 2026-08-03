@@ -444,9 +444,3 @@ The honest MVP is therefore complete W1, not any single user story: US1 delivers
 - `[P]` never permits shared-file editing. The integrator owns shared contracts, generated reconciliation, workflow generation, and the W6 and W7 rebases for the shared `packages/xtask/src/delivery/eligibility.rs` and `specs/003-adr052-bazel-rust/evidence/post-promotion.json` paths.
 - No literal census belongs in an implementation. Every census is a generator output that `test-drift` ties to the repository, and a hand-written count is a defect wherever a derivation exists.
 - Existing committed passing code wins over prose. Record any discovered drift in the implementation PR body or the plan's Spec Corrections table; never silently realign code to stale prose.
-
-
-
-
-
-
