@@ -1,33 +1,47 @@
-//! Zone-scoped Provider lifecycle effect dispatch.
+//! Descriptor-bound Provider lifecycle effects.
 //!
-//! Requests are addressed by `Zone/<zone>` plus `Guest/<name>` and are
-//! deduplicated by an opaque idempotency key. The actual start/stop effect is
-//! supplied by a descriptor-bound broker adapter; this planner never opens a
-//! socket or mutates host state.
+//! The daemon owns the lifecycle dispatcher, but it does not own a second
+//! broker protocol.  A caller supplies a typed effect port and this module
+//! performs only the Zone, caller-role, and idempotency admission that belongs
+//! at the Provider boundary.  The production port is implemented by `d2bd`
+//! with the existing typed broker dispatch functions.
 
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, sync::Mutex};
 
-use d2b_contracts::v3::{ResourceRef, identity::ZoneId};
+use d2b_contracts::{
+    broker_wire::BrokerCallerRole,
+    v3::{ResourceRef, identity::ZoneId},
+};
 
 /// Maximum retained lifecycle mutation keys.
 pub const MAX_TRACKED_LIFECYCLE_MUTATIONS: usize = 256;
 
 /// Closed caller roles allowed to request a Provider lifecycle effect.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum BrokerCallerRole {
-    /// The Zone controller.
-    ZoneController,
-    /// An explicitly authorized configuration controller.
-    ConfigurationController,
-    /// Any other caller, which is refused.
-    Other,
+///
+/// The daemon reuses the broker wire role rather than defining a second
+/// caller-role enum.  `NotAuthorized` is the only refusal state; the broker
+/// has already classified every other variant from its authenticated peer.
+fn caller_is_authorized(caller: &BrokerCallerRole) -> bool {
+    !matches!(caller, BrokerCallerRole::NotAuthorized)
 }
 
 /// Guest lifecycle operation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GuestLifecycleOperation {
+    /// Start the Guest runtime.
     Start,
+    /// Stop the Guest runtime.
     Stop,
+}
+
+impl GuestLifecycleOperation {
+    /// Stable operation token used in idempotency diagnostics.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Start => "start",
+            Self::Stop => "stop",
+        }
+    }
 }
 
 /// A v3 Guest lifecycle request.
@@ -98,6 +112,16 @@ pub enum ProviderEffectError {
     MutationTableFull,
     /// The same key was used for a different request.
     IdempotencyConflict,
+    /// The dispatcher state could not be read or updated.
+    StateUnavailable,
+    /// The configured Provider registry is unavailable.
+    RegistryUnavailable,
+    /// No registered Provider owns the requested Guest route.
+    ProviderNotRegistered,
+    /// The selected Provider does not publish the requested lifecycle method.
+    ProviderCapabilityDenied,
+    /// The typed effect port refused or failed the mutation.
+    EffectRejected,
 }
 
 impl ProviderEffectError {
@@ -110,6 +134,11 @@ impl ProviderEffectError {
             Self::IdempotencyKeyInvalid => "provider-effect-idempotency-key-invalid",
             Self::MutationTableFull => "provider-effect-mutation-table-full",
             Self::IdempotencyConflict => "provider-effect-idempotency-conflict",
+            Self::StateUnavailable => "provider-effect-state-unavailable",
+            Self::RegistryUnavailable => "provider-effect-registry-unavailable",
+            Self::ProviderNotRegistered => "provider-effect-provider-not-registered",
+            Self::ProviderCapabilityDenied => "provider-effect-provider-capability-denied",
+            Self::EffectRejected => "provider-effect-rejected",
         }
     }
 }
@@ -122,20 +151,43 @@ impl core::fmt::Display for ProviderEffectError {
 
 impl std::error::Error for ProviderEffectError {}
 
-/// Result of dispatching one lifecycle request.
+/// Result of admitting a lifecycle request without invoking an effect port.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LifecycleDispatch {
-    /// The caller may invoke the descriptor-bound effect port.
+    /// The request was newly admitted and may invoke its effect port.
     Dispatch,
     /// The exact request was already accepted under this idempotency key.
     Duplicate,
+}
+
+/// Result of invoking a typed lifecycle effect.
+#[derive(Debug, PartialEq, Eq)]
+pub enum EffectDispatch<T> {
+    /// The effect port ran and returned its typed output.
+    Dispatched(T),
+    /// The exact request was already accepted and the effect was not invoked.
+    Duplicate,
+}
+
+/// Typed Provider lifecycle effect port supplied by the daemon composition
+/// layer.
+///
+/// Implementations must route the request through an existing typed effect
+/// adapter.  This trait intentionally has no socket, path, argv, or raw
+/// broker payload surface.
+pub trait ProviderLifecycleEffectPort {
+    /// The successful effect result.
+    type Output;
+
+    /// Apply one already-admitted lifecycle request.
+    fn apply(&self, request: &GuestLifecycleRequest) -> Result<Self::Output, ProviderEffectError>;
 }
 
 /// Effect-free lifecycle dispatcher with bounded idempotency tracking.
 #[derive(Debug)]
 pub struct ProviderLifecycleDispatch {
     zone: ZoneId,
-    mutations: BTreeMap<String, (ResourceRef, GuestLifecycleOperation)>,
+    mutations: Mutex<BTreeMap<String, (ResourceRef, GuestLifecycleOperation)>>,
 }
 
 impl ProviderLifecycleDispatch {
@@ -143,71 +195,184 @@ impl ProviderLifecycleDispatch {
     pub fn new(zone: ZoneId) -> Self {
         Self {
             zone,
-            mutations: BTreeMap::new(),
+            mutations: Mutex::new(BTreeMap::new()),
         }
     }
 
     /// Admit one request after checking caller role, Zone, and deduplication.
     pub fn admit(
-        &mut self,
-        caller: BrokerCallerRole,
+        &self,
+        caller: &BrokerCallerRole,
         request: &GuestLifecycleRequest,
     ) -> Result<LifecycleDispatch, ProviderEffectError> {
-        if !matches!(
-            caller,
-            BrokerCallerRole::ZoneController | BrokerCallerRole::ConfigurationController
-        ) {
+        if !caller_is_authorized(caller) {
             return Err(ProviderEffectError::CallerRoleDenied);
         }
         if request.zone() != &self.zone {
             return Err(ProviderEffectError::ZoneMismatch);
         }
-        if let Some((guest, operation)) = self.mutations.get(request.idempotency_key()) {
+        let mut mutations = self
+            .mutations
+            .lock()
+            .map_err(|_| ProviderEffectError::StateUnavailable)?;
+        if let Some((guest, operation)) = mutations.get(request.idempotency_key()) {
             if guest == request.guest() && *operation == request.operation() {
                 return Ok(LifecycleDispatch::Duplicate);
             }
             return Err(ProviderEffectError::IdempotencyConflict);
         }
-        if self.mutations.len() >= MAX_TRACKED_LIFECYCLE_MUTATIONS {
+        if mutations.len() >= MAX_TRACKED_LIFECYCLE_MUTATIONS {
             return Err(ProviderEffectError::MutationTableFull);
         }
-        self.mutations.insert(
+        mutations.insert(
             request.idempotency_key().to_owned(),
             (request.guest().clone(), request.operation()),
         );
         Ok(LifecycleDispatch::Dispatch)
+    }
+
+    /// Admit a request and invoke its typed effect exactly once.
+    ///
+    /// A refused effect is removed from the bounded table so an operator can
+    /// retry with a fresh broker round trip.  No fallback effect is attempted.
+    pub fn dispatch<P: ProviderLifecycleEffectPort>(
+        &self,
+        caller: &BrokerCallerRole,
+        request: &GuestLifecycleRequest,
+        effect: &P,
+    ) -> Result<EffectDispatch<P::Output>, ProviderEffectError> {
+        match self.admit(caller, request)? {
+            LifecycleDispatch::Duplicate => Ok(EffectDispatch::Duplicate),
+            LifecycleDispatch::Dispatch => match effect.apply(request) {
+                Ok(output) => Ok(EffectDispatch::Dispatched(output)),
+                Err(error) => {
+                    self.remove(request);
+                    Err(error)
+                }
+            },
+        }
+    }
+
+    fn remove(&self, request: &GuestLifecycleRequest) {
+        if let Ok(mut mutations) = self.mutations.lock() {
+            mutations.remove(request.idempotency_key());
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, AtomicUsize, Ordering},
+    };
+
+    struct RecordingEffect {
+        calls: Arc<AtomicUsize>,
+        reject: AtomicBool,
+    }
+
+    impl ProviderLifecycleEffectPort for RecordingEffect {
+        type Output = usize;
+
+        fn apply(
+            &self,
+            _request: &GuestLifecycleRequest,
+        ) -> Result<Self::Output, ProviderEffectError> {
+            if self.reject.load(Ordering::Acquire) {
+                return Err(ProviderEffectError::EffectRejected);
+            }
+            Ok(self.calls.fetch_add(1, Ordering::AcqRel) + 1)
+        }
+    }
+
+    fn request(
+        zone: &ZoneId,
+        operation: GuestLifecycleOperation,
+        key: &str,
+    ) -> GuestLifecycleRequest {
+        GuestLifecycleRequest::new(
+            zone.clone(),
+            ResourceRef::parse("Guest/workstation").expect("Guest ref"),
+            operation,
+            key,
+        )
+        .expect("lifecycle request")
+    }
 
     #[test]
-    fn guest_resource_lifecycle_is_zone_scoped_and_idempotent() {
-        let zone = ZoneId::parse("work").unwrap();
-        let guest = ResourceRef::parse("Guest/workstation").unwrap();
-        let request =
-            GuestLifecycleRequest::new(zone.clone(), guest, GuestLifecycleOperation::Start, "k1")
-                .unwrap();
-        let mut dispatch = ProviderLifecycleDispatch::new(zone);
+    fn dispatch_invokes_typed_effect_once_and_deduplicates_reachably() {
+        let zone = ZoneId::parse("work").expect("Zone");
+        let dispatch = ProviderLifecycleDispatch::new(zone.clone());
+        let calls = Arc::new(AtomicUsize::new(0));
+        let effect = RecordingEffect {
+            calls: Arc::clone(&calls),
+            reject: AtomicBool::new(false),
+        };
+        let request = request(&zone, GuestLifecycleOperation::Start, "k1");
+        let caller = BrokerCallerRole::AdminUid { uid: 1000 };
+
         assert_eq!(
-            dispatch
-                .admit(BrokerCallerRole::ZoneController, &request)
-                .unwrap(),
-            LifecycleDispatch::Dispatch
+            dispatch.dispatch(&caller, &request, &effect),
+            Ok(EffectDispatch::Dispatched(1))
         );
         assert_eq!(
-            dispatch
-                .admit(BrokerCallerRole::ZoneController, &request)
-                .unwrap(),
-            LifecycleDispatch::Duplicate
+            dispatch.dispatch(&caller, &request, &effect),
+            Ok(EffectDispatch::Duplicate)
         );
+        assert_eq!(calls.load(Ordering::Acquire), 1);
+    }
+
+    #[test]
+    fn unauthorized_or_mismatched_requests_fail_closed_before_effect() {
+        let zone = ZoneId::parse("work").expect("Zone");
+        let dispatch = ProviderLifecycleDispatch::new(zone.clone());
+        let calls = Arc::new(AtomicUsize::new(0));
+        let effect = RecordingEffect {
+            calls: Arc::clone(&calls),
+            reject: AtomicBool::new(false),
+        };
+        let lifecycle_request = request(&zone, GuestLifecycleOperation::Stop, "k2");
+
         assert_eq!(
-            dispatch
-                .admit(BrokerCallerRole::Other, &request)
-                .unwrap_err(),
-            ProviderEffectError::CallerRoleDenied
+            dispatch.dispatch(
+                &BrokerCallerRole::NotAuthorized,
+                &lifecycle_request,
+                &effect
+            ),
+            Err(ProviderEffectError::CallerRoleDenied)
+        );
+        let other_zone = ZoneId::parse("personal").expect("Zone");
+        let other_request = request(&other_zone, GuestLifecycleOperation::Stop, "k3");
+        assert_eq!(
+            dispatch.dispatch(
+                &BrokerCallerRole::AdminUid { uid: 1000 },
+                &other_request,
+                &effect
+            ),
+            Err(ProviderEffectError::ZoneMismatch)
+        );
+        assert_eq!(calls.load(Ordering::Acquire), 0);
+    }
+
+    #[test]
+    fn rejected_effect_is_not_replaced_by_a_fallback() {
+        let zone = ZoneId::parse("work").expect("Zone");
+        let dispatch = ProviderLifecycleDispatch::new(zone.clone());
+        let calls = Arc::new(AtomicUsize::new(0));
+        let effect = RecordingEffect {
+            calls,
+            reject: AtomicBool::new(true),
+        };
+        let request = request(&zone, GuestLifecycleOperation::Start, "k4");
+        assert_eq!(
+            dispatch.dispatch(
+                &BrokerCallerRole::LauncherUid { uid: 1000 },
+                &request,
+                &effect
+            ),
+            Err(ProviderEffectError::EffectRejected)
         );
     }
 }

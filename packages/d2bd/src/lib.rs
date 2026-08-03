@@ -211,6 +211,11 @@ pub mod metrics;
 // the metric inventory.
 pub mod ch_stats;
 pub mod provider_shutdown;
+// v3 Provider composition and descriptor-bound lifecycle effects. The
+// modules reuse the shared Provider registry and the typed broker lifecycle
+// path; they are initialized below after the trusted host bundle loads.
+pub mod provider_effects;
+pub mod provider_registry;
 // In-daemon replacement for the
 // `d2b-audit-check.{service,timer}` host singleton + timer that
 // previously sanity-checked broker audit log shape on a daily cadence.
@@ -575,6 +580,10 @@ struct ServerState {
     /// Daemon-owned fast list/status read model. This is per ServerState so
     /// independent daemon instances/tests never evict each other's snapshots.
     public_status_read_model: Arc<PublicStatusReadModel>,
+    /// Shared v3 Provider registry and lifecycle effect dispatcher. A
+    /// pre-v3 bundle remains in explicit compatibility mode; a malformed
+    /// v3 catalog is fail-closed rather than falling back.
+    provider_runtime: Arc<provider_registry::ProviderRuntime>,
     /// Per-VM console session table (ring buffers and drainer tasks) for
     /// `d2b console <vm>`. Sessions are created on first Attach and persist
     /// until the daemon restarts or the VM stops.
@@ -1469,6 +1478,7 @@ pub async fn serve(options: ServeOptions) -> Result<(), TypedError> {
         conn_semaphore: concurrency::ConnSemaphore::new(resolve_max_inflight_connections()),
         op_locks: crate::concurrency::OpLockManager::new(),
         public_status_read_model: Arc::new(crate::PublicStatusReadModel::new()),
+        provider_runtime: Arc::new(crate::provider_registry::ProviderRuntime::new()),
         security_key_sessions: Arc::new(parking_lot::Mutex::new(
             crate::security_key::SkSessionTable::default(),
         )),
@@ -1488,6 +1498,12 @@ pub async fn serve(options: ServeOptions) -> Result<(), TypedError> {
 
     match load_bundle_resolver(&state) {
         Ok(resolver) => {
+            if let Err(error) = state.provider_runtime.configure_from_host(&resolver.host) {
+                tracing::error!(
+                    error = %error,
+                    "provider registry catalog refused; Provider lifecycle effects are disabled",
+                );
+            }
             let report = storage_lifecycle::run_startup_contract_check(&resolver);
             if report.has_only_legacy_contract_issue() {
                 tracing::info!(
@@ -3964,6 +3980,7 @@ mod workload_observability_tests {
             conn_semaphore: concurrency::ConnSemaphore::new(8),
             op_locks: concurrency::OpLockManager::new(),
             public_status_read_model: Arc::new(PublicStatusReadModel::new()),
+            provider_runtime: Arc::new(crate::provider_registry::ProviderRuntime::new()),
             console_sessions: Arc::new(Mutex::new(console_session::ConsoleSessionTable::default())),
             security_key_sessions: Arc::new(parking_lot::Mutex::new(
                 security_key::SkSessionTable::default(),
@@ -15681,6 +15698,126 @@ fn dispatch_broker_vm_start(
         return Ok(response);
     }
 
+    let provider_route_available = match state
+        .provider_runtime
+        .lifecycle_route_available(&request.vm)
+    {
+        Ok(available) => available,
+        Err(error) => {
+            return Ok(provider_lifecycle_failure_response(
+                VERB,
+                &request.vm,
+                error,
+            ));
+        }
+    };
+    if !provider_route_available {
+        return dispatch_broker_vm_start_inner(state, request);
+    }
+
+    let effect = DaemonProviderLifecycleEffect {
+        state,
+        request: request.clone(),
+        caller_role: BrokerCallerRole::AdminUid {
+            uid: state.daemon_uid,
+        },
+        term_timeout: VM_STOP_TIMEOUT,
+        kill_timeout: VM_STOP_TIMEOUT,
+        operation: provider_effects::GuestLifecycleOperation::Start,
+    };
+    match state.provider_runtime.dispatch_lifecycle(
+        &effect.caller_role,
+        &request.vm,
+        effect.operation,
+        next_provider_lifecycle_operation_id("start", &request.vm),
+        &effect,
+    ) {
+        Ok(provider_registry::ProviderRuntimeDispatch::Legacy) => {
+            dispatch_broker_vm_start_inner(state, request)
+        }
+        Ok(provider_registry::ProviderRuntimeDispatch::Active(
+            provider_effects::EffectDispatch::Dispatched(response),
+        )) => Ok(response),
+        Ok(provider_registry::ProviderRuntimeDispatch::Active(
+            provider_effects::EffectDispatch::Duplicate,
+        )) => Ok(applied_response(
+            VERB,
+            format!(
+                "vm start {}: duplicate Provider lifecycle request",
+                request.vm
+            ),
+        )),
+        Err(error) => Ok(provider_lifecycle_failure_response(
+            VERB,
+            &request.vm,
+            error,
+        )),
+    }
+}
+
+struct DaemonProviderLifecycleEffect<'a> {
+    state: &'a ServerState,
+    request: public_wire::VmLifecycleRequest,
+    caller_role: BrokerCallerRole,
+    term_timeout: Duration,
+    kill_timeout: Duration,
+    operation: provider_effects::GuestLifecycleOperation,
+}
+
+impl provider_effects::ProviderLifecycleEffectPort for DaemonProviderLifecycleEffect<'_> {
+    type Output = Value;
+
+    fn apply(
+        &self,
+        _request: &provider_effects::GuestLifecycleRequest,
+    ) -> Result<Self::Output, provider_effects::ProviderEffectError> {
+        let result = match self.operation {
+            provider_effects::GuestLifecycleOperation::Start => {
+                dispatch_broker_vm_start_inner(self.state, self.request.clone())
+            }
+            provider_effects::GuestLifecycleOperation::Stop => {
+                dispatch_broker_vm_stop_with_timeout_as_inner(
+                    self.state,
+                    self.request.clone(),
+                    self.caller_role.clone(),
+                    self.term_timeout,
+                    self.kill_timeout,
+                )
+            }
+        };
+        match result {
+            Ok(response) if response_outcome(&response) == Some("applied") => Ok(response),
+            Ok(_) | Err(_) => Err(provider_effects::ProviderEffectError::EffectRejected),
+        }
+    }
+}
+
+fn next_provider_lifecycle_operation_id(operation: &str, guest: &str) -> String {
+    provider_registry::next_lifecycle_operation_id(operation, guest)
+}
+
+fn provider_lifecycle_failure_response(
+    verb: &str,
+    guest: &str,
+    error: provider_effects::ProviderEffectError,
+) -> Value {
+    broker_failure_response(
+        verb,
+        format!(
+            "Provider lifecycle dispatch for {guest} refused ({})",
+            error.code()
+        ),
+        "Admin: rebuild the trusted Provider catalog and retry the lifecycle operation.".to_owned(),
+        None,
+    )
+}
+
+fn dispatch_broker_vm_start_inner(
+    state: &ServerState,
+    request: public_wire::VmLifecycleRequest,
+) -> Result<Value, TypedError> {
+    const VERB: &str = "vm start";
+
     let resolver = load_bundle_resolver(state)?;
 
     // For net VMs (`sys-<env>-net`), refuse start if the on-disk
@@ -16516,6 +16653,82 @@ fn dispatch_broker_vm_stop_with_timeout_as(
     {
         return Ok(response);
     }
+
+    let provider_route_available = match state
+        .provider_runtime
+        .lifecycle_route_available(&request.vm)
+    {
+        Ok(available) => available,
+        Err(error) => {
+            return Ok(provider_lifecycle_failure_response(
+                VERB,
+                &request.vm,
+                error,
+            ));
+        }
+    };
+    if !provider_route_available {
+        return dispatch_broker_vm_stop_with_timeout_as_inner(
+            state,
+            request,
+            caller_role,
+            term_timeout,
+            kill_timeout,
+        );
+    }
+
+    let effect = DaemonProviderLifecycleEffect {
+        state,
+        request: request.clone(),
+        caller_role: caller_role.clone(),
+        term_timeout,
+        kill_timeout,
+        operation: provider_effects::GuestLifecycleOperation::Stop,
+    };
+    match state.provider_runtime.dispatch_lifecycle(
+        &caller_role,
+        &request.vm,
+        effect.operation,
+        next_provider_lifecycle_operation_id("stop", &request.vm),
+        &effect,
+    ) {
+        Ok(provider_registry::ProviderRuntimeDispatch::Legacy) => {
+            dispatch_broker_vm_stop_with_timeout_as_inner(
+                state,
+                request,
+                caller_role,
+                term_timeout,
+                kill_timeout,
+            )
+        }
+        Ok(provider_registry::ProviderRuntimeDispatch::Active(
+            provider_effects::EffectDispatch::Dispatched(response),
+        )) => Ok(response),
+        Ok(provider_registry::ProviderRuntimeDispatch::Active(
+            provider_effects::EffectDispatch::Duplicate,
+        )) => Ok(applied_response(
+            VERB,
+            format!(
+                "vm stop {}: duplicate Provider lifecycle request",
+                request.vm
+            ),
+        )),
+        Err(error) => Ok(provider_lifecycle_failure_response(
+            VERB,
+            &request.vm,
+            error,
+        )),
+    }
+}
+
+fn dispatch_broker_vm_stop_with_timeout_as_inner(
+    state: &ServerState,
+    request: public_wire::VmLifecycleRequest,
+    caller_role: BrokerCallerRole,
+    term_timeout: Duration,
+    kill_timeout: Duration,
+) -> Result<Value, TypedError> {
+    const VERB: &str = "vm stop";
 
     let stop_entries = ordered_vm_stop_entries(state, &request.vm);
     if stop_entries.is_empty() {
@@ -19595,6 +19808,7 @@ mod public_status_tests {
             conn_semaphore: crate::concurrency::ConnSemaphore::new(8),
             op_locks: crate::concurrency::OpLockManager::new(),
             public_status_read_model: Arc::new(crate::PublicStatusReadModel::new()),
+            provider_runtime: Arc::new(crate::provider_registry::ProviderRuntime::new()),
             security_key_sessions: Arc::new(parking_lot::Mutex::new(
                 crate::security_key::SkSessionTable::default(),
             )),
@@ -22504,6 +22718,7 @@ mod detached_exec_routing_tests {
             conn_semaphore: crate::concurrency::ConnSemaphore::new(8),
             op_locks: crate::concurrency::OpLockManager::new(),
             public_status_read_model: Arc::new(crate::PublicStatusReadModel::new()),
+            provider_runtime: Arc::new(crate::provider_registry::ProviderRuntime::new()),
             security_key_sessions: Arc::new(parking_lot::Mutex::new(
                 crate::security_key::SkSessionTable::default(),
             )),
@@ -23218,6 +23433,7 @@ mod accept_loop_concurrency_tests {
             conn_semaphore: crate::concurrency::ConnSemaphore::new(8),
             op_locks: crate::concurrency::OpLockManager::new(),
             public_status_read_model: Arc::new(crate::PublicStatusReadModel::new()),
+            provider_runtime: Arc::new(crate::provider_registry::ProviderRuntime::new()),
             security_key_sessions: Arc::new(parking_lot::Mutex::new(
                 crate::security_key::SkSessionTable::default(),
             )),
@@ -23800,6 +24016,7 @@ mod broker_dispatch_tests {
             conn_semaphore: crate::concurrency::ConnSemaphore::new(8),
             op_locks: crate::concurrency::OpLockManager::new(),
             public_status_read_model: Arc::new(crate::PublicStatusReadModel::new()),
+            provider_runtime: Arc::new(crate::provider_registry::ProviderRuntime::new()),
             security_key_sessions: Arc::new(parking_lot::Mutex::new(
                 crate::security_key::SkSessionTable::default(),
             )),
@@ -23838,6 +24055,7 @@ mod broker_dispatch_tests {
             conn_semaphore: crate::concurrency::ConnSemaphore::new(8),
             op_locks: crate::concurrency::OpLockManager::new(),
             public_status_read_model: Arc::new(crate::PublicStatusReadModel::new()),
+            provider_runtime: Arc::new(crate::provider_registry::ProviderRuntime::new()),
             security_key_sessions: Arc::new(parking_lot::Mutex::new(
                 crate::security_key::SkSessionTable::default(),
             )),
@@ -25930,6 +26148,7 @@ mod broker_dispatch_tests {
             conn_semaphore: crate::concurrency::ConnSemaphore::new(8),
             op_locks: crate::concurrency::OpLockManager::new(),
             public_status_read_model: Arc::new(crate::PublicStatusReadModel::new()),
+            provider_runtime: Arc::new(crate::provider_registry::ProviderRuntime::new()),
             security_key_sessions: Arc::new(parking_lot::Mutex::new(
                 crate::security_key::SkSessionTable::default(),
             )),
@@ -26155,6 +26374,7 @@ mod broker_dispatch_tests {
             conn_semaphore: crate::concurrency::ConnSemaphore::new(8),
             op_locks: crate::concurrency::OpLockManager::new(),
             public_status_read_model: Arc::new(crate::PublicStatusReadModel::new()),
+            provider_runtime: Arc::new(crate::provider_registry::ProviderRuntime::new()),
             security_key_sessions: Arc::new(parking_lot::Mutex::new(
                 crate::security_key::SkSessionTable::default(),
             )),
@@ -26413,6 +26633,7 @@ mod broker_dispatch_tests {
             conn_semaphore: crate::concurrency::ConnSemaphore::new(8),
             op_locks: crate::concurrency::OpLockManager::new(),
             public_status_read_model: Arc::new(crate::PublicStatusReadModel::new()),
+            provider_runtime: Arc::new(crate::provider_registry::ProviderRuntime::new()),
             security_key_sessions: Arc::new(parking_lot::Mutex::new(
                 crate::security_key::SkSessionTable::default(),
             )),
@@ -28307,6 +28528,7 @@ mod broker_dispatch_tests {
             conn_semaphore: crate::concurrency::ConnSemaphore::new(8),
             op_locks: crate::concurrency::OpLockManager::new(),
             public_status_read_model: Arc::new(crate::PublicStatusReadModel::new()),
+            provider_runtime: Arc::new(crate::provider_registry::ProviderRuntime::new()),
             security_key_sessions: Arc::new(parking_lot::Mutex::new(
                 crate::security_key::SkSessionTable::default(),
             )),
@@ -29242,6 +29464,7 @@ mod broker_dispatch_tests {
             conn_semaphore: crate::concurrency::ConnSemaphore::new(8),
             op_locks: crate::concurrency::OpLockManager::new(),
             public_status_read_model: Arc::new(crate::PublicStatusReadModel::new()),
+            provider_runtime: Arc::new(crate::provider_registry::ProviderRuntime::new()),
             security_key_sessions: Arc::new(parking_lot::Mutex::new(
                 crate::security_key::SkSessionTable::default(),
             )),
@@ -29367,6 +29590,7 @@ mod broker_dispatch_tests {
             conn_semaphore: crate::concurrency::ConnSemaphore::new(8),
             op_locks: crate::concurrency::OpLockManager::new(),
             public_status_read_model: Arc::new(crate::PublicStatusReadModel::new()),
+            provider_runtime: Arc::new(crate::provider_registry::ProviderRuntime::new()),
             security_key_sessions: Arc::new(parking_lot::Mutex::new(
                 crate::security_key::SkSessionTable::default(),
             )),
