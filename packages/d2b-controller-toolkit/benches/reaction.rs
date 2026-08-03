@@ -483,7 +483,7 @@ impl ResourceReconciler for ProcessReconciler {
 }
 
 struct ProductionControllerSource {
-    fixture: Arc<bus_support::ProductionStore>,
+    fixture: std::sync::Weak<bus_support::ProductionStore>,
     harness: Arc<ProductionWatchHarness>,
     expected_creates: usize,
     metrics: Arc<ReactionMetrics>,
@@ -510,7 +510,7 @@ impl ProductionControllerSource {
         metrics: Arc<ReactionMetrics>,
     ) -> Arc<Self> {
         Arc::new(Self {
-            fixture,
+            fixture: Arc::downgrade(&fixture),
             harness,
             expected_creates,
             metrics,
@@ -542,7 +542,11 @@ impl ProductionControllerSource {
     }
 
     fn store(&self) -> Result<Arc<RedbResourceStore>, SourceError> {
-        Ok(self.fixture.store())
+        Ok(self.fixture()?.store())
+    }
+
+    fn fixture(&self) -> Result<Arc<bus_support::ProductionStore>, SourceError> {
+        self.fixture.upgrade().ok_or(SourceError::Unavailable)
     }
 
     async fn persist_status(
@@ -552,8 +556,8 @@ impl ProductionControllerSource {
         operation_id: String,
     ) -> Result<ZoneRevision, SourceError> {
         let result = loop {
-            match self
-                .fixture
+            let fixture = self.fixture()?;
+            match fixture
                 .commit_status(&target, &candidate, &operation_id)
                 .await
             {
