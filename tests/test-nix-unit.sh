@@ -22,13 +22,7 @@ if [ "${D2B_NIX_UNIT_JOBS+x}" = x ]; then
   exit 2
 fi
 
-if [ -n "${D2B_NIX_UNIT_WORKERS:-}" ]; then
-  requested_workers=$D2B_NIX_UNIT_WORKERS
-elif [ "${GITHUB_ACTIONS:-}" = true ]; then
-  requested_workers=1
-else
-  requested_workers=4
-fi
+requested_workers=${D2B_NIX_UNIT_WORKERS:-4}
 case "$requested_workers" in
   1|2|3|4) ;;
   *)
@@ -37,13 +31,7 @@ case "$requested_workers" in
     exit 2
     ;;
 esac
-if [ -n "${D2B_NIX_UNIT_MEMORY_MB:-}" ]; then
-  memory_mb=$D2B_NIX_UNIT_MEMORY_MB
-elif [ "${GITHUB_ACTIONS:-}" = true ]; then
-  memory_mb=1024
-else
-  memory_mb=4096
-fi
+memory_mb=${D2B_NIX_UNIT_MEMORY_MB:-4096}
 if ! [[ "$memory_mb" =~ ^[0-9]+$ ]] \
   || [ "$memory_mb" -lt 512 ] \
   || [ "$memory_mb" -gt 4096 ]; then
@@ -132,22 +120,6 @@ if [ -n "${D2B_NIX_UNIT_CHECK:-}" ] \
   exit 2
 fi
 
-# Plain local invocations self-provision only the locked Nix-unit tools. An
-# existing shell with both commands on PATH runs directly; a failed re-entry
-# cannot recurse indefinitely.
-if ! command -v nix-eval-jobs >/dev/null 2>&1 \
-  || ! command -v jq >/dev/null 2>&1; then
-  if [ "${D2B_NIX_UNIT_TOOLCHAIN_REENTRY:-0}" = 1 ]; then
-    fail "locked nix-unit shell did not provide nix-eval-jobs and jq" || true
-    exit 2
-  fi
-  export D2B_NIX_UNIT_TOOLCHAIN_REENTRY=1
-  exec nix develop --quiet --no-warn-dirty --no-write-lock-file \
-    "${flake_ref}#devShells.${system}.nix-unit" \
-    --command env D2B_NIX_UNIT_TOOLCHAIN_REENTRY=1 \
-      bash "$ROOT/tests/test-nix-unit.sh" "$@"
-fi
-
 check_dir=$(d2b_mktemp ".d2b-nix-unit-checks.XXXXXX")
 check_list="$check_dir/checks"
 if ! nix eval --raw "${flake_ref}#checks.$system" --apply '
@@ -199,6 +171,40 @@ if [ -n "${D2B_NIX_UNIT_CHECK:-}" ]; then
     fail "D2B_NIX_UNIT_CHECK is not a discovered nix-unit check: $D2B_NIX_UNIT_CHECK" || true
     exit 2
   fi
+  check="$D2B_NIX_UNIT_CHECK"
+  nix_unit_surface="$check"
+  log "--> nix eval --raw ${flake_label}#checks.${system}.${check}.drvPath (instantiate-only)"
+  if nix eval --raw "${flake_ref}#checks.${system}.${check}.drvPath" >/dev/null; then
+    nix_unit_command_succeeded=1
+    if ! publish_manifest_fragment "$check" passed; then
+      printf '%s\n' \
+        "test-nix-unit: required execution-manifest fragment publication failed after successful surface '$check'; evidence is incomplete; retry the target." \
+        >&2
+      exit 1
+    fi
+    nix_unit_surface=
+    ok "nix-unit check $check ($system)"
+  else
+    fail "nix-unit check $check ($system) failed" || true
+    exit 1
+  fi
+  log "test-nix-unit OK (selected $check; duration: $((SECONDS - suite_started))s)"
+  exit 0
+fi
+
+# Full local invocations self-provision only the locked Nix-unit tools. CI
+# selected shards exit above and need no eval-jobs or jq bootstrap.
+if ! command -v nix-eval-jobs >/dev/null 2>&1 \
+  || ! command -v jq >/dev/null 2>&1; then
+  if [ "${D2B_NIX_UNIT_TOOLCHAIN_REENTRY:-0}" = 1 ]; then
+    fail "locked nix-unit shell did not provide nix-eval-jobs and jq" || true
+    exit 2
+  fi
+  export D2B_NIX_UNIT_TOOLCHAIN_REENTRY=1
+  exec nix develop --quiet --no-warn-dirty --no-write-lock-file \
+    "${flake_ref}#devShells.${system}.nix-unit" \
+    --command env D2B_NIX_UNIT_TOOLCHAIN_REENTRY=1 \
+      bash "$ROOT/tests/test-nix-unit.sh" "$@"
 fi
 
 logical_cpus=$(getconf _NPROCESSORS_ONLN 2>/dev/null || nproc 2>/dev/null || printf '%s' 1)
@@ -300,28 +306,6 @@ workers=$requested_workers
 [ "$workers" -le "$memory_cap" ] || workers=$memory_cap
 [ "$workers" -ge 1 ] || workers=1
 log "  nix-eval-jobs workers: requested $requested_workers, effective $workers (CPU cap $cpu_cap, memory cap $memory_cap, $memory_mb MiB evaluator limit plus 2048 MiB overhead per worker)"
-
-if [ -n "${D2B_NIX_UNIT_CHECK:-}" ]; then
-  check="$D2B_NIX_UNIT_CHECK"
-  nix_unit_surface="$check"
-  log "--> nix eval --raw ${flake_label}#checks.${system}.${check}.drvPath (instantiate-only)"
-  if nix eval --raw "${flake_ref}#checks.${system}.${check}.drvPath" >/dev/null; then
-    nix_unit_command_succeeded=1
-    if ! publish_manifest_fragment "$check" passed; then
-      printf '%s\n' \
-        "test-nix-unit: required execution-manifest fragment publication failed after successful surface '$check'; evidence is incomplete; retry the target." \
-        >&2
-      exit 1
-    fi
-    nix_unit_surface=
-    ok "nix-unit check $check ($system)"
-  else
-    fail "nix-unit check $check ($system) failed" || true
-    exit 1
-  fi
-  log "test-nix-unit OK (selected $check; duration: $((SECONDS - suite_started))s)"
-  exit 0
-fi
 
 if ! command -v nix-eval-jobs >/dev/null 2>&1; then
   fail "nix-eval-jobs is required for local corpus evaluation; the locked nix-unit shell should provide it" || true

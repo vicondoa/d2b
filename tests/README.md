@@ -255,11 +255,8 @@ retired and exits with status 2; use
 bounded by the CPU cap `min(4, logical CPUs, finite cgroup CPU quota)` and the
 memory cap
 `max(1, floor((effective available MiB - 3072) / (limit + 2048)))`.
-The evaluator limit defaults to 4096 MiB locally and 1024 MiB on GitHub
-Actions, plus 2048 MiB of per-worker process and flake overhead. GitHub
-Actions requests one worker by default; local development requests four.
-This keeps the hosted evaluator serialized under memory pressure while
-preserving local speed.
+The full local runner defaults to four workers and a 4096 MiB evaluator limit,
+plus 2048 MiB of per-worker process and flake overhead.
 Effective available memory is the smaller of `MemAvailable` and the finite
 cgroup allowance after reclaimable file cache. A visible but unreadable cgroup
 controller fails closed to one worker. On the reference 12-CPU, 62-GiB host
@@ -277,7 +274,10 @@ fixed path-free `d2b` flake label.
 
 `D2B_NIX_UNIT_CHECK=<name>` remains the manual single-shard selector. It
 requires one of the seven discovered aggregate checks and evaluates only that
-check. With execution evidence enabled, a full pass publishes exactly the
+check without entering the eval-jobs tool shell or resource-accounting path.
+Hosted CI retains the pre-change discovery plus per-check matrix because the
+full eval-jobs path did not fit the hosted runner envelope. With execution
+evidence enabled, a full pass publishes exactly the
 seven leaves `nix-unit`, `nix-unit-daemon`, `nix-unit-guest`, `nix-unit-misc`,
 `nix-unit-network`, `nix-unit-runtime`, and `nix-unit-state`; a selected pass
 publishes only its selected leaf.

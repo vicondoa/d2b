@@ -255,9 +255,7 @@ message naming `D2B_NIX_UNIT_WORKERS`. Use that bounded operator-intent
 control. Its effective count is capped by four workers, logical CPUs, any
 finite cgroup CPU quota, and available memory after a 3 GiB host reserve at
 the evaluator limit plus 2048 MiB of process and flake overhead per worker.
-The limit defaults to 4096 MiB locally and 1024 MiB on GitHub Actions.
-GitHub Actions explicitly requests one worker by default, while local
-development requests four on the reference 12-CPU, 62-GiB host.
+The full local runner defaults to four workers and a 4096 MiB evaluator limit.
 `D2B_NIX_UNIT_MEMORY_MB` may set the limit from 512 through 4096 MiB.
 Successful full runs suppress raw JSONL output. Every real `FAIL <case>:
 <detail>` line from an aggregate error is parsed and printed as one concise,
@@ -269,6 +267,10 @@ attributable to that result attribute.
 Command progress uses the fixed path-free `d2b` flake label.
 
 `D2B_NIX_UNIT_CHECK` remains the manual single-shard selector. When
+set, it exits through the selected Nix check before eval-jobs bootstrap or
+resource accounting. Hosted CI retains the pre-change discovery and
+per-check matrix because the full eval-jobs path did not fit the hosted
+runner envelope. When
 `D2B_EXECUTION_MANIFEST` is set, enter the shared secure lifecycle before Nix
 discovery or toolchain entry. A full pass records exactly these seven leaves:
 `nix-unit`, `nix-unit-daemon`, `nix-unit-guest`, `nix-unit-misc`,

@@ -467,6 +467,69 @@ def rust_rollup_job(job: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def nix_unit_discover_job(job: dict[str, Any]) -> str:
+    return f"""  {job["ciJobId"]}:
+{needs_line(job)}    runs-on: {job["runsOn"]}
+    timeout-minutes: {job["timeoutMinutes"]}
+    outputs:
+      checks: ${{{{ steps.list.outputs.nixunitchecks }}}}
+    steps:
+      - uses: {CHECKOUT}
+        with:
+          persist-credentials: false
+{nix_setup_step(job)}
+      - id: list
+        name: {job["displayName"]}
+        run: |
+          partition=$(make -s test-flake-partition)
+          echo "$partition"
+          echo "$partition" >> "$GITHUB_OUTPUT"
+"""
+
+
+def nix_unit_shards_job(job: dict[str, Any]) -> str:
+    return f"""  {job["ciJobId"]}:
+{needs_line(job)}    runs-on: {job["runsOn"]}
+    timeout-minutes: {job["timeoutMinutes"]}
+    strategy:
+      fail-fast: false
+      max-parallel: {job["maxParallel"]}
+      matrix:
+        check: ${{{{ fromJSON(needs.nix-unit-discover.outputs.checks) }}}}
+    steps:
+      - uses: {CHECKOUT}
+        with:
+          persist-credentials: false
+{nix_setup_step(job, MATRIX_CHECK_SCOPE)}
+      - name: {job["displayName"]}
+        env:
+          D2B_NIX_UNIT_CHECK: ${{{{ matrix.check }}}}
+        run: make test-nix-unit"""
+
+
+def nix_unit_rollup_job(job: dict[str, Any]) -> str:
+    return f"""  {job["ciJobId"]}:
+    needs: {yaml_list(job["needs"])}
+    if: always()
+    runs-on: {job["runsOn"]}
+    timeout-minutes: {job["timeoutMinutes"]}
+    steps:
+      - uses: {CHECKOUT}
+        with:
+          persist-credentials: false
+      - name: {job["displayName"]}
+        run: |
+          discover='${{{{ needs.nix-unit-discover.result }}}}'
+          shards='${{{{ needs.nix-unit-shards.result }}}}'
+          echo "nix-unit-discover=$discover  nix-unit-shards=$shards"
+          if [ "$discover" = success ] && [ "$shards" = success ]; then
+            echo "Every discovered Nix-unit shard passed."
+          else
+            echo "::error::Nix-unit gate failed (discover=$discover, shards=$shards)"
+            exit 1
+          fi"""
+
+
 def flake_discover_job(job: dict[str, Any]) -> str:
     return f"""  {job["ciJobId"]}:
 {needs_line(job)}    runs-on: {job["runsOn"]}
@@ -750,6 +813,9 @@ RENDERERS = {
     "changelog": changelog_job,
     "rust": rust_job,
     "rust-rollup": rust_rollup_job,
+    "nix-unit-discover": nix_unit_discover_job,
+    "nix-unit-shards": nix_unit_shards_job,
+    "nix-unit-rollup": nix_unit_rollup_job,
     "flake-discover": flake_discover_job,
     "flake-x86-shards": flake_x86_shards_job,
     "flake-x86-realized": flake_x86_realized_job,

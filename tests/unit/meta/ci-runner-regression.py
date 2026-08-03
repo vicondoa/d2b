@@ -544,44 +544,52 @@ set -euo pipefail
     def test_fixture_lane_owns_the_only_bounded_nix_store_cache(self) -> None:
         workflow = load_layer1_jobs().render_workflow(load_layer1_jobs().load_manifest())
         fixture_job = workflow_job_block(workflow, "test-fixture-contracts")
-        nix_unit_job = workflow_job_block(workflow, "test-nix-unit")
+        nix_unit_job = workflow_job_block(workflow, "nix-unit-shards")
         self.assertIn("Nix store cache", fixture_job)
         self.assertIn("gc-max-store-size-linux: 4G", fixture_job)
         self.assertEqual(workflow.count("- name: Nix store cache"), 1)
         self.assertNotIn("Nix store cache", nix_unit_job)
         self.assertNotIn("nix-store --import", fixture_job)
 
-    def test_nix_unit_ci_is_one_enforcing_simple_job(self) -> None:
+    def test_nix_unit_ci_uses_the_retained_shard_matrix(self) -> None:
         layer1_jobs = load_layer1_jobs()
         manifest = layer1_jobs.load_manifest()
         workflow = layer1_jobs.render_workflow(manifest)
 
         jobs = manifest["jobs"]
         ci_jobs = manifest["ci"]["jobs"]
-        for obsolete in ("nix-unit-discover", "nix-unit-shards"):
-            self.assertNotIn(obsolete, jobs)
-            self.assertNotIn(obsolete, ci_jobs)
+        self.assertIn("nix-unit-discover", jobs)
+        self.assertIn("nix-unit-shards", jobs)
+        self.assertIn("nix-unit-discover", ci_jobs)
+        self.assertIn("nix-unit-shards", ci_jobs)
 
         nix_unit = jobs["test-nix-unit"]
-        self.assertEqual(nix_unit["ciKind"], "simple-nix")
-        self.assertEqual(nix_unit["needs"], ["tier0"])
+        self.assertEqual(nix_unit["ciKind"], "nix-unit-rollup")
+        self.assertEqual(
+            nix_unit["needs"],
+            ["nix-unit-discover", "nix-unit-shards"],
+        )
         self.assertEqual(nix_unit["runsOn"], "ubuntu-latest")
-        self.assertGreaterEqual(nix_unit["timeoutMinutes"], 15)
         self.assertNotEqual(nix_unit.get("enforcement"), "advisory")
         self.assertEqual(ci_jobs.count("test-nix-unit"), 1)
         self.assertEqual(manifest["ci"]["rollupNeeds"].count("test-nix-unit"), 1)
 
-        nix_unit_job = workflow_job_block(workflow, "test-nix-unit")
-        self.assertNotIn("strategy:", nix_unit_job)
-        self.assertNotIn("matrix:", nix_unit_job)
-        self.assertNotIn("D2B_NIX_UNIT_CHECK", nix_unit_job)
-        self.assertNotIn("D2B_NIX_UNIT_JOBS", nix_unit_job)
-        self.assertNotIn("Nix store cache", nix_unit_job)
-        self.assertEqual(
-            re.findall(r"(?m)^\s+run:\s*(.+)$", nix_unit_job),
-            ["make test-nix-unit"],
+        shard_job = workflow_job_block(workflow, "nix-unit-shards")
+        self.assertIn("strategy:", shard_job)
+        self.assertIn("matrix:", shard_job)
+        self.assertIn(
+            "check: ${{ fromJSON(needs.nix-unit-discover.outputs.checks) }}",
+            shard_job,
         )
-        self.assertIn("cachix/install-nix-action@", nix_unit_job)
+        self.assertIn("D2B_NIX_UNIT_CHECK: ${{ matrix.check }}", shard_job)
+        self.assertNotIn("D2B_NIX_UNIT_JOBS", shard_job)
+        self.assertIn("run: make test-nix-unit", shard_job)
+        self.assertEqual(jobs["nix-unit-shards"]["maxParallel"], 4)
+
+        rollup_job = workflow_job_block(workflow, "test-nix-unit")
+        self.assertIn("nix-unit-discover", rollup_job)
+        self.assertIn("nix-unit-shards", rollup_job)
+        self.assertIn("Every discovered Nix-unit shard passed.", rollup_job)
 
     def test_nix_unit_driver_uses_one_full_corpus_eval_jobs_path(self) -> None:
         driver = executable_shell_source(source_text(NIX_UNIT_DRIVER))
@@ -1000,15 +1008,13 @@ printf '%s\n' "$sanitized_line"
         )
         self.assertIn("reserve_mb=3072", driver)
         self.assertIn("worker_budget_mb=$((memory_mb + 2048))", driver)
-        self.assertIn('elif [ "${GITHUB_ACTIONS:-}" = true ]; then', driver)
-        self.assertRegex(
-            driver,
-            r'(?s)GITHUB_ACTIONS[^}]*\}.*memory_mb=1024.*else.*memory_mb=4096',
-        )
-        self.assertRegex(
-            driver,
-            r'(?s)D2B_NIX_UNIT_WORKERS.*GITHUB_ACTIONS[^}]*\}.*requested_workers=1'
-            r'.*else.*requested_workers=4',
+        self.assertIn("requested_workers=${D2B_NIX_UNIT_WORKERS:-4}", driver)
+        self.assertIn("memory_mb=${D2B_NIX_UNIT_MEMORY_MB:-4096}", driver)
+        self.assertNotIn("GITHUB_ACTIONS", driver)
+        self.assertLess(
+            driver.index('if [ -n "${D2B_NIX_UNIT_CHECK:-}" ]; then'),
+            driver.index("command -v nix-eval-jobs"),
+            "selected CI shards must exit before eval-jobs bootstrap",
         )
         self.assertIn("D2B_NIX_UNIT_WORKERS", driver)
         self.assertIn("D2B_NIX_UNIT_MEMORY_MB", driver)

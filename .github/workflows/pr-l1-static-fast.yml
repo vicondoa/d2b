@@ -1097,10 +1097,12 @@ jobs:
       - name: Proof crates gate
         run: make test-proofs
 
-  test-nix-unit:
+  nix-unit-discover:
     needs: [tier0]
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 10
+    outputs:
+      checks: ${{ steps.list.outputs.nixunitchecks }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
@@ -1110,8 +1112,57 @@ jobs:
           nix_path: nixpkgs=channel:nixos-unstable
           extra_nix_config: |
             experimental-features = nix-command flakes
-      - name: Nix unit gate
+      - id: list
+        name: Enumerate Nix unit checks
+        run: |
+          partition=$(make -s test-flake-partition)
+          echo "$partition"
+          echo "$partition" >> "$GITHUB_OUTPUT"
+
+
+  nix-unit-shards:
+    needs: [nix-unit-discover]
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix:
+        check: ${{ fromJSON(needs.nix-unit-discover.outputs.checks) }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          persist-credentials: false
+      - uses: cachix/install-nix-action@23cf0fec1d55e0b1f2631aedd2a610c21ef8b077
+        with:
+          nix_path: nixpkgs=channel:nixos-unstable
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+      - name: Nix unit shard
+        env:
+          D2B_NIX_UNIT_CHECK: ${{ matrix.check }}
         run: make test-nix-unit
+
+  test-nix-unit:
+    needs: [nix-unit-discover, nix-unit-shards]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          persist-credentials: false
+      - name: Require every Nix unit shard to pass
+        run: |
+          discover='${{ needs.nix-unit-discover.result }}'
+          shards='${{ needs.nix-unit-shards.result }}'
+          echo "nix-unit-discover=$discover  nix-unit-shards=$shards"
+          if [ "$discover" = success ] && [ "$shards" = success ]; then
+            echo "Every discovered Nix-unit shard passed."
+          else
+            echo "::error::Nix-unit gate failed (discover=$discover, shards=$shards)"
+            exit 1
+          fi
 
   flake-eval-discover:
     needs: [tier0]

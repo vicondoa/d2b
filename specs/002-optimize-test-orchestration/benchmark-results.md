@@ -510,11 +510,9 @@ created `XDG_CACHE_HOME`, and locked tool self-provisioning. It completed in
 reduction. The shared Nix store was retained. No candidate or final accepted
 sample overlapped another Nix client.
 
-The final runner reserves 2048 MiB of process and flake overhead per worker
-plus 3072 MiB for the host when calculating the memory cap. GitHub Actions
-uses a 1024 MiB evaluator restart limit, while local development retains
-4096 MiB. A local one-worker hosted-shape run completed the full file
-partition plus integrity in 600s. Hosted success remains a merge condition.
+The final full runner reserves 2048 MiB of process and flake overhead per
+worker plus 3072 MiB for the host when calculating the memory cap. Local
+development retains four requested workers and a 4096 MiB evaluator limit.
 
 ## Nix-unit failure and coverage evidence
 
@@ -569,8 +567,9 @@ excluding source templates, and emit one attributable fallback when a file
 aggregate provides no real FAIL line.
 
 The local defaults remain four requested workers and a 4096 MiB evaluator
-limit. GitHub Actions requests one worker with a 1024 MiB limit on a 16 GiB
-runner, for a 6 GiB modeled envelope including host reserve and worker
-overhead. The local hosted-shape run completed in 600s, below the 20-minute job
-timeout and the fixture critical path. Actual hosted success and duration are
-not claimed until the PR job passes.
+limit. Hosted full-run experiments were rejected: two workers at 4096, 3072,
+and 2048 MiB and one worker at 3072, 2048, and 1024 MiB were repeatedly
+terminated or exceeded the hosted timeout despite successful local
+observations. The condition for consolidating hosted CI was therefore not met.
+CI retains the pre-change discovery plus one selected check per matrix job,
+while the local public target uses the measured eval-jobs path.

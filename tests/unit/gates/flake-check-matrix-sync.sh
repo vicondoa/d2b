@@ -59,15 +59,16 @@ assert_wf "discover enumerates via make test-flake-partition" 'make -s test-flak
 # both shard lanes consume the discovered JSON (not a hardcoded list)
 assert_wf "eval matrix sourced from discover output" 'fromJSON\(needs\.flake-eval-discover\.outputs\.evalchecks\)'
 assert_wf "realized matrix sourced from discover output" 'fromJSON\(needs\.flake-eval-discover\.outputs\.realizedchecks\)'
-# nix-unit owns the complete corpus in one evaluation-only job. It no longer
-# consumes the flake partition or a per-check matrix.
-assert_wf "nix-unit runs the full public target once" 'name:\s*Nix unit gate'
-assert_wf "nix-unit invokes make test-nix-unit" 'run:\s*make test-nix-unit'
-if grep -Eq 'nix-unit-discover:|nix-unit-shards:|D2B_NIX_UNIT_CHECK:.*matrix\.check|outputs\.nixunitchecks' "$wf"; then
-  fail "wiring: obsolete Nix-unit discovery or shard wiring remains"
+# Nix-unit CI retains the pre-change per-check matrix because the full local
+# eval-jobs runner does not fit the hosted runner memory envelope.
+assert_wf "nix-unit discovery exports the partition" 'checks:\s*\$\{\{\s*steps\.list\.outputs\.nixunitchecks'
+assert_wf "nix-unit matrix sourced from discovery" 'fromJSON\(needs\.nix-unit-discover\.outputs\.checks\)'
+assert_wf "nix-unit shard invokes make test-nix-unit" 'D2B_NIX_UNIT_CHECK'
+if grep -Eq 'D2B_NIX_UNIT_JOBS' "$wf"; then
+  fail "wiring: retired D2B_NIX_UNIT_JOBS remains in CI"
   rc=1
 else
-  ok "wiring: Nix-unit discovery and shard wiring are absent"
+  ok "wiring: retired D2B_NIX_UNIT_JOBS is absent"
 fi
 # each shard runs the make-routed single-check evaluation
 assert_wf "shard runs D2B_FLAKE_CHECK make test-flake" 'D2B_FLAKE_CHECK'
