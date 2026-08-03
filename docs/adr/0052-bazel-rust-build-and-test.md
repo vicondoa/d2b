@@ -1569,10 +1569,13 @@ Negative: a planted message variant that interpolates
 the rejected path, one that omits the remedy, one that answers
 `D2B-BZLCLEAN-LIVE` with the tracked-entry remedy, one that answers
 `D2B-BZLCLEAN-SYMLINK` or `D2B-BZLCLEAN-ESCAPE` with a step that removes or
-replaces the link's external target, one that answers `D2B-BZLSERVER-STUCK`
-with a section 8 cleanup remedy, and one that answers a ceiling miss with a
-section 8 cleanup remedy, must all be rejected,
-which is what proves the redaction and per-code assertions are not vacuous.
+replaces the link's external target, one that tells the operator to replace
+the refused entry with a directory, one that carries a recursive removal
+command, one that answers `D2B-BZLSERVER-STUCK` with a section 8 cleanup
+remedy, one that answers a ceiling miss with a section 8 cleanup remedy, and
+one that suggests relaxing the ceiling, must all be rejected. Those planted
+variants prove the redaction, forbidden-instruction, and per-code assertions
+are not vacuous.
 
 **Workflow structure.** Two assertions land in
 `packages/xtask/tests/policy_ci.rs` beside the cache writer-policy assertion
