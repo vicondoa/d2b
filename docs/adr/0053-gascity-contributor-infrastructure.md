@@ -87,10 +87,36 @@ alias, not the project name, and the intended configuration repository
 | `gastownhall/gascity-packs` | `main` | `0b9574272814ba175950731b73c2cc201804ee61` | 2026-08-01 |
 | `gastownhall/gascity-dashboard` | `main` | `fdd2d636751963ca786d06c9e43369fc6a71f7e2` | 2026-07-17 |
 | `github/spec-kit` | `main` | `d1e86f638277a99b82715c22c90558cd58d3cffd` | 2026-07-31 |
+| `numtide/llm-agents.nix` | `main` | `7b99fc4bbb8a7c2fff82c2708d8636c1cbc65661` | 2026-08-03 |
 | `vicondoa/d2b` | `v3` | `5ccb12a2edaac85b4735ee95d697067bd3d339af` | 2026-08-02 |
 
 Gas City's latest tagged release at that commit is `1.4.0` (2026-07-24,
 `CHANGELOG.md`); the tree carries an `[Unreleased]` section on top of it.
+
+### The `gc` binary comes from a packaging flake, not from us
+
+`numtide/llm-agents.nix` describes itself as "Nix packages for AI coding agents
+and development tools. Automatically updated daily." Its
+`packages/gascity/package.nix` builds `pname = "gascity"`, `version = "1.4.0"`,
+from `fetchFromGitHub` of `gastownhall/gascity` at tag `v1.4.0`, building
+`subPackages = [ "cmd/gc" ]`. The package update commit is
+`5cd614eafd8cfcdbba8cafa6a37ef51633dd0f86`.
+
+Two details matter for the deployment. It `wrapProgram`s `gc` with a PATH
+prefix carrying `beads`, `dolt`, `flock`, `gitMinimal`, `jq`, `lsof`, `procps`
+and `tmux`, which is exactly the prerequisite set Gas City's own README lists as
+`Required: Always`, plus the beads provider tools; it also asserts
+`lib.versionAtLeast dolt.version "2.1.0"`, matching the minimum that README
+states. So the runtime dependency closure is the packaging flake's problem and
+is already solved there. And `doCheck = false` with `versionCheckHook` enabled,
+so the build does not run upstream's test suite but does verify the installed
+binary reports its version.
+
+What it does **not** provide is deployment wiring. Its flake outputs are
+per-system `packages` and `overlays.shared-nixpkgs`; there is no `nixosModules`
+output and no service, user, credential, or network configuration of any kind.
+That split is the reason D4 assigns the package to one repository and the module
+to another rather than looking for a single upstream that does both.
 
 ### Where d2b's product surface actually is
 
@@ -314,35 +340,119 @@ any of them, and none of them may acquire a Gas City dependency. Using Gas City
 is a contributor's choice about their own workflow, not a repository
 requirement.
 
-**D4. Three layers of ownership, and d2b owns almost none of it.**
+**D4. Four layers of ownership, and d2b owns almost none of it.** Package
+source, generic deployment machinery, d2b-specific policy, and machine-private
+instantiation are four different concerns with four different change rates and
+four different audiences, so they get four homes.
 
-- **The host's `/etc/nixos`** owns the deployment instantiation: the five
-  principals of D13 and their privilege separation, ownership and mode of the
-  approval store and the protected integration object store, the root-owned
-  append helper, per-unit credential delivery, the peer-credential-checked
-  socket, the worker network namespace and firewall policy of D14, service
-  supervision, the publisher's exposure, the dashboard's read-only mode and
-  loopback bind, log rotation and retention, and anything else specific to one
-  machine. This is operator-private configuration outside every repository
+- **`numtide/llm-agents.nix`** supplies the `gc` package and nothing else. It
+  is upstream, out of our control, and listed here because the alternative is
+  somebody building Gas City by hand. Pinned by layer 2 or layer 3, never by
+  d2b.
+- **`vicondoa/gascity.nix`** owns the generic, reusable NixOS module and its
+  helper packages: the systemd units and their ordering, the orchestrator,
+  worker, approval-controller, publisher and root-owned append-helper
+  principals of D14, state and lock paths, the graceful shutdown and
+  restart-adoption sequence of D5, dashboard read-only and loopback
+  enforcement, the worker network namespace and firewall primitives, the
+  append and audit helper with its rotation and retention, health checks, and
+  module tests.
+
+  It contains **nothing d2b-specific at all**: no d2b name or identifier, no
+  d2b path or default, no option that mentions d2b, no repository or rig
+  binding, no workflow formula, no panel or delivery concept, no Discord
+  identity value, no d2b egress allowlist entry, and no task-import logic.
+  Every one of those lives one layer up in `d2b-gascity-configs`. The rule is
+  not "avoid coupling where convenient"; it is that a reader of `gascity.nix`
+  should not be able to tell which project motivated it, and M21 checks that
+  mechanically rather than by review.
+
+  Its public option namespace is Gas City-specific and rooted at
+  `services.gascity`, with every declared option beneath it. A name like
+  `services.d2b-gascity` or an option carrying a d2b default would leak the
+  first consumer into the interface every later consumer has to use, which is
+  the same mistake as a d2b path in a unit file and is harder to undo once
+  configurations depend on it.
+
+  Its package option is wired from, or defaults to, the locked
+  `llm-agents.nix` `gascity` package rather than repackaging Gas City.
+- **`vicondoa/d2b-gascity-configs`** owns the d2b-specific instance and policy
+  layer. It pins and imports `gascity.nix`, following or aligning that flake's
+  `llm-agents.nix` pin rather than introducing a competing one, and it owns
+  `city.toml`, `packs.lock` and pack pins, the d2b workflow formulas, the
+  repository and rig binding, the single Discord user, guild and channel
+  values, the d2b-specific egress allowlist, the artifact approval policy and
+  schema, the `tasks.md` importer, and secret references by name.
+- **The host's `/etc/nixos`** owns machine-private instantiation: secret
+  values, local paths, uid and gid assignment, and the import of the d2b
+  configuration module. It is operator-private and outside every repository
   named here.
-- **`vicondoa/d2b-gascity-configs`** owns the reusable deployment
-  configuration: a NixOS module that `/etc/nixos` imports, `city.toml`,
-  `packs.lock`, pack imports and pins, the rig binding, the Discord, dashboard
-  and GitHub wiring, provider and upstream environment, secret references by
-  name rather than value, the workflow formulas, the artifact approval store,
-  and the `tasks.md` importer.
-- **`vicondoa/d2b`** owns this record, the follow-on contributor documentation,
-  the Spec Kit artifacts under `specs/`, and the repo-local manifest of D6.
-  Nothing else. No Gas City concern lands in `packages/` or `nixos-modules/`.
 
-That the reusable layer is a NixOS module does not make it a d2b module: it is
-imported by the operator's host configuration and is invisible to `flake.nix`
-and to `d2b.*`, per D1.
+**`vicondoa/d2b`** remains this record, the follow-on contributor
+documentation, the Spec Kit artifacts under `specs/`, and the repo-local
+manifest of D7. Nothing else. No Gas City concern lands in `packages/` or
+`nixos-modules/`, and neither `llm-agents.nix` nor `gascity.nix` is ever a d2b
+flake input.
 
-Secrets are referenced, never inlined, in the configuration repository, and
-their values exist only where `/etc/nixos` places them.
+**This record authorizes creating `vicondoa/gascity.nix` and
+`vicondoa/d2b-gascity-configs` later; it does not create them now.** Neither
+exists at the time of writing, and nothing here is blocked on their existing.
+Research at the measured commits found no reusable Gas City NixOS module to
+adopt instead: the upstream organisation ships Homebrew taps and no Nix
+deployment repository, and `llm-agents.nix` exposes per-system `packages` and
+`overlays.shared-nixpkgs` with no `nixosModules` output at all.
 
-**D5. One local, single-user deployment, and what that scope does not
+Secrets are referenced, never inlined, in either shared repository, and their
+values exist only where `/etc/nixos` places them.
+
+**D5. Lifecycle is generic, ordered, and owned by the module layer.** The
+machinery this record specifies is mostly not about d2b. Five principals, a
+network namespace, an append-only store with an exclusive lock, a read-only
+dashboard, rotation and retention, and the sequence below are all things any
+Gas City deployment that takes agent isolation seriously would need. That is
+the argument for layer 2 existing at all: this is a body of generic host
+behaviour large enough to be worth testing once, in a module with its own NixOS
+VM tests, rather than re-deriving per consumer inside a policy repository.
+
+**Shutdown is ordered, and the order is the specification.** Stopping these
+services in an arbitrary order loses work, corrupts nothing but strands
+plenty, and can leave the audit trail describing a state the store never
+reached. The sequence is:
+
+1. **Stop admitting work.** The orchestrator stops accepting new runs and new
+   task claims. Nothing new enters the system from this point.
+2. **Park or drain the workflow.** In-flight nodes reach a durable boundary:
+   a task at a safe point is allowed to finish, anything else is parked on its
+   gate so it resumes rather than restarts.
+3. **Stop agent sessions with a bounded grace period.** Sessions are asked to
+   stop, given a bounded interval, and then terminated. The bound is
+   configuration, not an open-ended wait, because an agent that will not exit
+   must not prevent the host from shutting down.
+4. **Preserve durable state.** Workflow state, session records, and the
+   protected integration object store are flushed and consistent before
+   anything that owns them exits.
+5. **Stop the dashboard and the Discord ingress.** Observation and human
+   ingress stop only after the state they would describe has settled, so a
+   late-arriving interaction cannot land against a half-stopped orchestrator.
+6. **Flush and close audit appends.** Every in-flight append completes or is
+   abandoned with its temporary unlinked per D12, and no append is left
+   acknowledged-but-unsynced.
+7. **Release the locks last.** The append-helper's single-owner lock is
+   released only after every writer above has stopped, so the lock's lifetime
+   strictly contains every operation it guards.
+
+**Restart adopts before it cleans.** Startup is the mirror image and the
+ordering constraint is the one that matters: a starting instance acquires
+exclusive ownership, then reads existing state, then reconciles, and only then
+resumes. It never cleans up before adopting, because a sweep by an instance
+that does not own the store can delete the in-flight state of one that does.
+D12 states that rule for the append helper's temporaries; D5 makes it the
+general shape for every stateful principal here.
+
+D2 still holds throughout: none of this uses `d2bd`, the broker, a microVM, or
+any other d2b component. It is systemd, Unix identities, and namespaces.
+
+**D6. One local, single-user deployment, and what that scope does not
 simplify.** The deployment is one operator on their own machine, and
 `/etc/nixos` instantiates exactly one of it. That scope is used deliberately to
 remove work, and just as deliberately not used to remove the boundary that
@@ -367,18 +477,18 @@ What it removes:
   rejection emits one local, bounded, redacted diagnostic naming the rejection
   class from a closed set (`unconfigured-allowlist`, `identity-mismatch`,
   `guild-mismatch`, `channel-mismatch`, `signature-invalid`) together with the
-  received and configured identity digests of D11, never the raw ids. Digests
+  received and configured identity digests of D12, never the raw ids. Digests
   are what makes it actionable: the operator can compare the received digest
   against the configured one and see whether they are dealing with the wrong
   account or an empty configuration, without the diagnostic itself becoming a
   place where platform identifiers accumulate in plaintext.
-- **The approval reviewer identity is that one operator.** D11 records it for
+- **The approval reviewer identity is that one operator.** D12 records it for
   provenance and for binding a decision to a human, not to choose among
   reviewers or to evaluate a permission.
 - **The dashboard binds loopback only** and gains no authentication layer,
   because there is no second *human* on the machine to authenticate. That is
   the limit of what this scope buys: loopback excludes remote humans and
-  admits every local process, so D12 additionally requires read-only mode.
+  admits every local process, so D13 additionally requires read-only mode.
 - **Nothing multi-party is designed.** No role model, no permissions matrix, no
   tenancy, no shared or hosted instance, no remote access path, no high
   availability, no failover, and no federation across cities.
@@ -387,39 +497,40 @@ What it does not remove: **local agent processes remain untrusted principals.**
 "Single-user" is a statement about humans. The deployment still runs autonomous
 agents, each of which is a local principal that can open loopback sockets, read
 what its identity can read, and write what its identity can write. Every
-control in D12 and D13 exists for those principals and none of them is relaxed
+control in D13 and D14 exists for those principals and none of them is relaxed
 by the fact that one person is at the keyboard.
 
 Concretely, the **worker and publisher separation, and the worker's inability
-to write approvals, both stand unchanged** under D13. Those boundaries are
+to write approvals, both stand unchanged** under D14. Those boundaries are
 between the operator and an agent process, not between one human and several.
 Collapsing them because "it is only me" would delete the design's only
-mechanical controls while leaving every reason for them intact, and D13 forbids
+mechanical controls while leaving every reason for them intact, and D14 forbids
 it.
 
 The same distinction applies to the Discord allowlist. It answers "which human
 may speak to this deployment", which is a small question here because the
 answer is one person. It does not answer "what may an agent do", which is the
-question D13 answers, and the two must not be conflated because both happen to
+question D14 answers, and the two must not be conflated because both happen to
 be touched by the word "single-user".
 
-**D6. One tiny repo-local manifest, with a d2b-owned schema.** Gas City reads
+**D7. One tiny repo-local manifest, with a d2b-owned schema.** Gas City reads
 nothing from the rig repository, so this file is read by the configuration
 repository's tooling only and must not imitate upstream syntax. It is
 `.d2b-orchestration.toml` at the repository root and carries exactly `schema`,
-`spec_root`, `gascity_compat` (a version range for `gc`), and `panel_authority`
+`spec_root`, `gascity_compat` (a version range checked against what the
+deployed binary reports through `gc version`, per D18), and `panel_authority`
 (whose only legal value is `xtask-delivery`). It is contributor metadata, not a
 configuration surface: it exists so that a rename of `specs/` or a
 compatibility break is caught in the same commit that causes it. `.gc/` is
 forbidden inside this repository; Gas City owns that name for city state.
 
-**D7. Execution is upstream's supported local model.** Sessions run on the
+**D8. Execution is upstream's supported local model.** Sessions run on the
 `tmux` runtime, which is both the default and the registered fallback, and each
 task works in a git worktree created from the checkout and removed on
 completion. Both are what upstream ships and tests. No alternative backend is
 configured in the first deployment.
 
-**D8. Gas City owns durable execution; Spec Kit owns planning; neither owns
+**D9. Gas City owns durable execution; Spec Kit owns planning; neither owns
 review.** For an opted-in run, Gas City owns workflow state, the task DAG,
 dependency execution, retries, waits, routing, notification, runtime desire,
 and non-convergence reporting. Spec Kit owns `constitution`, `specify`,
@@ -428,7 +539,7 @@ and non-convergence reporting. Spec Kit owns `constitution`, `specify`,
 `/d2b-autopilot`: exactly one executor drives a given run, and for an opted-in
 run that executor is Gas City.
 
-**D9. Per-task execution is Superpowers-shaped, with an evidence rule that
+**D10. Per-task execution is Superpowers-shaped, with an evidence rule that
 does not force a fake test.** A task that changes behaviour runs the full
 red/green discipline: write the failing test, prove it fails, implement, prove
 it passes, local simplification, re-run the focused tests, revert the
@@ -463,7 +574,7 @@ post-implementation `speckit.analyze`, then a verification matrix mapping every
 requirement to tasks, changed files, commits, tests, review disposition and
 final status, and fails when any chain is incomplete.
 
-**D10. Gas City orchestrates the panel stage; the panel itself stays d2b's and
+**D11. Gas City orchestrates the panel stage; the panel itself stays d2b's and
 runs unchanged.** The distinction matters and the previous phrasing blurred it.
 Gas City may schedule the stage, block the run on it, and consume its outcome.
 Gas City may not perform, synthesize, summarise, re-run, short-circuit, or
@@ -501,7 +612,7 @@ The resume is itself gated: the close is permitted only when a `panel-attest`
 record exists for the wave, bound to the same `candidate_id`, `content_id` and
 `snapshot_sha256` the run is at. Closing a parked panel gate with no attested
 record is refused, because a manual fallback that can be waved through by
-typing a command is a worse gate than no gate, and the whole point of D9 is
+typing a command is a worse gate than no gate, and the whole point of D10 is
 that Gas City cannot report a review that did not happen.
 
 Upstream `compound-engineering` may run as an **additional, non-binding**
@@ -511,12 +622,12 @@ substitutes for a seat, and never shortens the roster. `pr-pipeline`'s
 `mol-pr-ship` may supply the readiness report; it does not gate the merge. The
 standalone panel skill stays usable outside Gas City.
 
-**D11. Approvals are artifact-bound, digest-only, append-only, and fail
+**D12. Approvals are artifact-bound, digest-only, append-only, and fail
 closed.** The approval record is owned by the deployment's approval store, not
 by a Gas City gate, a Discord message, or the dashboard. Each record carries:
 the gate node identifier, the artifact identity, a decision from the closed set
 `{approve, revise, rescope, abort}`, a reviewer digest, a run digest, and the
-timestamp. For the publication gate the artifact identity is D13's immutable
+timestamp. For the publication gate the artifact identity is D14's immutable
 integration commit hash; for a document gate it is the artifact path plus the
 `sha256` of its exact bytes. A Gas City gate is the **transport** that blocks
 the run; Discord is the **surface** that collects the decision; neither is the
@@ -530,7 +641,7 @@ correlation handles leaks both to anyone who later reads it. The digest is
 snowflake is low-entropy and enumerable, so an unkeyed digest of it is
 reversible by anyone who can guess a few million candidates. The key is stable
 for the life of the deployment, so the digest remains a usable correlation
-handle across records while the raw value stays unrecoverable. Per D5 the
+handle across records while the raw value stays unrecoverable. Per D6 the
 reviewer is always the one configured operator, so the digest identifies rather
 than authorises: a decision whose reviewer digest does not equal the configured
 operator's is rejected, not recorded.
@@ -548,7 +659,7 @@ publication gates. Analysis and per-task review are autonomous with escalation.
 **History is append-only and nobody may rewrite it.** A mutable approval log
 cannot prove that a human authorised anything, because the proof and the thing
 it constrains are then editable by the same run. The store is written **only**
-by D13's root-owned `append-helper`, which exposes one append operation and no
+by D14's root-owned `append-helper`, which exposes one append operation and no
 update, replace, truncate, or per-record delete operation of any kind. Neither
 `agent-worker` nor `orchestrator` nor `approval-controller` nor `publisher` may
 write, rewind, or truncate it directly.
@@ -843,7 +954,7 @@ The directory under `quarantine/` is named with an opaque token, and that token
 appears in no log line, no audit record, no error message, and no operator
 output. Observable surfaces identify a quarantined period by two things: its
 canonical `YYYY-MM-DD` period date, and a **quarantine correlation id** that is
-a keyed digest over the token under the same deployment-scoped key D11 uses for
+a keyed digest over the token under the same deployment-scoped key D12 uses for
 its other identity digests. The correlation id is stable, so an operator can
 follow one quarantine across a status listing, an error, and an audit record,
 without any surface publishing a path or a raw token that would invite someone
@@ -919,10 +1030,10 @@ everything else, is equally immutable, and is written by the one caller
 authorised for that kind.
 
 **Only the approval controller may originate a record, and it is not the
-worker.** A record reaches the append helper only from D13's
+worker.** A record reaches the append helper only from D14's
 `approval-controller`, and only after that principal has verified the Discord
-platform signature, applied D5's allowlist, and derived the artifact identity
-itself under D13. `agent-worker` has no origination path by any route: not a
+platform signature, applied D6's allowlist, and derived the artifact identity
+itself under D14. `agent-worker` has no origination path by any route: not a
 file it can write, not a socket that accepts a record from it, not a helper
 that appends on its behalf. Read access for the worker is permitted, because a
 run must observe whether its gate is satisfied and reading cannot forge.
@@ -933,7 +1044,7 @@ the approval that makes the publisher act; the credential stays where it is and
 the branch is published anyway, through the sanctioned path. M15 tests for it
 directly.
 
-**D12. The dashboard runs read-only, bound to loopback, and is not an
+**D13. The dashboard runs read-only, bound to loopback, and is not an
 interaction surface.** Loopback is not access control here. Every agent this
 deployment runs is a local process on the same host, so a loopback bind admits
 exactly the principals the design is most concerned about. The dashboard's own
@@ -950,14 +1061,14 @@ layer, not the first. If a future upstream renames or restructures that knob,
 the requirement is the property rather than the variable: no mutation endpoint
 reachable, proven by M14 rather than by configuration intent.
 
-Discord, gated by D5's allowlist and D11's approval store, is the only human
+Discord, gated by D6's allowlist and D12's approval store, is the only human
 interaction surface. The dashboard is for run observation, stage state,
 transcripts, live activity and debugging. It may not carry an artifact
 approval, may not answer a pending interaction, and may not be exposed beyond
 loopback or fronted by a proxy; each of those is a new record, not a
 configuration change.
 
-**D13. Five host principals: four dedicated unprivileged identities plus a
+**D14. Five host principals: four dedicated unprivileged identities plus a
 root-owned helper.** The design brief's
 rule is that implementation agents do not hold publishing authority. Two
 earlier forms of this decision failed to deliver it. The first withheld the
@@ -979,10 +1090,10 @@ host contributor infrastructure and involves no d2b component.
 | Principal | Holds | Must not be able to |
 | --- | --- | --- |
 | `orchestrator` | Durable Gas City state, the protected integration object store | Run agent code |
-| `agent-worker` | Model credential, its own worktrees, a restricted network namespace (D14) | Read orchestrator state or memory, write the integration store, write approvals, publish |
+| `agent-worker` | Model credential, its own worktrees, a restricted network namespace (D15) | Read orchestrator state or memory, write the integration store, write approvals, publish |
 | `approval-controller` | Discord ingress, the verifying key, the allowlist | Hold a GitHub credential, run agent code, rewrite approval history |
 | `publisher` | The one GitHub credential scoped to `vicondoa/d2b` | Run agent code, accept a mutable ref, write approvals |
-| `append-helper` | Root-owned; sole writer of the approval and audit store, admitting three authorised caller-and-kind pairs per D11 | Expose any update, replace, truncate, or per-record delete operation |
+| `append-helper` | Root-owned; sole writer of the approval and audit store, admitting three authorised caller-and-kind pairs per D12 | Expose any update, replace, truncate, or per-record delete operation |
 
 Four dedicated unprivileged identities plus one root-owned helper service is
 cheap on one machine: the four are `users.users` entries with units, the helper
@@ -1070,7 +1181,7 @@ Credential rules that apply to every principal:
   values from logs, state files, and error text is a requirement on the
   configuration repository's own tooling.
 
-**D14. The agent-worker runs in a restricted host network namespace with
+**D15. The agent-worker runs in a restricted host network namespace with
 default-deny egress.** An agent that inherits the host network namespace also
 inherits every route the host has, which on this machine includes the d2b
 per-environment bridges the operator is developing against. That would let
@@ -1092,8 +1203,8 @@ Denied, by default and explicitly:
 - link-local, `169.254.0.0/16` and `fe80::/10`, including metadata endpoints;
 - the host's loopback services. The namespace has its own loopback, so the
   dashboard, the orchestrator socket, and any other host-loopback listener are
-  simply not addressable from inside it. This is why D12's read-only
-  requirement and this decision are complementary rather than redundant: D12
+  simply not addressable from inside it. This is why D13's read-only
+  requirement and this decision are complementary rather than redundant: D13
   holds if the namespace is ever misconfigured, and this holds if the
   dashboard's mode is ever wrong.
 
@@ -1104,23 +1215,23 @@ Allowed, only when named in the configuration:
 - DNS to a specified resolver;
 - GitHub **read** access, if and only if a task genuinely requires fetching
   rather than working from the checkout. Publication is unaffected: the worker
-  has no credential to publish with under D13, so read reachability grants it
+  has no credential to publish with under D14, so read reachability grants it
   nothing.
 
 The policy is default-deny with an explicit allowlist, not default-allow with
 exceptions, so an endpoint nobody considered is refused rather than reached.
 Unix-domain sockets are not affected by the network namespace, which is why
-D13's peer-credential-checked socket remains the worker's channel to the
+D14's peer-credential-checked socket remains the worker's channel to the
 orchestrator and does not require relaxing anything here.
 
 M17 tests this with planted denied targets and allowed controls, because a
 firewall that denies everything, including what the workflow needs, passes a
 naive "is it blocked" check while being useless.
 
-**D15. Publication is one step, gated by a human, audited on every attempt,
+**D16. Publication is one step, gated by a human, audited on every attempt,
 with the lint as defence in depth.** Pushing a branch and creating a pull
 request happen only in a publisher step, only against the immutable commit hash
-approved under D11, and only through D13's publisher. If the upstream `github`
+approved under D12, and only through D14's publisher. If the upstream `github`
 pack's `push-branch` and `create-pr` commands are used, they are reachable from
 that step and from nowhere else, and the formula set carries a lint asserting
 it.
@@ -1128,7 +1239,7 @@ it.
 **Every publication attempt emits exactly one audit record, whether it
 succeeds or fails.** Publication is the only effect this system has outside the
 host, so an attempt that leaves no trace is the one case where operational
-evidence matters most. The record is appended through D11's append-only helper
+evidence matters most. The record is appended through D12's append-only helper
 and carries: the commit hash, the approval record's own digest, the outcome as
 one of a closed set, the failure class when it failed, and the timestamp. It is
 bounded in size and redacted, carrying digests rather than the reviewer's raw
@@ -1137,7 +1248,7 @@ remote URL with embedded authentication, or captured command output. Exactly
 one record per attempt: a refusal before the push is still an attempt, and a
 retry is a second attempt with its own record.
 
-The lint is a third layer, not the control. The controls are D13's separations:
+The lint is a third layer, not the control. The controls are D14's separations:
 a formula that reached a publishing command from the wrong step would still
 fail because the worker holds no publishing credential, a run that manufactured
 its own approval would still fail because the worker cannot originate a record
@@ -1151,8 +1262,8 @@ Automatic publication is not configurable in the first deployment; the
 capability is absent rather than disabled. The publisher is not the merger:
 `v3` is protected and the merge stays the operator's, as it is today.
 
-**D16. State the trust boundary honestly.** Agents run as `agent-worker` with
-that identity's privileges, in git worktrees, inside D14's network namespace,
+**D17. State the trust boundary honestly.** Agents run as `agent-worker` with
+that identity's privileges, in git worktrees, inside D15's network namespace,
 with the model credential reachable. There is no sandbox, no isolation of an
 agent from its sibling worktrees, and no confinement of an agent to the
 checkout. The blast radius of a misbehaving or compromised agent is that
@@ -1182,10 +1293,10 @@ memory can extract whatever it holds. Property 5 is what keeps a contributor
 tool from undercutting the product it is used to build.
 
 The dashboard sits behind two of these. A worker agent cannot reach it at all
-from inside D14's namespace, and if that namespace is ever misconfigured, D12's
+from inside D15's namespace, and if that namespace is ever misconfigured, D13's
 read-only mode still refuses the mutation. Neither is presented as sufficient
 alone. A local agent is a local principal; "only I can reach it" is a statement
-about humans, and D5 says so explicitly.
+about humans, and D6 says so explicitly.
 
 Everything else is scope and gating rather than containment: model access
 scoped to inference, human approval at five named gates, the publication lint,
@@ -1195,14 +1306,41 @@ reaching `v3`; they do not contain a bad agent inside the worker identity. Any
 claim stronger than that is unsupported by this design, and D2 forecloses the
 obvious way to strengthen it until a separate ADR takes that up.
 
-**D17. Everything imported is pinned.** Packs are pinned in `packs.lock`, whose
-schema records `version`, `commit` and `fetched` per pack; imports pin a commit
-with `Import.Version = "sha:<hex>"`. `gc` is pinned to a released version. The
-configuration repository documents upgrade and rollback for each pinned
-artifact, and an upgrade that changes a pack's formula step identifiers is
+**D18. The version pin is a three-way check, not a single lock.** Three things
+must agree, and each is pinned in a different place, so an upgrade that moves
+one without the others is caught rather than discovered at runtime:
+
+1. **The configuration repository revision**, which carries the module, the
+   formulas, and the city configuration.
+2. **The `llm-agents.nix` revision**, pinned in that repository's own
+   `flake.lock`, which determines the `gascity` package version and therefore
+   the `gc` binary. At the commit measured above that package is Gas City
+   `1.4.0`.
+3. **The Gas City pack lock**, `packs.lock`, whose schema records `version`,
+   `commit` and `fetched` per pack, with imports pinning a commit through
+   `Import.Version = "sha:<hex>"`.
+
+`gascity_compat` in `.d2b-orchestration.toml` is the assertion that ties the
+target repository to the deployment: it is checked against the version the
+deployed binary reports through `gc version`, not against the flake input's
+attribute name and not against what the module intended to install. Checking
+the running binary is the point, since the binary is what executes the
+formulas.
+
+Upgrading is a deliberate change to the `llm-agents.nix` lock in the
+configuration repository, followed by re-checking `gascity_compat` and the pack
+locks against the new binary. Rolling back is the same operation in reverse:
+restore the previous lock revision, which restores the previous package version
+by construction, because the lock is the version. The configuration repository
+documents both, and an upgrade that changes a pack's formula step identifiers is
 treated as a breaking change to the run.
 
-**D18. The importer is a lenient parser with a strict output.** `tasks.md` has
+Automatic updates upstream are the reason this is stated as a three-way check
+rather than left implicit. `llm-agents.nix` describes itself as automatically
+updated daily, so an unpinned or casually-followed input would move the `gc`
+binary underneath a pinned pack set without anyone deciding to.
+
+**D19. The importer is a lenient parser with a strict output.** `tasks.md` has
 no schema and no format version, so the importer parses what is reliable (the
 `- [ ]` checkbox, the `T\d{3,}` identifier, the `[P]` and `[US\d+]` markers,
 and `## Phase N` headers) and treats the rest as advisory. Prose dependencies
@@ -1244,8 +1382,8 @@ The first two items are the load-bearing ones.
 - No change to `PANEL_PROVIDER_POLICY`, `PANEL_MODEL_POLICY`,
   `PANEL_REASONING_EFFORT_POLICY`, `PANEL_ROLES`, or any part of
   `packages/xtask/src/delivery/`.
-- No claim that this design isolates agents, beyond the two separations D13
-  establishes and M11 and M15 prove. See D16.
+- No claim that this design isolates agents, beyond the two separations D14
+  establishes and M11 and M15 prove. See D17.
 - No multi-party deployment shape. No role model, permissions matrix, tenancy,
   shared or hosted instance, remote access path, high availability, failover,
   or federation. No authentication layer for the dashboard, and no exposure of
@@ -1283,6 +1421,19 @@ The first two items are the load-bearing ones.
 - **No unbudgeted temporaries.** In-flight temporary bytes count against both a
   dedicated temporary budget and the total store budget, and every abandoned
   path unlinks its own temporary.
+- **No `llm-agents.nix` or `gascity.nix` in d2b.** Neither is a flake input, an
+  overlay, a dependency, or a mention in `flake.nix`, `flake.lock`, or
+  `nixos-modules/`. They exist only in the shared configuration layers and the
+  private host deployment, and d2b neither builds nor tests against them.
+- **Nothing d2b-specific in `gascity.nix`.** The generic module carries no d2b
+  name, identifier, path, option, default, workflow, or assumption; no
+  repository or rig binding; no formulas, panel or delivery policy; no Discord
+  identity values; no d2b egress entries; and no task-import logic. Its public
+  option namespace is rooted at `services.gascity` and never names a consumer.
+  All of that lives in `d2b-gascity-configs`, and M21 proves the absence
+  mechanically rather than by review.
+- **No hand-built or hand-wrapped `gc`.** Neither shared repository rebuilds
+  Gas City, vendors it, or restates its runtime dependency closure.
 - **No copy fallback anywhere in the store.** Neither record install nor
   whole-period removal may degrade to a copy when a rename is unavailable.
   `periods/` and `quarantine/` share one filesystem, asserted by `st_dev` at
@@ -1321,14 +1472,14 @@ The first two items are the load-bearing ones.
   planted violation, does not satisfy any acceptance condition in this record.
 - No Discord ingress from any identity other than the one configured operator,
   and no allowlist that defaults open when unset or empty.
-- **Single-user scope is never a reason to collapse identities or relax D12.**
-  D5 removes multi-human concerns; it removes nothing about what a local agent
-  process may do, and D12 and D13 stand independently of it.
-- No credential beyond those D13 names, no credential value committed to
+- **Single-user scope is never a reason to collapse identities or relax D13.**
+  D6 removes multi-human concerns; it removes nothing about what a local agent
+  process may do, and D13 and D14 stand independently of it.
+- No credential beyond those D14 names, no credential value committed to
   either repository, and no publishing credential reachable from the worker
   identity.
 - No assertion that a Gas City step can invoke an in-session Copilot slash
-  command. The panel bridge is unproven; see D10 and M10.
+  command. The panel bridge is unproven; see D11 and M10.
 - No `.gc/` directory in this repository, and no delivery evidence, transcript,
   or attestation payload committed to Git.
 - No freezing of upstream syntax beyond what the measured commits above prove.
@@ -1484,9 +1635,9 @@ escaping change all produce a clean result that means nothing.
   fail, not when a policy document says it should.
 
   This is the one MVP condition that is not negotiable on schedule grounds. The
-  helper protocol of D13 may be prototyped, revised, or replaced; the
+  helper protocol of D14 may be prototyped, revised, or replaced; the
   non-reachability property it exists to provide may not ship unproven, because
-  without it D15's lint is the only thing standing between an agent and the
+  without it D16's lint is the only thing standing between an agent and the
   remote.
 
 - **M12 Publication requires an approval bound to an immutable commit.** The
@@ -1495,7 +1646,7 @@ escaping change all produce a clean result that means nothing.
   commit presented; an approval recorded against a gate node other than the
   publication gate; an approval whose decision is not `approve`; and **any
   mutable reference offered in place of a commit hash**, including a branch
-  name, a tag name, `HEAD`, and a symbolic ref. The formula-set lint of D15
+  name, a tag name, `HEAD`, and a symbolic ref. The formula-set lint of D16
   rejects a formula that references `push-branch` or `create-pr` outside the
   publisher step. Done when each of the five publisher rejections and the lint
   rejection is individually observed.
@@ -1583,7 +1734,7 @@ escaping change all produce a clean result that means nothing.
      truncating the store, and deleting an individual record are each refused.
      Re-appending identical content is not a modification and is covered by
      part 5.
-  2. **Caller and kind authorization.** The helper's socket enforces the D11
+  2. **Caller and kind authorization.** The helper's socket enforces the D12
      matrix over all **fifteen** caller-and-kind combinations: three accepts,
      one per authorised pair; six cross-kind rejections, being each of those
      three callers offering each of the two kinds it does not own; and six
@@ -1722,6 +1873,97 @@ escaping change all produce a clean result that means nothing.
       deleting a period younger than the floor, deletion is **refused** and the
       condition reported.
 
+
+- **M19 The deployed `gc` resolves from the locked package, and no other `gc`
+  is reachable.** Four parts, all on the running deployment.
+
+  1. **Provenance.** The `gc` binary the service executes resolves to a Nix
+     store path produced by the `gascity` package of the
+     `llm-agents.nix` revision recorded in the configuration repository's
+     `flake.lock`, verified by comparing the resolved store path against the
+     path that revision evaluates to rather than by comparing version strings.
+  2. **Version agreement.** That binary's `gc version` output satisfies
+     `gascity_compat` in `.d2b-orchestration.toml`, and the check is performed
+     against the binary's own output rather than against the flake attribute or
+     the module's intent.
+  3. **No alternate binary.** The unit's `ExecStart` names that store path, and
+     the `PATH` of every principal that can invoke `gc` contains no other `gc`:
+     none in `/usr/local/bin`, none in a user profile, none in a development
+     shell left on the path, and none earlier in `PATH` than the intended one.
+     Verified by resolving `gc` from each principal's environment and asserting
+     a single candidate equal to the expected store path.
+  4. **No manual dependency restatement.** The configuration repository's
+     module does not add `beads`, `dolt`, `flock`, `gitMinimal`, `jq`, `lsof`,
+     `procps`, or `tmux` to the service `PATH` itself, verified by scanning the
+     module for those names; the wrapped binary supplies them. A build that
+     drops the wrapper is caught by part 1 rather than masked by a duplicated
+     list.
+
+
+- **M20 Shutdown is ordered and restart adopts before it cleans.** Two parts.
+
+  1. **Shutdown order.** A full stop of the deployment is traced, and the seven
+     steps of D5 are observed in order: no run or task claim is admitted after
+     step 1; an in-flight task either completes or is parked such that a
+     subsequent start resumes it rather than restarting it; an agent session
+     that ignores the stop request is terminated at the configured bound rather
+     than waited on indefinitely; the dashboard and Discord ingress stop
+     accepting only after workflow state has settled, verified by a late
+     interaction arriving during shutdown and being refused rather than
+     partially applied; no append is left acknowledged but unsynced, and no
+     temporary survives a clean shutdown; and the append-helper lock is
+     observed released after every writer has exited, not before.
+  2. **Startup adoption order.** A start against a store with existing state
+     acquires exclusive ownership, reads state, reconciles, and only then
+     resumes work, verified by tracing that no unlink, no reconciliation, and
+     no period open for writing precedes lock acquisition. Combined with M9's
+     overlap case, this closes the window in which a second instance could
+     clean up a first instance's state.
+
+  Both parts run against the generic module, not against d2b-specific
+  configuration, since D5 assigns this behaviour to the module layer and it
+  must hold for any consumer.
+
+
+- **M21 `gascity.nix` is generic, proven by scan rather than by review.** The
+  generic module repository is checked in its own CI, and the check is subject
+  to the standing coverage and planted-control requirements above.
+
+  1. **No d2b identifier anywhere.** A case-insensitive scan of the entire
+     tracked tree, including `flake.nix`, `flake.lock`, module files, helper
+     packages, tests, and documentation, finds no `d2b` identifier. The match
+     is at identifier boundaries rather than raw substring, and content-address
+     literals are excluded: `narHash`, `sha256`, `hash` and `vendorHash` values
+     and store-path components are opaque digests in which the three characters
+     can occur by chance, and a scan that fails on one of those will be
+     disabled the first time it does. Excluding them is what keeps the check
+     alive.
+  2. **No d2b dependency.** No flake input, overlay, or package reference
+     resolves to `vicondoa/d2b` or any repository under it, verified against
+     the resolved `flake.lock` rather than the input names in `flake.nix`, so
+     an input aliased to an innocuous name is still caught.
+  3. **Option namespace is Gas City-specific.** Every option the module
+     declares sits beneath `services.gascity`, and no declared option name,
+     description, example, or default contains a d2b identifier. Verified by
+     evaluating the module's option set and inspecting the declarations, not by
+     grepping the source, so an option assembled from string fragments is
+     still checked.
+  4. **Counted coverage.** The scan reports the number of files, flake inputs,
+     and declared options it examined, asserts each is greater than zero, and
+     fails closed on an empty set. A repository that scanned nothing passes
+     nothing.
+  5. **Planted controls.** Four violations are planted and each must be
+     rejected: an option named with a d2b identifier; an option whose default
+     is a d2b path; a flake input resolving to a d2b repository under a
+     neutral alias; and a d2b string inside a systemd unit definition. A scan
+     that cannot demonstrate these four detections has not been shown to detect
+     anything.
+
+  This condition belongs to the generic repository and runs there. It is listed
+  in this record because the split D4 makes is only worth its cost if the
+  generic layer stays generic, and that property degrades silently: one d2b
+  path added under deadline is invisible in review and permanent in practice.
+
 ## Consequences
 
 **d2b gains nothing, and that is the intended outcome.** A consumer's
@@ -1771,7 +2013,7 @@ it in a task record, and have it reach the panel. What it cannot do is publish
 that change, reach d2b's networks, read the orchestrator's memory, or rewrite
 the record of what a human approved.
 
-**The worker identity is not isolated, and D16 says so rather than implying
+**The worker identity is not isolated, and D17 says so rather than implying
 otherwise.** Agents run as `agent-worker` with its privileges and reach the
 model credential and their own worktrees. A prompt-injected or malfunctioning
 agent can do anything that identity can do inside its namespace, and the
@@ -1818,13 +2060,38 @@ change has to be considered against both, and the failure mode is a rule that
 lands in one and silently does not hold in the other. D3's guard catches
 deletion and conditioning, not divergence of intent.
 
-**Deployment is split across three places, one of which is not version
-controlled here.** `/etc/nixos` holds the instantiation, so a working
-deployment cannot be reproduced from the two repositories alone. That is the
-correct place for machine-specific and secret-adjacent configuration, but it
-means the configuration repository must document what `/etc/nixos` is expected
-to provide, and a missing expectation shows up as a runtime failure rather than
-an evaluation error.
+**Deployment is split across four layers, and two of them are repositories
+that do not exist yet.** `numtide/llm-agents.nix` supplies the package,
+`vicondoa/gascity.nix` will supply the generic module, `d2b-gascity-configs`
+will supply d2b policy, and `/etc/nixos` instantiates. That is three pins to
+keep aligned and two repositories to create, review, and maintain before any of
+this runs. The honest cost of the extra layer is that a change spanning generic
+machinery and d2b policy now spans two repositories and two reviews, and a
+version skew between them is a new failure mode that did not exist when the
+module and the policy were one file.
+
+What buys that back is testability and blast radius. The generic layer can have
+NixOS VM tests for shutdown ordering, restart adoption, lock contention and
+namespace denial that need no d2b checkout, no Discord application and no pack
+set; and a defect in d2b workflow policy cannot reach the principal split or
+the append store, because they are not in the same repository. Given that layer
+2 is where the security machinery lives, that separation is worth one more pin.
+
+`/etc/nixos` remains outside version control here, so a working deployment
+cannot be reproduced from the shared repositories alone. That is the correct
+place for machine-specific and secret-adjacent configuration, but it means the
+configuration repository must document what `/etc/nixos` is expected to
+provide, and a missing expectation shows up as a runtime failure rather than an
+evaluation error.
+
+**The generic module is a commitment to a second audience.** Writing
+`gascity.nix` as a reusable module means someone other than this deployment may
+use it, which is the point but is also an obligation: options become a surface,
+defaults become a contract, and a change that suits d2b but breaks a
+hypothetical consumer is now a real consideration. If it turns out nobody else
+ever uses it, the split will have cost a repository to buy testing isolation
+alone. That is still a reasonable trade for the machinery in D5, D12, D14 and
+D15, but it should be recorded as a bet rather than a certainty.
 
 **Reviews get slower and more expensive, on purpose.** An opted-in run carries
 per-task spec and quality reviews, an optional 17-lane compound filter, and the
@@ -1835,11 +2102,11 @@ front of them and removes nothing.
 **Operational dependence on Discord and a temporary dashboard.** A Discord
 outage means the human surface is gone and runs park at gates. The dashboard
 repository describes itself as a temporary workspace and has no auth model, so
-D12 confines it to loopback observation; when it folds back into `gc`, its
-approval semantics must be re-measured before D12 can be relaxed.
+D13 confines it to loopback observation; when it folds back into `gc`, its
+approval semantics must be re-measured before D13 can be relaxed.
 
 **Single-user scope is cheap now and will be the expensive thing to change.**
-D5 removes a permissions matrix, a role model, a tenancy story, and a dashboard
+D6 removes a permissions matrix, a role model, a tenancy story, and a dashboard
 authentication layer, none of which this deployment needs. The bill arrives if
 a second person ever needs access, because there is then no authentication
 surface to extend and no notion of an actor other than the configured operator
@@ -1848,7 +2115,7 @@ of the design, not a configuration change, and it deserves its own record. The
 trade is accepted because building multi-party access control for one person is
 speculative work whose only certain outcome is more code to keep correct.
 
-The half that does **not** get cheaper is the agent boundary. D13's separation
+The half that does **not** get cheaper is the agent boundary. D14's separation
 costs the same for one operator as for ten, because agents are the thing it
 constrains and the deployment runs exactly as many of them either way.
 
@@ -1861,7 +2128,7 @@ contributor tooling in a framework's product surface, which D1 forbids for
 better reasons.
 
 **The importer will drift.** `tasks.md` has no schema and no version and its
-producer is a language model. D18 makes drift loud at import time rather than
+producer is a language model. D19 makes drift loud at import time rather than
 silent at execution time and puts a human confirmation in the path, but it
 cannot make the format stable.
 
@@ -1903,11 +2170,38 @@ would strand anyone who cannot or will not run a Discord bot, a dashboard, and
 an orchestrator daemon to change a Nix module. D3 keeps the standalone skills
 first-class, and the two paths converge at the same panel and the same seal.
 
+**Keep the whole NixOS module in `d2b-gascity-configs`, with no separate
+`gascity.nix`.** Rejected, and this is the choice this revision makes rather
+than defers. What the module has to contain is now substantial and almost
+entirely generic: five principals and their privilege separation, a network
+namespace with a default-deny firewall, an append-only store with an exclusive
+lock and an atomic install path, rotation and retention with a quarantine
+protocol, a read-only dashboard, and the ordered shutdown and adoption sequence
+of D5. Fusing that with d2b's rig path, formulas, Discord identity and egress
+allowlist produces one repository where a change to a firewall primitive and a
+change to a workflow policy touch the same files and share a review.
+
+The concrete cost is testability. Generic lifecycle behaviour wants NixOS VM
+tests that assert shutdown ordering, restart adoption, lock contention, and
+namespace denial, and those tests should not require a d2b checkout, a Discord
+application, or a pack set to run. Splitting lets layer 2 be tested on its own
+terms and lets layer 3 stay small enough to read as policy. The price is one
+more repository and one more pin, which D4 accepts.
+
+**Put the module in `llm-agents.nix` instead.** Not assumed, and not
+requested. It supplies packages today, exposing per-system `packages` and
+`overlays.shared-nixpkgs` with no `nixosModules` output, and it is upstream and
+outside our control. Making this design depend on an upstream adding and then
+maintaining a NixOS module with our principal split, our shutdown ordering, and
+our append-only store would couple a security-relevant boundary to a repository
+that describes itself as automatically updated daily. If that flake later grows
+a module we want, adopting it is a decision to take then, on evidence.
+
 **Keep the whole deployment in `d2b-gascity-configs`, with nothing in
-`/etc/nixos`.** Rejected. Secret material, the service account, and network
-exposure are properties of one machine, and a shared repository is the wrong
-authority for them. The split costs reproducibility from the repositories
-alone, which D4 accepts and the configuration repository documents.
+`/etc/nixos`.** Rejected. Secret material, uid assignment, and network exposure
+are properties of one machine, and a shared repository is the wrong authority
+for them. The split costs reproducibility from the repositories alone, which D4
+accepts and the configuration repository documents.
 
 **Let Gas City run the ten-seat panel through `compound-engineering`.**
 Rejected on measured grounds. The compound pack has 17 selector-gated lanes, no
@@ -1932,7 +2226,7 @@ elsewhere.
 Rejected for the first deployment. Both are real builtin runtimes, but each
 adds an operational substrate the operator does not run today, and tmux remains
 required regardless because it is the registered fallback. Adding
-infrastructure to partially close the D16 gap is a decision that deserves its
+infrastructure to partially close the D17 gap is a decision that deserves its
 own record alongside the sandbox question, not a quiet default here.
 
 **Run everything as one identity and rely on the publication lint.** Rejected,
@@ -1945,20 +2239,20 @@ by any subprocess they spawn regardless of what the formula says, and the
 design brief's own rule is that implementation agents do not hold publishing
 authority. Splitting the identity costs one `users.users` entry and a helper,
 and it converts the rule from prompt-level to mechanical. The lint survives as
-defence in depth in D15, which is the right rank for it.
+defence in depth in D16, which is the right rank for it.
 
 **Collapse the identities, since it is a single-user machine anyway.**
 Rejected, and the reasoning that makes it tempting is the reasoning that makes
-it wrong. D5's scope means one *human* uses this deployment; it says nothing
+it wrong. D6's scope means one *human* uses this deployment; it says nothing
 about how many autonomous agent processes run under it, which is the population
-D13 constrains. The publishing credential and the approval-write authority are
+D14 constrains. The publishing credential and the approval-write authority are
 withheld from agents, not from the operator, who retains both through the
 controller and publisher identities. Merging them into the worker would trade
 the design's only mechanical controls for the removal of two `users.users`
 entries.
 
 **Withhold the GitHub credential but let the worker write approvals.**
-Rejected, and this was the defect in the previous form of D13. It looks like a
+Rejected, and this was the defect in the previous form of D14. It looks like a
 boundary and is not one: an agent that can write the approval store approves
 its own revision and then calls the publisher through the sanctioned path,
 which verifies an approval that exists and publishes. No credential leaks, no
@@ -2015,15 +2309,15 @@ never loads the frontend.
 **Build multi-user access control now.** Rejected. A permissions matrix, a role
 model, and a dashboard authentication layer would be written for a second
 principal who does not exist, tested against a threat model nobody has stated,
-and maintained by the one person they were supposed to protect against. D5
+and maintained by the one person they were supposed to protect against. D6
 takes the scope as given and states the cost of reversing it in Consequences
 rather than paying it up front. Note that this rejection is about **human**
-principals only; the agent-principal controls in D12 and D13 are built now
+principals only; the agent-principal controls in D13 and D14 are built now
 precisely because those principals do exist today.
 
 **Give the publisher the operator's general GitHub identity.** Rejected. It is
 the one credential in the system with lasting consequences outside this
-repository, and D13 scopes it to `vicondoa/d2b` precisely because D16 admits
+repository, and D14 scopes it to `vicondoa/d2b` precisely because D17 admits
 the worker identity running agents is not contained. Branch protection on `v3`
 and the human merge remain the last line rather than the only one.
 
@@ -2035,7 +2329,7 @@ delivery state root that `storage.rs` already refuses to place inside a working
 tree.
 
 **No repo-local manifest at all.** Rejected. Gas City reads nothing from the
-rig repository, so without D6 there is no file that travels with the code and
+rig repository, so without D7 there is no file that travels with the code and
 no place for a rename or a compatibility break to be caught in the commit that
 causes it. The manifest is deliberately four keys so that it cannot become a
 second configuration system, and it is contributor metadata rather than a
