@@ -993,47 +993,43 @@ fn execution_manifest_schema_and_prose_agree_with_non_empty_discovery() {
     assert!(
         nix_jobs.contains("builtins.tryEval")
             && nix_jobs.contains("caseNamesFor")
+            && nix_jobs.contains("mkAggregateCheck")
+            && nix_jobs.contains("fileJobName")
+            && nix_jobs.contains("fileJobs")
+            && nix_jobs.contains("jobNames")
+            && nix_jobs
+                .contains("value = mkAggregateCheck (fileJobName caseFileName) [ caseFileName ];")
             && !nix_jobs.contains("jobsFor")
             && !nix_jobs.contains("derivationName")
             && flake.contains("nixUnitJobs = forAllSystems")
-            && flake.contains("nixUnitCaseNames = forAllSystems")
+            && flake.contains("nixUnitInventory = forAllSystems")
             && flake.contains("nixUnitCorpus.caseNames")
+            && flake.contains("nixUnitCorpus.jobNames")
             && flake.contains("builtins.sort builtins.lessThan nixUnitCorpus.caseNames")
+            && flake.contains("builtins.sort builtins.lessThan nixUnitCorpus.jobNames")
+            && !flake.contains("nixUnitCaseNames")
             && !flake.contains("nixUnitCorpus.jobs")
             && !flake.contains("__nix_unit_integrity"),
-        "execution-manifest-policy: Nix-unit aggregate and case-inventory surfaces drifted"
+        "execution-manifest-policy: Nix-unit aggregate, file-job, and inventory surfaces drifted"
     );
     let jobs_block = flake
         .split("nixUnitJobs = forAllSystems")
         .nth(1)
-        .and_then(|region| region.split("nixUnitCaseNames = forAllSystems").next())
+        .and_then(|region| region.split("nixUnitInventory = forAllSystems").next())
         .expect("execution-manifest-policy: Nix-unit jobs block is missing");
-    let job_attr_re =
-        Regex::new(r#""(nix-unit(?:-[A-Za-z0-9_-]+)?)""#).expect("valid Nix-unit attr regex");
-    let actual_job_attrs: BTreeSet<String> = job_attr_re
-        .captures_iter(jobs_block)
-        .map(|capture| capture[1].to_string())
-        .collect();
-    assert_eq!(
-        actual_job_attrs, expected_nix_unit_leaves,
-        "execution-manifest-policy: Nix-unit jobs must expose exactly the seven baseline attrs"
-    );
-    for leaf in nix_unit_baseline_leaves {
-        assert_eq!(
-            jobs_block.matches(&format!("\"{leaf}\"")).count(),
-            1,
-            "execution-manifest-policy: Nix-unit jobs must contain exactly one aggregate attr {leaf}"
-        );
-    }
     assert!(
-        jobs_block.contains("self.checks.${system}.${checkName}"),
-        "execution-manifest-policy: Nix-unit jobs must reuse existing flake checks"
+        jobs_block.contains("fileJobs")
+            && jobs_block.contains("nixUnitCorpus.fileJobs")
+            && !jobs_block.contains("self.checks")
+            && !jobs_block.contains("nixUnitCorpus.jobs")
+            && !jobs_block.contains("jobsFor"),
+        "execution-manifest-policy: Nix-unit jobs must expose per-file fileJobs, not seven self.checks-only attrs"
     );
     for marker in [
         "nix-eval-jobs",
         "--no-instantiate",
         "nixUnitJobs.<system>",
-        "nixUnitCaseNames",
+        "nixUnitInventory",
         "installables",
         "realized_checks",
         "893",
@@ -1169,7 +1165,10 @@ fn execution_manifest_schema_and_prose_agree_with_non_empty_discovery() {
         "run make nix-unit-pin",
         "case_names_ok",
         "result_attrs_ok",
-        "case_inventory_file",
+        "inventory_file",
+        ".caseNames[]",
+        ".jobNames[]",
+        "keys | sort",
         "test(\"^[[:space:]]*FAIL [^:]+: \")",
         "contains(\"${\") | not",
         "evaluation failed without a FAIL line",
@@ -1183,9 +1182,9 @@ fn execution_manifest_schema_and_prose_agree_with_non_empty_discovery() {
         );
     }
     assert_eq!(
-        nix_driver.matches("nixUnitCaseNames").count(),
+        nix_driver.matches("nixUnitInventory").count(),
         1,
-        "execution-manifest-policy: Nix-unit case inventory must be evaluated exactly once"
+        "execution-manifest-policy: Nix-unit inventory must be evaluated exactly once"
     );
     assert!(
         nix_driver.contains("--json")

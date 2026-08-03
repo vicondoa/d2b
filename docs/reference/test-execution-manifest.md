@@ -28,17 +28,19 @@ failed fragment is best effort and the original test status is preserved.
 
 The Nix-unit target uses the same lifecycle. Its full pass invokes the locked
 `nix-eval-jobs` tool on the `nixUnitJobs.<system>` attrset with
-`--no-instantiate`. That attrset contains exactly the seven existing aggregate
-checks, which reuse the corresponding `checks.<system>` definitions. The
-runner compares the sorted result attributes by symmetric difference with that
-seven-leaf baseline, so each worker evaluates one shard rather than the
-complete 893-case attrset. The separate locked
-`nixUnitCaseNames.<system>` output is evaluated once with a `git+file` flake
-reference and compared by sorted symmetric difference with the common and
-native-system pin files. It contains names only and does not force case
-expressions. A selected `D2B_NIX_UNIT_CHECK` pass evaluates only that
-discovered check's `drvPath`, retaining the single-shard interface without
-realizing its output.
+`--no-instantiate`. That attrset contains exactly one aggregate attr per
+current `*.nix` case file (45 file jobs), with stable `case-<basename>` names.
+Each file job and the seven existing topical `checks.<system>` leaves reuse
+the same `casesFor`/`resultsFor`/failure-report constructor. The runner
+compares sorted result attrs by symmetric difference with the locked file-job
+names, so each worker evaluates one file aggregate rather than one case or
+the complete 893-case attrset. The single locked
+`nixUnitInventory.<system>` output is evaluated once with a `git+file` flake
+reference; it contains sorted `caseNames` and sorted `jobNames`. The runner
+compares `caseNames` by sorted symmetric difference with the common and
+native-system pin files. A selected `D2B_NIX_UNIT_CHECK` pass evaluates only
+that discovered topical check's `drvPath`, retaining the manual selector
+without realizing its output.
 
 Because both Nix-unit paths are evaluation-only, they submit no installables
 to the Nix daemon and realize no checks. Their manifest evidence therefore
@@ -179,9 +181,9 @@ and runs API, main, broker, guest, no-bash, schema, inventory and supply chain
 as separate full-budget Make jobs before the stable `test-rust` join.
 
 For Nix-unit, compare the seven completed leaves listed above with the
-baseline execution manifest, then compare the source case inventory
-separately. A passing full run must contain exactly the seven aggregate result
-attributes and all 893 names in the separate inventory; it publishes all seven
-leaves. A selected run evaluates and publishes only its one selected leaf. A
-failed or interrupted record is diagnostic partial evidence and cannot satisfy
-coverage acceptance.
+baseline execution manifest, then compare the source case and file-job
+inventories separately. A passing full run must contain exactly the 45 current
+file-job result attributes and all 893 case names in the single inventory; it
+publishes all seven leaves. A selected run evaluates and publishes only its one
+selected topical leaf. A failed or interrupted record is diagnostic partial
+evidence and cannot satisfy coverage acceptance.

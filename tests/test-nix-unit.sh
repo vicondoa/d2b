@@ -326,9 +326,9 @@ if ! command -v jq >/dev/null 2>&1; then
   exit 2
 fi
 
-# nix-eval-jobs owns the evaluator worker pool. It evaluates the seven
-# aggregate checks but --no-instantiate never submits them as installables to
-# the daemon or realizes their outputs.
+# nix-eval-jobs owns the evaluator worker pool. It evaluates one aggregate
+# attr per case file, while --no-instantiate never submits them as installables
+# to the daemon or realizes their outputs.
 nix_unit_surface=nix-unit
 result_dir=$(d2b_mktemp ".d2b-nix-eval-jobs.XXXXXX")
 result_file="$result_dir/results.jsonl"
@@ -349,26 +349,31 @@ emit_sanitized_tool_stderr() {
   sanitize_stderr_file "$tool_stderr"
 }
 
-case_inventory_file="$result_dir/case-names.json"
-case_inventory_stderr="$result_dir/case-names.stderr"
+inventory_file="$result_dir/inventory.json"
+inventory_stderr="$result_dir/inventory.stderr"
 if ! nix eval \
   --impure \
   --quiet \
   --no-warn-dirty \
   --json \
-  "${flake_ref}#nixUnitCaseNames.${system}" \
-  >"$case_inventory_file" \
-  2>"$case_inventory_stderr"; then
-  sanitize_stderr_file "$case_inventory_stderr"
-  fail "nix-unit case inventory ($system): evaluation failed" || true
+  "${flake_ref}#nixUnitInventory.${system}" \
+  >"$inventory_file" \
+  2>"$inventory_stderr"; then
+  sanitize_stderr_file "$inventory_stderr"
+  fail "nix-unit inventory ($system): evaluation failed" || true
   exit 1
 fi
 if ! jq -e '
-  type == "array"
-  and length > 0
-  and all(.[]; type == "string" and length > 0)
-' "$case_inventory_file" >/dev/null; then
-  fail "nix-unit case inventory ($system): output was not a non-empty string array" || true
+  type == "object"
+  and ((keys | sort) == ["caseNames", "jobNames"])
+  and (.caseNames | type == "array" and length > 0
+    and all(.[]; type == "string" and length > 0))
+  and (.jobNames | type == "array" and length > 0
+    and all(.[]; type == "string" and length > 0))
+  and (.caseNames == (.caseNames | sort | unique))
+  and (.jobNames == (.jobNames | sort | unique))
+' "$inventory_file" >/dev/null; then
+  fail "nix-unit inventory ($system): output was not an object with non-empty caseNames and jobNames arrays" || true
   exit 1
 fi
 
@@ -429,9 +434,9 @@ expected_result_attrs_unsorted="$result_dir/expected-result-attrs.unsorted"
 expected_result_attrs_file="$result_dir/expected-result-attrs"
 actual_result_attrs_unsorted="$result_dir/actual-result-attrs.unsorted"
 actual_result_attrs_file="$result_dir/actual-result-attrs"
-if ! printf '%s\n' "${nix_unit_baseline_leaves[@]}" \
+if ! jq -r '.jobNames[]' "$inventory_file" \
   >"$expected_result_attrs_unsorted"; then
-  fail "could not write expected Nix-unit result attributes" || true
+  fail "could not read expected Nix-unit job names" || true
   exit 1
 fi
 if ! sort "$expected_result_attrs_unsorted" >"$expected_result_attrs_file"; then
@@ -475,7 +480,7 @@ mapfile -t unexpected_result_attrs <"$unexpected_result_attrs_file"
 result_attrs_ok=1
 if [ "${#missing_result_attrs[@]}" -ne 0 ] \
   || [ "${#unexpected_result_attrs[@]}" -ne 0 ]; then
-  log "  FAIL: nix-unit result attributes differ from the seven baseline leaves"
+  log "  FAIL: nix-unit result attributes differ from the locked file-job inventory"
   for attr in "${missing_result_attrs[@]}"; do
     log "    missing result attribute: $attr"
   done
@@ -507,7 +512,7 @@ if ! sort -u "$expected_cases_unsorted" >"$expected_cases_file"; then
   exit 1
 fi
 inventory_cases_unsorted="$result_dir/inventory-cases.unsorted"
-if ! jq -r '.[]' "$case_inventory_file" >"$inventory_cases_unsorted"; then
+if ! jq -r '.caseNames[]' "$inventory_file" >"$inventory_cases_unsorted"; then
   fail "could not parse evaluated Nix-unit case names" || true
   exit 1
 fi

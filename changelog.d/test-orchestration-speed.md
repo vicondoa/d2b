@@ -14,12 +14,12 @@
 - Use `D2B_RUST_BUDGET` as the supported local Rust budget control. Top-level
   Make `-j` does not cap inner Cargo concurrency; the Rust target derives
   Cargo and nextest quotas from the effective CPU and memory budget.
-- Run the complete Nix-unit corpus through seven existing aggregate checks on
-  locked `nix-eval-jobs --no-instantiate`, with focused toolchain
-  self-provisioning, bounded worker control, and complete multi-failure
-  reporting. Expose the sorted full case-name inventory separately so case
-  presence remains checked without traversing the per-case surface in every
-  worker.
+- Run the complete Nix-unit corpus through one aggregate
+  `nix-eval-jobs --no-instantiate` attr per current case file (45 file jobs),
+  with focused toolchain self-provisioning, bounded worker control, and
+  complete multi-failure reporting. Reuse the same aggregate constructor for
+  the seven topical flake checks, and expose one locked inventory containing
+  sorted full case names and file-job names.
 - Use the operator-intent `D2B_NIX_UNIT_WORKERS` and
   `D2B_NIX_UNIT_MEMORY_MB` controls for Nix-unit resource requests, and retire
   `D2B_NIX_UNIT_JOBS` with an actionable migration error.
@@ -29,7 +29,11 @@
   drift with the `run make nix-unit-pin` remedy; use a fixed path-free `d2b`
   flake label for command progress.
 - Record Nix-unit execution evidence as the seven stable baseline leaves while
-  keeping evaluation-only runs free of installables and realized checks.
+  keeping evaluation-only runs free of installables and realized checks; the
+  45-file partition is a candidate pending measurement.
+- Reject the seven-aggregate candidate after its 543s local four-worker
+  observation; retain the earlier 202.20s per-case local result as historical
+  evidence without claiming hosted success.
 - Keep four requested local workers with a 4096 MiB default, use 3072 MiB on
   GitHub Actions so the existing envelope admits two workers on a 16 GiB
   runner, and do not claim hosted success until a hosted run is observed.

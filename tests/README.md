@@ -228,18 +228,22 @@ replace source inventory, `make test-policy`, or
 ### Nix-unit runner
 
 `make test-nix-unit` uses the established `nix-eval-jobs` runner with
-`--no-instantiate` against the locked
-`nixUnitJobs.<system>` flake output. That output contains exactly the seven
-aggregate leaves `nix-unit`, `nix-unit-daemon`, `nix-unit-guest`,
-`nix-unit-misc`, `nix-unit-network`, `nix-unit-runtime`, and `nix-unit-state`;
-each leaf reuses the corresponding `checks.<system>` definition. The runner
-evaluates every current x86 case through those aggregate shards without
-submitting installables to the daemon or realizing derivations.
-`nixUnitCaseNames.<system>` is a separate locked, sorted case-name inventory
-derived from the same corpus without forcing case expressions. The runner
-evaluates that inventory once and compares its exact names with the common and
-native-system pin files. Discovery is empty-set failure, and missing or
-unexpected names still direct operators to `run make nix-unit-pin`.
+`--no-instantiate` against the locked `nixUnitJobs.<system>` flake output.
+That output contains one aggregate attr per current `*.nix` case file (45
+file jobs), with stable names of the form `case-<basename>`. Each file job
+reuses the same `casesFor`/`resultsFor`/failure-report constructor as the
+seven topical `checks.<system>` leaves, so it reports every
+`FAIL <case>: <detail>` from its file without submitting installables to the
+daemon or realizing derivations.
+The seven topical checks remain the stable manifest leaves:
+`nix-unit`, `nix-unit-daemon`, `nix-unit-guest`, `nix-unit-misc`,
+`nix-unit-network`, `nix-unit-runtime`, and `nix-unit-state`.
+`nixUnitInventory.<system>` is one locked object containing sorted `caseNames`
+and sorted `jobNames`, derived from the same corpus without forcing case
+expressions. The runner evaluates that inventory once, compares `jobNames`
+exactly with the result attrs, and compares `caseNames` exactly with the
+common and native-system pin files. Discovery is empty-set failure, and
+missing or unexpected names still direct operators to `run make nix-unit-pin`.
 
 If `nix-eval-jobs` or `jq` is absent, the target makes one guarded re-entry
 through `devShells.<system>.nix-unit`, a focused `mkShellNoCC` output containing
@@ -264,8 +268,8 @@ suppress raw JSONL output. Every real `FAIL <case>: <detail>` line from an
 aggregate error is printed as one concise, repository-root-sanitized stderr
 entry; source-code template lines are ignored, and an aggregate with no real
 FAIL line receives one attributable fallback diagnostic. Result attributes are
-also compared exactly with the seven baseline leaves. Command progress uses
-the fixed path-free `d2b` flake label.
+also compared exactly with the locked file-job names. Command progress uses the
+fixed path-free `d2b` flake label.
 
 `D2B_NIX_UNIT_CHECK=<name>` remains the manual single-shard selector. It
 requires one of the seven discovered aggregate checks and evaluates only that

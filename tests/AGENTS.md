@@ -226,20 +226,24 @@ budget, including budget 1. Top-level Make `-j` is not the Rust budget knob.
 ### Nix-unit execution
 
 `make test-nix-unit` uses `nix-eval-jobs --no-instantiate` against the locked
-`nixUnitJobs.<system>` output. The output has exactly the seven existing
-aggregate checks: `nix-unit`, `nix-unit-daemon`, `nix-unit-guest`,
-`nix-unit-misc`, `nix-unit-network`, `nix-unit-runtime`, and `nix-unit-state`.
-Those checks reuse the flake shard definitions, so each evaluator worker sees
-one aggregate shard rather than the full 893-case attrset. No installable is
-submitted and no derivation is realized.
+`nixUnitJobs.<system>` output. The output contains exactly one aggregate job
+per current `*.nix` case file (45 file jobs), named bijectively as
+`case-<basename>`. The `fileJobs` constructor reuses the same
+`casesFor`/`resultsFor`/failure-report semantics as the seven existing flake
+shard checks, so every file job reports all of its real
+`FAIL <case>: <detail>` lines. No installable is submitted and no derivation
+is realized.
 
-The separate locked `nixUnitCaseNames.<system>` output is a sorted inventory
-from the same shared corpus and does not force case expressions. The runner
-evaluates it once with a `git+file` flake reference and compares its exact
-names with `tests/unit/nix/pinned/common.txt` plus the native-system pin file.
-Missing or unexpected names fail closed and retain the exact `run make
-nix-unit-pin` remedy. Result attributes are checked by sorted symmetric
-difference against the seven baseline leaves. Do not replace this with a
+The seven existing flake checks remain the stable manifest leaves:
+`nix-unit`, `nix-unit-daemon`, `nix-unit-guest`, `nix-unit-misc`,
+`nix-unit-network`, `nix-unit-runtime`, and `nix-unit-state`.
+The single locked `nixUnitInventory.<system>` output contains sorted
+`caseNames` and sorted `jobNames` from the same corpus and does not force case
+expressions. The runner evaluates it once with a `git+file` flake reference,
+compares result attrs by exact symmetric difference with `jobNames`, and
+compares `caseNames` exactly with `tests/unit/nix/pinned/common.txt` plus the
+native-system pin file. Missing or unexpected names fail closed and retain the
+exact `run make nix-unit-pin` remedy. Do not replace this with a
 repository-specific worker loop or a second scheduler.
 
 The target enters `devShells.<system>.nix-unit` once when `nix-eval-jobs` or

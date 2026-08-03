@@ -557,17 +557,26 @@ command is exactly `make test-nix-unit`.
 
 ## CI-cold refinement status
 
-This refinement changes only the Nix-unit evaluation surface; it has no new
-timing result. `nixUnitJobs.<system>` now contains exactly the seven existing
-aggregate check names and reuses `self.checks`, while
-`nixUnitCaseNames.<system>` is a separately locked, sorted inventory derived
-from the shared corpus without forcing case expressions. The runner evaluates
-that inventory once through `git+file`, compares exact sorted names with the
-common and native-system pins, and compares the `nix-eval-jobs` result
-attributes by exact sorted symmetric difference with the seven-leaf baseline.
-Aggregate errors retain every real `FAIL <case>: <detail>` line, excluding
-source templates, and emit one attributable fallback when a shard provides no
-real FAIL line.
+The accepted earlier per-case runner result remains the 202.20s local
+four-worker warm median recorded above; it evaluated 893 per-case attrs but
+repeatedly caused a GitHub Actions 16 GiB runner to shut down. The immediately
+preceding seven-aggregate candidate was memory-safe but took 543s in a local
+four-worker run, so it is rejected for latency.
+
+The current refinement changes only the Nix-unit evaluation surface and has no
+new timing result. `nixUnitJobs.<system>` now contains exactly one aggregate
+attr per current case file (45 file jobs), using the shared constructor also
+used by the seven topical flake checks. `nixUnitInventory.<system>` is one
+locked, sorted inventory object containing both full `caseNames` and file-job
+`jobNames`, derived without forcing case expressions. The runner evaluates that
+inventory once through `git+file`, compares result attrs exactly with
+`jobNames`, and compares `caseNames` exactly with the common and native-system
+pins. Aggregate errors retain every real `FAIL <case>: <detail>` line,
+excluding source templates, and emit one attributable fallback when a file
+aggregate provides no real FAIL line.
+
+The 45-file aggregate candidate is pending measurement. No hosted success or
+hosted timing claim has been made for it.
 
 The local defaults remain four requested workers and a 4096 MiB evaluator
 limit. GitHub Actions uses 3072 MiB, allowing the existing automatic resource

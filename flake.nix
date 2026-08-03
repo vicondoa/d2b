@@ -41,6 +41,33 @@
           cp ${./tests/fixtures/guest-rust-workspace/Cargo.toml} \
             $out/packages/Cargo.toml
         '';
+      # The Nix-unit corpus is shared by the topical flake checks, the
+      # per-file nix-eval-jobs surface, and the locked inventory. Keep the
+      # evaluator context in one constructor so those surfaces cannot drift.
+      nixUnitCorpusFor = system:
+        let
+          pkgs = nixpkgsFor.${system};
+          d2bModule = import ./nixos-modules { inherit inputs; };
+          mkEval = modules: nixpkgs.lib.nixosSystem {
+            inherit system;
+            modules = [
+              d2bModule
+              ({ lib, ... }: {
+                d2b.site.usePrebuiltHostTools =
+                  lib.mkDefault (system == "x86_64-linux");
+              })
+            ] ++ modules;
+          };
+        in
+        import ./tests/unit/nix/eval-jobs.nix {
+          lib = pkgs.lib;
+          inherit pkgs system;
+          flakeRoot = ./.;
+          d2bLib = import ./nixos-modules/lib.nix { lib = pkgs.lib; };
+          inherit mkEval;
+          nixpkgsFlake = nixpkgs;
+          inherit d2bModule;
+        };
     in
     {
       # The public surface area - populated incrementally by the
@@ -766,9 +793,7 @@
             "volume-mounts.nix"
           ];
         };
-        nixUnitCaseFileNames =
-          pkgs.lib.filter (n: pkgs.lib.hasSuffix ".nix" n)
-            (pkgs.lib.attrNames (builtins.readDir ./tests/unit/nix/cases));
+        nixUnitCaseFileNames = nixUnitCorpus.caseFileNames;
         nixUnitShardFiles = pkgs.lib.concatLists (pkgs.lib.attrValues nixUnitShardCaseFiles);
         nixUnitShardMissingFiles =
           pkgs.lib.filter (n: !(builtins.elem n nixUnitShardFiles)) nixUnitCaseFileNames;
@@ -788,45 +813,10 @@
           unknown = nixUnitShardUnknownFiles;
           duplicate = nixUnitShardDuplicateFiles;
         };
-        nixUnitCorpus = import ./tests/unit/nix/eval-jobs.nix {
-          lib = pkgs.lib;
-          inherit pkgs system;
-          flakeRoot = ./.;
-          d2bLib = import ./nixos-modules/lib.nix { lib = pkgs.lib; };
-          inherit mkEval;
-          # Direct-injection handles for tests/unit/nix/eval-cases/shared.nix (the
-          # minimal lib.evalModules fast evaluator) - passing the nixpkgs
-          # flake input + the d2b module set avoids a `getFlake ./.`
-          # (which would resolve to a non-git store path inside the flake).
-          nixpkgsFlake = nixpkgs;
-          inherit d2bModule;
-        };
-        nixUnitCasesFor = nixUnitCorpus.casesFor;
-        nixUnitCases = nixUnitCorpus.cases;
-        nixUnitEval = nixUnitCorpus.evalCase;
-        nixUnitResultsFor = nixUnitCorpus.resultsFor;
-        nixUnitShardCheck = checkName: caseFileNames:
-          let
-            cases = nixUnitCasesFor caseFileNames;
-            results = nixUnitResultsFor cases;
-            failures = pkgs.lib.filter (x: !x.ok) results;
-            report = pkgs.lib.concatMapStringsSep "\n"
-              (x: "FAIL ${x.name}: ${x.detail}") failures;
-            total = pkgs.lib.length results;
-          in
-          if failures != [ ] then
-            throw ''
-              ${checkName} gate FAILED (${toString (pkgs.lib.length failures)}/${toString total} cases failed) for ${system}:
-              ${report}
-            ''
-          else
-            pkgs.runCommand "d2b-${checkName}" { } ''
-              echo "${checkName}: ${toString total} cases passed"
-              mkdir -p "$out"
-              echo ok > "$out/${checkName}"
-            '';
+        nixUnitCorpus = nixUnitCorpusFor system;
+        nixUnitAggregateCheck = nixUnitCorpus.mkAggregateCheck;
         nixUnitShardChecks =
-          pkgs.lib.mapAttrs nixUnitShardCheck nixUnitShardCaseFiles;
+          pkgs.lib.mapAttrs nixUnitAggregateCheck nixUnitShardCaseFiles;
 
         # Fail-closed case-PRESENCE gate (mirrors tests/tools/assert-pinned-tests.sh
         # for the Rust layer): every pinned case name MUST still exist in the
@@ -845,7 +835,7 @@
         # (panel W2 re-review finding). The set of supported systems is the
         # flake's own `systems`, not the currently-evaluated case set (which
         # could be deleted in the same diff).
-        nixUnitCorpusCaseNames = pkgs.lib.attrNames nixUnitCases;
+        nixUnitCorpusCaseNames = nixUnitCorpus.caseNames;
         pinNames = path: pkgs.lib.filter (n: n != "" && !(pkgs.lib.hasPrefix "#" n))
           (pkgs.lib.splitString "\n" (builtins.readFile path));
         readPinsRequiredNonEmpty = path:
@@ -1316,50 +1306,27 @@
           (mkEval [ (import ./examples/graphics-workstation/configuration.nix) ]);
       });
 
-      # The local nix-eval-jobs surface deliberately contains only the existing
-      # aggregate checks. Reusing self.checks keeps the corpus evaluator and
-      # shard semantics in one place instead of rebuilding one derivation per
-      # case in every evaluator worker.
+      # The local nix-eval-jobs surface is the middle partition: one aggregate
+      # attr per case file. The constructor lives in eval-jobs.nix and is also
+      # used by the seven topical flake checks above.
       nixUnitJobs = forAllSystems (system:
-        nixpkgs.lib.genAttrs [
-          "nix-unit"
-          "nix-unit-daemon"
-          "nix-unit-guest"
-          "nix-unit-misc"
-          "nix-unit-network"
-          "nix-unit-runtime"
-          "nix-unit-state"
-        ] (checkName: self.checks.${system}.${checkName})
+        let
+          nixUnitCorpus = nixUnitCorpusFor system;
+        in
+        nixUnitCorpus.fileJobs
       );
 
-      # A separate, evaluation-only inventory exposes the complete case-name
-      # set without forcing any case expression. It is built from the same
-      # eval-jobs corpus used by the flake shard checks.
-      nixUnitCaseNames = forAllSystems (system:
+      # One locked, evaluation-only inventory keeps both exact source case
+      # names and the per-file job names together. Attr-name discovery does
+      # not force any case expression.
+      nixUnitInventory = forAllSystems (system:
         let
-          pkgs = nixpkgsFor.${system};
-          d2bModule = import ./nixos-modules { inherit inputs; };
-          mkEval = modules: nixpkgs.lib.nixosSystem {
-            inherit system;
-            modules = [
-              d2bModule
-              ({ lib, ... }: {
-                d2b.site.usePrebuiltHostTools =
-                  lib.mkDefault (system == "x86_64-linux");
-              })
-            ] ++ modules;
-          };
-          nixUnitCorpus = import ./tests/unit/nix/eval-jobs.nix {
-            lib = pkgs.lib;
-            inherit pkgs system;
-            flakeRoot = ./.;
-            d2bLib = import ./nixos-modules/lib.nix { lib = pkgs.lib; };
-            inherit mkEval;
-            nixpkgsFlake = nixpkgs;
-            inherit d2bModule;
-          };
+          nixUnitCorpus = nixUnitCorpusFor system;
         in
-        builtins.sort builtins.lessThan nixUnitCorpus.caseNames
+        {
+          caseNames = builtins.sort builtins.lessThan nixUnitCorpus.caseNames;
+          jobNames = builtins.sort builtins.lessThan nixUnitCorpus.jobNames;
+        }
       );
 
       lib = nixpkgs.lib.makeExtensible (_: {

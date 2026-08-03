@@ -615,46 +615,52 @@ set -euo pipefail
         self.assertIsNotNone(jobs_match, "flake must expose the eval-jobs attrset")
         assert jobs_match is not None
         inventory_match = re.search(
-            r"(?m)^\s*nixUnitCaseNames\s*=\s*forAllSystems",
+            r"(?m)^\s*nixUnitInventory\s*=\s*forAllSystems",
             flake,
         )
         self.assertIsNotNone(
             inventory_match,
-            "flake must expose the separate case-name inventory",
+            "flake must expose the locked case/job inventory",
         )
         assert inventory_match is not None
         jobs_block = flake[jobs_match.start() : inventory_match.start()]
-        expected_leaves = [
-            "nix-unit",
-            "nix-unit-daemon",
-            "nix-unit-guest",
-            "nix-unit-misc",
-            "nix-unit-network",
-            "nix-unit-runtime",
-            "nix-unit-state",
-        ]
-        self.assertEqual(
-            re.findall(r'"(nix-unit(?:-[a-z]+)?)"', jobs_block),
-            expected_leaves,
-            "nixUnitJobs must expose exactly the seven aggregate leaves",
+        self.assertIn("fileJobs", jobs_block)
+        self.assertIn("nixUnitCorpus.fileJobs", jobs_block)
+        self.assertNotIn(
+            "self.checks",
+            jobs_block,
+            "nixUnitJobs must not be a seven-self.checks-only surface",
         )
-        self.assertIn("self.checks.${system}.${checkName}", jobs_block)
         self.assertNotIn("nixUnitCorpus.jobs", jobs_block)
         self.assertNotIn("__nix_unit_integrity", jobs_block)
         self.assertNotIn("jobsFor", flake)
 
         inventory_block = flake[inventory_match.start() :]
-        self.assertIn("nixUnitCaseNames = forAllSystems", inventory_block)
+        self.assertIn("nixUnitInventory = forAllSystems", inventory_block)
         self.assertIn("nixUnitCorpus.caseNames", inventory_block)
+        self.assertIn("nixUnitCorpus.jobNames", inventory_block)
         self.assertIn("builtins.sort builtins.lessThan nixUnitCorpus.caseNames", inventory_block)
-        self.assertEqual(driver.count("nixUnitCaseNames"), 1)
+        self.assertIn("builtins.sort builtins.lessThan nixUnitCorpus.jobNames", inventory_block)
+        self.assertEqual(driver.count("nixUnitInventory"), 1)
         self.assertIn("--json", driver)
         self.assertIn("--impure", driver)
         self.assertIn("--no-warn-dirty", driver)
         self.assertIn("flake_ref=$(d2b_flake_ref", driver)
+        self.assertIn("'.caseNames[]'", driver)
+        self.assertIn("'.jobNames[]'", driver)
+        self.assertIn("keys | sort", driver)
         self.assertIn("caseNamesFor", eval_jobs)
         self.assertIn("caseNames = caseNamesFor null", eval_jobs)
+        self.assertIn("mkAggregateCheck", eval_jobs)
+        self.assertIn("fileJobName", eval_jobs)
+        self.assertIn("fileJobs", eval_jobs)
+        self.assertIn("jobNames", eval_jobs)
+        self.assertIn(
+            "value = mkAggregateCheck (fileJobName caseFileName) [ caseFileName ];",
+            eval_jobs,
+        )
         self.assertNotIn("jobsFor", eval_jobs)
+        self.assertNotIn("nixUnitCaseNames", flake + driver)
         self.assertNotIn("derivationName", eval_jobs)
 
     def test_nix_unit_reports_all_failures_and_rejects_empty_discovery(self) -> None:
@@ -767,7 +773,7 @@ set -euo pipefail
         self.assertIn("missing_result_attrs", driver)
         self.assertIn("unexpected_result_attrs", driver)
         self.assertIn("result_attrs_ok", driver)
-        self.assertIn("case_inventory_file", driver)
+        self.assertIn("inventory_file", driver)
         self.assertNotIn("integrity_count", driver)
         self.assertNotIn("__nix_unit_integrity", driver)
         self.assertRegex(
