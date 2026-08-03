@@ -5,6 +5,11 @@ This record covers only the pre-change baseline at
 It completes T001-T007. No implementation file was changed and no optimized
 acceptance claim is made here.
 
+The optimized Nix-unit measurements later in this record describe the
+pre-CI-cold-refinement runner. The refinement recorded at the end changes the
+evaluation surface and has not been benchmarked or observed on a hosted
+GitHub Actions runner.
+
 ## Measurement identity and environment
 
 The complete capture is
@@ -443,3 +448,128 @@ warm/cold profile switch, all eight CI Make targets, schema/inventory
 dependency chains, isolated and shared API/fixture targets, PTY behavior under
 the manifest helper, invalid budget exit 2, and all harness-free smoke checks
 without libtest arguments.
+
+## Nix-unit candidate comparison
+
+Every candidate started from committed base `28aa3b57`. Timing commands ran
+sequentially with no other candidate active. Samples with an external Nix
+client were retained as invalid and excluded. Candidate artifacts are under
+`.scratch/test-speedup-nix-candidates/`.
+
+| Candidate | Result | Evidence and disposition |
+| --- | --- | --- |
+| N0 - tuned Bash pool | Rejected | Four-worker warm observation: 337.13s. It exceeds the 269.445s ceiling and retains the repository-specific scheduler prohibited by the runner contract. |
+| N1 - pure aggregate | Rejected | The single evaluator remained inside whole-corpus evaluation after 610s and was terminated. No result derivation had been realized. |
+| N2 - lix-unit | Rejected | Tool acquisition took 452.48s, the fork retains the `nix-unit` binary name, and corpus evaluation repeatedly overflowed its stack. A 64 MiB stack retry still exceeded 600s. The dependency was not selected. |
+| N3 - nix-eval-jobs | Selected after refinement | Four workers with instantiation took 311.93s. Per-case `--no-instantiate` reached a 202.20s median but exhausted hosted memory. Seven shard aggregates took 543s. The selected file partition plus integrity reached a 231s local median and a 600s one-worker/1024 MiB hosted-shape observation. |
+| N4 - consolidated flake check | Rejected | The command is the already measured direct `nix flake check --no-build --keep-going` path. Its 565.495s baseline warm median exceeds the target and broadens focused iteration to the full flake. |
+| N5 - nix-fast-build | Not entered | N3 removed realization from the critical path. Parallel realization and grouped build logs were therefore not material. |
+
+The selected runner exposes one aggregate attribute per case file and invokes
+`nix-eval-jobs --no-instantiate`. It preserves the existing case evaluator and
+all pin and shard checks while avoiding output realization and the memory cost
+of 893 per-case result attributes. The runner owns parallel evaluation; the
+shell validates the separate case/job inventory and caps the requested worker
+count by logical CPUs, finite cgroup CPU quota, and available memory.
+
+The focused locked dev shell supplies `nix-eval-jobs` and `jq`. Plain
+`make test-nix-unit` enters it once when necessary. The retired
+`D2B_NIX_UNIT_JOBS` variable fails with status 2 and names
+`D2B_NIX_UNIT_WORKERS` as its replacement. The operator-intent
+`D2B_NIX_UNIT_MEMORY_MB` control lowers, but cannot raise, the retained
+per-worker evaluator limit.
+
+Successful full runs suppress the raw JSONL result dump. Failed attributes
+remain individually attributable as concise stderr entries with the
+repository root replaced by `<repo>`, while evaluated-vs-pinned case-name
+drift names every missing or unexpected case and directs operators to
+`run make nix-unit-pin`. Command progress uses the fixed path-free `d2b` flake
+label.
+
+## Nix-unit optimized result
+
+The representative warm samples on the integrated runner were:
+
+| Result | Seconds |
+| --- | ---: |
+| Baseline warm median | 538.889473 |
+| Optimized warm samples | 222, 233, 231 |
+| Optimized warm median | **231** |
+| Warm reduction | **57.13%** |
+| Slowest / median | 1.0087 |
+
+The optimized median is 42.86% of baseline and passes the 50%-of-baseline
+ceiling of 269.444737 seconds. The slowest valid sample is less than 1% above
+the median. Every run evaluated all 45 file attributes plus shard/pin
+integrity and compared all 893 pinned x86 case names through the separate
+inventory.
+
+The final fresh-cache observation used plain `make test-nix-unit`, a newly
+created `XDG_CACHE_HOME`, and locked tool self-provisioning. It completed in
+196s, compared with the 659.700177s baseline cold median, a 70.29%
+reduction. The shared Nix store was retained. No candidate or final accepted
+sample overlapped another Nix client.
+
+The final full runner reserves 2048 MiB of process and flake overhead per
+worker plus 3072 MiB for the host when calculating the memory cap. Local
+development retains four requested workers and a 4096 MiB evaluator limit.
+
+## Nix-unit failure and coverage evidence
+
+The passing manifest is
+`.scratch/test-speedup-optimized/test-nix-unit-file-integrity.json` at
+integrated tip `455b1648`. It records
+`run_status = "passed"`, the seven baseline leaves, no failed surface, no
+installable, and no realized check. The completed leaves are:
+
+```text
+nix-unit
+nix-unit-daemon
+nix-unit-guest
+nix-unit-misc
+nix-unit-network
+nix-unit-runtime
+nix-unit-state
+```
+
+An isolated committed probe changed one daemon case and one state case and
+substituted one pin name. One invocation reported both exact case names under
+their file-job attributes, named the missing and unexpected inventory cases
+with the `make nix-unit-pin` remedy, and published
+`.scratch/test-speedup-optimized/test-nix-unit-file-failed.json` with
+`run_status = "failed"` and no stale completed leaf.
+
+The retained selector probe
+`D2B_NIX_UNIT_CHECK=nix-unit-misc make test-nix-unit` passed and published a
+manifest containing only `nix-unit-misc`. CI no longer uses the selector: the
+generated workflow contains one enforcing `test-nix-unit` job whose test
+command is exactly `make test-nix-unit`.
+
+## CI-cold refinement result
+
+The earlier per-case runner reached a 202.20s local four-worker warm median but
+repeatedly caused a GitHub Actions 16 GiB runner to shut down. The seven
+topical-check aggregate candidate took 543s locally and was rejected for
+latency.
+
+The selected refinement changes only the Nix-unit evaluation surface.
+`nixUnitJobs.<system>` contains exactly one aggregate
+attr per current case file (45 file jobs), plus the `nix-unit` shard/pin
+integrity attr, using the shared constructor also used by the seven topical
+flake checks. `nixUnitInventory.<system>` is one
+locked, sorted inventory object containing both full `caseNames` and file-job
+`jobNames`, including integrity, derived without forcing case expressions. The
+runner evaluates that
+inventory once through `git+file`, compares result attrs exactly with
+`jobNames`, and compares `caseNames` exactly with the common and native-system
+pins. Aggregate errors retain every real `FAIL <case>: <detail>` line,
+excluding source templates, and emit one attributable fallback when a file
+aggregate provides no real FAIL line.
+
+The local defaults remain four requested workers and a 4096 MiB evaluator
+limit. Hosted full-run experiments were rejected: two workers at 4096, 3072,
+and 2048 MiB and one worker at 3072, 2048, and 1024 MiB were repeatedly
+terminated or exceeded the hosted timeout despite successful local
+observations. The condition for consolidating hosted CI was therefore not met.
+CI retains the pre-change discovery plus one selected check per matrix job,
+while the local public target uses the measured eval-jobs path.

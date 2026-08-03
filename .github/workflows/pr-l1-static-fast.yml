@@ -1115,8 +1115,6 @@ jobs:
       - id: list
         name: Enumerate Nix unit checks
         run: |
-          # Same partition tool as flake-eval-discover, so this lane is handed
-          # exactly the names that lane drops from its instantiate-only matrix.
           partition=$(make -s test-flake-partition)
           echo "$partition"
           echo "$partition" >> "$GITHUB_OUTPUT"
@@ -1142,10 +1140,7 @@ jobs:
             experimental-features = nix-command flakes
       - name: Nix unit shard
         env:
-          # The matrix value is data, not shell source. The driver validates it
-          # against both the safe-name grammar and the discovered check set.
           D2B_NIX_UNIT_CHECK: ${{ matrix.check }}
-          D2B_NIX_UNIT_JOBS: "1"
         run: make test-nix-unit
 
   test-nix-unit:
