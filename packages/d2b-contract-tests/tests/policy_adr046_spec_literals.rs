@@ -1856,6 +1856,24 @@ fn validate_spike_measurement(
     errors
 }
 
+/// The number of `| MEASURED-` rows the guard accounts for in `source`, and
+/// the two components of that total. Derived from the registry rather than
+/// hardcoded, so a legitimately added row moves the expectation instead of
+/// rotting the control. Shared by the validator and its negative controls, so
+/// the reported scope of a missing source and the scope asserted against it
+/// cannot disagree.
+fn accounted_rows(source: ResultSource) -> (usize, usize, usize) {
+    let registered = spike_measurement_specs()
+        .iter()
+        .filter(|spec| spec.result_source == source)
+        .count();
+    let superseded = SUPERSEDED_CANONICAL_ROWS
+        .iter()
+        .filter(|row| row.source == source)
+        .count();
+    (registered + superseded, registered, superseded)
+}
+
 fn validate_spike_measurements(
     sources: &BTreeMap<ResultSource, String>,
     documents: &BTreeMap<String, String>,
@@ -1863,31 +1881,44 @@ fn validate_spike_measurements(
     let specs = spike_measurement_specs();
     let mut errors = Vec::new();
 
+    // Resolve every required source once, before anything reads one. An absent
+    // source invalidates every check that would have read it, and the loops
+    // below cannot tell "nothing to check" from "nothing was checked" - a bare
+    // `continue` in any of them turns a missing artifact into a clean run.
+    //
+    // Reported here rather than inside each loop, and once per source rather
+    // than once per dependent item: a single missing file must deny loudly
+    // without burying the real findings under one restatement per spec and per
+    // superseded row. The error carries the scope it invalidated so the reader
+    // knows how much went unverified, not merely that something did.
+    for source in ResultSource::ALL {
+        if sources.contains_key(&source) {
+            continue;
+        }
+        let (accounted, registered, superseded) = accounted_rows(source);
+        errors.push(format!(
+            "missing required result source {}: {accounted} canonical row(s) could not be checked ({registered} registered + {superseded} superseded)",
+            source.path()
+        ));
+    }
+
     // Row accounting is per source. Every `| MEASURED-` row in a result
     // artifact is either registered by a spec or listed as superseded; an
     // eighth unaccounted row and a deleted historical row both fail here.
     for source in ResultSource::ALL {
         let Some(results) = sources.get(&source) else {
-            errors.push(format!("missing result source {}", source.path()));
+            // Already denied above; re-reporting here would duplicate.
             continue;
         };
-        let registered = specs
-            .iter()
-            .filter(|spec| spec.result_source == source)
-            .count();
-        let superseded = SUPERSEDED_CANONICAL_ROWS
-            .iter()
-            .filter(|row| row.source == source)
-            .count();
+        let (accounted, registered, superseded) = accounted_rows(source);
         let rows = results
             .lines()
             .filter(|line| line.contains("| MEASURED-"))
             .count();
-        if rows != registered + superseded {
+        if rows != accounted {
             errors.push(format!(
-                "{}: canonical final-threshold table has {rows} measurement row(s) but the guard accounts for {} ({registered} registered + {superseded} superseded)",
-                source.path(),
-                registered + superseded
+                "{}: canonical final-threshold table has {rows} measurement row(s) but the guard accounts for {accounted} ({registered} registered + {superseded} superseded)",
+                source.path()
             ));
         }
     }
@@ -1904,6 +1935,8 @@ fn validate_spike_measurements(
             ));
         }
         let Some(results) = sources.get(&row.source) else {
+            // Already denied above; one missing file must not become one error
+            // per superseded row.
             continue;
         };
         match canonical_measurement(results, row.threshold) {
@@ -1933,6 +1966,8 @@ fn validate_spike_measurements(
 
     for spec in &specs {
         let Some(results) = sources.get(&spec.result_source) else {
+            // Already denied above; one missing file must not become one error
+            // per registered measurement.
             continue;
         };
         match canonical_measurement(results, spec.threshold) {
@@ -2731,20 +2766,83 @@ fn assert_one_error_with(errors: &[String], label: &str, needles: &[&str]) {
     );
 }
 
-/// The number of `| MEASURED-` rows the guard accounts for in `source`, and
-/// the two components of that total. Derived from the registry rather than
-/// hardcoded, so a legitimately added row moves the expectation instead of
-/// rotting the control.
-fn accounted_rows(source: ResultSource) -> (usize, usize, usize) {
-    let registered = spike_measurement_specs()
-        .iter()
-        .filter(|spec| spec.result_source == source)
-        .count();
-    let superseded = SUPERSEDED_CANONICAL_ROWS
-        .iter()
-        .filter(|row| row.source == source)
-        .count();
-    (registered + superseded, registered, superseded)
+/// A missing required source must deny, not evaporate. Every loop in the
+/// validator reads `sources` through an `Option`, so an absent artifact is one
+/// bare `continue` away from producing a clean run - the check would simply not
+/// happen, and nothing would say so. This walks each required source out of the
+/// map in turn and requires the exact denial, including the scope it
+/// invalidated.
+#[test]
+fn a_missing_result_source_is_denied_and_never_silently_skipped() {
+    let sources = result_sources();
+    let documents = measurement_documents();
+    assert!(
+        validate_spike_measurements(&sources, &documents).is_empty(),
+        "the committed tree must be clean before removing a source"
+    );
+
+    for source in ResultSource::ALL {
+        let mut without = sources.clone();
+        assert!(
+            without.remove(&source).is_some(),
+            "{} must be present before the control removes it",
+            source.path()
+        );
+
+        let (accounted, registered, superseded) = accounted_rows(source);
+        let errors = validate_spike_measurements(&without, &documents);
+        assert_one_error_with(
+            &errors,
+            source.path(),
+            &[
+                &format!("missing required result source {}", source.path()),
+                &format!("{accounted} canonical row(s) could not be checked"),
+                &format!("({registered} registered + {superseded} superseded)"),
+            ],
+        );
+
+        // Exactly one error, and exactly one mention of the absent path. One
+        // missing file must not multiply into an error per dependent spec and
+        // superseded row, which would bury any genuine finding beside it.
+        assert_eq!(
+            errors.len(),
+            1,
+            "removing {} must produce exactly one error; got: {}",
+            source.path(),
+            errors.join("\n")
+        );
+        assert_eq!(
+            errors
+                .iter()
+                .filter(|error| error.contains(source.path()))
+                .count(),
+            1,
+            "removing {} must be reported once, not once per dependent check",
+            source.path()
+        );
+    }
+
+    // The degenerate case: nothing to read at all. This is the one an empty or
+    // mis-rooted map produces, and it must be the loudest failure rather than
+    // the quietest.
+    let errors = validate_spike_measurements(&BTreeMap::new(), &documents);
+    assert_eq!(
+        errors.len(),
+        ResultSource::ALL.len(),
+        "an empty source map must deny once per required source; got: {}",
+        if errors.is_empty() {
+            "<no errors at all>".to_string()
+        } else {
+            errors.join("\n")
+        }
+    );
+    for source in ResultSource::ALL {
+        assert_one_error_with(
+            &errors,
+            "empty source map",
+            &[&format!("missing required result source {}", source.path())],
+        );
+    }
 }
 
 /// A superseded row that still parses is not a preserved row. This proves the
