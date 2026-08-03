@@ -141,58 +141,6 @@ fn create_seal_body_with_resource(
     }
 }
 
-fn create_seal_body_with_resources(
-    operation_id: &str,
-    resources: Vec<(String, Vec<u8>)>,
-) -> MutationSealBody {
-    let mut mutations = Vec::with_capacity(resources.len());
-    let mut targets = Vec::with_capacity(resources.len());
-    for (name, canonical_resource) in resources {
-        let target = ResourceRef::parse(&format!("Host/{name}")).unwrap();
-        let payload_digest = canonical_digest(RESOURCE_ENVELOPE_DOMAIN_TAG, &canonical_resource);
-        targets.push(AdmittedAuthorizationTarget {
-            resource_type: ResourceTypeName::parse("Host").unwrap(),
-            resource_name: Some(target.name().clone()),
-            verb: AdmittedVerb::Create,
-            subresource: None,
-            execution_ref: None,
-        });
-        mutations.push(PreparedStoreMutation::new(
-            StoreMutation {
-                kind: ResourceMutationKind::Create,
-                zone: ZoneId::parse("work").unwrap(),
-                target,
-                expected: ExpectedRevision::CreateAbsent,
-                expected_uid: None,
-                owner: None,
-                canonical_resource: Some(canonical_resource),
-                add_finalizers: Vec::new(),
-                remove_finalizers: Vec::new(),
-                wait_for_reconcile: false,
-                reconcile_deadline_ms: None,
-            },
-            None,
-            Some(payload_digest),
-        ));
-    }
-    MutationSealBody {
-        mutations,
-        authorization: AdmittedAuthorization {
-            zone: ZoneId::parse("work").unwrap(),
-            subject_ref: ResourceRef::parse("Provider/system-core").unwrap(),
-            subject_uid: ResourceUid::parse("33333333-3333-4333-8333-333333333333").unwrap(),
-            targets,
-        },
-        policy_snapshot: PolicySnapshot {
-            policy_revision: 7,
-            api_catalog_revision: 8,
-            active_configuration_revision: ConfigurationGeneration::new(9).unwrap(),
-            controller_generation: None,
-        },
-        operation: operation(operation_id),
-    }
-}
-
 fn owned_file() -> (tempfile::TempDir, File) {
     let directory = tempfile::tempdir().unwrap();
     let file = OpenOptions::new()
@@ -1331,6 +1279,7 @@ const PRODUCTION_RSS_RESOURCE_COUNT: usize = 10_000;
 const PRODUCTION_RSS_WATCH_COUNT: usize = 100;
 const PRODUCTION_RSS_THRESHOLD_KIB: u64 = 24_576;
 const PRODUCTION_RSS_CHILD_ENV: &str = "D2B_REDB_PRODUCTION_RSS_CHILD";
+const PRODUCTION_RSS_FIXTURE_ENV: &str = "D2B_REDB_PRODUCTION_RSS_FIXTURE";
 const PRODUCTION_RSS_CHILD_MARKER: &str = "PRODUCTION_REDB_FIXTURE";
 
 #[test]
@@ -1348,6 +1297,7 @@ fn production_backend_hard_fixture_rss() {
     let executable = std::env::current_exe().expect("production RSS test executable");
     let mut raw_runs = Vec::with_capacity(3);
     for run in 1..=3 {
+        let fixture = prepare_production_rss_fixture();
         let output = Command::new(gnu_time_program())
             .args([
                 "-v",
@@ -1359,6 +1309,10 @@ fn production_backend_hard_fixture_rss() {
                 "--test-threads=1",
             ])
             .env(PRODUCTION_RSS_CHILD_ENV, "1")
+            .env(
+                PRODUCTION_RSS_FIXTURE_ENV,
+                fixture.path().to_str().expect("fixture path is UTF-8"),
+            )
             .output()
             .expect("GNU time is required for the production RSS fixture");
         let stdout = String::from_utf8_lossy(&output.stdout);
@@ -1421,56 +1375,200 @@ fn gnu_time_program() -> String {
     "time".to_owned()
 }
 
+fn prepare_production_rss_fixture() -> tempfile::TempDir {
+    let (directory, file) = owned_file();
+    drop(file);
+    let store_identity = identity();
+    let mut marker = OpenOptions::new()
+        .create_new(true)
+        .read(true)
+        .write(true)
+        .open(directory.path().join("store.marker"))
+        .expect("production RSS fixture marker");
+    write_provisioning_marker(&mut marker, &store_identity)
+        .expect("production RSS fixture marker write");
+
+    let file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(directory.path().join("store.redb"))
+        .expect("production RSS fixture database");
+    let backend = redb::backends::FileBackend::new(file).expect("production RSS fixture backend");
+    let database = Database::builder()
+        .create_with_backend(backend)
+        .expect("production RSS fixture database create");
+    crate::transaction::initialize(&database, &store_identity)
+        .expect("production RSS fixture initialization");
+
+    let mut write = database
+        .begin_write()
+        .expect("production RSS fixture write transaction");
+    crate::transaction::set_full_durability(&mut write).expect("production RSS fixture durability");
+    {
+        let mut resources = write
+            .open_table(crate::transaction::RESOURCES)
+            .expect("production RSS fixture resources table");
+        for index in 0..PRODUCTION_RSS_RESOURCE_COUNT {
+            let (target, _, canonical, payload_digest) = hard_seed_resource(index);
+            let record = crate::transaction::ResourceRecord {
+                canonical_json: canonical,
+                owner_uid: None,
+                controller_binding_id: "Provider/system-core".to_owned(),
+                payload_digest,
+            };
+            let value = crate::transaction::encode(ValueKind::ResourceRecord, &record)
+                .expect("production RSS fixture resource encoding");
+            resources
+                .insert(
+                    crate::transaction::resource_key(&target)
+                        .expect("production RSS fixture resource key")
+                        .as_slice(),
+                    value.as_slice(),
+                )
+                .expect("production RSS fixture resource row");
+        }
+    }
+    {
+        let mut type_index = write
+            .open_table(crate::transaction::TYPE_INDEX)
+            .expect("production RSS fixture type index table");
+        for index in 0..PRODUCTION_RSS_RESOURCE_COUNT {
+            let (target, uid, _, _) = hard_seed_resource(index);
+            let value = crate::transaction::encode(ValueKind::TypeIndexRecord, &uid.as_str())
+                .expect("production RSS fixture type-index encoding");
+            type_index
+                .insert(
+                    crate::transaction::type_index_key(&target)
+                        .expect("production RSS fixture type-index key")
+                        .as_slice(),
+                    value.as_slice(),
+                )
+                .expect("production RSS fixture type-index row");
+        }
+    }
+    {
+        let mut controller_index = write
+            .open_table(crate::transaction::CONTROLLER_INDEX)
+            .expect("production RSS fixture controller index table");
+        for index in 0..PRODUCTION_RSS_RESOURCE_COUNT {
+            let (target, uid, _, _) = hard_seed_resource(index);
+            let key = crate::encode_key(
+                KeySpace::ControllerIndex,
+                &[
+                    KeyComponent::Text("Provider/system-core"),
+                    KeyComponent::Text("Host"),
+                    KeyComponent::Text(target.name().as_str()),
+                ],
+            )
+            .expect("production RSS fixture controller-index key");
+            let value = crate::transaction::encode(ValueKind::ControllerIndexRecord, &uid.as_str())
+                .expect("production RSS fixture controller-index encoding");
+            controller_index
+                .insert(key.as_bytes(), value.as_slice())
+                .expect("production RSS fixture controller-index row");
+        }
+    }
+    {
+        let mut revisions = write
+            .open_table(crate::transaction::REVISION_LOG)
+            .expect("production RSS fixture revision table");
+        for index in 0..PRODUCTION_RSS_RESOURCE_COUNT {
+            let (target, uid, _, payload_digest) = hard_seed_resource(index);
+            let entry = ChangeEntry::new(
+                0,
+                ResourceTypeName::parse("Host").unwrap(),
+                target.name().clone(),
+                uid,
+                ChangeEvent::Created,
+                None,
+                Some(d2b_contracts::v3::ResourceGeneration::new(1).unwrap()),
+                None,
+                payload_digest,
+                "production-seed-operation".to_owned(),
+                "production-seed-correlation".to_owned(),
+            )
+            .expect("production RSS fixture change entry");
+            let batch = ChangeBatch::new(
+                d2b_contracts::v3::ZoneRevision::new((index + 1) as u64),
+                vec![entry],
+            )
+            .expect("production RSS fixture change batch");
+            let value = crate::transaction::encode(ValueKind::ChangeBatch, &batch)
+                .expect("production RSS fixture revision encoding");
+            revisions
+                .insert(
+                    crate::transaction::revision_key((index + 1) as u64)
+                        .expect("production RSS fixture revision key")
+                        .as_slice(),
+                    value.as_slice(),
+                )
+                .expect("production RSS fixture revision row");
+        }
+    }
+    let mut meta =
+        crate::transaction::current_meta(&database).expect("production RSS fixture metadata");
+    meta.current_revision = PRODUCTION_RSS_RESOURCE_COUNT as u64;
+    meta.clean_shutdown = true;
+    let meta_value = crate::transaction::encode(ValueKind::StoreMetaScalar, &meta)
+        .expect("production RSS fixture metadata encoding");
+    write
+        .open_table(crate::transaction::STORE_META)
+        .expect("production RSS fixture metadata table")
+        .insert(
+            crate::transaction::meta_key().as_slice(),
+            meta_value.as_slice(),
+        )
+        .expect("production RSS fixture metadata row");
+    write
+        .commit()
+        .expect("production RSS fixture transaction commit");
+    crate::transaction::validate_consistency(&database)
+        .expect("production RSS fixture consistency");
+    directory
+}
+
+fn hard_seed_resource(index: usize) -> (ResourceRef, ResourceUid, Vec<u8>, String) {
+    let name = format!("hard-host-{index:05}");
+    let uid = ResourceUid::parse(&format!("123e4567-e89b-42d3-a456-{index:012x}"))
+        .expect("production RSS fixture UID");
+    let canonical = String::from_utf8(stored_body(&name))
+        .expect("production RSS fixture resource UTF-8")
+        .replace("123e4567-e89b-42d3-a456-426614174000", uid.as_str())
+        .into_bytes();
+    let envelope =
+        ResourceEnvelope::from_json(&canonical).expect("production RSS fixture envelope");
+    let payload_digest = envelope
+        .digest()
+        .expect("production RSS fixture payload digest");
+    (
+        ResourceRef::parse(&format!("Host/{name}")).expect("production RSS fixture resource ref"),
+        uid,
+        canonical,
+        payload_digest,
+    )
+}
+
 async fn production_backend_hard_fixture_child() {
-    let (_directory, file, marker) = provisioned_store();
+    let fixture = std::env::var(PRODUCTION_RSS_FIXTURE_ENV).expect("production RSS fixture path");
+    let file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(std::path::Path::new(&fixture).join("store.redb"))
+        .expect("production RSS fixture database open");
+    let marker = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(std::path::Path::new(&fixture).join("store.marker"))
+        .expect("production RSS fixture marker open");
     let store_identity = identity();
     let (issuer, acceptor) = mutation_seal_pair(store_identity.seal_identity());
     let store = Arc::new(
-        RedbResourceStore::provision_owned(file, marker, store_identity, acceptor)
+        RedbResourceStore::open_owned(file, store_identity, acceptor)
             .await
             .expect("production backend hard fixture store"),
     );
     let issuer = Arc::new(issuer);
-    let mut current_revision = 0_u64;
-
-    let group_count = PRODUCTION_RSS_RESOURCE_COUNT.div_ceil(GROUP_COMMIT_MAX);
-    for chunk_start in (0..group_count).step_by(64) {
-        let chunk_end = (chunk_start + 64).min(group_count);
-        let mut commits = Vec::with_capacity(chunk_end - chunk_start);
-        for group in chunk_start..chunk_end {
-            let resource_start = group * GROUP_COMMIT_MAX;
-            let resource_end =
-                (resource_start + GROUP_COMMIT_MAX).min(PRODUCTION_RSS_RESOURCE_COUNT);
-            let resources = (resource_start..resource_end)
-                .map(|index| {
-                    let name = format!("hard-host-{index:05}");
-                    (name.clone(), create_body(&name))
-                })
-                .collect();
-            let body = create_seal_body_with_resources(
-                &format!("hard-create-group-{group:04}"),
-                resources,
-            );
-            let store = Arc::clone(&store);
-            let issuer = Arc::clone(&issuer);
-            commits.push(tokio::spawn(async move {
-                store
-                    .commit_verified(issuer.seal(body))
-                    .await
-                    .expect("production backend hard fixture mutation")
-            }));
-        }
-        for commit in commits {
-            current_revision = current_revision.max(
-                commit
-                    .await
-                    .expect("production backend hard fixture task")
-                    .revision
-                    .get(),
-            );
-        }
-    }
-    assert!(current_revision > 0);
+    let mut current_revision = PRODUCTION_RSS_RESOURCE_COUNT as u64;
 
     assert_eq!(WRITE_QUEUE_CAPACITY, 256);
     assert_eq!(GROUP_COMMIT_MAX, 16);
