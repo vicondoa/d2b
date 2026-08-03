@@ -2591,7 +2591,7 @@ mod tests {
             );
         }
         assert!(BinaryRef::parse("a").is_ok());
-        assert!(BinaryRef::parse(&"a".repeat(MAX_BINARY_REF_BYTES)).is_ok());
+        assert!(BinaryRef::parse("a".repeat(MAX_BINARY_REF_BYTES)).is_ok());
     }
 
     #[test]
