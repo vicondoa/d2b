@@ -11,4 +11,5 @@
   variant, and variant field of modelled type graphs. It fails closed on raw
   text, paths, unresolved types, unsupported cycles, empty root sets, missing
   roots, and roots that govern no structure. It is a reusable predicate over
-  modelled type metadata; it does not yet inspect any shipped type.
+  modelled type metadata; it does not yet inspect any shipped type. The policy
+  binary is wired into the enforcing `test-policy` lane.

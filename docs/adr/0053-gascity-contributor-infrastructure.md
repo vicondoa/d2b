@@ -701,10 +701,13 @@ Its two refusals name exact commands and mutate nothing:
   would conflict**. It already computed that list to decide to refuse, so
   telling the contributor to go run `git status` to rediscover it is asking
   them to redo work the tool has already done, and `git status` on an untouched
-  tree does not show a conflict that has not happened yet. The remedy is:
-  inspect the printed paths, reconcile them through normal branch integration,
-  then rerun `make panel-migrate`. Because detection precedes any rebase, there
-  is no in-progress state to continue or abort.
+  tree does not show a conflict that has not happened yet. The wrapper also
+  prints the full pinned supported revision and the exact commands:
+  `git fetch origin v3`, then `git rebase <pinned-supported-revision>`.
+  The contributor resolves the printed paths, runs `git add <paths>` and
+  `git rebase --continue`, or uses `git rebase --abort`, then reruns
+  `make panel-migrate`. Because detection precedes this explicit operator
+  action, the wrapper itself leaves no in-progress rebase behind.
 
   A future mode that starts a rebase before detecting conflicts would be a
   separate design with the standard `git add <paths>`, `git rebase --continue`
@@ -1858,10 +1861,13 @@ and it ships planted violations it must reject.
     `git stash push -u -m panel-migrate`, the rerun of `make panel-migrate`,
     and `git stash pop`, and the tree is byte-identical afterwards;
   - conflicting update: refuses, output contains the **exact list of
-    would-conflict paths** matched against the known planted conflict set, plus
-    the exact rerun command, and the tree is byte-identical afterwards. An
-    output that names `git status` instead of printing the paths fails this
-    case.
+    would-conflict paths** matched against the known planted conflict set, the
+    full pinned supported revision, `git fetch origin v3`,
+    `git rebase <pinned-supported-revision>`, `git add <paths>`,
+    `git rebase --continue`, `git rebase --abort`, and the exact rerun command,
+    and the tree is byte-identical afterwards. An output that names
+    `git status` instead of printing the paths, or omits the pinned target,
+    fails this case.
 
   The same shape is exercised for the controller variant: evidence absent,
   evidence untrusted, evidence contradicting the record, and a record carrying
