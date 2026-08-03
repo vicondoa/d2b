@@ -15,13 +15,23 @@
   binary is wired into the enforcing `test-policy` lane.
 - Migration-remedy output controls, as a modelled decision and renderer audit
   with an accepted corpus and planted rejected fixtures. A conflicting update
-  must print the exact sorted paths it already computed, plus the fetch, rebase
-  onto `origin/v3`, `git add`, continue, abort, and rerun steps in a runnable
-  order; no refusal may name a 40-hex object name or any other ref as a rebase
-  target, and an unpublished migration is a typed refusal carrying no git
-  command, since a pinned revision is the precondition a migration must satisfy
-  and never a place to land a branch. Nothing here runs git or reads a
-  repository, and no migration command exists yet for it to describe.
+  prints the sorted paths it predicts will conflict as an advisory planning
+  list, then `git fetch origin` and `git rebase origin/v3`, then the per-stop
+  sequence `git status --short`, `git add <resolved-paths-for-this-stop>` and
+  `git rebase --continue`, with `git rebase --abort` as the way out and the
+  rerun last, in an order that works when it is run. It renders no bulk
+  `git add` over the predicted paths: that set is the union across the whole
+  replay, so pasting it stages files the rebase has not reached and turns a
+  conflict resolution into an unrelated committed change. The audit parses
+  every rendered command line instead of scanning it for keywords, so an
+  unrecognised subcommand, flag, or form is rejected rather than skipped, a
+  40-hex object name is rejected anywhere on the line including inside a flag
+  assignment such as `--onto=<sha>`, and the only admitted rebase target is
+  `origin/v3`. A fetch that produced no such ref and an unpublished migration
+  are typed refusals carrying no git command at all, since a pinned revision is
+  the precondition a migration must satisfy and never a place to land a branch.
+  Nothing here runs git or reads a repository, and no migration command exists
+  yet for it to describe.
 
 ### Fixed
 

@@ -706,32 +706,61 @@ detaching to the pinned SHA to get the files would be a worse outcome than
 waiting.
 
 The wrapper **detects conflicts before it starts**, refusing with the tree
-untouched rather than leaving a half-finished rebase. Its two refusals name
-exact commands and mutate nothing:
+untouched rather than leaving a half-finished rebase. Its refusals name exact
+commands and mutate nothing:
 
 - **Dirty tree**: run `git status --short`; then either commit the changes, or
   `git stash push -u -m panel-migrate`; then rerun `make panel-migrate`; and
   after it succeeds, `git stash pop` if that path was taken.
-- **Conflicting update**: the wrapper **prints the exact list of paths that
-  would conflict**. It already computed that list to decide to refuse, so
-  telling the contributor to go run `git status` to rediscover it is asking
-  them to redo work the tool has already done, and `git status` on an untouched
-  tree does not show a conflict that has not happened yet. The wrapper prints
-  the exact commands: `git fetch origin v3`, then `git rebase origin/v3`. The
-  contributor resolves the printed paths, runs `git add <paths>` and
-  `git rebase --continue`, or uses `git rebase --abort`, then reruns
-  `make panel-migrate`. No refusal ever prints a rebase onto a pinned or
-  otherwise historical SHA. Because detection precedes this explicit operator
-  action, the wrapper itself leaves no in-progress rebase behind.
+- **Conflicting update**: the wrapper **prints the paths it predicts will
+  conflict**. It already computed that list to decide to refuse, so telling the
+  contributor to go run `git status` to rediscover it is asking them to redo
+  work the tool has already done, and `git status` on an untouched tree does
+  not show a conflict that has not happened yet.
 
-  A future mode that starts a rebase before detecting conflicts would be a
-  separate design with the same `git add <paths>`, `git rebase --continue` and
-  `git rebase --abort` remedies. The v1 preflight mode refuses with the tree
-  untouched.
+  Those paths are **advisory, for planning only**. A rebase replays commits one
+  at a time and stops at whichever subset conflicts at that commit, so the
+  predicted set is the union across the whole replay and is never the working
+  set at any single stop. The wrapper therefore prints no bulk `git add` over
+  the predicted list: a contributor who pastes that command stages paths that
+  are not unmerged at this stop, including files the replay has not reached,
+  and turns a conflict resolution into an unrelated content change that
+  `git rebase --continue` then commits.
+
+  The printed sequence is:
+
+  ```
+  git fetch origin
+  git rebase origin/v3
+  ```
+
+  Then, **at each rebase stop**: `git status --short`; resolve only the files
+  that are currently unmerged; `git add <resolved-paths-for-this-stop>`;
+  `git rebase --continue`. To abandon the migration at any stop:
+  `git rebase --abort`. After the rebase completes: `make panel-migrate`.
+
+  `git fetch origin` rather than `git fetch origin v3`, because the latter
+  updates `FETCH_HEAD` without reliably updating `refs/remotes/origin/v3` on
+  every supported Git configuration, and the next line resolves `origin/v3`. An
+  explicit refspec would work equally well; plain `git fetch origin` is chosen
+  because it behaves the same everywhere and needs no explanation.
+
+  No refusal ever prints a rebase onto a pinned or otherwise historical SHA.
+  Because detection precedes this explicit operator action, the wrapper itself
+  leaves no in-progress rebase behind.
+- **Target unavailable**: the fetched `origin` carries no `origin/v3`. The
+  wrapper refuses with a typed error, prints **no git command** at all, and
+  leaves the tree unchanged. There is nothing to rebase onto, so printing a
+  sequence would be instructing a contributor to run commands that cannot
+  succeed.
+
+A future mode that starts a rebase before detecting conflicts would be a
+separate design with the same per-stop remedies. The v1 preflight mode refuses
+with the tree untouched.
 
 Naming `git rebase origin/v3` is safe precisely because the wrapper has already
 determined the conflict and mutated nothing: the contributor is starting the
-rebase deliberately, with the conflicting paths in front of them, rather than
+rebase deliberately, with the predicted paths in front of them, rather than
 discovering mid-operation that a tool left them in a state they did not ask
 for.
 
@@ -1870,7 +1899,7 @@ and it ships planted violations it must reject.
   does not render into something useless, out of sequence, or wrong for a
   human. A new variant with no expected rendering fails the test.
 
-  `make panel-migrate` is separately exercised on all four paths, with its
+  `make panel-migrate` is separately exercised on all **five** paths, with its
   **output** asserted, not only its exit status:
 
   - clean tree: brings the branch onto current `origin/v3`, carrying the
@@ -1879,27 +1908,67 @@ and it ships planted violations it must reject.
   - unpublished migration: the required panel migration commit is planted as
     **not reachable** from the fetched `origin/v3`, and the wrapper refuses
     with the typed unpublished-migration error, mutating nothing;
+  - target unavailable: the fetched `origin` is planted **without** an
+    `origin/v3` ref, and the wrapper refuses with the typed
+    target-unavailable error, emits **no git command at all**, and the tree is
+    byte-identical afterwards. An output carrying any git command fails this
+    case, because a sequence the contributor cannot complete is worse than a
+    refusal that names the missing ref;
   - dirty tree: refuses, output contains exactly `git status --short`,
     `git stash push -u -m panel-migrate`, the rerun of `make panel-migrate`,
     and `git stash pop`, and the tree is byte-identical afterwards;
-  - conflicting update: refuses, output contains the **exact list of
-    would-conflict paths** matched against the known planted conflict set,
-    `git fetch origin v3`, `git rebase origin/v3`, `git add <paths>`,
-    `git rebase --continue`, `git rebase --abort`, and the exact rerun command,
-    and the tree is byte-identical afterwards. An output that names
-    `git status` instead of printing the paths fails this case.
+  - conflicting update: refuses, output contains the **predicted
+    would-conflict paths** matched against the known planted set, then
+    `git fetch origin`, `git rebase origin/v3`, the per-stop sequence
+    `git status --short`, `git add <resolved-paths-for-this-stop>`,
+    `git rebase --continue`, the abandon branch `git rebase --abort`, and the
+    exact rerun command, and the tree is byte-identical afterwards. An output
+    that names `git status` instead of printing the paths fails this case.
 
-  **A rebase onto anything other than `origin/v3` is asserted to be rejected.**
-  A planted renderer output instructing `git rebase <40-hex-sha>`, or naming
-  the pinned supported revision as a rebase target, fails the test. This is the
-  backwards-migration control: an instruction that looks correct and moves the
-  contributor's branch behind protected `v3` is exactly the output a
-  human-readable assertion waves through. The scan counts the rendered
-  refusals it examined and fails closed on an empty corpus.
+  **The bulk-add shape is asserted to be rejected.** A planted renderer output
+  containing a single `git add` whose arguments are the complete predicted
+  conflict set fails the test, as does any `git add` argument that is a literal
+  path rather than the per-stop placeholder. The predicted set is the union
+  across the replay and is never the unmerged set at one stop, so a bulk add
+  stages files the replay has not reached and converts a resolution into an
+  unrelated committed change.
+
+  **The renderer audit parses git command lines rather than scanning for
+  keywords.** For every rendered refusal it takes each git command line and:
+
+  - rejects any **40-hex object name anywhere on the line**, in a positional
+    argument or inside a flag assignment, explicitly including `--onto=<sha>`,
+    `--hard=<sha>` and the separated `--onto <sha>` form. A token-skipping scan
+    that only inspects positional arguments passes `--onto=<sha>`, which is the
+    backwards rebase wearing a flag;
+  - rejects any git subcommand or flag **not on the allowed list** rather than
+    ignoring what it does not recognise. Unrecognised is a failure: an audit
+    that skips tokens it cannot classify is an audit an unfamiliar flag walks
+    straight through;
+  - rejects any ref that is not `origin/v3`, including a foreign remote, a
+    foreign branch and a bare pinned revision.
+
+  **Ordering is asserted as a complete constraint set**, not a membership
+  check: `git fetch origin` before `git rebase origin/v3`; the rebase before
+  `git status --short`; the status before `git add`; the add before
+  `git rebase --continue`; and the continue before the `make panel-migrate`
+  rerun. On the abandon branch, `git rebase --abort` comes after the rebase and
+  before the rerun. Continue and abort are alternative branches, but both
+  appear after the rebase, and neither may appear before it.
+
+  Planted negative cases, each asserted to be **rejected**: `--onto=<sha>`;
+  `--hard=<sha>`; `--onto <sha>` separated; a foreign ref such as
+  `upstream/main` or `origin/main`; a bare 40-hex revision as the rebase
+  target; a bulk `git add` over the predicted set; an unrecognised git flag;
+  and out-of-order renderings, at minimum `git add` before `git status`,
+  `git rebase` before `git fetch`, and `git rebase --continue` before the
+  rebase. The scan counts the rendered refusals and command lines it examined
+  and fails closed on an empty corpus.
 
   The renderer policy test and its fixtures land in **this** pull request,
-  alongside the contributing-docs fail-open fix, so the backwards-rebase
-  instruction is rejected by a check that exists before the wrapper does.
+  alongside the contributing-docs fail-open fix, so the backwards-rebase and
+  bulk-add instructions are rejected by a check that exists before the wrapper
+  does.
 
   The same shape is exercised for the controller variant: evidence absent,
   evidence untrusted, evidence contradicting the record, and a record carrying
