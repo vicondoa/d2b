@@ -2766,6 +2766,131 @@ fn assert_one_error_with(errors: &[String], label: &str, needles: &[&str]) {
     );
 }
 
+/// Pinned canonical-row accounting per result source, spelled out rather than
+/// computed.
+///
+/// The controls below must not derive their expectations from
+/// [`accounted_rows`]: that is the validator's own helper, so an emptied
+/// registry would drive both sides of the comparison to zero and every
+/// count-based assertion would agree with itself while checking nothing. A
+/// deleted `MeasurementSpec` would not move a single expectation. These
+/// literals are the independent truth the helper and the registry are both
+/// measured against, and changing one is a visible edit a reviewer sees.
+const EXPECTED_ACCOUNTING: &[(ResultSource, usize, usize, usize)] = &[
+    // source, accounted, registered, superseded
+    (ResultSource::Original, 7, 6, 1),
+    (ResultSource::RssRerun20260802, 1, 1, 0),
+];
+
+/// The pinned `(accounted, registered, superseded)` baseline for `source`.
+/// Fails closed on a missing or duplicated baseline, so adding a
+/// [`ResultSource`] without pinning its counts breaks the controls rather than
+/// silently exempting the new source from them.
+fn expected_accounting(source: ResultSource) -> (usize, usize, usize) {
+    let mut found = None;
+    for (candidate, accounted, registered, superseded) in EXPECTED_ACCOUNTING {
+        if *candidate != source {
+            continue;
+        }
+        assert!(
+            found.is_none(),
+            "duplicate pinned baseline for {}",
+            source.path()
+        );
+        found = Some((*accounted, *registered, *superseded));
+    }
+    found.unwrap_or_else(|| panic!("no pinned baseline for {}", source.path()))
+}
+
+/// The registry itself, measured against the pinned baseline by direct
+/// iteration rather than through the validator's helper.
+///
+/// This is the test that makes every other count-based control non-vacuous. If
+/// `spike_measurement_specs` returned an empty vector, or
+/// `SUPERSEDED_CANONICAL_ROWS` were emptied, or a single spec lost its source
+/// binding, the controls that consume these counts would still be internally
+/// consistent - they would simply be checking nothing. Pinning the counts as
+/// literals is what turns "the numbers agree" into "the numbers are right".
+#[test]
+fn the_measurement_registry_matches_its_pinned_baseline() {
+    let specs = spike_measurement_specs();
+    assert!(
+        !specs.is_empty(),
+        "an empty measurement registry would let every count-derived control agree at zero"
+    );
+    assert!(
+        !SUPERSEDED_CANONICAL_ROWS.is_empty(),
+        "an empty superseded set would let the preservation controls agree at zero"
+    );
+    assert_eq!(
+        EXPECTED_ACCOUNTING.len(),
+        ResultSource::ALL.len(),
+        "every result source must carry a pinned baseline"
+    );
+
+    let mut total_registered = 0usize;
+    let mut total_superseded = 0usize;
+    for source in ResultSource::ALL {
+        let (accounted, registered, superseded) = expected_accounting(source);
+        assert_eq!(
+            accounted,
+            registered + superseded,
+            "the pinned baseline for {} is internally inconsistent",
+            source.path()
+        );
+
+        // Counted by direct iteration over the registry, not through
+        // `accounted_rows`, so the helper is measured rather than trusted.
+        let counted_registered = specs
+            .iter()
+            .filter(|spec| spec.result_source == source)
+            .count();
+        let counted_superseded = SUPERSEDED_CANONICAL_ROWS
+            .iter()
+            .filter(|row| row.source == source)
+            .count();
+        assert_eq!(
+            counted_registered,
+            registered,
+            "{} registers {counted_registered} measurement(s); the pinned baseline says {registered}",
+            source.path()
+        );
+        assert_eq!(
+            counted_superseded,
+            superseded,
+            "{} carries {counted_superseded} superseded row(s); the pinned baseline says {superseded}",
+            source.path()
+        );
+
+        // And the shared helper must agree with the pinned truth. This is the
+        // one place `accounted_rows` is an assertion subject rather than an
+        // assertion source.
+        assert_eq!(
+            accounted_rows(source),
+            (accounted, registered, superseded),
+            "accounted_rows disagrees with the pinned baseline for {}",
+            source.path()
+        );
+
+        total_registered += counted_registered;
+        total_superseded += counted_superseded;
+    }
+
+    // Every registered measurement and every superseded row is attributed to
+    // exactly one source, so a spec that quietly loses its binding cannot hide
+    // behind a per-source count that still balances.
+    assert_eq!(
+        total_registered,
+        specs.len(),
+        "every registered measurement must be attributed to exactly one source"
+    );
+    assert_eq!(
+        total_superseded,
+        SUPERSEDED_CANONICAL_ROWS.len(),
+        "every superseded row must be attributed to exactly one source"
+    );
+}
+
 /// A missing required source must deny, not evaporate. Every loop in the
 /// validator reads `sources` through an `Option`, so an absent artifact is one
 /// bare `continue` away from producing a clean run - the check would simply not
@@ -2789,7 +2914,7 @@ fn a_missing_result_source_is_denied_and_never_silently_skipped() {
             source.path()
         );
 
-        let (accounted, registered, superseded) = accounted_rows(source);
+        let (accounted, registered, superseded) = expected_accounting(source);
         let errors = validate_spike_measurements(&without, &documents);
         assert_one_error_with(
             &errors,
@@ -2910,7 +3035,7 @@ fn a_rewritten_superseded_row_fails_even_though_it_still_parses() {
         // both are asserted, because either one alone silently becoming
         // ineffective would leave the deletion detectable only by accident.
         let deleted = delete_canonical_row(original, row.threshold);
-        let (accounted, registered, superseded) = accounted_rows(row.source);
+        let (accounted, registered, superseded) = expected_accounting(row.source);
         let baseline = original
             .lines()
             .filter(|line| line.contains("| MEASURED-"))
@@ -2965,7 +3090,7 @@ fn an_unaccounted_measured_row_in_a_result_artifact_fails_closed() {
 
     for source in ResultSource::ALL {
         let original = &sources[&source];
-        let (accounted, registered, superseded) = accounted_rows(source);
+        let (accounted, registered, superseded) = expected_accounting(source);
         let baseline = original
             .lines()
             .filter(|line| line.contains("| MEASURED-"))
