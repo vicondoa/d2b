@@ -1353,8 +1353,10 @@ fn parse_maximum_rss_kib(stderr: &str) -> u64 {
     stderr
         .lines()
         .find_map(|line| {
-            line.strip_prefix(FIELD)
-                .and_then(|value| value.trim().parse::<u64>().ok())
+            let value = line
+                .find(FIELD)
+                .map(|offset| &line[offset + FIELD.len()..])?;
+            value.trim().parse::<u64>().ok()
         })
         .expect("GNU time did not report whole-process maximum RSS")
 }
