@@ -213,7 +213,8 @@ packages/xtask/tests/bazel_module_refresh.rs # Real-Bazel module lock drift and 
 packages/xtask/src/                   # Schema output and evidence helpers
 packages/xtask/tests/policy_ci.rs
 packages/xtask/tests/fixtures/ci/
-packages/d2b-contract-tests/tests/policy_docs.rs
+packages/d2b-contract-tests/tests/policy_docs.rs # W0 wave-note lint; W2 source-shape tests
+specs/003-adr052-bazel-rust/wave-notes/ # w0.md, w1.md, w2.md; one writer each
 packages/d2b-bazel-runner/src/fsops.rs # Injectable filesystem for JUnit and cleanup
 packages/d2b-bazel-runner/src/clock.rs # Injectable Clock and UptimeSource for deadlines
 packages/                             # Runner crate and locator crate paths fixed by W0 prep
@@ -308,19 +309,63 @@ is not enforceable. Each wave's notes are one committed file under
 `specs/003-adr052-bazel-rust/wave-notes/`, named `w0.md`, `w1.md`, and `w2.md`,
 and each is owned by the single scope that made the measurement: `generator` in
 W0, `aux` in W1, and `local-wrapper` in W2. One writer per file keeps the notes
-disjoint in the ownership map without a prep commit. Each wave's validation
-task scans every file in that directory, tracked or untracked, so a note left
-unstaged is scanned rather than skipped, and each such scan is first proved
-against a planted note carrying a synthetic absolute path that belongs to no
-machine involved. A scan that has only ever been run against notes that pass
-is not evidence that it can fail.
+disjoint in the ownership map without a prep commit.
+
+The rule is carried by a test, not by a ritual. W0 lands a type-5 policy lint
+in `packages/d2b-contract-tests/tests/policy_docs.rs` that enumerates every
+entry of that directory and refuses four things: an empty corpus, any entry
+that is not a readable regular file named `w<digits>.md`, any line that still
+holds a `/`-rooted path token once every `<worktree>`-rooted path and every
+`http` or `https` scheme-and-authority prefix has been removed, and any line
+carrying the worktree's own absolute path, or that path without its leading
+slash, as a bare substring. A `<worktree>`-rooted path is the exact literal
+`<worktree>` followed by `/`-separated segments, each an ordinary segment or a
+further angle-bracket placeholder, so
+`<worktree>/.scratch/bazel/<base>/execroot`
+is consumed whole rather than leaving `/execroot` behind. The scheme allowlist
+is exactly `http` and `https`, so `file:` is refused rather than parsed: a
+`file:` URI is an absolute path wearing a scheme, and parsing it would be the
+one hole an enumerated denylist of root directories always leaves. Nothing is
+allowlisted as a permitted real absolute path, `/dev/null` included, because a
+note records a shape and not a transcript. The substring rule is what catches a
+leak that arrives with no leading slash at all.
+
+The lint runs in the one lane that reaches that crate,
+`D2B_ENABLE_FIXTURE_BUILD=1 make test-fixture-contracts`. That is measured, not
+assumed: `tests/test-rust.sh` sets `workspace_test_excludes=(--exclude
+d2b-contract-tests)`, and `tests/test-policy.sh` runs seven fixture-independent
+contract-test binaries, none of which is `policy_docs`. No new gate, shell
+script, or `tests/test-policy.sh` entry is added, per FR-053.
+
+The lint carries its own proof that it can fail, and it carries it in-test
+rather than on disk. One case plants the generic absolute path
+`/home/planted-d2b-note-leak/adr052/.scratch/bazel`, which belongs to no
+machine in this run; one passes an empty corpus; one plants the worktree path
+with its leading slash removed; one plants a non-note entry name and an
+unreadable entry; and one requires `<worktree>` in exactly that spelling by
+refusing `<WORKTREE>`, `<worktree-root>`, and a `file:` URI while accepting a
+placeholder-rooted path that carries a nested `<base>` segment. All five are
+observed failing against an inert scanner before the real one lands.
+
+No wave plants a note fixture in the real directory any more. An untracked leak
+file there is either named like a note, in which case the lint reads it, or
+named anything else, in which case the lint refuses the entry. That is strictly
+stronger than the tracked-versus-untracked scan it replaces, and unlike a scan
+a validation task performs by hand, it cannot be skipped by a reviewer who is
+in a hurry. Adding `specs/003-adr052-bazel-rust/wave-notes` to this crate's
+input set is also what makes the fixture-dependent validation rule below bind
+for W0, W1, and W2 by derivation rather than by the incidental `.rs`
+intersection.
 
 ### Fixture-dependent validation rule
 
 `tests/test-rust.sh` sets `workspace_test_excludes=(--exclude
 d2b-contract-tests)`, so the `d2b-contract-tests` crate never runs under
 `make test-rust-main` or any other workspace leaf. It runs only under
-`D2B_ENABLE_FIXTURE_BUILD=1 make test-fixture-contracts`. A wave that edits a
+`D2B_ENABLE_FIXTURE_BUILD=1 make test-fixture-contracts`.
+`tests/test-policy.sh`
+does not close that gap: it runs seven named fixture-independent contract-test
+binaries, and `policy_docs` is not one of them. A wave that edits a
 file that crate reads therefore has no coverage at all unless its validation
 task runs that target.
 
@@ -342,7 +387,11 @@ task. Measured at the current base, the union already contains
 `packages/Cargo.toml`, `packages/xtask/src/main.rs`, `AGENTS.md`,
 `docs/contributing`, and `nixos-modules`. Every code-changing wave in this plan
 adds or edits at least one `.rs` file under `packages/`, so W0, W1, W2, W3, W5,
-W6, and W7 all carry the target. W4 owns no implementation file and runs it
+W6, and W7 all carry the target. W0 adds
+`repo_root().join("specs/003-adr052-bazel-rust/wave-notes")` to the union when
+it lands the wave-note lint, so from W0 onward the wave that writes a note is
+bound to the target by derivation rather than by the incidental `.rs`
+intersection. W4 owns no implementation file and runs it
 anyway, because promotion evidence requires the same-commit companion verdict.
 The practical consequence is that the target is not optional for a wave whose
 diff looks unrelated to fixtures: a wave that adds a new runner test file has
@@ -359,7 +408,8 @@ command, the pinned
 `cargo-bazel` acquisition, the generated workspace boundary, the Cargo-derived
 generator, the schema output prerequisite, the generated first-party graph, the
 coverage-map structure, the third-party build-script and action-environment
-inventory, and the frozen runner and locator crate decisions, including the
+inventory, the wave-note policy lint that carries the command-shape rule, and
+the frozen runner and locator crate decisions, including the
 `fsops` and `clock` boundary modules. Cargo remains authoritative.
 
 **Ownership**:
@@ -376,6 +426,10 @@ inventory, and the frozen runner and locator crate decisions, including the
   written against the prep-frozen `YankedIndex` boundary, its `IndexClient`
   implementation, and its fake;
   `packages/xtask/tests/bazel_module_refresh.rs`; their tests;
+  the wave-note policy lint in
+  `packages/d2b-contract-tests/tests/policy_docs.rs` and the W0 note
+  `specs/003-adr052-bazel-rust/wave-notes/w0.md`, which the scope that made the
+  measurement writes together with the lint that polices it;
   and its generated outputs including `.bazelignore` and the derived censuses.
 - `schema`: schema generator, its tests, and the current schema leaf only.
 - `runner`: the frozen runner crate skeleton, including the `fsops` and `clock`
@@ -419,9 +473,12 @@ one site that may; both schema generations report the exact generated nonempty
 valid census; the build-script
 and action-environment inventory is committed and drift-checked; the W0 wave
 notes record both measured invocations as command shapes with `<worktree>`
-placeholders and a scan of every file in the notes directory, tracked or
-untracked, proves no real absolute path appears in them, having first proved
-that same scan refuses a planted note carrying a synthetic absolute path;
+placeholders and the wave-note policy lint in
+`packages/d2b-contract-tests/tests/policy_docs.rs` passes over every entry of
+that directory under `D2B_ENABLE_FIXTURE_BUILD=1 make test-fixture-contracts`,
+with its planted absolute-path, empty-corpus, non-note-entry,
+worktree-substring, and placeholder-spelling cases all present and each
+observed failing against the inert scanner before the real one landed;
 Cargo remains authoritative and green; the ten-role panel and wave PR are
 sealed and merged.
 
@@ -444,9 +501,10 @@ guard, the manifest adapter, and the six ADR Make targets.
 - `broker`: three feature carriers and their exclusivity.
 - `aux`: the guest runner carrier and the offline supply-chain carriers,
   including the vendor repository rule, the unconditional lock-bounded
-  yanked-state snapshot and its three carriers, and
+  yanked-state snapshot and its three carriers,
   `packages/xtask/src/bazel_yanked.rs` for the offline `bazel-yanked-check`
-  validator those carriers run and its message tests.
+  validator those carriers run and its message tests, and the W1 note
+  `specs/003-adr052-bazel-rust/wave-notes/w1.md`.
 - `runner`: only the frozen runner crate, its environment and per-case evidence
   implementation, and its tests.
 - `locator`: the locator crate and the enumerated first-party migration.
@@ -481,8 +539,9 @@ offline for all three locks from both the carriers and a contributor shell,
 that validator names neither `YankedIndex` nor `IndexClient` so it cannot reach
 the index at all, the wave notes record the reviewed networked refresh that
 produced the snapshot as a command shape plus the index revision it observed
-and the W1 note scan refuses a planted note carrying a synthetic absolute path
-before it passes against the committed one,
+and the W0 wave-note lint passes over the added `w1.md` in the same
+`D2B_ENABLE_FIXTURE_BUILD=1 make test-fixture-contracts` run, with no shell
+scan and no planted note added here,
 its drift refusal names refresh, review and commit, then the check, and it
 reports under the existing `rust-deny-*` identifiers without adding a
 nineteenth surface; every migrated test resolves its binary
@@ -515,7 +574,8 @@ control. W5 removes that helper after W4 qualification is complete.
   derivation inside `bazel-repin` and `bazel-module-refresh` with the one shared
   construction, and `packages/xtask/tests/bazel_module_refresh.rs` solely to add
   the case proving every command the wrapper issues surfaces the same
-  module-lock remediation. That
+  module-lock remediation, plus the W2 note
+  `specs/003-adr052-bazel-rust/wave-notes/w2.md`. That
   replacement adds a `d2b-bazel-runner` path dependency, which changes the
   generated graph, so W2 gains an integrator regeneration step and
   `make test-drift` in validation.
@@ -547,9 +607,10 @@ step is synchronous and its completion is observed before any size measurement;
 every cleanup, result-file, and deadline property is proven through the
 injected `fsops` and `clock` boundaries with no live-host dependency; the W2
 wave notes record the consolidated startup-option construction as a command
-shape with `<worktree>` placeholders and a validation step proves no real
-absolute path appears in them, having first proved that same scan refuses a
-planted note carrying a synthetic absolute path;
+shape with `<worktree>` placeholders and the W0 wave-note lint passes over the
+added `w2.md` in the same `D2B_ENABLE_FIXTURE_BUILD=1 make
+test-fixture-contracts` run, with the W2 source-shape work in the same policy
+file leaving that lint and its cases byte-identical;
 panel and PR are sealed and merged.
 
 ### W3 - Shadow CI

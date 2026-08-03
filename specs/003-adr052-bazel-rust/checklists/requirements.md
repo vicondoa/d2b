@@ -65,3 +65,18 @@
   index-dependent design goes wrong. No functional requirement or success
   criterion was added or removed; the set remains FR-001 through FR-055 and
   SC-001 through SC-015.
+- Revalidated after the round-seven test-seat finding. The wave-note
+  command-shape rule moved from a hand-run shell scan plus a planted untracked
+  note in W0, W1, and W2 validation to a type-5 policy lint in
+  `packages/d2b-contract-tests/tests/policy_docs.rs`, carried by
+  `D2B_ENABLE_FIXTURE_BUILD=1 make test-fixture-contracts`, with its planted
+  cases held in-test rather than on disk. Two W0 tasks were added for the lint
+  and one W0 task was merged into the generator implementation it was a clause
+  of, so the artifact holds 174 tasks. The change is a carrier change, not a
+  requirement change: FR-051, FR-052, and FR-053 already required the guard,
+  the planted negative, and the use of an existing surface with no new
+  top-level gate. No functional requirement or success criterion was added or
+  removed; the set remains FR-001 through FR-055 and SC-001 through SC-015. The
+  carrier claim was measured rather than assumed: `tests/test-rust.sh` excludes
+  `d2b-contract-tests` from every workspace leaf, and `tests/test-policy.sh`
+  runs seven contract-test binaries that do not include `policy_docs`.

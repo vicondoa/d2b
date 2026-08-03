@@ -23,7 +23,8 @@ Files:
   four dependency hubs and their locks, the repository-owned commands that
   regenerate each committed lock and validate the yanked snapshot, the
   injectable index boundary the networked refresh calls through, the exact
-  operator-facing recovery text every refusal must carry, and permitted tool
+  operator-facing recovery text every refusal must carry, the wave-note
+  command-shape rule and the policy lint that enforces it, and permitted tool
   acquisition.
 - `execution-manifest-binding.md` - executor-to-existing-contract binding.
 - `shadow-promotion-evidence.md` - qualification records, evidence, and

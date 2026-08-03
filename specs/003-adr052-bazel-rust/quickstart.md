@@ -431,6 +431,51 @@ baseline. Validate fixture coverage separately:
 D2B_ENABLE_FIXTURE_BUILD=1 make test-fixture-contracts
 ```
 
+That target is also the wave-note verdict, from W0 onward. Every measured
+invocation a wave records under `specs/003-adr052-bazel-rust/wave-notes/` is
+written as a command shape with `<worktree>` placeholders, and the rule is
+enforced by a policy lint in
+`packages/d2b-contract-tests/tests/policy_docs.rs` that the run above already
+executed. Do not hand-roll a shell scan over the notes and do not plant a note
+file, tracked or untracked, to see the scan fail: the lint refuses an empty
+corpus and refuses any entry in that directory that is not a readable
+`w<digits>.md` note, so a stray file is caught either way, and the lint's own
+planted cases live in-test. `tests/test-rust.sh` excludes `d2b-contract-tests`
+from every workspace leaf and `tests/test-policy.sh` runs seven contract-test
+binaries that do not include `policy_docs`, so this is the only lane that runs
+it. Confirm the lint is present and reaches the notes, and confirm the wave's
+own note exists:
+
+```bash
+set -e
+. .scratch/adr052-assert.sh
+require_input packages/d2b-contract-tests/tests/policy_docs.rs \
+  specs/003-adr052-bazel-rust/wave-notes/
+if grep -n 'specs/003-adr052-bazel-rust/wave-notes' \
+    packages/d2b-contract-tests/tests/policy_docs.rs; then
+  :
+else
+  rc=$?
+  test "$rc" -eq 1 || fail "grep exited $rc while inspecting policy_docs.rs"
+  fail 'the wave-note lint no longer names the notes directory'
+fi
+if grep -n 'wave_note_violations' \
+    packages/d2b-contract-tests/tests/policy_docs.rs; then
+  :
+else
+  rc=$?
+  test "$rc" -eq 1 || fail "grep exited $rc while inspecting policy_docs.rs"
+  fail 'the wave-note scanner was removed from the policy carrier'
+fi
+```
+
+Both checks are presence claims and neither ends in `| head`: a pipeline
+reports the last command's status, so a `head` on the end would turn a deleted
+lint into a pass. In the W1 and W2 sections the same target covers `w1.md` and
+`w2.md`; nothing further is needed there, because the committed lint scans the
+whole directory and a wave that adds a note has already changed an input this
+crate reads.
+
 ## Local Bazel aggregate and slices - W1
 
 ```bash
@@ -675,8 +720,20 @@ require_input packages/d2b-bazel-runner/tests/ \
 refute 'runner tests depend on ambient time or uptime' \
   -rnE 'thread::sleep|SystemTime::now|/proc/uptime' \
   packages/d2b-bazel-runner/tests/
-grep -rn 'fsops::' packages/d2b-bazel-runner/src/cleanup.rs | head
-grep -rn 'clock::' packages/d2b-bazel-runner/src/deadline.rs | head
+if grep -rn 'fsops::' packages/d2b-bazel-runner/src/cleanup.rs; then
+  :
+else
+  rc=$?
+  test "$rc" -eq 1 || fail "grep exited $rc while inspecting cleanup.rs"
+  fail 'cleanup.rs never calls through the fsops boundary'
+fi
+if grep -rn 'clock::' packages/d2b-bazel-runner/src/deadline.rs; then
+  :
+else
+  rc=$?
+  test "$rc" -eq 1 || fail "grep exited $rc while inspecting deadline.rs"
+  fail 'deadline.rs never calls through the clock boundary'
+fi
 ```
 
 The `refute` line is the one that could go quiet. Written as a bare
@@ -685,6 +742,16 @@ The `refute` line is the one that could go quiet. Written as a bare
 branch, and the block report that no test reads the host clock when it read no
 test at all. `require_input` refuses a missing or empty directory first, and
 `refute` refuses every exit above 1 after that.
+
+The two `fsops::` and `clock::` checks are the mirror image, and they carry the
+same hazard in the opposite direction. They are presence claims, not absence
+claims, so `refute` is the wrong helper; but written as
+`grep -rn 'fsops::' ... | head` they were worse than either, because the
+pipeline reports `head`'s status and never grep's. A file that lost its
+boundary call, was renamed, or was never created all produced the same silent
+success. Written as above, exit 1 fails as a missing call and exit 2 or higher
+fails as an inspection error, each with its own message, and only exit 0
+passes.
 
 Prove startup options are byte-identical across every command the wrapper
 issues, because a mismatch starts a second server:

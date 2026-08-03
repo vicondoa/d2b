@@ -393,6 +393,37 @@ construction records the resulting invocation as a shape with `<worktree>`
 placeholders only, because a consolidated construction is exactly the note a
 later reader is most likely to copy verbatim.
 
+The rule is enforced by a type-5 policy lint, not by a scan a validation task
+performs by hand. W0 lands it in
+`packages/d2b-contract-tests/tests/policy_docs.rs`. It enumerates every entry
+of `specs/003-adr052-bazel-rust/wave-notes/` and refuses an empty corpus, any
+entry that is not a readable regular file named `w<digits>.md`, any line that
+still holds a `/`-rooted path token once every `<worktree>`-rooted path and
+every `http` or `https` scheme-and-authority prefix has been removed, and any
+line carrying the worktree's own absolute path, or that path stripped of its
+leading slash, as a bare substring. A `<worktree>`-rooted path is the exact
+literal `<worktree>` followed by `/`-separated segments, each an ordinary
+segment or a further angle-bracket placeholder, so
+`<worktree>/.scratch/bazel/<base>/execroot` is consumed whole. `<worktree>` is
+allowed in exactly that spelling; `<WORKTREE>` and `<worktree-root>` are not.
+The scheme allowlist is exactly `http` and `https`, so a `file:` URI is refused
+rather than parsed, because a `file:` URI is an absolute path wearing a scheme.
+No real absolute path is allowlisted, `/dev/null` included: a note records a
+shape, not a transcript. Every refusal names the note, the line, the whole
+offending token, and the one remediation, which is to rewrite the path as a
+`<worktree>`-rooted shape or drop it.
+
+The lint proves it can refuse before its pass is treated as evidence, and it
+does so against in-test planted entries rather than files written into the
+notes directory: a planted generic absolute path belonging to no machine in the
+run, an empty corpus, a worktree substring with no leading slash, a non-note
+entry name, and the two near-miss placeholder spellings plus the `file:` URI.
+The one lane that executes it is
+`D2B_ENABLE_FIXTURE_BUILD=1 make test-fixture-contracts`, because
+`tests/test-rust.sh` excludes `d2b-contract-tests` from every workspace leaf
+and `tests/test-policy.sh` names seven contract-test binaries that do not
+include `policy_docs`. No new gate or shell script is added.
+
 ## Tool acquisition
 
 - Bazel is `bazel_8` (8.6.0) from the pinned nixpkgs, reached through the dev
