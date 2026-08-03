@@ -115,8 +115,9 @@ specs/001-adr046-d2b3-completion/
 │   └── companion-contracts.md
 ├── checklists/
 │   ├── requirements.md  # Spec quality checklist (16/16 passing)
-│   └── coverage.md      # Upstream coverage gate (19/47 as of the W5 pass; Gate 1 and
-│                        #   Gate 2 closed, plus the W5 date-bound CHK025/CHK044 gate)
+│   └── coverage.md      # Upstream coverage gate (22/47 as of the W5 pass; Gate 1 and
+│                        #   Gate 2 closed, plus the W5 date-bound CHK025/CHK044 gate and
+│                        #   the companion family CHK018/CHK022/CHK033)
 └── tasks.md             # Phase 2 output - NOT created by /speckit-plan
 ```
 

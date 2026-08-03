@@ -46,11 +46,11 @@ Can these requirements be objectively assessed as written?
 - [x] CHK015 Is "declared budget" identified by name and value rather than referenced abstractly? [Clarity, Spec §SC-012]
 - [x] CHK016 Are the hard numeric targets that FR-030 governs enumerated in the spec itself? None of the ten targets appears in spec.md; they exist only in plan.md and spec-coverage.md. [Measurability, Spec §FR-030]
 - [ ] CHK017 Is "operator-facing capability" defined precisely enough to make the parity criterion checkable? [Clarity, Spec §SC-003]
-- [ ] CHK018 Is "desktop companion that consumes d2b's public operator contracts" defined by an objective test, so the release-blocking set cannot be argued? [Clarity, Spec §FR-039]
+- [x] CHK018 Is "desktop companion that consumes d2b's public operator contracts" defined by an objective test, so the release-blocking set cannot be argued? [Clarity, Spec §FR-039]
 - [ ] CHK019 Is "host recovery point" defined - what qualifies, and what evidence constitutes attestation? [Ambiguity, Spec §FR-043]
 - [x] CHK020 Is "actionable next step" specified well enough to be assessed without reviewer judgment? [Measurability, Spec §FR-017, §SC-004]
 - [ ] CHK021 Is "reachable through the operator surface" defined well enough to decide when a foundation surface has stopped being deliberately unwired? [Clarity, Spec §SC-021]
-- [ ] CHK022 Is "compatible version verified against the release candidate" defined with a pass condition? [Measurability, Spec §SC-024]
+- [x] CHK022 Is "compatible version verified against the release candidate" defined with a pass condition? [Measurability, Spec §SC-024]
 
 ## Requirement Consistency and Conflicts
 
@@ -214,10 +214,10 @@ the row reads **needs integrator** rather than guessing.
 | CHK011 | Checkpoint identity and rollback-command detail | W7 | `ADR046-reset-*` items are W7 |
 | CHK012 | Incident-hold scope - Zone-wide versus per-Volume | W7 | `ADR046-reset-*` items are W7 |
 | CHK017 | "Operator-facing capability" parity criterion | W7 | Parity is evaluated at cutover, so the definition must bind no later than W7 |
-| CHK018 | Objective test for "desktop companion consuming public operator contracts" | needs integrator | FR-039 is locally added with no upstream ADR-046 owner; the release-blocking companion set is an operator decision |
+| CHK018 | Objective test for "desktop companion consuming public operator contracts" | W5 | **closed** - FR-064; see the companion-membership gate below |
 | CHK019 | "Host recovery point" definition and attestation evidence | W7 | FR-043 is program-local (outside the work-item manifest per the recorded operator decision) but is exercised by the W7 destructive runs |
 | CHK021 | "Reachable through the operator surface" for deliberately unwired foundations | needs integrator | Spans W0 foundation surfaces and W6 Provider wiring; no single owning wave is evident |
-| CHK022 | Pass condition for "compatible version verified against the release candidate" | needs integrator | Same locally-added companion family as CHK018 |
+| CHK022 | Pass condition for "compatible version verified against the release candidate" | W5 | **closed** - FR-065; see the companion-membership gate below |
 | CHK024 | 2-second operator envelope versus component-level budgets | W5 | The component budgets are measured against the W5 storage engine and its watch consumer |
 | CHK025 | Companion adaptation without a published preview artifact | W5 | **closed** - see the W5 date-bound gate below |
 | CHK026 | Removal-proof consistency - one per path, 3 of 16 supplied, non-empty proof fields | W7 | Removal proofs are consumed by the cutover and streamline waves |
@@ -338,7 +338,8 @@ that carry the compatibility claim.
 "desktop companion that consumes d2b's public operator contracts") and CHK022 (a pass condition
 for "compatible version verified"). Both concern the *membership* and *entry bar* of the
 inventory rather than what happens when a member falls short. CHK033, which asked what happens
-when adaptation is partial, is closed below.
+when adaptation is partial, is closed below. **Both were closed in the following pass**; see
+"CHK018 and CHK022 - membership and pass condition" at the end of this file.
 
 ### CHK033 - partial adaptation, decided (2026-08-03)
 
@@ -374,11 +375,10 @@ refusal or degraded behavior". The shipped page anticipated this classification;
 spec was the side missing the rule. Existing docs are canon, so the rule was written to fit the
 evidence shape that already ships.
 
-**Recorded count drift.** Closing CHK033 moves this checklist to 20 of 47. `plan.md`'s Project
-Structure listing says "19/47 as of the W5 pass", written in the pass that closed CHK025 and
-CHK044, and is now one behind. It is left unedited because this change's file ownership is the
-spec, checklist, and companion-contract set; the correction a follow-up should apply is
-"20/47". Recorded here rather than silently fixed, per the standing rule on drift.
+**Recorded count drift.** Closing CHK033 moved this checklist to 20 of 47, one ahead of the
+"19/47" then recorded in `plan.md`'s Project Structure listing. That count was corrected to the
+current total in the pass that closed CHK018 and CHK022; the two items were not editable in the
+CHK033 pass because its file ownership was the spec, checklist, and companion-contract set.
 
 **No deprecation ladder was invented.** FR-045 leaves exactly one release, and this repository
 deliberately retired its staged warning, fail-loud, and removal calendar at the clean break -
@@ -392,3 +392,50 @@ or a missing `unsafe-local` no-isolation posture reads to an operator as "no cer
 progress" and "isolated", so a silent absence already lands in the unactionable class and is
 Blocked. The general rule reaches the strict answer on its own; a named exception would only
 create an edge to argue about.
+
+### CHK018 and CHK022 - membership and pass condition, closed (2026-08-03)
+
+These are the last two items in the locally-added companion family. CHK018 asked for an
+objective membership test so the release-blocking set cannot be argued; CHK022 asked for a pass
+condition so "verified against the release candidate" is measurable. Both were parked as "needs
+integrator" on the same reasoning that parked CHK033, and closing CHK033 removed that reasoning.
+
+| Item | Resolution |
+| --- | --- |
+| CHK018 | **FR-064** added: a two-limb membership test, both limbs required. Limb 1 is discovery from a closed list - the validation host's own flake inputs, the currently published inventory, and any repository a d2b reference doc, example, template, or how-to names as consuming a d2b surface. Limb 2 is consumption of at least one surface from a closed list of public operator surfaces: the public daemon socket wire; the CLI contract including `--json` and exit codes, and its v3 replacement; the public `vms.json` manifest; `/etc/d2b/ui-colors.{json,css}`; the clipboard picker protocol over the inherited `socketpair()`; public launcher metadata served through the authorized public daemon API; and the flake's public outputs. Each row carries repository, pinned **commit** rather than a tag or version string, maintainer of record, discovery source, and consumed surfaces. An addition needs both limbs; a **removal needs a recorded negative determination** at a named revision and date. A candidate that satisfies limb 1 but whose consumption cannot be determined is **in the set and blocks** until that determination exists. |
+| CHK022 | **FR-065** added: seven conditions, all required, no aggregate or majority reading. Live host, not a VM or container or CI runner; the exact release-candidate snapshot named by commit; the companion at a pinned commit; every surface in the row exercised rather than sampled; every surface Conformant or Retired under FR-063; zero Blocked including zero unclassifiable; evidence in FR-063's shape. Nine named non-passes are listed explicitly, including a green CI run in the companion's own repository and an exercise against a non-candidate build. **A moved candidate voids every verification against the previous snapshot**, mirroring the rule that any content change invalidates prior panel sign-off - without it, "the candidate" is whichever build was convenient when someone looked. |
+
+**Two design choices worth defending, since both could have gone the other way.**
+
+*Host flake inputs as the primary discovery source.* d2b targets a single trusted host with one
+operator, so the set that adopting 3.0 can actually break is what that host runs. That is
+enumerable and not arguable, where a curated prose list is neither.
+
+*Uncertainty resolves into the set, not out of it.* Wrongly including a candidate costs one
+negative determination. Wrongly excluding one ships a broken desktop and is discovered by the
+operator rather than by the gate. The asymmetry only points one way.
+
+**Prose was measured before it was rejected as a source**, because "README is unreliable" is the
+kind of claim that should not be asserted. `AGENTS.md` names no companion at all - there is no
+sibling-flake section, contrary to what `contracts/companion-contracts.md` previously stated.
+`README.md` names them exactly once, at line 38, inside a sentence about colour output: it lists
+three of the five published members under non-canonical short names (`wlcontrol`, `wlterm`,
+`clip-picker`), adds two upstream projects that are not members (`niri`, `Waybar`), and omits
+`d2b-toolkit` and `weezterm`. One line, three of five, two false positives, two omissions. That
+is the evidence for a mechanical test, and the stale claim in the contract file was corrected in
+the same pass.
+
+**One negative rule that does real work.** Reading a private bundle artifact is **not**
+membership; it is a defect to report. `docs/reference/manifest-bundle.md` fixes the
+public/private boundary and every private artifact installs `root:d2bd` `0640`. Admitting such a
+consumer to the inventory would record an unauthorised read as a supported contract and quietly
+convert a security finding into a compatibility obligation.
+
+**No external repository was verified, and nothing here implies otherwise.** FR-064 says how to
+decide membership and FR-065 says what passing means; neither has been applied. No candidate has
+been discovered from host flake inputs, no revision pinned, no negative determination recorded,
+and no companion exercised. All five published rows remain Pending, and the five-row inventory
+is itself an unverified starting set that FR-064 will confirm or change at W8.
+
+**Companion family status: closed.** CHK018, CHK022, CHK025, CHK033, and CHK044 are all
+resolved. The remaining open items in this checklist belong to other families.

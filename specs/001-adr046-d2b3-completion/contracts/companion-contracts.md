@@ -1,18 +1,24 @@
 # Contract: Desktop companion surfaces
 
-**Requirement**: FR-039, FR-040, FR-041, FR-042, FR-045, FR-061, FR-062, FR-063, SC-024 | **Waves**: W5 publish, W8 verify
+**Requirement**: FR-039, FR-040, FR-041, FR-042, FR-045, FR-061, FR-062, FR-063, FR-064, FR-065, SC-024 | **Waves**: W5 publish, W8 verify
 
 ## Why this file exists
 
 FR-039 makes an unadapted companion a **release blocker**. A gate that names "every companion"
 is unenforceable without a written, versioned set. No such inventory existed in the repository
-when this file was written: two of the most contract-coupled companions were absent from the
-AGENTS.md sibling-flake section entirely, and README named them only in passing prose.
+when this file was written.
+
+This file originally said the companions were "absent from the AGENTS.md sibling-flake section"
+and named "only in passing prose" in README. Checked against the tree, the first half is wrong
+in the direction that understates the problem: **`AGENTS.md` has no sibling-flake section and
+names no companion at all.** The README half is right and is quantified under "Who is in the
+set" below. Existing artifacts are canon, so the claim is corrected here rather than repeated.
 
 Publishing that inventory was therefore itself a deliverable, not a lookup. It has since
 landed as `docs/reference/companion-contracts.md`, which is the shipped, consumer-facing set;
-this file is the program-local record of the obligations behind it and of the FR-039/FR-045
-resolution that governs when each stage may proceed.
+this file is the program-local record of the obligations behind it, of the FR-039/FR-045
+resolution that governs when each stage may proceed, and of the membership and pass tests that
+decide who is in the set and what counts as verified.
 
 ## The set
 
@@ -39,6 +45,8 @@ resolution that governs when each stage may proceed.
 | CO-6 | Carry the companion-adaptation assumption as an unvalidated risk with a mitigation and a detection point, and never restate it as fact | standing | **Done** - FR-062 |
 | CO-7 | Classify every named surface at W8 as Conformant, Blocked, or Retired, defaulting to Blocked when the outcome cannot be classified | W8 | Open - the pass condition CO-3 is measured against |
 | CO-8 | Record any Retired surface on the FR-042 retirement list before the tag, with justification, owner, restoring condition, and a release-note line, and never as a relabelled failure | W8 | Open |
+| CO-9 | Re-derive the inventory at W8 under FR-064's two limbs, carrying repository, pinned commit, maintainer, discovery source, and consumed surfaces per row, with a recorded negative determination for any removal | W8 | Open |
+| CO-10 | Hold every companion verification to all seven FR-065 conditions, and void every verification if the release-candidate snapshot moves | W8 | Open |
 
 ## The resolution, and what it binds
 
@@ -100,11 +108,100 @@ Absent that, the constraint stands.
 
 ### What this does not close
 
-Nothing in the companion family now depends on this item. CHK018 (an objective test for
-"desktop companion that consumes d2b's public operator contracts") and CHK022 (a pass
-condition for "compatible version verified") remain open and unassigned; both are about the
-*membership* and *pass bar* of the inventory rather than about what happens when a member
-falls short, and neither is decided here.
+Nothing in the companion family remains open. CHK018 is closed by FR-064 and CHK022 by
+FR-065; see "Who is in the set" and "What counts as a pass" below.
+
+## Who is in the set: the membership test
+
+FR-039 makes membership release-blocking, so a set that can be argued is a set that can be
+argued down. FR-064 fixes it with two limbs, both required.
+
+### Why prose cannot settle it, measured
+
+This file previously said the inventory was hard to derive because companions were absent from
+the AGENTS.md sibling-flake section and named only in passing in README. Checked against the
+tree, the situation is worse than that and worth stating exactly, because it is the evidence
+for the mechanical test:
+
+- **`AGENTS.md` names no companion at all.** There is no sibling-flake section.
+- **`README.md` names them once**, at line 38, inside a sentence about colour output: "so niri,
+  Waybar, wlcontrol, wlterm, clip-picker, and Wayland rails use the same
+  host/realm/workload/state colors."
+
+That single line gets three of the five published members under non-canonical short names
+(`wlcontrol`, `wlterm`, `clip-picker` rather than `d2b-wlcontrol`, `d2b-wlterm`,
+`d2b-clip-picker`), adds two upstream projects that are **not** members (`niri`, `Waybar`), and
+omits `d2b-toolkit` and `weezterm` entirely. Prose may raise a candidate. It cannot settle one.
+
+### Limb 1: discovery sources, closed
+
+1. **The validation host's own flake inputs.** d2b targets a single trusted host with one
+   operator, so the set adopting 3.0 can break is what that host actually runs. This is the
+   primary source because it is enumerable and cannot be argued.
+2. **The currently published inventory**, so the set never shrinks silently.
+3. **Any repository a d2b reference doc, example, template, or how-to names** as consuming a
+   d2b surface.
+
+### Limb 2: consumed public operator surface, closed
+
+The public daemon socket wire; the `d2b` CLI contract including `--json` and exit codes, and
+its v3 replacement; the public `vms.json` manifest; `/etc/d2b/ui-colors.json` and
+`/etc/d2b/ui-colors.css`; the clipboard picker protocol over the inherited `socketpair()`; the
+public launcher metadata served through the authorized public daemon API; and the flake's
+public outputs (`nixosModules`, `packages.<system>`, `templates`, `overlays`).
+
+**Reading a private artifact is not membership, it is a defect.** `manifest-bundle.md` fixes
+the boundary and every private bundle artifact installs `root:d2bd` `0640`. A candidate found
+reading one is reported, not admitted - admitting it would record an unauthorised read as a
+supported contract, which is the opposite of what the inventory is for.
+
+### Evidence, additions, removals, and uncertainty
+
+Each row carries the repository, the exact revision pinned on the validation host **as a
+commit** rather than a tag or version string, the maintainer of record, the discovery source,
+and the limb-2 surfaces it consumes. A row without a pinned revision is not a row: "which
+version blocks" would be undecidable.
+
+An addition needs only both limbs. A **removal needs a negative determination** - recorded
+evidence that the candidate consumes no limb-2 surface, at a named revision, on a named date.
+Removal by assertion or by absence from prose is not permitted.
+
+**An uncertain candidate is in the set and blocks**, until a negative determination is
+recorded. Wrongly including costs one determination; wrongly excluding ships a broken desktop.
+
+## What counts as a pass
+
+FR-065 fixes the pass condition. All seven conditions must hold; there is no aggregate reading
+and no majority.
+
+| # | Condition |
+| --- | --- |
+| 1 | Exercised on the daily-driver **live host** - not a VM, container, or CI runner |
+| 2 | Against the **exact release-candidate snapshot** that will be tagged, named by commit |
+| 3 | Companion at a **pinned revision**, named by commit |
+| 4 | **Every** surface in the row exercised, not a sample |
+| 5 | Every surface classified **Conformant or Retired** under FR-063 |
+| 6 | **Zero** Blocked, including zero unclassifiable |
+| 7 | Evidence recorded in FR-063's shape |
+
+**Not a pass**, restated because each has been offered as one somewhere: source inspection; a
+matching version number or tag; a green docs check; the publication of these contracts; a
+successful build; a green CI run in the companion's own repository; an exercise against a
+non-candidate build; an exercise off the live host; a partial exercise of the row.
+
+**A moved candidate voids every verification against the old one.** If the release-candidate
+snapshot changes, all recorded companion verifications are void and re-run. This mirrors the
+rule that any content change invalidates prior panel sign-off, and it is what makes "verified
+against the release candidate" measurable: without it, "the candidate" is whichever build was
+convenient when someone looked.
+
+### Still true: nothing external has been verified
+
+FR-064 says how to decide membership and FR-065 says what passing means. Neither has been
+applied to any repository. No candidate has been discovered from host flake inputs, no revision
+has been pinned, no negative determination has been recorded, and no companion has been
+exercised. All five published rows remain **Pending live-host verification**, and the five-row
+inventory itself remains an unverified starting set that FR-064 will confirm or change at W8.
 
 ## Partial adaptation: the classification that decides the release
 
@@ -215,8 +312,10 @@ the one move this whole classification exists to prevent.
 ## Acceptance
 
 Every companion in the inventory has a compatible version exercised against the release
-candidate on the daily-driver host before 3.0 is tagged (SC-024), and every surface it names
-is classified Conformant or Retired under FR-063. Publication of this inventory and of the
-replacement contracts is not part of that acceptance; it is the precondition that makes
-adaptation possible, and FR-061 forbids reading it as evidence of compatibility. A surface
-that is Blocked, including one whose exercise could not be classified, holds the release.
+candidate on the daily-driver host before 3.0 is tagged (SC-024), where the inventory is the
+one FR-064 derives, "compatible" means every named surface is Conformant or Retired under
+FR-063, and "verified" means all seven FR-065 conditions hold. Publication of this inventory
+and of the replacement contracts is not part of that acceptance; it is the precondition that
+makes adaptation possible, and FR-061 forbids reading it as evidence of compatibility. A
+surface that is Blocked, including one whose exercise could not be classified, holds the
+release.

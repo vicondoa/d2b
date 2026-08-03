@@ -518,6 +518,8 @@ artifacts, complete Story 1, and exercise each desktop companion against it.
   against the release candidate. The program MUST identify that companion set, publish the
   replacement contracts they depend on early enough for them to adapt, and treat an
   unadapted companion as a release blocker rather than as acceptable post-release breakage.
+  FR-064 defines which candidates are members of that set; FR-065 defines what verification
+  passes.
 - **FR-040**: Companion compatibility MUST be verified by exercising each companion against
   the release candidate on a live host, not by inspection of its source or version number
   alone.
@@ -617,6 +619,88 @@ artifacts, complete Story 1, and exercise each desktop companion against it.
   deliberately retired its staged warning, fail-loud, and removal calendar at the clean break.
   A retirement is therefore an enumerated, release-note-named fact, never the first step of a
   multi-release timeline.
+- **FR-064**: Membership in the release-blocking companion set MUST be decided by a two-limb
+  test. A candidate is a member if and only if **both** limbs hold, and the decision MUST be
+  recorded rather than argued.
+
+  **Limb 1 - discovery.** The candidate appears in at least one of these sources, which are a
+  closed list:
+
+  1. the flake inputs of the validation host's own configuration - d2b targets a single trusted
+     host with one operator, so the set that adopting 3.0 can break is what that host runs;
+  2. the currently published inventory in `docs/reference/companion-contracts.md`, so the set
+     can never shrink silently; or
+  3. any repository that a d2b reference document, example, template, or how-to names as
+     consuming a d2b surface.
+
+  Prose in `README.md` or `AGENTS.md` MAY raise a candidate but MUST NOT settle membership,
+  because it is measurably unreliable: `AGENTS.md` names no companion at all, and `README.md`
+  names them once, in a sentence about colour output, listing three of the five published
+  members under non-canonical short names alongside two upstream projects that are not members,
+  and omitting two members entirely.
+
+  **Limb 2 - consumed public surface.** The candidate consumes at least one surface from this
+  closed list of public operator surfaces:
+
+  - the public daemon socket wire (`docs/reference/daemon-api.md`);
+  - the `d2b` CLI contract, including `--json` output and exit codes
+    (`docs/reference/cli-contract.md`), and its v3 replacement
+    (`docs/reference/zone-cli-contract.md`);
+  - the public `vms.json` manifest (`docs/reference/manifest-schema.md` and its schema);
+  - public presentation artifacts `/etc/d2b/ui-colors.json` and `/etc/d2b/ui-colors.css`
+    (`docs/reference/ui-colors.md` and its schema);
+  - the clipboard picker protocol over the inherited `socketpair()` file descriptor
+    (`docs/reference/clipboard-picker-protocol.md`);
+  - public launcher metadata served to authorized clients through the public daemon API
+    (`realm-workloads-launcher-v2.json`, per `docs/reference/manifest-bundle.md`); and
+  - the flake's public outputs: `nixosModules`, `packages.<system>`, `templates`, `overlays`.
+
+  **Reading a private artifact is not membership; it is a defect.**
+  `docs/reference/manifest-bundle.md` fixes the public/private boundary, and every private
+  bundle artifact installs `root:d2bd` `0640`. A candidate found reading one MUST be reported
+  as a defect and MUST NOT be admitted to the inventory on that basis, because admitting it
+  would record an unauthorised read as a supported contract.
+
+  **Evidence each row carries.** The repository, the exact revision pinned on the validation
+  host as a commit rather than a tag or version string, the maintainer of record, the discovery
+  source that raised it, and the specific surfaces from limb 2 that it consumes. A row without
+  a pinned revision is not a row, because "which version blocks" would be undecidable.
+
+  **Additions and removals.** An addition requires only both limbs. A **removal requires a
+  negative determination**: recorded evidence that the candidate consumes no surface on the
+  limb-2 list, at a named revision, on a named date. Removal by assertion, by absence from
+  prose, or by an unrecorded judgement is not permitted.
+
+  **Uncertain candidates fail closed into the set.** A candidate that satisfies limb 1 but whose
+  limb-2 consumption cannot be determined is a **member** and blocks the release until a
+  negative determination is recorded. The asymmetry is deliberate: wrongly including costs one
+  determination, and wrongly excluding ships a broken desktop.
+- **FR-065**: "A compatible version verified against the release candidate" (FR-039, SC-024)
+  passes if and only if **all** of the following hold. Any one failing is a fail, and there is
+  no aggregate or majority reading:
+
+  1. the exercise ran on the daily-driver **live host**, not in a VM, a container, or a CI
+     runner;
+  2. it ran against the **exact release-candidate snapshot** that will be tagged, named by
+     commit;
+  3. the companion was at a **pinned revision**, named by commit;
+  4. **every** surface named in that companion's inventory row was exercised, not a sample;
+  5. every one of those surfaces classified **Conformant or Retired** under FR-063;
+  6. **zero** surfaces classified Blocked, including zero that could not be classified; and
+  7. the evidence was recorded in FR-063's shape.
+
+  **None of these is a pass**: source inspection; a matching version number or tag; a
+  successful documentation check; the publication of the replacement contracts; a successful
+  build; a green CI run in the companion's own repository; an exercise against any d2b build
+  other than the candidate; an exercise on a host that is not the live validation host; and a
+  partial exercise of the row.
+
+  **A moved candidate voids its verifications.** If the release-candidate snapshot changes for
+  any reason, every companion verification recorded against the previous snapshot is void and
+  MUST be re-run against the new one. This mirrors the rule that any content change invalidates
+  prior panel sign-off, and it is what makes "verified against the release candidate"
+  measurable rather than aspirational: without it, "the candidate" is whichever build was
+  convenient at the time.
 
 ### Key Entities
 
@@ -751,9 +835,9 @@ Delegation is not omission. Every delegated obligation is enumerated in
 - **SC-024**: 100 percent of identified desktop companions that consume d2b's public
   operator contracts have a compatible version verified against the release candidate on a
   live host before 3.0 is tagged, so an operator's desktop is not degraded by adopting 3.0.
-  "Verified" means exercised and classified under FR-063: every named surface is Conformant,
-  or Retired under FR-042 by a decision recorded before the tag. A Blocked surface, including
-  one that could not be classified, holds the release.
+  The identified set is fixed by FR-064's two-limb membership test; "verified" means exercised
+  and classified under FR-063 and passing every condition of FR-065. A Blocked surface,
+  including one that could not be classified, holds the release.
 - **SC-026**: All seven remaining waves reach the integration lineage through a pull request
   whose gates passed first, with zero waves landing by direct push or by a gate-bypassing
   local merge, and zero intermediate versions published before 3.0.
