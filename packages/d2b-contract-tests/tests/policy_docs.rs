@@ -689,3 +689,226 @@ fn kernel_module_missing_typed_error_contract() {
         "kernel-module-matrix-eval: typed_error missing exit code 64 for HostKernelModulesMissing"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Test execution manifest schema/prose agreement.
+//
+// This is intentionally a policy lint rather than a fixture-backed contract:
+// a schema or reference-doc edit must not silently make the producer and
+// operator guidance disagree. The positive path discovers the required
+// top-level fields from the binding schema. The mutated prose below is the
+// negative fixture proving that a version drift is rejected.
+// ---------------------------------------------------------------------------
+fn execution_manifest_schema_prose_versions_agree(schema: &Value, prose: &str) -> bool {
+    let schema_version = schema
+        .pointer("/properties/version/const")
+        .and_then(Value::as_i64);
+    let prose_version = Regex::new(r"The binding schema version is \*\*([0-9]+)\*\*")
+        .expect("valid execution-manifest version regex")
+        .captures(prose)
+        .and_then(|captures| captures.get(1))
+        .and_then(|capture| capture.as_str().parse::<i64>().ok());
+    schema_version.is_some() && schema_version == prose_version
+}
+
+#[test]
+fn execution_manifest_schema_and_prose_agree_with_non_empty_discovery() {
+    let schema_rel = "docs/reference/schemas/test-execution-manifest-v1.json";
+    let prose_rel = "docs/reference/test-execution-manifest.md";
+    let helper_rel = "tests/tools/execution-manifest.pl";
+    assert!(
+        repo_path_exists(schema_rel),
+        "execution-manifest-policy: missing {schema_rel}"
+    );
+    assert!(
+        repo_path_exists(prose_rel),
+        "execution-manifest-policy: missing {prose_rel}"
+    );
+    assert!(
+        repo_path_exists(helper_rel),
+        "execution-manifest-policy: missing {helper_rel}"
+    );
+
+    let schema: Value =
+        serde_json::from_str(&read_repo_file(schema_rel)).expect("execution manifest schema JSON");
+    let prose = read_repo_file(prose_rel);
+    let helper = read_repo_file(helper_rel);
+    let makefile = read_repo_file("Makefile");
+    let rust_driver = read_repo_file("tests/test-rust.sh");
+    let api_driver = read_repo_file("tests/tools/api-surface-json.sh");
+    assert_eq!(
+        schema.get("$id").and_then(Value::as_str),
+        Some("https://vicondoa.github.io/d2b/schemas/test-execution-manifest-v1.json"),
+        "execution-manifest-policy: schema id drifted"
+    );
+    assert!(
+        execution_manifest_schema_prose_versions_agree(&schema, &prose),
+        "execution-manifest-policy: schema and prose versions disagree"
+    );
+
+    let properties = schema
+        .pointer("/properties")
+        .and_then(Value::as_object)
+        .expect("execution-manifest schema properties");
+    assert!(
+        !properties.is_empty(),
+        "execution-manifest-policy: field discovery is empty"
+    );
+    let required = schema
+        .get("required")
+        .and_then(Value::as_array)
+        .expect("execution-manifest schema required fields");
+    assert!(
+        !required.is_empty(),
+        "execution-manifest-policy: required-field discovery is empty"
+    );
+    for marker in [
+        "O_CLOEXEC",
+        "O_NOFOLLOW",
+        "F_OFD_SETLK",
+        "openat",
+        "unlinkat",
+    ] {
+        assert!(
+            helper.contains(marker),
+            "execution-manifest-policy: helper is missing secure lifecycle marker {marker}"
+        );
+    }
+    assert!(
+        !helper.contains("rm -rf"),
+        "execution-manifest-policy: helper must not use path-based recursive cleanup"
+    );
+    for field in required {
+        let field = field
+            .as_str()
+            .expect("execution-manifest required field is a string");
+        assert!(
+            properties.contains_key(field),
+            "execution-manifest-policy: required field {field} is not declared"
+        );
+        assert!(
+            prose.contains(&format!("`{field}`")),
+            "execution-manifest-policy: prose does not document required field {field}"
+        );
+    }
+
+    // Negative mutation fixture: a version edit in prose must fail closed.
+    let mutated = prose.replacen(
+        "The binding schema version is **1**.",
+        "The binding schema version is **2**.",
+        1,
+    );
+    assert_ne!(
+        mutated, prose,
+        "execution-manifest-policy: negative mutation fixture did not mutate prose"
+    );
+    assert!(
+        !execution_manifest_schema_prose_versions_agree(&schema, &mutated),
+        "execution-manifest-policy: version mutation was not rejected"
+    );
+
+    let rust_baseline_leaves = [
+        "rust-api-surface",
+        "rust-main-format",
+        "rust-main-clippy",
+        "rust-main-workspace-tests",
+        "rust-contract-tests",
+        "rust-cli-contract-tests",
+        "rust-no-bash-ast",
+        "rust-broker-default",
+        "rust-broker-layer1",
+        "rust-broker-fakebackends",
+        "rust-guest-shell-runner",
+        "rust-schema-reproducibility",
+        "rust-deny-main",
+        "rust-deny-broker",
+        "rust-deny-guest",
+        "rust-audit-main",
+        "rust-audit-broker",
+        "rust-audit-guest",
+        "rust-stub-no-socket",
+        "rust-assert-pinned",
+    ];
+    let schema_rust_leaves = schema
+        .pointer("/allOf/0/then/properties/completed_leaves/items/enum")
+        .and_then(Value::as_array)
+        .expect("execution-manifest-policy: Rust baseline enum is missing");
+    for leaf in rust_baseline_leaves {
+        assert!(
+            rust_driver.contains(leaf),
+            "execution-manifest-policy: Rust emitter does not name baseline leaf {leaf}"
+        );
+        assert!(
+            schema_rust_leaves
+                .iter()
+                .any(|value| value.as_str() == Some(leaf)),
+            "execution-manifest-policy: schema does not allow baseline leaf {leaf}"
+        );
+        assert!(
+            prose.contains(&format!("`{leaf}`")),
+            "execution-manifest-policy: reference prose does not document baseline leaf {leaf}"
+        );
+    }
+    assert!(
+        !makefile.contains("test-rust-leaf-fixture-contracts: test-rust-leaf-main-workspace"),
+        "execution-manifest-policy: isolated fixture target regained the main-workspace edge"
+    );
+    assert!(
+        rust_driver
+            .contains("fixture_target_dir=\"$ROOT/.scratch/rust-test-cache/fixture-contracts\"")
+            && rust_driver.contains("fixture_target_dir=\"$workspace_target_dir\"")
+            && rust_driver.contains("${D2B_RUST_COLD_PROFILE:-0}"),
+        "execution-manifest-policy: fixture warm/shared target selection drifted"
+    );
+    assert!(
+        api_driver.contains("public_target=\"$target_root/public-census\"")
+            && api_driver.contains("private_target=\"$target_root/private-census\"")
+            && api_driver.contains("public_target=\"$target_root/census\"")
+            && api_driver.contains("shared_census=1")
+            && api_driver.contains("checker_target=\"$target_root/checker\"")
+            && api_driver.contains("CARGO_BUILD_JOBS=\"$public_jobs\"")
+            && api_driver.contains("CARGO_BUILD_JOBS=\"$private_jobs\"")
+            && api_driver.contains(
+                "CARGO_TARGET_DIR=\"$checker_target\" cargo run --quiet --release --locked"
+            ),
+        "execution-manifest-policy: API census targets or split quotas drifted"
+    );
+    assert!(
+        makefile.contains("D2B_RUST_BROKER_PREREQS_aggregate := test-rust-leaf-inventory")
+            && makefile.contains("test-rust-leaf-broker: $(D2B_RUST_BROKER_PREREQS)"),
+        "execution-manifest-policy: broker target must wait for inventory before lockfile enumeration"
+    );
+    assert!(
+        makefile.contains("D2B_SKIP_FIXTURE_BUILD"),
+        "execution-manifest-policy: Rust aggregate lost the conditional fixture skip"
+    );
+    assert!(
+        makefile.contains(
+            "test-rust-main:\n\t+@$(call D2B_RUST_DISPATCH,$(D2B_RUST_MAIN_LEAVES),main)"
+        ),
+        "execution-manifest-policy: focused main target lost conditional fixture coverage"
+    );
+    let emitter_region = rust_driver
+        .split("publish_manifest_fragment()")
+        .nth(1)
+        .and_then(|region| region.split("rust_surface_start()").next())
+        .expect("execution-manifest-policy: fragment emitter helper is missing");
+    assert!(
+        !emitter_region.contains(">/dev/null"),
+        "execution-manifest-policy: fragment publication errors must remain visible"
+    );
+    assert!(
+        !emitter_region.contains("|| true"),
+        "execution-manifest-policy: fragment publication must not be made best-effort on success"
+    );
+    assert!(
+        rust_driver.contains("required execution-manifest fragment publication failed"),
+        "execution-manifest-policy: successful-surface emitter failures lack a static diagnostic"
+    );
+    assert!(
+        helper.contains("return 74")
+            && helper.contains("finalization failed after scheduler success")
+            && helper.contains("preserving the scheduler status"),
+        "execution-manifest-policy: finalization errors do not distinguish scheduler status"
+    );
+}

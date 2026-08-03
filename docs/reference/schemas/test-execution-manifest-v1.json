@@ -1,0 +1,140 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://vicondoa.github.io/d2b/schemas/test-execution-manifest-v1.json",
+  "title": "d2b test execution manifest v1",
+  "description": "Deterministic evidence emitted by an opt-in aggregate validation target.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "version",
+    "target",
+    "commit",
+    "run_status",
+    "completed_leaves",
+    "failed_surfaces",
+    "installables",
+    "realized_checks",
+    "source_inventory_digest",
+    "external_contention"
+  ],
+  "properties": {
+    "version": {
+      "type": "integer",
+      "const": 1,
+      "description": "Binding execution-manifest schema version."
+    },
+    "target": {
+      "type": "string",
+      "enum": [
+        "test-rust",
+        "test-nix-unit",
+        "test-flake"
+      ],
+      "description": "Stable public validation target that produced the evidence."
+    },
+    "commit": {
+      "type": "string",
+      "pattern": "^(unknown|[0-9a-fA-F]{7,64})$",
+      "description": "Git commit used by the aggregate invocation."
+    },
+    "run_status": {
+      "type": "string",
+      "enum": [
+        "passed",
+        "failed",
+        "interrupted"
+      ],
+      "description": "Whether the aggregate completed, failed, or handled an interruption."
+    },
+    "completed_leaves": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "pattern": "^[A-Za-z0-9_.-]+$"
+      },
+      "uniqueItems": true,
+      "description": "Sorted leaf identifiers whose required command completed successfully."
+    },
+    "failed_surfaces": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "pattern": "^[A-Za-z0-9_.-]+$"
+      },
+      "uniqueItems": true,
+      "description": "Sorted leaf or scheduler identifiers observed as failed."
+    },
+    "installables": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "uniqueItems": true,
+      "description": "Sorted Nix installables submitted by the target."
+    },
+    "realized_checks": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "uniqueItems": true,
+      "description": "Sorted flake checks actually realized by the target."
+    },
+    "source_inventory_digest": {
+      "type": "string",
+      "pattern": "^(|[0-9a-fA-F]{64})$",
+      "description": "SHA-256 digest of the matching source coverage inventory, or empty when not supplied."
+    },
+    "external_contention": {
+      "type": "string",
+      "enum": [
+        "not-measured",
+        "none",
+        "nix-daemon-shared",
+        "host-busy"
+      ],
+      "description": "Closed reason code for external resource contention."
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "target": {
+            "const": "test-rust"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "completed_leaves": {
+            "items": {
+              "enum": [
+                "rust-api-surface",
+                "rust-main-format",
+                "rust-main-clippy",
+                "rust-main-workspace-tests",
+                "rust-contract-tests",
+                "rust-cli-contract-tests",
+                "rust-no-bash-ast",
+                "rust-broker-default",
+                "rust-broker-layer1",
+                "rust-broker-fakebackends",
+                "rust-guest-shell-runner",
+                "rust-schema-reproducibility",
+                "rust-deny-main",
+                "rust-deny-broker",
+                "rust-deny-guest",
+                "rust-audit-main",
+                "rust-audit-broker",
+                "rust-audit-guest",
+                "rust-stub-no-socket",
+                "rust-assert-pinned"
+              ]
+            }
+          }
+        }
+      }
+    }
+  ]
+}

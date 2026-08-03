@@ -30,7 +30,8 @@ fi
 rustup set profile minimal >/dev/null
 rustup toolchain install "$pin" >/dev/null
 
-scratch=$(d2b_mktemp ".d2b-api-surface.XXXXXX")
+mkdir -p "$ROOT/.scratch"
+scratch=$(d2b_mktemp ".scratch/.d2b-api-surface.XXXXXX")
 public_dir="$scratch/public"
 private_dir="$scratch/private"
 mkdir -p "$public_dir" "$private_dir"
@@ -51,70 +52,112 @@ case "$target_root" in
     exit 2
     ;;
 esac
-# One target directory for both censuses. They differ only in RUSTDOCFLAGS,
-# which fingerprints the rustdoc units and so still re-renders every workspace
-# lib, but does NOT fingerprint the rustc units that compile the dependency
-# graph. Separate directories therefore compiled that graph twice: measured on
-# this workspace, the two trees held byte-identical dependency artifact sets
-# (1879 files each, all names matching) for 2.6 GB of pure duplication. That
-# cost is paid twice over, once as wall time on any cold run and once as
-# footprint in the repository-wide Actions cache budget that
-# .scratch/rust-test-cache is restored from.
-census_target="$target_root/census"
+# Public and private rustdoc renders use separate targets only for the warm
+# local aggregate, where their overlap is measured and accepted. Cold local
+# runs retain those same targets across `make clean`; CI alone uses the
+# original shared target serially so its cache footprint stays bounded.
+shared_census=0
+if [ -n "${CI:-}" ] || [ -n "${GITHUB_ACTIONS:-}" ]; then
+  shared_census=1
+  public_target="$target_root/census"
+  private_target="$target_root/census"
+else
+  public_target="$target_root/public-census"
+  private_target="$target_root/private-census"
+fi
+checker_target="$target_root/checker"
 
 # Reclaim the pre-merge layout. A restored cache still carries these, and left
 # alone they would keep charging the cache budget for a tree nothing reads.
 rm -rf "$target_root/public" "$target_root/private"
+if [ "$shared_census" = 1 ]; then
+  rm -rf "$target_root/public-census" "$target_root/private-census"
+else
+  rm -rf "$target_root/census"
+fi
 
 # Delete only rendered JSON. Cargo's compiled intermediate artifacts remain
 # reusable, but a stale or extra blob cannot satisfy the exact metadata census.
-# Sharing one directory makes this mandatory between the two passes, not just
-# before the first: the copy below globs whatever *.json is present, so a blob
-# left by the public pass could otherwise be counted as private output.
-rm -rf "$census_target/doc"
+# Each pass owns its own directory, so stale output is removed independently.
+rm -rf "$public_target/doc" "$private_target/doc"
 
-log "--> rustdoc JSON public workspace census ($pin)"
-# Raw cargo/rustdoc stderr names absolute scratch paths, source text, and
-# signature tokens, none of which this gate may emit. Capture it inside the
-# scratch root and report only a fixed label plus the exit status.
+api_jobs=${D2B_RUST_CARGO_JOBS:-1}
+case "$api_jobs" in
+  ''|*[!0-9]*) api_jobs=1 ;;
+esac
+[ "$api_jobs" -ge 1 ] || api_jobs=1
+if [ "$shared_census" = 1 ]; then
+  public_jobs="$api_jobs"
+  private_jobs="$api_jobs"
+else
+  private_jobs=$((api_jobs / 2))
+  public_jobs=$((api_jobs - private_jobs))
+  [ "$private_jobs" -ge 1 ] || private_jobs=1
+fi
+
+run_public_census() {
+  local rc=0
+  log "--> rustdoc JSON public workspace census ($pin)"
+  (
+    cd "$ROOT/packages"
+    env \
+      CARGO_BUILD_JOBS="$public_jobs" \
+      RUSTC_WRAPPER= \
+      RUSTC_WORKSPACE_WRAPPER= \
+      CARGO_BUILD_RUSTC_WRAPPER= \
+      RUSTDOCFLAGS="-D warnings -Z unstable-options --output-format json" \
+      cargo "+$pin" doc --locked --workspace --lib --no-deps \
+        --target-dir "$public_target"
+  ) >"$scratch/public-rustdoc.log" 2>&1 || rc=$?
+  [ "$rc" = 0 ] || return "$rc"
+  find "$public_target/doc" -maxdepth 1 -type f -name '*.json' -exec cp -t "$public_dir" -- {} +
+}
+
+run_private_census() {
+  local rc=0
+  log "--> rustdoc JSON private + hidden workspace census ($pin)"
+  (
+    cd "$ROOT/packages"
+    env \
+      CARGO_BUILD_JOBS="$private_jobs" \
+      RUSTC_WRAPPER= \
+      RUSTC_WORKSPACE_WRAPPER= \
+      CARGO_BUILD_RUSTC_WRAPPER= \
+      RUSTDOCFLAGS="-D warnings -Z unstable-options --output-format json --document-private-items --document-hidden-items" \
+      cargo "+$pin" doc --locked --workspace --lib --no-deps \
+        --target-dir "$private_target"
+  ) >"$scratch/private-rustdoc.log" 2>&1 || rc=$?
+  [ "$rc" = 0 ] || return "$rc"
+  find "$private_target/doc" -maxdepth 1 -type f -name '*.json' -exec cp -t "$private_dir" -- {} +
+}
+
 public_rc=0
-(
-  cd "$ROOT/packages"
-  env \
-    RUSTC_WRAPPER= \
-    RUSTC_WORKSPACE_WRAPPER= \
-    CARGO_BUILD_RUSTC_WRAPPER= \
-    RUSTDOCFLAGS="-D warnings -Z unstable-options --output-format json" \
-    cargo "+$pin" doc --locked --workspace --lib --no-deps \
-      --target-dir "$census_target"
-) >"$scratch/public-rustdoc.log" 2>&1 || public_rc=$?
+private_rc=0
+if [ "$shared_census" = 1 ]; then
+  run_public_census || public_rc=$?
+  if [ "$public_rc" = 0 ]; then
+    rm -rf "$public_target/doc"
+    run_private_census || private_rc=$?
+  fi
+elif [ "$api_jobs" -ge 2 ]; then
+  run_public_census &
+  public_pid=$!
+  run_private_census &
+  private_pid=$!
+  wait "$public_pid" || public_rc=$?
+  wait "$private_pid" || private_rc=$?
+else
+  run_public_census || public_rc=$?
+  run_private_census || private_rc=$?
+fi
 [ "$public_rc" = 0 ] || {
   fail "api-surface public rustdoc JSON census failed (exit $public_rc); rerun 'make api-surface-pin' locally for compiler diagnostics" || true
   exit 1
 }
-find "$census_target/doc" -maxdepth 1 -type f -name '*.json' -exec cp -t "$public_dir" -- {} +
-
-# Discard the public render before the private pass. Both passes emit into the
-# same doc directory now, and the copy above has already taken what it needs.
-rm -rf "$census_target/doc"
-
-log "--> rustdoc JSON private + hidden workspace census ($pin)"
-private_rc=0
-(
-  cd "$ROOT/packages"
-  env \
-    RUSTC_WRAPPER= \
-    RUSTC_WORKSPACE_WRAPPER= \
-    CARGO_BUILD_RUSTC_WRAPPER= \
-    RUSTDOCFLAGS="-D warnings -Z unstable-options --output-format json --document-private-items --document-hidden-items" \
-    cargo "+$pin" doc --locked --workspace --lib --no-deps \
-      --target-dir "$census_target"
-) >"$scratch/private-rustdoc.log" 2>&1 || private_rc=$?
 [ "$private_rc" = 0 ] || {
   fail "api-surface private rustdoc JSON census failed (exit $private_rc); rerun 'make api-surface-pin' locally for compiler diagnostics" || true
   exit 1
 }
-find "$census_target/doc" -maxdepth 1 -type f -name '*.json' -exec cp -t "$private_dir" -- {} +
 
 bash "$ROOT/tests/tools/gen-api-surface-metadata.sh" \
   "$public_dir" "$private_dir" "$metadata"
@@ -139,7 +182,7 @@ mode=--check
 log "--> d2b-api-surface snapshot check"
 (
 cd "$ROOT/packages"
-cargo run --quiet --locked \
+CARGO_TARGET_DIR="$checker_target" cargo run --quiet --release --locked \
   -p d2b-api-surface --bin d2b-api-surface -- \
   --public-json-dir "$public_dir" \
   --private-json-dir "$private_dir" \
