@@ -179,6 +179,7 @@ broker request is emitted.
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | `PrepareStoreView` | fs (store view) | per VM | live | yes | no | `d2b-launcher` + `d2b-admin` | yes | deny | `generation`, `hardlink_farm_path`, `target_view_path` |
 | `StoreSync` | fs (hardlink farm) | per VM | live | yes (atomic `current` symlink swap) | no | `d2b-launcher` + `d2b-admin` | yes | deny | `bundle_closure_ref`, `generation`, `closure_count`, `hardlink_farm_path` |
+| `OpenZoneStore` | resource store | per Zone | live | yes (provision/open and identity validation) | metadata-only | `d2bd` | yes | deny | `zone_store_id`, `store_identity`, `disposition`, `fd_count` (no host path) |
 | `GuestControlSign` | guest-control token | per VM | live | no | redacted-only | `d2bd` | yes | deny | `vm_id`, `role`, `purpose`, `transcript_len`, `peer_cid_present`, `capabilities_hash_present` |
 | `SetupMountNamespace` | mount ns | per VM / role | live | partial (mount-root prep + bind target) | no | `d2b-launcher` + `d2b-admin` | yes | deny | `role_id`, `mount_root`, `mount_view_path`, `source_view_path` |
 | `DeregisterRunnerPidfd` | process registry | per VM / role | live | no | no | `d2b-launcher` + `d2b-admin` | yes | deny | `vm_id`, `role_id`, `removed` |
@@ -245,6 +246,7 @@ non-bootstrap dispatch surface as typed per-op payloads:
 - `ApplySysctl { bundle_sysctl_intent_ref, key, destroy }`
 - `UpdateHostsFile { bundle_hosts_intent_ref, destroy }`
 - `OpenPidfd { pid, expected_start_time_ticks }`
+- `OpenZoneStore { zone_store_id, store_identity, disposition, fd_count }`
 - `SignalRunner { vm_id, role_id, signal }`
 - `DeregisterRunnerPidfd { vm_id, role_id }`
 - `SpawnRunner { bundle_runner_intent_ref, vm_id, role_id, role, runtime_allocations }` -

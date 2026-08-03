@@ -870,6 +870,16 @@ pub const BROKER_OPERATION_AUTHZ: &[OperationAuthzRow] = &[
         BrokerRequirement::Yes,
         AuditMode::Yes,
     ),
+    row(
+        "OpenZoneStore",
+        "resource-store",
+        "per-Zone",
+        &["d2bd"],
+        true,
+        SecretAccess::MetadataOnly,
+        BrokerRequirement::Yes,
+        AuditMode::Yes,
+    ),
     // PrepareSwtpmDir is a `SpawnRunner` side-effect (not a standalone
     // wire request) for the long-lived `Swtpm` runner: the broker
     // provisions/hardens the persistent per-VM swtpm state dir

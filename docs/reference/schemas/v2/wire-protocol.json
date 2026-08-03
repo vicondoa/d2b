@@ -1700,6 +1700,25 @@
           }
         },
         {
+          "description": "Resolve one signed Zone storage-row id against the trusted bundle, provision or open its database inode, and return the owned database descriptor via `SCM_RIGHTS`. No path, mode, owner, or marker value crosses this boundary.",
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "OpenZoneStore"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/OpenZoneStoreRequest"
+            }
+          }
+        },
+        {
           "type": "object",
           "required": [
             "kind",
@@ -2874,6 +2893,25 @@
             },
             "payload": {
               "$ref": "#/definitions/OpenPidfdResponse"
+            }
+          }
+        },
+        {
+          "description": "`OpenZoneStore` response. The database descriptor is the sole `SCM_RIGHTS` attachment on the same frame; the JSON body contains only opaque identity and disposition metadata.",
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "OpenZoneStore"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/OpenZoneStoreResponse"
             }
           }
         },
@@ -7253,6 +7291,46 @@
             "string",
             "null"
           ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "OpenZoneStoreRequest": {
+      "description": "Open one broker-resolved Zone resource store. The request is deliberately one typed opaque id: all path, marker, ownership, filesystem, locking, and publication authority remains in the signed storage-row artifact.",
+      "type": "object",
+      "required": [
+        "zoneStoreId"
+      ],
+      "properties": {
+        "zoneStoreId": {
+          "$ref": "#/definitions/ZoneStoreId"
+        }
+      },
+      "additionalProperties": false
+    },
+    "OpenZoneStoreResponse": {
+      "description": "Response to [`OpenZoneStoreRequest`]. The database fd is always the only descriptor attached to the response frame and is selected by `fd_index`.",
+      "type": "object",
+      "required": [
+        "disposition",
+        "fdIndex",
+        "storeIdentity",
+        "zoneStoreId"
+      ],
+      "properties": {
+        "disposition": {
+          "$ref": "#/definitions/ZoneStoreDisposition"
+        },
+        "fdIndex": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "storeIdentity": {
+          "type": "string"
+        },
+        "zoneStoreId": {
+          "$ref": "#/definitions/ZoneStoreId"
         }
       },
       "additionalProperties": false
@@ -13144,6 +13222,21 @@
         }
       },
       "additionalProperties": false
+    },
+    "ZoneStoreDisposition": {
+      "description": "Terminal disposition of a Zone store open.",
+      "type": "string",
+      "enum": [
+        "provisioned",
+        "opened"
+      ]
+    },
+    "ZoneStoreId": {
+      "description": "Opaque Zone store identifier resolved only by the storage owner.",
+      "type": "string",
+      "maxLength": 160,
+      "minLength": 1,
+      "pattern": "^[a-z][a-z0-9-]{0,159}$"
     }
   }
 }

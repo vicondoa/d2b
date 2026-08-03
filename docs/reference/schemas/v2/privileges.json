@@ -170,6 +170,7 @@
             "OpenKvm",
             "OpenPidfd",
             "OpenVhostNet",
+            "OpenZoneStore",
             "OwnershipMatrixCheck",
             "PauseBroker",
             "PollChildReaped",

@@ -2127,8 +2127,7 @@ fn dispatch_request_with_backend<B: DispatchBackend>(
             )))
         }
         RealBrokerRequest::OpenPidfd(req) => {
-            // OpenPidfd is the only arm that needs an SCM_RIGHTS-bearing
-            // response.
+            // OpenPidfd returns one SCM_RIGHTS-bearing response fd.
             let runner_id = format!("{}:{}", req.vm_id.as_str(), req.role_id.as_str());
             let outcome =
                 backend.open_pidfd(runner_id.as_str(), req.pid, req.expected_start_time_ticks)?;
@@ -2157,6 +2156,36 @@ fn dispatch_request_with_backend<B: DispatchBackend>(
                     pidfd_index: 0,
                 });
             Ok(DispatchResult::with_fd(response, outcome.pidfd))
+        }
+        RealBrokerRequest::OpenZoneStore(req) => {
+            // OpenZoneStore resolves one signed storage-row id and returns
+            // exactly one owned database descriptor. The row and all path
+            // components remain broker-local.
+            let resolver = require_resolver_ref(resolver.map(std::sync::Arc::as_ref))?;
+            let outcome = crate::live_handlers::live_open_zone_store(resolver, &req.zone_store_id)
+                .map_err(|err| BrokerError::LiveHandler(err.to_string()))?;
+            write_success_op_record!(
+                audit_log,
+                bundle_metadata,
+                "OpenZoneStore",
+                req.zone_store_id.as_str(),
+                caller_uid,
+                caller_gid,
+                &caller_role,
+                "zone-store",
+                req.zone_store_id.as_str(),
+                None,
+                OperationFields::OpenZoneStore {
+                    zone_store_id: req.zone_store_id.as_str().to_owned(),
+                    store_identity: outcome.response.store_identity.clone(),
+                    disposition: outcome.response.disposition.as_str().to_owned(),
+                    fd_count: 1,
+                },
+            )?;
+            Ok(DispatchResult::with_fd(
+                BrokerResponse::OpenZoneStore(outcome.response),
+                outcome.database_fd,
+            ))
         }
         RealBrokerRequest::SignalRunner(req) => {
             // Boundary note: d2bd owns operator authz classification; the
