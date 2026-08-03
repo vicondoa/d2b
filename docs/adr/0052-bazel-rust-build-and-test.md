@@ -7,7 +7,11 @@
   supporting statements wrong about the substrate. Sections 5, 6, 7, 8, 9, 11,
   12 and 13, invariants 3, 6, 10, 12 and 14, and measured constraint 4 are
   corrected in place; measured constraints 10 through 15 record what was
-  observed. No decision here is reversed and nothing here is superseded.
+  observed. The same amendment makes the section 6 yanked-state carrier
+  unconditional rather than conditional on what the migration comparison
+  happens to find, and records the measured `crate_universe` repin controls
+  that make a scoped, reviewed lock regeneration possible without a gate-path
+  escape hatch. No decision here is reversed and nothing here is superseded.
 - Related: [ADR 0009](0009-rust-toolchain-msrv-and-supply-chain.md) (Rust
   toolchain, MSRV, and supply-chain policy), which keeps its authority
   unchanged and is not superseded;
@@ -310,6 +314,29 @@ ADR justified by measured prototypes, and this ADR authorizes no such move.
   non-reproducible source-bootstrap fallback. No `CARGO_BAZEL_REPIN`, `REPIN`,
   or `CARGO_BAZEL_REPIN_ONLY` control is set by the Make wrapper or continuous
   integration.
+- A committed lock still has to be regenerable, and forbidding the environment
+  controls without naming a supported path is what pushes a contributor into
+  `CARGO_BAZEL_REPIN=1 make ...` under deadline. Regeneration is therefore a
+  repository-owned command, `cargo xtask bazel-repin --hub <name>`, and it is
+  the only place in the repository those three names may appear as a
+  process-environment assignment. It requires an explicit hub from the closed
+  four-hub set, sets `CARGO_BAZEL_REPIN` and `CARGO_BAZEL_REPIN_ONLY=<hub>`
+  only in the environment of the single Bazel child process it spawns, never
+  process-globally, uses the same absolute output user root, output base and
+  symlink prefix the wrapper derives, so it cannot start a second server, and
+  fails if any tracked file other than that hub's committed Bazel-side lock
+  changed. An already-current lock is exit zero with nothing changed rather
+  than an error; the run that must report a change is the one after a Cargo
+  workspace change, which is where a wrong invocation shows up. It is not a
+  Make target and no workflow may invoke it. Measured at `rules_rust` 0.73.0:
+  `CARGO_BAZEL_REPIN_ONLY` is a comma-delimited allowlist compared by exact
+  hub name in `determine_repin`, so single-hub scoping is a substrate
+  property rather than a convention, and `skip_cargo_lockfile_overwrite`
+  defaults to `false`, so every hub must set it to `true` or a repin silently
+  rewrites the authoritative `Cargo.lock` this section just froze. For the same
+  reason every hub sets both `lockfile` and `cargo_lockfile`: the extension
+  reports itself reproducible only when both are present, and
+  `--lockfile_mode=error` is only meaningful for a reproducible extension.
 - `rules_rust` is pinned to a single explicit version in `MODULE.bazel` (0.73.0
   is the newest release on the Bazel Central Registry as of this date; the
   implementer pins whatever is newest and compatible with Bazel 8.6.0 at
@@ -537,28 +564,43 @@ Today's leaf invokes `cargo deny --manifest-path ... check --config ...` with
 no subcommand list, so `advisories` runs there in addition to `cargo audit`,
 which is what makes that comparison meaningful rather than tautological.
 Promotion is blocked when any enforcing outcome differs. If one does differ,
-the remedy is to carry it explicitly, not to drop it.
+the remedy is the carrier described below, which has already landed by then,
+not dropping the outcome.
 
-**The carrier is pre-authorized here, so the comparison has an outcome in both
-directions.** Naming no carrier leaves promotion criterion 7 able to deadlock:
-a real difference blocks promotion with no authorized way through, and the
-pressure at that moment is to drop the outcome.
+**The carrier is unconditional, so the capability does not depend on what the
+comparison happens to find.** An earlier form of this section built the carrier
+only when the recorded comparison showed a yanked-state difference. That is
+wrong in the direction that matters. The comparison is one observation of one
+lock set at one moment; "no crate in these three locks is yanked today" is not
+"this repository can detect a yanked crate". A capability gated on a finding is
+absent exactly when the finding first appears, and it appears after promotion,
+when the Cargo executor that used to carry the outcome is gone. Continuous
+detection is the property being preserved, not a one-time diff.
 
-- If the recorded comparison over all three locks shows **no** yanked-state
-  difference, no new carrier is built and nothing is added.
-- If it shows a difference, a **yanked-crate check against a committed,
-  lock-bounded index snapshot** lands before promotion. The snapshot records,
-  for every `(name, version)` in the three locks, its yanked state and the
-  index revision identifier the generator observed it at. It is refreshed by a
+Therefore, whatever the comparison shows:
+
+- A **yanked-crate check against a committed, lock-bounded index snapshot**
+  lands during the shadow stage, before promotion. The snapshot records, for
+  every `(name, version)` in the three locks, its yanked state and the index
+  revision identifier the generator observed it at. It is refreshed by a
   repository-owned `xtask` subcommand that reads the index only during an
   explicit reviewed update, outside the gate, and the result is committed.
-  The enforcing drift check is offline: it verifies that the snapshot's
+- The enforcing drift check is offline: it verifies that the snapshot's
   `(name, version)` key set exactly equals the key set derived from the three
   committed locks and never regenerates yanked state from the live index.
   The Bazel action consumes the committed snapshot as a declared input and
   runs offline. A full index snapshot is rejected: the state the check needs is
   bounded by three committed locks, so the artifact is bounded by three
   committed locks.
+- An all-clear snapshot is the normal case and is still committed. A snapshot
+  with no yanked entry is evidence, not an excuse to skip the artifact; it is
+  the baseline the next diff line is read against.
+
+The comparison keeps its full force and is unchanged as promotion evidence:
+promotion criterion 7 still records today's `cargo deny check` against the
+decomposed pair over all three locks and still blocks on any differing
+enforcing outcome. What the comparison no longer decides is whether the
+detection capability exists.
 
 The carrier reports under the existing `rust-deny-main`, `rust-deny-broker` and
 `rust-deny-guest` identifiers, one target per lock. It is **not** a nineteenth
@@ -1720,10 +1762,11 @@ hold. Each is mechanically checkable.
    every measurement recorded, and the in-band deadline handoff is wired.
 7. **Supply chain.** The section 6 comparison is recorded: today's
    `cargo deny check` against the decomposed `cargo-deny` plus `cargo-audit`
-   pair, over all three locks, with no differing enforcing outcome. Where the
-   comparison showed a yanked-state difference, the section 6 yanked carrier
-   has landed under the three `rust-deny-*` identifiers and the union of
-   enforcing outcomes matches.
+   pair, over all three locks, with no differing enforcing outcome. The
+   section 6 yanked carrier has landed under the three `rust-deny-*`
+   identifiers regardless of what that comparison found, its committed
+   lock-bounded snapshot passes its offline key-set drift check, and the union
+   of enforcing outcomes matches.
 8. **Cache.** The shadow stage published no Actions cache entry; the cache
    maintenance job exists, runs only on pushes to protected `v3`, and has
    deleted the retired `Swatinem/rust-cache` entries; measured headroom
@@ -2281,8 +2324,15 @@ closed when any `.bazelrc` line or wrapper argument sets that flag.
   difference.** Rejected as the default outcome: promotion criterion 7 requires
   no differing enforcing outcome, section 11's remedy list does not authorize
   reducing coverage, and ADR 0009 authorizes no supply-chain waiver. The
-  pre-authorized carrier is the remedy, which is why it is pre-authorized here
-  rather than discovered under promotion pressure.
+  unconditional carrier is the remedy, which is why it is decided here rather
+  than discovered under promotion pressure.
+- **Building the yanked carrier only when the recorded comparison finds a
+  difference.** Rejected on the amendment: a detection capability conditioned
+  on a point-in-time finding is missing exactly when the first real finding
+  arrives, and by then the Cargo executor that used to carry the outcome is
+  retired. The comparison is evidence about one lock set at one moment, not a
+  statement about what the gate can detect. The carrier lands in the shadow
+  stage either way, and an all-clear snapshot is a normal committed baseline.
 - **Pinning a full crates.io index snapshot for the yanked check.** Rejected:
   the state that check needs is bounded by three committed locks, so the
   artifact is bounded by three committed locks. A full index would be a
@@ -2490,11 +2540,13 @@ closed when any `.bazelrc` line or wrapper argument sets that flag.
     fetch is permitted and is always pinned, by URL plus checksum or by git
     rev; no unpinned fetch is authorized anywhere. The union of the two tools
     is the ADR 0009 supply-chain policy, and a recorded outcome comparison
-    proves the union is unchanged. A yanked-state difference is carried by the
-    section 6 carrier against a committed, lock-bounded, drift-checked index
-    snapshot reporting under `rust-deny-main`, `rust-deny-broker` and
-    `rust-deny-guest`; dropping the outcome, or recording it as a section 13
-    deliberate difference, is not authorized. The yanked snapshot is refreshed
+    proves the union is unchanged. Yanked-state detection is carried
+    unconditionally by the section 6 carrier against a committed, lock-bounded,
+    drift-checked index snapshot reporting under `rust-deny-main`,
+    `rust-deny-broker` and `rust-deny-guest`; that carrier lands in the shadow
+    stage whether or not the recorded comparison found a difference, and
+    dropping the outcome, or recording it as a section 13 deliberate
+    difference, is not authorized. The yanked snapshot is refreshed
     only by an explicit reviewed networked update; the gate's drift check is
     offline and proves exact `(name, version)` key equality with the committed
     locks.
