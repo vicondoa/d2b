@@ -93,6 +93,35 @@ alias, not the project name, and the intended configuration repository
 Gas City's latest tagged release at that commit is `1.4.0` (2026-07-24,
 `CHANGELOG.md`); the tree carries an `[Unreleased]` section on top of it.
 
+### What we leverage upstream, pinned
+
+Every reference below is a commit-pinned URL at the measured commits above.
+Repository home pages are deliberately avoided: a link that moves is not
+evidence. The right-hand column is the part this design consumes; anything not
+listed is not inherited by default, and in particular no upstream review,
+approval, or publication semantics are adopted without the explicit
+restatements in D11, D12 and D16.
+
+| Component | Pinned URL | What we use, and what we do not inherit |
+| --- | --- | --- |
+| Pack format and imports | [`docs/reference/specs/pack-spec.md`](https://github.com/gastownhall/gascity/blob/38ed358fae0e8238834eb778a23a664fe4cb8954/docs/reference/specs/pack-spec.md) | The `[imports.<binding>]` mechanism, reserved directory layout, and binding namespace that D13 builds on. We do **not** rely on `version` or `requires_gc` constraints, which this spec says are parsed but not enforced. |
+| Formula composition | [`docs/reference/specs/formula-spec-v2.md`](https://github.com/gastownhall/gascity/blob/38ed358fae0e8238834eb778a23a664fe4cb8954/docs/reference/specs/formula-spec-v2.md) | `extends`, step-level `expand`, the `compose` table, and `pour` for checkpoint recovery. We do **not** assume v1 molecule semantics, which are inert after cook. |
+| Gates and durable waits | [`internal/formula/types.go`](https://github.com/gastownhall/gascity/blob/38ed358fae0e8238834eb778a23a664fe4cb8954/internal/formula/types.go), [`internal/session/waits.go`](https://github.com/gastownhall/gascity/blob/38ed358fae0e8238834eb778a23a664fe4cb8954/internal/session/waits.go) | Gates as the blocking transport for human decisions. We do **not** treat gate state as decision state; D17 owns the decision record because these carry no artifact binding. |
+| Session lifecycle | [`internal/session/manager.go`](https://github.com/gastownhall/gascity/blob/38ed358fae0e8238834eb778a23a664fe4cb8954/internal/session/manager.go) | Session states and the reconciling controller that make a run survive a restart. |
+| Rig binding | [`internal/config/site_binding.go`](https://github.com/gastownhall/gascity/blob/38ed358fae0e8238834eb778a23a664fe4cb8954/internal/config/site_binding.go) | `.gc/site.toml` path binding, and the fact that Gas City reads no config from inside the rig repository. |
+| Pack pinning | [`internal/packman/lockfile.go`](https://github.com/gastownhall/gascity/blob/38ed358fae0e8238834eb778a23a664fe4cb8954/internal/packman/lockfile.go) | `packs.lock` recording `version`, `commit`, `fetched`. The `commit` is the durable pin; see D21. |
+| Superpowers discipline | [`superpowers/formulas/superpowers-development.formula.toml`](https://github.com/gastownhall/gascity-packs/blob/0b9574272814ba175950731b73c2cc201804ee61/superpowers/formulas/superpowers-development.formula.toml), [`superpowers/pack.toml`](https://github.com/gastownhall/gascity-packs/blob/0b9574272814ba175950731b73c2cc201804ee61/superpowers/pack.toml) | The red/green step chain and per-task review, and `pack.toml` as the worked example of importing another pack. We do **not** inherit a per-task simplification step, which these formulas do not have; D10 adds it. |
+| Compound Engineering review | [`compound-engineering/formulas/compound-code-review.formula.toml`](https://github.com/gastownhall/gascity-packs/blob/0b9574272814ba175950731b73c2cc201804ee61/compound-engineering/formulas/compound-code-review.formula.toml) | An optional non-binding prefilter only. We do **not** adopt it as a panel: 17 selector-gated lanes, no per-lane model or effort record, no unanimity, no seat identity. |
+| PR readiness | [`pr-pipeline/formulas/mol-pr-ship.formula.toml`](https://github.com/gastownhall/gascity-packs/blob/0b9574272814ba175950731b73c2cc201804ee61/pr-pipeline/formulas/mol-pr-ship.formula.toml), [`pr-pipeline/pack.toml`](https://github.com/gastownhall/gascity-packs/blob/0b9574272814ba175950731b73c2cc201804ee61/pr-pipeline/pack.toml) | The simplify and readiness-report stages. We do **not** treat it as publication: it stops at a report and pushes nothing, which D16 says explicitly. |
+| Discord interaction | [`discord/pack.toml`](https://github.com/gastownhall/gascity-packs/blob/0b9574272814ba175950731b73c2cc201804ee61/discord/pack.toml) | Interaction ingress services. We do **not** inherit an authority model; D5 adds the single-identity allowlist and D17 owns approval. |
+| GitHub publishing | [`github/pack.toml`](https://github.com/gastownhall/gascity-packs/blob/0b9574272814ba175950731b73c2cc201804ee61/github/pack.toml), [`github/commands/push-branch`](https://github.com/gastownhall/gascity-packs/tree/0b9574272814ba175950731b73c2cc201804ee61/github/commands/push-branch), [`github/commands/create-pr`](https://github.com/gastownhall/gascity-packs/tree/0b9574272814ba175950731b73c2cc201804ee61/github/commands/create-pr) | The push and PR commands, reachable only from D16's publisher stage. We do **not** grant them to any other stage or identity. |
+| Spec Kit planning commands | [`templates/commands/specify.md`](https://github.com/github/spec-kit/blob/d1e86f638277a99b82715c22c90558cd58d3cffd/templates/commands/specify.md), [`clarify.md`](https://github.com/github/spec-kit/blob/d1e86f638277a99b82715c22c90558cd58d3cffd/templates/commands/clarify.md), [`plan.md`](https://github.com/github/spec-kit/blob/d1e86f638277a99b82715c22c90558cd58d3cffd/templates/commands/plan.md), [`tasks.md`](https://github.com/github/spec-kit/blob/d1e86f638277a99b82715c22c90558cd58d3cffd/templates/commands/tasks.md), [`analyze.md`](https://github.com/github/spec-kit/blob/d1e86f638277a99b82715c22c90558cd58d3cffd/templates/commands/analyze.md) | The interactive planning chain of Route A. We do **not** use [`implement.md`](https://github.com/github/spec-kit/blob/d1e86f638277a99b82715c22c90558cd58d3cffd/templates/commands/implement.md); Gas City executes, per D7. |
+| Spec Kit task format | [`templates/tasks-template.md`](https://github.com/github/spec-kit/blob/d1e86f638277a99b82715c22c90558cd58d3cffd/templates/tasks-template.md), [`templates/spec-template.md`](https://github.com/github/spec-kit/blob/d1e86f638277a99b82715c22c90558cd58d3cffd/templates/spec-template.md) | The `T001` id, `[P]` and `[USn]` markers and phase headers the importer parses. We do **not** assume a schema; there is none, which is why D19 is a lenient parser with a strict output. |
+| Gas City package | [`packages/gascity/package.nix`](https://github.com/numtide/llm-agents.nix/blob/7b99fc4bbb8a7c2fff82c2708d8636c1cbc65661/packages/gascity/package.nix) | The `gc` binary and its wrapped runtime PATH closure. We do **not** repackage it or restate its dependencies. |
+| d2b panel policy | [`packages/xtask/src/delivery/model.rs`](https://github.com/vicondoa/d2b/blob/b5881b2a6a42cd6e4db89c662c9df853f6a98d55/packages/xtask/src/delivery/model.rs) | `PANEL_ROLES`, `PANEL_PROVIDER_POLICY`, `PANEL_MODEL_POLICY`, `PANEL_REASONING_EFFORT_POLICY`, unchanged by this record. |
+| d2b panel gate | [`packages/xtask/src/delivery/panel.rs`](https://github.com/vicondoa/d2b/blob/b5881b2a6a42cd6e4db89c662c9df853f6a98d55/packages/xtask/src/delivery/panel.rs) | The `PanelRecord` envelope and `validate`, kept; the `--records DIR` and `<role>.json` transport, replaced by D12. |
+| d2b panel skill | [`.github/skills/d2b-panel-round/SKILL.md`](https://github.com/vicondoa/d2b/blob/b5881b2a6a42cd6e4db89c662c9df853f6a98d55/.github/skills/d2b-panel-round/SKILL.md), [`docs/contributing/panel-review.md`](https://github.com/vicondoa/d2b/blob/b5881b2a6a42cd6e4db89c662c9df853f6a98d55/docs/contributing/panel-review.md) | The standalone producer, which stays supported as one front end. Its working-file layout is not a contract. |
+
 ### The `gc` binary comes from a packaging flake, not from us
 
 `numtide/llm-agents.nix` describes itself as "Nix packages for AI coding agents
@@ -379,7 +408,7 @@ four different audiences, so they get four homes.
 - **`vicondoa/gascity.nix`** owns the generic, reusable NixOS module and its
   helper packages: the systemd units and their ordering, the orchestrator,
   worker, approval-controller, publisher and root-owned append-helper
-  principals of D15, state and lock paths, the graceful shutdown and
+  principals of D19, state and lock paths, the graceful shutdown and
   restart-adoption sequence of D5, dashboard read-only and loopback
   enforcement, the worker network namespace and firewall primitives, the
   append and audit helper with its rotation and retention, health checks, and
@@ -494,13 +523,13 @@ interchangeable:
 - `gascity-discord-ingress.service` is `After=` and **`BindsTo=`** the
   orchestrator. `BindsTo` rather than `Requires` because if the orchestrator
   dies unexpectedly the ingress must stop with it; an ingress accepting
-  approvals with no orchestrator behind it is the confused state D13's
+  approvals with no orchestrator behind it is the confused state D17's
   authority rules exist to prevent.
 
 **Startup, in order.**
 
 1. **The append helper acquires and adopts the store.** It takes the
-   single-owner lock, reconciles per D13, and becomes ready. Nothing else
+   single-owner lock, reconciles per D17, and becomes ready. Nothing else
    starts until it has, so no component can act before its actions can be
    recorded.
 2. **The worker namespace, interface, DNS proxy and firewall become ready.**
@@ -537,20 +566,20 @@ interchangeable:
 3. **The dashboard stops** once orchestrator state has settled, having stayed
    up through the drain so an operator can watch it.
 4. **The namespace, firewall and DNS proxy tear down**, only after every agent
-   and the orchestrator itself have exited. Per D16 the confinement's lifetime
+   and the orchestrator itself have exited. Per D20 the confinement's lifetime
    strictly contains every process it confines; an agent outliving the teardown
    of its own confinement is an unconfined agent, and the race is removed by
    ordering rather than narrowed by timing.
 5. **The append helper flushes, closes and releases its locks last.** Every
    in-flight append completes or is abandoned with its temporary unlinked per
-   D13, nothing is left acknowledged but unsynced, and the single-owner lock is
+   D17, nothing is left acknowledged but unsynced, and the single-owner lock is
    released only after every writer above has stopped, so the lock's lifetime
    strictly contains every operation it guards.
 
 **Adoption always precedes cleanup.** Each stateful unit acquires ownership,
 reads existing state, reconciles, and only then resumes work. It never cleans
 before adopting, because a sweep by an instance that does not own the store can
-delete the in-flight state of one that does. D13 states that rule for the
+delete the in-flight state of one that does. D17 states that rule for the
 append helper's temporaries; D5 makes it the general shape for every stateful
 principal here.
 
@@ -582,18 +611,18 @@ What it removes:
   rejection emits one local, bounded, redacted diagnostic naming the rejection
   class from a closed set (`unconfigured-allowlist`, `identity-mismatch`,
   `guild-mismatch`, `channel-mismatch`, `signature-invalid`) together with the
-  received and configured identity digests of D13, never the raw ids. Digests
+  received and configured identity digests of D17, never the raw ids. Digests
   are what makes it actionable: the operator can compare the received digest
   against the configured one and see whether they are dealing with the wrong
   account or an empty configuration, without the diagnostic itself becoming a
   place where platform identifiers accumulate in plaintext.
-- **The approval reviewer identity is that one operator.** D13 records it for
+- **The approval reviewer identity is that one operator.** D17 records it for
   provenance and for binding a decision to a human, not to choose among
   reviewers or to evaluate a permission.
 - **The dashboard binds loopback only** and gains no authentication layer,
   because there is no second *human* on the machine to authenticate. That is
   the limit of what this scope buys: loopback excludes remote humans and
-  admits every local process, so D14 additionally requires read-only mode.
+  admits every local process, so D18 additionally requires read-only mode.
 - **Nothing multi-party is designed.** No role model, no permissions matrix, no
   tenancy, no shared or hosted instance, no remote access path, no high
   availability, no failover, and no federation across cities.
@@ -602,20 +631,20 @@ What it does not remove: **local agent processes remain untrusted principals.**
 "Single-user" is a statement about humans. The deployment still runs autonomous
 agents, each of which is a local principal that can open loopback sockets, read
 what its identity can read, and write what its identity can write. Every
-control in D14 and D15 exists for those principals and none of them is relaxed
+control in D18 and D19 exists for those principals and none of them is relaxed
 by the fact that one person is at the keyboard.
 
 Concretely, the **worker and publisher separation, and the worker's inability
-to write approvals, both stand unchanged** under D15. Those boundaries are
+to write approvals, both stand unchanged** under D19. Those boundaries are
 between the operator and an agent process, not between one human and several.
 Collapsing them because "it is only me" would delete the design's only
-mechanical controls while leaving every reason for them intact, and D15 forbids
+mechanical controls while leaving every reason for them intact, and D19 forbids
 it.
 
 The same distinction applies to the Discord allowlist. It answers "which human
 may speak to this deployment", which is a small question here because the
 answer is one person. It does not answer "what may an agent do", which is the
-question D15 answers, and the two must not be conflated because both happen to
+question D19 answers, and the two must not be conflated because both happen to
 be touched by the word "single-user".
 
 **D7. One tiny repo-local manifest, with a d2b-owned schema.** Gas City reads
@@ -623,7 +652,7 @@ nothing from the rig repository, so this file is read by the configuration
 repository's tooling only and must not imitate upstream syntax. It is
 `.d2b-orchestration.toml` at the repository root and carries exactly `schema`,
 `spec_root`, `gascity_compat` (a version range checked against what the
-deployed binary reports through `gc version`, per D19), and `panel_authority`
+deployed binary reports through `gc version`, per D23), and `panel_authority`
 (whose only legal value is `xtask-delivery`). It is contributor metadata, not a
 configuration surface: it exists so that a rename of `specs/` or a
 compatibility break is caught in the same commit that causes it. `.gc/` is
@@ -708,10 +737,24 @@ which stay exactly as they are:
 - provenance and a receipt locator per record;
 - and no lane attesting work it authored.
 
-A manual fallback remains available for recovery, and the gate-close it uses is
-still refused unless a matching attestation exists. It is a recovery path, not
-the normal Gas City path, and a deployment in which the normal path is a human
-running the panel by hand has not met this decision.
+A manual fallback remains available for recovery. Its gate-close is still
+refused unless a matching attestation exists, and the parked gate's message
+**names the exact action that resumes it**: the concrete `gc bd close
+<gate-bead-id>` invocation with the bead id substituted, preceded by the
+producer command that must succeed first. It is a recovery path, not the normal
+Gas City path, and a deployment in which the normal path is a human running the
+panel by hand has not met this decision.
+
+**Missing or refused panel evidence reports a remedy, not just a state.** When
+the gate reports "panel required and not yet satisfied", or refuses an
+attestation, the message names the active route, the active producer, the
+specific unmet condition, and the next action for that combination: for a Gas
+City run, the formula stage to re-run and the wrapper command that runs it; for
+a standalone run, the skill invocation; for an untrusted or missing receipt,
+that receipt verification is unavailable and unattended orchestration is
+blocked per D12, with the standalone-under-observation path named as the way
+forward. A bare "not satisfied" leaves the operator to guess which of a dozen
+preconditions failed, and they will guess wrong on the ones that matter.
 
 **What Gas City must retain, without inheriting a file layout.** The reviewer
 inputs need not use the current panel files, but they must be byte-bound and
@@ -721,6 +764,25 @@ input content or a content address for it, such that the bytes each seat saw
 can be reproduced; a reference and digest for the validation evidence supplied;
 per seat, the observed provider, model and reasoning-effort binding together
 with a receipt locator for that observation; and per seat, the verdict.
+
+**Retention of those artifacts is bounded, and the bound is stated.** Requiring
+the exact review-input bytes to be kept forever would make every panel round a
+permanent copy of a diff, which on a workstation is unbounded growth dressed up
+as rigour. The posture matches D17's existing split between high-volume and
+evidentiary data:
+
+| Class | Default | Rationale |
+| --- | --- | --- |
+| Round review inputs, the exact bytes each seat saw | 30 days, 2 GiB aggregate, whichever binds first | Long enough to re-derive and dispute a recent round; not a diff archive |
+| Content addresses of those inputs, evidence references and digests | 365 days, with the audit floor of D17 | Small, and the part that proves what was reviewed |
+| Per-seat observed binding, receipt locator, verdict | 365 days, with the audit floor of D17 | This is the attestation; it outlives the bytes |
+
+So exact content is retained for a bounded window and its **content address**
+for the audit period: after 30 days a round can still be proven to have
+reviewed a specific artifact, and can no longer necessarily reproduce the bytes
+from Gas City alone, which is the correct trade when the bytes are recoverable
+from Git in the first place. Enforcement is the same daily rotation and sealed
+periods as D17, and these values live in the deployment configuration only.
 
 Nothing in that list mentions `.scratch`, `delta.diff`, `full.diff`,
 `evidence.md`, `observed.json`, or a verdict filename. Those are the working
@@ -785,23 +847,275 @@ a d2b skill was involved, not on any tool history. Absent panel evidence means
 A contributor who hand-edits a file in an editor is in exactly the same
 position as an autopilot lane.
 
-**Receipts are the weak point, and this record says so.** `receipt_locator` and
-the observed binding are supplied by the producer, so a dishonest or buggy
-producer can currently assert a binding it did not run at. Making the gate
-producer-neutral widens that surface from one producer to several, which is a
-real cost and is why the acceptance below requires that no producer can
-self-assert an observed runtime binding without a receipt the gate can trace to
-a trusted source. Until that traceability exists, the honest description of
-this field is provenance metadata rather than proof, and the panel model policy
-being different from the coding model remains the structural defence.
+**Receipt provenance is fail-closed, and there is no opt-out.** `receipt_locator`
+and the observed binding are producer-supplied, so a dishonest or buggy producer
+could assert a binding it did not run at. Making the gate producer-neutral
+widens that surface from one producer to several, and the answer is a hard
+precondition rather than a caveat:
+
+**A producer string is never proof.** The gate accepts an attestation's
+observed provider, model and reasoning effort only when its `receipt_locator`
+resolves through a source the gate trusts and the resolved receipt agrees with
+the claim. An absent locator, an unresolvable locator, a locator from an
+untrusted source, and a resolved receipt that contradicts the record are each a
+typed refusal.
+
+**Until the gate can verify trusted receipts, Gas City unattended panel
+orchestration is blocked.** This is not a warning to be acknowledged, a flag to
+be passed, or a mode to be configured; there is no override, no
+`--allow-unverified-receipts`, and no deployment setting that admits an
+unverified binding. A Gas City run that reaches the panel stage without
+receipt verification available parks with the typed error and the remedy of
+D11, and the operator either runs the standalone producer under direct
+observation or waits. The reasoning is that unattended orchestration is
+precisely the case where nobody is watching the model actually used, so it is
+the case that most needs the receipt and least tolerates a self-assertion.
+
+The structural defence remains and is unchanged: the panel model is
+deliberately not the coding model, so a lane cannot both author a change and
+attest to it.
 
 
-**D13. Approvals are artifact-bound, digest-only, append-only, and fail
+**D13. One d2b composite pack, `d2b-engineering`, owned by the config repo.**
+The operator should launch a run, not assemble one. Without a composite pack
+they would import five upstream packs, learn five command surfaces, and chain
+`gc` invocations by hand in the right order every time, with the ordering
+constraints living only in their memory. `d2b-engineering` is the single pack a
+d2b city imports; it pins its upstream dependencies, composes their formulas
+into a small number of entry points, and owns everything d2b-specific.
+
+It lives in `vicondoa/d2b-gascity-configs`. It is not in generic `gascity.nix`,
+which D4 bars from every d2b name and concept, and it is not in d2b product
+code, which D1 bars from Gas City entirely. The name follows the lowercase
+hyphenated convention of `pr-pipeline`, `compound-engineering` and
+`runtime-cloudflare`.
+
+**Composition is imports plus formula `extends`, measured, not a
+"composite pack" declaration.** Gas City has no first-class composite-pack
+construct and this record does not invent one. What it has, at the pinned
+commit, is two mechanisms that together do the job:
+
+- `[imports.<binding>]` in `pack.toml` declares a dependency on another pack.
+  The binding name is local to the importing file and is stamped onto every
+  agent the import contributes, qualifying runtime agent identities under a dot
+  separator. `superpowers/pack.toml` uses exactly this shape to depend on the
+  `gascity` pack, and `pr-pipeline` documents the same for consumers.
+- Formula-level composition then builds entry formulas from imported ones.
+  `formula-spec-v2.md` defines `extends` as parent formulas to compose from, a
+  step-level `expand` that inlines an expansion formula in place, and a
+  `compose` table carrying `bond_points`, `hooks`, `expand`, `map`, `branch`,
+  `gate` and `aspects`. `superpowers-build` composes from `build-base` this
+  way. Formula names resolve globally once a pack is imported, which is what
+  makes cross-pack `extends` work at all.
+
+Three honest limits, all measured, all of which the pack must design around.
+Import `version` constraints are parsed and preserved but **not enforced**
+during load, import or validation, so the durable pin is the `commit` recorded
+in `packs.lock`, not the version string. `requires_gc` is likewise parsed and
+not enforced, so D21's three-way check is what actually holds versions together
+rather than anything the manifest asserts. And formulas v2 compiles to a flat
+graph of step beads linked by blocking dependency edges, with the root blocking
+on `workflow-finalize`; `pour = true` is what materialises steps as bead rows
+for checkpoint recovery and is monotonic through `extends`, so a durable,
+resumable run is a property the entry formulas must opt into rather than
+inherit by default.
+
+**Deliverables, in the layout the pack format reserves.** The format reserves
+specific top-level directories and forbids inventing others, so the contents
+map onto them rather than onto a shape of our choosing:
+
+| Path | Contents |
+| --- | --- |
+| `pack.toml` | Manifest, `schema = 2`, `[imports.<binding>]` for `gascity`, `superpowers`, `compound-engineering`, `pr-pipeline`, `discord`, `github` |
+| `formulas/` | The entry formulas of D14 and the shared stage formulas of D15 |
+| `agents/` | d2b worker and reviewer agent definitions the entry formulas route to |
+| `commands/` | Operator-facing wrappers, invoked as `gc <binding> <command>` |
+| `assets/` | Private implementation: prompt bodies, adapters, importer, renderers |
+| `doctor/` | Preflight checks for the panel adapter, publisher reachability, pin agreement |
+| `skills/` | Skill catalog entries where a stage is better expressed as a skill |
+
+`assets/` carries the four pieces of software this design needs and upstream
+does not supply: the **Spec Kit adapter**, since no `speckit` pack exists
+upstream; the **typed task importer** of D19 that turns `tasks.md` into beads;
+the **panel attestation exporter** that submits to the producer-neutral
+contract of D12; and the **PR body renderer** of D16. `doctor/` carries the
+pack's own lints, including the D18 check that no publishing command is
+reachable outside the publisher stage.
+
+**D14. Four entry routes, one tail.** The operator's launch input differs by
+intent, and forcing every intent through feature planning is how a one-line bug
+fix acquires a product specification. Each route below produces its own front
+half and then converges on the identical execution, review, publication tail of
+D15. Route names are formula names in `d2b-engineering`; the `gc` invocations
+shown are **our** wrapper commands under the pack's import binding, not
+upstream surface.
+
+**Route A, idea or feature: `d2b-feature-build`.** The operator says what they
+want in prose.
+
+- Required: prompt text, target rig, base branch. Optional: constraints, a
+  linked GitHub issue, cited accepted ADR numbers.
+- Runs the full interactive Spec Kit path: constitution check, `specify`, human
+  spec approval, `clarify` with the questions and answers carried over Discord,
+  `plan`, human plan approval, `tasks`, human task-DAG approval, `analyze`,
+  then import.
+- Produces `specs/NNN-slug/` with `spec.md`, `plan.md`, `tasks.md` and whatever
+  `plan` emits alongside them.
+- Four human gates before any code is written. That is the cost of the route
+  and the reason the other routes exist.
+
+**Route B, pre-made ADR: `d2b-adr-build`.** The architecture is already
+decided and must not be relitigated.
+
+- Required: a path, ref or URL to an Accepted ADR, plus a prompt such as
+  "implement ADR 0053". Optional: scope narrowing to particular decisions.
+- **Admission is fail-closed.** The route reads the ADR, requires
+  `Status: Accepted`, computes and records its content digest, and refuses to
+  start on a Proposed, Superseded, missing, or unreadable record. The digest is
+  recorded as an immutable run input; if the ADR's bytes change mid-run the run
+  parks rather than continuing against a document that no longer says what it
+  said.
+- It **does** still produce a feature spec, plan and tasks, because the ADR
+  decides architecture and not decomposition, and the execution tail needs a
+  task DAG regardless. What changes is their status: they are generated under
+  settled context, the ADR is supplied to every planning step as binding input,
+  and the spec may not contradict it.
+- Skipped or constrained: the constitution check runs but cannot reopen the
+  ADR; `specify` is constrained to the ADR's decisions rather than exploring
+  alternatives; the spec approval gate becomes a **confirmation that the spec
+  faithfully implements the ADR** rather than an open product review; `clarify`
+  runs only for genuine gaps the ADR leaves open, and a clarification whose
+  answer would change an ADR decision is an escalation, not an answer.
+- Escalation: if planning finds the ADR insufficient or wrong, the run stops
+  and reports that a new or superseding ADR is required. It never edits the
+  ADR and never proceeds on an assumption.
+
+**Route C, bug fix: `d2b-bugfix`.** A local defect is not a product feature and
+must not be given a specification to justify itself.
+
+- Required: a defect description and the affected area or base branch.
+  Optional: a GitHub issue URL, reproduction evidence, a suspected commit.
+- The compact molecule, in order: **triage** the report; **reproduce** it;
+  **record the expected failure** as the pre-change proof of D10, which for a
+  bug is usually a failing test but may be a command or observation; state a
+  **root cause** in one paragraph; derive a **bounded repair task or small
+  DAG**; then the same red/green or pre/post evidence discipline, local
+  simplification, and on into the shared tail.
+- No `specify`, no `plan`, no product spec. The artifacts are the triage note,
+  the reproduction, the root-cause statement, and the repair tasks.
+- **Escalation is mandatory, not optional**, when triage finds any of:
+  requirement ambiguity about intended behaviour; a change to architecture; a
+  trust-boundary change; a schema, wire-format or public-contract change; or a
+  scope that is no longer bounded. The run stops and hands off to Route A, or
+  to an ADR, and says which condition it hit. A bug route that quietly grows
+  into a feature is the failure this rule exists to prevent, and it is the
+  reason the escalation list is closed rather than a judgement call.
+
+**Route D, resume: `d2b-resume`.** Included because the substrate supports it,
+narrowly.
+
+- Required: either an existing `specs/NNN-slug/` carrying `spec.md`, `plan.md`
+  and `tasks.md`, or a durable run identifier for an existing run.
+- Measured basis: formulas v2 with `pour = true` materialises each step as a
+  bead row explicitly for checkpoint recovery, and the durable bead store is
+  what a resumed run reads. Resume is therefore reading existing state, not
+  replaying a transcript.
+- Idempotency: re-import is keyed by stable task id, so re-running the import
+  against unchanged tasks creates no duplicate beads and leaves completed tasks
+  completed. A task whose text changed is re-imported as changed; a task that
+  disappeared is marked stale rather than silently dropped.
+- If the durable identifiers do not resolve, the route fails closed and says
+  so rather than starting a fresh run that looks like a resumed one.
+
+All four routes converge on D15 at the moment the task DAG exists.
+
+**D15. The shared tail, stage by stage.** Everything below is Gas City-native:
+beads, gates, steps and formulas, executed by the orchestrator on host worktrees
+under `agent-worker`, per D2 with no d2b runtime component anywhere in it.
+
+1. **Import.** Stable task ids, dependencies, parallel markers and phase
+   grouping become durable beads with blocking dependency edges. Re-import is
+   id-keyed and non-duplicating.
+2. **Execute ready tasks.** Independent tasks run concurrently in per-task host
+   git worktrees, inside the D19 network namespace, bounded by the pool the
+   deployment configures.
+3. **Per-task discipline**, composed from `superpowers`: failure proof, red;
+   implementation; green; local simplification with rollback scoped to the
+   simplifier's own change; spec-compliance review; quality review; bounded
+   repair. Tasks with no meaningful unit test use D10's pre-change proof and
+   post-change validation instead of a fabricated test.
+4. **Deterministic integration.** The orchestrator ingests task output into the
+   protected integration object store of D17 and produces the integration
+   commit whose hash is the artifact identity for everything downstream.
+5. **Global simplification**, using `pr-pipeline`'s simplify stage over the
+   integrated tree, with validation after and revert on failure.
+6. **Optional Compound Engineering prefilter.** Non-binding. Its findings are
+   input to a fix round; a clean result sets nothing and shortens nothing.
+7. **The d2b ten-seat panel**, orchestrated by Gas City per D11 and submitted
+   through D12's producer-neutral contract: ten seats dispatched, verdicts
+   collected, findings routed into scoped fix rounds, content change
+   invalidating prior sign-off, iterating until unanimous.
+8. **Post-implementation `analyze`** and the **verification matrix**, which
+   fails when any requirement lacks a chain to tasks, changes, tests, review
+   disposition and status.
+9. **Readiness**, using `pr-pipeline`'s ship-gate reporting, which produces a
+   report and deliberately stops there.
+10. **Artifact-bound human publication approval** per D17, over Discord, bound
+    to the integration commit hash.
+11. **Publish**, per D16.
+
+**D16. Publication is a required first-version output, and the PR carries the
+panel result.** Pushing a branch and opening a pull request are in scope for
+v1, not deferred. After the D17 publication approval, Gas City invokes the
+d2b-specific publisher stage, which runs under the `publisher` identity with
+the repository-scoped credential of D19 and pushes the exact immutable
+integration commit, then opens a pull request against the configured base
+branch.
+
+**How the upstream packs actually join up.** `pr-pipeline`'s `mol-pr-ship`
+ends at a readiness report and does not push or open anything; the `github`
+pack supplies `push-branch` and `create-pr` commands. The composite pack joins
+them through the publisher, not by pretending `pr-pipeline` publishes:
+readiness produces the report, the publication gate takes the human decision,
+and only the publisher stage may reach a publishing command. Nothing in
+`pr-pipeline` is given publication authority it does not have.
+
+**Merging stays human.** Gas City must not merge, must not enable auto-merge,
+and must not configure a merge queue in v1. The PR body says so explicitly.
+
+**The PR body is generated from the canonical gate, and it is bounded.** It
+carries:
+
+- the panel result as `10/10 unanimous`, taken from the attested record set
+  rather than from the orchestrator's own belief;
+- the reviewed identifiers: integration commit, `snapshot_sha256`,
+  `candidate_id`, `content_id`;
+- the round count, and per seat a one-line signoff table with the role, its
+  verdict and its receipt locator or durable reference;
+- a validation evidence summary with a reference or digest, not the output;
+- the input summary for the route that produced the run: the prompt, or the
+  ADR number and digest, or the issue and root-cause line;
+- the verification matrix summary, the simplification outcome, and unresolved
+  risks;
+- an explicit statement that merge requires human action.
+
+It carries **no** transcripts, no reviewer prose, no credentials, no secret
+values, and no raw identifiers that D17 keeps as digests. Bounded means bounded
+in bytes as well as in kind.
+
+**PR creation is impossible while any finding stands.** If the roster is not
+unanimous, a seat is missing, the snapshot is stale relative to the tree, a
+receipt is untrusted per D12, or the publication approval is absent or bound to
+different bytes, the publisher refuses and no branch is pushed. The PR body
+cannot be assembled from a gate that has not closed, and the design does not
+offer a way to write one by hand.
+
+**D17. Approvals are artifact-bound, digest-only, append-only, and fail
 closed.** The approval record is owned by the deployment's approval store, not
 by a Gas City gate, a Discord message, or the dashboard. Each record carries:
 the gate node identifier, the artifact identity, a decision from the closed set
 `{approve, revise, rescope, abort}`, a reviewer digest, a run digest, and the
-timestamp. For the publication gate the artifact identity is D15's immutable
+timestamp. For the publication gate the artifact identity is D19's immutable
 integration commit hash; for a document gate it is the artifact path plus the
 `sha256` of its exact bytes. A Gas City gate is the **transport** that blocks
 the run; Discord is the **surface** that collects the decision; neither is the
@@ -833,7 +1147,7 @@ publication gates. Analysis and per-task review are autonomous with escalation.
 **History is append-only and nobody may rewrite it.** A mutable approval log
 cannot prove that a human authorised anything, because the proof and the thing
 it constrains are then editable by the same run. The store is written **only**
-by D15's root-owned `append-helper`, which exposes one append operation and no
+by D19's root-owned `append-helper`, which exposes one append operation and no
 update, replace, truncate, or per-record delete operation of any kind. Neither
 `agent-worker` nor `orchestrator` nor `approval-controller` nor `publisher` may
 write, rewind, or truncate it directly.
@@ -884,7 +1198,7 @@ the period's identity survives in two places: in the name, which recovery can
 read without opening anything, and in the manifest, which survives a rename.
 
 This changes nothing about what is observable. Surfaces still emit the period
-date and the keyed correlation digest of D13 and never the raw token or a path,
+date and the keyed correlation digest of D17 and never the raw token or a path,
 so the date is available for operator reasoning while the token stays a
 filesystem detail.
 
@@ -1166,7 +1480,7 @@ The directory under `quarantine/` is named with an opaque token, and that token
 appears in no log line, no audit record, no error message, and no operator
 output. Observable surfaces identify a quarantined period by two things: its
 canonical `YYYY-MM-DD` period date, and a **quarantine correlation id** that is
-a keyed digest over the token under the same deployment-scoped key D13 uses for
+a keyed digest over the token under the same deployment-scoped key D17 uses for
 its other identity digests. The correlation id is stable, so an operator can
 follow one quarantine across a status listing, an error, and an audit record,
 without any surface publishing a path or a raw token that would invite someone
@@ -1324,10 +1638,10 @@ everything else, is equally immutable, and is written by the one caller
 authorised for that kind.
 
 **Only the approval controller may originate a record, and it is not the
-worker.** A record reaches the append helper only from D15's
+worker.** A record reaches the append helper only from D19's
 `approval-controller`, and only after that principal has verified the Discord
 platform signature, applied D6's allowlist, and derived the artifact identity
-itself under D15. `agent-worker` has no origination path by any route: not a
+itself under D19. `agent-worker` has no origination path by any route: not a
 file it can write, not a socket that accepts a record from it, not a helper
 that appends on its behalf. Read access for the worker is permitted, because a
 run must observe whether its gate is satisfied and reading cannot forge.
@@ -1338,7 +1652,7 @@ the approval that makes the publisher act; the credential stays where it is and
 the branch is published anyway, through the sanctioned path. M15 tests for it
 directly.
 
-**D14. The dashboard runs read-only, bound to loopback, and is not an
+**D18. The dashboard runs read-only, bound to loopback, and is not an
 interaction surface.** Loopback is not access control here. Every agent this
 deployment runs is a local process on the same host, so a loopback bind admits
 exactly the principals the design is most concerned about. The dashboard's own
@@ -1355,14 +1669,14 @@ layer, not the first. If a future upstream renames or restructures that knob,
 the requirement is the property rather than the variable: no mutation endpoint
 reachable, proven by M14 rather than by configuration intent.
 
-Discord, gated by D6's allowlist and D13's approval store, is the only human
+Discord, gated by D6's allowlist and D17's approval store, is the only human
 interaction surface. The dashboard is for run observation, stage state,
 transcripts, live activity and debugging. It may not carry an artifact
 approval, may not answer a pending interaction, and may not be exposed beyond
 loopback or fronted by a proxy; each of those is a new record, not a
 configuration change.
 
-**D15. Five host principals: four dedicated unprivileged identities plus a
+**D19. Five host principals: four dedicated unprivileged identities plus a
 root-owned helper.** The design brief's
 rule is that implementation agents do not hold publishing authority. Two
 earlier forms of this decision failed to deliver it. The first withheld the
@@ -1384,10 +1698,10 @@ host contributor infrastructure and involves no d2b component.
 | Principal | Holds | Must not be able to |
 | --- | --- | --- |
 | `orchestrator` | Durable Gas City state, the protected integration object store | Run agent code |
-| `agent-worker` | Model credential, its own worktrees, a restricted network namespace (D16) | Read orchestrator state or memory, write the integration store, write approvals, publish |
+| `agent-worker` | Model credential, its own worktrees, a restricted network namespace (D20) | Read orchestrator state or memory, write the integration store, write approvals, publish |
 | `approval-controller` | Discord ingress, the verifying key, the allowlist | Hold a GitHub credential, run agent code, rewrite approval history |
 | `publisher` | The one GitHub credential scoped to `vicondoa/d2b` | Run agent code, accept a mutable ref, write approvals |
-| `append-helper` | Root-owned; sole writer of the approval and audit store, admitting three authorised caller-and-kind pairs per D13 | Expose any update, replace, truncate, or per-record delete operation |
+| `append-helper` | Root-owned; sole writer of the approval and audit store, admitting three authorised caller-and-kind pairs per D17 | Expose any update, replace, truncate, or per-record delete operation |
 
 Four dedicated unprivileged identities plus one root-owned helper service is
 cheap on one machine: the four are `users.users` entries with units, the helper
@@ -1475,7 +1789,7 @@ Credential rules that apply to every principal:
   values from logs, state files, and error text is a requirement on the
   configuration repository's own tooling.
 
-**D16. The agent-worker runs in a restricted host network namespace with
+**D20. The agent-worker runs in a restricted host network namespace with
 default-deny egress.** An agent that inherits the host network namespace also
 inherits every route the host has, which on this machine includes the d2b
 per-environment bridges the operator is developing against. That would let
@@ -1497,8 +1811,8 @@ Denied, by default and explicitly:
 - link-local, `169.254.0.0/16` and `fe80::/10`, including metadata endpoints;
 - the host's loopback services. The namespace has its own loopback, so the
   dashboard, the orchestrator socket, and any other host-loopback listener are
-  simply not addressable from inside it. This is why D14's read-only
-  requirement and this decision are complementary rather than redundant: D14
+  simply not addressable from inside it. This is why D18's read-only
+  requirement and this decision are complementary rather than redundant: D18
   holds if the namespace is ever misconfigured, and this holds if the
   dashboard's mode is ever wrong.
 
@@ -1509,13 +1823,13 @@ Allowed, only when named in the configuration:
 - DNS to a specified resolver;
 - GitHub **read** access, if and only if a task genuinely requires fetching
   rather than working from the checkout. Publication is unaffected: the worker
-  has no credential to publish with under D15, so read reachability grants it
+  has no credential to publish with under D19, so read reachability grants it
   nothing.
 
 The policy is default-deny with an explicit allowlist, not default-allow with
 exceptions, so an endpoint nobody considered is refused rather than reached.
 Unix-domain sockets are not affected by the network namespace, which is why
-D15's peer-credential-checked socket remains the worker's channel to the
+D19's peer-credential-checked socket remains the worker's channel to the
 orchestrator and does not require relaxing anything here.
 
 **The confinement outlives every process it confines.** The namespace, its
@@ -1528,7 +1842,7 @@ still running while the confinement around it is being dismantled.
 This matters because the failure is silent and favourable to the attacker. If
 teardown races an agent that is ignoring its stop request, that agent is
 briefly a process in the host namespace with the host's routes, which is
-precisely the d2b bridge and LAN reachability D16 exists to deny, and it
+precisely the d2b bridge and LAN reachability D20 exists to deny, and it
 happens at the moment supervision is least attentive. Ordering teardown strictly
 after termination removes the race rather than narrowing it, and M17 tests it
 with an agent deliberately kept alive through the whole grace period.
@@ -1537,10 +1851,10 @@ M17 tests the policy with planted denied targets and allowed controls, because
 a firewall that denies everything, including what the workflow needs, passes a
 naive "is it blocked" check while being useless.
 
-**D17. Publication is one step, gated by a human, audited on every attempt,
+**D21. Publication is one step, gated by a human, audited on every attempt,
 with the lint as defence in depth.** Pushing a branch and creating a pull
 request happen only in a publisher step, only against the immutable commit hash
-approved under D13, and only through D15's publisher. If the upstream `github`
+approved under D17, and only through D19's publisher. If the upstream `github`
 pack's `push-branch` and `create-pr` commands are used, they are reachable from
 that step and from nowhere else, and the formula set carries a lint asserting
 it.
@@ -1548,7 +1862,7 @@ it.
 **Every publication attempt emits exactly one audit record, whether it
 succeeds or fails.** Publication is the only effect this system has outside the
 host, so an attempt that leaves no trace is the one case where operational
-evidence matters most. The record is appended through D13's append-only helper
+evidence matters most. The record is appended through D17's append-only helper
 and carries: the commit hash, the approval record's own digest, the outcome as
 one of a closed set, the failure class when it failed, and the timestamp. It is
 bounded in size and redacted, carrying digests rather than the reviewer's raw
@@ -1557,7 +1871,7 @@ remote URL with embedded authentication, or captured command output. Exactly
 one record per attempt: a refusal before the push is still an attempt, and a
 retry is a second attempt with its own record.
 
-The lint is a third layer, not the control. The controls are D15's separations:
+The lint is a third layer, not the control. The controls are D19's separations:
 a formula that reached a publishing command from the wrong step would still
 fail because the worker holds no publishing credential, a run that manufactured
 its own approval would still fail because the worker cannot originate a record
@@ -1571,8 +1885,8 @@ Automatic publication is not configurable in the first deployment; the
 capability is absent rather than disabled. The publisher is not the merger:
 `v3` is protected and the merge stays the operator's, as it is today.
 
-**D18. State the trust boundary honestly.** Agents run as `agent-worker` with
-that identity's privileges, in git worktrees, inside D16's network namespace,
+**D22. State the trust boundary honestly.** Agents run as `agent-worker` with
+that identity's privileges, in git worktrees, inside D20's network namespace,
 with the model credential reachable. There is no sandbox, no isolation of an
 agent from its sibling worktrees, and no confinement of an agent to the
 checkout. The blast radius of a misbehaving or compromised agent is that
@@ -1602,7 +1916,7 @@ memory can extract whatever it holds. Property 5 is what keeps a contributor
 tool from undercutting the product it is used to build.
 
 The dashboard sits behind two of these. A worker agent cannot reach it at all
-from inside D16's namespace, and if that namespace is ever misconfigured, D14's
+from inside D20's namespace, and if that namespace is ever misconfigured, D18's
 read-only mode still refuses the mutation. Neither is presented as sufficient
 alone. A local agent is a local principal; "only I can reach it" is a statement
 about humans, and D6 says so explicitly.
@@ -1615,7 +1929,7 @@ reaching `v3`; they do not contain a bad agent inside the worker identity. Any
 claim stronger than that is unsupported by this design, and D2 forecloses the
 obvious way to strengthen it until a separate ADR takes that up.
 
-**D19. The version pin is a three-way check, not a single lock.** Three things
+**D23. The version pin is a three-way check, not a single lock.** Three things
 must agree, and each is pinned in a different place, so an upgrade that moves
 one without the others is caught rather than discovered at runtime:
 
@@ -1649,7 +1963,7 @@ rather than left implicit. `llm-agents.nix` describes itself as automatically
 updated daily, so an unpinned or casually-followed input would move the `gc`
 binary underneath a pinned pack set without anyone deciding to.
 
-**D20. The importer is a lenient parser with a strict output.** `tasks.md` has
+**D24. The importer is a lenient parser with a strict output.** `tasks.md` has
 no schema and no format version, so the importer parses what is reliable (the
 `- [ ]` checkbox, the `T\d{3,}` identifier, the `[P]` and `[US\d+]` markers,
 and `## Phase N` headers) and treats the rest as advisory. Prose dependencies
@@ -1691,8 +2005,8 @@ The first two items are the load-bearing ones.
 - No change to `PANEL_PROVIDER_POLICY`, `PANEL_MODEL_POLICY`,
   `PANEL_REASONING_EFFORT_POLICY`, `PANEL_ROLES`, or any part of
   `packages/xtask/src/delivery/`.
-- No claim that this design isolates agents, beyond the two separations D15
-  establishes and M11 and M15 prove. See D18.
+- No claim that this design isolates agents, beyond the two separations D19
+  establishes and M11 and M15 prove. See D22.
 - No multi-party deployment shape. No role model, permissions matrix, tenancy,
   shared or hosted instance, remote access path, high availability, failover,
   or federation. No authentication layer for the dashboard, and no exposure of
@@ -1781,10 +2095,10 @@ The first two items are the load-bearing ones.
   planted violation, does not satisfy any acceptance condition in this record.
 - No Discord ingress from any identity other than the one configured operator,
   and no allowlist that defaults open when unset or empty.
-- **Single-user scope is never a reason to collapse identities or relax D14.**
+- **Single-user scope is never a reason to collapse identities or relax D18.**
   D6 removes multi-human concerns; it removes nothing about what a local agent
-  process may do, and D14 and D15 stand independently of it.
-- No credential beyond those D15 names, no credential value committed to
+  process may do, and D18 and D19 stand independently of it.
+- No credential beyond those D19 names, no credential value committed to
   either repository, and no publishing credential reachable from the worker
   identity.
 - **No panel semantics weakened, overridden, or defaulted at any producer
@@ -1961,30 +2275,80 @@ escaping change all produce a clean result that means nothing.
      inspects authorship, commit trailers, or tool history. Separately, a
      candidate with no panel evidence is reported as **panel required and not
      yet satisfied**, and never as unsupported or untrusted changes.
-  5. **Identical refusals across producers.** Each of these is submitted from
-     **both** producers and rejected identically, with the same typed reason:
-     a malformed envelope; a wrong `model_version`; a wrong `reasoning_effort`;
-     a wrong `provider`; a missing seat; a duplicate seat; a stale
-     `snapshot_sha256`; a record whose `candidate_id` or `content_id` does not
-     match the request; and a record set submitted after a content change to
-     the reviewed tree. A refusal that differs between producers, in outcome or
-     in reason, fails this item.
-  6. **Canonical records converge.** The internal records the gate stores after
+  5. **Identical refusals across producers, by typed reason.** Each of these is
+     submitted from **both** producers and rejected identically, and each
+     assertion is on the **typed semantic error**, not merely on non-zero exit
+     or on the envelope failing to parse: a wrong `model_version`; a wrong
+     `reasoning_effort`; a wrong `provider`; a missing seat; a duplicate seat;
+     a stale `snapshot_sha256`; and a record whose `candidate_id` or
+     `content_id` does not match the request. Each of these envelopes is
+     otherwise **well-formed**, so a test that passes because the payload was
+     malformed has not exercised the check it claims to; the assertion names
+     the specific refusal reason.
+  6. **Content change invalidates a satisfied candidate.** Not merely "a
+     submission after a change is refused". The test drives a candidate all the
+     way to satisfied and sealed with a unanimous attested roster, then mutates
+     the reviewed content, and then asserts that the prior sign-off and the
+     prior seal **no longer satisfy eligibility**: the wave does not remain
+     merge-eligible, the existing records do not carry over to the new content,
+     and a fresh unanimous round against the new snapshot is required. Testing
+     only the rejection of a late submission would leave the case that matters,
+     an already-green candidate quietly changing underneath its own approval,
+     entirely uncovered.
+  7. **Canonical records converge.** The internal records the gate stores after
      admitting a Gas City submission and after admitting the equivalent
      standalone submission are byte-identical, or, where a producer-specific
      field legitimately differs such as `run_id` or `receipt_locator`,
      semantically equivalent under a stated normalization with every other
      field byte-identical. The normalization is asserted explicitly rather than
      assumed.
-  7. **No self-asserted runtime binding.** A producer that claims an observed
-     provider, model or reasoning-effort binding without a receipt the gate can
-     trace to a trusted source is **rejected**. This is tested by submitting a
-     record whose `receipt_locator` is absent, is syntactically well-formed but
-     resolves to nothing, and points at a receipt whose observed binding
-     contradicts the record's claim; all three are refused. Until receipt
-     traceability exists, this item is the one that gates calling the field
-     proof rather than metadata, and a deployment that cannot satisfy it does
-     not get to describe its attestations as observed.
+  8. **No self-asserted runtime binding, by typed error.** Three cases, each
+     submitted with an otherwise well-formed envelope and each asserted on its
+     own typed semantic error rather than on a parse failure: `receipt_locator`
+     absent; `receipt_locator` syntactically valid but resolving to nothing or
+     to an untrusted source; and a resolved receipt whose observed binding
+     contradicts the record's claim. All three are refused. Additionally, with
+     receipt verification unavailable entirely, a Gas City unattended panel
+     stage is observed to **park with the typed error** rather than proceed,
+     and no configuration flag is found that admits an unverified binding, per
+     D12.
+
+- **M10a Entry routes behave differently and converge identically.** One run
+  per route, each reaching the same D15 tail.
+
+  1. **Route A** produces `spec.md`, `plan.md` and `tasks.md` and stops at all
+     four human gates in order.
+  2. **Route B** refuses a **Proposed** ADR, refuses a missing one, and refuses
+     one whose bytes changed after admission, each with its own typed error;
+     admits an Accepted ADR and records its digest as an immutable run input;
+     produces a spec constrained to the ADR; and escalates rather than
+     proceeding when a clarification answer would change an ADR decision.
+  3. **Route C** completes a bug fix with **no** `spec.md` or `plan.md`
+     produced anywhere, verified by asserting their absence, and carries a
+     triage note, reproduction, recorded expected failure and root-cause
+     statement. Then each of the five escalation conditions is planted in turn,
+     requirement ambiguity, architecture change, trust-boundary change,
+     schema or public-contract change, and unbounded scope, and each is
+     observed to **stop the run** and name the condition rather than
+     continuing.
+  4. **Route D** resumes an existing run without duplicating beads, keyed by
+     stable task id, and fails closed on an unresolvable run identifier
+     instead of silently starting a new run.
+  5. **Planted control:** a Route C run whose triage plants an architecture
+     change but which is configured to ignore escalation must be caught by the
+     test as a failure, proving the escalation assertion detects rather than
+     merely passes.
+
+- **M10b The composite pack imports and pins what it claims.** The
+  `d2b-engineering` manifest declares `[imports.<binding>]` for each upstream
+  pack it composes; `packs.lock` records a `commit` for every one; and the
+  resolved formula set contains the entry formulas of D14 and the stage
+  formulas of D15. Because import `version` constraints are measured as **not
+  enforced** by the loader, the test asserts on the locked `commit` and not on
+  a version string, and a planted control that changes a locked commit without
+  updating the lock is rejected. A second planted control removes an import the
+  entry formulas `extends` from, and the pack must fail to compose rather than
+  silently resolving a formula name from elsewhere.
 
 - **M11 The publishing credential is mechanically unreachable from the
   worker.** From the worker identity, with a full agent session running: no
@@ -1997,9 +2361,9 @@ escaping change all produce a clean result that means nothing.
   fail, not when a policy document says it should.
 
   This is the one MVP condition that is not negotiable on schedule grounds. The
-  helper protocol of D15 may be prototyped, revised, or replaced; the
+  helper protocol of D19 may be prototyped, revised, or replaced; the
   non-reachability property it exists to provide may not ship unproven, because
-  without it D17's lint is the only thing standing between an agent and the
+  without it D21's lint is the only thing standing between an agent and the
   remote.
 
 - **M12 Publication requires an approval bound to an immutable commit.** The
@@ -2008,7 +2372,7 @@ escaping change all produce a clean result that means nothing.
   commit presented; an approval recorded against a gate node other than the
   publication gate; an approval whose decision is not `approve`; and **any
   mutable reference offered in place of a commit hash**, including a branch
-  name, a tag name, `HEAD`, and a symbolic ref. The formula-set lint of D17
+  name, a tag name, `HEAD`, and a symbolic ref. The formula-set lint of D21
   rejects a formula that references `push-branch` or `create-pr` outside the
   publisher step. Done when each of the five publisher rejections and the lint
   rejection is individually observed.
@@ -2086,7 +2450,7 @@ escaping change all produce a clean result that means nothing.
   deny-only check while making the workflow unusable, and a namespace that
   allows everything passes an allow-only check while providing no isolation.
 
-  **Confinement lifetime.** A third part covers the teardown race of D16. An
+  **Confinement lifetime.** A third part covers the teardown race of D20. An
   agent is started that deliberately ignores its stop request and stays alive
   for the whole of D5's grace period. Throughout that interval, and up to the
   instant it is forcibly terminated, it is re-tested against the denied set
@@ -2108,7 +2472,7 @@ escaping change all produce a clean result that means nothing.
      truncating the store, and deleting an individual record are each refused.
      Re-appending identical content is not a modification and is covered by
      part 5.
-  2. **Caller and kind authorization.** The helper's socket enforces the D13
+  2. **Caller and kind authorization.** The helper's socket enforces the D17
      matrix over all **fifteen** caller-and-kind combinations: three accepts,
      one per authorised pair; six cross-kind rejections, being each of those
      three callers offering each of the two kinds it does not own; and six
@@ -2461,6 +2825,34 @@ escaping change all produce a clean result that means nothing.
   generic layer stays generic, and that property degrades silently: one d2b
   path added under deadline is invisible in review and permanent in practice.
 
+
+- **M22 The pull request carries the panel result and cannot exist without
+  it.** Two halves.
+
+  1. **Content.** A PR opened by the publisher contains, checked by parsing the
+     rendered body: `10/10 unanimous` taken from the attested record set; the
+     integration commit, `snapshot_sha256`, `candidate_id` and `content_id`;
+     the round count; a per-seat table with all ten roles, each verdict, and
+     each receipt locator or durable reference; a validation evidence summary
+     with a reference or digest; the route input summary, being the prompt, or
+     the ADR number and digest, or the issue and root-cause line; the
+     verification matrix summary; the simplification outcome; unresolved risks;
+     and an explicit statement that merge requires human action. It contains
+     **no** reviewer transcript, no credential, no raw Discord id or run
+     handle, and no remote URL carrying authentication, and its rendered size
+     is within the configured bound.
+  2. **Refusal.** Publication is attempted under each of these conditions and
+     **no branch is pushed and no PR is created** in any of them, each with its
+     own typed error: a seat returning a finding; a missing seat; a stale
+     snapshot relative to the working tree; an untrusted or unresolvable
+     receipt; and an absent publication approval, or one bound to a different
+     commit. Additionally the run is observed **not** to merge and not to
+     enable auto-merge or a merge queue under any configuration.
+
+  Planted control: a rendered body assembled from a roster of nine sign-offs
+  and one finding must be rejected by the same check, so a test that passes by
+  never assembling a body is caught.
+
 ## Consequences
 
 **d2b gains nothing, and that is the intended outcome.** A consumer's
@@ -2510,7 +2902,7 @@ it in a task record, and have it reach the panel. What it cannot do is publish
 that change, reach d2b's networks, read the orchestrator's memory, or rewrite
 the record of what a human approved.
 
-**The worker identity is not isolated, and D18 says so rather than implying
+**The worker identity is not isolated, and D22 says so rather than implying
 otherwise.** Agents run as `agent-worker` with its privileges and reach the
 model credential and their own worktrees. A prompt-injected or malfunctioning
 agent can do anything that identity can do inside its namespace, and the
@@ -2587,8 +2979,8 @@ use it, which is the point but is also an obligation: options become a surface,
 defaults become a contract, and a change that suits d2b but breaks a
 hypothetical consumer is now a real consideration. If it turns out nobody else
 ever uses it, the split will have cost a repository to buy testing isolation
-alone. That is still a reasonable trade for the machinery in D5, D13, D15 and
-D16, but it should be recorded as a bet rather than a certainty.
+alone. That is still a reasonable trade for the machinery in D5, D17, D19 and
+D20, but it should be recorded as a bet rather than a certainty.
 
 **The delivery gate becomes a maintained contract, not just a check.** Making
 `packages/xtask/src/delivery/` producer-neutral turns it into an interface with
@@ -2629,6 +3021,49 @@ defence that remains is unchanged and worth restating: the panel model is
 deliberately not the coding model, so a lane cannot both author a change and
 attest to it.
 
+**A composite pack is a maintenance commitment against five moving upstreams.**
+`d2b-engineering` pins and composes `gascity`, `superpowers`,
+`compound-engineering`, `pr-pipeline`, `discord` and `github`, and every one of
+them can rename a formula, restructure a step chain, or change an agent's
+identity in a release. Because import `version` constraints are measured as
+parsed but not enforced, nothing warns us: the pin is a commit in `packs.lock`,
+and moving it is a deliberate act whose blast radius is our entry formulas'
+`extends` edges. Upgrading is therefore a real task with real breakage, not a
+lockfile bump, and the pack needs its own tests for exactly that reason.
+
+The alternative is worse, which is why the pack exists. Without it the operator
+imports six packs, learns six command surfaces, and reproduces the stage
+ordering by hand on every run, with the ordering constraints living only in
+their memory and the failure mode being a run that skips the panel because
+someone forgot a step. One pack with one entry point per intent converts that
+into a version-controlled artifact that can be reviewed, tested and pinned. The
+cost is ours to carry; the risk of the alternative lands on the gate.
+
+**The Spec Kit adapter is ours to write and ours to keep working.** No
+`speckit` pack exists upstream, so the planning integration and the task
+importer are original software in `d2b-engineering/assets/`, sitting between
+two projects that neither know nor promise anything about each other. Spec Kit
+can change its templates and Gas City can change its bead API, independently,
+and both land on us.
+
+**Four routes are four things to keep consistent.** Every route ends in the
+same tail, which is the point, but each has its own front half with its own
+gates, artifacts and escalation rules. A change to the shared tail has to be
+considered against all four, and the honest risk is that Route C, the bug
+route, drifts toward Route A over time as people add "just one more check" to
+it until it is a feature route with extra steps. The closed escalation list in
+D14 is the guard, and it is a guard precisely because it is a list rather than
+a judgement.
+
+**Publication in v1 means the blast radius is real from day one.** Earlier
+drafts could describe publication as a later capability; this record requires
+it. The publisher pushes to `vicondoa/d2b` and opens pull requests as a normal
+part of a run, so every control around it, the identity split of D19, the
+approval binding of D17, the panel gate of D11, is load-bearing immediately
+rather than eventually. That is the correct trade for a workflow whose purpose
+is to produce merged changes, and it removes the comfortable middle state where
+the system is trusted with everything except the last step.
+
 **Reviews get slower and more expensive, on purpose.** An opted-in run carries
 per-task spec and quality reviews, an optional 17-lane compound filter, and the
 binding ten-seat panel, on top of validation. The ten seats are already a
@@ -2638,8 +3073,8 @@ front of them and removes nothing.
 **Operational dependence on Discord and a temporary dashboard.** A Discord
 outage means the human surface is gone and runs park at gates. The dashboard
 repository describes itself as a temporary workspace and has no auth model, so
-D14 confines it to loopback observation; when it folds back into `gc`, its
-approval semantics must be re-measured before D14 can be relaxed.
+D18 confines it to loopback observation; when it folds back into `gc`, its
+approval semantics must be re-measured before D18 can be relaxed.
 
 **Single-user scope is cheap now and will be the expensive thing to change.**
 D6 removes a permissions matrix, a role model, a tenancy story, and a dashboard
@@ -2651,7 +3086,7 @@ of the design, not a configuration change, and it deserves its own record. The
 trade is accepted because building multi-party access control for one person is
 speculative work whose only certain outcome is more code to keep correct.
 
-The half that does **not** get cheaper is the agent boundary. D15's separation
+The half that does **not** get cheaper is the agent boundary. D19's separation
 costs the same for one operator as for ten, because agents are the thing it
 constrains and the deployment runs exactly as many of them either way.
 
@@ -2664,7 +3099,7 @@ contributor tooling in a framework's product surface, which D1 forbids for
 better reasons.
 
 **The importer will drift.** `tasks.md` has no schema and no version and its
-producer is a language model. D20 makes drift loud at import time rather than
+producer is a language model. D24 makes drift loud at import time rather than
 silent at execution time and puts a human confirmation in the path, but it
 cannot make the format stable.
 
@@ -2739,6 +3174,51 @@ are properties of one machine, and a shared repository is the wrong authority
 for them. The split costs reproducibility from the repositories alone, which D4
 accepts and the configuration repository documents.
 
+**Use `speckit.implement` to execute Gas City runs.** Rejected. It reads
+`tasks.md` and drives the work itself, which would put a second executor beside
+Gas City with no durable state, no bead DAG, no gates and no relationship to
+the panel or the publisher. Spec Kit's own `tasks.md` template declares a
+handoff at exactly this point, so substituting the executor is the supported
+shape rather than a workaround, and D7 already says only one executor drives a
+run.
+
+**Send bug fixes through the full Spec Kit feature phase.** Rejected. A local
+defect does not have a product specification, and generating one produces a
+document nobody wanted, four human gates nobody needed, and a plan that
+restates the bug. Worse, it teaches the operator that the gates are ceremony,
+which is exactly the lesson that makes them stop reading the ones that matter.
+Route C short-circuits deliberately and escalates on a closed list of
+conditions, which is a different thing from skipping rigour.
+
+**Treat Compound Engineering as the binding d2b panel.** Rejected on measured
+grounds, and worth restating because the pack's breadth makes it tempting: 17
+selector-gated lanes, no per-lane model or effort record, no unanimity concept,
+no independent seat identity, and a synthesiser that collapses lanes into one
+verdict. It cannot emit an attestation this gate would accept, and relaxing the
+gate to fit it would trade ten independent seats for one synthesised opinion.
+It stays a non-binding prefilter.
+
+**Let `pr-pipeline` imply publication.** Rejected, because it does not
+publish. `mol-pr-ship` ends at a readiness report; the `github` pack holds the
+push and PR commands. Treating readiness as publication would put the push
+behind a stage that has no approval binding and no publisher identity, and
+would quietly move the last irreversible step out from behind the human gate
+that D17 exists to be.
+
+**Omit the panel result from the PR body.** Rejected. The PR is where a human
+decides to merge, so it is the one place the review result has to be legible
+without going to look for it. A PR that says only "checks passed" invites a
+merge on the strength of CI, and the ten-seat panel is the thing CI cannot
+replace. Bounding the content is the answer to the size objection, not omitting
+it.
+
+**Let Gas City merge, or enable auto-merge.** Rejected for v1. `v3` is
+protected and the merge is the point of no return; every other control in this
+design bounds what reaches that point rather than removing the point. An
+orchestrator that merges its own work has no remaining human check between a
+prompt and the default branch, which is not a system anyone should run
+unattended on a workstation.
+
 **Keep the panel exclusively behind the standalone skill, with Gas City only
 scheduling it.** Rejected, and this rejection is what a rejected pull request
 forced. Two earlier forms of this record said Gas City "may not perform" the
@@ -2796,7 +3276,7 @@ elsewhere.
 Rejected for the first deployment. Both are real builtin runtimes, but each
 adds an operational substrate the operator does not run today, and tmux remains
 required regardless because it is the registered fallback. Adding
-infrastructure to partially close the D18 gap is a decision that deserves its
+infrastructure to partially close the D22 gap is a decision that deserves its
 own record alongside the sandbox question, not a quiet default here.
 
 **Run everything as one identity and rely on the publication lint.** Rejected,
@@ -2809,20 +3289,20 @@ by any subprocess they spawn regardless of what the formula says, and the
 design brief's own rule is that implementation agents do not hold publishing
 authority. Splitting the identity costs one `users.users` entry and a helper,
 and it converts the rule from prompt-level to mechanical. The lint survives as
-defence in depth in D17, which is the right rank for it.
+defence in depth in D21, which is the right rank for it.
 
 **Collapse the identities, since it is a single-user machine anyway.**
 Rejected, and the reasoning that makes it tempting is the reasoning that makes
 it wrong. D6's scope means one *human* uses this deployment; it says nothing
 about how many autonomous agent processes run under it, which is the population
-D15 constrains. The publishing credential and the approval-write authority are
+D19 constrains. The publishing credential and the approval-write authority are
 withheld from agents, not from the operator, who retains both through the
 controller and publisher identities. Merging them into the worker would trade
 the design's only mechanical controls for the removal of two `users.users`
 entries.
 
 **Withhold the GitHub credential but let the worker write approvals.**
-Rejected, and this was the defect in the previous form of D15. It looks like a
+Rejected, and this was the defect in the previous form of D19. It looks like a
 boundary and is not one: an agent that can write the approval store approves
 its own revision and then calls the publisher through the sanctioned path,
 which verifies an approval that exists and publishes. No credential leaks, no
@@ -2882,12 +3362,12 @@ principal who does not exist, tested against a threat model nobody has stated,
 and maintained by the one person they were supposed to protect against. D6
 takes the scope as given and states the cost of reversing it in Consequences
 rather than paying it up front. Note that this rejection is about **human**
-principals only; the agent-principal controls in D14 and D15 are built now
+principals only; the agent-principal controls in D18 and D19 are built now
 precisely because those principals do exist today.
 
 **Give the publisher the operator's general GitHub identity.** Rejected. It is
 the one credential in the system with lasting consequences outside this
-repository, and D15 scopes it to `vicondoa/d2b` precisely because D18 admits
+repository, and D19 scopes it to `vicondoa/d2b` precisely because D22 admits
 the worker identity running agents is not contained. Branch protection on `v3`
 and the human merge remain the last line rather than the only one.
 
