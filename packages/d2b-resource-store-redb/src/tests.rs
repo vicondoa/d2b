@@ -1551,7 +1551,7 @@ fn prepare_production_rss_fixture() -> tempfile::TempDir {
 
 fn hard_seed_resource(index: usize) -> (ResourceRef, ResourceUid, Vec<u8>, String) {
     let name = format!("hard-host-{index:05}");
-    let uid = ResourceUid::parse(&format!("123e4567-e89b-42d3-a456-{index:012x}"))
+    let uid = ResourceUid::parse(format!("123e4567-e89b-42d3-a456-{index:012x}"))
         .expect("production RSS fixture UID");
     let canonical = String::from_utf8(stored_body(&name))
         .expect("production RSS fixture resource UTF-8")
