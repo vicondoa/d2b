@@ -257,6 +257,18 @@ configuration, or `status.provider` concerns; they never enter the base
 `UsbService` or `UsbBinding` contract. No raw busid, sysfs path, interface,
 address, port, fd, or credential appears in either base spec.
 
+### `UsbService.spec` fields
+
+| Field | Type | Required | Bounds/semantics |
+| --- | --- | --- | --- |
+| `providerRef` | ResourceRef | yes | Same-Zone Provider advertising the UsbService base fingerprint; initially `Provider/device-usbip` |
+| `updatePolicy` | object | no | D091 manual-disruptive default |
+| `mode` | enum | yes | `authority` or `projection` |
+| `backingDeviceRef` | ResourceRef | authority only | Same-Zone physical `Device`; forbidden on a projection |
+| `accessPolicy` | object | yes | Generic whole-device access policy; bounded active bindings and queue controls |
+| `backingAuthority` | AuthorityDescriptor | authority only | D097 physical USB backing descriptor; forbidden on a projection |
+| `sourceSchemaFingerprint` | string | projection only | Matches the canonical source Service schema fingerprint; absent on an owner Service |
+
 The USBIP implementation registers additional signed D097 authorities:
 
 | Authority class | Owning Resource | Scope/cardinality | Arbitration | Conflict |

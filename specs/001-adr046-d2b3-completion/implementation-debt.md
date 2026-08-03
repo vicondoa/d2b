@@ -978,6 +978,11 @@ the thing that needs to change. The consequence for `ADR046-zone-control-019`
 and `-020` is a real unmet obligation, but it is theirs and it is blocked behind
 this amendment.
 
+**Discharged by ADR 0051 Amendment A.** The security-key dossier now declares
+an empty provider-neutral backing set as a determinate deny-all, so the
+projection factory is constructible without inventing a physical backing
+reference.
+
 ### 13.4 The other underdetermined semantics this slice reported
 
 Checked against sections 2 and 10.2 first; none of the four was already
@@ -1025,7 +1030,7 @@ Three, all small, all recorded rather than corrected in place.
 | Finding | Class | Owning wave |
 | --- | --- | --- |
 | Telemetry Binding common status layer is empty, so no common status is writable for that type | Specification gap | Amendment to the telemetry dossier, before a telemetry controller is written |
-| Security-key names no semantic backing resource, so no signed projection factory can be built for that family | Specification gap | Amendment to the security-key dossier, before `ADR046-zone-control-019` / `-020` |
+| Security-key names no semantic backing resource, so no signed projection factory can be built for that family | Discharged by ADR 0051 Amendment A | Security-key dossier amendment before `ADR046-zone-control-019` / `-020` |
 | `ADR046-zone-control-019` / `-020` will find one of four families without factory metadata | Unmet obligation, blocked | Behind the amendment above |
 | Same-Zone half of the Binding ref/target rule is delegated to a caller that does not exist, and three of four families' target sets are untested | Unmet obligation | `ADR046-provider-004`, or the wave that first resolves refs in a Zone |
 | Serde round trip proved for the spec layer only, not status or projection | Unmet obligation, minor | Any later slice owning `semantic_services` |
@@ -2018,12 +2023,17 @@ not slice work.
 
 ### 19.8 The security-key semantic projection is not invented
 
-**The ruling.** Section 13.3 records that security-key cannot construct a signed
-projection factory at all, because no backing set is defined. W5 does not invent
-one. This follows the Wave 3 precedent, which correctly refused to invent a
-missing backing set rather than shipping a plausible guess.
+**The ruling.** Section 13.3 records that security-key could not construct a
+signed projection factory because no backing set was defined. W5 does not
+invent a non-empty set. ADR 0051 Amendment A instead makes the empty
+provider-neutral set determinate and deny-all, which unblocks construction
+without assigning the physical `Device` to the semantic Service.
 
-**Class: specification gap**, carried forward unchanged.
+**Class: specification gap, discharged by ADR 0051 Amendment A.**
+
+**Discharged by ADR 0051 Amendment A.** The security-key projection factory is
+now admitted with an empty `allowedBackingRefTypes` set, and any attempted
+backing reference remains denied.
 
 ### 19.9 What Wave 5 takes on from the standing register
 
@@ -2059,8 +2069,8 @@ their validation evidence rather than a criticism of it.
 - Three **unmet obligations**: the ChangeBatch fan-out coverage gap that the
   canonical RSS fixture cannot exercise (19.5), the latency targets that no
   runner can measure (19.6), and the standing debt table in 19.9.
-- Two **specification gaps** carried forward: derivation output layout (19.7) and
-  the security-key backing set (19.8).
+- One **specification gap** carried forward: derivation output layout (19.7).
+- The security-key backing-set gap (19.8) is discharged by ADR 0051 Amendment A.
 - Three **inferences** a reviewer should confirm: per-round prep against the
   one-snapshot requirement (19.1) and the `redb` dependency placement (19.4).
 

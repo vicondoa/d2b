@@ -55,6 +55,13 @@ shape, remediation hint, and docs anchor.
 | <a id="provider-misconfigured"></a>`#provider-misconfigured` | `provider-misconfigured` | `80` | `provider` | provider for {vm} is misconfigured: {reason} | Check the provider configuration for the VM and verify the expected guestd-compatible agent or sidecar is running. |
 <!-- END AUTO-GENERATED: error-table -->
 
+### Provider projection admission errors
+
+| Variant | Remediation |
+| --- | --- |
+| `provider-import-owned-origin-rejected` | The named resource is owned by a `ResourceImport`, so this Zone holds it on lease rather than owning its authority. Export the capability from the Zone that owns the authority Service; for a backing reference, name a locally owned resource. |
+| `provider-projection-protocol-version-mismatch` | The Provider artifact was built for a different semantic projection-protocol version than the one this Core installs. Install a Provider artifact built for this Core's protocol version and retry. If none is available, the Provider is not usable with this Core; the capability stays unavailable. Provider authors rebuild and re-sign the descriptor against the target Core's semantic catalog. |
+
 ### Unsafe-local persistent-shell errors
 
 These daemon wire errors carry only a closed kind. They never include helper

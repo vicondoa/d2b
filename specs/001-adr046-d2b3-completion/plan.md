@@ -259,6 +259,31 @@ session crates are retained for the W7 Provider-session migration, `d2b-provider
 ownership and committed runtime wiring force this boundary; deleting the later-wave surfaces
 in W5 would remove their only current implementations.
 
+ADR 0051 Amendment F describes the audio dossier's `implementationEndpointRefs` as appearing
+only in YAML examples and prose. At the c62e57ce integration tip, the committed
+`AudioService.spec` table already has a typed `Type` column for that field and every other
+base field. Per "existing code is canon", this wave leaves the already-correct audio table
+unchanged and adds only the missing typed Service tables to the security-key and USBIP
+dossiers.
+
+ADR 0051 Amendment E names two provider admission variants that are not present in the
+current `d2b_core::error::Kind` catalog. This docs-only scope cannot add Rust error records,
+and `gen-error-codes` owns the auto-generated table, so the two normative rows are recorded
+in a separate provider projection admission table rather than hand-editing generated output.
+The generated runtime catalog remains unchanged and its drift gate stays authoritative. The
+corresponding `ProviderContractError` variants and the protocol-version field are also absent
+from the current Rust implementation; those implementation changes belong to the downstream
+ADR 0051 consumer slice.
+
+Amendment A is likewise intentionally ahead of the current implementation: the committed
+`semantic_services/security_key.rs` still models `allowed_backing_ref_types: None` and
+`BackingRefTypesUndetermined`, while `ProjectionFactory::new` still rejects an empty backing
+set. This docs-only slice records the accepted deny-all contract and leaves that Rust
+implementation drift for the consumer slice rather than editing out-of-scope code.
+
+ADR 0051 Amendment G is outside this W5 request, which consumes amendments A-F and H.
+`ADR-046-nix-configuration.md` is therefore deliberately left unchanged.
+
 `ADR046-zone-control-001` authorizes removing the legacy `Realm` model but does not make the
 whole `d2b-realm-core` crate mechanically replaceable. In particular,
 `d2b-contracts::v3::resource_status::ResourceUpdateStatus` still uses the realm-core string

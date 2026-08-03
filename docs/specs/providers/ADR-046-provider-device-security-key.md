@@ -177,6 +177,19 @@ The provider-neutral ResourceType has a strict discriminated `spec.mode` union.
 Its base declares only semantic security-key authority. The initial
 `Provider/device-security-key` extension names the physical backing and relay:
 
+### `SecurityKeyService.spec` fields
+
+| Field | Type | Required | Bounds/semantics |
+| --- | --- | --- | --- |
+| `providerRef` | ResourceRef | yes | Same-Zone Provider advertising the SecurityKeyService base fingerprint; initially `Provider/device-security-key` |
+| `updatePolicy` | object | no | D091 manual-disruptive default |
+| `mode` | enum | yes | `authority` or `projection`; owner Services use `authority`, and Core creates `projection` |
+| `authority` | AuthorityDescriptor | authority only | D097 schema; required for `authority`, forbidden for `projection` |
+
+None of these four base fields is a `ResourceRef` to a backing resource. The
+physical `Device` and relay `Endpoint` are implementation children named only
+in `spec.provider.settings`; they are not semantic Service base fields.
+
 ```yaml
 apiVersion: resources.d2bus.org/v3
 type: security-key.d2bus.org.SecurityKeyService
@@ -1668,6 +1681,45 @@ its local ZoneLink plus export key and supplies the corresponding
 one local projection
 `SecurityKeyService` with `ownerRef: ResourceImport/<name>`. The projection has
 no physical Device ref, hidraw FD, DeviceGrant, selector, or open path.
+
+### Signed D096 projection factory
+
+The Provider descriptor carries exactly one signed factory:
+
+| Field | Security-key value |
+| --- | --- |
+| `serviceType` | `security-key.d2bus.org.SecurityKeyService` |
+| `bindingType` | `security-key.d2bus.org.SecurityKeyBinding` |
+| `allowedBackingRefTypes` | empty; this family's provider-neutral base names no backing resource |
+| `allowedBindingTargetRefTypes` | `Guest`, `User` |
+| `projectionSchema` | strict same-type projection schema with `providerRef` and the observed `mode`; no `spec.provider`, `deviceRef`, `authority`, physical selector, DeviceGrant, or raw locator/path/credential/fd/bytes |
+| `projectionSchemaFingerprint` | SHA-256 of the canonical committed projection schema |
+| `factoryFingerprint` | SHA-256 binding the semantic factory fields plus the projection-protocol version; never Provider or ExportAdapter/ImportAdapter identity or version |
+
+The empty `allowedBackingRefTypes` is a closed deny-all, not an absent
+constraint. Core rejects an owner `SecurityKeyService` that names any
+same-Zone backing reference in its provider-neutral base, including a
+reference to another `SecurityKeyService`, and rejects any backing whose
+`metadata.ownerRef` names a `ResourceImport`. The physical `Device` and the
+relay `Endpoint` are implementation children named only in
+`spec.provider.settings`; the physical Device is backing inventory, not the
+service authority. The guarantee that an owner Service is backed by one real
+physical key is carried by the mandatory
+`(Host, physical-usb-backing, opaqueKeyDigest)` claim admitted before any
+DeviceGrant or hidraw open, by the D097 `AuthorityDescriptor`, and by the
+signed Provider extension schema, not by the projection factory.
+
+A projection `SecurityKeyService` is never an export target. Its
+`metadata.ownerRef` names its `ResourceImport`, so a consumer Zone cannot
+re-export the key to a grandchild Zone; the owner Zone remains the only
+exporter of the one authority Service.
+
+Provider install, Nix build, API admission, export, and import fail closed
+if the factory, its signature, the Service/Binding pair, the allowed
+reference sets, or either fingerprint differs from the catalog-derived
+factory for this `serviceType`. The `factoryFingerprint` binds the semantic
+projection-protocol version, so a descriptor minted under an earlier protocol
+version mismatches by declared version skew rather than by tampering.
 
 Nix/an authorized operator then creates one or more local `SecurityKeyBinding`
 resources. Each Binding references the projection Service and its own Guest/User

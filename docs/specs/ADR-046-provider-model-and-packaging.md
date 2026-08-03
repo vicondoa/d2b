@@ -120,7 +120,8 @@ within a Provider artifact and binds:
 | --- | --- |
 | `serviceType` | One qualified semantic/provider-neutral `*Service` ResourceType; this is both the owner authority type and consumer projection type |
 | `bindingType` | Its qualified semantic/provider-neutral `*Binding` ResourceType expressing local consumer intent |
-| `allowedBackingRefTypes` | Closed set of same-Zone `Device`, `Endpoint`, or qualified semantic backend types the owner Service may reference |
+| `projectionProtocolVersion` | The semantic projection-protocol version this factory was minted against, declared explicitly. Compared before any other field, so a descriptor from an earlier protocol is diagnosed as version skew rather than as a fingerprint mismatch. Also bound into `factoryFingerprint`. |
+| `allowedBackingRefTypes` | Closed set of same-Zone `Device`, `Endpoint`, or qualified semantic backend types the owner Service may reference **in its provider-neutral base**. Empty when the family's base declares no backing-reference field. The empty set denies every backing reference and is never read as unconstrained. It may not contain the factory's own `serviceType` or `bindingType`. |
 | `allowedBindingTargetRefTypes` | Closed subset of `Guest`, `User`, and `Zone` that a Binding may target |
 | `projectionSchema` | Signed, strict, deny-unknown semantic base schema for the projection Service; contains only standard `providerRef`, semantic base/import fields, and no `spec.provider`, implementation-specific field, raw locator, path, credential, secret, FD, or bytes |
 | `projectionSchemaFingerprint` | SHA-256 of that canonical schema |

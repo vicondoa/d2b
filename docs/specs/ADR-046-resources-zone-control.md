@@ -1936,7 +1936,8 @@ descriptor:
 | --- | --- |
 | `serviceType` | Exact qualified semantic/provider-neutral `*Service` type used by owner and projection |
 | `bindingType` | Exact qualified semantic/provider-neutral `*Binding` type permitted to consume that Service |
-| `allowedBackingRefTypes` | Closed same-Zone types the owner Service may reference (`Device`, `Endpoint`, or qualified semantic backend types) |
+| `projectionProtocolVersion` | The semantic projection-protocol version this factory was minted against, declared explicitly. Compared before any other field, so a descriptor from an earlier protocol is diagnosed as version skew rather than as a fingerprint mismatch. Also bound into `factoryFingerprint`. |
+| `allowedBackingRefTypes` | Closed set of same-Zone `Device`, `Endpoint`, or qualified semantic backend types the owner Service may reference **in its provider-neutral base**. Empty when the family's base declares no backing-reference field. The empty set denies every backing reference and is never read as unconstrained. It may not contain the factory's own `serviceType` or `bindingType`. |
 | `allowedBindingTargetRefTypes` | Closed subset of `Guest`, `User`, and `Zone` |
 | `projectionSchema` | Strict deny-unknown semantic base schema for the local projection Service; contains standard `providerRef` plus semantic base/import fields and excludes `spec.provider`, implementation-specific fields, FD, secret, raw path/locator, credential, and payload bytes |
 | `projectionSchemaFingerprint` | SHA-256 of the canonical projection schema |
@@ -1957,6 +1958,17 @@ conditions, errors, and fingerprints never contain PipeWire, OTEL, USBIP,
 CTAPHID, package, binary, or adapter details; `providerRef` is the sole opaque
 implementation selector.
 
+For a `serviceType` in the D098 semantic catalog, the advertised factory is
+admitted only when every declared field equals the catalog-derived factory.
+Comparison order is normative: `projectionProtocolVersion` first; then
+`serviceType`, `bindingType`, both reference sets, and `exportability`; then
+both fingerprints. `exportability` is compared explicitly because no
+fingerprint binds it. A descriptor minted under an earlier protocol version is
+therefore rejected as declared version skew, whose remedy is to install a
+Provider artifact built for the Core protocol in use, and never as a
+fingerprint mismatch that reads as tampering. A Provider adds strict extension
+schemas; it never restates, widens, or narrows the semantic factory.
+
 ### 8A.2 ResourceExport
 
 `ResourceExport/<name>` lives in the owner/authority Zone. The core
@@ -1968,7 +1980,7 @@ adapter owns semantic admission and per-consumer arbitration.
 | Field | Type | Required | Default | Bounds/notes |
 | --- | --- | --- | --- | --- |
 | `providerRef` | ResourceRef | yes | - | `Provider/<name>` - the local authority Provider that mediates the resource |
-| `resourceRef` | ResourceRef | yes | - | **Local qualified owner `*Service` only**; a Device, Endpoint, Binding, or other backing is rejected |
+| `resourceRef` | ResourceRef | yes | - | **Local owner authority `*Service` only**; a Device, Endpoint, Binding, or other backing is rejected. A resource whose `metadata.ownerRef` names a `ResourceImport` is an import-owned projection and is rejected as an export target. |
 | `serviceType` | string | yes | - | Exact qualified type of `resourceRef`; must equal the factory `serviceType` |
 | `projectionSchemaFingerprint` | string | yes | - | Must equal the signed factory fingerprint for the projection Service schema |
 | `factoryFingerprint` | string | yes | - | Must equal the installed signed projection factory |
@@ -1983,6 +1995,15 @@ adapter owns semantic admission and per-consumer arbitration.
 `spec.provider = { schemaId, schemaVersion, settings }` (D089) adds strict,
 deny-unknown, type-specific export policy. It never restates a base field and
 never carries raw bytes, paths, device nodes, sockets, tokens, or a backing ref.
+
+`resourceRef` names a **local owner authority** Service. A resource whose
+`metadata.ownerRef` names a `ResourceImport` is an import-owned projection and
+is rejected as an export target: a Zone may consume what it imports and may
+not re-export it, so a grandchild Zone never acquires owner authority through
+an intermediary that held only a lease. Admission reads the stored resource;
+a bare ResourceRef is not sufficient evidence of origin. The same rule applies
+to any backing reference an owner Service names: an import-owned resource is
+never a backing.
 
 #### 8A.2.2 Base status (Layer 2, D088)
 

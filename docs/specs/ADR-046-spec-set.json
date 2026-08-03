@@ -321,7 +321,7 @@
         "ADR-046-telemetry-audit-and-support"
       ],
       "path" : "docs/specs/providers/ADR-046-provider-device-security-key.md",
-      "sha256" : "f2496b99ec2ace30a692b70b07dd15f82529e920e08f30403c46728d486b2410",
+      "sha256" : "a491ba0e04feaae3cf21c5034f3b95ec8445bb222cef04234b17ba20c7c16616",
       "specId" : "ADR-046-provider-device-security-key",
       "status" : "Accepted",
       "supersedes" : "`ProcessRole::SecurityKeyFrontend` daemon-internal accept loop (`packages/d2bd/src/security_key.rs`), `nixos-modules/components/security-key-guest.nix` untracked guest `d2b-sk-frontend.service` unit",
@@ -367,7 +367,7 @@
         "ADR-046-zone-routing"
       ],
       "path" : "docs/specs/providers/ADR-046-provider-device-usbip.md",
-      "sha256" : "fae7d6c70d34a5a95bfe49a0f8f840da431107a053db2dd21817c072384f1f46",
+      "sha256" : "f1a4d52cf2ff30d909ad3479114478c4dcb00949653ff85191d3d159d9ac61a4",
       "specId" : "ADR-046-provider-device-usbip",
       "status" : "Accepted",
       "supersedes" : "`nixos-modules/components/usbip.nix` (host-side), per-env usbipd systemd units in `nixos-modules/network.nix`, `ProcessRole::Usbip` / `RunnerRole::Usbip` in current v3 baseline",
@@ -407,7 +407,7 @@
         "ADR-046-resource-reconciliation"
       ],
       "path" : "docs/specs/ADR-046-provider-model-and-packaging.md",
-      "sha256" : "78a166a4f5655d608cbc462c77eb28b90d5644c4a490800fc0edadb2dee44b64",
+      "sha256" : "7be2611706337b19a1f475cd0ec3e73aeb4fc06e6776b729746e8f15cd68a419",
       "specId" : "ADR-046-provider-model-and-packaging",
       "status" : "Accepted",
       "supersedes" : "Current direct Provider construction/composition",
@@ -1013,7 +1013,7 @@
         "ADR-046-terminology-and-identities"
       ],
       "path" : "docs/specs/ADR-046-resources-zone-control.md",
-      "sha256" : "93829f519444505d55770d8e5f4c0940a5c293875a73d518568afac6c0815419",
+      "sha256" : "f7623d6ca0e8c0659d1de25ad715b6e26e0adfe91744bc2958e4596f8cc9b304",
       "specId" : "ADR-046-resources-zone-control",
       "status" : "Accepted",
       "supersedes" : null,
