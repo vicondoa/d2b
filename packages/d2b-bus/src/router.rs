@@ -11,7 +11,7 @@ use std::{
 
 use d2b_contracts::v3::{
     AuthenticatedSubjectContext, EvidenceClass, Locality, ResourceName, ResourceRef,
-    ResourceTypeName, ZoneId,
+    ResourceTypeName, ServiceName, ZoneId,
 };
 #[cfg(test)]
 use d2b_contracts::v3::{ControllerGeneration, ResourceGeneration, ResourceUid, SessionBinding};
@@ -34,6 +34,11 @@ use tokio::sync::{Mutex as AsyncMutex, oneshot};
 
 use crate::{
     authorization::{AuthorizationError, BusAuthorizer},
+    metrics::{
+        BusBackpressureReason, BusDirection, BusDisconnectOutcome, BusRegistrationOutcome,
+        BusRejectionOutcome, BusStreamKind, BusStreamOutcome, BusTelemetry, BusTransport,
+        NoopBusTelemetry, route_outcome, transport_for_context,
+    },
     operations::{
         CancelDeliveryAdmission, CancelDispatch, Cancellation, OperationError, OperationId,
         OperationSpec, OperationTable, PendingCancelDeliveries, SessionId, TombstoneEviction,
@@ -583,6 +588,8 @@ struct BusCore {
     max_payload_bytes: usize,
     max_correlations_per_generation: u64,
     observer: Arc<dyn BusObserver>,
+    metrics: Arc<dyn BusTelemetry>,
+    active_sessions: Mutex<BTreeMap<BusTransport, u64>>,
     #[cfg(test)]
     invocation_hooks: Mutex<InvocationHooks>,
 }
@@ -669,12 +676,84 @@ impl core::fmt::Debug for CancellationReceipt {
 }
 
 impl BusCore {
+    fn session_metrics(&self, session: SessionId) -> (BusDirection, BusTransport) {
+        let source = self.lock_registry().source(session).ok();
+        (
+            BusDirection::from_context(source.as_ref().and_then(|source| source.context.as_ref())),
+            transport_for_context(source.as_ref().and_then(|source| source.context.as_ref())),
+        )
+    }
+
+    fn record_session_registered(&self, session: SessionId) {
+        let (direction, transport) = self.session_metrics(session);
+        let active = {
+            let mut sessions = self
+                .active_sessions
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            let active = sessions.entry(transport).or_default();
+            *active = active.saturating_add(1);
+            *active
+        };
+        self.metrics
+            .registration(direction, BusRegistrationOutcome::Accepted);
+        self.metrics.session_active(transport, active);
+    }
+
+    fn record_route(
+        &self,
+        service: &ServiceName,
+        direction: BusDirection,
+        error: Option<&BusError>,
+        duration_seconds: f64,
+    ) {
+        self.metrics
+            .route(service, direction, route_outcome(error), duration_seconds);
+        if let Some(error) = error {
+            match rejection_outcome(error) {
+                BusRejectionOutcome::Quota => self.metrics.backpressure(
+                    direction,
+                    BusStreamKind::Control,
+                    BusBackpressureReason::Capacity,
+                ),
+                outcome => self.metrics.rejection(direction, outcome),
+            }
+        }
+    }
+
+    fn record_session_disconnected_values(
+        &self,
+        direction: BusDirection,
+        transport: BusTransport,
+        outcome: BusDisconnectOutcome,
+    ) {
+        let active = {
+            let mut sessions = self
+                .active_sessions
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            let active = sessions.entry(transport).or_default();
+            *active = active.saturating_sub(1);
+            *active
+        };
+        self.metrics.disconnect(direction, outcome);
+        self.metrics.session_active(transport, active);
+    }
+
     fn begin_cleanup_session(
         self: &Arc<Self>,
         session: SessionId,
     ) -> Option<crate::registry::SessionInvalidation> {
         let invalidation = self.lock_registry().invalidate(session);
-        self.lock_registry().remove(session);
+        let (direction, transport) = self.session_metrics(session);
+        let removed = self.lock_registry().remove(session);
+        if removed {
+            self.record_session_disconnected_values(
+                direction,
+                transport,
+                BusDisconnectOutcome::Abandoned,
+            );
+        }
         let targets = self.lock_operations().cancel_session(session);
         self.streams.cancel_session(session);
         self.dispatch_cancel_targets(targets);
@@ -896,6 +975,24 @@ impl ZoneBus {
         )
     }
 
+    /// Construct a bus with the system clock, observer, and telemetry handoff.
+    pub fn with_observer_and_metrics(
+        zone: ZoneId,
+        authorizer: BusAuthorizer,
+        config: BusConfig,
+        observer: Arc<dyn BusObserver>,
+        metrics: Arc<dyn BusTelemetry>,
+    ) -> Result<(Self, ZoneRegistrar), BusError> {
+        Self::with_clock_observer_and_metrics(
+            zone,
+            authorizer,
+            config,
+            Arc::new(SystemClock::new()),
+            observer,
+            metrics,
+        )
+    }
+
     /// Construct a bus with an injected monotonic clock.
     pub fn with_clock(
         zone: ZoneId,
@@ -913,6 +1010,25 @@ impl ZoneBus {
         clock: Arc<dyn BusClock>,
         observer: Arc<dyn BusObserver>,
     ) -> Result<(Self, ZoneRegistrar), BusError> {
+        Self::with_clock_observer_and_metrics(
+            zone,
+            authorizer,
+            config,
+            clock,
+            observer,
+            Arc::new(NoopBusTelemetry),
+        )
+    }
+
+    /// Construct a bus with an observer and the bounded telemetry handoff.
+    pub fn with_clock_observer_and_metrics(
+        zone: ZoneId,
+        authorizer: BusAuthorizer,
+        config: BusConfig,
+        clock: Arc<dyn BusClock>,
+        observer: Arc<dyn BusObserver>,
+        metrics: Arc<dyn BusTelemetry>,
+    ) -> Result<(Self, ZoneRegistrar), BusError> {
         if config.max_payload_bytes == 0
             || config.max_routes_per_session == 0
             || config.max_total_routes == 0
@@ -924,7 +1040,11 @@ impl ZoneBus {
         }
         let operations =
             OperationTable::new(config.max_operations, config.max_operations_per_session)?;
-        let streams = StreamBridge::with_observer(config.stream_limits, Arc::clone(&observer))?;
+        let streams = StreamBridge::with_observer_and_metrics(
+            config.stream_limits,
+            Arc::clone(&observer),
+            Arc::clone(&metrics),
+        )?;
         let core = Arc::new(BusCore {
             registry: Mutex::new(Registry::new(
                 zone.clone(),
@@ -943,6 +1063,8 @@ impl ZoneBus {
             max_payload_bytes: config.max_payload_bytes,
             max_correlations_per_generation: config.max_correlations_per_generation,
             observer,
+            metrics,
+            active_sessions: Mutex::new(BTreeMap::new()),
             #[cfg(test)]
             invocation_hooks: Mutex::new(InvocationHooks::default()),
         });
@@ -1389,10 +1511,27 @@ impl ZoneRegistrar {
         registration: SessionRegistration,
     ) -> Result<BusIngress, BusError> {
         let context = registration.context().ok_or(BusError::SessionMismatch)?;
-        self.core
+        let direction = BusDirection::from_context(Some(context));
+        if let Err(error) = self
+            .core
             .authorizer
-            .authorize_connect(context, &self.core.zone)?;
-        let session = self.core.lock_registry().register(registration)?;
+            .authorize_connect(context, &self.core.zone)
+        {
+            self.core
+                .metrics
+                .registration(direction, BusRegistrationOutcome::Rejected);
+            return Err(error.into());
+        }
+        let session = match self.core.lock_registry().register(registration) {
+            Ok(session) => session,
+            Err(error) => {
+                self.core
+                    .metrics
+                    .registration(direction, BusRegistrationOutcome::Rejected);
+                return Err(error.into());
+            }
+        };
+        self.core.record_session_registered(session);
         Ok(BusIngress {
             core: Arc::clone(&self.core),
             session,
@@ -1417,6 +1556,7 @@ impl ZoneRegistrar {
         self.core
             .lock_registry()
             .validate_reconnect(previous.session, &registration)?;
+        let previous_metrics = self.core.session_metrics(previous.session);
         let invalidation = self.core.lock_registry().invalidate(previous.session);
         if let Some(invalidation) = invalidation {
             invalidation.await;
@@ -1425,6 +1565,12 @@ impl ZoneRegistrar {
             .core
             .lock_registry()
             .reconnect(previous.session, registration)?;
+        self.core.record_session_disconnected_values(
+            previous_metrics.0,
+            previous_metrics.1,
+            BusDisconnectOutcome::Revoked,
+        );
+        self.core.record_session_registered(session);
         let targets = self.core.lock_operations().cancel_session(previous.session);
         self.core.streams.cancel_session(previous.session);
         self.core.dispatch_cancel_targets(targets);
@@ -2012,9 +2158,17 @@ impl ZoneRegistrar {
         if binding.zone() != &self.core.zone {
             return Err(BusError::SessionMismatch);
         }
-        self.core
+        if let Err(error) = self
+            .core
             .authorizer
-            .authorize_connect(binding.context(), &self.core.zone)?;
+            .authorize_connect(binding.context(), &self.core.zone)
+        {
+            self.core.metrics.registration(
+                BusDirection::from_context(Some(binding.context())),
+                BusRegistrationOutcome::Rejected,
+            );
+            return Err(error.into());
+        }
         let routes = routes_for_admitted_session(&binding)?;
         let cancellation = session.cancellation_handle();
         let responses =
@@ -2034,8 +2188,18 @@ impl ZoneRegistrar {
                 self.core.max_correlations_per_generation,
             )),
         });
+        let direction = BusDirection::from_context(Some(binding.context()));
         let registration = SessionRegistration::admitted(binding, routes, endpoint);
-        let session = self.core.lock_registry().register(registration)?;
+        let session = match self.core.lock_registry().register(registration) {
+            Ok(session) => session,
+            Err(error) => {
+                self.core
+                    .metrics
+                    .registration(direction, BusRegistrationOutcome::Rejected);
+                return Err(error.into());
+            }
+        };
+        self.core.record_session_registered(session);
         Ok(BusIngress {
             core: Arc::clone(&self.core),
             session,
@@ -2082,6 +2246,7 @@ impl ZoneRegistrar {
         self.core
             .lock_registry()
             .validate_reconnect(previous.session, &registration)?;
+        let previous_metrics = self.core.session_metrics(previous.session);
         let invalidation = self.core.lock_registry().invalidate(previous.session);
         if let Some(invalidation) = invalidation {
             invalidation.await;
@@ -2090,6 +2255,12 @@ impl ZoneRegistrar {
             .core
             .lock_registry()
             .reconnect(previous.session, registration)?;
+        self.core.record_session_disconnected_values(
+            previous_metrics.0,
+            previous_metrics.1,
+            BusDisconnectOutcome::Revoked,
+        );
+        self.core.record_session_registered(session);
         let targets = self.core.lock_operations().cancel_session(previous.session);
         self.core.streams.cancel_session(previous.session);
         self.core.dispatch_cancel_targets(targets);
@@ -2273,7 +2444,16 @@ impl BusIngress {
         operation: OperationSpec,
         payload: Vec<u8>,
     ) -> Result<BusResponse, BusError> {
+        let service = route.service().clone();
+        let direction = self.core.session_metrics(self.session).0;
+        let started = Instant::now();
         let result = self.invoke_inner(route, operation, None, payload).await;
+        self.core.record_route(
+            &service,
+            direction,
+            result.as_ref().err(),
+            started.elapsed().as_secs_f64(),
+        );
         if let Err(error) = &result {
             self.core.observe_error(BusEvent::Invoke, error);
         }
@@ -2288,9 +2468,18 @@ impl BusIngress {
         call: ResourceCall,
         payload: Vec<u8>,
     ) -> Result<BusResponse, BusError> {
+        let service = route.service().clone();
+        let direction = self.core.session_metrics(self.session).0;
+        let started = Instant::now();
         let result = self
             .invoke_inner(route, operation, Some(call), payload)
             .await;
+        self.core.record_route(
+            &service,
+            direction,
+            result.as_ref().err(),
+            started.elapsed().as_secs_f64(),
+        );
         if let Err(error) = &result {
             self.core.observe_error(BusEvent::Invoke, error);
         }
@@ -2386,9 +2575,18 @@ impl BusIngress {
         stream: StreamName,
         initial_credit: usize,
     ) -> Result<BusStream, BusError> {
+        let service = route.service().clone();
+        let direction = self.core.session_metrics(self.session).0;
+        let started = Instant::now();
         let result = self
             .open_stream_inner(route, operation, None, stream, initial_credit)
             .await;
+        self.core.record_route(
+            &service,
+            direction,
+            result.as_ref().err(),
+            started.elapsed().as_secs_f64(),
+        );
         if let Err(error) = &result {
             self.core.observe_error(BusEvent::OpenStream, error);
         }
@@ -2404,9 +2602,18 @@ impl BusIngress {
         stream: StreamName,
         initial_credit: usize,
     ) -> Result<BusStream, BusError> {
+        let service = route.service().clone();
+        let direction = self.core.session_metrics(self.session).0;
+        let started = Instant::now();
         let result = self
             .open_stream_inner(route, operation, Some(call), stream, initial_credit)
             .await;
+        self.core.record_route(
+            &service,
+            direction,
+            result.as_ref().err(),
+            started.elapsed().as_secs_f64(),
+        );
         if let Err(error) = &result {
             self.core.observe_error(BusEvent::OpenStream, error);
         }
@@ -2438,14 +2645,38 @@ impl BusIngress {
         let destination_session = destination.destination();
         let destination_principal = destination.destination_principal();
         let endpoint = destination.endpoint();
-        let (outgoing, incoming) = self.core.streams.open(
+        let direction = self.core.session_metrics(self.session).0;
+        let (outgoing, incoming) = match self.core.streams.open(
             stream,
             self.session,
             source_principal,
             destination_session,
             destination_principal,
+            direction,
             initial_credit,
-        )?;
+        ) {
+            Ok(handles) => handles,
+            Err(error) => {
+                self.core
+                    .metrics
+                    .stream_result(direction, BusStreamOutcome::Rejected);
+                if matches!(
+                    error,
+                    StreamError::CreditExceeded
+                        | StreamError::AggregateBackpressure
+                        | StreamError::PrincipalBackpressure
+                        | StreamError::StreamCapacityExceeded
+                        | StreamError::PrincipalCapacityExceeded
+                ) {
+                    self.core.metrics.backpressure(
+                        direction,
+                        BusStreamKind::Stream,
+                        rejection_backpressure_reason(error),
+                    );
+                }
+                return Err(error.into());
+            }
+        };
         let now = self.core.clock.now_tick();
         let cancellation = self.core.lock_operations().begin(
             &operation,
@@ -2499,8 +2730,12 @@ impl BusIngress {
 
     /// Cancel one exact operation attempt owned by this ingress.
     pub async fn cancel(&self, operation: &OperationSpec) -> Result<CancellationReceipt, BusError> {
+        let direction = self.core.session_metrics(self.session).0;
         let result = self.cancel_inner(operation).await;
         if let Err(error) = &result {
+            self.core
+                .metrics
+                .rejection(direction, rejection_outcome(error));
             self.core.observe_error(BusEvent::Cancel, error);
         }
         result
@@ -2720,6 +2955,38 @@ impl WatchSink for BusStream {
     }
 }
 
+fn rejection_outcome(error: &BusError) -> BusRejectionOutcome {
+    match error {
+        BusError::Authorization(_) => BusRejectionOutcome::Denied,
+        BusError::Registry(RegistryError::RouteNotFound)
+        | BusError::Operation(OperationError::OperationNotFound) => BusRejectionOutcome::NotFound,
+        BusError::Operation(
+            OperationError::CapacityExceeded | OperationError::SessionCapacityExceeded,
+        )
+        | BusError::Stream(
+            StreamError::StreamCapacityExceeded
+            | StreamError::PrincipalCapacityExceeded
+            | StreamError::AggregateBackpressure
+            | StreamError::PrincipalBackpressure
+            | StreamError::CreditExceeded,
+        ) => BusRejectionOutcome::Quota,
+        _ => BusRejectionOutcome::Error,
+    }
+}
+
+fn rejection_backpressure_reason(error: StreamError) -> BusBackpressureReason {
+    match error {
+        StreamError::CreditExceeded => BusBackpressureReason::Credit,
+        StreamError::AggregateBackpressure | StreamError::PrincipalBackpressure => {
+            BusBackpressureReason::BufferFull
+        }
+        StreamError::StreamCapacityExceeded | StreamError::PrincipalCapacityExceeded => {
+            BusBackpressureReason::Capacity
+        }
+        _ => BusBackpressureReason::Capacity,
+    }
+}
+
 fn validate_resource_route(
     route: &RouteKey,
     resource_call: Option<&ResourceCall>,
@@ -2811,6 +3078,7 @@ mod tests {
     };
     use std::time::Duration;
 
+    use crate::metrics::BusRouteOutcome;
     use async_trait::async_trait;
     use d2b_contracts::v3::{
         AuthenticatedSubjectContext, BindingDigest, CanonicalJsonValue, ConfigurationGeneration,
@@ -3035,6 +3303,64 @@ mod tests {
         session_verbs: Vec<SessionVerb>,
         resource_verbs: Vec<ResourceVerb>,
         endpoint: Arc<RecordingEndpoint>,
+    }
+
+    #[derive(Default)]
+    struct RecordingTelemetry {
+        routes: AtomicUsize,
+        registrations: AtomicUsize,
+        streams: AtomicUsize,
+        credits: AtomicUsize,
+        backpressure: AtomicUsize,
+        rejections: AtomicUsize,
+        disconnects: AtomicUsize,
+    }
+
+    impl BusTelemetry for RecordingTelemetry {
+        fn route(
+            &self,
+            _service: &ServiceName,
+            _direction: BusDirection,
+            _outcome: BusRouteOutcome,
+            _duration_seconds: f64,
+        ) {
+            self.routes.fetch_add(1, Ordering::Relaxed);
+        }
+
+        fn session_active(&self, _transport: BusTransport, _active: u64) {}
+
+        fn registration(&self, _direction: BusDirection, _outcome: BusRegistrationOutcome) {
+            self.registrations.fetch_add(1, Ordering::Relaxed);
+        }
+
+        fn stream_active(&self, _direction: BusDirection, _active: u64) {
+            self.streams.fetch_add(1, Ordering::Relaxed);
+        }
+
+        fn stream_result(&self, _direction: BusDirection, _outcome: BusStreamOutcome) {}
+
+        fn credits(&self, _direction: BusDirection, bytes: u64) {
+            if bytes > 0 {
+                self.credits.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+
+        fn backpressure(
+            &self,
+            _direction: BusDirection,
+            _kind: BusStreamKind,
+            _reason: BusBackpressureReason,
+        ) {
+            self.backpressure.fetch_add(1, Ordering::Relaxed);
+        }
+
+        fn rejection(&self, _direction: BusDirection, _outcome: BusRejectionOutcome) {
+            self.rejections.fetch_add(1, Ordering::Relaxed);
+        }
+
+        fn disconnect(&self, _direction: BusDirection, _outcome: BusDisconnectOutcome) {
+            self.disconnects.fetch_add(1, Ordering::Relaxed);
+        }
     }
 
     #[test]
@@ -3275,6 +3601,20 @@ mod tests {
         config: BusConfig,
         observer: Arc<dyn BusObserver>,
     ) -> Harness {
+        harness_with_config_and_observer_and_metrics(
+            spec,
+            config,
+            observer,
+            Arc::new(NoopBusTelemetry),
+        )
+    }
+
+    fn harness_with_config_and_observer_and_metrics(
+        spec: HarnessSpec<'_>,
+        config: BusConfig,
+        observer: Arc<dyn BusObserver>,
+        metrics: Arc<dyn BusTelemetry>,
+    ) -> Harness {
         let zone = ZoneId::parse("dev").unwrap();
         let schema = fingerprint('1');
         let generations = RouteGenerations::new(
@@ -3313,9 +3653,15 @@ mod tests {
         let native = NativeAuthorizer::new(ApiCatalog::standard(), Some(policy)).unwrap();
         let authorizer = BusAuthorizer::new(native, state(1)).unwrap();
         let clock = Arc::new(ManualClock::new(1));
-        let (bus, mut registrar) =
-            ZoneBus::with_clock_and_observer(zone, authorizer, config, clock.clone(), observer)
-                .unwrap();
+        let (bus, mut registrar) = ZoneBus::with_clock_observer_and_metrics(
+            zone,
+            authorizer,
+            config,
+            clock.clone(),
+            observer,
+            metrics,
+        )
+        .unwrap();
         let endpoint_ingress = registrar
             .register(SessionRegistration::new(
                 endpoint_context,
@@ -5178,6 +5524,64 @@ mod tests {
         incoming.grant(stream.name(), 1).await.unwrap();
         stream.send(vec![5]).await.unwrap();
         stream.close().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn router_stream_and_disconnect_paths_emit_closed_bus_metrics() {
+        let telemetry = Arc::new(RecordingTelemetry::default());
+        let endpoint = RecordingEndpoint::new();
+        let harness = harness_with_config_and_observer_and_metrics(
+            HarnessSpec {
+                service: "d2b.resource.v3",
+                member: RouteMember::stream("ResourceService/Watch").unwrap(),
+                caller_ref: "User/alice",
+                locality: Locality::Local,
+                evidence: EvidenceClass::UnixPeer,
+                session_verbs: vec![SessionVerb::Connect, SessionVerb::OpenStream],
+                resource_verbs: vec![ResourceVerb::Watch],
+                endpoint,
+            },
+            BusConfig::default(),
+            Arc::new(NoopBusObserver),
+            telemetry.clone(),
+        );
+        let query = ResourceQuery::new(
+            vec![ResourceTypeName::parse("Host").unwrap()],
+            Vec::new(),
+            Vec::new(),
+        )
+        .unwrap();
+        let stream = harness
+            .caller
+            .open_resource_stream(
+                harness.route.clone(),
+                operation("metrics-watch"),
+                ResourceCall::Watch(query),
+                StreamName::parse("watch:metrics").unwrap(),
+                4,
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            stream.send(vec![1, 2, 3, 4, 5]).await,
+            Err(BusError::Stream(StreamError::CreditExceeded))
+        );
+        stream.close().await.unwrap();
+        let Harness {
+            mut registrar,
+            caller,
+            endpoint_ingress,
+            ..
+        } = harness;
+        registrar.revoke(caller).await.unwrap();
+        registrar.revoke(endpoint_ingress).await.unwrap();
+
+        assert!(telemetry.routes.load(Ordering::Relaxed) >= 1);
+        assert!(telemetry.registrations.load(Ordering::Relaxed) >= 2);
+        assert!(telemetry.streams.load(Ordering::Relaxed) >= 1);
+        assert!(telemetry.credits.load(Ordering::Relaxed) >= 1);
+        assert!(telemetry.backpressure.load(Ordering::Relaxed) >= 1);
+        assert!(telemetry.disconnects.load(Ordering::Relaxed) >= 2);
     }
 
     #[tokio::test]

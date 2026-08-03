@@ -609,6 +609,37 @@ fn metric_label_policy_rejects_identity_keys_and_suffixes() {
 }
 
 #[test]
+fn bus_direction_metric_label_is_a_closed_enum_surface() {
+    let source = read_repo_file("packages/d2b-bus/src/metrics.rs");
+    assert!(
+        source.contains("pub enum BusDirection"),
+        "bus metrics must define the direction label as a named enum"
+    );
+    for variant in ["Local", "Host", "Guest", "ZoneLink"] {
+        assert!(
+            source.contains(&format!("Self::{variant}")),
+            "bus direction enum is missing {variant}"
+        );
+    }
+    assert!(
+        source.contains("direction.as_str()"),
+        "bus metrics must render direction only through the enum spelling"
+    );
+    assert!(
+        source.contains("const DIRECTION_LABELS"),
+        "bus direction label domain must be explicit and closed"
+    );
+    assert!(
+        !source.contains("direction: impl Into<String>"),
+        "bus metrics must not accept arbitrary direction label text"
+    );
+    assert!(
+        !source.contains("direction: String"),
+        "bus metrics must not retain arbitrary direction label text"
+    );
+}
+
+#[test]
 fn metric_policy_data_has_one_definition_and_denies_forks() {
     const POLICY_FILES: &[&str] = &[
         "packages/d2b-contracts/src/v3/telemetry_policy.rs",

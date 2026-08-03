@@ -13,6 +13,7 @@ pub mod driver;
 pub mod engine;
 pub mod error;
 pub mod lifecycle;
+pub mod metrics;
 pub mod operations;
 pub mod registry;
 pub mod relay;
