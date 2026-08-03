@@ -114,8 +114,9 @@ fi
 # dedicated per-case derivations; this path never invokes nix build.
 result_dir=$(d2b_mktemp ".d2b-nix-eval-jobs.XXXXXX")
 result_file="$result_dir/results.jsonl"
-log "--> nix-eval-jobs --flake ${flake_ref}#nixUnitJobs.${system} --workers $workers --max-memory-size $memory_mb"
+log "--> nix-eval-jobs --no-instantiate --flake ${flake_ref}#nixUnitJobs.${system} --workers $workers --max-memory-size $memory_mb"
 if nix-eval-jobs \
+  --no-instantiate \
   --flake "${flake_ref}#nixUnitJobs.${system}" \
   --workers "$workers" \
   --max-memory-size "$memory_mb" \
@@ -153,7 +154,7 @@ integrity_count=$(jq -s '
 if [ "$integrity_count" -ne 1 ]; then
   log "  FAIL: nix-unit integrity attribute was not evaluated exactly once"
 fi
-for failure in "${failures[@]:-}"; do
+for failure in "${failures[@]}"; do
   log "  FAIL: nix-unit attribute $failure"
 done
 if [ "$tool_status" -ne 0 ]; then
