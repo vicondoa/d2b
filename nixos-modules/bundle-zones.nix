@@ -179,7 +179,8 @@ let
   signatureIdFor = artifactId:
     let
       catalog = cfg.artifacts.${artifactId}.catalog or { };
-      signature = catalog.signature or { };
+      signatureValue = catalog.signature or null;
+      signature = if builtins.isAttrs signatureValue then signatureValue else { };
     in
     catalog.signatureId or signature.signatureId or signature.id or "default";
 
