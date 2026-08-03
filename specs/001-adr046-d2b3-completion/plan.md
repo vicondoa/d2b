@@ -338,6 +338,38 @@ and `ADR046-reconcile-003` remain `Planned` in W5: the passing rerun measures a 
 crate, not `packages/d2b-resource-store-redb`, and supplies none of those items' production
 evidence.
 
+That caveat is load bearing rather than ceremonial, and it became more so once the production
+backend landed. `packages/d2b-resource-store-redb/src/{actor,transaction,revision_log,backup}.rs`
+were added by `0a080828` on 2026-07-31, 349 commits before this amendment's base `c3e15b66`.
+The code exists; the measurement does not. The crate has **no `benches/` directory and no
+resident-memory harness of any kind**, so the production whole-process RSS obligation named by
+`ADR046-store-004`, `ADR046-store-002`, and `ADR046-store-005` is not merely unmet, it is
+currently unmeasurable. A reviewer who sees a green spike rerun beside a landed backend and
+concludes the backend's RSS gate is satisfied has made exactly the inference this amendment
+exists to block. All four items therefore stay `Planned` in the manifest, and the delivery
+obligation is a production measurement, not a re-reading of the proof result.
+
+The backend commit predates the amendment base, so it is outside this focused Gate 0 review and
+is not reverted or re-adjudicated here.
+
+Reviewing it surfaced a separate drift this amendment does not fix. Six destinations that the
+store and delivery specifications describe as absent are present at `c3e15b66`:
+`packages/d2b-resource-store-redb/src/{actor,transaction,revision_log,backup}.rs`,
+`packages/d2b-resource-api/src/watch.rs`, and
+`packages/d2b-controller-toolkit/benches/reaction.rs`. Only
+`packages/d2b-resource-store-redb/src/migration.rs` and
+`packages/d2b-priv-broker/src/ops/zone_store.rs` are still genuinely absent. The affected prose
+is `ADR046-store-002`/`-004`/`-005`'s Evidence rows, `ADR-046-validation-and-delivery` section
+3.2's `ADR046-store-004` determination ("Only contract modules exist in the crate") and its
+`ADR046-reconcile-003` row. Per "existing code is canon" the code wins and the prose is wrong.
+
+The RSS amendment touched some of those rows and deliberately did not correct the absence
+claims, because doing so asserts a different implementation state for four work items, and this
+amendment is forbidden from moving any item's state - a passing disposable proof must not
+advance a production item. Correcting an absence claim is a separate amendment with its own
+Gate 0 pass, and it must decide what `implementationState` those items now carry rather than
+inheriting it from a sentence. Recorded here rather than silently re-aligned.
+
 ## Complexity Tracking
 
 | Violation | Why Needed | Simpler Alternative Rejected Because |
