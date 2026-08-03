@@ -1101,16 +1101,41 @@ impl ResultSource {
 /// rather than merely happening not to be included.
 const PROTOTYPE_RESULT: &str = "proofs/redb-resource-store-spike/RESULTS-corrections.md";
 
-/// Canonical rows that are deliberately still present in a result source but
-/// are registered by no [`MeasurementSpec`], because a later source supersedes
-/// them. Each must remain present exactly once in its own source: preserving
-/// the superseded record is required, and citing it as current evidence is not
-/// permitted. Deleting the historical row therefore fails closed, and so does
-/// adding an eighth unaccounted row.
-const SUPERSEDED_CANONICAL_ROWS: &[(ResultSource, &str)] = &[(
-    ResultSource::Original,
-    "Median whole-process maximum RSS at or below 24 MiB",
-)];
+/// The exact superseded RSS measurement. Single-sourced so the pin on the
+/// historical `RESULTS.md` row and the pin on the retained `CHANGELOG.md` copy
+/// cannot drift apart: if the two were spelled separately, editing one would
+/// leave the other silently asserting a value that no longer exists anywhere.
+const SUPERSEDED_RSS_MEASUREMENT: &str =
+    "25,216 KiB (24.625 MiB), 640 KiB or about 2.6% above 24,576 KiB";
+
+/// A canonical row a result source deliberately still carries but that no
+/// [`MeasurementSpec`] registers, because a later source supersedes it.
+/// Preserving the record is required; citing it as current evidence is not.
+///
+/// The outcome and the measurement are pinned **exactly**, not merely required
+/// to parse. Requiring only parseability is the hole this closes: an author who
+/// edits `25,216 KiB` to any other well-formed figure, or flips `MEASURED-FAIL`
+/// to `MEASURED-PASS`, would leave a perfectly parseable row and satisfy a
+/// presence-only check while rewriting the very record this amendment promised
+/// to preserve byte for byte. The amendment's authority rests on the failure
+/// still being readable in its original form; a guard that cannot tell an
+/// intact history from a laundered one supplies no such authority.
+struct SupersededCanonicalRow {
+    source: ResultSource,
+    threshold: &'static str,
+    outcome: &'static str,
+    measurement: &'static str,
+}
+
+/// Every superseded row, with the values it must still record. Deleting a row
+/// fails the per-source row accounting above; rewriting one fails the exact
+/// comparison below; adding an unaccounted row fails the accounting too.
+const SUPERSEDED_CANONICAL_ROWS: &[SupersededCanonicalRow] = &[SupersededCanonicalRow {
+    source: ResultSource::Original,
+    threshold: "Median whole-process maximum RSS at or below 24 MiB",
+    outcome: "MEASURED-FAIL",
+    measurement: SUPERSEDED_RSS_MEASUREMENT,
+}];
 
 fn canonical_measurement(results: &str, threshold: &str) -> Result<CanonicalMeasurement, String> {
     let rows = results
@@ -1509,7 +1534,7 @@ fn spike_measurement_specs() -> Vec<MeasurementSpec> {
                 DerivedMeasurementSite {
                     path: "CHANGELOG.md",
                     expectation: DerivedExpectation::SupersededMeasurement(
-                        "25,216 KiB (24.625 MiB), 640 KiB or about 2.6% above 24,576 KiB",
+                        SUPERSEDED_RSS_MEASUREMENT,
                     ),
                     copies: 1,
                 },
@@ -1852,7 +1877,7 @@ fn validate_spike_measurements(
             .count();
         let superseded = SUPERSEDED_CANONICAL_ROWS
             .iter()
-            .filter(|(row_source, _)| *row_source == source)
+            .filter(|row| row.source == source)
             .count();
         let rows = results
             .lines()
@@ -1867,24 +1892,42 @@ fn validate_spike_measurements(
         }
     }
 
-    for (source, threshold) in SUPERSEDED_CANONICAL_ROWS {
+    for row in SUPERSEDED_CANONICAL_ROWS {
+        let path = row.source.path();
         if specs
             .iter()
-            .any(|spec| spec.result_source == *source && spec.threshold == *threshold)
+            .any(|spec| spec.result_source == row.source && spec.threshold == row.threshold)
         {
             errors.push(format!(
-                "{}: superseded row {threshold:?} is also registered as current evidence",
-                source.path()
+                "{path}: superseded row {:?} is also registered as current evidence",
+                row.threshold
             ));
         }
-        let Some(results) = sources.get(source) else {
+        let Some(results) = sources.get(&row.source) else {
             continue;
         };
-        if let Err(error) = canonical_measurement(results, threshold) {
-            errors.push(format!(
-                "{}: superseded row must be preserved verbatim: {error}",
-                source.path()
-            ));
+        match canonical_measurement(results, row.threshold) {
+            Ok(canonical) => {
+                // Parseability is not preservation. Compare both recorded
+                // fields against the pinned history so a well-formed rewrite -
+                // a different figure, or a flipped verdict - fails here.
+                if canonical.outcome != row.outcome {
+                    errors.push(format!(
+                        "{path}: superseded row {:?} must be preserved verbatim: recorded outcome is {:?}, expected {:?}",
+                        row.threshold, canonical.outcome, row.outcome
+                    ));
+                }
+                if canonical.measurement != row.measurement {
+                    errors.push(format!(
+                        "{path}: superseded row {:?} must be preserved verbatim: recorded measurement is {:?}, expected {:?}",
+                        row.threshold, canonical.measurement, row.measurement
+                    ));
+                }
+            }
+            Err(error) => errors.push(format!(
+                "{path}: superseded row {:?} is no longer readable: {error}",
+                row.threshold
+            )),
         }
     }
 
@@ -2620,6 +2663,322 @@ fn spike_measurement_contracts_match_and_reject_mutations() {
             errors.join("\n")
         );
     }
+}
+
+/// Rewrite the single canonical row for `threshold`, keeping it well-formed.
+/// Line-targeted rather than a substring replace, because the superseded
+/// figures also appear in `RESULTS.md` prose and a substring edit would prove
+/// nothing about the row.
+fn rewrite_canonical_row(
+    results: &str,
+    threshold: &str,
+    outcome: &str,
+    measurement: &str,
+) -> String {
+    let mut rewritten = Vec::new();
+    let mut hits = 0usize;
+    for line in results.lines() {
+        let cells = line.split('|').map(str::trim).collect::<Vec<_>>();
+        if cells.get(1) == Some(&threshold) {
+            hits += 1;
+            rewritten.push(format!("| {threshold} | {outcome} | {measurement} |"));
+        } else {
+            rewritten.push(line.to_string());
+        }
+    }
+    assert_eq!(
+        hits, 1,
+        "expected exactly one canonical row for {threshold:?}"
+    );
+    rewritten.join("\n")
+}
+
+/// Remove the single canonical row for `threshold`, leaving the rest of the
+/// table intact and well-formed.
+fn delete_canonical_row(results: &str, threshold: &str) -> String {
+    let mut kept = Vec::new();
+    let mut removed = 0usize;
+    for line in results.lines() {
+        let cells = line.split('|').map(str::trim).collect::<Vec<_>>();
+        if cells.get(1) == Some(&threshold) {
+            removed += 1;
+            continue;
+        }
+        kept.push(line.to_string());
+    }
+    assert_eq!(
+        removed, 1,
+        "expected exactly one canonical row for {threshold:?}"
+    );
+    kept.join("\n")
+}
+
+/// Assert that some single error carries every needle. Checking the needles
+/// against one error rather than against the joined set is the point: a test
+/// that accepts "these phrases appear somewhere" would pass on two unrelated
+/// failures and prove nothing about either.
+fn assert_one_error_with(errors: &[String], label: &str, needles: &[&str]) {
+    assert!(
+        errors
+            .iter()
+            .any(|error| needles.iter().all(|needle| error.contains(needle))),
+        "{label}: expected one error containing all of {needles:?}; got: {}",
+        if errors.is_empty() {
+            "<no errors at all>".to_string()
+        } else {
+            errors.join("\n")
+        }
+    );
+}
+
+/// The number of `| MEASURED-` rows the guard accounts for in `source`, and
+/// the two components of that total. Derived from the registry rather than
+/// hardcoded, so a legitimately added row moves the expectation instead of
+/// rotting the control.
+fn accounted_rows(source: ResultSource) -> (usize, usize, usize) {
+    let registered = spike_measurement_specs()
+        .iter()
+        .filter(|spec| spec.result_source == source)
+        .count();
+    let superseded = SUPERSEDED_CANONICAL_ROWS
+        .iter()
+        .filter(|row| row.source == source)
+        .count();
+    (registered + superseded, registered, superseded)
+}
+
+/// A superseded row that still parses is not a preserved row. This proves the
+/// guard pins the recorded verdict and figure rather than the row's existence:
+/// each rewrite below leaves a syntactically perfect table that a
+/// presence-only check would wave through.
+#[test]
+fn a_rewritten_superseded_row_fails_even_though_it_still_parses() {
+    let sources = result_sources();
+    let documents = measurement_documents();
+    assert!(
+        validate_spike_measurements(&sources, &documents).is_empty(),
+        "the committed tree must be clean before planting a rewrite"
+    );
+    assert!(
+        !SUPERSEDED_CANONICAL_ROWS.is_empty(),
+        "an empty superseded set would make this test vacuous"
+    );
+
+    for row in SUPERSEDED_CANONICAL_ROWS {
+        let original = &sources[&row.source];
+        let rewrites = [
+            // A different, entirely well-formed figure.
+            (
+                "restated figure",
+                row.outcome,
+                "25,600 KiB (25.0 MiB), 1,024 KiB or about 4.2% above 24,576 KiB",
+            ),
+            // The verdict flipped, the figure untouched.
+            ("flipped verdict", "MEASURED-PASS", row.measurement),
+            // History laundered to match the superseding result - the case the
+            // amendment exists to make impossible.
+            (
+                "laundered history",
+                "MEASURED-PASS",
+                "18,428 KiB, 6,148 KiB below 24,576 KiB",
+            ),
+        ];
+
+        for (label, outcome, measurement) in rewrites {
+            let mutated = rewrite_canonical_row(original, row.threshold, outcome, measurement);
+            // The rewrite must remain readable, or the test would be proving
+            // that a malformed table fails rather than that a rewritten one does.
+            assert!(
+                canonical_measurement(&mutated, row.threshold).is_ok(),
+                "{label}: the planted row must still parse"
+            );
+
+            let mut mutated_sources = sources.clone();
+            mutated_sources.insert(row.source, mutated);
+            let errors = validate_spike_measurements(&mutated_sources, &documents);
+            assert_one_error_with(
+                &errors,
+                label,
+                &[
+                    row.source.path(),
+                    "superseded row",
+                    "must be preserved verbatim",
+                ],
+            );
+        }
+
+        // Deleting the row is the other half of the obligation. It fails on two
+        // independent legs - the row accounting and the readability check - and
+        // both are asserted, because either one alone silently becoming
+        // ineffective would leave the deletion detectable only by accident.
+        let deleted = delete_canonical_row(original, row.threshold);
+        let (accounted, registered, superseded) = accounted_rows(row.source);
+        let baseline = original
+            .lines()
+            .filter(|line| line.contains("| MEASURED-"))
+            .count();
+        assert_eq!(
+            baseline,
+            accounted,
+            "the committed {} must already balance before deleting a row",
+            row.source.path()
+        );
+
+        let mut deleted_sources = sources.clone();
+        deleted_sources.insert(row.source, deleted);
+        let errors = validate_spike_measurements(&deleted_sources, &documents);
+        assert_one_error_with(
+            &errors,
+            "deleted superseded row",
+            &[
+                row.source.path(),
+                &format!(
+                    "canonical final-threshold table has {} measurement row(s)",
+                    baseline - 1
+                ),
+                &format!(
+                    "the guard accounts for {accounted} ({registered} registered + {superseded} superseded)"
+                ),
+            ],
+        );
+        assert_one_error_with(
+            &errors,
+            "deleted superseded row",
+            &[
+                row.source.path(),
+                "superseded row",
+                "is no longer readable",
+                "must occur exactly once, found 0",
+            ],
+        );
+    }
+}
+
+/// An extra `| MEASURED-` row in a registered artifact is a measurement nobody
+/// registered. Unregistered rows are how a result set grows a claim that no
+/// specification restates and no lint pins, so the accounting must reject one
+/// even when it is perfectly well-formed.
+#[test]
+fn an_unaccounted_measured_row_in_a_result_artifact_fails_closed() {
+    const UNACCOUNTED_ROW: &str = "| Unaccounted synthetic threshold | MEASURED-PASS | 1 KiB, planted by a negative control |";
+
+    let sources = result_sources();
+    let documents = measurement_documents();
+
+    for source in ResultSource::ALL {
+        let original = &sources[&source];
+        let (accounted, registered, superseded) = accounted_rows(source);
+        let baseline = original
+            .lines()
+            .filter(|line| line.contains("| MEASURED-"))
+            .count();
+        assert_eq!(
+            baseline,
+            accounted,
+            "the committed {} must already balance before injecting a row",
+            source.path()
+        );
+
+        let mut mutated_sources = sources.clone();
+        mutated_sources.insert(source, format!("{original}\n{UNACCOUNTED_ROW}\n"));
+        let errors = validate_spike_measurements(&mutated_sources, &documents);
+        assert_one_error_with(
+            &errors,
+            source.path(),
+            &[
+                source.path(),
+                &format!(
+                    "canonical final-threshold table has {} measurement row(s)",
+                    baseline + 1
+                ),
+                &format!(
+                    "the guard accounts for {accounted} ({registered} registered + {superseded} superseded)"
+                ),
+            ],
+        );
+    }
+}
+
+/// The superseded failure literals survive at exactly one registered site: the
+/// released changelog entry. That pin is load-bearing in both directions, so
+/// both are controlled here - a new copy anywhere under `docs/**`, and a
+/// duplicate of the retained copy inside `CHANGELOG.md` itself. Without the
+/// second control, the retained history could be quietly doubled and the
+/// inventory would be the only thing left objecting.
+#[test]
+fn extra_copies_of_the_superseded_literals_fail_closed() {
+    const UNREGISTERED_DOCUMENT: &str = "docs/explanation/unregistered-superseded-copy.md";
+
+    let sources = result_sources();
+    let documents = measurement_documents();
+    assert!(
+        !documents.contains_key(UNREGISTERED_DOCUMENT),
+        "plant path must not replace a real documentation file"
+    );
+    assert!(
+        spike_measurement_specs().iter().all(|spec| spec
+            .sites
+            .iter()
+            .all(|site| site.path != UNREGISTERED_DOCUMENT)),
+        "plant path is unexpectedly registered"
+    );
+
+    // One plant carrying every superseded literal, so a single validation pass
+    // exercises all four inventory patterns.
+    let mut planted = documents.clone();
+    planted.insert(
+        UNREGISTERED_DOCUMENT.to_string(),
+        format!("Independent historical note: {SUPERSEDED_RSS_MEASUREMENT}."),
+    );
+    let errors = validate_spike_measurements(&sources, &planted);
+    for description in [
+        "superseded 25,216 KiB whole-process RSS",
+        "superseded 24.625 MiB whole-process RSS",
+        "superseded 640 KiB threshold excess",
+        "superseded 2.6 percent excess over 24,576 KiB",
+    ] {
+        assert_one_error_with(
+            &errors,
+            description,
+            &[
+                "global docs/** and CHANGELOG.md inventory",
+                description,
+                "must contain exactly 1 copy/copies, found 2",
+                UNREGISTERED_DOCUMENT,
+            ],
+        );
+    }
+
+    // Duplicating the retained changelog copy must trip the site pin as well as
+    // the inventory, so the registered count cannot drift by duplication.
+    let changelog = documents
+        .get("CHANGELOG.md")
+        .expect("CHANGELOG.md is an inventoried document");
+    let mut doubled = documents.clone();
+    doubled.insert(
+        "CHANGELOG.md".to_string(),
+        format!("{changelog}\n\nDuplicate: {SUPERSEDED_RSS_MEASUREMENT}\n"),
+    );
+    let errors = validate_spike_measurements(&sources, &doubled);
+    assert_one_error_with(
+        &errors,
+        "doubled changelog history",
+        &[
+            "median RSS: CHANGELOG.md must contain",
+            SUPERSEDED_RSS_MEASUREMENT,
+            "exactly 1 time(s), found 2",
+        ],
+    );
+    assert_one_error_with(
+        &errors,
+        "doubled changelog history",
+        &[
+            "global docs/** and CHANGELOG.md inventory",
+            "superseded 25,216 KiB whole-process RSS",
+            "must contain exactly 1 copy/copies, found 2",
+            "CHANGELOG.md",
+        ],
+    );
 }
 
 /// The corrections prototype is a near-miss of the authoritative rerun: same
