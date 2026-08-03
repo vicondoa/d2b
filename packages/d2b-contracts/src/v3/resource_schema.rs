@@ -1420,6 +1420,21 @@ mod tests {
     }
 
     #[test]
+    fn framed_digest_matches_nix_bundle_and_catalog_vectors() {
+        assert_eq!(
+            framed_canonical_digest("d2b:v3:resource-bundle", br#"[]"#),
+            "sha256:2fa7348cd18ac4f54d28aeb87ef0be5da1fd772c3d173d830ef25e67b7adc63e2"
+        );
+        assert_eq!(
+            framed_canonical_digest(
+                "d2b:v3:artifact-catalog",
+                br#"{"entries":[],"schemaVersion":3}"#
+            ),
+            "sha256:854fc6c314b185ac9f842231e368fc75650729f669e15d0f1e60141ea334cb5e"
+        );
+    }
+
+    #[test]
     fn canonical_json_rejects_duplicates_floats_controls_and_non_nfc() {
         for input in [
             br#"{"a":1,"a":2}"#.as_slice(),
