@@ -320,10 +320,12 @@ reference, not a passing implementation of the future manifest contract.
 
 ## Rust optimized result
 
-The accepted Rust implementation and final measurements are at
-`0e563f433ccd41f8a4a57c955679e10fc256cecc`. GNU Make owns nine bounded
-`test-rust-leaf-*` nodes, while `tests/test-rust.sh` owns only explicit leaf
-execution. The
+The accepted three-run warm benchmark was captured at
+`0e563f433ccd41f8a4a57c955679e10fc256cecc`. Final behavior tip
+`0775159a46427364f943e6b7a49fd3079cd79c7f` changes only cold/cache policy and
+passed the complete warm aggregate with exact evidence in 141 coarse seconds.
+GNU Make owns nine bounded `test-rust-leaf-*` nodes, while
+`tests/test-rust.sh` owns only explicit leaf execution. The
 representative host calculated a 12-job budget and admitted at most nine
 lanes. Budgets through nine use one job per lane; the three surplus jobs on
 this host are assigned to the measured API long pole, so its two rustdoc
@@ -340,7 +342,8 @@ Two measured target-state changes removed the remaining warm critical path:
   targets, and the CPU-bound snapshot checker runs from Cargo's release
   profile in its own stable target.
 
-Cold and CI runs do not use those duplicated warm targets. Cold execution
+CI does not use those duplicated warm targets. Cold execution retains them
+across `make clean` and
 uses a four-lane bounded API/main/broker prebuild frontier, followed by a
 full-budget fixture, inventory and schema chain on shared targets. CI runs
 API, main, broker, guest shell runner, no-bash AST, schema, inventory and
@@ -364,9 +367,9 @@ DAG met the hard target, the conditional mold experiment in T017 was not
 entered and no linker dependency was added.
 
 The final cold observation is
-`.scratch/test-speedup-optimized/test-rust-cold.json` at 888 seconds, compared
+`.scratch/test-speedup-optimized/test-rust-cold.json` at 835 seconds, compared
 with the 911.204650-second baseline cold median. Cold elapsed time is therefore
-2.547% lower than baseline. The shared Nix store and `.scratch` compiler cache
+8.362% lower than baseline. The shared Nix store and `.scratch` compiler cache
 were retained in both measurements.
 
 ## Rust CI result
@@ -396,7 +399,7 @@ fixture lane remains below 15 minutes.
 
 The passing v1 manifest is
 `.scratch/test-speedup-optimized/test-rust-executed.json`, SHA-256
-`511d01418593d085a1216defd319f71b2253cf2ab256059aa0cefc0a90c86c56`.
+`bbc9c72c498e437682251f3790baaa8935d12051e7c7ed40cdcad71c9dc39c8d`.
 It records `run_status = "passed"` and all 20 baseline leaf identifiers.
 Direct sorted comparison with the trace-derived baseline manifest has no
 missing or added leaf.
