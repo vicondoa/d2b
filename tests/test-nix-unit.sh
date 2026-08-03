@@ -361,10 +361,19 @@ integrity_count=$(jq -s '
     | select(((.attrPath // []) | join(".")) == "__nix_unit_integrity")
   ] | length
 ' "$result_file")
+common_pin_file="$ROOT/tests/unit/nix/pinned/common.txt"
+system_pin_file="$ROOT/tests/unit/nix/pinned/$system.txt"
+if [ ! -f "$common_pin_file" ] || [ ! -f "$system_pin_file" ]; then
+  fail "nix-unit case-presence pin files are missing for $system" || true
+  exit 1
+fi
+common_case_count=$(awk '!/^#/ && NF { count++ } END { print count + 0 }' "$common_pin_file")
+system_case_count=$(awk '!/^#/ && NF { count++ } END { print count + 0 }' "$system_pin_file")
+expected_case_count=$((common_case_count + system_case_count))
 case_count=$((result_count - integrity_count))
 case_count_ok=1
-if [ "$case_count" -ne 893 ]; then
-  log "  FAIL: nix-unit corpus returned $case_count case attributes; expected the 893-case x86 corpus"
+if [ "$case_count" -ne "$expected_case_count" ]; then
+  log "  FAIL: nix-unit corpus returned $case_count case attributes; expected $expected_case_count pinned cases for $system"
   case_count_ok=0
 fi
 

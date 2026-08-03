@@ -30,10 +30,11 @@ The Nix-unit target uses the same lifecycle. Its full pass invokes the locked
 `nix-eval-jobs` tool on the `nixUnitJobs.<system>` attrset with
 `--no-instantiate`. That attrset contains one result for each case and the
 `__nix_unit_integrity` result, so the runner evaluates the complete current
-x86 corpus of 893 cases and reports every result without realizing a
-derivation. A selected `D2B_NIX_UNIT_CHECK` pass evaluates only that
-discovered check's `drvPath`, retaining the single-shard interface without
-realizing its output.
+corpus and reports every result without realizing a derivation. The expected
+count is derived from the common and native-system pin files; the current x86
+corpus contains 893 cases. A selected `D2B_NIX_UNIT_CHECK` pass evaluates only
+that discovered check's `drvPath`, retaining the single-shard interface
+without realizing its output.
 
 Because both Nix-unit paths are evaluation-only, they submit no installables
 to the Nix daemon and realize no checks. Their manifest evidence therefore
