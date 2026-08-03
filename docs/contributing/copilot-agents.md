@@ -183,9 +183,11 @@ is both the policy and the ceiling for the panel.
 
 ### Running check-bindings
 
+<!-- BEGIN PANEL-PREFLIGHT-COMMAND -->
 ```
 node scripts/copilot/check-bindings.mjs
 ```
+<!-- END PANEL-PREFLIGHT-COMMAND -->
 
 It fails on: an agent with no binding row, an effort or tier a model does not
 support, a panel row disagreeing with the delivery policy constants, a seat
@@ -193,6 +195,18 @@ missing from the roster or one not in it, a panel agent granted write tools,
 any effort-like key in frontmatter, a frontmatter and table model
 disagreement, and a repo-scope settings file carrying keys that scope cannot
 honour.
+
+<!-- BEGIN PANEL-PREFLIGHT-NOTICE -->
+> **Future, not yet implemented.**
+> [ADR 0053](../adr/0053-gascity-contributor-infrastructure.md) proposes
+> replacing the operator spelling with a single `make panel-preflight` target
+> that runs this checker plus a standalone harness receipt resolver and version
+> check. That target does not exist yet. Until it lands, run the node command
+> above. Whoever adds the target removes this notice and updates the command
+> above in the same commit; leaving either half behind points contributors at
+> the wrong preflight. The markers around this notice and the command block
+> above are what that commit's policy lint reads; keep them.
+<!-- END PANEL-PREFLIGHT-NOTICE -->
 
 ## Panel seats
 
