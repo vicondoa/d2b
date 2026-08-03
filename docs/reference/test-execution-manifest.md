@@ -26,6 +26,39 @@ fragment publication error after a successful sub-surface fails that leaf with
 a static retry diagnostic; when the test surface already failed, recording its
 failed fragment is best effort and the original test status is preserved.
 
+The Nix-unit target uses the same lifecycle. Its full pass invokes the locked
+`nix-eval-jobs` tool on the `nixUnitJobs.<system>` attrset with
+`--no-instantiate`. That attrset contains exactly one aggregate attr per
+current `*.nix` case file (45 file jobs), with stable `case-<basename>` names,
+plus the `nix-unit` shard/pin integrity attr. Each file job and the seven
+existing topical `checks.<system>` leaves reuse
+the same `casesFor`/`resultsFor`/failure-report constructor. The runner
+compares sorted result attrs by symmetric difference with the locked file-job
+names, so each worker evaluates one file aggregate rather than one case or
+the complete 893-case attrset. The single locked
+`nixUnitInventory.<system>` output is evaluated once with a `git+file` flake
+reference; it contains sorted `caseNames` and sorted `jobNames`. The runner
+compares `caseNames` by sorted symmetric difference with the common and
+native-system pin files. A selected `D2B_NIX_UNIT_CHECK` pass evaluates only
+that discovered topical check's `drvPath`, retaining the manual selector
+without realizing its output.
+
+Because both Nix-unit paths are evaluation-only, they submit no installables
+to the Nix daemon and realize no checks. Their manifest evidence therefore
+keeps `installables` and `realized_checks` empty. The completed leaf fragments
+are the coverage evidence: a full pass publishes exactly `nix-unit`,
+`nix-unit-daemon`, `nix-unit-guest`, `nix-unit-misc`, `nix-unit-network`,
+`nix-unit-runtime`, and `nix-unit-state`; a selected pass publishes only the
+selected leaf. A failed evaluation records the stable failed Nix-unit surface
+best effort and preserves the original target status.
+
+When an aggregate evaluation fails, the runner extracts each real
+`FAIL <case>: <detail>` line from that aggregate's error and prints one
+concise, sanitized stderr entry per line. Source-code template lines such as
+`${result.name}` are ignored. If an aggregate error contains no real FAIL line,
+one final fallback diagnostic naming that result attribute is printed, so
+integrity failures remain attributable.
+
 ## Schema version
 
 The binding schema version is **1**. The top-level `version` field is the
@@ -43,8 +76,8 @@ silently drift.
 | `run_status` | `passed`, `failed`, or `interrupted`. |
 | `completed_leaves` | Sorted leaf identifiers whose required command completed successfully. |
 | `failed_surfaces` | Sorted leaf or scheduler identifiers that failed before finalization. |
-| `installables` | Sorted Nix installables submitted by the target. Rust currently emits an empty list. |
-| `realized_checks` | Sorted flake checks actually realized by the target. Rust currently emits an empty list. |
+| `installables` | Sorted Nix installables submitted by the target. Rust and the evaluation-only Nix-unit target emit an empty list. |
+| `realized_checks` | Sorted flake checks actually realized by the target. Rust and the evaluation-only Nix-unit target emit an empty list. |
 | `source_inventory_digest` | SHA-256 digest of the matching source inventory, or an empty value when the target has no digest. |
 | `external_contention` | One closed contention code: `not-measured`, `none`, `nix-daemon-shared`, or `host-busy`. |
 
@@ -147,3 +180,12 @@ They overlap a bounded prebuild frontier, then run fixture, inventory and
 schema as a full-budget chain. CI alone uses the shared API census target
 and runs API, main, broker, guest, no-bash, schema, inventory and supply chain
 as separate full-budget Make jobs before the stable `test-rust` join.
+
+For Nix-unit, compare the seven completed leaves listed above with the
+baseline execution manifest, then compare the source case and file-job
+inventories separately. A passing full run must contain the 45 current
+file-job result attributes plus integrity and all 893 case names in the single
+inventory; it
+publishes all seven leaves. A selected run evaluates and publishes only its one
+selected topical leaf. A failed or interrupted record is diagnostic partial
+evidence and cannot satisfy coverage acceptance.

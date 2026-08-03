@@ -26,6 +26,7 @@ SCRATCH = ROOT / ".scratch"
 LAYER1_JOBS = ROOT / "tests" / "tools" / "layer1-jobs.py"
 MAKEFILE = ROOT / "Makefile"
 RUST_DRIVER = ROOT / "tests" / "test-rust.sh"
+NIX_UNIT_DRIVER = ROOT / "tests" / "test-nix-unit.sh"
 EXECUTION_MANIFEST_HELPER = ROOT / "tests" / "tools" / "execution-manifest.pl"
 
 
@@ -35,7 +36,7 @@ use warnings;
 use Errno qw(ECHILD);
 use POSIX qw(WNOHANG);
 
-my ($helper, $scenario, $manifest) = @ARGV;
+my ($helper, $scenario, $manifest, $target, $leaf) = @ARGV;
 
 sub fail {
     print STDERR "manifest-harness: $_[0]\n";
@@ -43,7 +44,11 @@ sub fail {
 }
 
 fail("missing harness arguments")
-    unless defined($helper) && defined($scenario) && defined($manifest);
+    unless defined($helper)
+        && defined($scenario)
+        && defined($manifest)
+        && defined($target)
+        && defined($leaf);
 require $helper;
 
 my $manifest_parent = $manifest;
@@ -81,6 +86,9 @@ my @kills;
 my @waits;
 my @descendant_reaps = (9001, 9002, -1);
 my $scheduler_status = $scenario eq "failure-finalization" ? 37 : 0;
+if ($scenario eq "failure") {
+    $scheduler_status = 37;
+}
 my $path_boundary = sub {
     my ($raw) = @_;
     fail("path boundary received an unexpected path") unless $raw eq $manifest;
@@ -100,11 +108,13 @@ my $process_control = {
         ++$fork_calls;
         $active_child = 1;
         if ($scenario eq "term") {
-            main::write_atomic_fragment($manifest, "rust-main-workspace", "passed");
+            main::write_atomic_fragment($manifest, $leaf, "passed");
             $SIG{TERM}->();
+        } elsif ($scenario eq "failure") {
+            main::write_atomic_fragment($manifest, $leaf, "passed");
         } elsif ($scenario eq "success-finalization"
             || $scenario eq "failure-finalization") {
-            main::write_atomic_fragment($manifest, "rust-main-workspace", "passed");
+            main::write_atomic_fragment($manifest, $leaf, "passed");
             no warnings qw(once redefine);
             *main::renameat_name = sub {
                 main::fatal("synthetic publication failure");
@@ -150,10 +160,27 @@ my $sleep = sub {
     fail("real grace sleep was reached");
 };
 
+# A prior success record and a valid stale fragment must never leak into the
+# current run. The lifecycle removes both through its anchored boundary before
+# the injected scheduler is allowed to run.
+open(my $prior, ">", $manifest) or fail("could not create prior evidence");
+print {$prior} "{\"version\":1,\"run_status\":\"passed\","
+    . "\"completed_leaves\":[\"stale-success\"]}\n";
+close($prior) or fail("could not close prior evidence");
+chmod(0600, $manifest) or fail("could not secure prior evidence");
+mkdir($fragment_dir, 0700) or fail("could not create stale fragment directory");
+my $stale_fragment = "$fragment_dir/fragment.stale";
+open(my $stale, ">", $stale_fragment)
+    or fail("could not create stale fragment");
+print {$stale} "{\"leaf\":\"stale\",\"run_status\":\"passed\","
+    . "\"completed_leaves\":[\"stale\"],\"failed_surfaces\":[]}\n";
+close($stale) or fail("could not close stale fragment");
+chmod(0600, $stale_fragment) or fail("could not secure stale fragment");
+
 my $status = main::run_manifest_lifecycle(
     command => [$^X, "-e", "exit 0"],
     manifest => $manifest,
-    target => "test-rust",
+    target => $target,
     commit => "injected-test",
     path_boundary => $path_boundary,
     clock => $clock,
@@ -177,6 +204,11 @@ if ($scenario eq "success-finalization") {
     fail("scheduler failure status was not preserved") unless $status == 37;
     fail("scheduler-failure finalization unexpectedly published evidence")
         if -e $manifest;
+} elsif ($scenario eq "failure") {
+    fail("scheduler failure status was not preserved") unless $status == 37;
+    fail("failed evidence was not published") unless -f $manifest;
+    fail("failed fragment directory was not removed")
+        if -d $fragment_dir;
 } elsif ($scenario eq "term") {
     fail("handled TERM did not preserve 143") unless $status == 143;
     fail("TERM did not use the injected zero-grace clock")
@@ -224,13 +256,12 @@ def make_target_block(source: str, target: str) -> str:
     return source[match.start() : end]
 
 
-def manifest_source() -> str:
-    return "\n".join(
-        (
-            MAKEFILE.read_text(encoding="utf-8"),
-            RUST_DRIVER.read_text(encoding="utf-8"),
-        )
-    )
+def source_text(*paths: pathlib.Path) -> str:
+    return "\n".join(path.read_text(encoding="utf-8") for path in paths)
+
+
+def manifest_source(*extra_paths: pathlib.Path) -> str:
+    return source_text(MAKEFILE, RUST_DRIVER, *extra_paths)
 
 
 def source_near(source: str, needle: str, radius: int = 1200) -> str:
@@ -238,6 +269,24 @@ def source_near(source: str, needle: str, radius: int = 1200) -> str:
     if index < 0:
         raise AssertionError(f"source does not contain {needle!r}")
     return source[max(0, index - radius) : index + radius]
+
+
+def workflow_job_block(workflow: str, job_id: str) -> str:
+    """Return one generated job without depending on its neighboring jobs."""
+    match = re.search(rf"(?m)^  {re.escape(job_id)}:\n", workflow)
+    if match is None:
+        raise AssertionError(f"generated workflow job {job_id!r} is missing")
+    remainder = workflow[match.end() :]
+    next_job = re.search(r"(?m)^  [A-Za-z0-9_-]+:\n", remainder)
+    end = match.end() + (next_job.start() if next_job else len(remainder))
+    return workflow[match.start() : end]
+
+
+def executable_shell_source(source: str) -> str:
+    """Drop full-line shell comments before checking executable contracts."""
+    return "\n".join(
+        line for line in source.splitlines() if not line.lstrip().startswith("#")
+    )
 
 
 def load_layer1_jobs() -> types.ModuleType:
@@ -266,6 +315,9 @@ class CiRunnerRegressionTests(unittest.TestCase):
         self,
         scenario: str,
         manifest: pathlib.Path,
+        *,
+        target: str = "test-rust",
+        leaf: str = "rust-main-workspace",
     ) -> subprocess.CompletedProcess[str]:
         perl = shutil.which("perl")
         self.assertIsNotNone(perl, "Perl is required for execution-manifest coverage")
@@ -281,6 +333,8 @@ class CiRunnerRegressionTests(unittest.TestCase):
                 str(EXECUTION_MANIFEST_HELPER),
                 scenario,
                 str(manifest),
+                target,
+                leaf,
             ],
             cwd=ROOT,
             env=env,
@@ -489,51 +543,595 @@ set -euo pipefail
 
     def test_fixture_lane_owns_the_only_bounded_nix_store_cache(self) -> None:
         workflow = load_layer1_jobs().render_workflow(load_layer1_jobs().load_manifest())
-        fixture_job = workflow.split("  test-fixture-contracts:", 1)[1].split("\n  test-proofs:", 1)[0]
-        nix_unit_job = workflow.split("  nix-unit-shards:", 1)[1].split("\n  test-nix-unit:", 1)[0]
+        fixture_job = workflow_job_block(workflow, "test-fixture-contracts")
+        nix_unit_job = workflow_job_block(workflow, "nix-unit-shards")
         self.assertIn("Nix store cache", fixture_job)
         self.assertIn("gc-max-store-size-linux: 4G", fixture_job)
+        self.assertEqual(workflow.count("- name: Nix store cache"), 1)
         self.assertNotIn("Nix store cache", nix_unit_job)
         self.assertNotIn("nix-store --import", fixture_job)
 
-    def test_nix_unit_ci_uses_one_runner_per_discovered_shard(self) -> None:
+    def test_nix_unit_ci_uses_the_retained_shard_matrix(self) -> None:
         layer1_jobs = load_layer1_jobs()
         manifest = layer1_jobs.load_manifest()
         workflow = layer1_jobs.render_workflow(manifest)
 
+        jobs = manifest["jobs"]
+        ci_jobs = manifest["ci"]["jobs"]
+        self.assertIn("nix-unit-discover", jobs)
+        self.assertIn("nix-unit-shards", jobs)
+        self.assertIn("nix-unit-discover", ci_jobs)
+        self.assertIn("nix-unit-shards", ci_jobs)
+
+        nix_unit = jobs["test-nix-unit"]
+        self.assertEqual(nix_unit["ciKind"], "nix-unit-rollup")
         self.assertEqual(
-            manifest["jobs"]["test-nix-unit"]["needs"],
+            nix_unit["needs"],
             ["nix-unit-discover", "nix-unit-shards"],
         )
-        self.assertIn("matrix:", workflow)
+        self.assertEqual(nix_unit["runsOn"], "ubuntu-latest")
+        self.assertNotEqual(nix_unit.get("enforcement"), "advisory")
+        self.assertEqual(ci_jobs.count("test-nix-unit"), 1)
+        self.assertEqual(manifest["ci"]["rollupNeeds"].count("test-nix-unit"), 1)
+
+        shard_job = workflow_job_block(workflow, "nix-unit-shards")
+        self.assertIn("strategy:", shard_job)
+        self.assertIn("matrix:", shard_job)
         self.assertIn(
             "check: ${{ fromJSON(needs.nix-unit-discover.outputs.checks) }}",
-            workflow,
+            shard_job,
         )
-        self.assertIn("D2B_NIX_UNIT_CHECK: ${{ matrix.check }}", workflow)
+        self.assertIn("D2B_NIX_UNIT_CHECK: ${{ matrix.check }}", shard_job)
+        self.assertNotIn("D2B_NIX_UNIT_JOBS", shard_job)
+        self.assertIn("run: make test-nix-unit", shard_job)
+        self.assertEqual(jobs["nix-unit-shards"]["maxParallel"], 4)
+
+        rollup_job = workflow_job_block(workflow, "test-nix-unit")
+        self.assertIn("nix-unit-discover", rollup_job)
+        self.assertIn("nix-unit-shards", rollup_job)
+        self.assertIn("Every discovered Nix-unit shard passed.", rollup_job)
+
+    def test_nix_unit_driver_uses_one_full_corpus_eval_jobs_path(self) -> None:
+        driver = executable_shell_source(source_text(NIX_UNIT_DRIVER))
+        flake = (ROOT / "flake.nix").read_text(encoding="utf-8")
+        eval_jobs = (ROOT / "tests" / "unit" / "nix" / "eval-jobs.nix").read_text(
+            encoding="utf-8"
+        )
+
+        runner_calls = list(
+            re.finditer(r"(?m)^\s*(?:if\s+)?nix-eval-jobs\b", driver)
+        )
+        self.assertEqual(
+            len(runner_calls),
+            1,
+            "the aggregate must have one established nix-eval-jobs invocation",
+        )
+        invocation = re.sub(
+            r"\\\s*\n",
+            " ",
+            driver[runner_calls[0].start() :],
+        )
+        self.assertIn("--no-instantiate", invocation)
+        self.assertRegex(
+            invocation,
+            r"--flake\s+[^\n]*nixUnitJobs[^\n]*"
+            r"--workers\s+[\"']?\$[A-Za-z_][A-Za-z0-9_]*[\"']?[^\n]*"
+            r"--max-memory-size\s+[\"']?\$[A-Za-z_][A-Za-z0-9_]*[\"']?",
+        )
+
+        jobs_match = re.search(r"(?m)^\s*nixUnitJobs\s*=", flake)
+        self.assertIsNotNone(jobs_match, "flake must expose the eval-jobs attrset")
+        assert jobs_match is not None
+        inventory_match = re.search(
+            r"(?m)^\s*nixUnitInventory\s*=\s*forAllSystems",
+            flake,
+        )
+        self.assertIsNotNone(
+            inventory_match,
+            "flake must expose the locked case/job inventory",
+        )
+        assert inventory_match is not None
+        jobs_block = flake[jobs_match.start() : inventory_match.start()]
+        self.assertIn("fileJobs", jobs_block)
+        self.assertIn("nixUnitCorpus.fileJobs", jobs_block)
+        self.assertIn("nix-unit = self.checks.${system}.nix-unit", jobs_block)
+        self.assertEqual(jobs_block.count("self.checks"), 1)
+        self.assertNotIn("nixUnitCorpus.jobs", jobs_block)
+        self.assertNotIn("__nix_unit_integrity", jobs_block)
+        self.assertNotIn("jobsFor", flake)
+
+        inventory_block = flake[inventory_match.start() :]
+        self.assertIn("nixUnitInventory = forAllSystems", inventory_block)
+        self.assertIn("nixUnitCorpus.caseNames", inventory_block)
+        self.assertIn("nixUnitCorpus.jobNames", inventory_block)
+        self.assertIn("builtins.sort builtins.lessThan nixUnitCorpus.caseNames", inventory_block)
         self.assertIn(
-            "checks: ${{ steps.list.outputs.nixunitchecks }}",
-            workflow,
+            'builtins.sort builtins.lessThan (nixUnitCorpus.jobNames ++ [ "nix-unit" ])',
+            inventory_block,
         )
-        self.assertEqual(manifest["jobs"]["nix-unit-shards"]["maxParallel"], 4)
-        self.assertIn("      max-parallel: 4", workflow)
-        self.assertIn('D2B_NIX_UNIT_JOBS: "1"', workflow)
-        self.assertIn("Every discovered Nix-unit shard passed.", workflow)
-        self.assertNotIn("run: make test-nix-unit\n\n  flake-eval-discover", workflow)
+        self.assertEqual(driver.count("nixUnitInventory"), 1)
+        self.assertIn("--json", driver)
+        self.assertIn("--impure", driver)
+        self.assertIn("--no-warn-dirty", driver)
+        self.assertIn("flake_ref=$(d2b_flake_ref", driver)
+        self.assertIn("'.caseNames[]'", driver)
+        self.assertIn("'.jobNames[]'", driver)
+        self.assertIn("keys | sort", driver)
+        self.assertIn("caseNamesFor", eval_jobs)
+        self.assertIn("caseNames = caseNamesFor null", eval_jobs)
+        self.assertIn("mkAggregateCheck", eval_jobs)
+        self.assertIn("fileJobName", eval_jobs)
+        self.assertIn("fileJobs", eval_jobs)
+        self.assertIn("jobNames", eval_jobs)
+        self.assertIn(
+            "value = mkAggregateCheck (fileJobName caseFileName) [ caseFileName ];",
+            eval_jobs,
+        )
+        self.assertNotIn("jobsFor", eval_jobs)
+        self.assertNotIn("nixUnitCaseNames", flake + driver)
+        self.assertNotIn("derivationName", eval_jobs)
 
-    def test_nix_unit_driver_is_bounded_and_waits_every_discovered_check(self) -> None:
-        driver = (ROOT / "tests" / "test-nix-unit.sh").read_text(encoding="utf-8")
+    def test_nix_unit_reports_all_failures_and_rejects_empty_discovery(self) -> None:
+        driver = executable_shell_source(source_text(NIX_UNIT_DRIVER))
 
-        self.assertIn('jobs=${D2B_NIX_UNIT_JOBS:-2}', driver)
-        self.assertIn('1|2|3|4) ;;', driver)
-        self.assertIn('D2B_NIX_UNIT_JOBS must be an integer from 1 through 4', driver)
-        self.assertNotIn('[ "$jobs" -gt 4 ]', driver)
-        self.assertIn('D2B_NIX_UNIT_CHECK', driver)
-        self.assertIn('for check in "${checks[@]}"; do', driver)
-        self.assertIn('while [ "$running" -ge "$jobs" ]; do', driver)
-        self.assertIn('while [ "$running" -gt 0 ]; do', driver)
-        self.assertIn('failures+=("$check")', driver)
-        self.assertIn('nix build --no-link --print-out-paths', driver)
+        exit_handler = driver[
+            driver.index("nix_unit_exit()") : driver.index("trap nix_unit_exit EXIT")
+        ]
+        self.assertIn(
+            'if ! publish_manifest_fragment "$nix_unit_surface" failed; then',
+            exit_handler,
+            "failed-surface evidence must enter the diagnostic branch only when publication fails",
+        )
+        self.assertNotIn(
+            'if publish_manifest_fragment "$nix_unit_surface" failed; then',
+            exit_handler,
+            "the EXIT trap must not diagnose successful fragment publication",
+        )
+        self.assertIn("local rc=$?", exit_handler)
+        self.assertIn('exit "$rc"', exit_handler)
+
+        # The aggregate must finish observing every selected check before it
+        # decides the final status. A first-failure exit would hide siblings.
+        self.assertIn('failures_file="$result_dir/failures"', driver)
+        self.assertIn('mapfile -t failures <"$failures_file"', driver)
+        self.assertRegex(
+            driver,
+            r"(?is)(?:select|filter).{0,180}(?:\.error|error\?)",
+        )
+        self.assertRegex(
+            driver,
+            r'(?s)test\("\^\[\[:space:\]\]\*FAIL \[\^:\]\+: "\)',
+            msg="evaluator output must select real FAIL lines",
+        )
+        self.assertIn('jq -r -s', driver)
+        self.assertIn('contains("${") | not', driver)
+        self.assertIn('$error_lines | join(" ; ")', driver)
+        self.assertIn("evaluation failed without diagnostic", driver)
+        self.assertIn("failure_attr", driver)
+        self.assertIn("failure_line", driver)
+        self.assertRegex(
+            driver,
+            r"(?is)(?:for|while).{0,120}(?:failure|failed).{0,300}"
+            r"(?:log|printf|echo|report)",
+        )
+        self.assertRegex(
+            driver,
+            r"(?is)(?:checks|discovered|jobs).{0,260}"
+            r"(?:-eq\s+0|==\s*0|length\s*[=!]=\s*0|empty).{0,260}"
+            r"(?:no|empty|zero|discovered).{0,260}(?:exit|return)\s+1\b",
+        )
+
+        self.assertNotIn(
+            'cat "$result_file"',
+            driver,
+            "successful full runs must not dump the raw JSONL result file",
+        )
+        self.assertIn('2>"$tool_stderr"', driver)
+        self.assertIn("emit_sanitized_tool_stderr()", driver)
+        self.assertIn(
+            'while IFS= read -r line || [ -n "$line" ]; do',
+            driver,
+            "stderr sanitization must retain an unterminated final line",
+        )
+        self.assertIn("sanitize_observable_line()", driver)
+        self.assertIn('value=${value//"$flake_root"/<repo>}', driver)
+        self.assertIn('value=${value//"$HOME"/<home>}', driver)
+        self.assertIn(
+            'while [[ "$value" =~ /nix/store/[a-z0-9]{32} ]]; do',
+            driver,
+        )
+        self.assertIn('value=${value//"$store_hash"/<store>}', driver)
+        self.assertIn('sanitize_observable_line "$line"', driver)
+        self.assertIn("flake_label=d2b", driver)
+        for line in driver.splitlines():
+            if re.search(r"\blog\b", line) and "flake" in line.lower():
+                self.assertNotIn(
+                    "flake_ref",
+                    line,
+                    "path-bearing flake references must not appear in progress logs",
+                )
+        failure_start = driver.index("for failure in")
+        failure_end = driver.index('if [ "$tool_status"', failure_start)
+        failure_reporting = driver[failure_start:failure_end]
+        self.assertIn('sanitize_observable_line "$failure"', failure_reporting)
+        self.assertIn("failure=$sanitized_line", failure_reporting)
+        self.assertIn(">&2", failure_reporting)
+        self.assertNotIn(
+            "log ",
+            failure_reporting,
+            "evaluator failures must go directly to stderr, not timestamped log",
+        )
+
+        sanitizer_start = driver.index("sanitize_observable_line()")
+        sanitizer_end = driver.index("sanitize_stderr_file()", sanitizer_start)
+        sanitizer = driver[sanitizer_start:sanitizer_end]
+        probe = subprocess.run(
+            [
+                "bash",
+                "-c",
+                sanitizer
+                + r'''
+flake_root=/repo/private
+HOME=/home/private
+sanitize_observable_line \
+  "/repo/private/src /home/private/cache /nix/store/0123456789abcdefghijklmnopqrstuv-openssl-3.0/lib"
+printf '%s\n' "$sanitized_line"
+''',
+            ],
+            cwd=ROOT,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(probe.returncode, 0, msg=probe.stderr)
+        self.assertEqual(
+            probe.stdout,
+            "<repo>/src <home>/cache <store>-openssl-3.0/lib\n",
+        )
+
+        self.assertIn("expected_cases_file", driver)
+        self.assertIn("actual_cases_file", driver)
+        self.assertIn("missing_cases", driver)
+        self.assertIn("unexpected_cases", driver)
+        self.assertIn("comm -23", driver)
+        self.assertIn("comm -13", driver)
+        self.assertIn('if ! jq -r ', driver)
+        self.assertIn('if ! comm -23 ', driver)
+        self.assertIn('if ! comm -13 ', driver)
+        for array_name in (
+            "failures",
+            "missing_cases",
+            "unexpected_cases",
+            "missing_result_attrs",
+            "unexpected_result_attrs",
+        ):
+            self.assertNotRegex(
+                driver,
+                rf"mapfile\s+-t\s+{array_name}\s*<\s*<\(",
+                msg=f"{array_name} must not discard a producer exit status",
+            )
+        self.assertIn("case_names_ok", driver)
+        self.assertIn("run make nix-unit-pin", driver)
+        self.assertIn("expected_result_attrs_file", driver)
+        self.assertIn("actual_result_attrs_file", driver)
+        self.assertIn("missing_result_attrs", driver)
+        self.assertIn("unexpected_result_attrs", driver)
+        self.assertIn("result_attrs_ok", driver)
+        self.assertIn("inventory_file", driver)
+        self.assertNotIn("integrity_count", driver)
+        self.assertNotIn("__nix_unit_integrity", driver)
+        self.assertRegex(
+            driver,
+            r"(?s)case_names_ok.{0,1200}"
+            r"\[\s*\"\$case_names_ok\"\s*-\s*ne\s*1\s*\]",
+        )
+
+    def test_nix_unit_invalidates_requested_manifest_before_nix_evaluation(self) -> None:
+        driver = source_text(NIX_UNIT_DRIVER)
+        self.assertIn("D2B_EXECUTION_MANIFEST", driver)
+
+        # Ignore comments when locating executable ordering. The first Nix
+        # command is the boundary after which stale success evidence is too
+        # late to remove.
+        executable = "\n".join(
+            line
+            for line in driver.splitlines()
+            if not line.lstrip().startswith("#")
+        )
+        evaluation = re.search(
+            r"\bnix\s+(?:eval|build|flake)\b"
+            r"|\b(?:lix-unit|nix-eval-jobs)\b",
+            executable,
+        )
+        self.assertIsNotNone(evaluation, "Nix evaluation/runner dispatch is absent")
+        assert evaluation is not None
+        before_evaluation = executable[: evaluation.start()]
+        self.assertRegex(
+            before_evaluation,
+            r"(?is)(?:execution-manifest\.pl|remove_prior_manifest|"
+            r"(?:rm|unlink|remove|invalidate)[^\n]{0,180}"
+            r"(?:D2B_EXECUTION_MANIFEST|execution[- ]manifest)).{0,260}"
+            r"(?:run|remove|unlink|invalidate|prior|manifest)",
+            msg=(
+                "the requested execution manifest must be invalidated through "
+                "the manifest lifecycle before any Nix command"
+            ),
+        )
+
+    def test_nix_unit_uses_the_runner_neutral_secure_manifest_contract(self) -> None:
+        driver = source_text(NIX_UNIT_DRIVER)
+        helper = source_text(EXECUTION_MANIFEST_HELPER)
+        self.assertRegex(
+            driver,
+            r"execution-manifest\.pl",
+            msg="Nix-unit must reuse the executable manifest lifecycle helper",
+        )
+        self.assertRegex(
+            driver,
+            r"(?is)execution-manifest\.pl.{0,500}\b(?:run|fragment)\b",
+            msg="Nix-unit must invoke, not merely mention, manifest plumbing",
+        )
+
+        for marker in (
+            "version => 1",
+            "run_status",
+            "completed_leaves",
+            "failed_surfaces",
+            "different filesystem",
+            "renameat_name",
+            "F_OFD_SETLK",
+            "O_CLOEXEC",
+            "FD_CLOEXEC",
+            "O_NOFOLLOW",
+            "openat2",
+            "RESOLVE_NO_SYMLINKS",
+            "RESOLVE_NO_MAGICLINKS",
+            "fstat",
+            "st_uid",
+            "verify_owner_mode",
+            "mode_is_symlink",
+            "$>",
+            "0600",
+            "0700",
+            "unlinkat",
+            "SIGTERM",
+            "SIGKILL",
+            "setsid",
+        ):
+            # `fstat` is the contract vocabulary even on the Perl stat()
+            # binding used by the dependency-free helper.
+            if marker == "fstat":
+                self.assertRegex(helper, r"(?i)(?:fstat|stat\()")
+            elif marker == "st_uid":
+                self.assertRegex(
+                    helper,
+                    r"(?:st_uid|\$[A-Za-z_][A-Za-z0-9_]*\[4\]\s*==\s*\$>)",
+                    msg="manifest ownership checks must compare stat uid to the effective uid",
+                )
+            else:
+                self.assertIn(marker, helper)
+
+        lifecycle = helper[helper.index("sub run_manifest_lifecycle") :]
+        self.assertRegex(
+            helper,
+            r"\$parent_st\[0\]\s*==\s*\$dir_st\[0\]",
+            msg="fragments must stay on the manifest parent filesystem",
+        )
+        self.assertLess(
+            lifecycle.index("$path_boundary->"),
+            lifecycle.index("lock_manifest"),
+            "the manifest parent must be anchored before lock creation",
+        )
+        self.assertLess(
+            lifecycle.index("lock_manifest"),
+            lifecycle.index("remove_prior_manifest"),
+            "prior evidence is removed only after the lock is held",
+        )
+        self.assertIn("F_OFD_SETLK", helper)
+        self.assertNotIn("F_OFD_SETLKW", helper)
+
+        # Complete fragments are read in a stable order and all observed
+        # failure surfaces are accumulated before the replacement is written.
+        self.assertIn(
+            "for my $name (sort(directory_entries($dirfh)))",
+            helper,
+        )
+        self.assertIn("push @failed", helper)
+        self.assertRegex(helper, r"(?s)@failed = sort keys %unique")
+        self.assertRegex(
+            helper,
+            r"(?s)(?:unless|if) \(defined\(\$entryfh\)\).*?next;",
+        )
+        self.assertRegex(
+            helper,
+            r"(?s)(?:unless \(\$valid\)|unless \@st).*?next;",
+        )
+        self.assertIn("manifest-lock-contended:", helper)
+        self.assertIn(
+            "execution-manifest lock is active; "
+            "wait for the active run to finish and retry.",
+            helper,
+        )
+        for line in helper.splitlines():
+            if "manifest-lock-contended:" in line or (
+                "execution-manifest lock is active" in line
+            ):
+                self.assertNotRegex(
+                    line,
+                    r"\$(?:manifest|lock|path|tmp|dir)\b|/(?:tmp|home|run|nix|var)/",
+                    msg="manifest lock diagnostics must remain path-free",
+                )
+
+    def test_nix_unit_retains_selector_and_bounded_effective_resources(self) -> None:
+        driver = executable_shell_source(source_text(NIX_UNIT_DRIVER))
+
+        self.assertIn("D2B_NIX_UNIT_CHECK", driver)
+        self.assertRegex(
+            driver,
+            r"(?is)D2B_NIX_UNIT_CHECK.{0,700}"
+            r"(?:discovered|selected|checks).{0,700}"
+            r"(?:exit|return)\s+2",
+        )
+        self.assertRegex(
+            driver,
+            r"(?is)(?:D2B_NIX_UNIT_CHECK|selected).{0,500}"
+            r"(?:unsafe|unknown|not a discovered|not found)",
+        )
+
+        # The selected evaluator owns concurrency. The shell only validates
+        # effective values and passes explicit worker and memory ceilings.
+        self.assertRegex(
+            driver,
+            r"(?is)(?:workers?|worker_count).{0,500}"
+            r"(?:case|bound|ceiling|maximum|limit|between).{0,500}"
+            r"(?:1|4|integer)",
+        )
+        self.assertRegex(
+            driver,
+            r"(?is)(?:memory|memory_mb|memory_size).{0,500}"
+            r"(?:minimum|maximum|bound|ceiling|limit|between).{0,500}"
+            r"(?:512|4096|8192|MiB|MB)",
+        )
+        self.assertRegex(
+            driver,
+            r"--workers\s+[\"']?\$[A-Za-z_][A-Za-z0-9_]*[\"']?",
+        )
+        self.assertRegex(
+            driver,
+            r"--max-memory-size\s+[\"']?\$[A-Za-z_][A-Za-z0-9_]*[\"']?",
+        )
+        self.assertRegex(
+            driver,
+            r"(?is)(?:log|echo|printf).{0,300}\$[A-Za-z_][A-Za-z0-9_]*"
+            r".{0,180}(?:worker|memory|MiB|MB)",
+        )
+        self.assertIn("reserve_mb=3072", driver)
+        self.assertIn("worker_budget_mb=$((memory_mb + 2048))", driver)
+        self.assertIn("requested_workers=${D2B_NIX_UNIT_WORKERS:-4}", driver)
+        self.assertIn("memory_mb=${D2B_NIX_UNIT_MEMORY_MB:-4096}", driver)
+        self.assertNotIn("GITHUB_ACTIONS", driver)
+        self.assertLess(
+            driver.index('if [ -n "${D2B_NIX_UNIT_CHECK:-}" ]; then'),
+            driver.index("command -v nix-eval-jobs"),
+            "selected CI shards must exit before eval-jobs bootstrap",
+        )
+        self.assertIn("D2B_NIX_UNIT_WORKERS", driver)
+        self.assertIn("D2B_NIX_UNIT_MEMORY_MB", driver)
+        self.assertNotIn("D2B_NIX_EVAL_JOBS_WORKERS", driver)
+        self.assertNotIn("D2B_NIX_EVAL_JOBS_MEMORY_MB", driver)
+
+    def test_nix_unit_handles_retired_worker_knobs_actionably(self) -> None:
+        driver = executable_shell_source(source_text(NIX_UNIT_DRIVER))
+        knob = "D2B_NIX_UNIT_JOBS"
+        self.assertIn(
+            knob,
+            driver,
+            "the retired variable needs an explicit migration diagnostic",
+        )
+        retirement = re.search(
+            rf"(?is){re.escape(knob)}.{{0,700}}"
+            r"(?:retir|remov|deprecat|migration|no longer supported|unsupported)",
+            driver,
+        )
+        self.assertIsNotNone(
+            retirement,
+            "D2B_NIX_UNIT_JOBS must be rejected, not used as a compatibility alias",
+        )
+        assert retirement is not None
+        region = driver[max(0, retirement.start() - 500) : retirement.end() + 500]
+        self.assertRegex(region, r"(?m)\b(?:exit|return)\s+2\b")
+        self.assertRegex(
+            region,
+            r"(?i)(?:migration|replace|use|supported|instead|control)",
+        )
+        self.assertIn("D2B_NIX_UNIT_WORKERS", region)
+        self.assertNotRegex(
+            driver,
+            rf"\$\{{[^}}\n]*{re.escape(knob)}[^}}\n]*:-",
+            "the retired variable must not remain a worker fallback",
+        )
+
+    def test_nix_unit_resource_requests_fail_before_nix_entry(self) -> None:
+        cases = (
+            (
+                {"D2B_NIX_UNIT_JOBS": "2"},
+                "D2B_NIX_UNIT_JOBS is retired; unset it and use "
+                "D2B_NIX_UNIT_WORKERS (1 through 4).\n",
+            ),
+            (
+                {"D2B_NIX_UNIT_WORKERS": "5"},
+                "D2B_NIX_UNIT_WORKERS must be an integer from 1 through 4\n",
+            ),
+            (
+                {"D2B_NIX_UNIT_WORKERS": "abc"},
+                "D2B_NIX_UNIT_WORKERS must be an integer from 1 through 4\n",
+            ),
+            (
+                {"D2B_NIX_UNIT_MEMORY_MB": "abc"},
+                "D2B_NIX_UNIT_MEMORY_MB must be between 512 and 4096 MiB\n",
+            ),
+            (
+                {"D2B_NIX_UNIT_MEMORY_MB": "200"},
+                "D2B_NIX_UNIT_MEMORY_MB must be between 512 and 4096 MiB\n",
+            ),
+            (
+                {"D2B_NIX_UNIT_MEMORY_MB": "5000"},
+                "D2B_NIX_UNIT_MEMORY_MB must be between 512 and 4096 MiB\n",
+            ),
+        )
+        for overrides, expected_stderr in cases:
+            env = {
+                key: value
+                for key, value in os.environ.items()
+                if key
+                not in {
+                    "D2B_EXECUTION_MANIFEST",
+                    "D2B_NIX_UNIT_JOBS",
+                    "D2B_NIX_UNIT_WORKERS",
+                    "D2B_NIX_UNIT_MEMORY_MB",
+                }
+            }
+            env.update(overrides)
+            result = subprocess.run(
+                ["bash", str(NIX_UNIT_DRIVER)],
+                cwd=ROOT,
+                env=env,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(result.returncode, 2)
+            self.assertEqual(result.stdout, "")
+            self.assertEqual(result.stderr, expected_stderr)
+
+    def test_nix_unit_does_not_add_a_repository_specific_scheduler(self) -> None:
+        driver = executable_shell_source(source_text(NIX_UNIT_DRIVER))
+        for marker in (
+            "declare -a pids",
+            "launch_check()",
+            "reap_next()",
+            "next_to_wait",
+            'while [ "$running"',
+            'kill "$pid"',
+            'pids+=("$!")',
+        ):
+            self.assertNotIn(
+                marker,
+                driver,
+                msg=f"repository-specific Nix scheduler marker remains: {marker}",
+            )
+        self.assertNotRegex(
+            driver,
+            r"(?m)^\s*(?:[A-Za-z_][A-Za-z0-9_]*\s*=\s*)?[^#\n]*&\s*$",
+            "the Nix-unit driver must not launch a shell worker pool",
+        )
+        self.assertRegex(
+            driver,
+            r"(?i)(?:nix-unit|lix-unit|nix-eval-jobs|"
+            r"\bnix\s+(?:eval|build|flake\s+check)\b)",
+        )
 
     def test_fixture_driver_realizes_minimal_and_excludes_real_binary_probe(self) -> None:
         driver = (ROOT / "tests" / "test-rust.sh").read_text(encoding="utf-8")
@@ -626,8 +1224,8 @@ set -euo pipefail
         for raw in ('is not a quoted name: $token', '[A-Za-z0-9._-]: $name'):
             self.assertNotIn(raw, partition)
 
-        # Both discovery jobs read the same partition, so the names dropped
-        # from the eval matrix are exactly the names the Nix-unit lane runs.
+        # The remaining flake discovery job is the single source for both
+        # matrix classes. Nix-unit no longer consumes a partitioned selector.
         self.assertEqual(workflow.count("partition=$(make -s test-flake-partition)"), 2)
 
     def test_disk_reclaim_is_conditional_but_still_fails_safe(self) -> None:
@@ -1329,58 +1927,89 @@ esac
     def test_execution_manifest_injected_lifecycle_boundaries_are_executable(self) -> None:
         with tempfile.TemporaryDirectory(prefix="execution-manifest-regression.") as raw_dir:
             temp_dir = pathlib.Path(raw_dir)
-            scenarios = {
-                name: temp_dir / f"{name}.json"
-                for name in (
-                    "success-finalization",
-                    "failure-finalization",
-                    "term",
-                )
-            }
-            results = {
-                name: self.run_execution_manifest_harness(name, manifest)
-                for name, manifest in scenarios.items()
-            }
+            for target, leaf in (
+                ("test-rust", "rust-main-workspace"),
+                ("test-nix-unit", "nix-unit-shard"),
+            ):
+                target_dir = temp_dir / target
+                target_dir.mkdir()
+                scenarios = {
+                    name: target_dir / f"{name}.json"
+                    for name in (
+                        "success-finalization",
+                        "failure-finalization",
+                        "failure",
+                        "term",
+                    )
+                }
+                results = {
+                    name: self.run_execution_manifest_harness(
+                        name,
+                        manifest,
+                        target=target,
+                        leaf=leaf,
+                    )
+                    for name, manifest in scenarios.items()
+                }
 
-            for name, result in results.items():
+                for name, result in results.items():
+                    self.assertEqual(
+                        result.returncode,
+                        0,
+                        msg=(
+                            f"{target} {name} harness failed with "
+                            f"{result.returncode}\nstdout:\n{result.stdout}"
+                            f"\nstderr:\n{result.stderr}"
+                        ),
+                    )
+                    self.assertNotIn(str(temp_dir), result.stdout)
+                    self.assertNotIn(str(temp_dir), result.stderr)
+
+                self.assertIn(
+                    "finalization failed after scheduler success",
+                    results["success-finalization"].stderr,
+                )
+                self.assertIn(
+                    "synthetic publication failure",
+                    results["success-finalization"].stderr,
+                )
                 self.assertEqual(
-                    result.returncode,
-                    0,
-                    msg=(
-                        f"{name} harness failed with {result.returncode}\n"
-                        f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
-                    ),
+                    results["success-finalization"].stderr.count("\n"),
+                    1,
                 )
-                self.assertNotIn(str(temp_dir), result.stdout)
-                self.assertNotIn(str(temp_dir), result.stderr)
+                self.assertIn(
+                    "preserving the scheduler status",
+                    results["failure-finalization"].stderr,
+                )
+                self.assertIn(
+                    "synthetic publication failure",
+                    results["failure-finalization"].stderr,
+                )
+                self.assertEqual(
+                    results["failure-finalization"].stderr.count("\n"),
+                    1,
+                )
 
-            self.assertIn(
-                "finalization failed after scheduler success",
-                results["success-finalization"].stderr,
-            )
-            self.assertIn(
-                "synthetic publication failure",
-                results["success-finalization"].stderr,
-            )
-            self.assertEqual(results["success-finalization"].stderr.count("\n"), 1)
-            self.assertIn(
-                "preserving the scheduler status",
-                results["failure-finalization"].stderr,
-            )
-            self.assertIn(
-                "synthetic publication failure",
-                results["failure-finalization"].stderr,
-            )
-            self.assertEqual(results["failure-finalization"].stderr.count("\n"), 1)
+                failed_manifest = scenarios["failure"]
+                failed_evidence = json.loads(failed_manifest.read_text(encoding="utf-8"))
+                self.assertEqual(failed_evidence["run_status"], "failed")
+                self.assertEqual(failed_evidence["target"], target)
+                self.assertIn(leaf, failed_evidence["completed_leaves"])
+                self.assertIn("scheduler", failed_evidence["failed_surfaces"])
+                self.assertNotIn("stale", json.dumps(failed_evidence))
+                self.assertTrue((target_dir / "failure.json.lock").is_file())
+                self.assertFalse((target_dir / ".failure.json.fragments").exists())
 
-            interrupted_manifest = scenarios["term"]
-            evidence = json.loads(interrupted_manifest.read_text(encoding="utf-8"))
-            self.assertEqual(evidence["run_status"], "interrupted")
-            self.assertIn("rust-main-workspace", evidence["completed_leaves"])
-            self.assertIn("scheduler-interrupted", evidence["failed_surfaces"])
-            self.assertEqual(evidence["version"], 1)
-            self.assertTrue((temp_dir / "term.json.lock").is_file())
-            self.assertFalse((temp_dir / ".term.json.fragments").exists())
+                interrupted_manifest = scenarios["term"]
+                evidence = json.loads(interrupted_manifest.read_text(encoding="utf-8"))
+                self.assertEqual(evidence["run_status"], "interrupted")
+                self.assertEqual(evidence["target"], target)
+                self.assertIn(leaf, evidence["completed_leaves"])
+                self.assertIn("scheduler-interrupted", evidence["failed_surfaces"])
+                self.assertNotIn("stale", json.dumps(evidence))
+                self.assertEqual(evidence["version"], 1)
+                self.assertTrue((target_dir / "term.json.lock").is_file())
+                self.assertFalse((target_dir / ".term.json.fragments").exists())
 
     def test_execution_manifest_lock_contention_is_executable_and_path_free(self) -> None:
         perl = shutil.which("perl")
