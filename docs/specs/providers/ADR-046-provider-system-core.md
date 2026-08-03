@@ -84,7 +84,8 @@ The crate produces:
 | Output | Role |
 | --- | --- |
 | `libsystem_core.rlib` | Provider library: Host/User controller handlers, manifest, and component descriptors |
-| `provider-system-core-manifest.json` | Compiled provider manifest installed into the private artifact catalog |
+| `share/d2b/provider/provider-manifest.json` | Compiled provider manifest at the fixed section 4.9.2 path; its store path is recorded in the private artifact catalog |
+| (no `bin/`) | `system-core` builds no component executable of its own, so its manifest declares an empty `package.executableDigests` and the derivation ships no `bin/` directory. `libsystem_core.rlib` is an internal build product linked by the separate `d2b-core-controller` derivation and is not a Provider artifact |
 
 There is no `src/main.rs` in this crate. The binary `d2b-core-controller` is
 owned by the separate `packages/d2b-core-controller` crate, which links
@@ -502,8 +503,8 @@ state between structural-check clearance and row removal.
 
 | Component ID | Type | Owned ResourceTypes | Binary | Placement |
 | --- | --- | --- | --- | --- |
-| `host-controller` | controller | `Host` | `d2b-core-controller` | Fixed; part of core-controller process |
-| `user-controller` | controller | `User` | `d2b-core-controller` | Fixed; part of core-controller process |
+| `host-controller` | controller | `Host` | `InProcessBootstrap` | Fixed; part of core-controller process |
+| `user-controller` | controller | `User` | `InProcessBootstrap` | Fixed; part of core-controller process |
 
 Both components run as handlers inside the single fixed core-controller process.
 The `d2b-core-controller` binary is built by `packages/d2b-core-controller` and
@@ -518,7 +519,6 @@ a Host resource to exist before starting.
 ```yaml
 id: host-controller
 type: controller
-binaryRef: d2b-core-controller
 resourceTypes: [Host]
 allowedDomains: [system]        # host-controller only runs in system domain
 cardinality: 1                  # one instance in the fixed process
@@ -549,7 +549,6 @@ permissionClaims:
 ```yaml
 id: user-controller
 type: controller
-binaryRef: d2b-core-controller
 resourceTypes: [User]
 allowedDomains: [system]
 cardinality: 1
@@ -573,6 +572,12 @@ permissionClaims:
   - resourceType: Volume
     verbs: [get, list]          # structural-check reads only; user-controller does NOT own Volume and does NOT create/delete Volume resources
 ```
+
+Neither descriptor carries a `binaryRef`. Both are bootstrap exception
+components (§11.3 step 5): the Zone runtime creates no Process from them, and
+their handlers execute in-process inside the fixed `d2b-core-controller`
+binary, which belongs to a different derivation and is not pinned by this
+Provider's artifact digests.
 
 ### 5.3 Services
 
@@ -772,8 +777,8 @@ d2b.artifacts.system-core = {
 
 `pkgs.d2b-provider-system-core` is the Nix derivation that builds
 `packages/d2b-provider-system-core`. It produces the provider library
-(`libsystem_core.rlib`), the compiled provider manifest
-(`provider-system-core-manifest.json`), and component descriptors. The manifest
+(`libsystem_core.rlib`), the compiled provider manifest at
+`share/d2b/provider/provider-manifest.json`, and component descriptors. The manifest
 store path is recorded in the private `artifact-catalog.json` (`root:d2bd` 0640);
 it never appears in any public ResourceSpec, status field, audit record, or OTEL
 telemetry. The `d2b-core-controller` binary is built by the separate

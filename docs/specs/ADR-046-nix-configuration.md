@@ -515,6 +515,7 @@ content-addressed: same derivation inputs produce byte-identical output.
 | Rule | Layer |
 | --- | --- |
 | `<id>` matches `^[a-z][a-z0-9-]*$` | Eval |
+| Provider artifact package resolves to one Nix output, explicitly selected when the derivation has more than one | Eval |
 | No duplicate `d2b.artifacts.<id>` keys | Eval (Nix attrset uniqueness) |
 | Every `artifactId` / `systemArtifactId` in any spec exists in `d2b.artifacts` | Build |
 | `type` of the artifact matches the expected type for the spec field | Build |

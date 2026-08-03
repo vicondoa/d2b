@@ -226,7 +226,9 @@ One Provider crate:
   ecosystem dependencies;
 - does not import d2bd, broker, Zone-store, Nix-emitter, or another Provider's
   implementation internals;
-- has one Nix package/conformance output;
+- has one Nix package/conformance output (one Nix output, explicitly selected
+  when the derivation has more than one; layout fixed by
+  ADR-046-resources-zone-control section 4.9);
 - has one `ADR-046-provider-<provider-name>.md` dossier.
 
 Every Provider crate contains:
@@ -491,8 +493,35 @@ Official Rust toolkit provides:
 - fault injection;
 - black-box conformance;
 - Provider flake/project templates.
+- `d2b.lib.buildProviderElfShim`, the framework-owned builder that produces a
+  conforming ELF entry point for an interpreted Provider component
+  (ADR-046-resources-zone-control section 4.9.3a);
+- canonical artifact emission for `provider-manifest.json` and
+  `config-schema.json`, emitting exactly the bytes required by section 4.9.4.
+  Provider authors never hand-canonicalize these files.
 
 Wire/state-machine golden vectors remain language-neutral.
+
+### Canonical Provider artifact emission
+
+The toolkit MUST expose canonical emission as the only supported writer for
+the two Provider JSON artifacts. The manifest and schema emitters return
+`d2b-cjson/v1` bytes with sorted object keys, integer-only values,
+NFC-validated strings, no BOM, and no trailing newline:
+
+| Surface | Contract |
+| --- | --- |
+| `d2b_provider_toolkit::manifest::emit_canonical(&ProviderManifest) -> Vec<u8>` | Emits the exact manifest bytes section 4.9.4 hashes |
+| `d2b_provider_toolkit::schema::emit_canonical(&RootConfigSchema) -> Vec<u8>` | Emits the exact root-schema bytes section 4.9.4 hashes |
+| `d2b-provider-toolkit manifest emit --out <path>` | Writes canonical bytes with mode `0644` and no trailing newline |
+| `d2b-provider-toolkit manifest verify <path>` | Reports canonicality and the first divergent byte offset |
+
+The CLI has no pretty-print, indentation, or newline switches because those
+would emit files the resource compiler refuses. Toolkit tests cover round-trip
+canonicality, no trailing newline, digest agreement, key-order independence,
+and `verify` agreement for trailing-newline, reordered-key, and indented
+inputs. This producer obligation belongs to `ADR046-provider-001`; it does not
+block the resource compiler's non-canonical fixture.
 
 ## Provider dossier requirement
 

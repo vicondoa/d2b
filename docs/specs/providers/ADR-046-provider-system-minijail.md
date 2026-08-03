@@ -171,7 +171,7 @@ worker components.
 | --- | --- |
 | Component ID | `minijail-controller` |
 | Type | controller |
-| Binary | `d2b-provider-system-minijail` (single executable) |
+| `binaryRef` | `d2b-provider-system-minijail`; the component is `Launchable` (§4.9.3), so the derivation ships `bin/d2b-provider-system-minijail` and declares exactly one `package.executableDigests` entry keyed by that name |
 | Exported ResourceTypes | `Process`, `EphemeralProcess` |
 | Domain | `system` (default); `user` when descriptor declares `user-domain-supported` |
 | Cardinality | 1 per Zone |
@@ -184,6 +184,16 @@ worker components.
 
 There are no service, worker, or separate component binaries in this Provider.
 The controller is the only binary entry point.
+
+`Provider/system-minijail` is a bootstrap exception for Process creation only:
+the Zone runtime starts its controller without a parent `Process` resource
+(§11.3 step 5). It is not an in-process Provider. Unlike
+`Provider/system-core`, whose handlers link into the `d2b-core-controller`
+binary from another derivation, `system-minijail` builds and ships its own
+executable, so its component descriptor carries a `binaryRef`, its artifact
+ships a `bin/` directory, and its `package.executableDigests` is non-empty.
+The `InProcessBootstrap` arm of `ComponentExecution` is admissible for this
+Provider but is not used by it.
 
 ## 4.2 Endpoint resources (D092)
 

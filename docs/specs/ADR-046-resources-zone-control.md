@@ -605,7 +605,7 @@ artifact catalog; the resource store holds only `artifactId`.
 | `name` (from manifest) | string | Must equal Provider identity declared in manifest; must equal `metadata.name` |
 | `version` (from manifest) | string | Semver `major.minor.patch`; informational; exact digest is binding |
 | `digest` | sha256 | Content digest of signed Provider package; required; validated at build |
-| `executableDigests` | map[name]sha256 | One entry per built binary; validated at build |
+| `executableDigest` | sha256 | Digest over the signed manifest's `package.executableDigests` object; see section 4.9.4. The per-binary map is a manifest field, not a catalog field |
 | `manifestDigest` | sha256 | Digest of the Provider's signed manifest artifact; validated at build |
 | `configSchemaDigest` | sha256 | Digest of the root config JSON Schema; used to validate `spec.config` |
 | `publisher` | string | Stable publisher/organization label; `^[a-z][a-z0-9-]*$` |
@@ -618,6 +618,10 @@ artifact catalog; the resource store holds only `artifactId`.
 Unknown artifact catalog fields are rejected at build time. Store paths and
 Nix closure metadata are private catalog implementation data and do not appear
 in resource spec, status, audit records, or OTEL attributes.
+
+The exact on-disk shape of a Provider derivation, the relative path of each
+required file, and the preimage of every digest in this table are fixed by
+section 4.9.
 
 #### 4.3.2 Root configuration
 
@@ -1007,6 +1011,273 @@ packages/d2b-provider-runtime-cloud-hypervisor/
     ├── guest_spawn.rs                 # integration-target: host-integration
     └── guest_network_attach.rs        # integration-target: container
 ```
+
+### 4.9 Provider derivation artifact layout (normative)
+
+Section 4.8 fixes the shape of a Provider crate. This section fixes the shape
+of the derivation that `d2b.artifacts.<id>.package` names and that the
+resource compiler validates at Phase 2. The crate layout and derivation layout
+are independent contracts.
+
+#### 4.9.1 One unambiguously named Nix output
+
+A `type = "provider"` artifact MUST resolve to one Nix output. When its
+derivation has more than one output, the selected output MUST carry evidence
+that it was selected. The Phase 1 predicate, evaluated in
+`nixos-modules/provider-catalog.nix`, is:
+
+```nix
+let
+  package = artifact.package;
+  declaredOutputs = package.outputs or [ "out" ];
+  shapeRecognised =
+    builtins.isList declaredOutputs
+    && declaredOutputs != [ ]
+    && builtins.all builtins.isString declaredOutputs;
+in
+  if !shapeRecognised then false
+  else if builtins.length declaredOutputs == 1 then true
+  else if (package.outputSpecified or false) == true then true
+  else (package.outputName or null) != builtins.head declaredOutputs
+```
+
+The predicate MUST NOT read `package.all`. It is total over the shapes admitted
+by `types.package`: `outputs` defaults to `["out"]`, `outputSpecified` and
+`outputName` are optional, and every partial operation is reached only after
+the non-empty list-of-strings guard. A store-path-valued package is accepted.
+An unrecognised shape fails with `provider-artifact-output-shape-unknown`
+rather than an evaluation trace. A multi-output package that pins its first
+output without evidence of selection fails with
+`provider-artifact-output-ambiguous`; select the output explicitly, or
+repackage a raw derivation when its first output cannot carry selection
+evidence.
+
+#### 4.9.2 Required paths
+
+Every required path is relative to the one pinned store output, written
+`<out>`:
+
+```text
+<out>/
+|-- bin/
+|   `-- <name>
+`-- share/d2b/provider/
+    |-- provider-manifest.json
+    |-- provider-manifest.json.sig
+    `-- config-schema.json
+```
+
+The three names under `share/d2b/provider/` are constants. They do not contain
+the Provider identity, version, or artifact ID. The manifest is the signed
+Provider manifest, the `.sig` file is exactly 64 detached Ed25519 signature
+octets over its raw bytes, and `config-schema.json` is the root config schema.
+Both JSON files are already `d2b-cjson/v1` canonical bytes with no trailing
+newline. All three MUST be regular files. Symlinks, directories, FIFOs,
+sockets, and device nodes fail with `provider-required-output-not-regular`;
+missing files fail with `provider-required-output-absent`.
+
+The two directories are closed. `share/d2b/provider/` contains exactly those
+three files and rejects an extra entry with
+`provider-layout-entry-unexpected`. `bin/` exists if and only if
+`package.executableDigests` is non-empty. A Provider with no executable of its
+own ships no `bin/` and declares an empty map. An existing empty `bin/`
+directory fails with `provider-executable-set-empty`.
+
+#### 4.9.3 Locating the executable set
+
+The compiler derives three sets and requires them to agree:
+
+1. entries read from `<out>/bin`;
+2. keys in the signed manifest's `package.executableDigests`;
+3. `binaryRef` values in component descriptors.
+
+The first two sets are equal and the third is a subset of the second. Each
+directory entry is a regular file, is valid UTF-8, is at most 64 bytes, and
+matches `^[a-z][a-z0-9-]*$`; names are checked as read from the directory and
+are never normalised. A mismatch fails with
+`provider-executable-set-mismatch`; an invalid name fails with
+`provider-executable-name-invalid`; a non-regular entry fails with
+`provider-executable-not-regular`; and a `binaryRef` absent from the manifest
+map fails with `provider-binary-ref-unresolved`.
+
+Every executable is an ELF64 `ET_EXEC` or `ET_DYN` image. The compiler reads
+only a bounded 18-octet prefix from the already-open descriptor and checks
+the ELF magic, class, byte order, version, and type. Scripts, empty files,
+short files, `ET_REL`, and `ET_CORE` fail with
+`provider-executable-not-elf`. The same regular ELF bytes with no execute bit
+fail with `provider-executable-not-executable`.
+
+##### 4.9.3a `d2b.lib.buildProviderElfShim` (normative, framework-owned)
+
+The framework MUST expose `d2b.lib.buildProviderElfShim` for interpreted
+Provider entry points:
+
+```nix
+d2b.lib.buildProviderElfShim {
+  inherit pkgs;
+  name = "d2b-provider-foo-controller";
+  interpreterPkg = pkgs.python3;
+  interpreterPath = "bin/python3";
+  program = ./controller.py;
+  extraArgs = [ ];
+}
+```
+
+The helper receives a package output and a relative path, never an interpolated
+absolute path. It emits a compiled ELF64 `ET_DYN` entry point, bakes the
+resolved interpreter and program members into its closure, and accepts no
+runtime-selected program or environment override. The interpreter walk and
+program walk are independent bounded walks: relative links only, no `..`, no
+magic links, no escape from the respective output, and at most eight links.
+The interpreter terminus is a regular executable ELF with an execute bit; the
+program terminus is a regular file. Wrapper scripts, invalid images, device
+nodes, FIFOs, sockets, absolute links, escaping links, and overlong chains
+fail at build time. The emitted shim resolves the baked interpreter beneath an
+anchored dirfd with the same fd discipline below, then uses `execveat` and
+forwards caller arguments after its fixed arguments. It never uses `PATH`,
+`execve` on a concatenated string, a shell, or an environment-selected
+program.
+
+#### 4.9.4 Digest preimages
+
+Every digest renders as `sha256:<64 lowercase hex>`:
+
+| Value | Preimage |
+| --- | --- |
+| `package.executableDigests[<name>]` | raw octets of `<out>/bin/<name>` |
+| `executableDigest` | `canonical_digest("d2b:v3:provider-executable-set", C)`, where `C` is the `d2b-cjson/v1` object containing every executable name and its digest |
+| `manifestDigest` | raw octets of `<out>/share/d2b/provider/provider-manifest.json` |
+| `configSchemaDigest` | raw octets of `<out>/share/d2b/provider/config-schema.json` |
+| `digest` | NAR serialization of `<out>`, as `nix hash path --type sha256 --base16` renders it |
+
+The executable set digest uses the D101 canonical digest helper from
+`d2b-contracts/src/v3/resource_schema.rs`, not the delivery tooling helper.
+Object key order is canonical and the whole map is the preimage. The two JSON
+files MUST equal their own canonical reserialization before their bytes are
+hashed. `closureDigest` and `closureSize` remain owned by ADR046-nix-022.
+
+#### 4.9.5 Three-source agreement
+
+The operator-authored catalog, the signed manifest, and compiler-recomputed
+values are independent sources. Admission requires pairwise equality for the
+manifest, config schema, executable set, and package content digests. The
+compiler computes its side and never copies a value from the manifest or
+catalog into that comparison.
+
+#### 4.9.6 Signature anchoring and failure taxonomy
+
+The detached manifest signature is verified before another artifact file is
+read. The key is selected from the built-in `d2b-official` root or the
+configured public `d2b.zones.<zone>.trustedPublishers.<publisher>` entry.
+Unregistered publishers, unresolved signature IDs, malformed signatures, and
+verification failures are distinct and fail closed.
+
+All errors below are bounded to 512 bytes, UTF-8, control-character sanitized,
+and contain no secret, credential, absolute path, store path, manifest body,
+config value, or process data:
+
+| Error code | Raised when |
+| --- | --- |
+| `provider-artifact-output-ambiguous` | A multi-output package pins its first output without selection evidence |
+| `provider-artifact-output-shape-unknown` | `outputs` is not a non-empty list of strings |
+| `provider-required-output-absent` | A fixed required layout path is absent |
+| `provider-required-output-not-regular` | A fixed required path is not regular |
+| `provider-layout-entry-unexpected` | The closed provider directory contains another entry |
+| `provider-signature-publisher-unregistered` | The publisher is not registered |
+| `provider-signature-id-unresolvable` | The catalog signature ID has no registered key |
+| `provider-signature-malformed` | The detached signature is not 64 octets |
+| `provider-signature-verification-failed` | A well-formed signature does not verify |
+| `provider-digest-mismatch` | A pinned digest differs between sources |
+| `provider-manifest-not-canonical` | A JSON file differs from its canonical bytes |
+| `provider-executable-name-invalid` | A `bin/` entry violates the name grammar |
+| `provider-executable-set-empty` | `bin/` exists but has no entries |
+| `provider-executable-not-elf` | A `bin/` entry is not an admissible ELF image |
+| `provider-executable-not-executable` | A valid ELF has no execute bit |
+| `provider-executable-not-regular` | A `bin/` entry is not regular |
+| `provider-executable-set-mismatch` | The directory and manifest executable sets differ |
+| `provider-binary-ref-unresolved` | A component reference is not an executable-map key |
+| `provider-launch-format-rejected` | `execveat` returns `ENOEXEC` or post-open `ENOENT` |
+| `provider-launch-permission-denied` | `execveat` returns `EACCES` |
+| `provider-component-execution-invalid` | A component's launch mode is invalid for its Provider |
+| `provider-executable-declaration-inconsistent` | The executable map and launchable-component count disagree |
+
+Set-valued messages contain at most four sorted, 64-byte-truncated members and
+the true total count. Digests are fixed-width and may be emitted in full.
+Canonicality failures name the byte offset and the fixed toolkit remediation:
+`d2b-provider-toolkit manifest emit --out <path>`, followed by
+`d2b-provider-toolkit manifest verify <path>`.
+
+#### 4.9.7 Anchored fd-relative resolution
+
+Neither compiler nor launcher joins a path and calls `stat` followed by
+`open`. The pinned output is opened once as
+`O_PATH | O_DIRECTORY | O_CLOEXEC`; each fixed layout path or already-validated
+`bin/<name>` is resolved with `openat2` and
+`RESOLVE_BENEATH | RESOLVE_NO_SYMLINKS | RESOLVE_NO_MAGICLINKS`.
+`RESOLVE_BENEATH` maps escapes to `NotBeneath`/`EXDEV`,
+`RESOLVE_NO_SYMLINKS` rejects ordinary and trailing symlinks, and
+`RESOLVE_NO_MAGICLINKS` rejects procfs-style magic links. The compiler opens
+readable files as `O_RDONLY | O_NONBLOCK | O_CLOEXEC`; the launcher opens
+executable references as `O_PATH | O_CLOEXEC`. Both `fstat` the descriptor
+before reading or executing, and no descriptor is inherited by a launched
+Provider. `O_NONBLOCK` prevents a FIFO from blocking the compiler.
+
+The sequence is injectable:
+
+```rust
+pub trait AnchoredDir: Send + Sync {
+    type Readable: ReadableFile;
+    type Executable: ExecutableFile;
+    fn open_readable(&self, path: LayoutPath) -> Result<Self::Readable, LayoutError>;
+    fn open_executable(&self, path: LayoutPath) -> Result<Self::Executable, LayoutError>;
+    fn entries(&self, dir: LayoutDir) -> Result<Vec<OsString>, LayoutError>;
+}
+
+pub trait ReadableFile: Send {
+    fn len(&self) -> u64;
+    fn read_prefix(&mut self, out: &mut [u8]) -> Result<usize, LayoutError>;
+    fn read_to_digest(self) -> Result<ArtifactDigest, LayoutError>;
+}
+
+pub trait ExecutableFile: Send {}
+
+pub trait ProcessLauncher: Send + Sync {
+    type Executable: ExecutableFile;
+    fn exec_from(&self, file: Self::Executable, argv: &Argv, envp: &Envp)
+        -> Result<Infallible, LaunchError>;
+}
+```
+
+`LayoutError` distinguishes `NotBeneath`, `SymlinkRefused`, `NotRegular`,
+`NotExecutable`, `NotElf`, `NoDevice`, and `Absent`. `LaunchError` separately
+distinguishes `FormatRejected`, `PermissionDenied`, and
+`InterpreterUnresolvable`, so an `ENOENT` at open cannot collapse with an
+`ENOENT` returned by `execveat`. Handles are consumed by digest and launch.
+The production implementation is the only workspace code allowed to name
+`openat2`, `execveat`, or `AT_EMPTY_PATH`; the seam itself is hermetic and has
+no syscall implementation.
+
+#### 4.9.8 Component execution and the flat wire field
+
+The in-memory `ComponentExecution` enum has two arms:
+`Launchable { binaryRef }` and `InProcessBootstrap`. The wire representation
+does not change: a present flat `binaryRef` maps to `Launchable`, and an absent
+field maps to `InProcessBootstrap`; serialization performs the inverse and
+omits the field for the bootstrap arm. `BinaryRef` is a validating newtype,
+not a string and not `Option<BinaryRef>`, with the
+`^[a-z][a-z0-9-]*$` grammar and a 64-byte maximum. Its hand-written
+`Deserialize` routes through the parser. No schema or API version bump is
+required. The bootstrap arm is admitted only for the closed `system-core` and
+`system-minijail` Provider exceptions; the executable-map biconditional is
+checked at the artifact boundary.
+
+The four contract-dependent scenarios are
+`nix-build-binary-ref-unresolved`,
+`nix-build-component-execution-invalid`,
+`nix-build-executable-declaration-inconsistent`, and
+`nix-build-manifest-binary-ref-wire-compatible`. The shim obligation gates
+`nix-build-elf-shim-satisfies-the-layout`. The remaining layout checks are
+independently testable without either obligation.
 
 ---
 
@@ -3604,6 +3875,7 @@ Three ordered phases validate the Nix configuration before a bundle is activated
 | `type = "Provider"` without a `spec.artifactId` field is rejected | Nix `assert` | eval error |
 | `spec.artifactId` value must name an entry in `d2b.artifacts.*` (attrset key lookup at eval time) with `type = "provider"` - Provider only | Nix `assert` | eval error if ID absent from catalog |
 | Provider spec contains no field other than `artifactId` and `config`; signed-manifest fields such as `exports`, `components`, `dependencies`, `permissionClaims`, `upgradePolicy`, and `restartPolicy` are not resource fields | Strict generated Provider ResourceSpec plus Nix `assert` | eval error with message |
+| Provider artifact package resolves to one Nix output, carrying evidence of selection when the derivation has more than one (§4.9.1 predicate over `outputs`, `outputSpecified`, and `outputName`; `package.all` MUST NOT be read) - Provider only | Nix `assert` in `provider-catalog.nix` | `provider-artifact-output-ambiguous` or `provider-artifact-output-shape-unknown`, naming the artifact ID and declared output names |
 
 #### Phase 2 - Nix build (impure; runs on `nixos-rebuild build` and `nix build`)
 
@@ -3611,11 +3883,20 @@ Three ordered phases validate the Nix configuration before a bundle is activated
 | --- | --- | --- |
 | Each resource's `spec` validated against the ResourceTypeSchema for its `type`; canonical JSON compared against schema (`genSchemaOptions` emits Phase 1 Nix options; Phase 2 performs the definitive comparison against the committed schema JSON) | Resource compiler | build failure naming type and failing field |
 | `spec.artifactId` names an existing `d2b.artifacts.<id>` catalog entry with `type = "provider"` - Provider only | Resource compiler | build failure: "artifact ID not found or wrong type" |
-| Artifact catalog entry has required derivation outputs (manifest, config schema, executable) - Provider only | Resource compiler | build failure |
+| Required derivation paths present per section 4.9.2 (`share/d2b/provider/provider-manifest.json`, `provider-manifest.json.sig`, `config-schema.json`) - Provider only | Resource compiler | `provider-required-output-absent`, naming the layout-relative path |
+| Each of those three paths is a regular file, established by anchored `openat2` with `RESOLVE_NO_SYMLINKS` plus `fstat` on the descriptor (section 4.9.7) - Provider only | Resource compiler | `provider-required-output-not-regular`, naming the path and observed file type |
+| `provider-manifest.json` and `config-schema.json` octets equal their own `d2b-cjson/v1` canonical bytes - Provider only | Resource compiler | `provider-manifest-not-canonical`, naming the file, first divergent byte, and remediation |
+| `bin/` entry set equals the signed manifest's `package.executableDigests` key set; each entry is a regular file - Provider only | Resource compiler | `provider-executable-set-mismatch` or `provider-executable-not-regular` |
+| Every `bin/` entry is an `ET_EXEC` or `ET_DYN` ELF64 image, established by a bounded 18-octet prefix read of the already-open descriptor (section 4.9.3) - Provider only | Resource compiler | `provider-executable-not-elf`, naming the entry and first four octets as hex |
+| Every `bin/` directory entry name matches `^[a-z][a-z0-9-]*$`, is at most 64 bytes, and is valid UTF-8, checked as read from the directory (section 4.9.3) - Provider only | Resource compiler | `provider-executable-name-invalid`, naming the entry and grammar |
+| `bin/` does not exist with zero entries; a Provider with no executables ships no `bin/` and an empty `package.executableDigests` - Provider only | Resource compiler | `provider-executable-set-empty` |
+| Every component `binaryRef` is a key of `package.executableDigests` - Provider only | Resource compiler | `provider-binary-ref-unresolved`, naming the component and ref |
+| Each `bin/<name>` SHA-256 equals its `package.executableDigests` value - Provider only | Resource compiler | `provider-digest-mismatch`, naming the binary and both digest values in full |
+| Operator-authored catalog digests, manifest-declared digests, and compiler-recomputed digests agree pairwise (section 4.9.5) - Provider only | Resource compiler | `provider-digest-mismatch`, naming the two disagreeing sources and both values |
 | Artifact catalog `configSchemaDigest` matches SHA-256 of schema file in derivation output - Provider only | Resource compiler | build failure |
 | Operator `spec.config` passes JSON Schema validation against catalog-resolved config schema - Provider only | Resource compiler | build failure naming failing field and schema path |
 | Artifact catalog `manifestDigest` matches SHA-256 of manifest file in derivation output - Provider only | Resource compiler | build failure |
-| Artifact manifest signature chain valid against installed trust store - Provider only | Resource compiler | build failure |
+| Artifact manifest signature chain valid against installed trust store - Provider only | Resource compiler | one of `provider-signature-publisher-unregistered`, `provider-signature-id-unresolvable`, `provider-signature-malformed`, `provider-signature-verification-failed` (section 4.9.6) |
 | Artifact `conformanceAttestationDigest` present in known attestation store - Provider only | Resource compiler | build failure |
 | No duplicate `d2b.artifacts.<id>` entries (IDs are unique across the catalog) | Resource compiler | build failure naming duplicate ID |
 | All declared dependency aliases resolve within the same Zone's Providers - Provider only | Resource compiler | build failure naming unresolved alias |
@@ -3977,6 +4258,25 @@ Rollback atomically:
 | `nix-build-config-schema-failure` | Provider config field of wrong type fails build with field path in error |
 | `nix-build-schema-digest-mismatch` | Schema file with SHA-256 not matching `configSchemaDigest` in artifact catalog fails build |
 | `nix-build-manifest-digest-mismatch` | Manifest file with SHA-256 not matching `manifestDigest` in artifact catalog fails build |
+| `nix-build-required-outputs-missing` | A Provider derivation missing any of `share/d2b/provider/provider-manifest.json`, `provider-manifest.json.sig`, or `config-schema.json` fails build naming the absent relative path |
+| `nix-build-manifest-signature-invalid` | Four distinct cases fail with four distinct codes: unregistered publisher, unresolvable `signatureId`, a `.sig` that is not exactly 64 octets, and 64 well-formed octets that do not verify |
+| `nix-build-layout-entry-unexpected` | A derivation with a fourth entry under `share/d2b/provider/` fails build naming it; a derivation with exactly the three required entries succeeds; many extra entries report a bounded sample and true count |
+| `nix-build-required-output-not-regular` | Each required provider file, replaced by a symlink (including a same-output symlink and a procfs-style magic link), directory, FIFO, Unix socket, or device node, fails with its path and observed type; FIFO open is nonblocking and the seam records `RESOLVE_NO_MAGICLINKS` |
+| `nix-build-manifest-not-canonical` | A manifest or config schema with non-canonical bytes, including a trailing newline, fails naming the file, first divergent byte, and `d2b-provider-toolkit manifest emit --out` remediation without an absolute path |
+| `nix-build-executable-set-mismatch` | `package.executableDigests` keys unequal to the `bin/` entry set fail with sorted side-labelled samples and the true mismatch count, within the 512-byte bound |
+| `nix-build-executable-set-empty` | A derivation with an empty `bin/` directory fails, while an artifact with no `bin/` and an empty executable map succeeds |
+| `nix-build-executable-name-invalid` | A `bin/` entry violating `^[a-z][a-z0-9-]*$`, the 64-byte bound, UTF-8, or the traversal/control/whitespace restrictions fails naming the directory entry |
+| `nix-build-executable-not-regular-file` | A `bin/` entry that is a symlink, magic link, directory, FIFO, socket, or device node fails naming the entry and records the anchored resolve mask |
+| `nix-build-executable-not-elf` | A `bin/` entry that is a shebang script, empty/short file, `ET_REL`, or `ET_CORE` image fails naming the entry and first four octets as hex, with the ELF shim remedy |
+| `nix-build-executable-not-executable` | Byte-identical valid `ET_DYN` files at modes `0644` and `0755` prove the former fails on execute bits and the latter succeeds |
+| `nix-build-elf-shim-satisfies-the-layout` | The framework ELF shim accepts a same-output interpreter link, rejects escaping/absolute/`..`/magic/overlong chains and invalid terminuses, walks the program independently, validates its own output, and launches only through anchored fd resolution |
+| `nix-build-component-execution-invalid` | A non-bootstrap Provider component omitting `binaryRef` fails with `provider-component-execution-invalid` naming the component; a bootstrap exception omission succeeds; an invalid non-bootstrap bootstrap arm fails |
+| `nix-build-executable-declaration-inconsistent` | Empty executable digests with a launchable component and non-empty digests with no launchable component both fail without naming a component |
+| `nix-build-manifest-binary-ref-wire-compatible` | A flat `binaryRef` descriptor parses and round-trips byte-identically; a reference violating the executable-name grammar fails during deserialization |
+| `nix-build-binary-ref-unresolved` | A component `binaryRef` absent from `package.executableDigests` fails naming the component and ref |
+| `nix-build-executable-digest-mismatch` | A `bin/` file whose SHA-256 differs from its manifest value fails naming the binary and both full digests |
+| `nix-build-catalog-manifest-disagreement` | Operator catalog, signed manifest, and compiler-recomputed digests disagreeing on any pinned value fail naming the two sources and both values |
+| `nix-build-provider-error-redaction` | No Provider artifact failure contains an absolute path, `/nix/store`, key material, manifest/config content, or process data, and every message stays within 512 bytes |
 | `nix-build-resourcetype-collision` | Two Providers in the same Zone exporting the same short ResourceType name fail build |
 | `nix-build-bundle-sorted` | Emitted `resources` array is sorted by `(type, name)` ascending |
 | `nix-build-content-hash-stable` | Same Nix config on two builds produces identical `contentHash` |
@@ -3995,6 +4295,7 @@ Rollback atomically:
 | `nix-runtime-zone-mismatch-rejected` | Bundle with `zone != Zone self-resource name` is rejected |
 | `nix-runtime-activation-nonblocking` | New generation activates and serves requests before cleanup of prior generation completes |
 | `nix-runtime-provider-config-invalid-continues` | Provider `config` failing schema re-check sets `Failed` with `ConfigValid=False` condition but does not block other resources from activating |
+| `nix-runtime-launcher-anchored-resolution` | The launcher resolves only `bin/<binaryRef>` beneath the anchored artifact dirfd, with no `PATH` or manifest-path fallback; symlink, magic-link, directory, FIFO, socket, device, and escape cases fail before process creation, a non-image is reported by `execveat`, `EACCES` maps to `LaunchError::PermissionDenied`, and open-time `ENOENT` remains distinct from exec-time `InterpreterUnresolvable`; every opened descriptor is `O_CLOEXEC` and no descriptor reaches the child |
 
 #### Cleanup tests
 
@@ -4294,7 +4595,7 @@ None of the following exist in baseline:
 | Current source | `packages/d2b-realm-router/src/session.rs` (`PeerSession<C>` - `implemented-but-unwired`, baseline `b5ddbed6`; no live call sites in d2bd or d2b - only reachable through `realm_stubs.rs` dead code in d2bd); `packages/d2b-realm-router/src/secure_session.rs` (`SecurePeerSession<C>`, Noise-based - `implemented-but-unwired`); `packages/d2b-realm-router/src/mux_session.rs` (`MuxSession<C>` - `implemented-but-unwired`); `packages/d2b-realm-router/src/session_lifecycle.rs` (`SessionLifecycle`, `SessionPhase` - `implemented-but-unwired`); `packages/d2b-realm-core/src/route_engine.rs` (`RouteTreeEngine`, `admit_advertisement()`, `decide_route()`, `RoutePruneReport` - `implemented-but-unwired`; exported from `d2b_realm_core::lib.rs:122` but zero call sites in live daemon or CLI code, tests only); `packages/d2b-realm-core/src/identity_store.rs` (`RealmIdentityStore`, `EnrollmentRecord`, `ChildKeyPin` - `implemented-and-reachable`); `packages/d2b-realm-core/src/realm.rs` (`RealmPath`, `MAX_REALM_LABELS = 16` - `implemented-and-reachable`); `packages/d2b-realm-core/src/access.rs` (`RealmTransportBinding::{LocalUnixSocket,RemoteRealmTransport,ProviderRealmTransport}` - `implemented-and-reachable` in CLI routing path); ZoneLink resource schema and cursor tables: `ADR-only` |
 | Reuse source | main `a1cc0b2d`: `packages/d2b-session/src/lifecycle.rs`, `d2b-session-unix/src/adapter.rs` for reconnect/transport precedents |
 | Reuse action | adapt |
-| Destination | `packages/d2b-contracts/src/v3/zone_link.rs`; `packages/d2b-core-controller/src/zone_link.rs` |
+| Destination | `packages/d2b-contracts/src/v3/zone_link.rs`; `packages/d2b-core-controller/src/zone_links.rs` |
 | Detailed design | Child-local ZoneLink schema with self-matching `spec.childZoneName` plus same-Zone `spec.transportProviderRef`, `spec.transportSettings`, and `spec.transportCredentials`; at most one uplink resource per non-root Zone and none in local root; child-store cursor/intent state; reconnect loop with exponential backoff; local intent queue (max 256 entries); local child UID change detection; drain finalizer; no reciprocal parent-store resource; compiler-only `parentZone` selects the one allocator owner, while that allocator owns privileged listener/placement/route allocation effects and exposes only a sealed bootstrap/allocation interface. The controller drives the core-owned enrollment-and-session state machine `Unenrolled -> IKpsk2 -> EnrollmentCommitted -> KK -> Ready` (canonical in ADR-046-zone-routing; the FSM itself is implemented by ADR046-zone-routing) and never adapts directly to a steady-state KK session: only `Unenrolled -> IKpsk2` consumes the allocator-issued single-use PSK (once), the sealed enrollment record (child static key-pin) is committed in one durable transaction before the enrolled `Noise_KK_25519_ChaChaPoly_SHA256` handshake, reconnect re-enters at `KK` from `EnrollmentCommitted` without a PSK, and resource-plane traffic is prohibited until `Ready`; the selected transport Provider never selects, negotiates, or reorders the handshake profile. Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt (`SecurePeerSession` Noise model -> the ZoneLink enrollment-and-session state machine above rather than a direct ComponentSession KK session; `SessionLifecycle`/`SessionPhase` -> ZoneLink session reconnect loop and connection detail fields; `Connecting`/`Established` current evidence phases drive `status.connected` and `status.phase` transitions to `Pending`/`Ready`, not direct phase values; `RouteTreeEngine.decide_route()` -> cursor tracking; `RealmIdentityStore` enrollment -> ZoneLink child key-pin and sealed bootstrap record). |
 | Integration | child core-controller zone_link handler; child redb `zone_link_cursors` table; Nix-compiled `parentZone` bootstrap topology; selected parent allocator and route engine through sealed allocation authority; d2b-bus transport resolver; ComponentSession lifecycle |
 | Data migration | Destructive reset; no v2 Realm peer migration |
@@ -4509,7 +4810,7 @@ Evidence class for all: `main-reuse-source`.
 | Dependency/owner | ADR046-zone-control-011, ADR046-zone-control-012, ADR046-zone-control-013; ZoneLink session/admission foundation owner |
 | Current source | main `a1cc0b2d`: `packages/d2b-session/src/lifecycle.rs` (`SessionPhase` 5-phase FSM, `begin_reconnect` window/attempt bounds - lines 9-195); `packages/d2b-realm-router/src/service_v2.rs` (`RealmSessionAuthority::local_controller/gateway_peer`, authority validation rejecting invalid combinations - lines 53-123; `RealmServiceServer::call` wire/request/generation/lifetime/attachment validation - lines 415-497; `RealmServiceLimits` 15 fields - lines 147-181; `RealmAuditEvent`/`RealmAuditOutcome` - lines 236-245); `packages/d2b-realm-router/src/session_lifecycle.rs` (`SessionPhase::{Allocating,TokenMinting,RelayConnecting,DisplayOpening,Running,Stopping,Stopped}`, `fail`/`stop`/`finish_stop`, tests `forward_sequence_reaches_running_then_refuses_to_advance`, `failure_mid_establishment_rolls_into_teardown_and_records_phase`, `stop_is_idempotent`, `finish_stop_without_stopping_is_a_no_op` - lines 31-220); `packages/d2b-client/src/session.rs` (`ComponentSessionConnector` trait - lines 79-86; `NamedStream` lifecycle/close/reset/send/receive - lines 426-576); `packages/d2b-daemon-access/src/component_session.rs` (`connect_component_session()` peer-UID verify + `HandshakeCredentials::Nn` + `TransportKind::LocalUnix` - lines 53-85) |
 | Reuse action | adapt |
-| Destination | `packages/d2b-core-controller/src/zone_link.rs` (ZoneLink handler); `packages/d2b-resource-api/src/admission.rs` (request admission) |
+| Destination | `packages/d2b-core-controller/src/zone_links.rs` (ZoneLink handler); `packages/d2b-resource-api/src/admission.rs` (request admission) |
 | Detailed design | **Selected**: `SessionPhase` 5-phase FSM (from main `d2b-session`) drives ZoneLink session state; `Established` state → `status.connected=true` + ZoneLink `status.phase=Ready`; `Disconnected`/`Reconnecting` states → `status.connected=false` + ZoneLink `status.phase=Pending` (or `Degraded` if degraded capability); session-internal phases are not exposed as `ZoneLink.status.phase` values - only the common Resource phases (`Pending|Ready|Degraded|Failed|Unknown`) appear in `status.phase` (§3.5); `begin_reconnect` window/attempt logic → ZoneLink reconnect loop; `RealmSessionAuthority` local vs gateway pattern → ZoneLink authority types for host-local vs transport-bridge sessions; `RealmServiceServer::call` wire validation (generation, request lifetime, attachment) → Zone API request admission; `RealmServiceLimits` 15 fields → ZoneLink `spec.limits`; `connect_component_session()` Nn peer-UID path → Zone runtime bootstrap ComponentSession; `NamedStream` lifecycle → ZoneLink named-stream operations; session-lifecycle tests ported as ZoneLink phase regression tests. **Excluded ADR45 assumptions**: `RealmSessionAuthority::gateway_peer()` (lines 72-87): gateway custody and `Locality::Remote` + `CredentialCustody::GatewayGuest` are ADR45 realm-gateway patterns; v3 ZoneLink transport is bound by the resolved `spec.transportProviderRef`, `spec.transportSettings`, and `spec.transportCredentials` contract instead. Realm 7-phase `SessionLifecycle` (`Allocating→…→Running→Stopping→Stopped`) is the ADR45 realm-specific lifecycle; ZoneLink uses the 5-phase d2b-session model. `GuestBootstrapPsk`/`GuestSessionCredentialV1`: ADR45 guest bootstrap, excluded. `realm_stubs.rs` `ApiService`/`ApiFrontend` dead code excluded (§16.2). |
 | Integration | Zone runtime startup creates bootstrap ComponentSession using `HandshakeCredentials::Nn` + local domain socket + peer-UID verification (adapted from `connect_component_session`); the child-local ZoneLink handler opens its allocator-bound uplink session using d2b-bus `SessionEngine`, and the parent routes child calls over that session; resource API admission validates requests using the `RealmServiceServer::call` pattern |
 | Data migration | Not applicable; new implementation |
@@ -4617,9 +4918,10 @@ Evidence class for all: `main-reuse-source`.
 | Reuse action | create |
 | Destination | `packages/d2b-resource-compiler/src/{main,bundle,schema,validator,digest,sort,secret_lint,generation}.rs`; exposed as `pkgs.d2b-resource-compiler`; called from `nixos-modules/resource-compiler.nix` |
 | Detailed design | Implement all Phase 2 build-time checks (§14.10 Phase 2 table): dispatch on `type` to look up ResourceTypeSchema; validate each resource's `spec` canonical JSON against the committed schema (build validation compares canonical rendered JSON against ResourceTypeSchema for each core type); compile the `d2b.artifacts.*` catalog: for each entry, build/include the derivation, verify `type` is a recognized value, compute `digest` over the derivation output, extract and hash manifest and config schema files, validate signature chain and conformance attestation; detect duplicate artifact IDs; for each Provider resource, look up `spec.artifactId` in the compiled catalog (build failure if absent or wrong type), verify `configSchemaDigest` matches schema SHA-256, validate operator `spec.config` against loaded JSON Schema using a pure-Rust validator bundled in the derivation, verify `manifestDigest` and signature chain, and retain manifest-derived properties (`exports`, `components`, `dependencies`, `permissionClaims`, `upgradePolicy`, `restartPolicy`) only in the private integrity-pinned artifact catalog entry read by core ProviderDeployment, never in the canonical Provider resource envelope; emit that private catalog (ID → type/digest/closure/manifest metadata) as a separate private file, never merged into the public resource bundle; check `spec.rules[*].resourceTypes` against installed Provider catalogs in the bundle (Role); verify `spec.roleRef` names an existing Role in the bundle (RoleBinding); verify `spec.subjects[*]` names resolve in bundle (RoleBinding); check ResourceType short-name collision across all Zone Providers; RFC 8785 canonical JSON serialization; `contentHash` computation over the sorted `resources` array; `artifactCatalogDigest` copy from the site artifact catalog; inline-secret heuristic lint (`--strict-secrets` flag); emit `resource-bundle.json` bundle with all fields per §14.9 |
+| Provider artifact selection and layout | Resolve one explicitly evidenced Nix output at Phase 1, then inspect only the fixed section 4.9.2 paths at Phase 2; refuse extra entries, non-regular files, non-ELF or non-executable binaries, set mismatches, digest disagreements, invalid signatures, non-canonical JSON, unresolved `binaryRef`, and all failure-taxonomy violations before emitting the private catalog |
 | Integration | Reads from `d2b.zones.<zone>.resources.*` (ADR046-zone-control-014) and emits the immutable bundle consumed by ADR046-zone-control-001. This build-time work assigns or stores no runtime generation ordinal; ADR046-routing-013 assigns the next ordinal during activation and persists it in the sole durable `generation.json` commit. |
 | Data migration | Full reset; no prior bundle state exists to carry forward |
-| Validation | All Phase 2 build tests in §15.8 (`nix-build-artifact-id-missing-from-catalog`, `nix-build-artifact-wrong-type-rejected`, `nix-build-duplicate-artifact-id`, `nix-build-artifact-store-path-absent-from-bundle`, `nix-build-artifact-store-path-absent-from-config`, `nix-build-config-schema-failure`, `nix-build-schema-digest-mismatch`, `nix-build-manifest-digest-mismatch`, `nix-build-resourcetype-collision`, `nix-build-bundle-sorted`, `nix-build-bundle-digest-stable`, `nix-build-per-resource-digest-correct`, `nix-build-credential-ref-survives-build`, `nix-build-inline-secret-lint-warning`, `nix-build-inline-secret-strict-failure`) |
+| Validation | All Phase 2 build tests in §15.8 (`nix-build-artifact-id-missing-from-catalog`, `nix-build-artifact-wrong-type-rejected`, `nix-build-duplicate-artifact-id`, `nix-build-artifact-store-path-absent-from-bundle`, `nix-build-artifact-store-path-absent-from-config`, `nix-build-config-schema-failure`, `nix-build-schema-digest-mismatch`, `nix-build-manifest-digest-mismatch`, `nix-build-required-outputs-missing`, `nix-build-layout-entry-unexpected`, `nix-build-required-output-not-regular`, `nix-build-manifest-signature-invalid`, `nix-build-manifest-not-canonical`, `nix-build-executable-set-mismatch`, `nix-build-executable-set-empty`, `nix-build-executable-name-invalid`, `nix-build-executable-not-regular-file`, `nix-build-executable-not-elf`, `nix-build-executable-not-executable`, `nix-build-elf-shim-satisfies-the-layout`, `nix-build-provider-error-redaction`, `nix-build-component-execution-invalid`, `nix-build-executable-declaration-inconsistent`, `nix-build-manifest-binary-ref-wire-compatible`, `nix-build-binary-ref-unresolved`, `nix-build-executable-digest-mismatch`, `nix-build-catalog-manifest-disagreement`, `nix-build-resourcetype-collision`, `nix-build-bundle-sorted`, `nix-build-content-hash-stable`, `nix-build-artifact-catalog-digest-anchored`, `nix-build-credential-ref-survives-build`, `nix-build-inline-secret-lint-warning`, `nix-build-inline-secret-strict-failure`) and the Phase 1 eval tests `nix-eval-provider-output-ambiguous`, `nix-eval-provider-output-shape-accepted`, and `nix-eval-provider-output-shape-unknown`. `nix-build-binary-ref-unresolved`, `nix-build-component-execution-invalid`, `nix-build-executable-declaration-inconsistent`, and `nix-build-manifest-binary-ref-wire-compatible` are blocked until the ComponentDescriptor execution field and flat-wire parser land; `nix-build-elf-shim-satisfies-the-layout` is blocked until the framework shim exists. The remaining layout scenarios are independently testable as enumerated in §4.9.8 |
 | Removal proof | No current equivalent; additive only; no prior code removed |
 | Implementation state | Planned |
 | Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
@@ -4633,11 +4935,12 @@ Evidence class for all: `main-reuse-source`.
 | Current source | `packages/d2bd/src/lib.rs` lines 1408 and 16741 (`RealmControllersJson` load - live active generation load pattern); `nixos-modules/realm-controller-config-json.nix` (current config bundle emit to `/etc/d2b/`); `packages/d2b-realm-core/src/allocator_engine.rs` (generation/activation pattern); `packages/d2b-core/src/unsafe_local_workloads.rs:16-164` (`MAX_UNSAFE_LOCAL_WORKLOADS=256`, etc. - bounds reference for Credential/Host cleanup) |
 | Reuse source | main `a1cc0b2d`: `packages/d2b-session/src/lifecycle.rs` `begin_reconnect` exponential backoff logic (cleanup retry); `packages/d2b-state/` lock/lease types (ADR046-store-001 dependency for bundle file locking) |
 | Reuse action | adapt |
-| Destination | `packages/d2b-core-controller/src/configuration.rs` (Phase 3 activation, diff, delete dispatch); `packages/d2b-core-controller/src/cleanup.rs` (pending tracking, status, stuck detection, rollback verb handler) |
+| Destination | `packages/d2b-core-controller/src/configuration/{mod,bundle_apply,generation_transition}.rs` (Phase 3 activation, diff, delete dispatch); `packages/d2b-core-controller/src/cleanup.rs` (pending tracking, status, stuck detection, rollback verb handler) |
 | Detailed design | Implement all Phase 3 runtime activation checks (§14.10 Phase 3 table); `contentHash` and `artifactCatalogDigest` integrity verify; `zoneUid` consistency check; `contentHash`-identity no-op check; atomic generation advance - the durable `generation.json` commit, including the next `configurationGeneration` ordinal, is owned by the sole durable writer ADR046-routing-013. After that commit returns, this work item idempotently records the committed ordinal and active `contentHash` in redb `store_meta` in a separate transaction before request admission or diff application; restart reconciles that pointer from committed `generation.json` before serving. It does not write `generation.json` independently and claims no cross-file/redb transaction; diff computation (resources with `managedBy=configuration` absent from new bundle → async Delete; `managedBy=controller`/`managedBy=api` resources untouched); `managedBy` and `configurationGeneration` field maintenance on resources in redb store; `cleanupPendingCount` and `generationCleanupPending` maintenance; Zone.status.phase → Degraded while cleanup pending, reverts on completion; `GenerationCleanupPending`/`GenerationCleanupFailed` condition management; stuck-cleanup `GenerationCleanupFailed=True` at `cleanupStuckThreshold` (default 5 min) with exponential backoff retry; prior generation bundle retention and pruning up to configured `retainedGenerations` (default 3, range 1..16); audit emission for all four cleanup audit kinds (§14.11); `zone.config-rollback` verb handler Primary reuse disposition: `adapt`. Preserved source-plan detail: extract exponential backoff from `begin_reconnect`. |
+| Provider launcher boundary | Resolve `bin/<binaryRef>` only beneath the anchored artifact dirfd, use the injectable `AnchoredDir`/`ProcessLauncher` seam, preserve `O_CLOEXEC`, distinguish open-time `Absent` from exec-time `InterpreterUnresolvable`, and fail closed on symlink, magic-link, non-regular, escape, format, or permission outcomes |
 | Integration | Zone store / redb (ADR046-store-001); core-controller watch/trigger bus (ADR046-zone-control-011); Zone status writer (ADR046-zone-control-001); audit emitter (§13.2); Credential revocation hook (triggered when `deletionRequestedAt` is set on a Credential and `core.credential-revoke` finalizer is present; revocation completes before finalizer clearance) |
 | Data migration | Full reset; no prior bundle activation state exists to carry forward |
-| Validation | All Phase 3 runtime and cleanup tests in §15.8 (`nix-runtime-bundledigest-integrity`, `nix-runtime-generation-monotone`, `nix-runtime-zoneuid-mismatch-rejected`, `nix-runtime-zonename-mismatch-rejected`, `nix-runtime-activation-nonblocking`, `nix-runtime-provider-config-invalid-continues`, all `cleanup-*` and `rollback-*` tests) |
+| Validation | All Phase 3 runtime and cleanup tests in §15.8 (`nix-runtime-content-hash-integrity`, `nix-runtime-same-content-hash-noop`, `nix-runtime-zoneuid-mismatch-rejected`, `nix-runtime-zone-mismatch-rejected`, `nix-runtime-activation-nonblocking`, `nix-runtime-provider-config-invalid-continues`, `nix-runtime-launcher-anchored-resolution`, all `cleanup-*` and `rollback-*` tests) |
 | Removal proof | `d2bd/src/lib.rs` config-load at lines 1408 and 16741 removed after Zone configuration publication handler reaches parity; `realm-controller-config-json.nix` and `realm-identity-config-json.nix` Nix bundle-emit removed after resource compiler reaches parity |
 | Implementation state | Planned |
 | Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |

@@ -178,7 +178,12 @@ compromised build pipeline, or a Provider process compromised at runtime
   Provider dossier); canonical Provider spec is exactly `{ artifactId; config
   }` with all other properties resolved from the signed manifest (D075).
 - **Detection:** build-time signature chain verification (RZC lines
-  2731-2735); runtime trust/conformance re-validation at activation;
+  2731-2735), with distinct outcomes
+  `provider-signature-publisher-unregistered`,
+  `provider-signature-id-unresolvable`, `provider-signature-malformed`, and
+  `provider-signature-verification-failed`; anchored `openat2` resolution
+  (RZC section 4.9.7) closes the check-to-use window between file verification
+  and the compiler or launcher read; runtime trust/conformance re-validation at activation;
   `PackageTrusted` condition (`trusted|revoked|expired-epoch|
   attestation-failed|conformance-failed`, RZC lines 671-683, 1753-1778).
 - **Recovery:** quarantine (not deletion) on trust/conformance failure - all

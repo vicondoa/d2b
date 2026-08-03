@@ -704,6 +704,12 @@ is what exposed the gap.
 
 ### 12.2 Specification gap: the required derivation outputs have no path, name, or layout
 
+**Disposition: closed by accepted ADR 0050 and its applied amendment.** The
+historical audit below records the pre-amendment state. Section 4.9 of
+`ADR-046-resources-zone-control.md` now fixes the output-selection predicate,
+the complete relative layout, the executable set, digest preimages, and the
+failure taxonomy.
+
 **Unimplementable as specified.** The Phase 2 row above names three required
 derivation outputs - manifest, config schema, executable - and specifies no
 path, no filename, no Nix output name, and no directory layout for any of them.
@@ -750,6 +756,10 @@ section 11's row closes; if rejected, the term stays open behind the amendment
 above.
 
 ### 12.3 Specification gap: the required-outputs rule has no conformance scenario
+
+**Disposition: closed by the applied amendment.** The section 15.8 Phase 1,
+Phase 2, and Phase 3 tables now carry the named Provider artifact and launcher
+scenarios, and work items 015 and 016 cite them.
 
 Smaller, and independent of whether 12.2 is amended.
 
@@ -840,10 +850,10 @@ digests.
 | Finding | Class | Owning wave |
 | --- | --- | --- |
 | Output obligation mislocated to `provider-catalog.nix`; the derivation-contents rule is `ADR046-zone-control-015` | Correction to this register | Recorded, no wave work |
-| Required derivation outputs have no path, filename, output name, or layout | Specification gap | Amendment, before `ADR046-zone-control-015` in W5 |
-| Output cardinality not checkable: no Provider crate has a package output, so the crate-to-output relation does not exist in the tree | Unmet obligation, blocked | Behind the amendment above |
+| Required derivation outputs have no path, filename, output name, or layout | Specification correction | Closed by accepted ADR 0050 and its applied amendment |
+| Output cardinality not checkable: no Provider crate has a package output, so the crate-to-output relation does not exist in the tree | Unmet obligation, blocked | Closed by the section 4.9.1 artifact-entry predicate |
 | `d2b.artifacts.<id>.package` typed `types.package` already enforces the cardinality at the one entry point | Inference, needs confirm or reject | W3 panel |
-| Required-outputs row has no conformance scenario in the section 15.8 Phase 2 table | Specification gap | Same amendment |
+| Required-outputs row has no conformance scenario in the section 15.8 Phase 2 table | Specification correction | Closed by the applied amendment |
 | Catalog names component and descriptor digests; contract names exported schema and service digests; section 4.3.1 names neither | Ruling needed, three-way | Amendment, before the Provider packaging surface is treated as frozen |
 | Five catalog facts absent from the manifest; one contract field absent from the catalog | Unmet obligation, pinned as data | `ADR046-provider-002`, closes when the ruling above lands |
 
@@ -2005,6 +2015,12 @@ stays open and visible until a runner exists.
 
 ### 19.7 `ADR046-zone-control-015` stays blocked pending an amendment
 
+**Disposition: closed by the accepted ADR 0050 amendment.** The item remains
+implementation work owned by W5, but it is no longer blocked on an absent
+derivation contract; the applied section 4.9 and section 15.8 scenarios are
+the contract it consumes. The dependent 016 and 021 records may likewise cite
+the corrected Phase 3 launcher and configuration scenarios.
+
 **The ruling.** The item is **not** delivered in W5 on invented facts. Section
 12.3 and the required-outputs register row already record the gap: the required
 derivation outputs have no path, filename, output name, or layout anywhere in the
@@ -2069,7 +2085,8 @@ their validation evidence rather than a criticism of it.
 - Three **unmet obligations**: the ChangeBatch fan-out coverage gap that the
   canonical RSS fixture cannot exercise (19.5), the latency targets that no
   runner can measure (19.6), and the standing debt table in 19.9.
-- One **specification gap** carried forward: derivation output layout (19.7).
+- The derivation output layout gap (19.7) is closed by accepted ADR 0050 and
+  its applied amendment.
 - The security-key backing-set gap (19.8) is discharged by ADR 0051 Amendment A.
 - Three **inferences** a reviewer should confirm: per-round prep against the
   one-snapshot requirement (19.1) and the `redb` dependency placement (19.4).
