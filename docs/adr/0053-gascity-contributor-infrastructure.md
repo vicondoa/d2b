@@ -563,13 +563,33 @@ wrote it.
 
 **The standalone cutover is gated before dispatch, not after.** The panel
 refuses to dispatch its seats when no supported resolver is present, so the
-failure costs a preflight rather than ten reviews. Its typed error names four
-things, because an error that names fewer leaves the contributor guessing which
-of them changed: the required mechanism, `StandaloneHarnessReceipt`; the
-preflight command, `node scripts/copilot/check-bindings.mjs`; the current and
-supported harness version, or the fact that no resolver was found; and the
-upgrade and retry action. Partially running the panel and failing at admission
-is specifically what this gate exists to prevent.
+failure costs a preflight rather than ten reviews. Partially running the panel
+and failing at admission is specifically what this gate exists to prevent.
+
+**Resolution goes through an injected interface, not a hardcoded process.**
+Preflight and admission both take a `HarnessReceiptResolver` as a parameter:
+an interface that maps an opaque receipt locator to a resolved binding or to a
+typed failure. The production adapter implements it against the harness or
+session resolver; tests inject a mock. Nothing in the verifier opens a fixed
+socket path or shells a fixed process, because a hardcoded dependency is
+untestable exactly where the security property lives, and every negative case
+below would otherwise need a real broken harness to reproduce.
+
+**Failures are distinct variants, not one invalid-state error**, because the
+remedies differ and a single error forces the contributor to guess which one
+applies:
+
+| Variant | Remedy it names |
+| --- | --- |
+| `HarnessResolverMissing` | Install or configure a supported resolver; run the preflight |
+| `HarnessVersionUnsupported { current, supported }` | Upgrade to the pinned Copilot CLI version, both values shown |
+| `HarnessReceiptUnresolvable` | The locator did not resolve; re-run the round so the harness issues a fresh receipt |
+| `HarnessReceiptBindingMismatch` | The resolved binding contradicts the record; the panel must be re-run under the pinned binding |
+| `SelfAssertedBindingRejected` | A record supplied binding strings instead of a locator; update the adapter to capture the receipt |
+
+Between them these name the required mechanism, the preflight command
+`node scripts/copilot/check-bindings.mjs`, the current and supported harness
+version where that is what failed, and the upgrade or retry action.
 
 No round manifest is added to xtask. The gate refuses any set containing a
 finding and has no round concept, so **rounds stay in the producer**: Gas City
@@ -656,6 +676,22 @@ distinguishes the two cases it can actually be in:
   operator whose manifest predates the branch is told to produce a current one
   rather than left to guess.
 
+**A crash between push and pull request is recoverable without forcing.** Before
+pushing, and again after a lease failure, the publisher reads the remote
+branch's current target and compares it against two values it already holds:
+
+- **already `<full-sha>`** - the push completed before the crash. The publisher
+  treats the push as done and continues to create-or-edit the pull request.
+- **the manifest's `expected_previous_remote_sha`** - the branch is where the
+  manifest expected, so the leased update proceeds.
+- **anything else** - a stale lease refusal with the remedy above.
+
+This read recognises an already-completed target; it is **never** used to
+manufacture a new expected sha. The distinction is the whole point: adopting
+whatever the remote currently holds as "expected" is the fresh-read mistake D9
+rejects, while recognising that the remote already holds the exact sha we were
+asked to publish is idempotency.
+
 Retry is safe in both paths. The publisher looks for an existing pull request
 by head branch, creates one if absent and edits the body if present, so a
 retried publication converges rather than failing or duplicating.
@@ -673,6 +709,13 @@ passed; the sender opens it safely and **closes its own copy immediately after
 `sendmsg` returns, unconditionally, on success and on failure alike**; the
 receiver takes it with `MSG_CMSG_CLOEXEC` and owns and closes it; and unbounded
 descriptor reception is refused.
+
+**A refusing receiver still owns what arrived.** When a message carries an
+unexpected descriptor, a duplicate, or more than one, the receiver iterates
+**every** control message in the received set and closes **every** descriptor
+it finds before returning its typed refusal. Refusing without draining leaks
+precisely the descriptors an attacker chose to send, which turns a validation
+check into a resource exhaustion path.
 
 The unconditional close matters more than the success path does. Ownership
 transfers only if the descriptor was actually received, so a `sendmsg` that
@@ -945,8 +988,17 @@ component, operation, producer or provider class where that class is itself
 bounded, outcome, and typed error code. An arbitrary string is refused as a
 label value even when it carries nothing sensitive, because unbounded
 cardinality is its own failure: a label whose domain is a run id or a branch
-name degrades the metric backend regardless of what the string says. Free-form
-detail belongs in a bounded log line or an audit record, never in a label.
+name degrades the metric backend regardless of what the string says.
+
+**No surface is a catch-all for what the label could not hold.** An audit
+record carries only fixed digests, closed enum values, bounded numeric and
+timestamp fields, and schema-defined bounded text in the specific fields where
+redaction has been reviewed and approved. Raw run ids, branch names and other
+opaque values are never carried by any of them. Ordinary log lines are bounded
+and redacted under the same rules rather than being the place free-form detail
+is allowed to land. An earlier revision said detail belonged in a log line or
+an audit record instead of a label; that made the audit trail the dumping
+ground for exactly the values the label rule exists to exclude.
 
 The scan reports the number of records, log lines and error strings examined,
 fails closed on an empty corpus, and ships one planted control per category
@@ -1311,9 +1363,21 @@ and it ships planted violations it must reject.
   manifest's expected sha, the current remote sha and the intervening commits;
   the documented remedy is to reconcile through the integration route and rerun
   `d2b-gc publish <run-id>`. The missing-expected-state error names how to
-  regenerate the manifest from the current approved candidate. Neither output
-  contains a force instruction without a lease, asserted by scanning the
-  rendered error text.
+  regenerate the manifest from the current approved candidate.
+
+  Neither output contains a force instruction without a lease, asserted by
+  scanning the rendered error text over a **counted, non-empty** corpus of
+  rendered errors. A planted error string carrying an unleased force
+  instruction is required and must be **rejected** by that scan; a scanner that
+  has never rejected anything has not been shown to detect anything.
+
+  **Crash between push and pull request recovers without forcing.** A crash is
+  injected after the push succeeds and before the pull request is created; the
+  retry reads the remote, finds it already at `<full-sha>`, treats the push as
+  complete and proceeds to create or edit the PR. Separately, a remote sitting
+  at a **third** sha, neither the target nor the manifest's expected value, is
+  **refused** with the stale-lease remedy rather than adopted as a new expected
+  value.
 
   The body arrives as bounded message bytes over the socket or stdin, so a
   planted attempt to swap a file at a caller-supplied path has nothing to
@@ -1321,11 +1385,18 @@ and it ships planted violations it must reject.
   passed, the sender closes its own copy immediately after `sendmsg` returns
   **whether it succeeded or failed**, the receiver takes it with
   `MSG_CMSG_CLOEXEC` and closes it, and a planted attempt to send two or to
-  send an unexpected descriptor is refused. Over a hundred repeated transfers
-  that **include injected `sendmsg` failures**, the open-descriptor count of
-  **both** sender and receiver is observed unchanged from its starting value. A
-  success-only repeat loop does not satisfy this item, because the leak it
-  looks for happens on the failure path.
+  send an unexpected descriptor is refused **with every received descriptor
+  closed**, verified across all control messages in the set rather than only
+  the first.
+
+  The repeated-transfer loop runs a hundred iterations mixing three injected
+  failure classes: `sendmsg` failures on the sender side, and on the receiver
+  side an unexpected descriptor and a duplicate or multiple-descriptor message.
+  After the loop the open-descriptor count of **both** sender and receiver is
+  unchanged from its starting value. A success-only loop, or one that injects
+  only sender failures, does not satisfy this item, because a refusing receiver
+  that forgets to drain leaks exactly the descriptors an attacker chose to
+  send.
   Temporary and handoff state is absent after both a successful and a failed
   run, and a crash mid-publication leaves only state a bounded recovery
   removes.
@@ -1406,13 +1477,25 @@ and it ships planted violations it must reject.
   directly, so a contributor meets the error before starting a round rather
   than during one.
 
-  For the standalone variant specifically: a locator that **resolves** through
-  the authoritative resolver is accepted and its resolved binding is what the
-  verifier uses; a locator that **cannot be resolved** is refused; a locator
-  whose resolved binding **contradicts** the record is refused; and a
-  submission carrying **typed model and effort strings instead of a locator**
-  is refused. Each refusal is its own typed semantic error on a well-formed
-  envelope, not a parse failure.
+  For the standalone variant, resolution runs through an **injected**
+  `HarnessReceiptResolver`, so every case below is driven by a mock rather than
+  by a real broken harness. A locator that **resolves** is accepted and its
+  resolved binding is what the verifier uses. Each failure is asserted to be
+  its own **distinct** variant on a well-formed envelope, not a parse failure
+  and not a shared invalid-state error:
+
+  - no resolver configured returns `HarnessResolverMissing`;
+  - an unsupported harness returns
+    `HarnessVersionUnsupported { current, supported }` carrying both values;
+  - a locator that does not resolve returns `HarnessReceiptUnresolvable`;
+  - a resolved binding contradicting the record returns
+    `HarnessReceiptBindingMismatch`;
+  - a submission carrying model and effort strings instead of a locator returns
+    `SelfAssertedBindingRejected`.
+
+  Each variant's rendered message is asserted to carry its own remedy. A test
+  that accepts any refusal for any of these five cases does not satisfy this
+  item.
 
   The same shape is exercised for the controller variant: evidence absent,
   evidence untrusted, evidence contradicting the record, and a record carrying
