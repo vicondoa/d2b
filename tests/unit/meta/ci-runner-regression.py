@@ -1696,8 +1696,10 @@ esac
             line
             for line in driver.splitlines()
             if 'cargo test --jobs "$D2B_RUST_CARGO_JOBS"' in line
-            and '--test "$bin"' in line
+            and '"$cargo_selector" "$target"' in line
         )
+        self.assertIn("cargo_selector=--test", driver)
+        self.assertIn("cargo_selector=--bench", driver)
         self.assertNotIn("--test-threads", command)
         self.assertFalse(command.rstrip().endswith(" --"))
 
