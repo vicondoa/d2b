@@ -698,25 +698,45 @@ contains the work it was based on. The pinned revision names the migration that
 must be present, not the place to land.
 
 So the pin is used as a **precondition, not a target**. The wrapper's preflight
-fetches `origin/v3` and verifies the required panel migration commit is
-**reachable from** it. If it is not, the wrapper refuses with a typed error
-saying the supported migration is not published yet, which is the honest
-diagnosis: the contributor cannot migrate to something that has not landed, and
-detaching to the pinned SHA to get the files would be a worse outcome than
-waiting.
+fetches the canonical remote and verifies the required panel migration commit
+is **reachable from** `upstream/v3`. If it is not, the wrapper refuses with a
+typed error saying the supported migration is not published yet, which is the
+honest diagnosis: the contributor cannot migrate to something that has not
+landed, and detaching to the pinned SHA to get the files would be a worse
+outcome than waiting.
+
+**`origin` is the contributor's remote and the wrapper never touches it.**
+Canonical `vicondoa/d2b` is reached through a remote named **`upstream`**, URL
+exactly `https://github.com/vicondoa/d2b.git`, and the migration target is
+`upstream/v3`.
+
+An earlier revision had this backwards: it required `origin` to be canonical
+and offered to rename a contributor's fork out of the way. That is withdrawn.
+`origin` is normally the fork a contributor pushes to, so renaming it breaks
+`git push`, any configured upstream tracking, and every habit and script built
+on it, in service of a read-only fetch the wrapper could have done under a
+different name. A migration tool that rearranges someone's push remote to
+perform a rebase has taken far more than it needed. The fork/upstream layout is
+also what a forked-repository workflow already looks like, so for most
+contributors there is nothing to repair at all.
+
+The wrapper reads `upstream` and never writes it. It performs no `git remote
+set-url`, no `git remote rename`, and no automatic remote mutation of any kind;
+where a remote must change, the contributor runs the command.
 
 The wrapper **detects conflicts before it starts**, refusing with the tree
 untouched rather than leaving a half-finished rebase. Its refusals name exact
 commands and mutate nothing:
 
-- **Dirty tree**: run `git status --short`; then either commit the changes, or
-  `git stash push -u -m panel-migrate`; then rerun `make panel-migrate`; and
-  after it succeeds, `git stash pop` if that path was taken.
-- **Conflicting update**: the wrapper **prints the paths it predicts will
-  conflict**. It already computed that list to decide to refuse, so telling the
-  contributor to go run `git status` to rediscover it is asking them to redo
-  work the tool has already done, and `git status` on an untouched tree does
-  not show a conflict that has not happened yet.
+- **Dirty tree** (`DirtyTree`): run `git status --short`; then either commit
+  the changes, or `git stash push -u -m panel-migrate`; then rerun
+  `make panel-migrate`; and after it succeeds, `git stash pop` if that path was
+  taken.
+- **Conflicting update** (`ConflictingUpdate`): the wrapper **prints the paths
+  it predicts will conflict**. It already computed that list to decide to
+  refuse, so telling the contributor to go run `git status` to rediscover it is
+  asking them to redo work the tool has already done, and `git status` on an
+  untouched tree does not show a conflict that has not happened yet.
 
   Those paths are **advisory, for planning only**. A rebase replays commits one
   at a time and stops at whichever subset conflicts at that commit, so the
@@ -730,8 +750,8 @@ commands and mutate nothing:
   The printed sequence is:
 
   ```
-  git fetch origin
-  git rebase origin/v3
+  git fetch upstream
+  git rebase upstream/v3
   ```
 
   Then, **at each rebase stop**: `git status --short`; resolve only the files
@@ -739,68 +759,56 @@ commands and mutate nothing:
   `git rebase --continue`. To abandon the migration at any stop:
   `git rebase --abort`. After the rebase completes: `make panel-migrate`.
 
-  `git fetch origin` rather than `git fetch origin v3`, because the latter
-  updates `FETCH_HEAD` without reliably updating `refs/remotes/origin/v3` on
-  every supported Git configuration, and the next line resolves `origin/v3`. An
-  explicit refspec would work equally well; plain `git fetch origin` is chosen
-  because it behaves the same everywhere and needs no explanation.
+  `git fetch upstream` rather than `git fetch upstream v3`, because the latter
+  updates `FETCH_HEAD` without reliably updating `refs/remotes/upstream/v3` on
+  every supported Git configuration, and the next line resolves `upstream/v3`.
+  An explicit refspec would work equally well; plain `git fetch upstream` is
+  chosen because it behaves the same everywhere and needs no explanation.
 
   No refusal ever prints a rebase onto a pinned or otherwise historical SHA.
   Because detection precedes this explicit operator action, the wrapper itself
   leaves no in-progress rebase behind.
-- **Origin is a fork (`TargetUnavailable`)**: the fetched `origin` carries no
-  `origin/v3` **and** `origin` is not canonical `vicondoa/d2b`. In practice
-  this is the common case: `origin` is the contributor's fork, and the fork has
-  no `v3` branch. The supported migration path requires `origin` to be
-  canonical, because `origin/v3` is what the rebase lands on and a fork's refs
-  are not the protected branch.
-
-  So this refusal is **not** command-free. A bare "restore access" would
-  misdiagnose it as a network fault and send a contributor to debug
-  connectivity that is working. The wrapper refuses with a typed error naming
-  the specific condition, `origin` not canonical, and prints the repair
-  sequence, which **preserves the fork under a different name rather than
-  discarding it**:
+- **Upstream remote missing** (`UpstreamRemoteMissing`): no remote named
+  `upstream` exists. This is the ordinary first-run case for a contributor who
+  cloned their fork, and the repair adds a remote rather than moving one:
 
   ```
-  git remote rename origin fork
-  git remote add origin https://github.com/vicondoa/d2b.git
-  git fetch origin
+  git remote add upstream https://github.com/vicondoa/d2b.git
+  git fetch upstream
   make panel-migrate
   ```
 
-  This path prints **no rebase**. The migration has not been attempted and the
-  target does not yet resolve, so a rebase command here would be a sequence the
-  contributor cannot complete.
+  `origin` is not mentioned, because nothing about it needs to change. This
+  path prints **no rebase**: the target does not resolve yet, so a rebase
+  command here would be a sequence the contributor cannot complete.
 
   The remote URL is a fixed literal carrying **no credentials**: no userinfo
   component, no token, no `x-access-token` form. A remote URL is stored in
   plain `.git/config`, so a credential printed into one is a credential written
   to disk by a tool the contributor trusted.
-- **Repair destination occupied (`ForkRemoteNameTaken`)**: the same condition,
-  with a remote named `fork` already present. The wrapper does not overwrite it
-  and does not silently pick another name. Renaming onto an occupied name
-  fails, and guessing `fork2` hands back a remote layout the contributor never
-  chose. This refusal **mutates nothing and emits no git command**, naming the
-  collision and asking the contributor to rename to a name they pick
-  themselves before rerunning `make panel-migrate`.
-- **Canonical target missing (`CanonicalTargetMissing`)**: `origin` is verified
-  canonical `vicondoa/d2b`, the fetch succeeded, and there is still no
-  `origin/v3`. This is a **different fault from the fork case and must not
-  share its remedy**. The remote layout is already correct, so the four-command
-  repair would tell a contributor to rename and re-add remotes they have set up
-  properly, leaving them worse off and no closer to a target. No change of
-  remote layout repairs a branch that is not there.
+- **Upstream remote mismatch** (`UpstreamRemoteMismatch`): a remote named
+  `upstream` exists with a URL that is not the canonical one. The wrapper
+  performs **no `git remote set-url` and no rename**, and emits no mutating
+  command. Hijacking a remote a contributor configured deliberately, perhaps a
+  mirror or a second project, would be the tool silently deciding it owns a
+  name it merely wanted.
 
-  The wrapper refuses with a typed error carrying **no git command at all**,
-  stating that the canonical protected branch is unavailable or not yet
-  published, and that the remedy is outside the contributor's tree: wait for it
-  to be published, or contact the repository owner. This is deliberately not a
-  generic network or access diagnosis. The fetch worked; what is absent is the
-  branch, and saying so is the whole value of separating this state from the
-  fork case.
+  The refusal prints `git remote get-url upstream` so the contributor can see
+  what is actually configured, prints the expected canonical URL, and asks them
+  to choose a remote arrangement themselves before rerunning
+  `make panel-migrate`. The record does not prescribe which arrangement,
+  because the right answer depends on what that remote is for and only the
+  contributor knows.
+- **Canonical target missing** (`CanonicalTargetMissing`): `upstream` is
+  present with the canonical URL, the fetch succeeded, and there is still no
+  `upstream/v3`. No change of remote layout repairs a branch that is not there,
+  so this refusal carries **no git command at all**. It states that the
+  canonical protected branch is unavailable or not yet published, and that the
+  remedy is outside the contributor's tree: wait for it to be published, or
+  contact the repository owner. This is deliberately not a generic network or
+  access diagnosis. The fetch worked; what is absent is the branch.
 
-A genuine network or access failure still fails at `git fetch origin` and is
+A genuine network or access failure still fails at `git fetch upstream` and is
 reported by Git itself, which already says it better than a wrapper would. What
 this record requires is that every **typed** diagnosis above names its specific
 condition, never a generic access message that covers several and explains
@@ -810,11 +818,11 @@ A future mode that starts a rebase before detecting conflicts would be a
 separate design with the same per-stop remedies. The v1 preflight mode refuses
 with the tree untouched.
 
-Naming `git rebase origin/v3` is safe precisely because the wrapper has already
-determined the conflict and mutated nothing: the contributor is starting the
-rebase deliberately, with the predicted paths in front of them, rather than
-discovering mid-operation that a tool left them in a state they did not ask
-for.
+Naming `git rebase upstream/v3` is safe precisely because the wrapper has
+already determined the conflict and mutated nothing: the contributor is
+starting the rebase deliberately, with the predicted paths in front of them,
+rather than discovering mid-operation that a tool left them in a state they did
+not ask for.
 
 **Redaction is type-level, the type set is closed, and the outer `Debug` is
 derived on purpose.** The governed surface is a **declared closed set of
@@ -903,6 +911,16 @@ rewritten.
 claims from the Gas City caller. Before acting it verifies the controller's
 bound publication manifest and the exact approval against the commit it is
 being asked to push, and refuses on any mismatch.
+
+**Publication remotes are the publisher's, not the contributor's.** The
+publisher pushes from `<handoff-repo>`, a clone it controls under the handoff
+identity, whose `origin` is the canonical repository it was cloned from. That
+`origin` has nothing to do with the remotes in a contributor's working tree,
+which is why `make panel-migrate` leaving `origin` alone costs publication
+nothing: the two never share a repository. A publisher that resolved a remote
+name out of a contributor's checkout would be taking a push target from an
+untrusted layout, so it does not; the handoff clone's remote is established
+when the clone is created and is not read from anywhere else.
 
 **Two push paths, neither of them a bare force.** An unconditional `+` would
 let a concurrent change on the remote be silently discarded, so the publisher
@@ -1956,12 +1974,12 @@ and it ships planted violations it must reject.
   status. Seven is the exact size of the `MigrateContext` corpus, and the test
   asserts that size so a new context cannot be added without a case here:
 
-  - **clean tree**: brings the branch onto current `origin/v3`, carrying the
+  - **clean tree**: brings the branch onto current `upstream/v3`, carrying the
     supported skill and adapter, and the resulting head is asserted to be a
-    descendant of the fetched `origin/v3` rather than of any pinned SHA;
+    descendant of the fetched `upstream/v3` rather than of any pinned SHA;
   - **unpublished migration** (`UnpublishedMigration`): the required panel
     migration commit is planted as **not reachable** from the fetched
-    `origin/v3`. The wrapper refuses with the typed error, emits **no git
+    `upstream/v3`. The wrapper refuses with the typed error, emits **no git
     command**, and mutates nothing;
   - **dirty tree** (`DirtyTree`): refuses, output contains exactly
     `git status --short`, `git stash push -u -m panel-migrate`, the rerun of
@@ -1969,45 +1987,54 @@ and it ships planted violations it must reject.
     afterwards;
   - **conflicting update** (`ConflictingUpdate`): refuses, output contains the
     **predicted would-conflict paths** matched against the known planted set,
-    then `git fetch origin`, `git rebase origin/v3`, the per-stop sequence
+    then `git fetch upstream`, `git rebase upstream/v3`, the per-stop sequence
     `git status --short`, `git add <resolved-paths-for-this-stop>`,
     `git rebase --continue`, the abandon branch `git rebase --abort`, and the
     exact rerun command, and the tree is byte-identical afterwards. An output
     that names `git status` instead of printing the paths fails this case;
-  - **fork on origin** (`TargetUnavailable`): `origin` is planted as a fork
-    with no `origin/v3`. Output is asserted to contain exactly
-    `git remote rename origin fork`,
-    `git remote add origin https://github.com/vicondoa/d2b.git`,
-    `git fetch origin` and the `make panel-migrate` rerun, in that order, and
-    **no rebase command**. The remote URL is asserted to be the exact canonical
+  - **upstream remote missing** (`UpstreamRemoteMissing`): no `upstream` remote
+    is planted. Output is asserted to contain exactly
+    `git remote add upstream https://github.com/vicondoa/d2b.git`,
+    `git fetch upstream` and the `make panel-migrate` rerun, in that order, and
+    **no rebase command**. The URL is asserted to be the exact canonical
     literal with **no userinfo component**, and a planted output carrying a
     credential-bearing URL is rejected. A generic access or connectivity
     message fails this case, because it sends a contributor to debug a working
     network;
-  - **fork remote name taken** (`ForkRemoteNameTaken`): the same fork context
-    with a remote named `fork` already present. The wrapper is asserted to emit
-    **no git command at all**: no rename onto the occupied name, no generated
-    alternative such as `fork2`, and no canonical `git remote add`. It refuses
-    with the typed collision error requiring a manual rename, and the tree and
-    remote layout are unchanged;
-  - **canonical branch missing** (`CanonicalTargetMissing`): `origin` is
-    planted as verified canonical and the fetch resolves **no** `origin/v3`.
-    The wrapper refuses with the typed error, emits **no git command at all**,
-    and the tree is unchanged. The output is asserted **not** to contain the
-    fork repair sequence, in particular no `git remote rename` and no
-    `git remote add`, since the contributor's remotes are already correct and
-    rewriting them repairs nothing. It is also asserted not to render a generic
-    network or access message: the fetch succeeded and the branch is what is
-    absent.
+  - **upstream remote mismatch** (`UpstreamRemoteMismatch`): an `upstream`
+    remote is planted with a non-canonical URL. The wrapper is asserted to emit
+    **no mutating git command**: no `git remote set-url`, no
+    `git remote rename`, no `git remote add`, and nothing touching `origin`. It
+    refuses with the typed error, whose output is asserted to contain
+    `git remote get-url upstream`, the expected canonical URL, and the rerun
+    command. The planted non-canonical URL is asserted **not** to appear in the
+    output, since it is contributor configuration and may itself carry
+    credentials;
+  - **canonical branch missing** (`CanonicalTargetMissing`): `upstream` is
+    planted with the canonical URL and the fetch resolves **no**
+    `upstream/v3`. The wrapper refuses with the typed error, emits **no git
+    command at all**, and the tree is unchanged. The output is asserted **not**
+    to contain the missing-upstream repair, in particular no
+    `git remote add`, since the remote is already correct and re-adding it
+    repairs nothing. It is also asserted not to render a generic network or
+    access message: the fetch succeeded and the branch is what is absent.
 
-  **The three remote states are asserted to be distinct, not merely present.**
-  Each of `TargetUnavailable`, `ForkRemoteNameTaken` and
-  `CanonicalTargetMissing` is asserted to render a command set that the other
-  two do not, and a fixture that renders the fork repair for the canonical
-  case, or any git command for either of the other two, is rejected. Collapsing
-  them into one message is the failure this split exists to prevent: it would
-  tell a contributor with correct remotes to rewrite them, and a contributor
-  with a fork to go wait for a branch that already exists.
+  **`origin` is asserted to be untouched in every context.** No rendered
+  output across the whole corpus may contain `origin` as the object of any
+  command: no `git remote rename origin`, no `git remote set-url origin`, no
+  `git remote remove origin`, no push-remote reconfiguration, and no
+  `origin/v3` ref. A planted output renaming or re-pointing `origin` is
+  rejected. This is the control for the inverted-remote failure: an instruction
+  that reads plausibly and quietly breaks the remote a contributor pushes
+  through.
+
+  **The three upstream states are asserted to be distinct, not merely
+  present.** Each of `UpstreamRemoteMissing`, `UpstreamRemoteMismatch` and
+  `CanonicalTargetMissing` is asserted to render a command set the other two do
+  not, and a fixture that renders the add-upstream repair for either of the
+  other two is rejected. Collapsing them into one message would tell a
+  contributor whose `upstream` is already correct to add it again, and a
+  contributor with a deliberately different remote that the branch is missing.
 
   **The bulk-add shape is asserted to be rejected.** A planted renderer output
   containing a single `git add` whose arguments are the complete predicted
@@ -2030,21 +2057,27 @@ and it ships planted violations it must reject.
     that skips tokens it cannot classify is an audit an unfamiliar flag walks
     straight through. The allowed list covers exactly the commands these
     refusals may print: `git status --short`, `git stash push`, `git stash
-    pop`, `git fetch origin`, `git rebase origin/v3`, `git add`,
-    `git rebase --continue`, `git rebase --abort`, `git remote rename` and
-    `git remote add`;
-  - rejects any ref that is not `origin/v3`, including a foreign remote, a
-    foreign branch and a bare pinned revision;
+    pop`, `git fetch upstream`, `git rebase upstream/v3`, `git add`,
+    `git rebase --continue`, `git rebase --abort`, `git remote add upstream`
+    and `git remote get-url upstream`. `git remote set-url` and
+    `git remote rename` are **not** on the list in any form, because the
+    wrapper never instructs a remote mutation beyond adding a missing one;
+  - rejects any ref that is not `upstream/v3`, including `origin/v3`, a foreign
+    remote, a foreign branch and a bare pinned revision;
+  - rejects any command whose object is `origin`, in any position, so a
+    rendering cannot rename, re-point or remove the contributor's push remote;
   - rejects any URL that is not the exact canonical remote literal, and any URL
     carrying a userinfo component, a token or an `x-access-token` form, on the
     grounds that a remote URL lands in plain `.git/config`.
 
-  Refusals that carry no git command at all - `UnpublishedMigration`,
-  `ForkRemoteNameTaken` and `CanonicalTargetMissing` - are audited for the
-  absence of any git command line, not merely for the absence of a rebase.
+  Refusals that carry no git command at all - `UnpublishedMigration` and
+  `CanonicalTargetMissing` - are audited for the absence of any git command
+  line, not merely for the absence of a rebase. `UpstreamRemoteMismatch` is
+  audited for the absence of any **mutating** command, `git remote get-url`
+  being a read.
 
   **Ordering is asserted as a complete constraint set**, not a membership
-  check: `git fetch origin` before `git rebase origin/v3`; the rebase before
+  check: `git fetch upstream` before `git rebase upstream/v3`; the rebase before
   `git status --short`; the status before `git add`; the add before
   `git rebase --continue`; and the continue before the `make panel-migrate`
   rerun. On the abandon branch, `git rebase --abort` comes after the rebase and
@@ -2053,15 +2086,15 @@ and it ships planted violations it must reject.
 
   Planted negative cases, each asserted to be **rejected**: `--onto=<sha>`;
   `--hard=<sha>`; `--onto <sha>` separated; a foreign ref such as
-  `upstream/main` or `origin/main`; a bare 40-hex revision as the rebase
+  `upstream/main` or `origin/v3`; a bare 40-hex revision as the rebase
   target; a bulk `git add` over the predicted set; an unrecognised git flag;
   and out-of-order renderings, at minimum `git add` before `git status`,
   `git rebase` before `git fetch`, and `git rebase --continue` before the
   rebase. On the target-unavailable path the constraint set is
-  `git remote rename` before `git remote add`, that before `git fetch origin`,
-  and that before the `make panel-migrate` rerun; a rendering that adds the
-  canonical remote before renaming the fork off `origin` is rejected, because
-  it instructs a `git remote add` that fails on an occupied name. The scan
+  `git remote add upstream` before `git fetch upstream`, and that before the
+  `make panel-migrate` rerun; a rendering that fetches `upstream` before adding
+  it is rejected, because it instructs a fetch of a remote that does not exist
+  yet. The scan
   counts the rendered refusals and command lines it examined and fails closed
   on an empty corpus.
 
