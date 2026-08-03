@@ -13,7 +13,7 @@
 
 use d2b_contracts::v3::identity::BindingDigest;
 use d2b_contracts::v3::{
-    Locality, TransportBinding,
+    Locality, ResourceEnvelope, TransportBinding,
     execution_policy::{BoundedToken, ExecutionDomain},
     identity::{ResourceTypeName, SchemaFingerprint, SessionPurpose},
     provider::{
@@ -25,7 +25,8 @@ use d2b_contracts::v3::{
         UpgradeDisposition, UpgradePolicy,
     },
     resource_ref::ResourceRef,
-    resource_schema::{ExtensionSchemaId, SchemaVersion},
+    resource_schema::{ExtensionSchemaId, SchemaVersion, canonical_json_bytes},
+    semantic_services::catalog,
     zone_routing::ZonePath,
 };
 use d2b_provider_toolkit::conformance::{CapabilityMatrix, ConformanceError};
@@ -82,6 +83,21 @@ fn controller(component_id: &str) -> ComponentDescriptor {
     .expect("a controller owning one ResourceType is valid")
 }
 
+fn controller_for_resource(resource_type: &str) -> ComponentDescriptor {
+    ComponentDescriptor::new(
+        BoundedToken::parse("semantic-controller").expect("valid id"),
+        ComponentType::Controller,
+        [ResourceTypeName::parse(resource_type).expect("valid type")],
+        [BoundedToken::parse("assess-update").expect("valid method")],
+        [ExecutionDomain::System],
+        1,
+        ArtifactDigest::parse(DIGEST).expect("valid digest"),
+        [],
+        false,
+    )
+    .expect("a controller owning one ResourceType is valid")
+}
+
 fn binding_for(resource_type: &str) -> ResourceApiBinding {
     ResourceApiBinding::new(
         ResourceTypeName::parse(resource_type).expect("valid type"),
@@ -98,6 +114,58 @@ fn binding_for(resource_type: &str) -> ResourceApiBinding {
         None,
     )
     .expect("a binding is valid")
+}
+
+fn resource_envelope(resource_type: &str, owner_ref: Option<&str>) -> ResourceEnvelope {
+    let owner_ref = owner_ref
+        .map(|owner| format!("\"{owner}\""))
+        .unwrap_or_else(|| "null".to_owned());
+    let json = r#"{
+        "apiVersion": "resources.d2bus.org/v3",
+        "type": "__TYPE__",
+        "metadata": {
+            "name": "resource",
+            "zone": "dev",
+            "uid": "123e4567-e89b-42d3-a456-426614174000",
+            "generation": 1,
+            "revision": 1,
+            "ownerRef": __OWNER__,
+            "finalizers": [],
+            "deletionRequestedAt": null,
+            "createdAt": "2026-07-22T00:00:00.000Z",
+            "updatedAt": "2026-07-22T00:00:00.000Z",
+            "managedBy": "controller",
+            "configurationGeneration": null,
+            "controllerGeneration": null,
+            "providerGeneration": null
+        },
+        "spec": {},
+        "status": {
+            "completedAt": null,
+            "conditions": [],
+            "lastReconciledAt": null,
+            "observedGeneration": 0,
+            "outcome": null,
+            "phase": "Pending",
+            "resource": {},
+            "startedAt": null,
+            "update": {
+                "dependencies": {"count": 0, "refs": []},
+                "disruption": "None",
+                "lastAssessedAt": null,
+                "observedGeneration": 0,
+                "operationId": null,
+                "owned": {"count": 0, "refs": []},
+                "preserveState": true,
+                "reasons": [],
+                "state": "Unknown",
+                "targetGeneration": 1
+            }
+        }
+    }"#
+    .replace("__TYPE__", resource_type)
+    .replace("__OWNER__", &owner_ref);
+    ResourceEnvelope::from_json(json.as_bytes()).expect("valid resource envelope")
 }
 
 fn manifest_with(
@@ -124,6 +192,18 @@ fn manifest_with(
             max_automatic_disposition: UpgradeDisposition::InPlace,
             preserves_durable_state: true,
         },
+    )
+}
+
+fn manifest_for_factory(
+    factory: ProjectionFactory,
+) -> Result<ProviderManifest, ProviderContractError> {
+    let service_type = factory.service_type().as_str().to_owned();
+    manifest_with(
+        trusted(),
+        vec![controller_for_resource(&service_type)],
+        vec![binding_for(&service_type)],
+        vec![factory],
     )
 }
 
@@ -298,6 +378,10 @@ fn a_provider_cannot_smuggle_a_backing_device_or_binding_across_a_zone() {
         Exportability::ExplicitExport,
     )
     .expect("an explicit-export factory is valid");
+    assert_eq!(
+        factory.admits_export_target(&resource_envelope("audio.d2bus.org.AudioService", None)),
+        Ok(())
+    );
     // The one legal export target is the owner Service. A backing Device,
     // the Binding expressing local consumer intent, and an unrelated
     // Credential are all refused.
@@ -306,11 +390,19 @@ fn a_provider_cannot_smuggle_a_backing_device_or_binding_across_a_zone() {
         "audio.d2bus.org.AudioBinding/desk",
         "Credential/keyring",
     ] {
+        let resource_type = ResourceRef::parse(smuggled)
+            .expect("valid ref")
+            .resource_type()
+            .clone();
         assert_eq!(
-            factory.admits_export_target(&ResourceRef::parse(smuggled).expect("valid ref")),
+            factory.admits_export_target(&resource_envelope(resource_type.as_str(), None)),
             Err(ProviderContractError::ProjectionFactoryInvalid)
         );
     }
+    assert_eq!(
+        factory.admits_backing_ref(&resource_envelope("Device", None)),
+        Ok(())
+    );
     // A factory cannot be declared for a capability whose exportability is
     // forbidden, so a forbidden capability has no export machinery at all.
     assert_eq!(
@@ -324,6 +416,233 @@ fn a_provider_cannot_smuggle_a_backing_device_or_binding_across_a_zone() {
             Exportability::Forbidden,
         ),
         Err(ProviderContractError::ExportForbidden)
+    );
+}
+
+#[test]
+fn an_empty_backing_allowlist_denies_every_backing_envelope() {
+    let security_key = catalog()
+        .into_iter()
+        .find(|pair| {
+            pair.projection().service_type().as_str() == "security-key.d2bus.org.SecurityKeyService"
+        })
+        .expect("security-key is in the semantic catalog")
+        .projection()
+        .projection_factory()
+        .expect("the empty security-key backing set is constructible");
+    assert!(security_key.allowed_backing_ref_types().is_empty());
+    for resource_type in [
+        "Device",
+        "Endpoint",
+        "security-key.d2bus.org.SecurityKeyService",
+    ] {
+        assert_eq!(
+            security_key.admits_backing_ref(&resource_envelope(resource_type, None)),
+            Err(ProviderContractError::ProjectionFactoryInvalid)
+        );
+    }
+
+    // Positive control: the USB catalog has a declared Device backing and
+    // still admits a locally owned row.
+    let usb = catalog()
+        .into_iter()
+        .find(|pair| pair.projection().service_type().as_str() == "usb.d2bus.org.UsbService")
+        .expect("USB is in the semantic catalog")
+        .projection()
+        .projection_factory()
+        .expect("the USB factory is constructible");
+    assert_eq!(
+        usb.admits_backing_ref(&resource_envelope("Device", None)),
+        Ok(())
+    );
+}
+
+#[test]
+fn an_import_owned_envelope_is_rejected_as_export_and_backing() {
+    let factory = catalog()
+        .into_iter()
+        .find(|pair| pair.projection().service_type().as_str() == "audio.d2bus.org.AudioService")
+        .expect("audio is in the semantic catalog")
+        .projection()
+        .projection_factory()
+        .expect("the audio factory is constructible");
+    let imported_service = resource_envelope(
+        factory.service_type().as_str(),
+        Some("ResourceImport/yubikey-primary"),
+    );
+    let imported_endpoint = resource_envelope("Endpoint", Some("ResourceImport/yubikey-primary"));
+
+    assert_eq!(
+        factory.admits_export_target(&imported_service),
+        Err(ProviderContractError::ImportOwnedOriginRejected)
+    );
+    assert_eq!(
+        factory.admits_backing_ref(&imported_endpoint),
+        Err(ProviderContractError::ImportOwnedOriginRejected)
+    );
+    assert_eq!(
+        ProviderContractError::ImportOwnedOriginRejected.code(),
+        "provider-import-owned-origin-rejected"
+    );
+
+    // Positive controls keep the exact same factory useful for local owner
+    // authority and backing rows.
+    assert_eq!(
+        factory.admits_export_target(&resource_envelope(factory.service_type().as_str(), None)),
+        Ok(())
+    );
+    assert_eq!(
+        factory.admits_backing_ref(&resource_envelope("Endpoint", None)),
+        Ok(())
+    );
+    assert_eq!(
+        factory.admits_backing_ref(&resource_envelope("Volume", None)),
+        Err(ProviderContractError::ProjectionFactoryInvalid)
+    );
+}
+
+#[test]
+fn a_factory_cannot_advertise_its_own_service_or_binding_as_backing() {
+    let expected = catalog()
+        .into_iter()
+        .find(|pair| pair.projection().service_type().as_str() == "audio.d2bus.org.AudioService")
+        .expect("audio is in the semantic catalog")
+        .projection()
+        .projection_factory()
+        .expect("the audio factory is constructible");
+    let attempt = |backing: ResourceTypeName| {
+        ProjectionFactory::new(
+            expected.service_type().clone(),
+            expected.binding_type().clone(),
+            [backing],
+            expected.allowed_binding_target_ref_types().iter().copied(),
+            expected.projection_schema_fingerprint().clone(),
+            expected.factory_fingerprint().clone(),
+            expected.exportability(),
+        )
+    };
+
+    assert_eq!(
+        attempt(expected.service_type().clone()),
+        Err(ProviderContractError::ConflictingFields)
+    );
+    assert_eq!(
+        attempt(expected.binding_type().clone()),
+        Err(ProviderContractError::ConflictingFields)
+    );
+}
+
+#[test]
+fn a_provider_reports_protocol_skew_before_a_fingerprint_mismatch() {
+    let expected = catalog()
+        .into_iter()
+        .find(|pair| pair.projection().service_type().as_str() == "audio.d2bus.org.AudioService")
+        .expect("audio is in the semantic catalog")
+        .projection()
+        .projection_factory()
+        .expect("the audio factory is constructible");
+    let mut wire = String::from_utf8(
+        canonical_json_bytes(&expected).expect("the factory serializes canonically"),
+    )
+    .expect("canonical factory JSON is UTF-8");
+    let version_field = format!(
+        "\"projectionProtocolVersion\":\"{}\"",
+        expected.projection_protocol_version().as_str()
+    );
+    assert_eq!(wire.matches(&version_field).count(), 1);
+    wire = wire.replacen(&version_field, "\"projectionProtocolVersion\":\"1.0\"", 1);
+    let fingerprint_field = format!(
+        "\"factoryFingerprint\":\"{}\"",
+        expected.factory_fingerprint().as_str()
+    );
+    let altered_fingerprint = format!("\"factoryFingerprint\":\"{}\"", fingerprint("9").as_str());
+    assert_eq!(wire.matches(&fingerprint_field).count(), 1);
+    wire = wire.replacen(&fingerprint_field, &altered_fingerprint, 1);
+
+    let legacy: ProjectionFactory =
+        d2b_contracts::decode_json_body("projection-factory", wire.as_bytes())
+            .expect("legacy descriptor reaches admission");
+    assert_eq!(legacy.projection_protocol_version().as_str(), "1.0");
+    assert_ne!(legacy.factory_fingerprint(), expected.factory_fingerprint());
+    assert_eq!(
+        manifest_for_factory(legacy),
+        Err(ProviderContractError::ProjectionProtocolVersionMismatch)
+    );
+}
+
+#[test]
+fn wrong_exportability_is_rejected_even_with_matching_fingerprints() {
+    let expected = catalog()
+        .into_iter()
+        .find(|pair| pair.projection().service_type().as_str() == "audio.d2bus.org.AudioService")
+        .expect("audio is in the semantic catalog")
+        .projection()
+        .projection_factory()
+        .expect("the audio factory is constructible");
+    let result = ProjectionFactory::new(
+        expected.service_type().clone(),
+        expected.binding_type().clone(),
+        expected.allowed_backing_ref_types().iter().cloned(),
+        expected.allowed_binding_target_ref_types().iter().copied(),
+        expected.projection_schema_fingerprint().clone(),
+        expected.factory_fingerprint().clone(),
+        Exportability::Forbidden,
+    );
+    assert_eq!(result, Err(ProviderContractError::ExportForbidden));
+}
+
+#[test]
+fn a_provider_advertised_factory_must_equal_the_semantic_catalog() {
+    for pair in catalog() {
+        let expected = pair
+            .projection()
+            .projection_factory()
+            .expect("every catalog family has a factory");
+        let manifest = manifest_for_factory(expected.clone()).expect("catalog factory is admitted");
+        assert_eq!(manifest.projection_factories(), &[expected]);
+    }
+
+    let expected = catalog()
+        .into_iter()
+        .find(|pair| {
+            pair.projection().service_type().as_str() == "security-key.d2bus.org.SecurityKeyService"
+        })
+        .expect("security-key is in the semantic catalog")
+        .projection()
+        .projection_factory()
+        .expect("the security-key factory is constructible");
+    let widened_backing = ProjectionFactory::new(
+        expected.service_type().clone(),
+        expected.binding_type().clone(),
+        [ResourceTypeName::parse("Device").expect("valid type")],
+        expected.allowed_binding_target_ref_types().iter().copied(),
+        expected.projection_schema_fingerprint().clone(),
+        expected.factory_fingerprint().clone(),
+        expected.exportability(),
+    )
+    .expect("a widened descriptor is structurally valid");
+    assert_eq!(
+        widened_backing.factory_fingerprint(),
+        expected.factory_fingerprint()
+    );
+    assert_eq!(
+        manifest_for_factory(widened_backing),
+        Err(ProviderContractError::ProjectionFactoryInvalid)
+    );
+
+    let wrong_fingerprint = ProjectionFactory::new(
+        expected.service_type().clone(),
+        expected.binding_type().clone(),
+        expected.allowed_backing_ref_types().iter().cloned(),
+        expected.allowed_binding_target_ref_types().iter().copied(),
+        expected.projection_schema_fingerprint().clone(),
+        fingerprint("9"),
+        expected.exportability(),
+    )
+    .expect("a fingerprint-tampered descriptor is structurally valid");
+    assert_eq!(
+        manifest_for_factory(wrong_fingerprint),
+        Err(ProviderContractError::DescriptorFingerprintMismatch)
     );
 }
 
