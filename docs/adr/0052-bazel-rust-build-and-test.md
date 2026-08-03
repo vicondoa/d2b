@@ -1,6 +1,6 @@
 # ADR 0052: Bazel as the Rust build and test scheduler
 
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-08-02
 - Related: [ADR 0009](0009-rust-toolchain-msrv-and-supply-chain.md) (Rust
   toolchain, MSRV, and supply-chain policy), which keeps its authority
