@@ -7,7 +7,7 @@ scope-owned worktree on a committed tree.
 ## Prerequisites
 
 ```bash
-export D2B_WORKTREE=/absolute/path/to/d2b-adr0052-spec
+export D2B_WORKTREE=/absolute/path/to/your/adr052-worktree
 cd "$D2B_WORKTREE"
 git status --short --branch
 nix develop
@@ -15,26 +15,40 @@ rustc --version
 cat packages/d2b-api-surface/rust-toolchain.toml
 ```
 
-Expected stable Rust is 1.97.0 and the API pin is
-`nightly-2026-02-16`. From W0:
+Expected stable Rust is 1.97.0 and the API pin is `nightly-2026-02-16`. From
+W0:
 
 ```bash
 bazel --version
 cat .bazelversion
+buildifier --version
 make test-drift
 ```
 
-Both Bazel versions must be 8.6.0. Drift must fail rather than rewrite a lock.
-Do not use Bazelisk, direct Bazel workflow commands, a remote cache, or a
-shared worktree output tree.
+Both Bazel versions must be 8.6.0, and `bazel_8` plus `bazel-buildtools` must
+come from the pinned dev shell. Drift must fail rather than rewrite a lock. Do
+not use Bazelisk, direct Bazel workflow commands, a remote cache, or a shared
+worktree output tree.
 
-## Branch-authority gate - before W0
+## Amended ADR verification - before W0
 
-W0 must not start until a standalone ADR 0052 amendment has merged. The
-amended decision must name protected `v3` as the promotion, maintenance,
-publication, shadow-streak, and post-promotion lineage. It must replace the
-weekly default-branch cold profile with the five most recent qualifying Bazel
-shadow runs for PRs merged into `v3`.
+The ADR 0052 amendment is a merged prerequisite, not work this feature
+performs. Before any W0 branch is created, prove the amended commit is an
+ancestor of the W0 base:
+
+```bash
+git log --oneline -1 -- docs/adr/0052-bazel-rust-build-and-test.md
+grep -n '^- Amended:' docs/adr/0052-bazel-rust-build-and-test.md
+grep -n '0052' docs/adr/README.md
+```
+
+The record must be `Status: Accepted`, must carry the 2026-08-03 amendment
+line, and must already name protected `v3` as the promotion,
+cache-maintenance, cache-publication, streak, and post-promotion lineage, with
+the cold measurement set drawn from qualifying cold qualification records. If
+any of `.bazelversion`, `.bazelrc`, `.bazelignore`, `MODULE.bazel`,
+`MODULE.bazel.lock`, `bazel/`, or generated `packages/**/BUILD.bazel` exists in
+a commit that predates that amendment, stop.
 
 ## Foundation validation - W0
 
@@ -47,9 +61,30 @@ make test-drift
 make test-policy
 ```
 
-Review the schema result for two independent generations, each with exactly
-twenty nonempty valid JSON files before comparison. Confirm `make test-rust`
-still invokes Cargo and remains authoritative:
+Review the schema result for two independent generations, each containing the
+exact generated nonempty valid JSON census before comparison. The census is the
+manifest the generator returns, not a number written by hand; a review that
+checks a literal is checking the wrong thing.
+
+Check the pinning and boundary invariants that are easy to get wrong quietly:
+
+```bash
+# .bazelrc carries no startup line and no channel flag.
+! grep -qE '^[[:space:]]*startup[[:space:]]' .bazelrc
+! grep -q 'rust/toolchain/channel' .bazelrc
+
+# All four hubs declare a Bazel-side lock.
+grep -c 'lockfile' MODULE.bazel
+
+# No repin escape hatch anywhere on the gate path.
+! grep -rqE 'CARGO_BAZEL_REPIN|CARGO_BAZEL_REPIN_ONLY|(^|[^A-Z_])REPIN=' \
+  Makefile .github/workflows/
+
+# The workspace boundary covers scratch and every Cargo output directory.
+grep -q '^\.scratch/$' .bazelignore
+```
+
+Confirm `make test-rust` still invokes Cargo and remains authoritative:
 
 ```bash
 D2B_SKIP_FIXTURE_BUILD=1 \
@@ -119,32 +154,12 @@ jq -e '
   .version == 1 and
   .target == "test-rust" and
   .run_status == "passed" and
-  .completed_leaves == [
-    "rust-api-surface",
-    "rust-assert-pinned",
-    "rust-audit-broker",
-    "rust-audit-guest",
-    "rust-audit-main",
-    "rust-broker-default",
-    "rust-broker-fakebackends",
-    "rust-broker-layer1",
-    "rust-deny-broker",
-    "rust-deny-guest",
-    "rust-deny-main",
-    "rust-guest-shell-runner",
-    "rust-main-clippy",
-    "rust-main-format",
-    "rust-main-workspace-tests",
-    "rust-no-bash-ast",
-    "rust-schema-reproducibility",
-    "rust-stub-no-socket"
-  ] and
+  (.completed_leaves | length) == 18 and
   (.failed_surfaces | length) == 0
 ' .scratch/adr052-bazel-pass.json
 ```
 
-Compare exact IDs with the committed coverage map through the aggregate guard,
-then independently keep adjacent enforcing surfaces green:
+Then keep the adjacent enforcing surfaces green:
 
 ```bash
 make test-bazel-rust
@@ -158,18 +173,21 @@ A failed or handled-interrupted probe must leave a schema-valid partial
 manifest with nonempty `failed_surfaces` and must not retain an earlier passing
 manifest. Perform interruption only in a disposable validation worktree.
 
-## Census, topology, and planted failures - W1 and W4
+## Census, topology, evidence, and planted failures - W1 and W4
 
 The W1 aggregate checks:
 
-- exact per-binary test and ignored-case census;
-- derived nonempty doctest and harness-free companions;
-- main and guest one-process-per-case topology;
+- exact per-binary test and ignored-case census, generator-derived;
+- derived nonempty doctest and executed harness-free companions, with every
+  out-of-census manifest entry recorded with its reason;
+- main and guest one-process-per-case topology with a per-case directory
+  beneath the executor temporary root;
 - broker one-process-per-binary topology with exclusivity;
-- exact governed-source/runfiles/parsed-file equality;
-- exact two-by-twenty schema census;
-- nightly API and pinned-test inventories;
-- binary existence, executability, and identity.
+- exact governed-source, runfiles, and parsed-file equality;
+- two independent schema generations against the generated census;
+- the nightly API census, including the toolchain version the action actually
+  used compared against the committed pin;
+- binary existence, executability, and identity through the dual-mode locator.
 
 Run the carriers:
 
@@ -179,6 +197,26 @@ make test-bazel-rust-api
 make test-bazel-rust-broker
 make test-bazel-rust-aux
 ```
+
+Inspect the per-case evidence rather than trusting a green target. For a
+carrier under the local output tree, confirm the result document exists, names
+individual cases, keeps ignored cases distinct, and carries none of the
+forbidden values, while raw output remains reachable in `test.log`:
+
+```bash
+find .scratch/bazel -name test.xml -path '*ci/rust*' | head
+find .scratch/bazel -name test.log -path '*ci/rust*' | head
+```
+
+Two negative controls matter more than the positive ones:
+
+- the planted stale-binary fixture, which puts an out-of-date executable at the
+  Cargo path, removes the runfiles entry, runs under Bazel, and must fail
+  naming the expected runfiles path rather than passing against the stale
+  binary;
+- the planted redaction fixture, which must first prove every forbidden value
+  is present in the unredacted fixture and then prove every one absent from the
+  result document.
 
 Seeded failures are made on eighteen disposable, committed evidence branches,
 one protected condition per branch. Each branch runs only its owning approved
@@ -202,16 +240,19 @@ jq -e '
 ' specs/003-adr052-bazel-rust/evidence/qualification.json
 ```
 
-Audit topology and broker repetition:
+Audit topology, per-case evidence, locator migration, and broker repetition:
 
 ```bash
 jq -e '
   (.topology_proofs | length) == 5 and
   all(.topology_proofs[];
-    .census_matches and .ignored_census_matches and .shell_free) and
+    .census_matches and .ignored_census_matches and
+    .per_case_results_published and .shell_free) and
   (.broker_repetitions | length) == 3 and
   all(.broker_repetitions[];
-    .exclusive and .consecutive_passes == 20)
+    .exclusive and .consecutive_passes == 20) and
+  .locator_migration.unresolved_files == 0 and
+  .locator_migration.stale_binary_fixture_failed_under_bazel
 ' specs/003-adr052-bazel-rust/evidence/qualification.json
 ```
 
@@ -229,10 +270,14 @@ D2B_CLEAN_DRY_RUN=1 make clean
 
 The targeted tests must exercise both cleanup syscall routes, descriptor
 inheritance, replacement race, dedicated process group, fixed grace, final
-SIGKILL, sibling survival, deadline grammar/rounding, stuck shutdown, message
-redaction, and every wrong-remedy mutation.
+SIGKILL, sibling survival, deadline grammar and rounding, stuck shutdown,
+message redaction, every wrong-remedy mutation, and the result-document
+filesystem cases: link and anchored-escape refusal, creation ownership,
+short-write and collision handling, sync before rename, close-on-exec, and
+child-reap ordering.
 
-Shutdown uses only the approved entry point:
+Prove startup options are byte-identical across every command the wrapper
+issues, because a mismatch starts a second server:
 
 ```bash
 make bazel-shutdown
@@ -241,13 +286,20 @@ make bazel-shutdown
 On `D2B-BZLSERVER-STUCK`, close other clients and rerun that command. Do not
 delete `.scratch/bazel/` or signal a PID by hand.
 
+Trimming is an explicit synchronous step, not an idle-time side effect.
+Confirm the wrapper runs the on-demand collector and observes its completion
+before it measures or publishes anything; a measurement taken before the
+collector finished is invalid even if the number looks fine.
+
 ## Warm and cold local measurements - W2 and W4
 
 Use three dedicated measurement worktrees based on the same W4 candidate.
-Ensure no heavy lane is active. In each worktree, independently perform the
-complete warm sequence: prime successfully, append exactly one comment line
-to `packages/d2b-core/src/lib.rs`, and immediately measure without shutdown,
-cleanup, or another command between the prime and edit:
+Ensure no heavy lane is active and that no measurement uses
+`--test_output=streamed`, which silently serializes every test. In each
+worktree, independently perform the complete warm sequence: prime
+successfully, append exactly one comment line to
+`packages/d2b-core/src/lib.rs`, and immediately measure without shutdown,
+cleanup, or another command between the prime and the edit:
 
 ```bash
 make test-bazel-rust
@@ -257,8 +309,8 @@ time make test-bazel-rust
 ```
 
 Discard each measurement worktree after recording its result. Record
-output-root size before and after. Median must be at most 600 seconds and every
-sample at most 720.
+output-root size before and after. The median must be at most 600 seconds and
+every sample at most 720.
 
 For each cold-local sample, retain a populated repository cache while creating
 a fresh output user root and empty action cache:
@@ -269,10 +321,14 @@ time make test-bazel-rust
 ```
 
 The evidence-only preparation helper exists from W2 through W4 and is removed
-in W5. Run three samples. Median must be at most 900 seconds and every sample
-at most 1080. A cleanup, hard-limit refusal, server restart during a warm
-sample, wrong cache state, or heavy-lane overlap invalidates and replaces the
-sample.
+in W5. Run three samples. The median must be at most 900 seconds and every
+sample at most 1080. A cleanup, hard-limit refusal, server restart during a
+warm sample, wrong cache state, streamed test output, or heavy-lane overlap
+invalidates and replaces the sample.
+
+Expect the broker suites to run last and alone in the local aggregate: exclusive
+tests execute one at a time after the whole parallel phase, so that shape is
+correct rather than a scheduling bug.
 
 Audit all performance sets:
 
@@ -280,17 +336,21 @@ Audit all performance sets:
 jq -e '
   (.performance_sets | length) == 3 and
   all(.performance_sets[]; .valid == true) and
+  all(.performance_sets[]; .invocation_flags | index("--test_output=streamed") | not) and
   (.performance_sets[] | select(.profile == "warm-local")
     | .median_seconds <= 600 and .maximum_seconds <= 720) and
   all(.performance_sets[] | select(.profile != "warm-local");
     .median_seconds <= 900 and .maximum_seconds <= 1080) and
   (.performance_sets[] | select(.profile == "cold-ci") |
     (.sample_refs | length) == 5 and
-    all(.sample_refs[]; .branch == "v3" and .merged == true))
+    (.feasibility_ref | length) > 0 and
+    all(.sample_refs[];
+      .source_event == "push" and .branch == "v3" and
+      .cache_restored == 0))
 ' specs/003-adr052-bazel-rust/evidence/qualification.json
 ```
 
-## Shadow workflow - W3 and W4
+## Shadow workflow and qualification records - W3 and W4
 
 Run all local slices first:
 
@@ -305,20 +365,32 @@ make test-lint
 ```
 
 Review the shadow run rather than treating green as sufficient. It must be
-non-required, use four slices and a rollup, restore/save nothing, call only
-Make, use credentialless checkout, and grant PR jobs only `contents: read`.
-Cold-CI qualification uses the complete slowest-slice job duration from each
-of the five most recent qualifying runs for PRs merged into `v3`.
+non-required, use four slices and a rollup, restore and save nothing, call only
+Make targets, use credentialless checkout, and grant pull-request jobs only
+`contents: read`.
 
-Audit ten-run equivalence and shadow cache behavior:
+Evidence comes only from qualification records: push events on
+`refs/heads/v3` produced by merged pull requests, where the Bazel run and the
+required Cargo run carry the same head commit. A pull-request run is
+diagnostic and produces no record, because its merge ref is recomputed against
+a moving base and its path filter excludes exactly the changes a divergence
+would appear in.
+
+Before the cold ceiling binds, record the W3 feasibility measurement with all
+four slice durations. If it does not clear the ceiling, the only authorized
+answers are a larger runner class or a further disjoint slice split.
+
+Audit the streak and shadow cache behavior:
 
 ```bash
 jq -e '
-  (.shadow_runs | length) >= 10 and
-  ([.shadow_runs[-10:][] |
+  (.qualification_records | length) >= 10 and
+  ([.qualification_records[-10:][] |
+    (.source_event == "push") and
     (.branch == "v3") and
-    (.merged == true) and
+    (.cargo_run_head_sha == .bazel_run_head_sha) and
     (.cargo_verdict == .bazel_verdict) and
+    (.fixture_verdict == "passed") and
     (.cache_writes == 0)] | all)
 ' specs/003-adr052-bazel-rust/evidence/qualification.json
 ```
@@ -330,6 +402,9 @@ jq -e '
   .status == "qualified" and
   .coverage.exact_surface_count == 18 and
   .coverage.unmapped_count == 0 and
+  .coverage.carriers_claimed_more_than_once == 0 and
+  .coverage.analysis_time_label_check_passed and
+  .coverage.out_of_test_completeness_check_passed and
   .supply_chain.differing_enforcing_outcomes == 0 and
   .shadow_cache.publications == 0 and
   .workflow_policy.all_positive_and_negative_controls_pass
@@ -355,10 +430,10 @@ make check
 D2B_ENABLE_FIXTURE_BUILD=1 make test-fixture-contracts
 ```
 
-After the ordered maintenance/save run, confirm the required context is still
-`test-rust`, exactly one protected-`v3` writer published, output base was not
-cached, retired prefixes are absent, and both headroom checks were at most
-8 GiB.
+After the ordered maintenance and save run, confirm the required context is
+still `test-rust`, the synchronous trim completed before both headroom checks,
+exactly one protected-`v3` writer published, the output base was not cached,
+retired prefixes are absent, and both headroom checks were at most 8 GiB.
 
 Rehearse rollback in a separate worktree after the promotion commit is created
 and before Cargo retirement:
@@ -420,7 +495,9 @@ jq --arg sha "$promotion_sha" -e '
 ' specs/003-adr052-bazel-rust/evidence/post-promotion.json
 ```
 
-Then run the retirement validation:
+Then run the retirement validation. Every public name below must still exist
+and must invoke a Bazel carrier; retirement removes implementations, never
+names:
 
 ```bash
 make check

@@ -8,20 +8,27 @@ does not version or replace execution-manifest v1.
 Each row contains:
 
 - `surfaceId`: one baseline execution-manifest ID;
-- `carrier`: one existing Bazel label owning the verdict;
-- `companions`: additional labels needed for the same surface;
+- `carriers`: the nonempty set of existing Bazel labels for this surface, with
+  exactly one marked as owning the verdict;
 - `slice`: `main`, `api`, `broker`, or `aux`;
 - `cargoBaseline`: current leaf/mode reference;
-- `census`: exact manifest reference, expected entries/count, and derivation;
+- `census`: the generator-derived census artifact, its expected entries and
+  count, and the derivation that produced it;
+- `outOfCensus`: every manifest entry the executed selector excludes, each with
+  its reason;
 - `topology`: topology reference or explicit not-applicable reason;
 - `testTargets`: all transitively carried Rust tests;
 - `handwrittenFragments`: all non-generated BUILD fragments;
-- `binaryProviders`: expected provider label and binary identity;
+- `binaryProviders`: expected provider label, runfiles path, and binary
+  identity;
+- `locatorFiles`: the migrated first-party files this surface's tests use, each
+  `migrated` or `no-migration-needed` with a reason;
 - `deliberateDifferences`: applicable ADR section 13 entries;
 - `generatedBuildDigest`: digest binding the row to generated graph state.
 
 Arrays and rows are sorted deterministically. Paths are normalized
-repository-relative paths. Empty required collections are invalid.
+repository-relative paths. Empty required collections are invalid, and a
+hand-written count is invalid wherever the generator can derive one.
 
 ## Exact ID set
 
@@ -48,23 +55,73 @@ rust-audit-guest
 
 `rust-contract-tests` and `rust-cli-contract-tests` must not appear.
 
+## Cardinality
+
+The mapping is **total and unambiguous**, not one-to-one: every ID has a
+nonempty carrier set and every carrier belongs to exactly one ID.
+`rust-main-workspace-tests` already needs three carriers. The guard enforces
+both directions of totality.
+
+## Required hand-written fragments
+
+These are not generated and must each appear exactly once in
+`handwrittenFragments`:
+
+- the per-target nightly channel transition rule over the API census subgraph;
+- the `rustdoc_json` rule that renders the census and emits the toolchain
+  version the action actually used;
+- the vendor repository rule that materializes the offline dependency tree;
+- the aggregate, slice, carrier, and guard fragments under `bazel/` and
+  `ci/rust/`.
+
+## Where each invariant is proved
+
+A Bazel test action has no server, no source tree, and no sanctioned way to
+reach one. A condition phrased as a nested `bazel query` inside the test cannot
+execute and would leave the guard green while proving less than it claims. The
+split is therefore load-bearing:
+
+| Invariant | Proved at |
+| --- | --- |
+| Every mapped carrier label exists | Analysis time, through real `deps`/`data` edges from the guard target |
+| Every carrier belongs to exactly one ID | Bazel test |
+| No Rust test target is unclaimed | Make wrapper and `test-drift`, over `tests/golden/bazel-rust-query.json` |
+| Query result is not stale | Make wrapper and `test-drift` |
+| Exact census, topology, hand-written-fragment listing | Bazel test |
+| Generated BUILD and lock drift | `test-drift` |
+
+No Bazel test invokes `bazel query`, and no test action runs a nested Bazel
+server. The committed query result is a declared input to the out-of-test
+check and is drift-checked by the same mechanism that guards every other
+generated output, so no new gate, Layer-1 job, or Make target is created.
+
 ## Fail-closed invariants
 
 The guard rejects:
 
-- an ID missing, duplicated, added, or mapped to multiple carriers;
-- a carrier or companion label absent from Bazel query;
+- an ID missing, duplicated, or added;
+- an ID with an empty carrier set;
+- a carrier claimed by more than one ID;
+- a carrier or companion label that does not exist, which fails analysis
+  naming the label before any test runs;
 - a Rust test target not transitively claimed exactly once;
-- a suite without exact nonempty census or required topology;
-- a hand-written fragment not listed exactly once;
+- a suite without an exact nonempty census or a required topology;
+- a hand-written fragment not listed exactly once, including the three
+  fragments named above;
 - a scan input set unequal to its committed manifest in either direction;
 - parsed no-bash files unequal to declared inputs;
-- empty/missing harness-free or doctest discovery;
-- a schema generation differing from the exact twenty-file nonempty valid-JSON
-  census before content comparison;
-- a binary provider that is absent, non-executable, stale, or wrong identity;
-- generated BUILD drift or Cargo/Bazel lock drift.
+- empty or missing harness-free or doctest discovery, and a harness-free
+  census that does not match the selector the Cargo gate uses;
+- an out-of-census manifest entry with no recorded reason;
+- a schema generation differing from the generated nonempty valid-JSON census
+  before content comparison;
+- a binary provider that is absent, non-executable, stale, or of the wrong
+  identity;
+- a locator file that is neither migrated nor recorded as needing no
+  migration;
+- an emitted census toolchain version that differs from the committed pin;
+- a `.bazelrc` line or wrapper argument that sets the toolchain channel flag;
+- generated BUILD drift, `.bazelignore` drift, or Cargo/Bazel lock drift.
 
-The guard itself is carried by the Bazel aggregate and generator drift by
-existing `test-drift`. A passing guard is necessary but not sufficient for
-promotion; execution evidence is also required.
+A passing guard is necessary but not sufficient for promotion; execution
+evidence is also required.

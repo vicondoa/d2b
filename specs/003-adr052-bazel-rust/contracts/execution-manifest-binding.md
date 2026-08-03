@@ -13,7 +13,8 @@ identifier, status, or lifecycle rule.
 - A surface enters `completed_leaves` only after every command and companion
   required by its coverage row succeeds.
 - Carrier failures map to `failed_surfaces` without collapsing several
-  carriers into one result.
+  carriers into one result. A surface with several carriers still reports one
+  surface verdict, owned by the carrier the coverage map marks as owning it.
 - Prior manifest evidence is invalidated before dispatch.
 - Normal failure and handled interruption publish sorted partial evidence
   atomically and preserve the original command status.
@@ -21,6 +22,9 @@ identifier, status, or lifecycle rule.
   success record in place.
 - Fixture-backed IDs are emitted only by the unchanged Cargo/Nix fixture path.
 - Executor name is migration metadata and is not added to schema v1.
+- Per-case results live in the executor's own per-target result document, as
+  `runner-environment.md` specifies. They sit below this binding and add no
+  manifest field, identifier, or status.
 
 ## Equivalence
 

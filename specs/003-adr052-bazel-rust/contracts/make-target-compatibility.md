@@ -15,9 +15,10 @@ make bazel-shutdown
 ```
 
 The aggregate invokes all eighteen baseline surfaces. Slice targets invoke
-only their coverage-map rows. `bazel-shutdown` uses the same startup options
-as validation, deletes nothing, and returns nonzero with
-`D2B-BZLSERVER-STUCK` if its own bound expires.
+only their coverage-map rows. Every Bazel invocation the wrapper makes,
+including `bazel-shutdown`, uses byte-identical absolute startup options; see
+`workspace-and-tool-pinning.md`. `bazel-shutdown` deletes nothing and returns
+nonzero with `D2B-BZLSERVER-STUCK` if its own bound expires.
 
 Every workflow calls one of these approved Make targets, never Bazel directly.
 All targets run from repository root, preserve carrier-attributed diagnostics,
@@ -44,9 +45,21 @@ environment contract, and is removed in W5.
 ## Removal
 
 Bazel-specific aliases may be removed only in a separate change after a
-release tag contains promotion and the promotion deprecation shipped. Cargo
-leaf implementation may be removed only in a later change after ten
-consecutive green promoted `v3` runs. `fixture-contracts` remains.
+release tag contains promotion and the promotion deprecation shipped.
+
+Cargo *implementation* for the eighteen migrated surfaces may be removed only
+in a later change after ten consecutive green promoted `v3` runs. That change
+removes leaf modes from `tests/test-rust.sh` and unreachable Cargo-specific
+plumbing and nothing else. It must not remove:
+
+- `make test-rust`;
+- any of the eight `make test-rust-<leaf>` names;
+- the `fixture-contracts` mode or either fixture surface.
+
+Those names continue to invoke the authoritative Bazel carriers. Leaving
+`test-rust` with only the fixture leaf is forbidden. The retirement validation
+includes an inventory proving that exactly the eighteen Cargo implementations
+disappeared and that every public name still resolves to a Bazel carrier.
 
 ## Guard
 

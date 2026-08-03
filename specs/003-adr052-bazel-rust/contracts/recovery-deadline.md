@@ -49,8 +49,8 @@ without a shell. On expiry:
 3. observe leader state only with `EXITED|NOWAIT|NOHANG`;
 4. send unconditional SIGKILL to the group;
 5. reap the direct child;
-6. request server termination only through bounded `bazel shutdown` with the
-   same startup options.
+6. request server termination only through a bounded `bazel shutdown` carrying
+   byte-identical absolute startup options.
 
 It never signals its own group, group zero, group -1, or a server PID read from
 a file. Tests prove call order, full grace after leader exit, surviving
@@ -58,4 +58,7 @@ descendant termination, unrelated sibling survival, and stuck shutdown.
 
 A ceiling miss reports measured duration and target and authorizes only a
 larger runner or further disjoint slice split. It never suggests weaker
-coverage, weaker enforcement, surface removal, or a relaxed ceiling.
+coverage, weaker enforcement, surface removal, or a relaxed ceiling. The cold
+continuous-integration ceiling does not become binding until the W3 feasibility
+measurement records it as attainable on the real runner class; a feasibility
+shortfall takes one of the same two remedies.
