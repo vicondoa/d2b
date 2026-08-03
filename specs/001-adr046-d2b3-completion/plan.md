@@ -115,7 +115,8 @@ specs/001-adr046-d2b3-completion/
 │   └── companion-contracts.md
 ├── checklists/
 │   ├── requirements.md  # Spec quality checklist (16/16 passing)
-│   └── coverage.md      # Upstream coverage gate (11/47, Gate 1 closed)
+│   └── coverage.md      # Upstream coverage gate (19/47 as of the W5 pass; Gate 1 and
+│                        #   Gate 2 closed, plus the W5 date-bound CHK025/CHK044 gate)
 └── tasks.md             # Phase 2 output - NOT created by /speckit-plan
 ```
 
@@ -318,6 +319,28 @@ here, and because the production constraint the line states - `<=24,576 KiB` wit
 subtraction - is itself unchanged. The exact replacement clause a follow-up should apply is
 "currently MEASURED-PASS on the disposable proof at 18,428 KiB and unmeasured on the production
 engine".
+
+Eleven W5 work items and two already-`Merged` items name destination crates that do not
+exist, where a committed crate covers the same obligation under a different name. The full
+adjudication is [`amendment-w5-destination-drift.md`](./amendment-w5-destination-drift.md);
+the summary is that FR-046 does not decide this class, because both sides of the
+disagreement are the generated manifest rather than prose against a manifest.
+`ADR046-exec-016` names `packages/d2b-bus-session/` while `ADR046-session-001`, `Merged` in
+W1, names `packages/d2b-session/`, and both are rows in `ADR-046-work-items.json`. "Existing
+code is canon" decides it, and the committed crate is the destination:
+`d2b-session`/`d2b-session-unix`, `d2b-bus`, `d2b-zone-routing`, `d2b-resource-client`,
+`d2b-resource-api`, and `d2b-provider`. The session-crate pair is not drift at all - the
+member spec's own text says "rename crate ... or retain name". Two obligations are genuinely
+absent rather than relocated, `ProcessAttachClient` and
+`nixos-modules/options-volumes.nix`, and both stay outstanding against their `Planned`
+items. No item is marked complete on file presence.
+
+The three W5 crate removals now carry real FR-023 proofs in
+[`removal-proof-w5.md`](./removal-proof-w5.md), replacing the rationale paragraph above as
+the evidence of record. Two migration-map rows moved to W5 under FR-060, one row was retired
+as naming a path that does not exist at the map's own baseline, and the
+`d2b-daemon-access` ADAPT disposition is raised as drift rather than corrected, because the
+migration map is a member specification.
 
 ### Gate status
 

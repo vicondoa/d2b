@@ -2130,3 +2130,75 @@ part of the evidence, not as an aside.
 
 **Class: unmet obligation** until the measurement of record is taken under that
 precondition. The provisional slice reading is explicitly not evidence.
+
+## 20. Wave 5 destination and rename drift, and two corrections to earlier entries
+
+The full adjudication is
+[`amendment-w5-destination-drift.md`](./amendment-w5-destination-drift.md). Only
+what changes an existing entry in this register is restated here.
+
+**Class: specification drift.** Eleven W5 items and two already-`Merged` items
+carry destination paths naming crates that do not exist, where a committed crate
+covers the same obligation under a different name: `d2b-bus-session` and
+`d2b-bus-session-unix` against `d2b-session` and `d2b-session-unix`,
+`d2b-bus-wire` against `d2b-bus`, `d2b-zone-router` against `d2b-zone-routing`,
+`d2b-client` and `d2b-bus-client` against `d2b-resource-client`,
+`d2b-bus-contracts` and `d2b-zone-service` against `d2b-resource-api`, and
+`d2b-provider-runtime` and `d2b-provider-agent` against `d2b-provider`.
+
+**FR-046 does not decide this class**, and that is the entry worth carrying
+forward. FR-046 resolves prose against the generated manifests. Here both sides
+are the generated manifest: `ADR046-exec-016` names `packages/d2b-bus-session/`
+while `ADR046-session-001`, `Merged` in W1, names `packages/d2b-session/`, and
+both are rows in `ADR-046-work-items.json`. Two member specs were authored
+against different naming proposals and the generator carried both forward
+faithfully. The deciding rule is therefore "existing code is canon", with the
+committed crate as the destination - except where the member spec's own
+detailed-design text permits the current name, in which case there is no drift.
+`ADR046-exec-016` and `ADR046-exec-017` are that exception: both say "rename
+crate ... or retain name", and `ADR046-exec-017`'s Removal proof says "if the
+name is retained, no prior owner is removed".
+
+### 20.1 Correction to section 10.3: the crate-layout policy record is stale
+
+Section 10.3 recorded that `ADR046-pkg-001` named
+`packages/d2b-contract-tests/tests/policy_provider_crate_layout.rs` while the
+slice shipped `policy_provider_crates.rs`, routed through "the **advisory**
+`test-fixture-contracts` lane". Both halves have been overtaken:
+
+- The named file now exists. `2232c8c1` added it, 533 lines, driven by Cargo
+  metadata and an on-disk `packages/` scan so a crate omitted from the workspace
+  cannot escape coverage.
+- `test-fixture-contracts` is no longer advisory. `tests/layer1-jobs.json`
+  classifies exactly one job advisory today, `test-performance-budgets`.
+
+Section 10.3's reasoning was sound and is kept; its premise about the lane is
+not, and citing that sentence now understates the coverage. Three locations are
+live and each has a distinct role - the xtask entrypoint at
+`packages/xtask/src/provider_crate_policy.rs`, the dependency-allowlist and
+naming-exemption policy at `policy_provider_crates.rs`, and the layout policy at
+`policy_provider_crate_layout.rs`. The shell gate `ADR046-pstate-011` also names
+is still not owed; section 14.4 already ruled on it and the gate set is closed.
+
+### 20.2 Two obligations that are absent rather than relocated
+
+Recorded separately because the rest of the drift resolves to a rename, and a
+reader who generalises would conclude nothing is missing:
+
+- `ProcessAttachClient`, `ADR046-exec-022`'s fourth prescribed rename, has no
+  counterpart anywhere in `packages/`. The other three renames it names all
+  landed in `d2b-resource-client`.
+- `nixos-modules/options-volumes.nix` does not exist and no other module covers
+  it. `ADR046-volume-004` and `ADR046-vvfs-006` both name it for user-facing
+  volume and attachment options. Its sibling destination
+  `nixos-modules/resources-volume.nix` does exist and is substantial, so a scan
+  that stopped at "one destination of two is present" would have marked the row
+  covered.
+
+`nixos-modules/resources-zone-control.nix` at `ADR046-zone-control-007` is a
+third case, between the two: no file answers to the name, but Zone-control
+resource handling is spread across `options-zones.nix`,
+`options-zones-resources.nix`, `resources-zones-processes.nix`,
+`resources-zones-volumes.nix` and `generated/`, and `index.nix` already computes
+`declaredZones` and `zoneRows`. The integrator must bind the destination to that
+set or accept a new file; it is not decided here.
