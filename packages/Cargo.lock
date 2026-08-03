@@ -1623,6 +1623,7 @@ dependencies = [
  "d2b-gateway",
  "d2b-gateway-runtime",
  "d2b-host",
+ "d2b-provider",
  "d2b-provider-aca",
  "d2b-provider-relay",
  "d2b-realm-core",
