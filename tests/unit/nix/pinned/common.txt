@@ -632,6 +632,7 @@ provider-catalog/v3-user-only-host-process-posture
 provider-catalog/zone-resource-bundle-credential-envelope-and-digest
 provider-catalog/zone-resource-credential-invalid-inputs-rejected
 provider-catalog/zone-resource-credential-secret-shaped-rejected
+provider-catalog/zone-resource-owner-ref-is-optional-but-validated
 provider-catalog/zone-resource-runtime-metadata-and-store-path-absent
 provider-elf-shim/absolute-interpreter-path-is-rejected
 provider-elf-shim/empty-interpreter-component-is-rejected
@@ -902,6 +903,7 @@ volume-mounts/v3-block-image-requires-byte-quota
 volume-mounts/v3-block-image-requires-durable-or-ephemeral-kind
 volume-mounts/v3-block-image-requires-virtio-blk
 volume-mounts/v3-generated-volumes-enter-zone-bundle
+volume-mounts/v3-layout-owner-ref-remains-required
 volume-mounts/v3-layout-schema-rejects-unknown-field
 volume-mounts/v3-non-symlink-must-not-follow
 volume-mounts/v3-quota-limits-must-be-positive
