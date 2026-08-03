@@ -1046,6 +1046,47 @@ printf '%s\n' "$sanitized_line"
             "the retired variable must not remain a worker fallback",
         )
 
+    def test_nix_unit_resource_requests_fail_before_nix_entry(self) -> None:
+        cases = (
+            (
+                {"D2B_NIX_UNIT_WORKERS": "5"},
+                "D2B_NIX_UNIT_WORKERS must be an integer from 1 through 4\n",
+            ),
+            (
+                {"D2B_NIX_UNIT_MEMORY_MB": "200"},
+                "D2B_NIX_UNIT_MEMORY_MB must be between 512 and 4096 MiB\n",
+            ),
+            (
+                {"D2B_NIX_UNIT_MEMORY_MB": "5000"},
+                "D2B_NIX_UNIT_MEMORY_MB must be between 512 and 4096 MiB\n",
+            ),
+        )
+        for overrides, expected_stderr in cases:
+            env = {
+                key: value
+                for key, value in os.environ.items()
+                if key
+                not in {
+                    "D2B_EXECUTION_MANIFEST",
+                    "D2B_NIX_UNIT_JOBS",
+                    "D2B_NIX_UNIT_WORKERS",
+                    "D2B_NIX_UNIT_MEMORY_MB",
+                }
+            }
+            env.update(overrides)
+            result = subprocess.run(
+                ["bash", str(NIX_UNIT_DRIVER)],
+                cwd=ROOT,
+                env=env,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(result.returncode, 2)
+            self.assertEqual(result.stdout, "")
+            self.assertEqual(result.stderr, expected_stderr)
+
     def test_nix_unit_does_not_add_a_repository_specific_scheduler(self) -> None:
         driver = executable_shell_source(source_text(NIX_UNIT_DRIVER))
         for marker in (

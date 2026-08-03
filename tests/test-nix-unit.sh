@@ -22,6 +22,36 @@ if [ "${D2B_NIX_UNIT_JOBS+x}" = x ]; then
   exit 2
 fi
 
+if [ -n "${D2B_NIX_UNIT_WORKERS:-}" ]; then
+  requested_workers=$D2B_NIX_UNIT_WORKERS
+elif [ "${GITHUB_ACTIONS:-}" = true ]; then
+  requested_workers=1
+else
+  requested_workers=4
+fi
+case "$requested_workers" in
+  1|2|3|4) ;;
+  *)
+    printf '%s\n' \
+      "D2B_NIX_UNIT_WORKERS must be an integer from 1 through 4" >&2
+    exit 2
+    ;;
+esac
+if [ -n "${D2B_NIX_UNIT_MEMORY_MB:-}" ]; then
+  memory_mb=$D2B_NIX_UNIT_MEMORY_MB
+elif [ "${GITHUB_ACTIONS:-}" = true ]; then
+  memory_mb=1024
+else
+  memory_mb=4096
+fi
+if ! [[ "$memory_mb" =~ ^[0-9]+$ ]] \
+  || [ "$memory_mb" -lt 512 ] \
+  || [ "$memory_mb" -gt 4096 ]; then
+  printf '%s\n' \
+    "D2B_NIX_UNIT_MEMORY_MB must be between 512 and 4096 MiB" >&2
+  exit 2
+fi
+
 # The helper owns the secure evidence lifecycle. Enter it before the first Nix
 # evaluation or toolchain process. The marker is only for the helper's child
 # and is preserved through the one possible dev-shell re-entry.
@@ -169,36 +199,6 @@ if [ -n "${D2B_NIX_UNIT_CHECK:-}" ]; then
     fail "D2B_NIX_UNIT_CHECK is not a discovered nix-unit check: $D2B_NIX_UNIT_CHECK" || true
     exit 2
   fi
-fi
-
-# `nix-eval-jobs` owns evaluation concurrency. The request is deliberately
-# bounded before it is capped by the host's CPU and available memory.
-if [ -n "${D2B_NIX_UNIT_WORKERS:-}" ]; then
-  requested_workers=$D2B_NIX_UNIT_WORKERS
-elif [ "${GITHUB_ACTIONS:-}" = true ]; then
-  requested_workers=1
-else
-  requested_workers=4
-fi
-case "$requested_workers" in
-  1|2|3|4) ;;
-  *)
-    fail "D2B_NIX_UNIT_WORKERS must be an integer from 1 through 4" || true
-    exit 2
-    ;;
-esac
-if [ -n "${D2B_NIX_UNIT_MEMORY_MB:-}" ]; then
-  memory_mb=$D2B_NIX_UNIT_MEMORY_MB
-elif [ "${GITHUB_ACTIONS:-}" = true ]; then
-  memory_mb=1024
-else
-  memory_mb=4096
-fi
-if ! [[ "$memory_mb" =~ ^[0-9]+$ ]] \
-  || [ "$memory_mb" -lt 512 ] \
-  || [ "$memory_mb" -gt 4096 ]; then
-  fail "D2B_NIX_UNIT_MEMORY_MB must be between 512 and 4096 MiB" || true
-  exit 2
 fi
 
 logical_cpus=$(getconf _NPROCESSORS_ONLN 2>/dev/null || nproc 2>/dev/null || printf '%s' 1)
