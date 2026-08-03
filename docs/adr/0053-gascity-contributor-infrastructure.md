@@ -2117,7 +2117,7 @@ and it ships planted violations it must reject.
   - rejects any URL outside the exact two-literal canonical set,
     `https://github.com/vicondoa/d2b.git` and
     `git@github.com:vicondoa/d2b.git`. Planted rejections include a wrong SSH
-    host (`git@git.example.invalid:vicondoa/d2b.git`), a wrong SSH user
+    host (`git@git.example.invalid:vicondoa/d2b.git`), a wrong repository owner
     (`git@github.com:someone/d2b.git`), a wrong repository
     (`git@github.com:vicondoa/other.git`), an `ssh://` spelling of an otherwise
     correct target, a URL carrying a userinfo component or token, an
