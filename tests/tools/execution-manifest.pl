@@ -40,6 +40,8 @@ use constant {
     SIGKILL => 9,
     SIGTERM => 15,
     MAX_INTERRUPT_RETRIES => 16,
+    MANIFEST_LOCK_DIAGNOSTIC =>
+        "execution-manifest lock is active; wait for the active run to finish and retry.",
     SEEK_SET    => 0,
     SHUTDOWN_GRACE_SECONDS => 10,
 };
@@ -401,9 +403,7 @@ sub lock_manifest {
     my $request = pack("ssxxxxqqixxxx", F_WRLCK, SEEK_SET, 0, 0, 0);
     if (!defined(fcntl($lockfh, F_OFD_SETLK, $request))) {
         if ($! == EACCES || $! == EAGAIN) {
-            print STDERR
-                "manifest-lock-contended: execution-manifest lock is active; "
-                . "wait for the active run to finish and retry.\n";
+            print STDERR "manifest-lock-contended: " . MANIFEST_LOCK_DIAGNOSTIC . "\n";
             exit 73;
         }
         fatal("could not acquire the execution-manifest lock");
