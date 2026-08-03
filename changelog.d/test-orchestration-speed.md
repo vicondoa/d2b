@@ -29,14 +29,13 @@
   drift with the `run make nix-unit-pin` remedy; use a fixed path-free `d2b`
   flake label for command progress.
 - Record Nix-unit execution evidence as the seven stable baseline leaves while
-  keeping evaluation-only runs free of installables and realized checks; the
-  45-file partition is a candidate pending measurement.
+  keeping evaluation-only runs free of installables and realized checks; use
+  one aggregate eval-jobs attribute per case file.
 - Reject the seven-aggregate candidate after its 543s local four-worker
-  observation; retain the earlier 202.20s per-case local result as historical
-  evidence without claiming hosted success.
+  observation and the per-case candidate after hosted memory exhaustion.
 - Keep four requested local workers with a 4096 MiB default, use 3072 MiB on
   GitHub Actions so the existing envelope admits two workers on a 16 GiB
-  runner, and do not claim hosted success until a hosted run is observed.
+  runner, and retain exact case and file-job inventory checks.
 - Keep the separate enforcing fixture lane from duplicating the aggregate by
   honoring `D2B_SKIP_FIXTURE_BUILD=1` in the Layer-1 orchestration.
 - Keep the measured parallel profile for warm local runs, retain its API cache
