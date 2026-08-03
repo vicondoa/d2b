@@ -302,6 +302,25 @@ thirteen agents, the five d2b skills and the `speckit-*` skills remain usable
 and supported for contributors who never touch Gas City. Nothing may delete,
 rename, gate or condition them, and none may acquire a Gas City dependency.
 
+**First-class does not mean frozen.** D8 requires the standalone panel to
+submit a resolvable `StandaloneHarnessReceipt`, which the current skill does
+not capture. That is a **clean break, delivered atomically**: the same
+implementation change updates the skill and its adapter to capture the receipt
+locator automatically, adds a preflight that requires a supported harness
+resolver, and makes the panel **refuse before dispatch** when one is absent.
+There is no legacy acceptance path and no warning-and-continue, because a
+panel that runs ten seats and then discovers it cannot attest has wasted the
+expensive part and produced nothing.
+
+Existing users get a cutover, not a deprecation window. This is contributor
+tooling with one operator, so no window is required; what is required is that
+the remedy is explicit. The preflight is
+`node scripts/copilot/check-bindings.mjs`, extended to verify the harness
+receipt resolver alongside the bindings it already checks, so contributors run
+the command they already know rather than learning a new one. Its failure names
+the unsupported or missing resolver and the pinned Copilot CLI version to
+upgrade to.
+
 **D4. Four layers of ownership.**
 
 - **`numtide/llm-agents.nix`** supplies the `gc` package. Pinned by the config
@@ -542,6 +561,16 @@ Both variants converge on the same typed verifier and then on
 record's own claim about its binding is never evidence, whichever producer
 wrote it.
 
+**The standalone cutover is gated before dispatch, not after.** The panel
+refuses to dispatch its seats when no supported resolver is present, so the
+failure costs a preflight rather than ten reviews. Its typed error names four
+things, because an error that names fewer leaves the contributor guessing which
+of them changed: the required mechanism, `StandaloneHarnessReceipt`; the
+preflight command, `node scripts/copilot/check-bindings.mjs`; the current and
+supported harness version, or the fact that no resolver was found; and the
+upgrade and retry action. Partially running the panel and failing at admission
+is specifically what this gate exists to prevent.
+
 No round manifest is added to xtask. The gate refuses any set containing a
 finding and has no round concept, so **rounds stay in the producer**: Gas City
 keeps round and fix history in beads and submits only the final unanimous set.
@@ -611,8 +640,21 @@ distinguishes the two cases it can actually be in:
   fails and the publisher **refuses** rather than retrying with a wider hammer.
   If the manifest carries no `expected_previous_remote_sha` at all, a
   non-fast-forward update is **refused outright**: absent expected state is not
-  permission to force. Unexpected remote movement is a condition to report, not
-  to overwrite.
+  permission to force.
+
+  **A refusal is actionable, and it never suggests forcing.** The lease-failure
+  error directs the operator to `d2b-gc publish status <run-id>`, which shows
+  the manifest's expected sha, the current remote sha, and the commits that
+  landed between them. The remedy is to reconcile or rebase through the normal
+  integration route, which produces a new candidate and a new approval, and
+  then to rerun `d2b-gc publish <run-id>`. At no point does the output offer a
+  force without a lease, because the whole purpose of the refusal is that
+  something arrived which nobody has reviewed.
+
+  The missing-expected-state error is separately actionable: it names how to
+  regenerate a publication manifest from the current approved candidate, so an
+  operator whose manifest predates the branch is told to produce a current one
+  rather than left to guess.
 
 Retry is safe in both paths. The publisher looks for an existing pull request
 by head branch, creates one if absent and edits the body if present, so a
@@ -628,10 +670,17 @@ descriptor to mismanage.
 Descriptor passing is not required and should not be reached for by default. If
 a chosen implementation does pass one, then exactly **one** descriptor is
 passed; the sender opens it safely and **closes its own copy immediately after
-a successful `sendmsg`**; the receiver takes it with `MSG_CMSG_CLOEXEC` and
-owns and closes it; and unbounded descriptor reception is refused. Neither side
-accumulates descriptors across repeated transfers, which is a property a test
-can count rather than a discipline a comment can request.
+`sendmsg` returns, unconditionally, on success and on failure alike**; the
+receiver takes it with `MSG_CMSG_CLOEXEC` and owns and closes it; and unbounded
+descriptor reception is refused.
+
+The unconditional close matters more than the success path does. Ownership
+transfers only if the descriptor was actually received, so a `sendmsg` that
+fails leaves the sender holding the only copy, and a sender that closes solely
+on success leaks one descriptor per failure. Failures are exactly the case that
+repeats. Neither side accumulates descriptors across repeated transfers,
+successful or failed, which is a property a test can count rather than a
+discipline a comment can request.
 This record does not claim that setting close-on-exec after creation is atomic,
 because it is not. A path variant remains possible only if the path is
 controller-owned and resolved anchored and fd-relative per D20, meaning
@@ -890,6 +939,14 @@ or metric label carrying any of the above; or a `Debug` rendering that exposes
 them. Audit records may carry approved fixed digests and closed enum values
 only, and protected observable surfaces carry explicit redacting `Debug`
 implementations rather than derived ones.
+
+**Metric labels are drawn only from closed, low-cardinality enumerations**:
+component, operation, producer or provider class where that class is itself
+bounded, outcome, and typed error code. An arbitrary string is refused as a
+label value even when it carries nothing sensitive, because unbounded
+cardinality is its own failure: a label whose domain is a run id or a branch
+name degrades the metric backend regardless of what the string says. Free-form
+detail belongs in a bounded log line or an audit record, never in a label.
 
 The scan reports the number of records, log lines and error strings examined,
 fails closed on an empty corpus, and ships one planted control per category
@@ -1249,14 +1306,26 @@ and it ships planted violations it must reject.
   PR create-or-edit is exercised across the retry: created once, body edited
   the second time, never duplicated.
 
+  **Both refusals are actionable.** The stale-lease error names
+  `d2b-gc publish status <run-id>` and, when run, that command shows the
+  manifest's expected sha, the current remote sha and the intervening commits;
+  the documented remedy is to reconcile through the integration route and rerun
+  `d2b-gc publish <run-id>`. The missing-expected-state error names how to
+  regenerate the manifest from the current approved candidate. Neither output
+  contains a force instruction without a lease, asserted by scanning the
+  rendered error text.
+
   The body arrives as bounded message bytes over the socket or stdin, so a
   planted attempt to swap a file at a caller-supplied path has nothing to
   swap. If the implementation passes a descriptor instead, exactly one is
-  passed, the sender closes its own copy immediately after a successful
-  `sendmsg`, the receiver takes it with `MSG_CMSG_CLOEXEC` and closes it, and a
-  planted attempt to send two or to send an unexpected descriptor is refused.
-  Over a hundred repeated transfers, the open-descriptor count of **both**
-  sender and receiver is observed not to grow.
+  passed, the sender closes its own copy immediately after `sendmsg` returns
+  **whether it succeeded or failed**, the receiver takes it with
+  `MSG_CMSG_CLOEXEC` and closes it, and a planted attempt to send two or to
+  send an unexpected descriptor is refused. Over a hundred repeated transfers
+  that **include injected `sendmsg` failures**, the open-descriptor count of
+  **both** sender and receiver is observed unchanged from its starting value. A
+  success-only repeat loop does not satisfy this item, because the leak it
+  looks for happens on the failure path.
   Temporary and handoff state is absent after both a successful and a failed
   run, and a crash mid-publication leaves only state a bounded recovery
   removes.
@@ -1296,6 +1365,12 @@ and it ships planted violations it must reject.
   controls than categories has not been shown to detect the categories it does
   not test. Separately, an ordinary rejection diagnostic is asserted to carry
   its closed class and **no digest of any kind**.
+
+  **Metric label cardinality is checked as well as content.** Every emitted
+  label value is drawn from a closed enumeration, and a planted metric carrying
+  an unbounded label value, a run id, is **rejected** even though that value
+  discloses nothing sensitive. A scan that only looks for secrets passes this
+  control and misses the cardinality failure entirely.
 - **M27 The supervisor gets its grace period, with a real session running.**
   A live agent session with an active pane is started **before** the stop, so
   the item cannot pass against an empty supervisor. On stop, that pane is
@@ -1319,6 +1394,17 @@ and it ships planted violations it must reject.
   proving the skill remains functional alone, and its receipt locator is
   observed to have been captured **automatically by the adapter** rather than
   entered by a person.
+
+  **The cutover gate fires before dispatch.** With no supported harness
+  resolver present, the standalone panel is observed to **refuse before any
+  seat is dispatched**, not at admission afterwards, and zero seat sessions are
+  created. Its typed error is asserted to name all four of: the required
+  `StandaloneHarnessReceipt` mechanism, the
+  `node scripts/copilot/check-bindings.mjs` preflight, the current and
+  supported harness version or the missing resolver, and the upgrade and retry
+  action. The same preflight is observed to fail for the same reason when run
+  directly, so a contributor meets the error before starting a round rather
+  than during one.
 
   For the standalone variant specifically: a locator that **resolves** through
   the authoritative resolver is accepted and its resolved binding is what the
