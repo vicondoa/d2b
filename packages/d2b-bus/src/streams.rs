@@ -111,6 +111,7 @@ struct StreamState {
     source: SessionId,
     destination: SessionId,
     credit: usize,
+    acknowledged_bytes: usize,
     frames: VecDeque<Vec<u8>>,
 }
 
@@ -215,6 +216,7 @@ impl StreamBridge {
                 source,
                 destination,
                 credit: initial_credit,
+                acknowledged_bytes: 0,
                 frames: VecDeque::new(),
             },
         );
@@ -376,6 +378,7 @@ impl StreamBridge {
         principal: &PrincipalId,
         destination: SessionId,
         bytes: usize,
+        acknowledge: bool,
     ) -> Result<(), StreamError> {
         if bytes == 0 {
             return Err(StreamError::CreditExceeded);
@@ -404,6 +407,9 @@ impl StreamBridge {
             .checked_add(bytes)
             .filter(|credit| *credit <= self.limits.max_stream_credit)
             .ok_or(StreamError::CreditExceeded)?;
+        if acknowledge {
+            stream.acknowledged_bytes = stream.acknowledged_bytes.saturating_add(bytes);
+        }
         state.aggregate_credit += bytes;
         state
             .usage
@@ -468,6 +474,14 @@ impl StreamBridge {
         self.state
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    fn acknowledged_bytes(&self, key: &StreamKey) -> Result<usize, StreamError> {
+        self.lock()
+            .streams
+            .get(key)
+            .map(|stream| stream.acknowledged_bytes)
+            .ok_or(StreamError::StreamClosed)
     }
 }
 
@@ -536,6 +550,23 @@ impl OutgoingStream {
         }
     }
 
+    pub(crate) async fn send_and_wait_ack(&self, payload: Vec<u8>) -> Result<(), StreamError> {
+        let target = self
+            .bridge
+            .acknowledged_bytes(&self.key)?
+            .saturating_add(payload.len());
+        self.send_wait(payload).await?;
+        loop {
+            let notified = self.bridge.notify.notified();
+            let mut notified = std::pin::pin!(notified);
+            notified.as_mut().enable();
+            if self.bridge.acknowledged_bytes(&self.key)? >= target {
+                return Ok(());
+            }
+            notified.await;
+        }
+    }
+
     pub(crate) fn close(&mut self) {
         if !self.closed {
             self.bridge.close(&self.key);
@@ -581,8 +612,13 @@ impl IncomingStream {
 
     /// Grant more byte credit to one named stream at this destination.
     pub async fn grant(&self, stream: &StreamName, bytes: usize) -> Result<(), StreamError> {
-        self.bridge
-            .grant(stream, &self.owner.principal, self.destination, bytes)
+        self.bridge.grant(
+            stream,
+            &self.owner.principal,
+            self.destination,
+            bytes,
+            false,
+        )
     }
 
     /// Grant credit to the exact authenticated principal and stream in a frame.
@@ -596,6 +632,7 @@ impl IncomingStream {
             &frame.key.principal,
             self.destination,
             bytes,
+            true,
         )
     }
 

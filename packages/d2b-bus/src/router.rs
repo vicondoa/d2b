@@ -47,6 +47,10 @@ use crate::{
     },
 };
 
+#[cfg(feature = "production-rss-fixture")]
+#[path = "production_rss.rs"]
+pub mod production_rss;
+
 /// Default maximum bytes in one method payload.
 pub const DEFAULT_MAX_PAYLOAD_BYTES: usize = 1024 * 1024;
 pub const DEFAULT_MAX_ROUTES_PER_SESSION: usize = 128;
@@ -1379,7 +1383,7 @@ impl ZoneRegistrar {
         self.unix_subjects.install(subject, &self.core.zone)
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "production-rss-fixture"))]
     pub(crate) fn register(
         &mut self,
         registration: SessionRegistration,
@@ -2654,7 +2658,7 @@ impl BusStream {
         tokio::select! {
             biased;
             () = self.cancellation.cancelled() => Err(BusError::Cancelled),
-            result = outgoing.send_wait(payload) => result.map_err(BusError::Stream),
+            result = outgoing.send_and_wait_ack(payload) => result.map_err(BusError::Stream),
         }
     }
 
