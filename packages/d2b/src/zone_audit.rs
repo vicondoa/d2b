@@ -305,7 +305,9 @@ fn validate_record(
         "process_effect_fields",
         "state_reset_fields",
     ];
-    if object.keys().any(|key| !ENVELOPE_KEYS.contains(&key.as_str()))
+    if object
+        .keys()
+        .any(|key| !ENVELOPE_KEYS.contains(&key.as_str()))
         || !validate_public_envelope(object)
     {
         return Err(RecordValidationError::Invalid);
@@ -427,8 +429,7 @@ const ROUTE_ADMISSION_FIELDS: &[&str] = &[
     "authz_revision",
     "outcome",
 ];
-const RESOURCE_SHARE_FIELDS: &[&str] =
-    &["event", "peer_zone", "capability_subset", "outcome"];
+const RESOURCE_SHARE_FIELDS: &[&str] = &["event", "peer_zone", "capability_subset", "outcome"];
 const BROKER_EFFECT_FIELDS: &[&str] = &[
     "op_class",
     "subject_digest",
@@ -446,8 +447,7 @@ const PROCESS_EFFECT_FIELDS: &[&str] = &[
     "outcome",
     "exit_class",
 ];
-const STATE_RESET_FIELDS: &[&str] =
-    &["scope", "trigger", "generation", "prior_digest", "outcome"];
+const STATE_RESET_FIELDS: &[&str] = &["scope", "trigger", "generation", "prior_digest", "outcome"];
 
 fn posture_field() -> &'static str {
     concat!("no", "_isolation")
@@ -559,10 +559,9 @@ fn validate_public_field(class: &str, key: &str, value: &Value) -> bool {
     };
     match key {
         "resource_uid" | "process_uid" => valid_uuid_v4(value),
-        "subject_digest"
-        | "execution_ref_digest"
-        | "session_gen_digest"
-        | "prior_digest" => valid_digest(value),
+        "subject_digest" | "execution_ref_digest" | "session_gen_digest" | "prior_digest" => {
+            valid_digest(value)
+        }
         "resource_type" => valid_resource_type(value),
         "service" => valid_service(value),
         "method" => valid_route_component(value),
@@ -579,12 +578,7 @@ fn validate_public_field(class: &str, key: &str, value: &Value) -> bool {
         "direction" => matches!(value, "local" | "host" | "guest" | "zone_link"),
         "update_state" => matches!(
             value,
-            "Current"
-                | "UpdateAvailable"
-                | "UpgradeRequired"
-                | "Upgrading"
-                | "Blocked"
-                | "Unknown"
+            "Current" | "UpdateAvailable" | "UpgradeRequired" | "Upgrading" | "Blocked" | "Unknown"
         ),
         "disruption" => matches!(value, "None" | "Reload" | "Restart" | "Recycle" | "Replace"),
         "scope" => matches!(value, "zone" | "provider" | "host" | "guest"),
@@ -598,8 +592,14 @@ fn valid_verb(class: &str, value: &str) -> bool {
     match class {
         "resource-mutation" | "rbac-change" => matches!(
             value,
-            "create" | "update-spec" | "update-status" | "update-metadata"
-                | "update-finalizers" | "delete" | "use-credential" | "admin-credential"
+            "create"
+                | "update-spec"
+                | "update-status"
+                | "update-metadata"
+                | "update-finalizers"
+                | "delete"
+                | "use-credential"
+                | "admin-credential"
         ),
         "resource-upgrade" => matches!(value, "assess" | "plan" | "execute"),
         _ => false,
@@ -615,7 +615,10 @@ fn valid_outcome(class: &str, value: &str) -> bool {
         "rbac-change" | "route-admission" => matches!(value, "ok" | "denied" | "error"),
         "session-connect" => matches!(value, "ok" | "auth" | "policy" | "timeout" | "error"),
         "resource-share" => {
-            matches!(value, "ok" | "denied" | "quota" | "revoked" | "degraded" | "error")
+            matches!(
+                value,
+                "ok" | "denied" | "quota" | "revoked" | "degraded" | "error"
+            )
         }
         "broker-effect" | "state-reset" => matches!(value, "ok" | "denied" | "error"),
         "process-effect" => matches!(value, "ok" | "error"),
@@ -720,9 +723,9 @@ fn safe_public_text(value: &str, allow_slash: bool) -> bool {
     !value.is_empty()
         && value.len() <= 256
         && value == bounded
-        && value.bytes().all(|byte| {
-            byte.is_ascii_graphic() && (allow_slash || byte != b'/')
-        })
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_graphic() && (allow_slash || byte != b'/'))
 }
 
 fn valid_hash(value: &str) -> bool {

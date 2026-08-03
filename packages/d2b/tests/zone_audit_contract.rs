@@ -16,10 +16,7 @@ fn sample_record() -> String {
     fields.insert("event".to_owned(), serde_json::json!("launch"));
     fields.insert("provider".to_owned(), serde_json::json!("systemd"));
     fields.insert("domain".to_owned(), serde_json::json!("system"));
-    fields.insert(
-        ["no", "isolation"].join("_"),
-        serde_json::json!(false),
-    );
+    fields.insert(["no", "isolation"].join("_"), serde_json::json!(false));
     fields.insert(
         "execution_ref_digest".to_owned(),
         serde_json::json!(
