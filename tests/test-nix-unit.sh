@@ -181,7 +181,13 @@ case "$requested_workers" in
     exit 2
     ;;
 esac
-memory_mb=${D2B_NIX_UNIT_MEMORY_MB:-4096}
+if [ -n "${D2B_NIX_UNIT_MEMORY_MB:-}" ]; then
+  memory_mb=$D2B_NIX_UNIT_MEMORY_MB
+elif [ "${GITHUB_ACTIONS:-}" = true ]; then
+  memory_mb=3072
+else
+  memory_mb=4096
+fi
 if ! [[ "$memory_mb" =~ ^[0-9]+$ ]] \
   || [ "$memory_mb" -lt 512 ] \
   || [ "$memory_mb" -gt 4096 ]; then

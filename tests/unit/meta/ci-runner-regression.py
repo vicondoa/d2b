@@ -901,6 +901,11 @@ set -euo pipefail
         )
         self.assertIn("reserve_mb=3072", driver)
         self.assertIn("worker_budget_mb=$((memory_mb + 2048))", driver)
+        self.assertIn('elif [ "${GITHUB_ACTIONS:-}" = true ]; then', driver)
+        self.assertRegex(
+            driver,
+            r'(?s)GITHUB_ACTIONS[^}]*\}.*memory_mb=3072.*else.*memory_mb=4096',
+        )
         self.assertIn("D2B_NIX_UNIT_WORKERS", driver)
         self.assertIn("D2B_NIX_UNIT_MEMORY_MB", driver)
         self.assertNotIn("D2B_NIX_EVAL_JOBS_WORKERS", driver)

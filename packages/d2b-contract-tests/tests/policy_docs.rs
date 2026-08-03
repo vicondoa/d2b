@@ -1029,7 +1029,10 @@ fn execution_manifest_schema_and_prose_agree_with_non_empty_discovery() {
     );
     assert!(
         nix_driver.contains("reserve_mb=3072")
-            && nix_driver.contains("worker_budget_mb=$((memory_mb + 2048))"),
+            && nix_driver.contains("worker_budget_mb=$((memory_mb + 2048))")
+            && nix_driver.contains("GITHUB_ACTIONS")
+            && nix_driver.contains("memory_mb=3072")
+            && nix_driver.contains("memory_mb=4096"),
         "execution-manifest-policy: Nix-unit hosted-runner memory envelope drifted"
     );
     assert!(

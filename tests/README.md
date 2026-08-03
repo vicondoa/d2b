@@ -242,16 +242,18 @@ development shell with both commands runs directly. `D2B_NIX_UNIT_JOBS` is
 retired and exits with status 2; use
 `D2B_NIX_UNIT_WORKERS=<1..4>` instead. The requested worker count is
 bounded by the CPU cap `min(4, logical CPUs, finite cgroup CPU quota)` and the
-memory cap `max(1, floor((effective available MiB - 3072) / 6144))`. The
-memory budget combines the retained 4096 MiB evaluator limit with 2048 MiB of
-per-worker process and flake overhead. This caps a 16 GiB hosted runner at one
-worker while preserving four workers on the reference host.
+memory cap
+`max(1, floor((effective available MiB - 3072) / (limit + 2048)))`.
+The evaluator limit defaults to 4096 MiB locally and 3072 MiB on GitHub
+Actions, plus 2048 MiB of per-worker process and flake overhead. This admits
+two bounded workers on a 16 GiB hosted runner while preserving four workers on
+the reference host.
 Effective available memory is the smaller of `MemAvailable` and the finite
 cgroup allowance after reclaimable file cache. A visible but unreadable cgroup
 controller fails closed to one worker. On the reference 12-CPU, 62-GiB host
 the effective cap preserves four workers.
-`D2B_NIX_UNIT_MEMORY_MB` may lower the retained 4096 MiB evaluator limit but
-cannot raise it; the 2048 MiB overhead remains reserved. Successful full runs
+`D2B_NIX_UNIT_MEMORY_MB` may set the evaluator limit from 512 through 4096 MiB;
+the 2048 MiB overhead remains reserved. Successful full runs
 suppress raw JSONL output. Failed attributes remain individually attributable
 as one concise, repository-root-sanitized stderr line each, and evaluated
 case-name drift reports each missing or unexpected name with
