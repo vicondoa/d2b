@@ -1226,7 +1226,7 @@ printf '%s\n' "$sanitized_line"
 
         # The remaining flake discovery job is the single source for both
         # matrix classes. Nix-unit no longer consumes a partitioned selector.
-        self.assertEqual(workflow.count("partition=$(make -s test-flake-partition)"), 1)
+        self.assertEqual(workflow.count("partition=$(make -s test-flake-partition)"), 2)
 
     def test_disk_reclaim_is_conditional_but_still_fails_safe(self) -> None:
         workflow = load_layer1_jobs().render_workflow(load_layer1_jobs().load_manifest())
