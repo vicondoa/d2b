@@ -1525,15 +1525,18 @@ complete -c d2b -n "__fish_d2b_using_subcommand provider; and __fish_seen_subcom
 complete -c d2b -n "__fish_d2b_using_subcommand provider; and __fish_seen_subcommand_from inspect" -l human -d 'Force human-readable terminal output'
 complete -c d2b -n "__fish_d2b_using_subcommand provider; and __fish_seen_subcommand_from inspect" -l no-deadline -d 'Suppress the command default deadline'
 complete -c d2b -n "__fish_d2b_using_subcommand provider; and __fish_seen_subcommand_from inspect" -s h -l help -d 'Print help'
-complete -c d2b -n "__fish_d2b_using_subcommand zone; and not __fish_seen_subcommand_from get list status" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
-complete -c d2b -n "__fish_d2b_using_subcommand zone; and not __fish_seen_subcommand_from get list status" -l deadline -d 'Bound all Zone requests and streams' -r
-complete -c d2b -n "__fish_d2b_using_subcommand zone; and not __fish_seen_subcommand_from get list status" -l json -d 'Emit the stable JSON envelope'
-complete -c d2b -n "__fish_d2b_using_subcommand zone; and not __fish_seen_subcommand_from get list status" -l human -d 'Force human-readable terminal output'
-complete -c d2b -n "__fish_d2b_using_subcommand zone; and not __fish_seen_subcommand_from get list status" -l no-deadline -d 'Suppress the command default deadline'
-complete -c d2b -n "__fish_d2b_using_subcommand zone; and not __fish_seen_subcommand_from get list status" -s h -l help -d 'Print help'
-complete -c d2b -n "__fish_d2b_using_subcommand zone; and not __fish_seen_subcommand_from get list status" -f -a "get"
-complete -c d2b -n "__fish_d2b_using_subcommand zone; and not __fish_seen_subcommand_from get list status" -f -a "list"
-complete -c d2b -n "__fish_d2b_using_subcommand zone; and not __fish_seen_subcommand_from get list status" -f -a "status"
+complete -c d2b -n "__fish_d2b_using_subcommand zone; and not __fish_seen_subcommand_from get list status audit doctor support-bundle" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand zone; and not __fish_seen_subcommand_from get list status audit doctor support-bundle" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand zone; and not __fish_seen_subcommand_from get list status audit doctor support-bundle" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand zone; and not __fish_seen_subcommand_from get list status audit doctor support-bundle" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand zone; and not __fish_seen_subcommand_from get list status audit doctor support-bundle" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand zone; and not __fish_seen_subcommand_from get list status audit doctor support-bundle" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand zone; and not __fish_seen_subcommand_from get list status audit doctor support-bundle" -f -a "get"
+complete -c d2b -n "__fish_d2b_using_subcommand zone; and not __fish_seen_subcommand_from get list status audit doctor support-bundle" -f -a "list"
+complete -c d2b -n "__fish_d2b_using_subcommand zone; and not __fish_seen_subcommand_from get list status audit doctor support-bundle" -f -a "status"
+complete -c d2b -n "__fish_d2b_using_subcommand zone; and not __fish_seen_subcommand_from get list status audit doctor support-bundle" -f -a "audit"
+complete -c d2b -n "__fish_d2b_using_subcommand zone; and not __fish_seen_subcommand_from get list status audit doctor support-bundle" -f -a "doctor" -d 'Arguments for `d2b zone doctor`'
+complete -c d2b -n "__fish_d2b_using_subcommand zone; and not __fish_seen_subcommand_from get list status audit doctor support-bundle" -f -a "support-bundle" -d 'Arguments for `d2b zone support-bundle`'
 complete -c d2b -n "__fish_d2b_using_subcommand zone; and __fish_seen_subcommand_from get" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
 complete -c d2b -n "__fish_d2b_using_subcommand zone; and __fish_seen_subcommand_from get" -l deadline -d 'Bound all Zone requests and streams' -r
 complete -c d2b -n "__fish_d2b_using_subcommand zone; and __fish_seen_subcommand_from get" -l json -d 'Emit the stable JSON envelope'
@@ -1553,6 +1556,25 @@ complete -c d2b -n "__fish_d2b_using_subcommand zone; and __fish_seen_subcommand
 complete -c d2b -n "__fish_d2b_using_subcommand zone; and __fish_seen_subcommand_from status" -l human -d 'Force human-readable terminal output'
 complete -c d2b -n "__fish_d2b_using_subcommand zone; and __fish_seen_subcommand_from status" -l no-deadline -d 'Suppress the command default deadline'
 complete -c d2b -n "__fish_d2b_using_subcommand zone; and __fish_seen_subcommand_from status" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand zone; and __fish_seen_subcommand_from audit" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand zone; and __fish_seen_subcommand_from audit" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand zone; and __fish_seen_subcommand_from audit" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand zone; and __fish_seen_subcommand_from audit" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand zone; and __fish_seen_subcommand_from audit" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand zone; and __fish_seen_subcommand_from audit" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand zone; and __fish_seen_subcommand_from audit" -f -a "export" -d 'Arguments for `d2b zone audit export`'
+complete -c d2b -n "__fish_d2b_using_subcommand zone; and __fish_seen_subcommand_from doctor" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand zone; and __fish_seen_subcommand_from doctor" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand zone; and __fish_seen_subcommand_from doctor" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand zone; and __fish_seen_subcommand_from doctor" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand zone; and __fish_seen_subcommand_from doctor" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand zone; and __fish_seen_subcommand_from doctor" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand zone; and __fish_seen_subcommand_from support-bundle" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand zone; and __fish_seen_subcommand_from support-bundle" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand zone; and __fish_seen_subcommand_from support-bundle" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand zone; and __fish_seen_subcommand_from support-bundle" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand zone; and __fish_seen_subcommand_from support-bundle" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand zone; and __fish_seen_subcommand_from support-bundle" -s h -l help -d 'Print help'
 complete -c d2b -n "__fish_d2b_using_subcommand quota; and not __fish_seen_subcommand_from get list watch create update-spec delete status upgrade reconcile verify usb security-key" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
 complete -c d2b -n "__fish_d2b_using_subcommand quota; and not __fish_seen_subcommand_from get list watch create update-spec delete status upgrade reconcile verify usb security-key" -l deadline -d 'Bound all Zone requests and streams' -r
 complete -c d2b -n "__fish_d2b_using_subcommand quota; and not __fish_seen_subcommand_from get list watch create update-spec delete status upgrade reconcile verify usb security-key" -l json -d 'Emit the stable JSON envelope'

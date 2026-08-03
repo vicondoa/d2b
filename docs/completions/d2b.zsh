@@ -3071,6 +3071,64 @@ _arguments "${_arguments_options[@]}" : \
 '::name:_default' \
 && ret=0
 ;;
+(audit)
+_arguments "${_arguments_options[@]}" : \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+":: :_d2b__subcmd__zone__subcmd__audit_commands" \
+"*::: :->audit" \
+&& ret=0
+
+    case $state in
+    (audit)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:d2b-zone-audit-command-$line[1]:"
+        case $line[1] in
+            (export)
+_arguments "${_arguments_options[@]}" : \
+'--after=[Export segments after this owned segment basename]:AFTER:_default' \
+'--before=[Export segments before this owned segment basename]:BEFORE:_default' \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+        esac
+    ;;
+esac
+;;
+(doctor)
+_arguments "${_arguments_options[@]}" : \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(support-bundle)
+_arguments "${_arguments_options[@]}" : \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
         esac
     ;;
 esac
@@ -5803,8 +5861,28 @@ _d2b__subcmd__zone_commands() {
 'get:' \
 'list:' \
 'status:' \
+'audit:' \
+'doctor:Arguments for \`d2b zone doctor\`' \
+'support-bundle:Arguments for \`d2b zone support-bundle\`' \
     )
     _describe -t commands 'd2b zone commands' commands "$@"
+}
+(( $+functions[_d2b__subcmd__zone__subcmd__audit_commands] )) ||
+_d2b__subcmd__zone__subcmd__audit_commands() {
+    local commands; commands=(
+'export:Arguments for \`d2b zone audit export\`' \
+    )
+    _describe -t commands 'd2b zone audit commands' commands "$@"
+}
+(( $+functions[_d2b__subcmd__zone__subcmd__audit__subcmd__export_commands] )) ||
+_d2b__subcmd__zone__subcmd__audit__subcmd__export_commands() {
+    local commands; commands=()
+    _describe -t commands 'd2b zone audit export commands' commands "$@"
+}
+(( $+functions[_d2b__subcmd__zone__subcmd__doctor_commands] )) ||
+_d2b__subcmd__zone__subcmd__doctor_commands() {
+    local commands; commands=()
+    _describe -t commands 'd2b zone doctor commands' commands "$@"
 }
 (( $+functions[_d2b__subcmd__zone__subcmd__get_commands] )) ||
 _d2b__subcmd__zone__subcmd__get_commands() {
@@ -5820,6 +5898,11 @@ _d2b__subcmd__zone__subcmd__list_commands() {
 _d2b__subcmd__zone__subcmd__status_commands() {
     local commands; commands=()
     _describe -t commands 'd2b zone status commands' commands "$@"
+}
+(( $+functions[_d2b__subcmd__zone__subcmd__support-bundle_commands] )) ||
+_d2b__subcmd__zone__subcmd__support-bundle_commands() {
+    local commands; commands=()
+    _describe -t commands 'd2b zone support-bundle commands' commands "$@"
 }
 
 if [ "$funcstack[1]" = "_d2b" ]; then
