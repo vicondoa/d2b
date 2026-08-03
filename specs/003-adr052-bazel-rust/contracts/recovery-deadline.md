@@ -10,14 +10,18 @@ descriptor is close-on-exec. A tracked file, unsafe layout, replacement race,
 or live matching server causes refusal before deletion.
 
 Cleanup performs every one of those operations through the same injectable
-filesystem trait in `packages/d2b-bazel-runner/src/fsops.rs` that the per-case
-result writer uses. The two subsystems enforce identical properties on
+filesystem trait in `packages/d2b-bazel-support/src/fsops.rs` that the per-case
+result writer, the topology provider checks, and the locator use. Those
+subsystems enforce identical properties on
 identical syscalls, so a single implementation and a single mutation set cover
-both, and no cleanup test needs live host filesystem state: the tracked-file,
+them, and no cleanup test needs live host filesystem state: the tracked-file,
 symlink, magic-link, escape, replacement-race, decoy-survival, and
 descriptor-inheritance negatives are all produced by the injected fake. The
 forced component-walk route is selected through the same boundary rather than
-by finding a kernel that lacks `openat2`.
+by finding a kernel that lacks `openat2`. The trait lives in the neutral
+support crate rather than in the runner so that the locator can reach it
+without depending on the runner, and so `xtask` can reach the startup-option
+construction beside it without an `xtask -> d2b-bazel-runner` edge.
 
 | Code | Required recovery |
 | --- | --- |
@@ -51,7 +55,11 @@ down.
 
 Both the raw uptime field and the current instant arrive through
 `packages/d2b-bazel-runner/src/clock.rs`, which declares an `UptimeSource` and
-a `Clock`. Nothing in the deadline path opens `/proc/uptime` or reads the host
+a `Clock`. That boundary stays in the runner rather than moving to the shared
+support crate, because the deadline and process paths are its only readers; the
+locator resolves provider freshness from timestamps the filesystem boundary
+returns and needs no clock at all. Nothing in the deadline path opens
+`/proc/uptime` or reads the host
 clock directly. That is what makes the grammar and rounding table testable:
 every accepted and rejected field, the truncate-on-capture and round-up-on-read
 pair, the exactly-zero remaining budget, and the overflow case are supplied

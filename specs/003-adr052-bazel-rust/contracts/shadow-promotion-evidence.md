@@ -74,8 +74,9 @@ produced no measurement rather than selecting among warm and cold runs.
    all three locks, whatever the comparison found;
 9. zero shadow cache restore, save, or publication;
 10. the complete locator migration record set, every file migrated or recorded
-    as needing no migration, with the planted stale-binary negative fixture
-    failing under Bazel as required;
+    as needing no migration, with the injected stale-provider negative failing
+    in Bazel mode as required, supplied through the `FileSystem` and
+    `RunfilesView` fakes rather than by an executable written to a live path;
 11. positive and all required negative workflow, cache, deadline, cleanup,
     per-case-redaction, and result-filesystem controls passing.
 
