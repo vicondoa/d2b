@@ -401,6 +401,7 @@ fn contract_constants_are_exact() {
     assert_eq!(READ_POOL_THREADS, 4);
     assert_eq!(MAX_CONCURRENT_READS, 16);
     assert_eq!(READ_LIFETIME, std::time::Duration::from_millis(250));
+    assert_eq!(REDB_CACHE_SIZE, 4 * 1024 * 1024);
 }
 
 #[test]
@@ -1822,8 +1823,9 @@ async fn production_backend_hard_fixture_child() {
 
     let backend_signals = store.signals();
     println!(
-        "{PRODUCTION_RSS_CHILD_MARKER} resources={PRODUCTION_RSS_RESOURCE_COUNT} watches={PRODUCTION_RSS_WATCH_COUNT} range_seeks={} decoded_rows={} shared_batches={} fanout_references={} queue_depth={} queue_capacity={} read_pool_threads={} max_concurrent_reads={} slow_watcher_evictions={} admission_rejections={} replay_work={}",
+        "{PRODUCTION_RSS_CHILD_MARKER} resources={PRODUCTION_RSS_RESOURCE_COUNT} watches={PRODUCTION_RSS_WATCH_COUNT} range_seeks={} scanned_rows={} decoded_rows={} shared_batches={} fanout_references={} queue_depth={} queue_capacity={} read_pool_threads={} max_concurrent_reads={} cache_bytes={} watch_registrations={} watch_budget_used={} watch_budget_capacity={} slow_watcher_evictions={} admission_rejections={} replay_work={}",
         backend_signals.revision_range_seeks,
+        backend_signals.replay_rows_scanned,
         backend_signals.replay_rows_decoded,
         backend_signals.shared_immutable_batches,
         backend_signals.fanout_references,
@@ -1831,6 +1833,10 @@ async fn production_backend_hard_fixture_child() {
         backend_signals.writer_queue_capacity,
         READ_POOL_THREADS,
         MAX_CONCURRENT_READS,
+        REDB_CACHE_SIZE,
+        watch_signals.current_registrations,
+        watch_signals.budget_used,
+        watch_signals.budget_capacity,
         watch_signals.slow_watcher_evictions,
         watch_signals.admission_rejections,
         watch_signals.replay_work,
