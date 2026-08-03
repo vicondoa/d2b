@@ -315,6 +315,36 @@ refute 'lock regeneration is reachable from Make or CI' \
   -rqE 'xtask (bazel-repin|bazel-module-refresh)' Makefile .github/workflows/
 ```
 
+W0 also fixes the dependency direction among the three internal crates this
+migration adds. `packages/d2b-bazel-support/` is neutral and holds what more
+than one consumer needs: the `FileSystem` boundary, the `RunfilesView`
+boundary, and, from W2, the one startup-option construction. The runner, the
+locator, and `xtask` all read it, and nothing reads the runner. Check the
+authority first and the two manifests second:
+
+```bash
+set -e
+. .scratch/adr052-assert.sh
+require_input tests/unit/meta/w0-dep-direction.sh \
+  packages/d2b-bazel-support/Cargo.toml \
+  packages/xtask/Cargo.toml
+tests/unit/meta/w0-dep-direction.sh
+refute 'the support crate declares a first-party dependency' \
+  -nE '^[[:space:]]*d2b[a-z0-9_-]*[[:space:]]*=' \
+  packages/d2b-bazel-support/Cargo.toml
+refute 'xtask declares the runner or the locator' \
+  -nE '^[[:space:]]*d2b-(bazel-runner|test-locator)[[:space:]]*=' \
+  packages/xtask/Cargo.toml
+```
+
+The gate is the authority and the two `refute` calls are only a fast local
+read: the gate resolves names through `cargo metadata --no-deps`, so it sees a
+`package =` rename, a workspace-inherited dependency, and a target-specific
+entry that a manifest grep would miss, and it already fails closed when the
+resolver is unavailable. Running it directly here is deliberate; `make
+test-policy` above ran it too, and a contributor who is about to add a helper
+to the runner wants the answer before the wave, not after.
+
 Each of the two commands refuses an exported repin control, and each refusal
 ends on the command that was refused rather than on a shared template. Check
 both, because a single templated remedy would have to name a `--hub` that
@@ -443,7 +473,8 @@ corpus and refuses any entry in that directory that is not a readable
 planted cases live in-test. `tests/test-rust.sh` excludes `d2b-contract-tests`
 from every workspace leaf and `tests/test-policy.sh` runs seven contract-test
 binaries that do not include `policy_docs`, so this is the only lane that runs
-it. Confirm the lint is present and reaches the notes, and confirm the wave's
+it. Confirm the lint is present, reaches the notes, and carries the case that
+polices its own refusals, and confirm the wave's
 own note exists:
 
 ```bash
@@ -467,9 +498,35 @@ else
   test "$rc" -eq 1 || fail "grep exited $rc while inspecting policy_docs.rs"
   fail 'the wave-note scanner was removed from the policy carrier'
 fi
+if grep -n 'wave_note_refusals_carry_no_path_token' \
+    packages/d2b-contract-tests/tests/policy_docs.rs; then
+  :
+else
+  rc=$?
+  test "$rc" -eq 1 || fail "grep exited $rc while inspecting policy_docs.rs"
+  fail 'the scanner no longer refuses its own rendered refusals'
+fi
 ```
 
-Both checks are presence claims and neither ends in `| head`: a pipeline
+Read one refusal before trusting the lint. It must name the note and the
+one-based line, give the one remediation, and stop: it must not print the
+offending token. A refusal is republished into the target's output, into panel
+comments, and into PR bodies, so a message that echoes the leaked path has
+spread it further than the note did. The third check above is the mechanical
+half of that rule, because it names the case that runs every rendered refusal
+back through the scanner's own path-token and worktree-substring tests.
+
+The other half is not greppable and is deliberately left to the compiler and
+the tests: the entry API returns `std::io::Result` at both levels, one for
+reading the directory and one per entry holding exactly what `read_to_string`
+returned, so an unreadable directory is a refusal rather than an empty corpus
+and a committed subdirectory, a dangling symlink, a permission denial, and
+non-UTF-8 content are four distinguishable errnos. A grep over a Rust signature
+that may wrap across lines is exactly the fragile check the rest of this guide
+argues against, so do not add one.
+
+All three checks are presence claims and none ends in `| head`: a
+pipeline
 reports the last command's status, so a `head` on the end would turn a deleted
 lint into a pass. In the W1 and W2 sections the same target covers `w1.md` and
 `w2.md`; nothing further is needed there, because the committed lint scans the
@@ -534,7 +591,9 @@ The W1 aggregate checks:
 - two independent schema generations against the generated census;
 - the nightly API census, including the toolchain version the action actually
   used compared against the committed pin;
-- binary existence, executability, and identity through the dual-mode locator.
+- binary existence, executability, freshness, and identity through the
+  dual-mode locator, every one of them read through the injected `FileSystem`
+  boundary rather than by touching a live path.
 
 Run the carriers:
 
@@ -557,10 +616,12 @@ find .scratch/bazel -name test.log -path '*ci/rust*' | head
 
 Two negative controls matter more than the positive ones:
 
-- the planted stale-binary fixture, which puts an out-of-date executable at the
-  Cargo path, removes the runfiles entry, runs under Bazel, and must fail
+- the planted stale-provider case, in which the injected `FileSystem` fake
+  reports an out-of-date, wrong-digest executable at the Cargo path and the
+  injected `RunfilesView` fake reports no entry, so the Bazel arm must fail
   naming the expected runfiles path rather than passing against the stale
-  binary;
+  provider. Nothing is written to `packages/target/` to produce it: that
+  directory is the hazard, not the fixture;
 - the planted redaction fixture, which must first prove every forbidden value
   is present in the unredacted fixture and then prove every one absent from the
   result document.
@@ -678,7 +739,8 @@ jq -e '
   all(.broker_repetitions[];
     .exclusive and .consecutive_passes == 20) and
   .locator_migration.unresolved_files == 0 and
-  .locator_migration.stale_binary_fixture_failed_under_bazel
+  .locator_migration.injected_stale_provider_refused_in_bazel_mode and
+  (.locator_migration.live_paths_written == 0)
 ' specs/003-adr052-bazel-rust/evidence/qualification.json
 ```
 
@@ -704,8 +766,11 @@ short-write and collision handling, sync before rename, close-on-exec, and
 child-reap ordering.
 
 Every one of those states is supplied through an injected boundary, not
-arranged on the host. Cleanup and the result writer share the `FileSystem`
-trait in `packages/d2b-bazel-runner/src/fsops.rs`, and the deadline path takes
+arranged on the host. Cleanup, the result writer, the topology provider checks,
+and the locator share the `FileSystem`
+trait in `packages/d2b-bazel-support/src/fsops.rs`, the locator and the runner
+share `RunfilesView` in `packages/d2b-bazel-support/src/runfiles.rs`, and the
+deadline path takes
 `Clock` and `UptimeSource` from `packages/d2b-bazel-runner/src/clock.rs`. When
 reviewing W2, check that no test fills a disk, requires a privileged mount,
 sleeps to reach an expiry, or reads the host clock; a test that does is not
@@ -716,7 +781,8 @@ set -e
 . .scratch/adr052-assert.sh
 require_input packages/d2b-bazel-runner/tests/ \
   packages/d2b-bazel-runner/src/cleanup.rs \
-  packages/d2b-bazel-runner/src/deadline.rs
+  packages/d2b-bazel-runner/src/deadline.rs \
+  packages/d2b-bazel-support/src/fsops.rs
 refute 'runner tests depend on ambient time or uptime' \
   -rnE 'thread::sleep|SystemTime::now|/proc/uptime' \
   packages/d2b-bazel-runner/tests/

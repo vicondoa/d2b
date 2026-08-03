@@ -124,7 +124,8 @@ The guard rejects:
 - a schema generation differing from the generated nonempty valid-JSON census
   before content comparison;
 - a binary provider that is absent, non-executable, stale, or of the wrong
-  identity;
+  identity, where each of those four states is supplied through the injected
+  `FileSystem` and `RunfilesView` boundaries rather than arranged on disk;
 - a locator file that is neither migrated nor recorded as needing no
   migration;
 - an emitted census toolchain version that differs from the committed pin;

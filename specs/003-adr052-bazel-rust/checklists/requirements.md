@@ -80,3 +80,25 @@
   carrier claim was measured rather than assumed: `tests/test-rust.sh` excludes
   `d2b-contract-tests` from every workspace leaf, and `tests/test-policy.sh`
   runs seven contract-test binaries that do not include `policy_docs`.
+- Revalidated after the round-eight panel. Three carrier and structure changes,
+  no requirement change. First, a neutral internal crate
+  `packages/d2b-bazel-support/` now holds the `FileSystem` boundary, the new
+  `RunfilesView` boundary, and the one absolute startup-option construction, so
+  the dependency direction is `xtask`, `d2b-bazel-runner`, and
+  `d2b-test-locator` all depending on support and `xtask` never depending on
+  the runner; `Clock` and `UptimeSource` stay in
+  `packages/d2b-bazel-runner/src/clock.rs`, because no second crate reads them.
+  The rule is enforced by extending the existing resolver-backed gate
+  `tests/unit/meta/w0-dep-direction.sh`, which adds no new top-level shell gate
+  and therefore stays inside FR-053. Second, the locator and topology provider
+  negatives, absent, non-executable, stale, and wrong identity, are now
+  supplied through the injected filesystem and runfiles fakes, and no test
+  writes a stale executable into the live Cargo path; that is FR-052's existing
+  injected-boundary rule applied to the one guard that had still been proven by
+  arranging host state. Third, the wave-note lint's refusal now names the note,
+  the one-based line, and the remediation and never the offending token, and
+  its entry API returns `std::io::Result` at both levels instead of collapsing
+  a failed read into `Option`; both are FR-029 and FR-052 properties of a
+  refusal, not new requirements. Task count stays 174 and no task was renumbered.
+  No functional requirement or success criterion was added or removed; the set
+  remains FR-001 through FR-055 and SC-001 through SC-015.

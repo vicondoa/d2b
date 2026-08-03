@@ -698,11 +698,13 @@ with close-on-exec descriptors. Refusal deletes nothing and gives its
 code-specific recovery.
 
 **Cleanup and result publication share one injectable filesystem boundary.**
-`packages/d2b-bazel-runner/src/fsops.rs` owns `openat2`, the forced
-component-walk fallback, `open`, `write`, `fsync`, `renameat`, `unlinkat`, and
-directory enumeration, and both the JUnit writer and cleanup call through it.
-Two reasons, and neither is stylistic. The first is that these two subsystems
-enforce the *same* properties on the same syscalls: anchored close-on-exec
+`packages/d2b-bazel-support/src/fsops.rs` owns `openat2`, the forced
+component-walk fallback, `open`, `write`, `fsync`, `renameat`, `unlinkat`,
+directory enumeration, and the metadata reads the provider checks need, and the
+JUnit writer, cleanup, the topology provider checks, and the locator all call
+through it. Two reasons, and neither is stylistic. The first is that these
+subsystems enforce the *same* properties on the same syscalls: anchored
+close-on-exec
 descriptors, refusal of symlink and magic-link parents, refusal of an anchored
 `..` escape, and unlinking only what the runner created. Implementing them
 twice means the planted mutations only prove one copy is correct, and a future
@@ -712,9 +714,32 @@ errno at an exact call ordering, and the only reliable way to produce
 replacement race on a shared reference host is to inject it. A test that needs
 a genuinely full disk is a test that will be marked ignored within a quarter.
 
-The boundary is a W0-frozen module path, not a W2 refactor, so cleanup, result
-publication, and deadline scopes open against a stable trait surface and the
-W2 slices stay file-disjoint.
+**The boundary lives in a neutral crate, not in the runner.**
+`packages/d2b-bazel-support/` is an internal build-tooling crate that declares
+no first-party dependency at all. Three crates read it: the runner, the
+locator, and, from W2, `xtask`. Putting the trait in the runner instead would
+have forced `xtask -> d2b-bazel-runner` as soon as the repin and module-refresh
+commands needed the one shared startup-option construction, and that edge runs
+the wrong way: `xtask` is the generator, and the runner's own Bazel targets are
+part of what `xtask` generates. The neutral crate is also what keeps the
+locator honest, because the locator must not depend on the runner to get a
+filesystem seam. `RunfilesView` sits beside `FileSystem` in the same crate for
+the same reason: both the locator's Bazel arm and the runner's child-binary
+resolution look up declared runfiles, and a fake runfiles view is the only way
+to plant a missing entry without editing a real runfiles tree.
+
+The boundary is a W0-frozen module path, not a W2 refactor, and W0 lands it
+whole, so the W1 runner and locator scopes and the W2 cleanup, result
+publication, and deadline scopes all open against one stable trait surface with
+one fake, and the slices stay file-disjoint.
+
+**Time does not move with it.** `Clock` and `UptimeSource` stay in
+`packages/d2b-bazel-runner/src/clock.rs`, because only the deadline and process
+paths read them: the locator has no clock dependency, since provider staleness
+is a comparison of two timestamps the filesystem boundary already returns, and
+`xtask` has none either. A boundary shared by one crate belongs in that crate;
+moving it into the neutral crate would buy nothing and would widen a surface
+three crates then have to agree on.
 
 **Rationale**: Persistent reuse is the local performance benefit, but an
 unbounded or path-based cleanup can fill disk or delete unrelated data, and a
@@ -917,10 +942,27 @@ rollback and distinguish naming failures from executor failures.
 
 **Decision**: Behavioral guards live in the owning Rust crate, source-shape
 cleanup guards extend `policy_docs.rs`, workflow and cache guards extend
-`policy_ci.rs`, and generated drift extends `test-drift`. Each ships with a
+`policy_ci.rs`, crate dependency direction extends
+`tests/unit/meta/w0-dep-direction.sh`, and generated drift extends
+`test-drift`. Each ships with a
 positive case and an observable negative mutation. No host or manual tier is
 used. Every wave has the full ten-role plan and diff panels, unanimous and
 bound to one snapshot. This plan does not use pipelined dispatch.
+
+**The dependency-direction guard extends the resolver-backed gate that already
+exists.** `tests/unit/meta/w0-dep-direction.sh` is wired into both
+`tests/test-policy.sh` and `tests/static.sh`, resolves dependencies with
+`cargo metadata --no-deps` rather than by reading manifest text, and already
+fails closed when the resolver cannot run. Those three properties are the whole
+reason to extend it rather than to write a Rust manifest scan: a `package =`
+rename, a workspace-inherited dependency, and a target-specific dependency all
+resolve correctly there and would all be invisible to a text scan. Extending it
+adds no gate, no Layer-1 job, and no required context, so FR-053 is satisfied
+by the same reasoning that puts the wave-note lint in an existing Rust carrier.
+Its planted negatives are an `xtask -> d2b-bazel-runner` edge and a first-party
+edge out of the support crate, each added, observed refused, and reverted
+during W0 integrated validation, where all three build-tooling crates are
+workspace members and the gate's required-crate assertion can be satisfied.
 
 **The `software` seat is filled by the Bazel and `rules_rust` expert for this
 delivery run.** The findings that forced the ADR amendment were all
@@ -1052,9 +1094,26 @@ never falls back to the Cargo arm. Chaining is the failure that matters:
 `packages/target/` holds real, executable, out-of-date binaries for the whole
 shadow stage, so a fallback would find one and the test would go green against
 the wrong binary. Every located binary is still checked to exist, to be
-executable, and to report the expected identity before use. The guard that
-proves the guard is a negative fixture that plants a stale binary at the Cargo
-path, removes the runfiles entry, runs under Bazel, and requires failure.
+executable, to be no older than its newest declared input, and to report the
+expected identity before use, where identity is the digest of the provider's
+bytes compared against the value the coverage map records. Identity is a read,
+not an execution, which is what lets every provider check run against supplied
+state.
+
+**Every provider negative is injected, and nothing is planted on disk.** The
+absent, non-executable, stale, and wrong-identity providers are states of the
+`FileSystem` fake in `packages/d2b-bazel-support/`, and the removed runfiles
+entry is a state of the `RunfilesView` fake beside it. The guard that proves
+the guard is therefore a fake filesystem that reports an out-of-date,
+wrong-digest executable at the Cargo path while the fake runfiles view reports
+no entry, run in Bazel mode, requiring failure. An earlier draft wrote a real
+stale executable into the Cargo path. That is the one arrangement this design
+must not use: `packages/target/` is exactly the directory whose real,
+out-of-date binaries are the hazard being guarded against, so a test that
+plants one there has manufactured the hazard on the shared reference host, and
+an interrupted run leaves it behind for whatever runs next. The same reasoning
+that keeps `ENOSPC` and `EINTR` off the real disk keeps a stale provider off
+the real path.
 
 **All fixture reads become declared data**, resolved through the same locator.
 A check that needs the repository *inventory* rather than a file consumes a

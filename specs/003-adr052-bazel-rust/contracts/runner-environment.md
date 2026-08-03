@@ -21,6 +21,38 @@ mechanically true.
   gate already uses. Per-target concurrency never multiplies `--local_test_jobs`
   into an unbounded process count.
 
+## Binary provider resolution
+
+The locator's Bazel arm and the runner's child-binary resolution both look up
+a declared runfiles path, and both check the provider before use. Those two
+operations sit behind two injected boundaries, not behind the standard library:
+
+- Runfiles lookup goes through `RunfilesView` in
+  `packages/d2b-bazel-support/src/runfiles.rs`. The supplied states are a
+  declared entry present, a declared entry missing, and a runfiles environment
+  that indicates no Bazel test at all. Mode is chosen once from that last
+  state; a missing entry in Bazel mode is a hard failure that names the
+  expected runfiles path and never falls back to the Cargo arm.
+- Existence, executable mode, freshness, and identity go through `FileSystem`
+  in `packages/d2b-bazel-support/src/fsops.rs`. Freshness compares the
+  provider's modification time against the newest declared input's, both read
+  through the boundary. Identity is the digest of the provider's bytes compared
+  against the value the coverage map records for that provider. Identity is a
+  read, never an execution, which is what allows every provider negative to be
+  a supplied state.
+
+**No provider test writes an executable to a live path.** The absent,
+non-executable, out-of-date, and wrong-identity providers are states of the
+`FileSystem` fake, and the removed runfiles entry is a state of the
+`RunfilesView` fake. The stale-provider case in particular is proven by a fake
+that reports an out-of-date, wrong-digest executable at the Cargo path while
+the fake runfiles view reports no entry. Writing a real stale binary into
+`packages/target/` would manufacture, on the shared host, precisely the hazard
+the locator exists to refuse, and an interrupted run would leave it there for
+the next suite to find. This is the same rule that keeps `ENOSPC` and `EINTR`
+off the real disk, applied to the one directory the shadow stage keeps full of
+real, out-of-date binaries.
+
 ## Per-case result document
 
 - One JUnit document is written to the path Bazel supplies in
@@ -65,18 +97,23 @@ mechanically true.
   filesystem error unlink only the runner-created temporary with `unlinkat`
   before failing the carrier, so no partial evidence remains and no foreign
   path is removed.
-- Open, write, sync, rename, unlink, and directory enumeration sit behind one
-  injectable filesystem trait in `packages/d2b-bazel-runner/src/fsops.rs`, so
+- Open, write, sync, rename, unlink, directory enumeration, and the metadata
+  reads the provider checks need sit behind one
+  injectable filesystem trait in `packages/d2b-bazel-support/src/fsops.rs`, so
   errno mapping, ownership state, and call ordering are hermetically testable
   rather than requiring a full disk or signal races on the shared host.
-- That trait is shared with cleanup, which enforces the same anchored
+- That trait is shared with cleanup, with the topology provider checks, and
+  with the locator, all of which enforce the same anchored
   close-on-exec, link-refusal, escape-refusal, and own-what-you-unlink
   properties on the same syscalls. One implementation means one set of planted
-  mutations proves both callers, and a later fix cannot land in one copy only.
-  See `recovery-deadline.md` for the cleanup side of the same boundary.
+  mutations proves every caller, and a later fix cannot land in one copy only.
+  It lives in the neutral `packages/d2b-bazel-support/` crate, which declares
+  no first-party dependency, so the locator reaches it without depending on the
+  runner. See `recovery-deadline.md` for the cleanup side of the same boundary.
 - No test in this contract may depend on live host filesystem state. `ENOSPC`,
-  short writes, `EINTR` and `EAGAIN` retries, `EEXIST` collisions, and
-  replacement races are produced by the injected fake.
+  short writes, `EINTR` and `EAGAIN` retries, `EEXIST` collisions, replacement
+  races, and every absent, non-executable, out-of-date, or wrong-identity
+  provider are produced by the injected fake.
 
 ## Publication is enforcing
 

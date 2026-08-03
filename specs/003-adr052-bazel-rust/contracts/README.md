@@ -18,8 +18,11 @@ Files:
 - `coverage-map.md` - internal coverage artifact shape, cardinality, and the
   split between analysis-time, in-test, and out-of-test invariants.
 - `runner-environment.md` - child environment, per-case result document,
-  filesystem semantics, and the scope of the no-shell rule.
-- `workspace-and-tool-pinning.md` - startup options, workspace boundary, the
+  binary provider resolution through the injected runfiles and filesystem
+  boundaries, filesystem semantics, and the scope of the no-shell rule.
+- `workspace-and-tool-pinning.md` - startup options and the one construction
+  that derives them, the crate dependency direction that construction's home
+  depends on, the workspace boundary, the
   four dependency hubs and their locks, the repository-owned commands that
   regenerate each committed lock and validate the yanked snapshot, the
   injectable index boundary the networked refresh calls through, the exact

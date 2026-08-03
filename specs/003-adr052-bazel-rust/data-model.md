@@ -173,20 +173,34 @@ injected boundaries below rather than by arranging host state.
 
 ## Injected Boundaries
 
-Three boundaries exist so that failure states are supplied rather than
+Four boundaries exist so that failure states are supplied rather than
 provoked. All are W0-frozen module paths, so later scopes open against a stable
-surface.
+surface. The first two live in `packages/d2b-bazel-support/`, the neutral
+internal crate that declares no first-party dependency, because the runner, the
+locator, and `xtask` all read them; the crate exists so that no consumer has to
+depend on another consumer to reach a boundary.
 
 | Boundary | Path | Serves | Supplied states |
 | --- | --- | --- | --- |
-| `FileSystem` | `packages/d2b-bazel-runner/src/fsops.rs` | Per-case result publication and scratch cleanup | `openat2` and forced component-walk routes, symlink and magic-link parents, anchored `..` escape, `EEXIST` collision, short write, `EINTR`, `EAGAIN`, `ENOSPC`, replacement race, tracked entry, foreign decoy |
+| `FileSystem` | `packages/d2b-bazel-support/src/fsops.rs` | Per-case result publication, scratch cleanup, and every provider existence, mode, freshness, and identity check | `openat2` and forced component-walk routes, symlink and magic-link parents, anchored `..` escape, `EEXIST` collision, short write, `EINTR`, `EAGAIN`, `ENOSPC`, replacement race, tracked entry, foreign decoy, and an absent, non-executable, out-of-date, or wrong-digest provider |
+| `RunfilesView` | `packages/d2b-bazel-support/src/runfiles.rs` | The locator's Bazel arm and the runner's child-binary resolution | A declared entry present, a declared entry missing, and a runfiles environment that indicates no Bazel test at all |
 | `Clock` and `UptimeSource` | `packages/d2b-bazel-runner/src/clock.rs` | Deadline parsing, remaining-budget arithmetic, child duration, expiry escalation | Every accepted and rejected uptime field, truncate on capture and round up on read, exactly-zero remaining budget, overflow, expiry reached without sleeping |
 | `YankedIndex` | `packages/xtask/src/bazel_yanked.rs` | The reviewed networked yanked-snapshot refresh | All-clear index, a yanked version, a key the locks declare and the index omits, a key no lock declares, a missing index revision, a transport failure, a malformed payload |
 
-No test of cleanup, result publication, or deadline handling may depend on
-live host filesystem state, a full disk, a privileged mount, or the host clock.
-A property that can only be exercised by arranging host state is a property
-that will be marked ignored, which is the same as not testing it.
+`Clock` and `UptimeSource` stay in the runner rather than moving to the support
+crate, because only the runner's deadline and process paths read them. The
+locator needs no clock: provider freshness compares two timestamps the
+`FileSystem` boundary already returns, and provider identity is a byte digest
+read through the same boundary rather than an execution.
+
+No test of cleanup, result publication, deadline handling, or provider
+resolution may depend on live host filesystem state, a full disk, a privileged
+mount, or the host clock. A property that can only be exercised by arranging
+host state is a property that will be marked ignored, which is the same as not
+testing it. That applies with particular force to the stale-provider case: a
+test that writes an out-of-date executable into `packages/target/` has planted
+the exact hazard the locator exists to refuse, on the host every other suite
+shares, and leaves it there if the run is interrupted.
 
 The same rule holds for the network. `IndexClient` is the single networked
 implementation of `YankedIndex` and the only site permitted to open a socket
@@ -223,6 +237,14 @@ compile-time Cargo environment expansion and 20 test files resolving
 is in neither variant is a gap the coverage map makes visible. Both arms stay
 green on the Cargo path for the whole shadow stage.
 
+Provider negatives are supplied, never arranged. The absent, non-executable,
+out-of-date, and wrong-identity providers, and the missing runfiles entry that
+turns a Bazel-mode lookup into a refusal, are all states of the `FileSystem`
+and `RunfilesView` fakes in `packages/d2b-bazel-support/`. No record in this
+set is proven by writing an executable to `packages/target/` or to any other
+live path, and no provider check executes the located file: identity is the
+digest of its bytes read through the same boundary.
+
 ## Hermeticity Inventory
 
 | Field | Rule |
@@ -234,7 +256,7 @@ green on the Cargo path for the whole shadow stage.
 | `action_env_allowlist` | The explicit minimal set of host environment values any action may observe. |
 | `bazelignore_entries` | `.scratch/` plus every Cargo output directory any workspace or tool creates. |
 | `symlink_prefix` | Absolute path beneath `.scratch/`. |
-| `startup_options` | Absolute values supplied by the wrapper, byte-identical across build, test, query, info, shutdown, clean, and, from W2, the repin and module-refresh children. |
+| `startup_options` | Absolute values supplied by the wrapper from the one construction in `packages/d2b-bazel-support/src/startup.rs`, byte-identical across build, test, query, info, shutdown, clean, and, from W2, the repin and module-refresh children. |
 | `generator_pin` | `cargo-bazel` URL plus sha256; source bootstrap refused. |
 | `module_lock_modes` | `.bazelrc` carries `common --lockfile_mode=error` and `common --check_direct_dependencies=error`; neither may be relaxed by a wrapper argument. |
 
@@ -403,7 +425,7 @@ Promotion Evidence Set before executor authority changes.
 | `qualification_records` | Ten consecutive matching push-to-`v3` records, each with one shared `head_sha`, both run IDs, and a passing fixture-contract verdict. |
 | `seeded_failures` | Exact eighteen-record set. |
 | `topology_proofs` | Main, guest, and three broker suites; exact generator-derived censuses and ignored counts, plus per-case result publication. |
-| `locator_migration_proof` | Every enumerated file migrated or recorded as needing none, plus the passing stale-binary negative fixture. |
+| `locator_migration_proof` | Every enumerated file migrated or recorded as needing none, plus the passing injected stale-provider negative in which the `FileSystem` fake reports an out-of-date, wrong-digest executable at the Cargo path while the `RunfilesView` fake reports the entry missing. |
 | `broker_repetitions` | Twenty consecutive passes per broker suite with exclusivity. |
 | `performance_sets` | Three valid profiles. Local sets bind the candidate; cold-CI samples carry their own `head_sha` values and reference the W3 feasibility measurement. |
 | `supply_chain_comparison` | Three locks, no differing enforcing outcome, with the yanked carrier landed and `cargo xtask bazel-yanked-check` passing offline against all three. |

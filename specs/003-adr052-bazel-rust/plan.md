@@ -215,9 +215,12 @@ packages/xtask/tests/policy_ci.rs
 packages/xtask/tests/fixtures/ci/
 packages/d2b-contract-tests/tests/policy_docs.rs # W0 wave-note lint; W2 source-shape tests
 specs/003-adr052-bazel-rust/wave-notes/ # w0.md, w1.md, w2.md; one writer each
-packages/d2b-bazel-runner/src/fsops.rs # Injectable filesystem for JUnit and cleanup
+packages/d2b-bazel-support/src/fsops.rs    # Injectable FileSystem: writer, cleanup, providers
+packages/d2b-bazel-support/src/runfiles.rs # Injectable RunfilesView for locator and runner
+packages/d2b-bazel-support/src/startup.rs  # The one absolute startup-option construction
 packages/d2b-bazel-runner/src/clock.rs # Injectable Clock and UptimeSource for deadlines
-packages/                             # Runner crate and locator crate paths fixed by W0 prep
+tests/unit/meta/w0-dep-direction.sh    # Extended with the build-tooling direction rule
+packages/                             # Support, runner, locator crate paths fixed by W0 prep
 tests/golden/bazel-rust-coverage.json
 tests/golden/bazel-rust-query.json     # Committed drift-checked query result
 tests/test-rust.sh                     # Cargo authority; fixture mode survives
@@ -231,8 +234,62 @@ changelog.d/                           # One unique semantic fragment per code s
 `gen-bazel` owns all generated BUILD files, `.bazelignore`, the governed-source
 manifest, every derived census, and the build-script and action-environment
 inventory. ADR 0052 fixes labels and ownership, not every helper filename. W0
-prep selects the runner crate, the locator crate, and exact helper paths before
-parallel worktrees open.
+prep selects the support crate, the runner crate, the locator crate, and exact
+helper paths before parallel worktrees open.
+
+### Dependency direction among the build-tooling crates
+
+Three internal crates carry this migration's Rust code, and their edges are a
+closed set rather than a convention:
+
+```text
+packages/d2b-bazel-support/   <- packages/d2b-bazel-runner/
+                              <- packages/d2b-test-locator/
+                              <- packages/xtask/            (from W2)
+```
+
+`d2b-bazel-support` is neutral: it declares no first-party dependency at all.
+Every other edge among these three and `xtask` is refused, in particular
+`xtask -> d2b-bazel-runner`, which an earlier draft would have created when the
+wrapper's startup-option construction was going to live in the runner. That
+edge is wrong in direction: `xtask` is the generator and the contributor
+command surface, and the runner is a consumer of the graph `xtask` generates,
+so a runner dependency makes the generator's own build depend on the thing it
+generates targets for. Moving the shared construction into a neutral crate is
+what removes the temptation rather than documenting it away.
+
+The rule is enforced by the repository's existing crate-granular gate,
+`tests/unit/meta/w0-dep-direction.sh`, which `tests/test-policy.sh` and
+`tests/static.sh` already run. That gate resolves dependencies with
+`cargo metadata --no-deps`, so it sees the real resolved crate name after a
+`package =` rename, after workspace inheritance, and for target-specific
+entries, and it already fails closed when the resolver cannot run. A
+manifest-text scan in a Rust policy test would miss exactly those three forms,
+which is why the guard extends the existing resolver-backed gate instead of
+starting a parallel one. FR-053 forbids a new top-level shell gate; this adds
+no gate, no Layer-1 job, and no required context.
+
+W0 extends that gate with: `d2b-bazel-support` declares no workspace member and
+no `d2b`-prefixed crate; `d2b-bazel-runner` and `d2b-test-locator` declare
+`d2b-bazel-support` and nothing else first-party; `xtask` declares neither the
+runner nor the locator in any dependency kind, so a dev-dependency cannot
+smuggle the edge back through `packages/xtask/tests/`; the only members that
+may declare `d2b-bazel-support` as a non-dev dependency are the runner, the
+locator, and `xtask`, and no member at all may declare `d2b-bazel-runner`
+outside the runner's own targets; and the gate carries a required-crate list
+naming all three and refuses when any of them is absent from the resolver's
+member set, rather than falling through its existing "not a workspace member
+yet" skip, because a silent skip on a misspelled crate name is the one path by
+which a direction gate passes while enforcing nothing. That required-crate
+assertion is satisfiable only on the integrated tree, since the runner and the
+locator become members at integration, so the planted-edge observations happen
+there rather than inside a single scope worktree, and the list is never
+weakened to make one worktree green.
+
+`d2b-test-locator` is deliberately outside that reverse rule: the W1 migration
+makes it a **dev-dependency** of every first-party crate whose tests locate a
+binary or a fixture, which is the whole point of the crate, and the existing
+gate already filters dev edges out of the direction check.
 
 ## Spec Corrections
 
@@ -254,6 +311,9 @@ parallel worktrees open.
 | Planning prose treated `--lockfile_mode=error` as sufficient to fail closed on any module-input change. | Measured at Bazel 8.6.0: a direct `bazel_dep` version the graph absorbs produces a warning and exit zero; only a missing registry file checksum fails. | `.bazelrc` gains `common --check_direct_dependencies=error`. A check that warns is not a pin, and W0 proves the negative. |
 | Planning prose required byte-identical options across every Bazel invocation without distinguishing startup options from command options. | Measured at Bazel 8.6.0: `bazel mod` rejects `--symlink_prefix` as unrecognized. | The identity requirement binds the startup-option set that selects the server and output base. `--symlink_prefix` is supplied to the commands that accept it, and the module-refresh child is held only to startup-option identity. |
 | An earlier plan draft ended the yanked drift remedy at `bazel-yanked-refresh`, leaving verification to continuous integration. | The gate check must be offline and must not regenerate state, so it is a different operation from the networked refresh. | `cargo xtask bazel-yanked-check` is the offline validator, the three carriers run it as a declared-input action, and the recovery text ends on it. |
+| An earlier plan draft put the shared absolute startup-option construction in `packages/d2b-bazel-runner/` and had `packages/xtask/Cargo.toml` take a path dependency on the runner to reach it. | Dependency direction: `xtask` generates the graph the runner's targets live in, so `xtask -> d2b-bazel-runner` inverts the relationship. | The construction moves to the neutral `packages/d2b-bazel-support/`, which declares no first-party dependency; `xtask`, the runner, and the locator all consume it, and `tests/unit/meta/w0-dep-direction.sh` refuses the runner edge in every dependency kind. |
+| An earlier plan draft proved the locator's stale-provider negative by writing an out-of-date executable to the live Cargo path and removing a runfiles entry. | A guard whose setup writes an executable into `packages/target/` leaves that executable behind when the run is interrupted, in the one directory the shadow stage keeps full of real binaries. | The absent, non-executable, stale, and wrong-identity providers are all supplied states on the injected `FileSystem`, and the missing runfiles entry is a state on the injected `RunfilesView`. No provider test writes to or executes a live path. |
+| An earlier plan draft had the wave-note refusal name the whole offending token and modeled absent note content as `Option<String>`. | A refusal is republished into CI output, panel comments, and PR bodies, so echoing the token spreads the leak; and a failed read is a diagnosable error, not a blank. | The refusal carries the note, the one-based line, and one remediation only, proven by running the rendered refusals back through the scanner's own rules; the entry API returns `std::io::Result` at both levels and keeps the real error. |
 
 There is no eighteen-surface drift: committed code publishes eighteen with
 `D2B_SKIP_FIXTURE_BUILD=1` and two fixture surfaces when enabled.
@@ -330,6 +390,37 @@ allowlisted as a permitted real absolute path, `/dev/null` included, because a
 note records a shape and not a transcript. The substring rule is what catches a
 leak that arrives with no leading slash at all.
 
+**The refusal itself is redacted.** A violation names the note file, the
+one-based line number, and one remediation sentence, and stops there. It never
+prints the offending token, not truncated, not summarized, not "first segment
+only". This is not a new rule: FR-029 already forbids a refusal message from
+carrying an absolute path, and a refusal that echoes the leaked token is
+exactly such a message. It is also the worse case, because a lint refusal
+travels further than the file it refused: it lands in the
+`test-fixture-contracts` output, is pasted into panel comments, and is quoted
+into PR bodies and wave notes. A refusal that echoes the leaked absolute path
+has published it into three more artifacts than the note did, which is the
+exact escape this lint exists to close, and it would do so at the moment
+everyone is looking. `w1.md:37` plus "rewrite the path as a `<worktree>`-rooted
+shape or drop it" is enough to fix it, because the contributor already has the
+file open. The scanner therefore refuses its own rendered refusals: one test
+runs every violation's rendered text back through the same path-token and
+worktree-substring rules and requires no violation, so a future change that
+adds the token to the message fails the lint that added it.
+
+**Absent content is an error, not a blank.** The enumerator returns
+`std::io::Result` at both levels: one for reading the directory, and one per
+entry holding exactly what `read_to_string` returned for it. It does not
+collapse a failed read into `None` or into an empty string. The difference
+matters twice. A directory the lint cannot read is a fail-closed refusal rather
+than a corpus that happens to look empty, and an entry that is a directory, a
+dangling symlink, a permission denial, or non-UTF-8 is refused with its real
+errno rather than with one indistinguishable "absent" state, so a reviewer can
+tell "someone committed a subdirectory here" from "the file is unreadable in
+CI". Preserving the real `std::io::Error` is also what stops a later refactor
+from quietly mapping every failure onto the same benign-looking value; an
+`Option` has exactly one way to be empty and a `Result` has to say why.
+
 The lint runs in the one lane that reaches that crate,
 `D2B_ENABLE_FIXTURE_BUILD=1 make test-fixture-contracts`. That is measured, not
 assumed: `tests/test-rust.sh` sets `workspace_test_excludes=(--exclude
@@ -341,11 +432,15 @@ The lint carries its own proof that it can fail, and it carries it in-test
 rather than on disk. One case plants the generic absolute path
 `/home/planted-d2b-note-leak/adr052/.scratch/bazel`, which belongs to no
 machine in this run; one passes an empty corpus; one plants the worktree path
-with its leading slash removed; one plants a non-note entry name and an
-unreadable entry; and one requires `<worktree>` in exactly that spelling by
-refusing `<WORKTREE>`, `<worktree-root>`, and a `file:` URI while accepting a
-placeholder-rooted path that carries a nested `<base>` segment. All five are
-observed failing against an inert scanner before the real one lands.
+with its leading slash removed; one plants a non-note entry name and an entry
+whose content is a real `std::io::Error`; and one requires `<worktree>` in
+exactly that spelling by refusing `<WORKTREE>`, `<worktree-root>`, and a
+`file:` URI while accepting a placeholder-rooted path that carries a nested
+`<base>` segment. All five are observed failing against an inert scanner before
+the real one lands. A sixth case, the self-application above, requires every
+rendered refusal from those same planted inputs to name the entry, the line
+where a line exists, and the remediation, and to carry no path token and no
+worktree substring of its own.
 
 No wave plants a note fixture in the real directory any more. An untracked leak
 file there is either named like a note, in which case the lint reads it, or
@@ -409,8 +504,10 @@ command, the pinned
 generator, the schema output prerequisite, the generated first-party graph, the
 coverage-map structure, the third-party build-script and action-environment
 inventory, the wave-note policy lint that carries the command-shape rule, and
-the frozen runner and locator crate decisions, including the
-`fsops` and `clock` boundary modules. Cargo remains authoritative.
+the frozen support, runner, and locator crate decisions, including the shared
+`FileSystem` and `RunfilesView` boundaries, the frozen `startup` seam, the
+runner-local `clock` boundary, and the dependency-direction guard that pins the
+edges between the three. Cargo remains authoritative.
 
 **Ownership**:
 
@@ -432,14 +529,27 @@ the frozen runner and locator crate decisions, including the
   measurement writes together with the lint that polices it;
   and its generated outputs including `.bazelignore` and the derived censuses.
 - `schema`: schema generator, its tests, and the current schema leaf only.
-- `runner`: the frozen runner crate skeleton, including the `fsops` and `clock`
-  boundary modules W2 implements against.
-- `locator`: the frozen locator crate skeleton and its own tests.
+- `runner`: `packages/d2b-bazel-support/` and `packages/d2b-bazel-runner/`, plus
+  `tests/unit/meta/w0-dep-direction.sh`. It lands the support crate complete:
+  the `FileSystem` trait with the operation set the runner-environment and
+  recovery contracts fix, its host-backed implementation, its in-memory fake,
+  the `RunfilesView` trait with its runfiles-backed implementation and its
+  in-memory fake, and the empty W0-frozen `startup` module W2 fills. It lands
+  the runner crate as a skeleton with the runner-local `clock` boundary W2
+  implements against. It also extends the dependency-direction gate, because
+  FR-051 puts an enforcing guard in the same wave as the plumbing it
+  constrains. One scope authoring both crates does not make the support crate
+  less neutral: neutrality here is a dependency property that the gate decides
+  mechanically, not an authorship property, and no other W0 scope owns a file
+  under either directory.
+- `locator`: the frozen locator crate skeleton and its own tests. It consumes
+  the support boundaries and declares no other first-party dependency.
 - Integrator prep: `Makefile`, Cargo workspace membership,
   `packages/xtask/src/main.rs` seams, the `YankedIndex` trait declaration in
-  `packages/xtask/src/bazel_yanked.rs`, coverage-map format, runner and locator
-  crate selection, generated output reconciliation, and shared changelog
-  folding.
+  `packages/xtask/src/bazel_yanked.rs`, coverage-map format, the
+  `packages/d2b-bazel-support/` directory and its module files so runner and
+  locator open against one resolvable crate, support, runner, and locator crate
+  selection, generated output reconciliation, and shared changelog folding.
 
 **Validation**: `make check-tier0`, `make test-lint`, `make test-rust-schema`,
 `make test-rust-inventory`, `make test-drift`, `make test-policy`,
@@ -478,7 +588,15 @@ placeholders and the wave-note policy lint in
 that directory under `D2B_ENABLE_FIXTURE_BUILD=1 make test-fixture-contracts`,
 with its planted absolute-path, empty-corpus, non-note-entry,
 worktree-substring, and placeholder-spelling cases all present and each
-observed failing against the inert scanner before the real one landed;
+observed failing against the inert scanner before the real one landed, its
+entry API returning `std::io::Result` at both levels rather than an `Option`,
+and its rendered refusals carrying the note, the line, and the remediation and
+no offending token, proven by running those refusals back through the
+scanner's own rules; `packages/d2b-bazel-support/` declares no first-party
+dependency, the runner and the locator declare it and nothing else first-party,
+and `tests/unit/meta/w0-dep-direction.sh` refuses a planted
+`xtask -> d2b-bazel-runner` edge and a planted first-party edge out of the
+support crate, both observed failing and reverted;
 Cargo remains authoritative and green; the ten-role panel and wave PR are
 sealed and merged.
 
@@ -506,7 +624,8 @@ guard, the manifest adapter, and the six ADR Make targets.
   validator those carriers run and its message tests, and the W1 note
   `specs/003-adr052-bazel-rust/wave-notes/w1.md`.
 - `runner`: only the frozen runner crate, its environment and per-case evidence
-  implementation, and its tests.
+  implementation, and its tests. It consumes the W0 support boundaries and adds
+  no operation to them.
 - `locator`: the locator crate and the enumerated first-party migration.
 - `coverage`: `ci/rust/BUILD.bazel`, the coverage JSON, the committed query
   result, and the split guard.
@@ -516,6 +635,14 @@ guard, the manifest adapter, and the six ADR Make targets.
 - Integrator prep: `Makefile`, approved targets, the manifest adapter boundary,
   the `bazel-yanked-check` CLI seam in `packages/xtask/src/main.rs`, and the
   locator's public macro surface, which the migration scope consumes.
+
+No W1 scope owns a file under `packages/d2b-bazel-support/`. W0 landed that
+crate complete, which is what lets the `runner` and `locator` scopes, whose
+provider and result-file tests both drive the same fake, open in parallel
+without one waiting on the other's worktree. If W1 discovers the boundary is
+short an operation, it lands in the W1 prep commit and nowhere else; a scope
+that quietly extends a shared trait has reintroduced the coupling the prep rule
+exists to remove.
 
 Generated BUILD outputs remain generator-owned and are regenerated once after
 scope merges.
@@ -545,8 +672,10 @@ scan and no planted note added here,
 its drift refusal names refresh, review and commit, then the check, and it
 reports under the existing `rust-deny-*` identifiers without adding a
 nineteenth surface; every migrated test resolves its binary
-and fixtures through the locator, the planted stale-binary negative fixture
-fails under Bazel, and both arms stay green under Cargo;
+and fixtures through the locator, the four provider negatives and the
+stale-provider case are all supplied by the injected `FileSystem` and
+`RunfilesView` fakes with no executable written into `packages/target/` or any
+other live path, and both arms stay green under Cargo;
 per-case JUnit results are published with the canonical redaction set absent
 and raw output only in `test.log`; failed and interrupted runs publish partial
 evidence; repository-owned runner execution uses no shell, with the
@@ -568,7 +697,9 @@ control. W5 removes that helper after W4 qualification is complete.
 
 - `process-control`: deadline, process group, wait ordering, shutdown tests.
 - `cleanup`: cleanup modules and tests, plus its `policy_docs.rs` marker block.
-- `local-wrapper`: `Makefile`, `.bazelrc`, startup-option construction, the
+- `local-wrapper`: `Makefile`, `.bazelrc`, the one startup-option construction
+  in `packages/d2b-bazel-support/src/startup.rs` and its identity tests in
+  `packages/d2b-bazel-support/tests/startup_options.rs`, the
   synchronous trim step, scratch budgets, `packages/xtask/Cargo.toml`,
   `packages/xtask/src/bazel.rs` solely to replace the minimal W0 startup-option
   derivation inside `bazel-repin` and `bazel-module-refresh` with the one shared
@@ -576,21 +707,30 @@ control. W5 removes that helper after W4 qualification is complete.
   the case proving every command the wrapper issues surfaces the same
   module-lock remediation, plus the W2 note
   `specs/003-adr052-bazel-rust/wave-notes/w2.md`. That
-  replacement adds a `d2b-bazel-runner` path dependency, which changes the
+  replacement adds a `d2b-bazel-support` path dependency, which changes the
   generated graph, so W2 gains an integrator regeneration step and
-  `make test-drift` in validation.
+  `make test-drift` in validation. It is the support edge and not a runner
+  edge: `xtask -> d2b-bazel-runner` stays refused by the W0
+  dependency-direction guard, which is why the construction lives in the
+  neutral crate rather than in the runner it was first drafted into.
 - `recovery`: the recovery table and its tests only.
-- `boundaries`: `packages/d2b-bazel-runner/src/fsops.rs` and
+- `boundaries`: `packages/d2b-bazel-support/src/fsops.rs` and
   `packages/d2b-bazel-runner/src/clock.rs`. Both are W0-frozen module paths
-  whose operation set W1 already fixed, so this scope owns only their W2
-  changes and their in-memory fakes. Cleanup, result publication, and deadline
-  handling consume those traits rather than calling the standard library
-  directly and rather than adding operations to these two files. No cleanup or
-  deadline test may depend on live host filesystem state or on the host clock.
+  whose operation set W0 fixed and W1 consumed, so this scope owns only the W2
+  changes to `fsops.rs`, which should be none, and `clock.rs` with its
+  in-memory fake; the `fsops` and `runfiles` fakes already exist from W0.
+  Cleanup, result publication, and
+  deadline handling consume those traits rather than calling the standard
+  library directly and rather than adding operations to these two files. No
+  cleanup or deadline test may depend on live host filesystem state or on the
+  host clock. This scope and `local-wrapper` both open files under
+  `packages/d2b-bazel-support/`, and they stay file-disjoint the same way the
+  two W1 `xtask` scopes do: ownership in this plan is per file, never per crate.
 
 Prep first splits stable interfaces if process-control and cleanup would share
-a file. `fsops` and `clock` land in the prep commit so cleanup, deadline, and
-result-publication scopes open against a stable trait surface.
+a file. `clock` lands in the prep commit, and `fsops` and `runfiles` are
+already whole from W0, so cleanup, deadline, and result-publication scopes open
+against a stable trait surface.
 
 **Validation**: `make test-rust-main`, `make test-policy`, `make check-tier0`,
 `make test-drift`, `make test-bazel-rust`, `D2B_CLEAN_DRY_RUN=1 make clean`,
@@ -605,10 +745,13 @@ proven byte-identical across `build`, `test`, `query`, `info`, `shutdown`, and
 `clean`, with a mutation that perturbs one of them failing closed; the trim
 step is synchronous and its completion is observed before any size measurement;
 every cleanup, result-file, and deadline property is proven through the
-injected `fsops` and `clock` boundaries with no live-host dependency; the W2
-wave notes record the consolidated startup-option construction as a command
-shape with `<worktree>` placeholders and the W0 wave-note lint passes over the
-added `w2.md` in the same `D2B_ENABLE_FIXTURE_BUILD=1 make
+injected `fsops` and `clock` boundaries with no live-host dependency; the one
+startup-option construction lives in `packages/d2b-bazel-support/src/startup.rs`
+and both `xtask` commands call it rather than deriving their own, with
+`xtask -> d2b-bazel-runner` still refused by the W0 dependency-direction guard;
+the W2 wave notes record the consolidated startup-option construction as a
+command shape with `<worktree>` placeholders and the W0 wave-note lint passes
+over the added `w2.md` in the same `D2B_ENABLE_FIXTURE_BUILD=1 make
 test-fixture-contracts` run, with the W2 source-shape work in the same policy
 file leaving that lint and its cases byte-identical;
 panel and PR are sealed and merged.
@@ -765,7 +908,8 @@ possible, each with the guard that catches it.
 | Failure | Guard | Rollback |
 | --- | --- | --- |
 | A sandboxed scan or generator passes because it scanned nothing, or scanned a tree it could not see. | Generator-derived exact census, declared-input equality in both directions, parsed count equal to declared count, `test-drift`, planted violation. | Revert the carrier; Cargo remains the authority. |
-| The locator misses under Bazel and silently finds a stale binary in `packages/target/`, which holds real executables for the whole shadow stage. | Mode is selected once and the arms never chain; a Bazel-mode miss fails naming the expected runfiles path; identity is asserted before use; a planted stale-binary fixture with the runfiles entry removed must fail. | Revert the locator migration scope; the Cargo arm is unchanged. |
+| The locator misses under Bazel and silently finds a stale binary in `packages/target/`, which holds real executables for the whole shadow stage. | Mode is selected once and the arms never chain; a Bazel-mode miss fails naming the expected runfiles path; identity is asserted before use; and the planted case supplies a stale, wrong-identity provider at the Cargo path through the injected `FileSystem` while the injected `RunfilesView` reports the entry missing, so the refusal is proven without any test writing an executable into a live path. | Revert the locator migration scope; the Cargo arm is unchanged. |
+| A provider negative is arranged on disk instead of injected, so the shadow stage's own `packages/target/` becomes test scaffolding and one abandoned run leaves a stale executable behind that a later Cargo test finds. | All four provider negatives are supplied states on the shared `FileSystem` and `RunfilesView` fakes; the locator and topology never call the standard library directly, and no provider test executes the planted file, because identity is a digest read through the same boundary. | Revert the locator or topology scope; nothing was written outside the fake. |
 | The channel transition silently stops applying in a `rules_rust` bump, so the census renders on stable and still looks correct. | The census emits the toolchain version the action actually used as a declared output, and a test compares it to the committed pin. | Revert the `api` scope; the census stays on the Cargo path. |
 | The channel flag is set globally instead, so every first-party crate compiles on nightly while the gate stays green. | A guard fails closed on any `.bazelrc` line or wrapper argument that sets the channel flag. | Remove the flag; the guard blocks the merge before it ships. |
 | The vendor tree is quietly short a crate, so `licenses` harvests fewer files, reports fewer findings, and exits zero. | Total classification with named refusals for mirrors and checksum-less non-git entries, plus an assertion that the materialized package count equals the lock's before any tool runs. | Revert the vendor rule; the Cargo supply-chain leaf remains authoritative. |
@@ -775,7 +919,9 @@ possible, each with the guard that catches it.
 | A `bazel_dep` version disagreement is absorbed by the resolved graph, so `--lockfile_mode=error` warns and exits zero and the module lock records a version nobody declared. | `.bazelrc` carries `common --check_direct_dependencies=error`, and W0 proves the negative by planting a direct-dependency version the graph would otherwise absorb. | Correct the declared version or the pin; the build refuses until they agree. |
 | A repin or module refresh quietly carries an unrelated tracked change into the same commit, so a review reads one lock update and merges two. | Both commands digest every committed derived artifact before the child runs and fail afterwards on any other tracked change, listing the affected paths repository-relative. The recovery is to commit or restore those paths and rerun the same scoped command. | Nothing was committed; the command refused before writing a result. |
 | A yanked snapshot is refreshed over the network, reviewed, committed, and never validated, so a key set that does not match the locks reaches continuous integration. | The drift recovery ends on `cargo xtask bazel-yanked-check`, the same offline validator the three carriers run, so the contributor sees the same message in their own shell. | Rerun the refresh and the check; the snapshot is committed and revertible. |
-| A cleanup or deadline guard is written against the live host filesystem or clock, so its planted negative silently never runs and the guard is decorative. | `fsops` and `clock` are injected boundaries; every negative is produced by the fake, and the mutation tests assert errno mapping, ownership state, call ordering, and rounding without a full disk, a privileged mount, or a manipulated host clock. | Revert the affected W2 scope; the boundary is a W0-frozen module path, so reverting an implementation does not move the seam. |
+| A cleanup or deadline guard is written against the live host filesystem or clock, so its planted negative silently never runs and the guard is decorative. | `fsops` in `packages/d2b-bazel-support/` and `clock` in `packages/d2b-bazel-runner/` are injected boundaries; every negative is produced by the fake, and the mutation tests assert errno mapping, ownership state, call ordering, and rounding without a full disk, a privileged mount, or a manipulated host clock. | Revert the affected W2 scope; the boundary is a W0-frozen module path, so reverting an implementation does not move the seam. |
+| The shared startup-option construction is put in the runner because that is where the wrapper lives, so `xtask` takes a dependency on the crate whose build targets `xtask` itself generates, and the next shared helper follows it there. | The construction lives in the neutral `packages/d2b-bazel-support/`, and `tests/unit/meta/w0-dep-direction.sh` refuses `xtask -> d2b-bazel-runner` in every dependency kind and refuses any first-party edge out of the support crate, resolving names with `cargo metadata` so a rename or a target-specific entry cannot evade it. | Move the helper into the support crate; the guard blocks the merge before the edge ships. |
+| The wave-note lint refuses a leaked absolute path and prints the token, so the leak is copied into CI output, a panel comment, and a PR body by the guard that caught it. | The refusal carries the note name, the one-based line, and one remediation and nothing else, and one test runs every rendered refusal back through the scanner's own path-token and worktree-substring rules. | Fix the message; the note itself never merged, because the lint refusal is merge-blocking. |
 | The coverage guard is green while half its invariants never executed, because a Bazel test cannot query the graph. | Analysis-time dependency edges prove label existence; completeness and query drift run in the wrapper and `test-drift` over a committed drift-checked query result; no Bazel test invokes `bazel query`. | Revert the guard split; do not weaken either half. |
 | The disk cache is measured before asynchronous trimming finishes, so a compliant run refuses to publish forever. | An explicit synchronous on-demand collector runs as a named step before measurement and save; the size refusal stays a backstop. | Revert to the previous snapshot; the maintenance verdict is outside the Rust verdict. |
 | A cache-key input changes without changing the key, restoring a subtly stale cache. | The key binds all four hub locks, all four per-hub Bazel-side locks, the guest lock, the generator sha256, `.bazelignore`, the startup and symlink configuration, the build-script and action-environment digest, and the generated BUILD digest. | Rotate the restore prefix; a stale generation is superseded and deleted by the maintenance job. |

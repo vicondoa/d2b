@@ -20,7 +20,13 @@ small set of options the Java side resolves. `--output_user_root` and
   reason under the module lock below.
 - `.bazelrc` contains **no** `startup` line.
 - The Make and Rust wrapper supplies every startup option as an absolute path
-  derived from the worktree.
+  derived from the worktree. From W2 there is exactly one construction that
+  derives them, in `packages/d2b-bazel-support/src/startup.rs`, and the
+  wrapper, `cargo xtask bazel-repin`, and `cargo xtask bazel-module-refresh`
+  all call it. That module is in the neutral support crate rather than in the
+  runner precisely so `xtask` can call it without an
+  `xtask -> d2b-bazel-runner` dependency, which
+  `tests/unit/meta/w0-dep-direction.sh` refuses.
 - The wrapper supplies **byte-identical** startup options to `build`, `test`,
   `query`, `info`, `shutdown`, and `clean`, and from W2 to the single child
   each of `cargo xtask bazel-repin` and `cargo xtask bazel-module-refresh`
@@ -29,6 +35,55 @@ small set of options the Java side resolves. `--output_user_root` and
   output base, so a mismatched shutdown starts a second server and leaves the
   live one owning the tree.
 - A mutation that perturbs one invocation's startup options must fail closed.
+
+## Crate dependency direction
+
+This migration adds three internal crates, and their edges are a closed set:
+
+```text
+packages/d2b-bazel-support/   <- packages/d2b-bazel-runner/
+                              <- packages/d2b-test-locator/
+                              <- packages/xtask/            (from W2)
+```
+
+- `d2b-bazel-support` is neutral. It declares no workspace member and no
+  `d2b`-prefixed crate as a dependency of any kind. It holds what more than one
+  consumer needs: the `FileSystem` boundary, the `RunfilesView` boundary, and
+  the one absolute startup-option construction.
+- `d2b-bazel-runner` and `d2b-test-locator` declare `d2b-bazel-support` and no
+  other first-party crate. In particular they do not declare each other.
+- `xtask` declares `d2b-bazel-support` from W2 and never declares
+  `d2b-bazel-runner` or `d2b-test-locator`, in any dependency kind, so a
+  dev-dependency under `packages/xtask/tests/` cannot smuggle the edge back.
+  `xtask` generates the build targets the runner's own graph is made of;
+  depending on the runner inverts that.
+- Only the runner, the locator, and `xtask` may declare `d2b-bazel-support` as
+  a non-dev dependency, and no crate outside the runner declares
+  `d2b-bazel-runner` at all. `d2b-test-locator` is deliberately outside that
+  restriction: the W1 migration makes it a **dev-dependency** of every
+  first-party crate whose tests locate a binary or a fixture.
+
+W0 enforces this by extending `tests/unit/meta/w0-dep-direction.sh`, the
+repository's existing crate-granular direction gate, which
+`tests/test-policy.sh` and `tests/static.sh` both run. That gate resolves
+dependencies with `cargo metadata --no-deps`, so a `package =` rename, a
+workspace-inherited dependency, and a target-specific dependency are all
+visible to it and would all be invisible to a manifest-text scan; it already
+fails closed when the resolver cannot run. The extension carries a
+required-crate list naming all three and refuses when any of them is absent
+from the resolver's member set, rather than falling through that gate's
+existing "not a workspace member yet" skip, because a silent skip on a
+misspelled crate name is the one way a direction gate passes while enforcing
+nothing. That assertion is satisfiable only on the integrated tree, where all
+three are members. Extending an existing gate adds
+no new top-level shell gate, no Layer-1 job, and no required context, so
+FR-053 holds.
+
+The planted negatives are an `xtask -> d2b-bazel-runner` edge and a
+first-party edge out of the support crate. Both are added, observed refused,
+and reverted during W0 integrated validation, not inside a single scope
+worktree, because the required-crate list cannot be satisfied before
+integration.
 
 ## Workspace boundary
 
@@ -133,7 +188,9 @@ Its contract, all of it enforcing:
 - It passes the same absolute output user root, output base, and
   `--symlink_prefix` the rest of this contract fixes. In W0 that derivation
   lives in the command, because no wrapper exists yet; from W2 the command
-  calls the one shared construction instead, and the startup-option identity
+  calls the one shared construction in
+  `packages/d2b-bazel-support/src/startup.rs` instead, and the startup-option
+  identity
   test covers the repin child alongside every other command.
 - It records the digest of every committed derived artifact before the child
   runs and fails afterwards if any tracked file other than the named hub's
@@ -217,7 +274,8 @@ Its contract, all of it enforcing:
 - It issues the measured module-lock update invocation with the same absolute
   output user root and output base every other Bazel command in this contract
   uses. In W0 that derivation lives in the command because no wrapper exists
-  yet; from W2 the command calls the one shared construction, and the
+  yet; from W2 the command calls the one shared construction in
+  `packages/d2b-bazel-support/src/startup.rs`, and the
   startup-option identity test covers this child alongside the repin child.
 - It records the digest of every committed derived artifact before the child
   runs and fails afterwards if any tracked file other than `MODULE.bazel.lock`
@@ -409,15 +467,38 @@ allowed in exactly that spelling; `<WORKTREE>` and `<worktree-root>` are not.
 The scheme allowlist is exactly `http` and `https`, so a `file:` URI is refused
 rather than parsed, because a `file:` URI is an absolute path wearing a scheme.
 No real absolute path is allowlisted, `/dev/null` included: a note records a
-shape, not a transcript. Every refusal names the note, the line, the whole
-offending token, and the one remediation, which is to rewrite the path as a
-`<worktree>`-rooted shape or drop it.
+shape, not a transcript.
+
+Every refusal names the note, the one-based line where a line applies, and the
+one remediation, which is to rewrite the path as a `<worktree>`-rooted shape or
+drop it. It never names the offending token. FR-029 already forbids a refusal
+message from carrying an absolute path, and a refusal that echoes the leaked
+token is one. It is also republished:
+into the `test-fixture-contracts` output, into panel comments, and into PR
+bodies. A refusal that echoes the leaked absolute path has copied it into three
+artifacts the note never reached, which is the escape this lint exists to
+close, performed by the guard that caught it. `w1.md:37` plus the remediation
+is sufficient, because the contributor has the file. The scanner proves this
+about itself: one test runs every rendered refusal back through the same
+path-token and worktree-substring rules and requires no violation, so a change
+that adds the token to a message fails the lint that added it.
+
+The enumeration API returns `std::io::Result` at both levels, one for reading
+the directory and one per entry carrying exactly what `read_to_string`
+returned. It never collapses a failed read to `None` or to an empty string. An
+unreadable directory is then a fail-closed refusal rather than a corpus that
+looks empty, and a committed subdirectory, a dangling symlink, a permission
+denial, and non-UTF-8 content are four distinguishable errnos rather than one
+indistinguishable "absent" state. Keeping the real `std::io::Error` is also
+what stops a later refactor from mapping every failure onto the same
+benign-looking value.
 
 The lint proves it can refuse before its pass is treated as evidence, and it
 does so against in-test planted entries rather than files written into the
 notes directory: a planted generic absolute path belonging to no machine in the
 run, an empty corpus, a worktree substring with no leading slash, a non-note
-entry name, and the two near-miss placeholder spellings plus the `file:` URI.
+entry name beside an entry whose content is a real `std::io::Error`, and the
+two near-miss placeholder spellings plus the `file:` URI.
 The one lane that executes it is
 `D2B_ENABLE_FIXTURE_BUILD=1 make test-fixture-contracts`, because
 `tests/test-rust.sh` excludes `d2b-contract-tests` from every workspace leaf
