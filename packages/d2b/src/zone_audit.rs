@@ -558,7 +558,7 @@ fn validate_public_field(class: &str, key: &str, value: &Value) -> bool {
         return false;
     };
     match key {
-        "resource_uid" | "process_uid" => valid_uuid_v4(value),
+        "resource_uid" | "process_uid" => valid_resource_uid(value),
         "subject_digest" | "execution_ref_digest" | "session_gen_digest" | "prior_digest" => {
             valid_digest(value)
         }
@@ -678,11 +678,7 @@ fn valid_route_component(value: &str) -> bool {
 }
 
 fn valid_code(value: &str) -> bool {
-    !value.is_empty()
-        && value.len() <= 128
-        && value
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
+    safe_public_text(value, false) && d2b_realm_core::OperationId::parse(value.to_owned()).is_ok()
 }
 
 fn valid_digest(value: &str) -> bool {
@@ -695,18 +691,8 @@ fn valid_digest(value: &str) -> bool {
             .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
 }
 
-fn valid_uuid_v4(value: &str) -> bool {
-    let bytes = value.as_bytes();
-    bytes.len() == 36
-        && [8, 13, 18, 23]
-            .into_iter()
-            .all(|index| bytes[index] == b'-')
-        && bytes.iter().enumerate().all(|(index, byte)| {
-            [8, 13, 18, 23].contains(&index)
-                || byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase()
-        })
-        && bytes[14] == b'4'
-        && matches!(bytes[19], b'8' | b'9' | b'a' | b'b')
+fn valid_resource_uid(value: &str) -> bool {
+    d2b_contracts::v3::ResourceUid::parse(value.to_owned()).is_ok()
 }
 
 fn valid_zone(value: &str) -> bool {
@@ -872,6 +858,18 @@ mod tests {
         assert!(!output.contains("secret"));
         assert!(!output.contains("/private"));
         assert!(validator.had_break());
+    }
+
+    #[test]
+    fn validator_rejects_credential_shaped_opaque_ids_without_echoing_them() {
+        let mut value: Value = serde_json::from_str(&record()).unwrap();
+        let token = ["bearer", "secret"].join("-");
+        value["operation_id"] = json!(token);
+        let mut validator = AuditStreamValidator::new(false);
+        let output = validator.accept(&value.to_string());
+        assert!(output.contains("\"export_error\":\"record-invalid\""));
+        assert!(!output.contains("bearer"));
+        assert!(!output.contains("secret"));
     }
 
     #[test]
