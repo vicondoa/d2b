@@ -29,6 +29,13 @@ if [ -z "${D2B_STUB_NO_SOCKET_IN_NIX_SHELL:-}" ] && ! command -v cargo >/dev/nul
     --command bash "$0" "$@"
 fi
 
+log "--> cargo build --bin d2b --bin d2bd (stub smoke binaries)"
+(cd "$ROOT/packages" && \
+  CARGO_TARGET_DIR="$workspace_target_dir" \
+  cargo build --manifest-path "$manifest" --quiet --bin d2b --bin d2bd)
+
+# Build before installing the ephemeral runtime environment. A persistent
+# sccache server must not inherit a TMPDIR that this test removes on exit.
 scratch=$(d2b_mktemp .d2b-stub-smoke.XXXXXX)
 add_cleanup "rm -rf -- \"$scratch\""
 test_home="$scratch/home"
@@ -170,11 +177,6 @@ run_stub() {
   assert_no_runtime_state "$bin" "$run_list_before" "$var_lib_list_before" \
     "$xdg_before" "$tmp_before"
 }
-
-log "--> cargo build --bin d2b --bin d2bd (stub smoke binaries)"
-(cd "$ROOT/packages" && \
-  CARGO_TARGET_DIR="$workspace_target_dir" \
-  cargo build --manifest-path "$manifest" --quiet --bin d2b --bin d2bd)
 
 run_stub d2b "d2b 0.0.0-bootstrap"
 run_stub d2bd "d2bd 0.0.0-bootstrap (bootstrap stub)"
