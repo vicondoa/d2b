@@ -6,11 +6,13 @@
   break, and its prohibition on host-singleton framework services),
   [ADR 0035](0035-efficiency-and-simplification-roadmap.md) (efficiency and
   simplification roadmap), [ADR 0046](0046-d2b-3-provider-control-plane.md)
-  section 12.3 and
-  [`docs/specs/ADR-046-validation-and-delivery.md`](../specs/ADR-046-validation-and-delivery.md)
-  sections 12.2, 12.5 and 12.6,
-  [ADR 0048](0048-copilot-native-agent-surface.md) (Copilot-native agent
-  surface). This record changes none of them.
+  (d2b 3.0 provider control plane), whose validation and delivery contract is
+  specified in
+  [`docs/specs/ADR-046-validation-and-delivery.md`](../specs/ADR-046-validation-and-delivery.md);
+  sections 12.2, 12.3, 12.5 and 12.6 cited throughout this record are sections
+  of that specification, not of ADR 0046, which carries no numbered section
+  12.3. Also [ADR 0048](0048-copilot-native-agent-surface.md) (Copilot-native
+  agent surface). This record changes none of them.
 - Scope: contributor workflow ownership and external configuration only.
   Documentation only; it authorizes no code and no change to any d2b product
   surface.
@@ -314,12 +316,15 @@ requirement.
 
 **D4. Three layers of ownership, and d2b owns almost none of it.**
 
-- **The host's `/etc/nixos`** owns the deployment instantiation: the identities
-  of D13 and their privilege separation, ownership and mode of the approval
-  store, per-unit credential delivery, service supervision, the publisher
-  helper's exposure, the dashboard's read-only mode and loopback bind, network
-  exposure, and anything else specific to one machine. This is operator-private
-  configuration outside every repository named here.
+- **The host's `/etc/nixos`** owns the deployment instantiation: the five
+  principals of D13 and their privilege separation, ownership and mode of the
+  approval store and the protected integration object store, the root-owned
+  append helper, per-unit credential delivery, the peer-credential-checked
+  socket, the worker network namespace and firewall policy of D14, service
+  supervision, the publisher's exposure, the dashboard's read-only mode and
+  loopback bind, log rotation and retention, and anything else specific to one
+  machine. This is operator-private configuration outside every repository
+  named here.
 - **`vicondoa/d2b-gascity-configs`** owns the reusable deployment
   configuration: a NixOS module that `/etc/nixos` imports, `city.toml`,
   `packs.lock`, pack imports and pins, the rig binding, the Discord, dashboard
@@ -355,6 +360,18 @@ What it removes:
   than defaulting open. Signature verification authenticates the platform, not
   the person, so it is a precondition of the allowlist rather than a substitute
   for it.
+
+  **A rejection is diagnosed locally, never silent.** Silent unresponsiveness
+  is indistinguishable from a broken token, a dead service, or a bot that was
+  never invited, and the operator would have no way to tell which. Every
+  rejection emits one local, bounded, redacted diagnostic naming the rejection
+  class from a closed set (`unconfigured-allowlist`, `identity-mismatch`,
+  `guild-mismatch`, `channel-mismatch`, `signature-invalid`) together with the
+  received and configured identity digests of D11, never the raw ids. Digests
+  are what makes it actionable: the operator can compare the received digest
+  against the configured one and see whether they are dealing with the wrong
+  account or an empty configuration, without the diagnostic itself becoming a
+  place where platform identifiers accumulate in plaintext.
 - **The approval reviewer identity is that one operator.** D11 records it for
   provenance and for binding a decision to a human, not to choose among
   reviewers or to evaluate a permission.
@@ -472,6 +489,21 @@ durable gate that parks the run and a contributor who runs the panel by hand,
 which is strictly better than a bridge that silently reports a review nobody
 performed.
 
+**A parked run must say how to unpark it.** A fallback that leaves the
+operator with a permanently blocked workflow and no named next step is not a
+fallback. Upstream closes a human gate by closing its bead, measured in the
+shipped packs as `gc bd close <gate-bead-id>`, so the parked gate's own message
+carries that command with the concrete bead id substituted, and the follow-on
+specification re-measures the invocation before it is written down as
+operator-facing text.
+
+The resume is itself gated: the close is permitted only when a `panel-attest`
+record exists for the wave, bound to the same `candidate_id`, `content_id` and
+`snapshot_sha256` the run is at. Closing a parked panel gate with no attested
+record is refused, because a manual fallback that can be waved through by
+typing a command is a worse gate than no gate, and the whole point of D9 is
+that Gas City cannot report a review that did not happen.
+
 Upstream `compound-engineering` may run as an **additional, non-binding**
 pre-panel filter whose only output is findings for the integrator to fix before
 the panel round. A clean compound review never sets `signoff`, never
@@ -479,32 +511,112 @@ substitutes for a seat, and never shortens the roster. `pr-pipeline`'s
 `mol-pr-ship` may supply the readiness report; it does not gate the merge. The
 standalone panel skill stays usable outside Gas City.
 
-**D11. Approvals are artifact-bound and fail closed.** The approval record is
-owned by the configuration repository's approval store, not by a Gas City gate,
-a Discord message, or the dashboard. It records at minimum the run, the node,
-the artifact path, the `sha256` of the exact artifact bytes, a decision from
-the closed set `{approve, revise, rescope, abort}`, the reviewer identity, and
-the timestamp. Per D5 the reviewer identity is always the one configured
-operator, and a decision carrying any other identity is rejected rather than
-recorded. A Gas City gate is the **transport** that blocks the run; Discord is
-the **surface** that collects the decision; neither is the **authority**.
+**D11. Approvals are artifact-bound, digest-only, append-only, and fail
+closed.** The approval record is owned by the deployment's approval store, not
+by a Gas City gate, a Discord message, or the dashboard. Each record carries:
+the gate node identifier, the artifact identity, a decision from the closed set
+`{approve, revise, rescope, abort}`, a reviewer digest, a run digest, and the
+timestamp. For the publication gate the artifact identity is D13's immutable
+integration commit hash; for a document gate it is the artifact path plus the
+`sha256` of its exact bytes. A Gas City gate is the **transport** that blocks
+the run; Discord is the **surface** that collects the decision; neither is the
+**authority**.
 
-An approval is honoured only when the recorded `sha256` equals the artifact's
-current bytes. On mismatch the run is **denied**, not warned, and the error
-names the remediation: re-request approval on the new revision. This mirrors
-section 12.6's content-invalidation rule that the panel already enforces, and
-it is the direct answer to the upstream gate bug commit `d1e86f6` fixed.
+**Identifiers are stored as digests, never in plaintext.** The Discord user id
+and the run handle are recorded as fixed digests, not raw values, because a
+durable audit surface that accumulates raw platform identifiers and opaque
+correlation handles leaks both to anyone who later reads it. The digest is
+**keyed with a deployment-scoped secret** rather than a bare hash: a Discord
+snowflake is low-entropy and enumerable, so an unkeyed digest of it is
+reversible by anyone who can guess a few million candidates. The key is stable
+for the life of the deployment, so the digest remains a usable correlation
+handle across records while the raw value stays unrecoverable. Per D5 the
+reviewer is always the one configured operator, so the digest identifies rather
+than authorises: a decision whose reviewer digest does not equal the configured
+operator's is rejected, not recorded.
+
+An approval is honoured only when the recorded artifact identity equals what is
+in front of the consumer. On mismatch the run is **denied**, not warned, and
+the error names the remediation: re-request approval on the new revision. This
+mirrors section 12.6's content-invalidation rule that the panel already
+enforces, and it is the direct answer to the upstream gate bug commit `d1e86f6`
+fixed.
 
 Human approval is required at the constitution, spec, plan, task-DAG, and
 publication gates. Analysis and per-task review are autonomous with escalation.
 
-**The store has exactly one writer, and it is not the worker.** Durable
-approval records are created only by D13's approval-controller identity, after
-it has verified the Discord platform signature and applied D5's allowlist. The
-worker identity, under which every agent runs, has no write path to the store
-by any route: not a file, not a socket it may send a write to, not a helper
-that writes on its behalf. Read access for the worker is permitted, since a run
-must observe whether its gate is satisfied, and reading cannot forge.
+**History is append-only and nobody may rewrite it.** A mutable approval log
+cannot prove that a human authorised anything, because the proof and the thing
+it constrains are then editable by the same run. The store is written **only**
+by D13's root-owned `append-helper`, which exposes exactly one operation,
+"append this record", and no update, replace, truncate, or delete operation of
+any kind. Records are content-addressed by their own digest and created with
+`O_CREAT | O_EXCL` so an existing record can never be overwritten, each append
+is `fsync`ed before it is acknowledged, and the containing directory is owned
+by the helper. Neither `agent-worker` nor `orchestrator` nor
+`approval-controller` nor `publisher` may write, rewind, or truncate it
+directly.
+
+**The helper authenticates its callers and accepts a narrow set from each.**
+Its Unix socket checks the peer credentials of every connection
+(`SO_PEERCRED`, or the platform equivalent) and admits exactly two callers for
+exactly two record kinds: an approval append is accepted **only** from
+`approval-controller`, and a publication audit append is accepted **only** from
+`publisher`. A connection from `agent-worker` or `orchestrator` is rejected
+outright, and so is a caller presenting the wrong record kind for its identity,
+so a compromised publisher cannot forge an approval and a compromised
+controller cannot forge a publication audit trail. Neither can erase or alter
+anything already written. The publisher re-reads and verifies the record it
+acts on rather than trusting a value passed to it.
+
+**Retention is bounded by stated defaults.** "Bounded" is not a default, so the
+first deployment ships these, and the asymmetry between them is deliberate:
+event logs are high volume and low evidentiary value, while audit records are
+tiny and are the only proof that a human authorised anything.
+
+| Store | Rotation | Retention floor | Aggregate cap | Per-file cap |
+| --- | --- | --- | --- | --- |
+| Gas City event logs | daily | 14 days | 512 MiB | 64 MiB, rotates early if exceeded within a day |
+| Approval records | daily seal | 365 days | 256 MiB | not applicable |
+| Publication audit records | daily seal | 365 days | 256 MiB | not applicable |
+
+For event logs the first bound to bind wins: a chatty fortnight is trimmed by
+the byte cap before the age floor is reached, and a quiet one is trimmed by age.
+For the audit stores the floor wins and the cap is a backstop that should never
+bind. Records are digests, hashes, and timestamps, so a year of them on a
+single-user workstation is small; if the cap ever would bind before the floor,
+deletion is **refused** and the condition is reported, because silently
+discarding audit history to satisfy a disk budget is the failure this
+requirement exists to prevent.
+
+These values are configurable **only in the external deployment repository**,
+alongside the rest of the deployment configuration. They are not exposed
+through `.d2b-orchestration.toml`, a d2b option, or any surface inside this
+repository, per D1.
+
+**Retention and append-only are reconciled by deleting whole periods and
+nothing else.** The append API has no update, replace, truncate, or delete
+operation, and gains none. Enforcement is instead a separate root-owned
+retention timer, which may do exactly one thing: unlink an entire sealed period
+once the retention floor has passed for it. It may never truncate a period,
+never rewrite or re-encode one, never remove an individual record from within
+one, and never touch the current unsealed period. A period is therefore either
+wholly present and byte-identical to when it was sealed, or wholly absent.
+
+Each retention deletion is itself recorded, by appending a record to the
+current period naming the deleted period, its record count, and its digest, so
+the history explains its own gaps rather than merely having them. That record
+is written through the same append path as everything else and is equally
+immutable.
+
+**Only the approval controller may originate a record, and it is not the
+worker.** A record reaches the append helper only from D13's
+`approval-controller`, and only after that principal has verified the Discord
+platform signature, applied D5's allowlist, and derived the artifact identity
+itself under D13. `agent-worker` has no origination path by any route: not a
+file it can write, not a socket that accepts a record from it, not a helper
+that appends on its behalf. Read access for the worker is permitted, because a
+run must observe whether its gate is satisfied and reading cannot forge.
 
 This is the half of the boundary that is easy to omit. Withholding the GitHub
 credential from agents accomplishes nothing on its own if an agent can write
@@ -536,89 +648,107 @@ approval, may not answer a pending interaction, and may not be exposed beyond
 loopback or fronted by a proxy; each of those is a new record, not a
 configuration change.
 
-**D13. Three host identities, because withholding the credential is not enough
-if the precondition can be forged.** The design brief's rule is that
-implementation agents do not hold publishing authority. A previous form of this
-decision withheld the GitHub credential from the worker and had the publisher
-verify a D11 approval before acting, which is defeated by a shorter path than
-credential theft: if the worker can write the approval store, an agent
-manufactures an approval for a revision it controls and then invokes the
-publisher **legitimately**. The credential never leaks and the boundary still
-fails. Authority over the precondition is therefore as load-bearing as
-authority over the credential, and must be separated with the same mechanism.
+**D13. Five host principals: four dedicated unprivileged identities plus a
+root-owned helper.** The design brief's
+rule is that implementation agents do not hold publishing authority. Two
+earlier forms of this decision failed to deliver it. The first withheld the
+GitHub credential but let the worker write the approval store, so an agent
+could approve its own revision and invoke the publisher **legitimately**. The
+second offered a two-identity variant in which `LoadCredential=` was claimed to
+confine the credential to one unit; that claim is wrong. Credentials placed in
+`$CREDENTIALS_DIRECTORY` are readable by the unit's own uid, so any process
+sharing that uid, including a network-facing one, can read them. `LoadCredential`
+isolates a secret from *other* uids and from the general filesystem; it does not
+isolate it from a peer process running as the same user. The variant is
+withdrawn, and this record now requires a distinct Unix identity for every
+boundary that must be mechanical.
 
-Three Unix identities, established by `/etc/nixos`. This is host contributor
-infrastructure and involves no d2b component.
+`/etc/nixos` establishes five principals: four dedicated unprivileged
+identities, each with its own uid, and one root-owned helper service. This is
+host contributor infrastructure and involves no d2b component.
 
-- **Worker** runs `gc`, its sessions, and every agent. It holds the
-  model-provider credential and read/write access to the checkout and its
-  worktrees. It holds **no** GitHub publishing credential and has **no write
-  path to the approval store**: it cannot create, amend, delete, or replace a
-  durable approval record, and it cannot present one it authored. An agent that
-  decides to `git push` fails for lack of a credential; an agent that decides
-  to approve its own work fails for lack of write authority. Neither failure
-  depends on a prompt.
-- **Approval controller** receives Discord interactions, verifies the platform
-  signature, applies D5's one-user and one-guild-and-channel allowlist, and is
-  the **sole writer** of durable approval records. It runs no agent and holds
-  no GitHub credential.
-- **Publisher** holds the one GitHub credential scoped to `vicondoa/d2b` with
-  push and pull-request permission. It runs no agent, and it **independently
-  reads and verifies** the approval record and its `sha256` against the exact
-  revision presented, rather than trusting any claim from the caller.
+| Principal | Holds | Must not be able to |
+| --- | --- | --- |
+| `orchestrator` | Durable Gas City state, the protected integration object store | Run agent code |
+| `agent-worker` | Model credential, its own worktrees, a restricted network namespace (D14) | Read orchestrator state or memory, write the integration store, write approvals, publish |
+| `approval-controller` | Discord ingress, the verifying key, the allowlist | Hold a GitHub credential, run agent code, rewrite approval history |
+| `publisher` | The one GitHub credential scoped to `vicondoa/d2b` | Run agent code, accept a mutable ref, write approvals |
+| `append-helper` | Root-owned; sole writer of the approval and audit store | Expose any update or delete operation |
 
-Three accounts on one machine is cheap. Each is a `users.users` entry and a
-unit; the deployment is single-user and local, so there is no directory, no
-role mapping, and no lifecycle to manage.
+Four dedicated unprivileged identities plus one root-owned helper service is
+cheap on one machine: the four are `users.users` entries with units, the helper
+is a root-owned service rather than a fifth login account, and the deployment
+is single-user and local, so there is no directory, no role mapping, and no
+lifecycle to manage. What is not cheap, and is therefore forbidden, is
+asserting any of these boundaries within one uid. A separation enforced by file
+mode inside a single uid, a wrapper script, a directory convention, environment
+scrubbing, a proxy process, or an instruction to agents is not a boundary in
+this design and may not be substituted for a distinct identity.
 
-**A two-identity variant is permissible only if it is equally mechanical.**
-Collapsing the approval controller and publisher into one **gatekeeper**
-identity satisfies the same threat, because the property that matters is that
-neither authority is reachable from the worker, not that they are separated
-from each other. It qualifies only when all of the following hold, and it does
-not qualify on any weaker basis:
+**Orchestrator and worker are separate because same-uid is not a boundary.**
+A process can `ptrace` and read `/proc` state of another process running as the
+same user, so an agent sharing the orchestrator's uid could read its memory,
+its file descriptors, its environment, and any token it holds, and could drive
+its sockets directly rather than through whatever wrapper it was offered.
+Splitting the uid removes that class outright. The worker reaches the
+orchestrator only over a Unix socket whose server checks the peer credentials
+of every connection (`SO_PEERCRED`, or the platform equivalent) and serves a
+closed set of request types, rejecting any peer uid outside the expected one.
+Same-uid wrapper or proxy separation is forbidden here specifically.
 
-1. The gatekeeper's uid differs from the worker's, and the approval store is
-   owned by the gatekeeper with a mode that grants the worker no write access.
-   Cross-uid ownership is the control. Same-uid separation by file mode,
-   directory convention, a wrapper script, or an instruction to agents is not
-   acceptable and does not satisfy this clause.
-2. The GitHub credential reaches only the publishing unit, through systemd
-   per-unit credentials (`LoadCredential=` into `$CREDENTIALS_DIRECTORY`),
-   never through the gatekeeper's environment, home directory, or a
-   world-of-that-uid readable path. This repository already uses that mechanism
-   in `nixos-modules/guest-control.nix:297` and
-   `nixos-modules/components/observability/stack.nix`, so it is established
-   practice here rather than a novel claim.
-3. The deployment documents that it has merged the network-facing Discord
-   ingress parser with the credential holder, so a parsing defect in ingress
-   now reaches the publishing credential.
+**The protected integration object store gives the artifact an identity the
+worker cannot rewrite.** The worker commits in its own worktree, which it owns
+and may rewrite freely; that is not the artifact. When a task completes, the
+**orchestrator** ingests the result into a Git object store it owns and the
+worker cannot write, producing an **integration commit**. The hash of that
+commit is the artifact identity for every downstream stage. Because Git objects
+are content-addressed and the store is owned by a different uid, the bytes
+behind a given hash cannot be changed by the worker after the fact, and a
+second commit with different content necessarily has a different hash.
 
-Three identities is the recommended default precisely because of clause 3: the
-approval controller parses attacker-influenced input from a network service and
-the publisher does not, and keeping them apart bounds what a bug in the former
-grants. The two-identity variant trades that for one fewer account.
+**The approval controller derives the artifact identity itself.** It resolves
+the integration commit **by hash** from the protected store, reads the commit
+and its tree directly, and constructs the Discord prompt from what it read: the
+commit hash, the changed paths, and the diff statistics it computed. It accepts
+from the workflow only the hash and the gate node identifier. It does not take
+a summary, a title, a description, a rendered diff, or any hidden interaction
+metadata from the worker, and it does not display worker-authored prose as
+though the controller vouched for it.
 
-The worker reaches the publisher only through a **narrowly exposed one-shot
-helper** that accepts an integrated ref or revision, verifies the D11 approval
-for exactly those bytes, and then pushes and opens the pull request itself. It
-takes no branch name, remote, refspec, or command from the caller beyond the
-revision under approval, and it exits after one publication.
+That rule exists to defeat a confused-deputy attack the previous draft allowed:
+a worker could present benign prose to the operator while binding the approval
+to the hash of different bytes, and the operator would approve what they read
+rather than what would ship. Deriving the prompt from the same immutable object
+the publisher will push closes the gap, because the operator, the approval
+record, and the publisher all resolve one commit hash to one set of bytes.
 
-**The helper's exact protocol, transport, and privilege-drop mechanism are
-prototype and specification work**, and this record deliberately does not
-invent them; several plausible shapes exist on a NixOS host and choosing among
-them needs measurement rather than assertion. What is not deferred are the two
-properties the identity split exists to provide, both of which are MVP
-acceptance conditions and neither of which depends on which protocol wins:
-M11 requires mechanical proof that the publishing credential is unreachable
-from the worker, and M15 requires mechanical proof that the worker cannot write
-or forge an approval record.
+**The publisher accepts a commit hash and nothing else.** It takes a full
+immutable commit object name, rejects every mutable reference including branch
+names, tag names, `HEAD`, symbolic refs, and any expression that resolves
+through one, and it pushes that object. Before acting it independently reads
+the approval record from the store and requires all of: node equal to the
+publication gate, decision equal to `approve`, reviewer equal to the configured
+operator, and approved commit hash equal to the commit presented. Any mismatch,
+including an otherwise-valid approval recorded against an earlier gate, is a
+refusal.
 
-Credential rules that apply to every identity:
+Accepting a ref was a real defect and not a stylistic one: a worker able to
+move a ref between the moment of verification and the moment of push publishes
+bytes nobody approved, and the approval record afterwards describes something
+that was never shipped.
+
+**The helper's exact protocol and transport remain prototype and specification
+work**, and this record deliberately does not invent them; several plausible
+shapes exist on a NixOS host and choosing among them needs measurement rather
+than assertion. What is not deferred are the properties the split exists to
+provide, each an MVP acceptance condition independent of which protocol wins:
+M11 for credential unreachability, M15 for approval unforgeability, M16 for
+orchestrator-state unreachability, and M18 for append-only history.
+
+Credential rules that apply to every principal:
 
 - **Model access** is whatever the configured providers require, scoped to
-  model inference, and reaches the worker only. Where a model provider is a
+  model inference, and reaches `agent-worker` only. Where a model provider is a
   cloud service, its credential is a model-provider credential and is
   permitted; it is named in the configuration and scoped as narrowly as that
   provider allows.
@@ -627,52 +757,126 @@ Credential rules that apply to every identity:
   the workflow does not use for model inference; credentials for another
   repository or organisation; and any credential the configuration does not
   name a use for.
-- Credentials are never passed between the two identities, and redaction of
-  credential values from logs, state files, and error text is a requirement on
-  the configuration repository's own tooling.
+- Credentials are never passed between principals, and redaction of credential
+  values from logs, state files, and error text is a requirement on the
+  configuration repository's own tooling.
 
-**D14. Publication is one step, gated by a human, with the lint as defence in
-depth.** Pushing a branch and creating a pull request happen only in a
-publisher step, only after a recorded artifact-bound approval under D11 against
-the exact integrated tree, and only through D13's helper. If the upstream
-`github` pack's `push-branch` and `create-pr` commands are used, they are
-reachable from that step and from nowhere else, and the formula set carries a
-lint asserting it.
+**D14. The agent-worker runs in a restricted host network namespace with
+default-deny egress.** An agent that inherits the host network namespace also
+inherits every route the host has, which on this machine includes the d2b
+per-environment bridges the operator is developing against. That would let
+contributor tooling reach d2b guest networks while this record claims no d2b
+relationship, and it would weaken the environment isolation d2b exists to
+provide, without any d2b component being involved in the breach.
 
-That lint is a third layer, not the control. The controls are D13's two
-separations: a formula that reached a publishing command from the wrong step
-would still fail because the worker holds no publishing credential, and a run
-that manufactured its own approval would still fail because the worker cannot
-write one and the publisher re-verifies the record itself. Ordering them this
-way is deliberate, since a lint over a formula set is exactly the kind of guard
-an agent editing formulas could regress.
+`agent-worker` sessions therefore run in a dedicated network namespace
+configured by `/etc/nixos`, with its own interface and its own firewall policy.
+This is ordinary host networking: no d2b module, no d2b bridge, no broker, and
+no d2b service participates in it.
+
+Denied, by default and explicitly:
+
+- every d2b bridge, TAP, and per-environment interface, and every address on
+  them;
+- RFC1918 and other LAN ranges, and any other address on the host's own local
+  networks;
+- link-local, `169.254.0.0/16` and `fe80::/10`, including metadata endpoints;
+- the host's loopback services. The namespace has its own loopback, so the
+  dashboard, the orchestrator socket, and any other host-loopback listener are
+  simply not addressable from inside it. This is why D12's read-only
+  requirement and this decision are complementary rather than redundant: D12
+  holds if the namespace is ever misconfigured, and this holds if the
+  dashboard's mode is ever wrong.
+
+Allowed, only when named in the configuration:
+
+- the configured model provider endpoints;
+- package registries and Nix substituters the tasks need;
+- DNS to a specified resolver;
+- GitHub **read** access, if and only if a task genuinely requires fetching
+  rather than working from the checkout. Publication is unaffected: the worker
+  has no credential to publish with under D13, so read reachability grants it
+  nothing.
+
+The policy is default-deny with an explicit allowlist, not default-allow with
+exceptions, so an endpoint nobody considered is refused rather than reached.
+Unix-domain sockets are not affected by the network namespace, which is why
+D13's peer-credential-checked socket remains the worker's channel to the
+orchestrator and does not require relaxing anything here.
+
+M17 tests this with planted denied targets and allowed controls, because a
+firewall that denies everything, including what the workflow needs, passes a
+naive "is it blocked" check while being useless.
+
+**D15. Publication is one step, gated by a human, audited on every attempt,
+with the lint as defence in depth.** Pushing a branch and creating a pull
+request happen only in a publisher step, only against the immutable commit hash
+approved under D11, and only through D13's publisher. If the upstream `github`
+pack's `push-branch` and `create-pr` commands are used, they are reachable from
+that step and from nowhere else, and the formula set carries a lint asserting
+it.
+
+**Every publication attempt emits exactly one audit record, whether it
+succeeds or fails.** Publication is the only effect this system has outside the
+host, so an attempt that leaves no trace is the one case where operational
+evidence matters most. The record is appended through D11's append-only helper
+and carries: the commit hash, the approval record's own digest, the outcome as
+one of a closed set, the failure class when it failed, and the timestamp. It is
+bounded in size and redacted, carrying digests rather than the reviewer's raw
+identity or the run handle, and it never carries a credential, a token, a
+remote URL with embedded authentication, or captured command output. Exactly
+one record per attempt: a refusal before the push is still an attempt, and a
+retry is a second attempt with its own record.
+
+The lint is a third layer, not the control. The controls are D13's separations:
+a formula that reached a publishing command from the wrong step would still
+fail because the worker holds no publishing credential, a run that manufactured
+its own approval would still fail because the worker cannot originate a record
+and the publisher re-verifies the record itself, and a run that tried to swap
+the bytes after approval would still fail because the publisher accepts only an
+immutable commit hash. Ordering them this way is deliberate, since a lint over
+a formula set is exactly the kind of guard an agent editing formulas could
+regress.
 
 Automatic publication is not configurable in the first deployment; the
 capability is absent rather than disabled. The publisher is not the merger:
 `v3` is protected and the merge stays the operator's, as it is today.
 
-**D15. State the trust boundary honestly.** Agents run as the worker identity
-with that identity's privileges, in git worktrees, with the model credential
-reachable. There is no sandbox, no isolation of an agent from its sibling
-worktrees, and no confinement of an agent to the checkout. The blast radius of
-a misbehaving or compromised agent is the worker identity and everything it can
-reach.
+**D16. State the trust boundary honestly.** Agents run as `agent-worker` with
+that identity's privileges, in git worktrees, inside D14's network namespace,
+with the model credential reachable. There is no sandbox, no isolation of an
+agent from its sibling worktrees, and no confinement of an agent to the
+checkout. The blast radius of a misbehaving or compromised agent is that
+identity and everything it can reach.
 
 What that blast radius **excludes**, mechanically rather than procedurally, is
-the pair of authorities that together constitute publication. A compromised
-agent cannot push to `vicondoa/d2b` or open a pull request, because the
-credential is not present in its identity. It also cannot manufacture the
-approval that would let it invoke the publisher legitimately, because the
-approval store is written by a different identity and the publisher verifies
-the record itself rather than accepting the caller's word. Both halves are
-required: either one alone leaves a complete path from a compromised agent to a
-published branch. That pair is the only real containment property in this
-design, and D13 is where it lives.
+a set of five properties, each enforced by a distinct identity or namespace
+rather than by a rule an agent is asked to follow:
 
-The dashboard is inside the blast radius in the sense that a worker agent can
-reach it over loopback, which is why D12 requires read-only mode rather than
-treating the loopback bind as a control. A local agent is a local principal;
-"only I can reach it" is a statement about humans and D5 says so explicitly.
+1. It cannot publish, because the GitHub credential is not present in its
+   identity and is not readable from it.
+2. It cannot manufacture the approval that would let it invoke the publisher
+   legitimately, because only `approval-controller` originates records and the
+   publisher re-reads and verifies them.
+3. It cannot move the bytes after approval, because the publisher accepts only
+   an immutable commit hash resolved from a store the worker cannot write.
+4. It cannot read or attach to orchestrator state, because that runs under a
+   different uid and is reached only through a peer-credential-checked socket.
+5. It cannot reach d2b networks, the LAN, link-local addresses, or host
+   loopback services, because it is in its own network namespace under
+   default-deny egress.
+
+Properties 1 through 3 are required together: any one alone leaves a complete
+path from a compromised agent to a published branch. Property 4 is what makes
+the other four durable, because an agent that can read the orchestrator's
+memory can extract whatever it holds. Property 5 is what keeps a contributor
+tool from undercutting the product it is used to build.
+
+The dashboard sits behind two of these. A worker agent cannot reach it at all
+from inside D14's namespace, and if that namespace is ever misconfigured, D12's
+read-only mode still refuses the mutation. Neither is presented as sufficient
+alone. A local agent is a local principal; "only I can reach it" is a statement
+about humans, and D5 says so explicitly.
 
 Everything else is scope and gating rather than containment: model access
 scoped to inference, human approval at five named gates, the publication lint,
@@ -682,21 +886,28 @@ reaching `v3`; they do not contain a bad agent inside the worker identity. Any
 claim stronger than that is unsupported by this design, and D2 forecloses the
 obvious way to strengthen it until a separate ADR takes that up.
 
-**D16. Everything imported is pinned.** Packs are pinned in `packs.lock`, whose
+**D17. Everything imported is pinned.** Packs are pinned in `packs.lock`, whose
 schema records `version`, `commit` and `fetched` per pack; imports pin a commit
 with `Import.Version = "sha:<hex>"`. `gc` is pinned to a released version. The
 configuration repository documents upgrade and rollback for each pinned
 artifact, and an upgrade that changes a pack's formula step identifiers is
 treated as a breaking change to the run.
 
-**D17. The importer is a lenient parser with a strict output.** `tasks.md` has
+**D18. The importer is a lenient parser with a strict output.** `tasks.md` has
 no schema and no format version, so the importer parses what is reliable (the
 `- [ ]` checkbox, the `T\d{3,}` identifier, the `[P]` and `[US\d+]` markers,
 and `## Phase N` headers) and treats the rest as advisory. Prose dependencies
 and prose file paths are extracted best-effort and then **confirmed by a human
-at the task-DAG approval gate**, which is already in the flow. An unparseable
-line fails the import with the line quoted; it is never silently dropped.
-Re-import is keyed by task ID and must not duplicate unchanged tasks.
+at the task-DAG approval gate**, which is already in the flow.
+
+An unparseable line fails the import, and the failure **names the expectation
+that was not met** as well as quoting the line. Quoting alone leaves the
+operator guessing which of several required tokens was wrong: the `- [ ]`
+checkbox, the `T` plus three-or-more digits identifier, the `[P]` or `[US<n>]`
+marker shape, or the enclosing `## Phase N` header. The message states which
+element the parser required, what it found in that position, and the line
+verbatim. A line is never silently dropped, and re-import is keyed by task ID
+and must not duplicate unchanged tasks.
 
 ## Non-goals, and what this ADR does not authorize
 
@@ -725,7 +936,7 @@ The first two items are the load-bearing ones.
   `PANEL_REASONING_EFFORT_POLICY`, `PANEL_ROLES`, or any part of
   `packages/xtask/src/delivery/`.
 - No claim that this design isolates agents, beyond the two separations D13
-  establishes and M11 and M15 prove. See D15.
+  establishes and M11 and M15 prove. See D16.
 - No multi-party deployment shape. No role model, permissions matrix, tenancy,
   shared or hosted instance, remote access path, high availability, failover,
   or federation. No authentication layer for the dashboard, and no exposure of
@@ -738,10 +949,37 @@ The first two items are the load-bearing ones.
 - **No worker-writable approval store**, and no design in which the publisher
   trusts an approval assertion supplied by its caller rather than reading and
   verifying the record itself.
+- **No mutable approval history.** No update, replace, truncate, or delete
+  operation is exposed by the append helper to any principal, and no rotation
+  scheme rewrites a sealed period.
+- **No mutable ref in the publication path.** The publisher accepts a full
+  immutable commit hash only, and rejects branch names, tag names, `HEAD`,
+  symbolic refs, and anything resolving through one.
+- **No worker-supplied approval prose or metadata.** The approval controller
+  derives the artifact identity and constructs the operator-facing prompt from
+  the protected immutable object, never from text or hidden interaction
+  metadata originating in the worker.
+- **No raw identifiers in durable records.** Discord user ids and run handles
+  appear only as keyed digests in approval records, audit records, diagnostics,
+  and event logs.
+- **No unbounded state.** Event logs and approval or audit history carry
+  shipped rotation and retention defaults rather than growing until the disk
+  fills.
+- **No host-network agents.** Worker sessions do not run in the host network
+  namespace and do not inherit host routes, and no d2b bridge, guest address,
+  LAN range, link-local address, or host loopback service is reachable from
+  them.
 - **No same-uid separation anywhere in the trust model.** A boundary asserted
-  by file mode within one uid, by a wrapper script, by directory convention, by
-  environment scrubbing, or by an instruction to agents does not count as a
-  boundary in this design and may not be substituted for a distinct identity.
+  by file mode within one uid, by a wrapper script, by a proxy process, by
+  directory convention, by environment scrubbing, or by an instruction to
+  agents does not count as a boundary in this design and may not be substituted
+  for a distinct identity. This explicitly includes systemd per-unit
+  credentials: `LoadCredential=` isolates a secret from other uids, not from a
+  peer process running as the same uid, so it is a delivery mechanism and never
+  a trust boundary.
+- **No absence scan without counted coverage and a planted control.** A scan
+  that cannot show it examined a non-empty corpus, and cannot show it rejects a
+  planted violation, does not satisfy any acceptance condition in this record.
 - No Discord ingress from any identity other than the one configured operator,
   and no allowlist that defaults open when unset or empty.
 - **Single-user scope is never a reason to collapse identities or relax D12.**
@@ -765,6 +1003,23 @@ Every condition below is evaluable by a machine except the one half of M1 that
 is explicitly marked as a reviewer judgement, which is called out rather than
 disguised as a scan.
 
+**Every absence scan below is subject to two standing requirements**, because
+an absence scan is the easiest kind of check to pass for the wrong reason. A
+renamed directory, a moved corpus, a typo in a glob, or a pattern broken by an
+escaping change all produce a clean result that means nothing.
+
+1. **Counted, non-empty coverage.** Each scan reports the number of files and
+   the number of candidate sites it actually examined, asserts that number is
+   greater than zero, and fails closed when its input set is empty or when the
+   count falls below a committed floor. A scan that examined nothing is a
+   failure, not a pass.
+2. **Planted negative controls.** Each scan ships fixtures containing exactly
+   the forbidden references it exists to catch, and the scan is required to
+   **reject** them. A scan that cannot demonstrate a detection on a planted
+   violation has not been shown to detect anything. Controls live outside the
+   scanned corpus, or are neutralised in the committed tree and injected during
+   the check, so they never themselves become violations.
+
 - **M1 No product surface.** Mechanical: a scan finds no Gas City reference in
   `flake.nix`, `nixos-modules/`, `packages/`, `docs/reference/`,
   `docs/how-to/`, `docs/explanation/`, `README.md`, or
@@ -773,6 +1028,12 @@ disguised as a scan.
   outside those surfaces are permitted, so `docs/adr/`, `docs/contributing/`,
   `specs/`, `.d2b-orchestration.toml`, `changelog.d/`, and `CHANGELOG.md` are
   not scanned for presence.
+
+  Coverage and controls: the scan reports the file count per scanned surface
+  and fails if any named surface contributed zero files, which catches a
+  renamed or relocated directory. Planted controls place a Gas City reference
+  in each of a Nix option description, a flake output attribute, a
+  `docs/reference/` page, and `README.md`, and each must be rejected.
 
   Reviewer judgement, stated as such: a `CHANGELOG.md` or `changelog.d/`
   mention must describe a contributor-process decision and must not present Gas
@@ -798,7 +1059,17 @@ disguised as a scan.
      identity denied access to `/run/d2b/` and with no d2b binary on its
      `PATH`. A dependency that the trace missed fails here.
 
-  Done when all three pass on a host with d2b up and at least one VM running.
+  Coverage and controls: part 1 reports the count of configuration files,
+  packs, and formulas scanned and fails on an empty set, which catches a pack
+  set that failed to resolve and was silently scanned as nothing. Part 2
+  reports the count of traced syscalls and fails if the trace captured none,
+  which catches a tracer that attached to the wrong process or exited early.
+  Planted controls add a formula step that invokes `d2b vm list` and one that
+  connects to `/run/d2b/public.sock`; part 1 must reject the first and part 2
+  must reject the second.
+
+  Done when all three pass, with coverage asserted and controls rejected, on a
+  host with d2b up and at least one VM running.
 
 - **M3 The standalone contributor surface is unaffected and self-sufficient.**
   With Gas City absent from the host, `node scripts/copilot/check-bindings.mjs`,
@@ -807,6 +1078,12 @@ disguised as a scan.
   completion without the external configuration repository, the `gc` binary, or
   any Gas City service; and no file under those two directories references Gas
   City, `d2b-gascity-configs`, `.d2b-orchestration.toml`, or the approval store.
+
+  Coverage and controls: the reference scan reports how many agent and skill
+  files it read and fails if either directory contributed zero, which is the
+  failure mode if the surface is ever relocated. A planted control adds a Gas
+  City dependency to one agent file and one skill file, and both must be
+  rejected.
 
   This deliberately does not freeze bytes. Those directories will change for
   unrelated contributor-process reasons, and an equality assertion against a
@@ -836,50 +1113,67 @@ disguised as a scan.
   implemented task, validation fails, and only the simplifier's change is
   reverted. Done when a test asserts the post-revert tree equals the
   pre-simplification tree byte for byte.
-- **M9 tasks.md import fidelity.** One real `tasks.md` from `specs/` imports
-  into a validated DAG preserving IDs, parallel markers and dependencies, at
-  least two independent tasks run concurrently, and a re-import after an
-  unrelated edit creates no duplicate task. Done when a deliberately malformed
-  line fails the import with the line quoted.
-- **M10 The panel bridge is proven or the stage parks.** Either a Gas City run
-  causes the existing d2b panel skill and `xtask delivery wave
-  panel-request | panel-attest | seal` to run unchanged and drive a wave to
-  sealed, with a deliberately mis-bound lane **rejected** by `panel-attest`; or
-  the bridge is shown not to work and the stage parks on a durable gate for a
-  contributor to run the panel by hand. Done when one of those two is
-  demonstrated and the other is not silently substituted. A run that reports a
-  panel outcome without a corresponding `panel-attest` record fails this item.
+- **M9 tasks.md import fidelity, with actionable failures.** One real
+  `tasks.md` from `specs/` imports into a validated DAG preserving IDs,
+  parallel markers and dependencies, at least two independent tasks run
+  concurrently, and a re-import after an unrelated edit creates no duplicate
+  task. Done when four deliberately malformed lines, each breaking a different
+  required element (the checkbox, the task identifier, the marker shape, the
+  phase header), are each rejected with a message naming **which** expectation
+  failed and what was found there, in addition to quoting the line. A rejection
+  that only quotes the line fails this item.
+- **M10 The panel bridge is proven or the stage parks with a named resume.**
+  Either a Gas City run causes the existing d2b panel skill and `xtask delivery
+  wave panel-request | panel-attest | seal` to run unchanged and drive a wave
+  to sealed, with a deliberately mis-bound lane **rejected** by `panel-attest`;
+  or the bridge is shown not to work and the stage parks on a durable gate
+  whose message names the concrete resume command with its bead id
+  substituted. In the parked case, closing the gate is refused while no
+  matching `panel-attest` record exists, and succeeds once one does. Done when
+  one of the two paths is demonstrated end to end, the other is not silently
+  substituted, and the refuse-then-succeed pair is observed in the parked case.
+  A run that reports a panel outcome without a corresponding `panel-attest`
+  record fails this item.
 - **M11 The publishing credential is mechanically unreachable from the
   worker.** From the worker identity, with a full agent session running: no
   GitHub token is present in the environment; no readable file, git credential
-  helper, `~/.config/gh`, or push-authorised SSH key yields one; and a direct
-  `git push` and a direct pull-request creation against `vicondoa/d2b` both
-  **fail for lack of a credential**. Done when each of those is attempted and
-  observed to fail, not when a policy document says it should.
+  helper, `~/.config/gh`, or push-authorised SSH key yields one; the publisher's
+  credential material is unreadable including anything under a per-unit
+  credentials directory belonging to another principal; and a direct `git push`
+  and a direct pull-request creation against `vicondoa/d2b` both **fail for
+  lack of a credential**. Done when each of those is attempted and observed to
+  fail, not when a policy document says it should.
 
   This is the one MVP condition that is not negotiable on schedule grounds. The
   helper protocol of D13 may be prototyped, revised, or replaced; the
   non-reachability property it exists to provide may not ship unproven, because
-  without it D14's lint is the only thing standing between an agent and the
+  without it D15's lint is the only thing standing between an agent and the
   remote.
 
-- **M12 Publication requires an approval, at both layers.** The run stops
-  before push; the helper rejects a revision with no recorded artifact-bound
-  approval, and rejects an approval whose `sha256` does not match the revision
-  presented; and the formula-set lint of D14 rejects a formula that references
-  `push-branch` or `create-pr` outside the publisher step. Done when the two
-  helper rejections and the lint rejection are each observed.
+- **M12 Publication requires an approval bound to an immutable commit.** The
+  run stops before push. The publisher rejects each of: a commit with no
+  approval record; an approval whose recorded commit hash differs from the
+  commit presented; an approval recorded against a gate node other than the
+  publication gate; an approval whose decision is not `approve`; and **any
+  mutable reference offered in place of a commit hash**, including a branch
+  name, a tag name, `HEAD`, and a symbolic ref. The formula-set lint of D15
+  rejects a formula that references `push-branch` or `create-pr` outside the
+  publisher step. Done when each of the five publisher rejections and the lint
+  rejection is individually observed.
 
-- **M13 Discord ingress is allowlisted and fails closed.** A message from any
-  Discord user id other than the configured operator, and where a guild is
-  configured a message from any other guild or channel, produces no approval,
-  no response, no clarification answer, no gate transition, and no workflow
-  state change of any kind, and is rejected **at ingress** rather than filtered
-  downstream. Done when three things are observed: a foreign-author message
-  rejected before any workflow state is touched; a message from the configured
-  operator in a non-configured channel likewise rejected; and an unset or empty
-  allowlist rejecting the configured operator too, proving the default is
-  closed rather than open.
+- **M13 Discord ingress is allowlisted, fails closed, and diagnoses.** A
+  message from any Discord user id other than the configured operator, and
+  where a guild is configured a message from any other guild or channel,
+  produces no approval, no response, no clarification answer, no gate
+  transition, and no workflow state change of any kind, and is rejected **at
+  ingress** rather than filtered downstream. Done when four things are
+  observed: a foreign-author message rejected before any workflow state is
+  touched; a message from the configured operator in a non-configured channel
+  likewise rejected; an unset or empty allowlist rejecting the configured
+  operator too, proving the default is closed rather than open; and each of
+  those rejections emitting exactly one local diagnostic naming its rejection
+  class and carrying the received and configured identity digests, with no raw
+  Discord id present in the diagnostic.
 
 - **M14 The dashboard refuses remote reach and local mutation.** Two parts,
   both required, because they defend against different principals.
@@ -899,14 +1193,14 @@ disguised as a scan.
   and fails part 2 has no dashboard control at all, because every agent it runs
   is already inside loopback.
 
-- **M15 The worker cannot write or forge an approval.** Running as the worker
-  identity, with a full agent session active: every write path to the durable
-  approval store is attempted and observed to fail, including direct file
-  creation and modification, replacement of an existing record, deletion, and
-  any socket or helper the deployment exposes to the worker. Then the end-to-end
-  case: a run that fabricates an approval for a revision it controls and
-  invokes the publisher is **refused by the publisher**, which reads the store
-  itself and finds no matching record.
+- **M15 The worker cannot originate or forge an approval.** Running as the
+  worker identity, with a full agent session active: every write path to the
+  durable approval store is attempted and observed to fail, including direct
+  file creation and modification, replacement of an existing record, deletion,
+  and any socket or helper the deployment exposes to the worker. Then the
+  end-to-end case: a run that fabricates an approval for a commit it controls
+  and invokes the publisher is **refused by the publisher**, which reads the
+  store itself and finds no matching record.
 
   Done when both the write attempts and the fabricated-publication attempt are
   observed failing. Read access from the worker is expected to succeed and is
@@ -915,6 +1209,66 @@ disguised as a scan.
   M11 and M15 are a pair and neither is sufficient alone. M11 without M15
   leaves an agent able to manufacture the precondition and publish through the
   sanctioned path; M15 without M11 leaves an agent able to publish directly.
+
+- **M16 The worker cannot read or attach to orchestrator state.** Running as
+  the worker identity: `ptrace` attachment to an orchestrator process fails;
+  the orchestrator's `/proc/<pid>` memory, environment, and file-descriptor
+  entries are unreadable; the orchestrator's durable state directory and the
+  protected integration object store are not writable; and a write attempt
+  against an existing integration object fails. The worker's own socket to the
+  orchestrator accepts only the closed request set and rejects a connection
+  whose peer uid is not the expected one, observed by connecting from a third
+  identity. Done when each is attempted and observed to fail, and the
+  legitimate request set is observed to succeed.
+
+- **M17 Worker egress is default-deny with the required paths open.** From
+  inside the worker's network namespace, with planted targets on both sides:
+  every d2b bridge address, a d2b guest address, a host LAN address, a
+  link-local address including `169.254.169.254`, and the host's loopback
+  dashboard and orchestrator ports are each unreachable; and the configured
+  model endpoint, the configured substituter or package registry, and the
+  configured DNS resolver are each reachable. Done when every denied control is
+  observed refused and every allowed control is observed to succeed.
+
+  Both halves are required. A namespace that denies everything passes a
+  deny-only check while making the workflow unusable, and a namespace that
+  allows everything passes an allow-only check while providing no isolation.
+
+- **M18 Approval and audit history is append-only, authenticated, and bounded
+  to stated defaults.** Five parts.
+
+  1. **Immutability.** Attempts to modify history fail from every principal
+     that is not the append helper, including `approval-controller` and
+     `publisher`: overwriting an existing record, truncating the store,
+     deleting a record, and re-appending a record whose content address already
+     exists are each refused. An append is durable across an immediate
+     power-loss simulation, demonstrating the `fsync`.
+  2. **Caller authentication.** The helper's socket rejects a connection from
+     `agent-worker` and from `orchestrator` on peer-credential grounds; accepts
+     an approval append from `approval-controller` and rejects a publication
+     audit append from that same identity; and accepts a publication audit
+     append from `publisher` and rejects an approval append from it. Done when
+     all six outcomes are observed, since the cross-kind rejections are what
+     stop a compromised controller or publisher from forging the other's
+     records.
+  3. **Publication audit completeness.** Every publication attempt, success and
+     failure alike, produces exactly one audit record, verified by counting
+     records across a successful publication, a publication refused for a
+     missing approval, and a publication refused for a ref rather than a hash.
+  4. **Redaction.** No durable record contains a raw Discord id, a raw run
+     handle, a credential, or a remote URL carrying authentication, verified by
+     scanning the store with counted coverage and a planted control.
+  5. **Retention.** Daily rotation runs on schedule. Event logs are trimmed at
+     whichever of 14 days, 512 MiB aggregate, or the 64 MiB per-file cap binds
+     first. Approval and publication audit periods older than the 365-day floor
+     are removed by the root-owned retention timer as **whole sealed periods**,
+     with each deletion leaving its own record in the current period naming the
+     deleted period, its record count, and its digest. The timer is observed to
+     refuse a partial deletion, to refuse deleting the current unsealed period,
+     and to leave every surviving sealed period byte-identical to its sealed
+     state. Where the 256 MiB audit cap would require deleting a period younger
+     than the floor, deletion is **refused** and the condition reported, which
+     is verified by driving the store past the cap with synthetic records.
 
 ## Consequences
 
@@ -933,28 +1287,67 @@ a `checks` output "so CI can run it", a `docs/how-to/` page "since people
 ask". M1 exists precisely because that drift is invisible in any single commit
 and obvious only in aggregate.
 
-**The worker identity is not isolated, and D15 says so rather than implying
-otherwise.** Agents run as the worker identity with its privileges and reach
-the model credential. A prompt-injected or malfunctioning agent can do anything
-that identity can do, and neither the worktree nor the workflow shape prevents
-it. What it cannot do is publish, and that now rests on two separations rather
-than one: it holds no publishing credential, and it cannot write the approval
-that would make the publisher act on its behalf. Everything else is scope,
+**Five principals and a network namespace are more operational surface than a
+contributor tool usually carries.** That is the honest cost of running
+autonomous agents on a workstation that also hosts d2b development. Four of the
+principals are `users.users` entries with units and the fifth is a root-owned
+helper service, the namespace is a handful of firewall rules, and none of it
+needs d2b, but it is five services to keep running and a firewall policy that
+will block something legitimate the first time a task needs an endpoint nobody
+listed. The alternative is not "less configuration"; it is a design in which an
+agent reaches the operator's LAN, the d2b bridges, and the publishing
+credential, and where the only thing between it and `v3` is a prompt.
+
+**The retention defaults are a guess, and the audit floor is the one that will
+be wrong first.** Fourteen days and 512 MiB for event logs, and a 365-day floor
+under a 256 MiB backstop for approval and publication audit, are conservative
+workstation values chosen without production data. Event logs are the volatile
+side and will simply trim earlier than expected on a busy fortnight. The audit
+side is the side to watch: it is deliberately configured so that a full store
+**refuses to delete** rather than silently discarding history, which converts a
+disk-budget problem into an operator-visible failure. That is the correct
+direction for an audit trail and it does mean a misconfigured deployment can
+wedge on storage rather than quietly losing evidence. Both sets of values live
+only in the external deployment repository, so tuning them never touches d2b.
+
+**The controls now assume an agent is hostile, while the workflow assumes it is
+useful.** That tension is deliberate and unresolved. An agent gets a model
+credential, a writable worktree, and outbound access to model and package
+endpoints, because it cannot do the job otherwise, and everything else is
+denied. A compromised agent can still produce a plausible bad change, argue for
+it in a task record, and have it reach the panel. What it cannot do is publish
+that change, reach d2b's networks, read the orchestrator's memory, or rewrite
+the record of what a human approved.
+
+**The worker identity is not isolated, and D16 says so rather than implying
+otherwise.** Agents run as `agent-worker` with its privileges and reach the
+model credential and their own worktrees. A prompt-injected or malfunctioning
+agent can do anything that identity can do inside its namespace, and the
+workflow shape does not prevent it. What it cannot do rests on separations
+rather than rules: no publishing credential, no ability to originate an
+approval, no ability to move the bytes after approval, no reach into
+orchestrator state, and no route to d2b or the LAN. Everything else is scope,
 gating, and review, which reduce the chance of a bad change reaching `v3` and
-do not contain a bad agent. Anyone deploying this should size the worker
-identity accordingly, and should notice that the separations are ordinary Unix,
-need no d2b component, and convert the two most consequential authorities in
-the system from prompt-level rules into mechanical ones.
+do not contain a bad agent. Anyone deploying this should size `agent-worker`
+accordingly.
 
 **"Local" is not a trust boundary, and the dashboard is where that bites.**
 The single-user scope makes it tempting to treat loopback as a perimeter, and
-for humans it is one. For agents it is not: every agent this deployment runs is
-already inside it, and the upstream dashboard exposes a respond path that
-answers an agent's own permission prompts. Read-only mode is therefore a
-requirement rather than a hardening option, and the cost is real: run
-observation is all the dashboard provides, so anything an operator might have
-done through its controls now happens through Discord or a shell. That is the
-correct trade, but it is a trade.
+for humans it is one. For agents it is not: the upstream dashboard exposes a
+respond path that answers an agent's own permission prompts. Read-only mode and
+the worker's separate network namespace are therefore both requirements rather
+than hardening options, and the cost is real: run observation is all the
+dashboard provides, so anything an operator might have done through its
+controls now happens through Discord or a shell. That is the correct trade, but
+it is a trade.
+
+**Digested identifiers make forensics harder.** Storing keyed digests instead
+of raw Discord ids and run handles means an operator reading the audit trail
+cannot see who or what at a glance, and correlating a record with a Discord
+message requires computing the digest. That is accepted because the durable
+store outlives the incident that motivated it and accumulates identifiers
+forever, but it is a genuine loss of convenience and the deployment
+documentation has to explain how to compute the digest for a known id.
 
 **D2 closes the obvious escape hatch, on purpose, and that has a price.** The
 project that would most naturally supply a sandbox here is the project this
@@ -1016,7 +1409,7 @@ contributor tooling in a framework's product surface, which D1 forbids for
 better reasons.
 
 **The importer will drift.** `tasks.md` has no schema and no version and its
-producer is a language model. D17 makes drift loud at import time rather than
+producer is a language model. D18 makes drift loud at import time rather than
 silent at execution time and puts a human confirmation in the path, but it
 cannot make the format stable.
 
@@ -1087,7 +1480,7 @@ elsewhere.
 Rejected for the first deployment. Both are real builtin runtimes, but each
 adds an operational substrate the operator does not run today, and tmux remains
 required regardless because it is the registered fallback. Adding
-infrastructure to partially close the D15 gap is a decision that deserves its
+infrastructure to partially close the D16 gap is a decision that deserves its
 own record alongside the sandbox question, not a quiet default here.
 
 **Run everything as one identity and rely on the publication lint.** Rejected,
@@ -1100,7 +1493,7 @@ by any subprocess they spawn regardless of what the formula says, and the
 design brief's own rule is that implementation agents do not hold publishing
 authority. Splitting the identity costs one `users.users` entry and a helper,
 and it converts the rule from prompt-level to mechanical. The lint survives as
-defence in depth in D14, which is the right rank for it.
+defence in depth in D15, which is the right rank for it.
 
 **Collapse the identities, since it is a single-user machine anyway.**
 Rejected, and the reasoning that makes it tempting is the reasoning that makes
@@ -1125,8 +1518,40 @@ rather than a weaker one.
 Rejected. Same-uid separation is defeated by the trivial expedient of not using
 the wrapper, and an agent that can run arbitrary commands as an identity has
 every authority that identity holds regardless of how the paths are laid out.
+It can also `ptrace` its same-uid peers and read their memory and file
+descriptors, so even a well-behaved wrapper leaks what it was meant to guard.
 The non-goals say this explicitly because it is the shape a hurried
-implementation reaches for when a third account feels like ceremony.
+implementation reaches for when more accounts feel like ceremony.
+
+**Use `LoadCredential=` to confine the GitHub token to one unit while sharing a
+uid.** Rejected on a factual correction. An earlier draft offered this as a
+two-identity variant; it does not work. Credentials materialise in
+`$CREDENTIALS_DIRECTORY` readable by the unit's own user, so any process
+sharing that uid, including a network-facing ingress parser, can read them.
+`LoadCredential` is a good delivery mechanism, keeps secrets out of the store
+and out of the general filesystem, and this repository already uses it in
+`nixos-modules/guest-control.nix:297`; it is not a cross-principal boundary and
+this record no longer treats it as one.
+
+**Let the publisher accept a branch or ref that the run has prepared.**
+Rejected. A ref is a name whose target the worker can change, so approval
+verification and push would consult two different sets of bytes with a window
+between them, and nothing about the record afterwards would reveal it. The
+publisher takes a commit hash, which is the bytes.
+
+**Let the workflow supply the approval prompt text and artifact identity.**
+Rejected. It makes the approval controller a confused deputy: benign prose is
+shown to the operator while the approval binds to a hash of different content,
+and the operator's genuine approval authorises something they never saw. The
+controller reading the immutable object itself costs a little duplicated work
+and removes the whole class.
+
+**Run agents in the host network namespace, since the firewall is a
+workstation concern.** Rejected. The host on which this runs is precisely the
+host running d2b microVM bridges, so an agent in the host namespace can reach
+the guest networks whose isolation d2b exists to provide. That would let
+contributor tooling undercut the product from the outside without touching a
+single d2b component, which is a worse version of the coupling D2 forbids.
 
 **Rely on the dashboard's loopback bind instead of read-only mode.** Rejected.
 Loopback is a control against remote humans and no control at all against local
@@ -1146,7 +1571,7 @@ precisely because those principals do exist today.
 
 **Give the publisher the operator's general GitHub identity.** Rejected. It is
 the one credential in the system with lasting consequences outside this
-repository, and D13 scopes it to `vicondoa/d2b` precisely because D15 admits
+repository, and D13 scopes it to `vicondoa/d2b` precisely because D16 admits
 the worker identity running agents is not contained. Branch protection on `v3`
 and the human merge remain the last line rather than the only one.
 
