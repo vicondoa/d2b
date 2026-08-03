@@ -582,14 +582,40 @@ applies:
 | Variant | Remedy it names |
 | --- | --- |
 | `HarnessResolverMissing` | Install or configure a supported resolver; run the preflight |
-| `HarnessVersionUnsupported { current, supported }` | Upgrade to the pinned Copilot CLI version, both values shown |
+| `HarnessVersionUnsupported { current, supported }` | Upgrade to the pinned Copilot CLI version, both values shown as parsed versions |
 | `HarnessReceiptUnresolvable` | The locator did not resolve; re-run the round so the harness issues a fresh receipt |
 | `HarnessReceiptBindingMismatch` | The resolved binding contradicts the record; the panel must be re-run under the pinned binding |
 | `SelfAssertedBindingRejected` | A record supplied binding strings instead of a locator; update the adapter to capture the receipt |
 
-Between them these name the required mechanism, the preflight command
-`node scripts/copilot/check-bindings.mjs`, the current and supported harness
-version where that is what failed, and the upgrade or retry action.
+**The preflight is one repository command: `make panel-preflight`.** It runs
+the existing binding checks together with the harness receipt resolver and
+version preflight, and it is what must pass **before any seat is dispatched**.
+Contributors get one command to remember rather than a list, and every error
+variant below names it.
+
+Every variant renders an **exact** remedy, including the exact active
+invocation and its arguments. A message saying "update the adapter" is not a
+remedy; the contributor has to know which command, with which arguments, in
+which order:
+
+- `HarnessResolverMissing` and
+  `HarnessVersionUnsupported { current, supported }`: install or upgrade to the
+  pinned supported Copilot CLI per the repository setup documentation, then run
+  `make panel-preflight`.
+- `HarnessReceiptUnresolvable` and `HarnessReceiptBindingMismatch`: run
+  `make panel-preflight`, then rerun the exact `/d2b-panel-round <mode> ...`
+  invocation **printed in the error**, arguments included.
+- `SelfAssertedBindingRejected`: remove the legacy manually-entered observed
+  values by upgrading the checked-out standalone skill and adapter, run
+  `make panel-preflight`, then rerun the printed panel command.
+
+**`HarnessVersionUnsupported` carries parsed versions, not captured output.**
+Its `current` and `supported` fields are bounded parsed version newtypes or
+equally closed-safe fields, never a raw string, and the variant carries a
+custom redacting `Debug` and `Display`. A version probe shells an external
+binary, so its stdout is attacker-influenced in exactly the deployment where
+the harness is wrong; a derived `Debug` would put that output straight into a
+log line or an audit field.
 
 No round manifest is added to xtask. The gate refuses any set containing a
 finding and has no round concept, so **rounds stay in the producer**: Gas City
@@ -710,12 +736,19 @@ passed; the sender opens it safely and **closes its own copy immediately after
 receiver takes it with `MSG_CMSG_CLOEXEC` and owns and closes it; and unbounded
 descriptor reception is refused.
 
-**A refusing receiver still owns what arrived.** When a message carries an
-unexpected descriptor, a duplicate, or more than one, the receiver iterates
-**every** control message in the received set and closes **every** descriptor
-it finds before returning its typed refusal. Refusing without draining leaks
-precisely the descriptors an attacker chose to send, which turns a validation
-check into a resource exhaustion path.
+**A refusing receiver still owns what arrived, on every refusal path.** The
+receiver takes ownership of every descriptor the moment `recvmsg` returns, by
+wrapping each into an owning type or an explicit guard **before** any
+validation runs. Every subsequent refusal then closes them all: an unexpected
+descriptor, a duplicate, more than one, and equally a **malformed or invalid
+payload arriving alongside an otherwise valid expected descriptor**.
+
+That last case is the one a natural implementation misses. Validating the
+descriptor set first and the payload second makes the payload check an early
+return past a descriptor nobody owns yet, so a `?` on a parse error leaks it.
+Owning first and validating second removes the class rather than adding another
+check. Refusing without draining leaks precisely the descriptors an attacker
+chose to send, which turns a validation check into a resource exhaustion path.
 
 The unconditional close matters more than the success path does. Ownership
 transfers only if the descriptor was actually received, so a `sendmsg` that
@@ -991,14 +1024,23 @@ cardinality is its own failure: a label whose domain is a run id or a branch
 name degrades the metric backend regardless of what the string says.
 
 **No surface is a catch-all for what the label could not hold.** An audit
-record carries only fixed digests, closed enum values, bounded numeric and
-timestamp fields, and schema-defined bounded text in the specific fields where
-redaction has been reviewed and approved. Raw run ids, branch names and other
-opaque values are never carried by any of them. Ordinary log lines are bounded
-and redacted under the same rules rather than being the place free-form detail
-is allowed to land. An earlier revision said detail belonged in a log line or
-an audit record instead of a label; that made the audit trail the dumping
-ground for exactly the values the label rule exists to exclude.
+record carries **only** fixed digests, closed enum values, and bounded numeric
+and timestamp fields. There is no free-form or schema-defined text field, not
+even a reviewed one, because a text field that exists will eventually carry
+whatever the caller had. Ordinary local log lines are bounded and redacted
+under the same rules and are likewise not a catch-all. An earlier revision said
+detail belonged in a log line or an audit record instead of a label; that made
+the audit trail the dumping ground for exactly the values the label rule exists
+to exclude.
+
+**Correlation is an alias, not the value.** Raw run ids and branch names appear
+in neither logs nor audits. The controller issues a bounded **correlation
+alias** with a fixed grammar and length, which ordinary local logs and error
+text may carry; the audit record carries a digest. An operator resolves it with
+`d2b-gc correlate <alias>`, which reads protected controller state and shows
+the authorized run and branch mapping locally. Every log line and error that
+references a run names the alias **and** that command, so the alias is
+actionable rather than merely opaque.
 
 The scan reports the number of records, log lines and error strings examined,
 fails closed on an empty corpus, and ships one planted control per category
@@ -1177,8 +1219,19 @@ and it ships planted violations it must reject.
   `nixos-modules/`, `packages/` outside the delivery gate,
   `docs/{reference,how-to,explanation}/`, `README.md`, or
   `critical-subsystems.md`, and no `d2b.*` option, manifest field or schema
-  property mentioning it. Counted coverage per surface; planted controls in a
-  Nix option description, a flake attribute, a reference page and `README.md`.
+  property mentioning it.
+
+  **Counted coverage per surface, and one planted control per surface**, not a
+  sample of four across all of them: a `flake.nix` output attribute; a Nix
+  option or module in `nixos-modules/`; Rust product code in `packages/`
+  outside the delivery gate; a `docs/reference/` page; a `docs/how-to/` page; a
+  `docs/explanation/` page; `README.md`; a `critical-subsystems.md` row; and a
+  manifest, bundle or schema property name and its description, counted
+  separately where those are separate categories. Each surface reports its own
+  examined count and fails closed at zero, so a relocated or renamed surface
+  cannot pass by contributing nothing. A sampled control set leaves the
+  unsampled surfaces unproven, which is the failure mode this scan exists to
+  prevent.
   Reviewer judgement, stated as such: changelog mentions must describe
   contributor process and not a d2b capability, which no scanner can decide.
 - **M2 d2b is never contacted, whether or not d2b is running.** Unchanged, and
@@ -1389,9 +1442,13 @@ and it ships planted violations it must reject.
   closed**, verified across all control messages in the set rather than only
   the first.
 
-  The repeated-transfer loop runs a hundred iterations mixing three injected
+  The repeated-transfer loop runs a hundred iterations mixing four injected
   failure classes: `sendmsg` failures on the sender side, and on the receiver
-  side an unexpected descriptor and a duplicate or multiple-descriptor message.
+  side an unexpected descriptor, a duplicate or multiple-descriptor message,
+  and a **valid expected descriptor arriving with a malformed payload**. That
+  last case is required specifically because it is the one an
+  order-of-validation mistake leaks: the descriptor is legitimate, so a
+  descriptor-set check passes it and the payload check returns early past it.
   After the loop the open-descriptor count of **both** sender and receiver is
   unchanged from its starting value. A success-only loop, or one that injects
   only sender failures, does not satisfy this item, because a refusing receiver
@@ -1442,6 +1499,25 @@ and it ships planted violations it must reject.
   an unbounded label value, a run id, is **rejected** even though that value
   discloses nothing sensitive. A scan that only looks for secrets passes this
   control and misses the cardinality failure entirely.
+
+  **Audit records carry no text field at all.** The scan asserts every audit
+  field is a fixed digest, a closed enum value, or a bounded numeric or
+  timestamp, and a planted record carrying any free-form string is rejected.
+
+  **Version fields are parsed, and their `Debug` is redacting.** A harness that
+  emits a hostile version banner, containing a secret-shaped token and control
+  bytes, is planted; the resulting `HarnessVersionUnsupported` is asserted to
+  carry parsed version values only, and its `Debug` and `Display` renderings
+  are scanned and must contain none of the planted output. A derived `Debug`
+  fails this control.
+
+  **Correlation aliases resolve, and raw ids never appear.** Log lines and
+  error text carry the bounded alias and the `d2b-gc correlate <alias>`
+  command, never a raw run id or branch name; a planted log line carrying a raw
+  run id is rejected. Running that command against a valid alias is observed to
+  return the authorized run and branch mapping from protected controller state,
+  and running it against an alias with no mapping fails closed rather than
+  guessing.
 - **M27 The supervisor gets its grace period, with a real session running.**
   A live agent session with an active pane is started **before** the stop, so
   the item cannot pass against an empty supervisor. On stop, that pane is
@@ -1493,9 +1569,14 @@ and it ships planted violations it must reject.
   - a submission carrying model and effort strings instead of a locator returns
     `SelfAssertedBindingRejected`.
 
-  Each variant's rendered message is asserted to carry its own remedy. A test
-  that accepts any refusal for any of these five cases does not satisfy this
-  item.
+  Each variant's rendered message is asserted to carry its own **exact** remedy
+  text: `make panel-preflight` in all five; the pinned Copilot CLI upgrade
+  instruction for the first two; and for the receipt and mismatch variants the
+  literal `/d2b-panel-round <mode> ...` invocation **with the active arguments
+  substituted**, asserted by comparing against the invocation the round was
+  actually started with rather than a generic pattern. A test that accepts any
+  refusal, or any remedy string, for any of these five cases does not satisfy
+  this item.
 
   The same shape is exercised for the controller variant: evidence absent,
   evidence untrusted, evidence contradicting the record, and a record carrying
