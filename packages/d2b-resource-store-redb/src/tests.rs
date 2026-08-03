@@ -1484,6 +1484,7 @@ fn prepare_production_rss_fixture() -> tempfile::TempDir {
                 Some(d2b_contracts::v3::ResourceGeneration::new(1).unwrap()),
                 None,
                 payload_digest,
+                None,
                 "production-seed-operation".to_owned(),
                 "production-seed-correlation".to_owned(),
             )
@@ -1555,11 +1556,6 @@ async fn production_backend_hard_fixture_child() {
         .write(true)
         .open(std::path::Path::new(&fixture).join("store.redb"))
         .expect("production RSS fixture database open");
-    let marker = OpenOptions::new()
-        .read(true)
-        .write(true)
-        .open(std::path::Path::new(&fixture).join("store.marker"))
-        .expect("production RSS fixture marker open");
     let store_identity = identity();
     let (issuer, acceptor) = mutation_seal_pair(store_identity.seal_identity());
     let store = Arc::new(
