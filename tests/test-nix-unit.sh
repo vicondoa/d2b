@@ -274,8 +274,8 @@ if [ "$cgroup_memory_unknown" -eq 1 ]; then
   log "  WARN: Nix-unit cgroup memory state is unreadable; effective workers capped at 1"
 else
   available_mb=$((effective_memory_bytes / 1024 / 1024))
-  reserve_mb=2048
-  worker_budget_mb=$((memory_mb + 1024))
+  reserve_mb=3072
+  worker_budget_mb=$((memory_mb + 2048))
   if [ "$available_mb" -le "$reserve_mb" ]; then
     memory_cap=1
   else
@@ -287,7 +287,7 @@ workers=$requested_workers
 [ "$workers" -le "$cpu_cap" ] || workers=$cpu_cap
 [ "$workers" -le "$memory_cap" ] || workers=$memory_cap
 [ "$workers" -ge 1 ] || workers=1
-log "  nix-eval-jobs workers: requested $requested_workers, effective $workers (CPU cap $cpu_cap, memory cap $memory_cap, $memory_mb MiB evaluator limit plus 1024 MiB overhead per worker)"
+log "  nix-eval-jobs workers: requested $requested_workers, effective $workers (CPU cap $cpu_cap, memory cap $memory_cap, $memory_mb MiB evaluator limit plus 2048 MiB overhead per worker)"
 
 if [ -n "${D2B_NIX_UNIT_CHECK:-}" ]; then
   check="$D2B_NIX_UNIT_CHECK"

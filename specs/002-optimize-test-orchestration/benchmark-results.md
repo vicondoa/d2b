@@ -509,10 +509,11 @@ nix-eval-jobs per-worker restart limit. Client peak RSS ranged from
 17,809,492 KiB to 19,944,520 KiB. Combining client CPU time with readable
 nix-daemon cgroup deltas produced approximately 96-97% utilization of the
 four-worker budget. Daemon CPU deltas were under 4.3s because the selected
-path does not instantiate or realize outputs. The final runner reserves an
-additional 1024 MiB of process and flake overhead per worker when calculating
-the memory cap so smaller CI runners reduce concurrency before exhausting
-memory.
+path does not instantiate or realize outputs. The final runner reserves an additional 2048 MiB of process and flake overhead
+per worker plus 3072 MiB for the host when calculating the memory cap. The
+second hosted run demonstrated that two workers could trigger runner shutdown
+on a 16 GiB image, so hosted CI is capped to one worker while the reference
+host retains four.
 
 ## Nix-unit failure and coverage evidence
 

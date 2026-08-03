@@ -899,6 +899,8 @@ set -euo pipefail
             r"(?is)(?:log|echo|printf).{0,300}\$[A-Za-z_][A-Za-z0-9_]*"
             r".{0,180}(?:worker|memory|MiB|MB)",
         )
+        self.assertIn("reserve_mb=3072", driver)
+        self.assertIn("worker_budget_mb=$((memory_mb + 2048))", driver)
         self.assertIn("D2B_NIX_UNIT_WORKERS", driver)
         self.assertIn("D2B_NIX_UNIT_MEMORY_MB", driver)
         self.assertNotIn("D2B_NIX_EVAL_JOBS_WORKERS", driver)

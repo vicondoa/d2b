@@ -1028,6 +1028,11 @@ fn execution_manifest_schema_and_prose_agree_with_non_empty_discovery() {
         "execution-manifest-policy: Nix-unit resource controls are incomplete"
     );
     assert!(
+        nix_driver.contains("reserve_mb=3072")
+            && nix_driver.contains("worker_budget_mb=$((memory_mb + 2048))"),
+        "execution-manifest-policy: Nix-unit hosted-runner memory envelope drifted"
+    );
+    assert!(
         nix_driver.contains("D2B_NIX_UNIT_JOBS is retired")
             && !nix_driver.contains("${D2B_NIX_UNIT_JOBS:-"),
         "execution-manifest-policy: retired Nix-unit worker knob is still accepted"

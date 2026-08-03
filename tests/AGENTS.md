@@ -238,10 +238,11 @@ by the locked flake inputs; an existing toolchain or development shell runs
 directly. `D2B_NIX_UNIT_JOBS` is retired and returns status 2 with a migration
 message naming `D2B_NIX_UNIT_WORKERS`. Use that bounded operator-intent
 control. Its effective count is capped by four workers, logical CPUs, any
-finite cgroup CPU quota, and available memory after a 2 GiB reserve at the
-4096 MiB evaluator limit plus 1024 MiB of process and flake overhead per
-worker, so four workers remain available on the reference 12-CPU, 62-GiB host
-while smaller runners are capped safely. `D2B_NIX_UNIT_MEMORY_MB` may lower
+finite cgroup CPU quota, and available memory after a 3 GiB host reserve at
+the 4096 MiB evaluator limit plus 2048 MiB of process and flake overhead per
+worker. A 16 GiB hosted runner admits one worker, while four workers remain
+available on the reference 12-CPU, 62-GiB host.
+`D2B_NIX_UNIT_MEMORY_MB` may lower
 the retained 4096 MiB evaluator limit but cannot raise it. Successful full
 runs suppress raw JSONL output; failed attributes are reported one per
 concise, repository-root-sanitized stderr line, and evaluated case-name drift
