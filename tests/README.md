@@ -229,13 +229,21 @@ replace source inventory, `make test-policy`, or
 
 `make test-nix-unit` uses the established `nix-eval-jobs` runner with
 `--no-instantiate` against the locked `nixUnitJobs.<system>` flake output.
-That output contains one aggregate attr per current `*.nix` case file (45
-file jobs), plus the `nix-unit` shard/pin integrity attr. File jobs use stable
+That output contains one aggregate attr per current `*.nix` case file, plus
+the `nix-unit` shard/pin integrity attr. File jobs use stable
 names of the form `case-<basename>`. Each file job
 reuses the same `casesFor`/`resultsFor`/failure-report constructor as the
 seven topical `checks.<system>` leaves, so it reports every
 `FAIL <case>: <detail>` from its file without submitting installables to the
 daemon or realizing derivations.
+
+Neither the file-job count nor the corpus case count is stated here as a
+number. They are derived, the bijection rather than the cardinality is the
+contract, and the corpus total differs per system (the common pin plus the
+native-system pin). `ls tests/unit/nix/cases/*.nix | wc -l` gives the file-job
+count; the pin files under `tests/unit/nix/pinned/` give the case counts. See
+[`tests/AGENTS.md`](./AGENTS.md) for the derivation and why the numbers are
+not pinned in prose.
 The seven topical checks remain the stable manifest leaves:
 `nix-unit`, `nix-unit-daemon`, `nix-unit-guest`, `nix-unit-misc`,
 `nix-unit-network`, `nix-unit-runtime`, and `nix-unit-state`.

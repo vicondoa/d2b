@@ -229,13 +229,31 @@ budget, including budget 1. Top-level Make `-j` is not the Rust budget knob.
 
 `make test-nix-unit` uses `nix-eval-jobs --no-instantiate` against the locked
 `nixUnitJobs.<system>` output. The output contains exactly one aggregate job
-per current `*.nix` case file (45 file jobs), named bijectively as
+per current `*.nix` case file, named bijectively as
 `case-<basename>`, plus the `nix-unit` shard/pin integrity job. The `fileJobs`
 constructor reuses the same
 `casesFor`/`resultsFor`/failure-report semantics as the seven existing flake
 shard checks, so every file job reports all of its real
 `FAIL <case>: <detail>` lines. No installable is submitted and no derivation
 is realized.
+
+The file-job count and the corpus case count are **derived, not contractual**,
+so this document states the rule rather than a number. The bijection is the
+contract; the cardinality is whatever the corpus currently holds, and the
+pinned case list is what fails closed when it changes. Derive either count
+from the tree:
+
+```bash
+ls tests/unit/nix/cases/*.nix | wc -l            # file jobs, one per case file
+grep -hvc '^#' tests/unit/nix/pinned/common.txt  # cases present on every system
+grep -hvc '^#' tests/unit/nix/pinned/$(nix eval --raw --impure \
+  --expr builtins.currentSystem).txt             # extra cases on this system
+```
+
+The corpus total is **system-dependent**: it is the common pin count plus the
+native-system pin count, so a single hardcoded total would be wrong on at least
+one supported system. Hardcoding either number also puts this file one case
+addition behind the tree, which is how the previous figures went stale.
 
 The seven existing flake checks remain the stable manifest leaves:
 `nix-unit`, `nix-unit-daemon`, `nix-unit-guest`, `nix-unit-misc`,
