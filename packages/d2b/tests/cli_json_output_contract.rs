@@ -235,7 +235,7 @@ fn assert_zone_unavailable_json(out: &Output, missing_socket: &Path, label: &str
         "{label} unexpected error class"
     );
     assert_eq!(
-        value["message"], "Zone runtime is unavailable",
+        value["message"], "Zone transport is unavailable",
         "{label} unexpected error message"
     );
     assert_eq!(
@@ -260,7 +260,7 @@ fn assert_zone_unavailable_human(out: &Output, missing_socket: &Path, label: &st
     );
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
-        stderr.contains("zone-unavailable") && stderr.contains("Zone runtime is unavailable"),
+        stderr.contains("zone-unavailable") && stderr.contains("Zone transport is unavailable"),
         "{label} human error is not the Zone-unavailable message:\n{stderr}"
     );
     assert_no_legacy_fallback(out, missing_socket, label);
