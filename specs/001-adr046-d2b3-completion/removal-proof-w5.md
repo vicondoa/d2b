@@ -255,16 +255,16 @@ scan at the same commit:
 ```
 $ git grep -l -e 'd2b-userd' -e 'd2b_userd' -e 'userd' 2e92622f \
     -- flake.nix nix pkgs nixos-modules tests packages/Cargo.guest.lock packages/d2b-contract-tests
-flake.nix
-nixos-modules/net.nix
-packages/Cargo.guest.lock
-packages/d2b-contract-tests/tests/policy_contracts.rs
-tests/fixtures/guest-rust-workspace/Cargo.toml
-tests/golden/api-surface/workspace-metadata.json
-tests/migration-ledger.toml
-tests/migration-state.d/guest-exec-policy-eval.toml
-tests/migration-state.d/guest-exec-runtime-static.toml
-tests/unit/nix/eval-cases/guest-exec-policy-eval.nix
+2e92622f:flake.nix
+2e92622f:nixos-modules/net.nix
+2e92622f:packages/Cargo.guest.lock
+2e92622f:packages/d2b-contract-tests/tests/policy_contracts.rs
+2e92622f:tests/fixtures/guest-rust-workspace/Cargo.toml
+2e92622f:tests/golden/api-surface/workspace-metadata.json
+2e92622f:tests/migration-ledger.toml
+2e92622f:tests/migration-state.d/guest-exec-policy-eval.toml
+2e92622f:tests/migration-state.d/guest-exec-runtime-static.toml
+2e92622f:tests/unit/nix/eval-cases/guest-exec-policy-eval.nix
 ```
 
 Ten surfaces, not zero. This is the case the Cargo-only check would have
@@ -472,9 +472,9 @@ crates are present in that tree:
 
 ```
 $ git ls-tree -d b5ddbed6 packages/d2b-daemon-access packages/d2b-host-providers packages/d2b-userd
-040000 tree 80334991...  packages/d2b-daemon-access
-040000 tree 4078eb53...  packages/d2b-host-providers
-040000 tree c9941c58...  packages/d2b-userd
+040000 tree 80334991e269fdf5def40fa8a1f1db1fd0ffae3f	packages/d2b-daemon-access
+040000 tree 4078eb534eeca50927bb1ef1cddfd5502ad233c8	packages/d2b-host-providers
+040000 tree c9941c5854451dfa1003f31580064ad82ba112a4	packages/d2b-userd
 ```
 
 **Ruling: no reconciliation is owed, and none is performed.** Rewriting a
@@ -495,11 +495,13 @@ statement of **absence** that the removal made more true rather than less:
 
 ```
 $ git grep -n 'd2b-userd' -- docs/reference
-docs/reference/guest-control-exec-interactive-tty.md:30:  ... there is no per-user `d2b-userd` involvement.
-docs/reference/guest-control-exec-io-chunked-stdio.md:564: ... workload user or `d2b-userd`.
-docs/reference/guest-control-exec-io-chunked-stdio.md:575: ... there is no `d2b-userd` involvement and no per-user
-docs/reference/guest-control-exec-io-chunked-stdio.md:579: ... no separate user-session daemon (`d2b-userd` was removed; see ADR 0030).
+docs/reference/guest-control-exec-interactive-tty.md:30:`d2b-guestd`; there is no per-user `d2b-userd` involvement.
+docs/reference/guest-control-exec-io-chunked-stdio.md:564:  workload user or `d2b-userd`.
+docs/reference/guest-control-exec-io-chunked-stdio.md:575:   trusted runner; there is no `d2b-userd` involvement and no per-user
+docs/reference/guest-control-exec-io-chunked-stdio.md:579:   no separate user-session daemon (`d2b-userd` was removed; see
 ```
+
+Line 579 continues "[ADR 0030](../adr/0030-guest-exec-as-workload-user.md))".
 
 No shipped-doc edit is owed. This was checked rather than assumed, because a
 removal that leaves a reference doc describing a live component is exactly the
