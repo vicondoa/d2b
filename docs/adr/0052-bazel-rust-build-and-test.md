@@ -826,11 +826,18 @@ and invokes no shell. It:
   opens no JUnit output descriptor until every child has been reaped. Temporary
   creation and final replacement are descriptor-relative: a close-on-exec
   same-directory temporary is written, synced and installed with `renameat`.
-  The bounded write loop advances the buffer after a short write, retries
-  `EINTR` and `EAGAIN`, and chooses another unpredictable temporary name after
-  `EEXIST`. Exhausting a retry bound, `ENOSPC` and every unhandled filesystem
-  error unlink the temporary with `unlinkat` before failing the carrier, so no
-  partial evidence or persistent collision remains;
+  A bounded creation loop chooses another unpredictable name after `EEXIST`;
+  exhausting that bound fails without unlinking any colliding path, because no
+  temporary was created and the runner owns nothing. After successful
+  creation, a separate bounded write loop advances the buffer after a short
+  write and retries `EINTR` and `EAGAIN`. `ENOSPC`, exhausted write retries and
+  every unhandled post-creation filesystem error unlink only the
+  runner-created temporary with `unlinkat` before failing the carrier, so no
+  partial evidence remains and no foreign path is removed;
+- places open, write, sync, rename and unlink operations behind a small
+  injectable filesystem trait, so errno mapping, ownership state and call
+  ordering are hermetically testable rather than requiring a full disk or
+  signal races on the shared host;
 - carries behavioral negative tests for the evidence path. A committed planted
   failed-case fixture contains every member of the canonical forbidden set in
   its environment, argv, output and failure text; the test first asserts every
@@ -840,8 +847,18 @@ and invokes no shell. It:
   injected cases prove refusal of symlink and magic-link parents, refusal of an
   existing case directory, buffer advancement after a short write, bounded
   `EINTR`/`EAGAIN` and temporary-name-collision retries, failure on `ENOSPC`,
-  temporary unlink on every terminal error, and descriptor-relative
-  `renameat`.
+  no unlink when creation never succeeded, temporary unlink on every terminal
+  post-creation error, descriptor-relative `renameat`, sync-before-rename,
+  close-on-exec on every opened descriptor, no JUnit descriptor before every
+  child is reaped, and refusal of an anchored `..` escape. Each property has a
+  planted mutation that the test must reject.
+
+JUnit publication is part of the enforcing test contract, not optional
+telemetry. A carrier whose tests pass but whose required structured result
+cannot be published fails rather than returning a success-shaped result with
+missing BEP evidence. When tests already failed, a JUnit publication failure
+preserves the test failure as the primary diagnosis and reports the publication
+failure as an additional bounded runner error.
 
 Doctests and `harness = false` companions keep their own targets and are not
 routed through the case runner: doctests expose no such listing interface, and
@@ -2391,14 +2408,20 @@ closed when any `.bazelrc` line or wrapper argument sets that flag.
    descriptor without link traversal, resolves the `XML_OUTPUT_FILE` parent
    through a second anchored close-on-exec descriptor with the same link
    refusals, opens JUnit output only after all children are reaped, writes a
-   close-on-exec same-directory temporary with bounded retry, and installs it
-   through descriptor-relative `renameat`. Short writes advance the buffer;
-   `EINTR`, `EAGAIN` and temporary-name `EEXIST` retry within a bound; terminal
-   errors unlink the temporary through `unlinkat` and fail the carrier. A
+   close-on-exec same-directory temporary, syncs it, and installs it through
+   descriptor-relative `renameat`. A bounded creation loop handles
+   temporary-name `EEXIST` and never unlinks a path it did not create; a
+   separate write loop advances short writes and retries `EINTR` and `EAGAIN`;
+   terminal post-creation errors unlink only the owned temporary through
+   `unlinkat` and fail the carrier. Filesystem operations sit behind an
+   injectable trait. A
    committed planted fixture first proves every canonical forbidden value is
    present before proving it absent from JUnit, and injected filesystem
-   failures prove link refusal, collision handling, cleanup and atomic
-   replacement.
+   failures prove link and anchored-escape refusal, creation ownership,
+   short-write and collision handling, sync-before-rename, close-on-exec,
+   child-reap ordering, cleanup and atomic replacement. JUnit publication is
+   enforcing evidence: inability to publish fails an otherwise passing
+   carrier, while an existing test failure remains the primary diagnosis.
 6. Pull requests never publish a shared cache entry and never hold
    `actions: write`, and a structural policy test with committed negative and
    positive fixtures enforces both. Exactly one job writes, and only on a push
