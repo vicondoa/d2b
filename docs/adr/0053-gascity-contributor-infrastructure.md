@@ -602,14 +602,33 @@ with the implementation. Until then the operator command remains
 `docs/contributing/copilot-agents.md` documents today. Contributor docs
 describe what works now; this record describes what replaces it.
 
-Every variant carries a **structured remedy**, not a prose string. Each error
-holds a `RemedyAction` list drawn from a closed set, currently
-`RunPanelPreflight`, `RunPanelMigrate`, `UpgradePinnedHarness`,
-`RerunOriginalPanelCommand` and
-`RetryGasCityPanelStage { stage: SafeStageId }`, and `Display` renders that
-list into the fixed command text. Callers and tests match on the actions;
-nothing parses a message to decide what to do, and no action carries argv or a
-free-form string.
+Every variant carries a **structured remedy**, and that remedy is **derived,
+never stored**. The error holds no remedy field at all. Instead a typed method
+computes it:
+
+```
+fn remedies(&self, producer: ProducerContext) -> RemedyPlan
+```
+
+`ProducerContext` is closed, currently `Standalone` and
+`GasCity { safe_stage: SafeStageId }`. `RemedyPlan` is an immutable typed
+sequence that no caller can populate: it is produced only by this function,
+which matches on the variant and the producer and returns the fixed ordered
+actions **by construction**. `RemedyAction` is drawn from a closed set,
+currently `RunPanelPreflight`, `RunPanelMigrate`, `UpgradePinnedHarness`,
+`RerunOriginalPanelCommand` and `RetryGasCityPanelStage { stage: SafeStageId }`,
+and `Display` renders the computed plan into the fixed command text.
+
+A stored list was the earlier shape and it is withdrawn, because a stored list
+is a field someone can build wrongly. It permits a Gas City error carrying
+`RunPanelMigrate`, or a correct set in the wrong order, to exist in memory and
+be rendered before any test notices, and the mitigation was to write tests
+asserting those states are rejected. Making the order a total function of
+variant and producer deletes the invalid states instead of detecting them: the
+wrong plan is not a bug the type system tolerates and a test must catch, it is
+a value that cannot be constructed. Callers and tests match on the returned
+actions; nothing parses a message to decide what to do, and no action carries
+argv or a free-form string.
 
 **No error prints the panel invocation or its arguments, and none stores it
 either.** An earlier revision required the exact active
@@ -632,18 +651,21 @@ differ:
   Gas City already holds durably in beads. No alias and no mapping are needed
   because the orchestrator knows where the run is.
 
-**The core error carries only producer-neutral actions; adapters compose the
-rest in a fixed order.** The verifier does not know which producer it is
-serving and should not have to: a core error that always carried
-`RunPanelMigrate` would tell a Gas City run to migrate a standalone skill it
-does not use. So the core error holds only what is true for every producer, and
-the presenting adapter **composes** its producer-specific actions **before or
-after** the core actions according to a fixed per-variant order. Appending is
-not sufficient, because order is semantic: a contributor told to run the
-preflight before migrating will watch the preflight fail for the reason the
+**The core error is producer-neutral; the producer is an argument, not a
+stored field.** The verifier does not know which producer it is serving and
+should not have to: an error that always carried `RunPanelMigrate` would tell a
+Gas City run to migrate a standalone skill it does not use. So the error stores
+nothing producer-specific, and `remedies` takes the `ProducerContext` from the
+caller that has it. Order is semantic, not cosmetic: a contributor told to run
+the preflight before migrating will watch the preflight fail for the reason the
 migration exists to remove.
 
-Core actions by variant:
+The table below is what `remedies` returns. The core rows are the
+producer-neutral spine, kept as a separate list because that is how the
+decision is reviewed and how a new variant is reasoned about, but they are not
+a value the error holds.
+
+Core spine by variant:
 
 - `HarnessResolverMissing`, `HarnessVersionUnsupported { current, supported }`
   and `HarnessVersionUnparseable`: `UpgradePinnedHarness`, then
@@ -651,20 +673,20 @@ Core actions by variant:
 - `HarnessReceiptUnresolvable`, `HarnessReceiptBindingMismatch` and
   `SelfAssertedBindingRejected`: `RunPanelPreflight`.
 
-Composed orders, fixed per producer and variant:
+Returned plans, fixed per producer and variant:
 
 - **Standalone**, `SelfAssertedBindingRejected`: `RunPanelMigrate`, then
   `RunPanelPreflight`, then `RerunOriginalPanelCommand`. The migration goes
-  **first**, before the core action, because the legacy manually-entered values
+  **first**, before the core spine, because the legacy manually-entered values
   live in the checked-out skill and the preflight cannot pass until they are
   gone.
-- **Standalone**, every other variant: the core actions in their core order,
-  then `RerunOriginalPanelCommand` last.
-- **Gas City**, every variant: the core actions in their core order, then
-  `RetryGasCityPanelStage { stage: SafeStageId }` last, and **never**
-  `RunPanelMigrate`. `SafeStageId` is a bounded newtype over a closed stage
-  identifier, not prose and not a formula path, so the action stays free of
-  free-form strings like every other.
+- **Standalone**, every other variant: the core spine in its order, then
+  `RerunOriginalPanelCommand` last.
+- **Gas City**, every variant: the core spine in its order, then
+  `RetryGasCityPanelStage { stage }` last, carrying the `SafeStageId` from the
+  `ProducerContext`, and **never** `RunPanelMigrate`. `SafeStageId` is a
+  bounded newtype over a closed stage identifier, not prose and not a formula
+  path, so the action stays free of free-form strings like every other.
 
 **`make panel-migrate` is a wrapper that fails closed**, not a documented pair
 of git commands. It brings the checked-out standalone skill and adapter to the
@@ -697,8 +719,7 @@ second, unrelated reason.
 derived on purpose.** **Every** field of the panel receipt error enum, and
 every field of every type nested inside it, must come from a **closed approved
 set** of safe types: redacting newtypes, closed enums, bounded numeric,
-version or stage newtypes, and collections of typed `RemedyAction` whose own
-fields are likewise drawn from that set. No raw `String`, no `OsString`, no
+version or stage newtypes. No raw `String`, no `OsString`, no
 `Path` or `PathBuf`, no arbitrary map or vector of text, and no type absent
 from the approved set may appear anywhere in the tree.
 
@@ -723,8 +744,9 @@ from the derive.
 
 `Display` remains hand-written and redacting. It is not a dump of fields but a
 deliberate operator-facing message, so it is written rather than derived: a
-closed reason, the fixed remedy commands rendered from the `RemedyAction` list,
-and bounded safe version newtypes where the variant has them.
+closed reason, the fixed remedy commands rendered from the `RemedyPlan` that
+`remedies` computed, and bounded safe version newtypes where the variant has
+them.
 
 `HarnessVersionUnsupported` in particular carries `current` and `supported` as
 bounded parsed version newtypes or equally closed-safe fields, never raw
@@ -1638,31 +1660,50 @@ and it ships planted violations it must reject.
      because extracting a plausible-looking version from attacker-influenced
      bytes is how the hostile content gets carried forward under a safe-looking
      type.
-  2. **Policy control: an exhaustive field census, with a planted control.**
+  2. **Policy control: an exhaustive recursive census, with planted controls.**
      Through the repository's existing policy-test mechanism over the source or
-     API surface, the check **traverses every variant of the panel receipt
-     error enum and every field of every type nested inside it**, and asserts
-     each field's type is a member of the closed approved set: redacting
-     newtype, closed enum, bounded numeric, version or stage newtype, or a
-     collection of typed `RemedyAction` whose fields satisfy the same rule. A
-     raw `String`, `OsString`, `Path`, `PathBuf`, arbitrary text map or vector,
-     or **any type the census does not recognise**, fails, whether or not
-     anyone labelled it protected. The enum's **derived** `Debug` rendering is
-     then what control 3 scans, so the check covers the rendering that actually
-     ships.
+     API surface, the check **traverses the whole reachable type tree**: every
+     field of every struct, and every variant and every variant-field of every
+     enum, recursively, at every nesting level, starting from the panel receipt
+     error enum and including `RemedyAction`, `RemedyPlan` and
+     `ProducerContext`. Enums are not a leaf. An enum whose variants are
+     inspected only for their names, or a struct whose fields are inspected
+     only one level down, is where the unsafe field survives.
 
-     A planted mock type is submitted to the same policy test and must be
-     **rejected** for each of: a raw `String` field carrying no protected
-     marking at all, a `PathBuf` field, and a raw `String` field on a type
-     nested two levels below the enum rather than on the enum itself. The
-     unmarked and the nested cases matter most; a census that only inspects the
-     top level, or only fields someone remembered to annotate, is the census
-     that misses the field that leaks.
+     Each field's type must be a member of the closed approved set: redacting
+     newtype, closed enum whose own variant-fields satisfy the same rule,
+     bounded numeric, version or stage newtype. A raw `String`, `OsString`,
+     `Path`, `PathBuf`, arbitrary text map or vector, or **any type the census
+     does not recognise**, fails, whether or not anyone labelled it protected.
+     The enum's **derived** `Debug` rendering is then what control 3 scans, so
+     the check covers the rendering that actually ships.
 
-     The check reports the number of variants and the number of fields it
-     examined and **fails closed** on an empty corpus and on any field whose
-     type it could not resolve. Unknown is a failure, not a pass: a census that
-     silently skips what it cannot parse has counted the easy fields.
+     Planted mock types are submitted to the same policy test and each must be
+     **rejected**: a raw `String` field carrying no protected marking at all; a
+     `PathBuf` field; a raw `String` on a **struct** field two levels below the
+     entry type; and a raw `String` or path on an **enum variant-field** two
+     levels below the entry type, reached through another enum. The unmarked,
+     the nested and the through-an-enum cases matter most; a census that stops
+     at variant names, inspects only the top level, or trusts annotations is
+     the census that misses the field that leaks.
+
+     The check reports the number of types, variants and fields it examined and
+     **fails closed** on an empty corpus, on any type it cannot resolve, and on
+     any shape it does not support, including a cycle it cannot traverse to a
+     fixed point. Unresolved is a failure, not a pass: a census that silently
+     skips what it cannot parse has counted the easy fields.
+
+     **What lands when.** The panel receipt error enum does not exist yet, so
+     this record does not claim a census over it. This pull request adds the
+     census predicate and its planted fixtures as a Type 5 policy test now,
+     which is non-vacuous because the planted mocks are real types the
+     predicate accepts or rejects today. The implementation commit that
+     introduces the real error enum wires that type into the **same** census
+     rather than writing a second one, and the fixtures stay as the negative
+     corpus. A predicate proven against fixtures and then pointed at the
+     production type is a check that was working before the type it guards
+     existed; a census written alongside the type is one nobody has seen
+     reject anything.
 
   3. **Rendering control, with a planted negative.** The `Debug` and `Display`
      renderings of every variant are scanned and must contain no protected
@@ -1736,27 +1777,32 @@ and it ships planted violations it must reject.
   - a submission carrying model and effort strings instead of a locator returns
     `SelfAssertedBindingRejected`.
 
-  **Remedies are asserted as structured actions, split by layer.** Tests match
-  on the `RemedyAction` list rather than parsing a message.
+  **Remedies are asserted as a computed plan, not a stored list.** Tests call
+  `remedies(producer)` and match on the returned `RemedyPlan` rather than
+  parsing a message.
 
-  Core, producer-neutral, asserted on the error the verifier returns: every
-  variant carries `RunPanelPreflight`; `HarnessResolverMissing`,
-  `HarnessVersionUnsupported` and `HarnessVersionUnparseable` additionally
-  carry `UpgradePinnedHarness`. The core error for
-  `SelfAssertedBindingRejected` is asserted **not** to carry
-  `RunPanelMigrate`, because that is the adapter's to add.
+  A table covers **every variant crossed with every producer**, twelve cells,
+  each asserting the exact ordered plan: standalone `SelfAssertedBindingRejected`
+  is `RunPanelMigrate`, then `RunPanelPreflight`, then
+  `RerunOriginalPanelCommand`; standalone otherwise is the core spine in order
+  ending with `RerunOriginalPanelCommand`; Gas City is the core spine in order
+  ending with `RetryGasCityPanelStage { stage }` carrying the `SafeStageId`
+  from the `ProducerContext`, for every variant. A cell with no expected plan
+  fails the table.
 
-  Composed, asserted per producer **as an ordered list, not a set**: the
-  standalone adapter's list for `SelfAssertedBindingRejected` is exactly
-  `RunPanelMigrate`, then `RunPanelPreflight`, then
-  `RerunOriginalPanelCommand`, in that order, and a correctly-populated but
-  permuted list is asserted to fail; for the other variants it is the core
-  actions in core order ending with `RerunOriginalPanelCommand`; the Gas City adapter's list ends with
-  `RetryGasCityPanelStage { stage }` carrying a bounded `SafeStageId` and
-  **never** contains `RunPanelMigrate` for any variant. Each producer's wrong
-  action set, including a Gas City list containing `RunPanelMigrate`, is
-  asserted to be rejected by the test rather than merely absent. No action
-  carries argv.
+  **Wrong plans are excluded structurally, not asserted against.** Earlier
+  revisions required tests that built a permuted or wrongly-populated list and
+  asserted it was rejected. Those are removed, because the type no longer
+  represents them: `RemedyPlan` is constructible only by `remedies`, so there
+  is no permuted list to instantiate and a test that appeared to build one
+  would only be testing a test helper. What replaces them is a structural
+  assertion through the policy mechanism that `RemedyPlan` exposes no public
+  constructor, no public mutation and no `From` or collection conversion that
+  would let a caller assemble one, and that no error variant carries a stored
+  remedy field. A plan that cannot be built wrongly does not need a test
+  proving the wrong one is caught; it needs a test proving it cannot be built.
+
+  No action carries argv.
 
   **No rendered message contains an invocation, argv, or a path**, asserted by
   scanning every rendered message across all six variants. A test that accepts
@@ -1766,14 +1812,13 @@ and it ships planted violations it must reject.
   **Display is verified positively, per action and in order.** A table test
   maps **every** `RemedyAction` variant to its expected safe rendered command
   or phrase and asserts the exact output. The same test asserts the **rendered
-  order** of each composed list against the fixed per-variant order: standalone
+  order** of each computed plan against the fixed per-variant order: standalone
   `SelfAssertedBindingRejected` renders `make panel-migrate`, then
   `make panel-preflight`, then the rerun phrase, in that sequence; a Gas City
-  list renders the core actions before `RetryGasCityPanelStage`. A permuted
-  order is asserted to fail. Control flow still never parses a string; this
-  covers the other half, that a correct action list does not render into
-  something useless, out of sequence, or wrong for a human. A new variant with
-  no expected rendering fails the test.
+  plan renders the core spine before `RetryGasCityPanelStage`. Control flow
+  still never parses a string; this covers the other half, that a correct plan
+  does not render into something useless, out of sequence, or wrong for a
+  human. A new variant with no expected rendering fails the test.
 
   `make panel-migrate` is separately exercised on all three paths, with its
   **output** asserted, not only its exit status:
@@ -1835,17 +1880,15 @@ and it ships planted violations it must reject.
   approval** and to refuse a publication whose approval exists only as an audit
   line.
 
-- **M32 The `panel-preflight` notice and the target land together.** This
-  record does **not** add a gate, because the target does not exist yet and a
-  docs-only change must not claim one. It is an obligation on the implementing
-  change: the commit that adds a real `panel-preflight` target to the
-  `Makefile` must, in that same commit, extend
+- **M32 The `panel-preflight` notice and the target land together, enforced by
+  a lint that ships with this record.** The Type 5 policy lint is added in
+  **this** pull request, in
   `packages/d2b-contract-tests/tests/policy_docs.rs` (or a sibling
-  `policy_*.rs` in that crate if it is cleaner there) with a **Type 5 policy
-  lint**, and must update `docs/contributing/copilot-agents.md` to match.
-  Type 5 is the repository's existing tier for exactly this kind of
-  source-and-docs consistency check, so this reuses a mechanism rather than
-  inventing one, and it adds no new gate because that crate already runs.
+  `policy_*.rs` in that crate if it is cleaner there). Type 5 is the
+  repository's existing tier for source-and-docs consistency checks, so this
+  reuses a mechanism rather than inventing one, and it adds no new gate because
+  that crate already runs. The commit that adds it carries a changelog
+  fragment; this record itself remains Proposed and fragment-free.
 
   The lint reads two inputs, the presence of a `panel-preflight` target in the
   `Makefile` and the operator command plus notice markers in the contributing
@@ -1869,16 +1912,17 @@ and it ships planted violations it must reject.
   leaves contributors with a doc that points at nothing; target present with
   the node command still given as the operator instruction, which is the drift
   that leaves half the preflight unrun; and target present with the notice
-  still there, telling contributors a shipped target does not exist.
+  still there, telling contributors a shipped target does not exist. The
+  planted fixtures are what make the lint non-vacuous today, since the live
+  tree currently sits in one state and exercises one row.
 
   The lint keys on stable markers rather than prose. This change adds them to
   `docs/contributing/copilot-agents.md` now, following the repository's
   existing `<!-- BEGIN ... -->` and `<!-- END ... -->` convention:
   `PANEL-PREFLIGHT-COMMAND` around the operator command block and
-  `PANEL-PREFLIGHT-NOTICE` around the future notice. Adding them here costs
-  nothing and does not change the truthful current command, and it means the
-  implementing commit finds a machine-readable surface instead of grepping
-  sentences that a later edit will reword.
+  `PANEL-PREFLIGHT-NOTICE` around the future notice. The markers do not change
+  the truthful current command, and they give the lint a machine-readable
+  surface instead of sentences that a later edit will reword.
 
   The lint **fails closed** when either marker pair is missing or unbalanced,
   or when it cannot read the `Makefile`, since a consistency check that cannot

@@ -11,7 +11,7 @@
 //!   * tests/kernel-module-matrix-eval.sh -> kernel_module_matrix_source_doc_parity
 //!     + kernel_module_missing_typed_error_contract
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use d2b_contract_tests::{read_repo_file, repo_path_exists};
 use regex::Regex;
@@ -910,5 +910,1072 @@ fn execution_manifest_schema_and_prose_agree_with_non_empty_discovery() {
             && helper.contains("finalization failed after scheduler success")
             && helper.contains("preserving the scheduler status"),
         "execution-manifest-policy: finalization errors do not distinguish scheduler status"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Panel-preflight doc / Makefile truth table.
+//
+// The contributing doc tells a contributor how to run the panel preflight. The
+// spelling it gives has to be the spelling that exists: an earlier revision
+// documented `make panel-preflight` before any such target was written, and
+// nothing was looking. This lint looks.
+//
+// It reads two inputs - whether the `Makefile` declares a `panel-preflight`
+// target, and the marked command / notice blocks in
+// `docs/contributing/copilot-agents.md` - and admits exactly two pairings:
+//
+//   | State       | Makefile target | Operator command                        | Future notice |
+//   |-------------|-----------------|-----------------------------------------|---------------|
+//   | Current     | absent          | `node scripts/copilot/check-bindings.mjs` | present     |
+//   | Implemented | present         | `make panel-preflight`                  | absent        |
+//
+// Every other pairing is a mixed state and is rejected with a distinguishable
+// reason. The lint fails closed on a missing, duplicated, reversed or empty
+// marker block and on an input it cannot read, because a consistency check
+// that cannot locate both sides has not shown consistency.
+// ---------------------------------------------------------------------------
+
+const PANEL_PREFLIGHT_TARGET: &str = "panel-preflight";
+const PANEL_PREFLIGHT_COMMAND_MARKER: &str = "PANEL-PREFLIGHT-COMMAND";
+const PANEL_PREFLIGHT_NOTICE_MARKER: &str = "PANEL-PREFLIGHT-NOTICE";
+const PANEL_PREFLIGHT_NODE_COMMAND: &str = "node scripts/copilot/check-bindings.mjs";
+const PANEL_PREFLIGHT_MAKE_COMMAND: &str = "make panel-preflight";
+const PANEL_PREFLIGHT_DOC: &str = "docs/contributing/copilot-agents.md";
+
+/// Why a `<!-- BEGIN X -->` / `<!-- END X -->` pair could not be read as one
+/// block. Every case is a failure: a lint that silently treats a missing or
+/// duplicated marker as "nothing to check" checks nothing.
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+enum MarkerFault {
+    BeginMissing,
+    EndMissing,
+    DuplicateBegin,
+    DuplicateEnd,
+    /// `END` precedes `BEGIN`.
+    Reversed,
+}
+
+/// What the notice block says about the target's existence.
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+enum NoticeState {
+    /// The markers are balanced and hold no prose: the notice was removed, as
+    /// the implementing commit is told to do.
+    Absent,
+    /// The notice still claims the target does not exist yet.
+    FutureNotImplemented,
+    /// A notice that makes some other claim - the implemented-state
+    /// replacement. Admitted wherever `Absent` is admitted.
+    NonFuture,
+}
+
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+enum PanelPreflightState {
+    /// Target absent, node command documented, future notice present.
+    CurrentNodeCommand,
+    /// Target present, `make panel-preflight` documented, future notice gone.
+    ImplementedMakeTarget,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum PanelPreflightReject {
+    MakefileUnreadable,
+    DocUnreadable,
+    CommandMarker(MarkerFault),
+    NoticeMarker(MarkerFault),
+    /// A code fence inside the command block is never closed.
+    MalformedCommandBlock,
+    /// The command block gives no command at all (empty, or prose only).
+    EmptyCommandBlock,
+    /// The command block gives a command, but neither recognised spelling.
+    NoRecognisedOperatorCommand,
+    /// The exact state a panel round caught in this repository's history.
+    TargetAbsentButMakeCommandGiven,
+    /// The doc no longer says the target is missing, and it is still missing.
+    TargetAbsentButFutureNoticeMissing(NoticeState),
+    /// Half the preflight goes unrun: the target shipped and the doc still
+    /// points at the checker it wraps.
+    TargetPresentButNodeCommandGiven,
+    /// The doc tells contributors a shipped target does not exist.
+    TargetPresentButFutureNoticePresent,
+}
+
+/// The lines strictly between `<!-- BEGIN {marker} -->` and
+/// `<!-- END {marker} -->`.
+fn extract_marked_block(doc: &str, marker: &str) -> Result<Vec<String>, MarkerFault> {
+    let begin = format!("<!-- BEGIN {marker} -->");
+    let end = format!("<!-- END {marker} -->");
+    let mut begin_idx: Option<usize> = None;
+    let mut end_idx: Option<usize> = None;
+    for (idx, line) in doc.lines().enumerate() {
+        let line = line.trim();
+        if line == begin {
+            if begin_idx.is_some() {
+                return Err(MarkerFault::DuplicateBegin);
+            }
+            begin_idx = Some(idx);
+        } else if line == end {
+            if end_idx.is_some() {
+                return Err(MarkerFault::DuplicateEnd);
+            }
+            end_idx = Some(idx);
+        }
+    }
+    let begin_idx = begin_idx.ok_or(MarkerFault::BeginMissing)?;
+    let end_idx = end_idx.ok_or(MarkerFault::EndMissing)?;
+    if end_idx <= begin_idx {
+        return Err(MarkerFault::Reversed);
+    }
+    Ok(doc
+        .lines()
+        .skip(begin_idx + 1)
+        .take(end_idx - begin_idx - 1)
+        .map(str::to_string)
+        .collect())
+}
+
+/// Whether the `Makefile` *declares* `target` as a rule target, rather than
+/// merely mentioning it.
+///
+/// Make rules are line-oriented: a rule line starts in column zero, names its
+/// targets before the first `:`, and is not a variable assignment. So a
+/// `.PHONY: panel-preflight` line, a `foo: panel-preflight` prerequisite, a
+/// recipe line, a comment, and a `panel-preflight-args := …` assignment all
+/// mention the name without declaring the target - and a substring search
+/// would call every one of them an implementation.
+fn makefile_declares_target(makefile: &str, target: &str) -> bool {
+    makefile.lines().any(|line| {
+        if line.starts_with([' ', '\t']) || line.trim_start().starts_with('#') {
+            return false;
+        }
+        let Some(colon) = line.find(':') else {
+            return false;
+        };
+        let rest = &line[colon + 1..];
+        // `name := value`, `name ::= value`: an assignment, not a rule.
+        if rest.starts_with('=') || rest.starts_with(":=") {
+            return false;
+        }
+        line[..colon].split_whitespace().any(|name| name == target)
+    })
+}
+
+/// The commands a marked block *gives an operator*: the non-empty,
+/// non-comment lines inside its fenced code blocks. Prose around the fence -
+/// an "under the hood this runs …" note, or a debugging aid - is deliberately
+/// not an operator command, which is what lets the implemented state keep
+/// naming the node checker without re-entering the current state.
+fn operator_commands(block: &[String]) -> Result<Vec<String>, PanelPreflightReject> {
+    let mut out: Vec<String> = Vec::new();
+    let mut in_fence = false;
+    for line in block {
+        let trimmed = line.trim();
+        if trimmed.starts_with("```") {
+            in_fence = !in_fence;
+            continue;
+        }
+        if !in_fence {
+            continue;
+        }
+        let command = trimmed.trim_start_matches("$ ").trim();
+        if command.is_empty() || command.starts_with('#') {
+            continue;
+        }
+        out.push(command.to_string());
+    }
+    if in_fence {
+        return Err(PanelPreflightReject::MalformedCommandBlock);
+    }
+    Ok(out)
+}
+
+/// Classify the notice block. The future notice is recognised by the claim it
+/// makes - that the target does not exist yet - not by its exact wording, so a
+/// reflow does not silently turn it into a non-future notice.
+fn notice_state(block: &[String]) -> NoticeState {
+    let text = block
+        .iter()
+        .map(|line| line.trim().trim_start_matches('>').trim().to_lowercase())
+        .collect::<Vec<_>>()
+        .join(" ");
+    if text.trim().is_empty() {
+        return NoticeState::Absent;
+    }
+    let claims_future = [
+        "not yet implemented",
+        "not implemented yet",
+        "does not exist yet",
+        "until it lands",
+    ]
+    .iter()
+    .any(|phrase| text.contains(phrase));
+    if claims_future {
+        NoticeState::FutureNotImplemented
+    } else {
+        NoticeState::NonFuture
+    }
+}
+
+/// The whole truth table, as a pure function of the two inputs. `None` models
+/// an input the caller could not read; it is a rejection, never a skip.
+fn evaluate_panel_preflight(
+    makefile: Option<&str>,
+    doc: Option<&str>,
+) -> Result<PanelPreflightState, PanelPreflightReject> {
+    let makefile = makefile.ok_or(PanelPreflightReject::MakefileUnreadable)?;
+    let doc = doc.ok_or(PanelPreflightReject::DocUnreadable)?;
+
+    let command_block = extract_marked_block(doc, PANEL_PREFLIGHT_COMMAND_MARKER)
+        .map_err(PanelPreflightReject::CommandMarker)?;
+    let notice_block = extract_marked_block(doc, PANEL_PREFLIGHT_NOTICE_MARKER)
+        .map_err(PanelPreflightReject::NoticeMarker)?;
+
+    let commands = operator_commands(&command_block)?;
+    if commands.is_empty() {
+        return Err(PanelPreflightReject::EmptyCommandBlock);
+    }
+    let gives_make = commands
+        .iter()
+        .any(|command| command.contains(PANEL_PREFLIGHT_MAKE_COMMAND));
+    let gives_node = commands
+        .iter()
+        .any(|command| command.contains(PANEL_PREFLIGHT_NODE_COMMAND));
+    let notice = notice_state(&notice_block);
+
+    if makefile_declares_target(makefile, PANEL_PREFLIGHT_TARGET) {
+        if gives_node {
+            return Err(PanelPreflightReject::TargetPresentButNodeCommandGiven);
+        }
+        if !gives_make {
+            return Err(PanelPreflightReject::NoRecognisedOperatorCommand);
+        }
+        if notice == NoticeState::FutureNotImplemented {
+            return Err(PanelPreflightReject::TargetPresentButFutureNoticePresent);
+        }
+        Ok(PanelPreflightState::ImplementedMakeTarget)
+    } else {
+        if gives_make {
+            return Err(PanelPreflightReject::TargetAbsentButMakeCommandGiven);
+        }
+        if !gives_node {
+            return Err(PanelPreflightReject::NoRecognisedOperatorCommand);
+        }
+        if notice != NoticeState::FutureNotImplemented {
+            return Err(PanelPreflightReject::TargetAbsentButFutureNoticeMissing(
+                notice,
+            ));
+        }
+        Ok(PanelPreflightState::CurrentNodeCommand)
+    }
+}
+
+/// The live tree: the real `Makefile` and the real contributing doc must sit in
+/// one of the two admitted rows, not in any mix of them.
+#[test]
+fn panel_preflight_doc_matches_the_makefile() {
+    assert!(
+        repo_path_exists(PANEL_PREFLIGHT_DOC),
+        "panel-preflight-policy: missing {PANEL_PREFLIGHT_DOC}"
+    );
+    let makefile = read_repo_file("Makefile");
+    let doc = read_repo_file(PANEL_PREFLIGHT_DOC);
+
+    let state = evaluate_panel_preflight(Some(&makefile), Some(&doc)).unwrap_or_else(|reject| {
+        panic!(
+            "panel-preflight-policy: the Makefile and {PANEL_PREFLIGHT_DOC} are in a mixed \
+             state: {reject:?}. The documented operator command, the future notice, and the \
+             presence of a `{PANEL_PREFLIGHT_TARGET}` target move together, in one commit."
+        )
+    });
+
+    assert_eq!(
+        state,
+        PanelPreflightState::CurrentNodeCommand,
+        "panel-preflight-policy: the tree has moved to the implemented row. That is the \
+         intended destination, not a failure: change this expectation to \
+         `PanelPreflightState::ImplementedMakeTarget` in the same commit that adds the \
+         `{PANEL_PREFLIGHT_TARGET}` target, rewrites the command block, and drops the future \
+         notice."
+    );
+}
+
+// --- in-memory fixtures for the truth table --------------------------------
+
+const NODE_COMMAND_BLOCK: &str = "```\nnode scripts/copilot/check-bindings.mjs\n```";
+const MAKE_COMMAND_BLOCK: &str = "```\nmake panel-preflight\n```";
+/// The implemented-state command block that still names the node checker, as
+/// the underlying implementation, outside the fence. This must be admitted:
+/// the rule is about what the operator is told to run, not about the string.
+const MAKE_COMMAND_BLOCK_WITH_NODE_PROSE: &str = "```\nmake panel-preflight\n```\n\nUnder the \
+     hood that runs `node scripts/copilot/check-bindings.mjs` plus the receipt resolver; run \
+     the node checker directly only when debugging the bindings themselves.";
+const FUTURE_NOTICE: &str = "> **Future, not yet implemented.**\n> A single `make \
+     panel-preflight` target is proposed. That target does not exist yet. Until it lands, run \
+     the node command above.";
+const IMPLEMENTED_NOTICE: &str = "> `make panel-preflight` runs the binding checker, the harness receipt resolver, and the \
+     version check.";
+
+const MAKEFILE_WITH_TARGET: &str = "\
+.PHONY: check panel-preflight
+
+check: panel-preflight
+\t@echo checked
+
+panel-preflight:
+\tnode scripts/copilot/check-bindings.mjs
+";
+
+/// Mentions `panel-preflight` four ways - a `.PHONY` list, a prerequisite, a
+/// comment, and a variable assignment whose name has it as a prefix - and
+/// declares it none of them.
+const MAKEFILE_WITHOUT_TARGET: &str = "\
+.PHONY: check panel-preflight
+
+# panel-preflight: proposed, see ADR 0053.
+panel-preflight-args := --strict
+
+check: panel-preflight
+\t@echo checked
+";
+
+fn panel_doc_fixture(command_block: &str, notice_block: &str) -> String {
+    format!(
+        "## Running check-bindings\n\
+         \n\
+         <!-- BEGIN {PANEL_PREFLIGHT_COMMAND_MARKER} -->\n\
+         {command_block}\n\
+         <!-- END {PANEL_PREFLIGHT_COMMAND_MARKER} -->\n\
+         \n\
+         It fails on an agent with no binding row.\n\
+         \n\
+         <!-- BEGIN {PANEL_PREFLIGHT_NOTICE_MARKER} -->\n\
+         {notice_block}\n\
+         <!-- END {PANEL_PREFLIGHT_NOTICE_MARKER} -->\n\
+         \n\
+         ## Panel seats\n"
+    )
+}
+
+#[test]
+fn panel_preflight_makefile_target_detection_is_line_oriented() {
+    assert!(
+        makefile_declares_target(MAKEFILE_WITH_TARGET, PANEL_PREFLIGHT_TARGET),
+        "a rule line declaring the target must be detected"
+    );
+    assert!(
+        !makefile_declares_target(MAKEFILE_WITHOUT_TARGET, PANEL_PREFLIGHT_TARGET),
+        ".PHONY entries, prerequisites, comments and prefixed variables are mentions, not \
+         declarations"
+    );
+    assert!(
+        makefile_declares_target(
+            "panel-preflight other-check: deps\n\t@echo hi\n",
+            PANEL_PREFLIGHT_TARGET
+        ),
+        "a multi-target rule line declares each of its targets"
+    );
+    assert!(
+        makefile_declares_target("panel-preflight::\n\t@echo hi\n", PANEL_PREFLIGHT_TARGET),
+        "a double-colon rule declares its target"
+    );
+    assert!(
+        !makefile_declares_target("panel-preflight := node x.mjs\n", PANEL_PREFLIGHT_TARGET),
+        "a variable assignment is not a rule"
+    );
+    assert!(
+        !makefile_declares_target("\tpanel-preflight: not a rule\n", PANEL_PREFLIGHT_TARGET),
+        "a recipe line is not a rule line"
+    );
+}
+
+#[test]
+fn panel_preflight_admits_the_current_state() {
+    let doc = panel_doc_fixture(NODE_COMMAND_BLOCK, FUTURE_NOTICE);
+    assert_eq!(
+        evaluate_panel_preflight(Some(MAKEFILE_WITHOUT_TARGET), Some(&doc)),
+        Ok(PanelPreflightState::CurrentNodeCommand)
+    );
+}
+
+#[test]
+fn panel_preflight_admits_the_implemented_state() {
+    for notice in [IMPLEMENTED_NOTICE, "", "   "] {
+        let doc = panel_doc_fixture(MAKE_COMMAND_BLOCK, notice);
+        assert_eq!(
+            evaluate_panel_preflight(Some(MAKEFILE_WITH_TARGET), Some(&doc)),
+            Ok(PanelPreflightState::ImplementedMakeTarget),
+            "the implemented state admits a removed notice and a non-future replacement"
+        );
+    }
+
+    let doc = panel_doc_fixture(MAKE_COMMAND_BLOCK_WITH_NODE_PROSE, IMPLEMENTED_NOTICE);
+    assert_eq!(
+        evaluate_panel_preflight(Some(MAKEFILE_WITH_TARGET), Some(&doc)),
+        Ok(PanelPreflightState::ImplementedMakeTarget),
+        "naming the node checker as the underlying implementation, outside the fence, is not \
+         an operator instruction"
+    );
+}
+
+#[test]
+fn panel_preflight_rejects_every_mixed_state() {
+    // The state a panel round caught here: the doc promoted a target that had
+    // not been written, and left the notice saying so.
+    assert_eq!(
+        evaluate_panel_preflight(
+            Some(MAKEFILE_WITHOUT_TARGET),
+            Some(&panel_doc_fixture(MAKE_COMMAND_BLOCK, FUTURE_NOTICE))
+        ),
+        Err(PanelPreflightReject::TargetAbsentButMakeCommandGiven)
+    );
+    // Same missing target, notice dropped: the doc now points at nothing.
+    assert_eq!(
+        evaluate_panel_preflight(
+            Some(MAKEFILE_WITHOUT_TARGET),
+            Some(&panel_doc_fixture(NODE_COMMAND_BLOCK, ""))
+        ),
+        Err(PanelPreflightReject::TargetAbsentButFutureNoticeMissing(
+            NoticeState::Absent
+        ))
+    );
+    assert_eq!(
+        evaluate_panel_preflight(
+            Some(MAKEFILE_WITHOUT_TARGET),
+            Some(&panel_doc_fixture(NODE_COMMAND_BLOCK, IMPLEMENTED_NOTICE))
+        ),
+        Err(PanelPreflightReject::TargetAbsentButFutureNoticeMissing(
+            NoticeState::NonFuture
+        ))
+    );
+    // Target shipped, doc still sends operators at the checker it wraps.
+    assert_eq!(
+        evaluate_panel_preflight(
+            Some(MAKEFILE_WITH_TARGET),
+            Some(&panel_doc_fixture(NODE_COMMAND_BLOCK, IMPLEMENTED_NOTICE))
+        ),
+        Err(PanelPreflightReject::TargetPresentButNodeCommandGiven)
+    );
+    // Target shipped, notice still says it does not exist.
+    assert_eq!(
+        evaluate_panel_preflight(
+            Some(MAKEFILE_WITH_TARGET),
+            Some(&panel_doc_fixture(MAKE_COMMAND_BLOCK, FUTURE_NOTICE))
+        ),
+        Err(PanelPreflightReject::TargetPresentButFutureNoticePresent)
+    );
+    // Both spellings given as operator commands, in either row.
+    assert_eq!(
+        evaluate_panel_preflight(
+            Some(MAKEFILE_WITHOUT_TARGET),
+            Some(&panel_doc_fixture(
+                "```\nnode scripts/copilot/check-bindings.mjs\nmake panel-preflight\n```",
+                FUTURE_NOTICE
+            ))
+        ),
+        Err(PanelPreflightReject::TargetAbsentButMakeCommandGiven)
+    );
+    assert_eq!(
+        evaluate_panel_preflight(
+            Some(MAKEFILE_WITH_TARGET),
+            Some(&panel_doc_fixture(
+                "```\nnode scripts/copilot/check-bindings.mjs\nmake panel-preflight\n```",
+                IMPLEMENTED_NOTICE
+            ))
+        ),
+        Err(PanelPreflightReject::TargetPresentButNodeCommandGiven)
+    );
+    // A third spelling nobody recognises is not a pass in either row.
+    for makefile in [MAKEFILE_WITHOUT_TARGET, MAKEFILE_WITH_TARGET] {
+        assert_eq!(
+            evaluate_panel_preflight(
+                Some(makefile),
+                Some(&panel_doc_fixture(
+                    "```\nbash scripts/copilot/preflight.sh\n```",
+                    FUTURE_NOTICE
+                ))
+            ),
+            Err(PanelPreflightReject::NoRecognisedOperatorCommand)
+        );
+    }
+}
+
+#[test]
+fn panel_preflight_marker_faults_fail_closed() {
+    let command_begin = format!("<!-- BEGIN {PANEL_PREFLIGHT_COMMAND_MARKER} -->");
+    let command_end = format!("<!-- END {PANEL_PREFLIGHT_COMMAND_MARKER} -->");
+    let notice_end = format!("<!-- END {PANEL_PREFLIGHT_NOTICE_MARKER} -->");
+    let valid = panel_doc_fixture(NODE_COMMAND_BLOCK, FUTURE_NOTICE);
+
+    let cases: Vec<(String, PanelPreflightReject)> = vec![
+        (
+            valid.replace(&command_begin, ""),
+            PanelPreflightReject::CommandMarker(MarkerFault::BeginMissing),
+        ),
+        (
+            valid.replace(&command_end, ""),
+            PanelPreflightReject::CommandMarker(MarkerFault::EndMissing),
+        ),
+        (
+            valid.replace(&command_begin, &format!("{command_begin}\n{command_begin}")),
+            PanelPreflightReject::CommandMarker(MarkerFault::DuplicateBegin),
+        ),
+        (
+            valid.replace(&command_end, &format!("{command_end}\n{command_end}")),
+            PanelPreflightReject::CommandMarker(MarkerFault::DuplicateEnd),
+        ),
+        (
+            format!("{command_end}\n{NODE_COMMAND_BLOCK}\n{command_begin}\n"),
+            PanelPreflightReject::CommandMarker(MarkerFault::Reversed),
+        ),
+        (
+            valid.replace(&notice_end, ""),
+            PanelPreflightReject::NoticeMarker(MarkerFault::EndMissing),
+        ),
+        (
+            panel_doc_fixture("", FUTURE_NOTICE),
+            PanelPreflightReject::EmptyCommandBlock,
+        ),
+        (
+            panel_doc_fixture("Run the checker somehow.", FUTURE_NOTICE),
+            PanelPreflightReject::EmptyCommandBlock,
+        ),
+        (
+            panel_doc_fixture("```\n# just a comment\n```", FUTURE_NOTICE),
+            PanelPreflightReject::EmptyCommandBlock,
+        ),
+        (
+            panel_doc_fixture(
+                "```\nnode scripts/copilot/check-bindings.mjs",
+                FUTURE_NOTICE,
+            ),
+            PanelPreflightReject::MalformedCommandBlock,
+        ),
+    ];
+
+    for (doc, expected) in cases {
+        assert_eq!(
+            evaluate_panel_preflight(Some(MAKEFILE_WITHOUT_TARGET), Some(&doc)),
+            Err(expected),
+            "marker fault fixture was not rejected as expected; doc was:\n{doc}"
+        );
+    }
+}
+
+#[test]
+fn panel_preflight_unreadable_inputs_fail_closed() {
+    let doc = panel_doc_fixture(NODE_COMMAND_BLOCK, FUTURE_NOTICE);
+    assert_eq!(
+        evaluate_panel_preflight(None, Some(&doc)),
+        Err(PanelPreflightReject::MakefileUnreadable),
+        "an unreadable Makefile is a rejection, not a skipped half of the check"
+    );
+    assert_eq!(
+        evaluate_panel_preflight(Some(MAKEFILE_WITHOUT_TARGET), None),
+        Err(PanelPreflightReject::DocUnreadable)
+    );
+    assert_eq!(
+        evaluate_panel_preflight(None, None),
+        Err(PanelPreflightReject::MakefileUnreadable)
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Safe-type census predicate + planted fixtures.
+//
+// The panel receipt error enum does not exist in this repository yet, so
+// nothing below inspects a shipped type and nothing below is evidence about
+// one. What lands now is the *algorithm* and the corpus that proves it works:
+// an exhaustive recursive census over a type graph, plus planted fixtures that
+// it must accept and reject today.
+//
+// The rule the census enforces: every field of every struct, and every variant
+// and every variant-field of every enum, reachable from the entry type, at any
+// depth, must resolve to a member of the closed approved set - a redacting
+// newtype, a closed enum whose own variant-fields satisfy the same rule, a
+// bounded numeric, a version or stage newtype, or a collection of safe items.
+// Raw text, a path, an unresolved type, and a cycle it cannot traverse to a
+// fixed point are all failures. Enums are not leaves: a census that stops at
+// variant names, or that descends one level into structs only, is the census
+// that misses the field that leaks.
+//
+// **Wiring contract for the implementation commit.** The corpus below is a
+// hand-written model, deliberately shaped like the metadata a real census has:
+// named types, fields, variants, variant-fields, and type references resolved
+// through one map. The commit that introduces the real panel receipt error
+// enum builds a `TypeCorpus` from that type's actual metadata and calls
+// `census_reachable_types` on it - the same predicate, not a second one - and
+// keeps the fixtures below as its negative corpus. Until then this file
+// asserts a property of the predicate, not of any production type.
+// ---------------------------------------------------------------------------
+
+/// A type with no members, as the census sees it. The approved kinds are the
+/// closed safe set; the rejected kinds are the raw types a leak arrives in,
+/// modelled explicitly so a planted raw `String` is distinguishable from a
+/// type the census simply could not resolve.
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+enum LeafKind {
+    /// A newtype whose `Debug` renders a fixed redaction placeholder.
+    RedactingNewtype,
+    /// A bounded count, duration, or other bounded number.
+    BoundedNumeric,
+    /// A parsed, bounded version newtype.
+    VersionNewtype,
+    /// A closed pipeline-stage newtype.
+    StageNewtype,
+    /// `String`, `OsString`, or an arbitrary text map: never approved.
+    RawText,
+    /// `Path` or `PathBuf`: never approved.
+    RawPath,
+}
+
+impl LeafKind {
+    fn approved(self) -> bool {
+        matches!(
+            self,
+            Self::RedactingNewtype
+                | Self::BoundedNumeric
+                | Self::VersionNewtype
+                | Self::StageNewtype
+        )
+    }
+}
+
+/// `(member name, referenced type name)` pairs - struct fields, or the fields
+/// of one enum variant.
+type FieldList = Vec<(&'static str, &'static str)>;
+
+#[derive(Debug, Clone)]
+enum TypeDef {
+    Leaf(LeafKind),
+    Struct(FieldList),
+    /// `(variant name, variant fields)`. A fieldless variant carries an empty
+    /// field list and is still counted.
+    Enum(Vec<(&'static str, FieldList)>),
+    /// A homogeneous collection (`Vec<T>`, or a map from a closed key to `T`):
+    /// safe exactly when its item type is.
+    Collection(&'static str),
+}
+
+/// The resolvable universe. A type reference that is not a key here is
+/// unresolved, and unresolved is a failure rather than a pass.
+type TypeCorpus = BTreeMap<&'static str, TypeDef>;
+
+/// What the census examined. Reported, not asserted away: a census that cannot
+/// say how much it looked at cannot be shown to have looked at anything.
+#[derive(Debug, Default, PartialEq, Eq)]
+struct CensusReport {
+    types: usize,
+    variants: usize,
+    fields: usize,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum CensusReject {
+    /// Nothing to traverse at all.
+    EmptyCorpus,
+    /// The entry type resolved but reaches no variant and no field.
+    NothingExamined { root: String },
+    /// A referenced type the census cannot resolve. Not a skip.
+    Unresolved { type_name: String, path: String },
+    UnapprovedLeaf {
+        kind: LeafKind,
+        type_name: String,
+        path: String,
+    },
+    /// A reference back into a type still on the traversal stack. The census
+    /// does not attempt a fixed point, so this is an unsupported shape.
+    UnsupportedCycle { type_name: String, path: String },
+}
+
+struct Census<'a> {
+    corpus: &'a TypeCorpus,
+    report: CensusReport,
+    /// Types fully traversed. A shared (diamond) reference is supported and
+    /// counted once, so the counts stay deterministic.
+    settled: BTreeSet<&'static str>,
+    /// Types currently being traversed, innermost last.
+    stack: Vec<&'static str>,
+}
+
+impl Census<'_> {
+    fn visit(&mut self, type_name: &'static str, path: &str) -> Result<(), CensusReject> {
+        if self.stack.contains(&type_name) {
+            return Err(CensusReject::UnsupportedCycle {
+                type_name: type_name.to_string(),
+                path: path.to_string(),
+            });
+        }
+        if self.settled.contains(type_name) {
+            return Ok(());
+        }
+        let corpus = self.corpus;
+        let Some(def) = corpus.get(type_name) else {
+            return Err(CensusReject::Unresolved {
+                type_name: type_name.to_string(),
+                path: path.to_string(),
+            });
+        };
+
+        self.stack.push(type_name);
+        self.report.types += 1;
+        match def {
+            TypeDef::Leaf(kind) => {
+                if !kind.approved() {
+                    return Err(CensusReject::UnapprovedLeaf {
+                        kind: *kind,
+                        type_name: type_name.to_string(),
+                        path: path.to_string(),
+                    });
+                }
+            }
+            TypeDef::Struct(fields) => {
+                for &(field, field_type) in fields {
+                    self.report.fields += 1;
+                    self.visit(field_type, &format!("{path}.{field}"))?;
+                }
+            }
+            TypeDef::Enum(variants) => {
+                for (variant, fields) in variants {
+                    self.report.variants += 1;
+                    for &(field, field_type) in fields {
+                        self.report.fields += 1;
+                        self.visit(field_type, &format!("{path}::{variant}.{field}"))?;
+                    }
+                }
+            }
+            TypeDef::Collection(item) => {
+                self.visit(item, &format!("{path}[]"))?;
+            }
+        }
+        self.stack.pop();
+        self.settled.insert(type_name);
+        Ok(())
+    }
+}
+
+/// Traverse every type reachable from `root` and prove each member is safe.
+///
+/// This is a fixture predicate, not a production scan: it reads the modelled
+/// `corpus` it is handed. The implementation commit that adds the real panel
+/// receipt error enum is expected to build that corpus from the type's own
+/// metadata and call this function, rather than writing a second census.
+fn census_reachable_types(
+    corpus: &TypeCorpus,
+    root: &'static str,
+) -> Result<CensusReport, CensusReject> {
+    if corpus.is_empty() {
+        return Err(CensusReject::EmptyCorpus);
+    }
+    let mut census = Census {
+        corpus,
+        report: CensusReport::default(),
+        settled: BTreeSet::new(),
+        stack: Vec::new(),
+    };
+    census.visit(root, root)?;
+    if census.report.variants == 0 && census.report.fields == 0 {
+        return Err(CensusReject::NothingExamined {
+            root: root.to_string(),
+        });
+    }
+    Ok(census.report)
+}
+
+const CENSUS_ROOT: &str = "PanelReceiptError";
+
+/// The accepted fixture: an entry enum whose reachable graph is entirely
+/// approved. It exercises every supported shape - variant fields, a fieldless
+/// variant, a nested struct, a closed fieldless enum, a collection of typed
+/// items whose own variant-fields are safe, and a type (`RemedyPlan`) reached
+/// from two different variants.
+fn safe_panel_receipt_corpus() -> TypeCorpus {
+    TypeCorpus::from([
+        (
+            "PanelReceiptError",
+            TypeDef::Enum(vec![
+                (
+                    "HarnessVersionUnparseable",
+                    vec![("observed", "BannerDigest"), ("stage", "ReceiptStage")],
+                ),
+                (
+                    "HarnessUnavailable",
+                    vec![("attempts", "AttemptCount"), ("plan", "RemedyPlan")],
+                ),
+                (
+                    "ReceiptRejected",
+                    vec![("alias", "CorrelationAlias"), ("plan", "RemedyPlan")],
+                ),
+                ("Cancelled", vec![]),
+            ]),
+        ),
+        (
+            "ReceiptStage",
+            TypeDef::Enum(vec![
+                ("Preflight", vec![]),
+                ("Resolve", vec![]),
+                ("Publish", vec![]),
+            ]),
+        ),
+        (
+            "RemedyPlan",
+            TypeDef::Struct(vec![
+                ("actions", "RemedyActionList"),
+                ("harness", "HarnessVersion"),
+                ("producer", "ProducerContext"),
+            ]),
+        ),
+        ("RemedyActionList", TypeDef::Collection("RemedyAction")),
+        (
+            "RemedyAction",
+            TypeDef::Enum(vec![
+                ("RerunPreflight", vec![("stage", "PipelineStage")]),
+                ("UpgradeHarness", vec![("required", "HarnessVersion")]),
+                ("AskOperator", vec![("alias", "CorrelationAlias")]),
+                ("Abort", vec![]),
+            ]),
+        ),
+        (
+            "ProducerContext",
+            TypeDef::Struct(vec![
+                ("stage", "PipelineStage"),
+                ("seat", "SeatDigest"),
+                ("attempt", "AttemptCount"),
+            ]),
+        ),
+        ("BannerDigest", TypeDef::Leaf(LeafKind::RedactingNewtype)),
+        ("SeatDigest", TypeDef::Leaf(LeafKind::RedactingNewtype)),
+        (
+            "CorrelationAlias",
+            TypeDef::Leaf(LeafKind::RedactingNewtype),
+        ),
+        ("AttemptCount", TypeDef::Leaf(LeafKind::BoundedNumeric)),
+        ("HarnessVersion", TypeDef::Leaf(LeafKind::VersionNewtype)),
+        ("PipelineStage", TypeDef::Leaf(LeafKind::StageNewtype)),
+    ])
+}
+
+/// The safe corpus with `overrides` applied - the planted-fixture builder.
+/// Each negative below changes exactly one thing, so the reason the census
+/// rejects it is the thing that was planted.
+fn corpus_with(overrides: &[(&'static str, TypeDef)]) -> TypeCorpus {
+    let mut corpus = safe_panel_receipt_corpus();
+    for (name, def) in overrides {
+        corpus.insert(*name, def.clone());
+    }
+    corpus
+}
+
+/// The entry enum with one extra variant appended, for planting a defect at
+/// the top level of the reachable graph.
+fn root_enum_with_extra_variant(variant: &'static str, fields: FieldList) -> TypeDef {
+    let TypeDef::Enum(mut variants) = safe_panel_receipt_corpus()
+        .get(CENSUS_ROOT)
+        .expect("the fixture corpus defines its entry type")
+        .clone()
+    else {
+        panic!("the fixture entry type is an enum");
+    };
+    variants.push((variant, fields));
+    TypeDef::Enum(variants)
+}
+
+#[test]
+fn safe_type_census_accepts_the_approved_fixture() {
+    let report = census_reachable_types(&safe_panel_receipt_corpus(), CENSUS_ROOT)
+        .expect("the approved fixture corpus is accepted");
+
+    // Non-vacuous counts: 12 reachable types, 11 variants (4 on the entry
+    // enum, 3 on the closed fieldless enum, 4 on RemedyAction), 15 fields.
+    // `RemedyPlan` is reached from two variants and counted once.
+    assert_eq!(
+        report,
+        CensusReport {
+            types: 12,
+            variants: 11,
+            fields: 15,
+        },
+        "the census must report what it examined; a drifting count means the traversal changed"
+    );
+}
+
+#[test]
+fn safe_type_census_rejects_planted_unsafe_members() {
+    // A raw String at the top level, carrying no protected marking at all.
+    assert_eq!(
+        census_reachable_types(
+            &corpus_with(&[
+                (
+                    CENSUS_ROOT,
+                    root_enum_with_extra_variant("Diagnostic", vec![("message", "RawMessage")])
+                ),
+                ("RawMessage", TypeDef::Leaf(LeafKind::RawText)),
+            ]),
+            CENSUS_ROOT
+        ),
+        Err(CensusReject::UnapprovedLeaf {
+            kind: LeafKind::RawText,
+            type_name: "RawMessage".to_string(),
+            path: "PanelReceiptError::Diagnostic.message".to_string(),
+        })
+    );
+
+    // A PathBuf at the top level.
+    assert_eq!(
+        census_reachable_types(
+            &corpus_with(&[
+                (
+                    CENSUS_ROOT,
+                    root_enum_with_extra_variant("ReceiptMissing", vec![("path", "ReceiptPath")])
+                ),
+                ("ReceiptPath", TypeDef::Leaf(LeafKind::RawPath)),
+            ]),
+            CENSUS_ROOT
+        ),
+        Err(CensusReject::UnapprovedLeaf {
+            kind: LeafKind::RawPath,
+            type_name: "ReceiptPath".to_string(),
+            path: "PanelReceiptError::ReceiptMissing.path".to_string(),
+        })
+    );
+
+    // A raw String on a struct field two levels below the entry type
+    // (entry enum -> RemedyPlan -> ProducerContext). A census that inspects
+    // only the top level passes this fixture.
+    assert_eq!(
+        census_reachable_types(
+            &corpus_with(&[
+                (
+                    "ProducerContext",
+                    TypeDef::Struct(vec![
+                        ("stage", "PipelineStage"),
+                        ("seat", "SeatDigest"),
+                        ("note", "RawMessage"),
+                    ])
+                ),
+                ("RawMessage", TypeDef::Leaf(LeafKind::RawText)),
+            ]),
+            CENSUS_ROOT
+        ),
+        Err(CensusReject::UnapprovedLeaf {
+            kind: LeafKind::RawText,
+            type_name: "RawMessage".to_string(),
+            path: "PanelReceiptError::HarnessUnavailable.plan.producer.note".to_string(),
+        })
+    );
+
+    // A raw String on an enum variant-field two levels below the entry type,
+    // reached through another enum. A census that stops at variant names
+    // passes this fixture.
+    assert_eq!(
+        census_reachable_types(
+            &corpus_with(&[
+                (
+                    CENSUS_ROOT,
+                    root_enum_with_extra_variant("Escalated", vec![("inner", "InnerError")])
+                ),
+                (
+                    "InnerError",
+                    TypeDef::Enum(vec![
+                        ("Transient", vec![("attempts", "AttemptCount")]),
+                        ("Detail", vec![("evidence", "RawMessage")]),
+                    ])
+                ),
+                ("RawMessage", TypeDef::Leaf(LeafKind::RawText)),
+            ]),
+            CENSUS_ROOT
+        ),
+        Err(CensusReject::UnapprovedLeaf {
+            kind: LeafKind::RawText,
+            type_name: "RawMessage".to_string(),
+            path: "PanelReceiptError::Escalated.inner::Detail.evidence".to_string(),
+        })
+    );
+
+    // A path on a variant-field of the typed action collection: entry enum ->
+    // RemedyPlan -> collection -> RemedyAction variant.
+    assert_eq!(
+        census_reachable_types(
+            &corpus_with(&[
+                (
+                    "RemedyAction",
+                    TypeDef::Enum(vec![
+                        (
+                            "RerunPreflight",
+                            vec![("stage", "PipelineStage"), ("workdir", "ReceiptPath")]
+                        ),
+                        ("Abort", vec![]),
+                    ])
+                ),
+                ("ReceiptPath", TypeDef::Leaf(LeafKind::RawPath)),
+            ]),
+            CENSUS_ROOT
+        ),
+        Err(CensusReject::UnapprovedLeaf {
+            kind: LeafKind::RawPath,
+            type_name: "ReceiptPath".to_string(),
+            path: "PanelReceiptError::HarnessUnavailable.plan.actions[]::RerunPreflight.workdir"
+                .to_string(),
+        })
+    );
+}
+
+#[test]
+fn safe_type_census_fails_closed_on_unresolved_cyclic_and_empty_corpora() {
+    // A type the census does not recognise. Unresolved is a failure: a census
+    // that skips what it cannot resolve has counted the easy fields.
+    assert_eq!(
+        census_reachable_types(
+            &corpus_with(&[(
+                CENSUS_ROOT,
+                root_enum_with_extra_variant("Opaque", vec![("payload", "UnmodelledPayload")])
+            )]),
+            CENSUS_ROOT
+        ),
+        Err(CensusReject::Unresolved {
+            type_name: "UnmodelledPayload".to_string(),
+            path: "PanelReceiptError::Opaque.payload".to_string(),
+        })
+    );
+
+    // A cycle the census cannot traverse to a fixed point.
+    assert_eq!(
+        census_reachable_types(
+            &corpus_with(&[(
+                "ProducerContext",
+                TypeDef::Struct(vec![("stage", "PipelineStage"), ("parent", "RemedyPlan"),])
+            )]),
+            CENSUS_ROOT
+        ),
+        Err(CensusReject::UnsupportedCycle {
+            type_name: "RemedyPlan".to_string(),
+            path: "PanelReceiptError::HarnessUnavailable.plan.producer.parent".to_string(),
+        })
+    );
+
+    // An entry enum with no variants: nothing was examined, so nothing was
+    // shown safe.
+    assert_eq!(
+        census_reachable_types(
+            &corpus_with(&[(CENSUS_ROOT, TypeDef::Enum(vec![]))]),
+            CENSUS_ROOT
+        ),
+        Err(CensusReject::NothingExamined {
+            root: CENSUS_ROOT.to_string(),
+        })
+    );
+
+    // An empty corpus.
+    assert_eq!(
+        census_reachable_types(&TypeCorpus::new(), CENSUS_ROOT),
+        Err(CensusReject::EmptyCorpus)
+    );
+
+    // An entry type that is not in the corpus at all.
+    assert_eq!(
+        census_reachable_types(&safe_panel_receipt_corpus(), "AbsentEntryType"),
+        Err(CensusReject::Unresolved {
+            type_name: "AbsentEntryType".to_string(),
+            path: "AbsentEntryType".to_string(),
+        })
     );
 }
