@@ -1060,7 +1060,8 @@ fn execution_manifest_schema_and_prose_agree_with_non_empty_discovery() {
     }
     assert!(
         nix_driver.contains("if ! publish_manifest_fragment \"$nix_unit_surface\" failed; then")
-            && !nix_driver.contains("if publish_manifest_fragment \"$nix_unit_surface\" failed; then")
+            && !nix_driver
+                .contains("if publish_manifest_fragment \"$nix_unit_surface\" failed; then")
             && nix_driver.contains("local rc=$?")
             && nix_driver.contains("exit \"$rc\"")
             && nix_driver.contains("nix_unit_command_succeeded"),
