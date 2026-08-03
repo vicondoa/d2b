@@ -1071,6 +1071,13 @@ fn execution_manifest_schema_and_prose_agree_with_non_empty_discovery() {
         "execution-manifest-policy: Nix-unit full runs must not dump raw JSONL results"
     );
     assert!(
+        nix_driver.contains("2>\"$tool_stderr\"")
+            && nix_driver.contains("emit_sanitized_tool_stderr()")
+            && nix_driver.contains("line=${line//\"$flake_root\"/<repo>}")
+            && nix_driver.contains("line=${line//\"$HOME\"/<home>}"),
+        "execution-manifest-policy: evaluator stderr must be captured and path-sanitized"
+    );
+    assert!(
         nix_driver.contains("flake_label=d2b"),
         "execution-manifest-policy: Nix-unit progress must use a fixed path-free flake label"
     );

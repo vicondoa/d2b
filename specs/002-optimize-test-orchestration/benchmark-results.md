@@ -488,12 +488,12 @@ The representative warm samples on the integrated runner were:
 | Result | Seconds |
 | --- | ---: |
 | Baseline warm median | 538.889473 |
-| Optimized warm samples | 202.71, 202.90, 199.98 |
-| Optimized warm median | **202.71** |
-| Warm reduction | **62.38%** |
-| Slowest / median | 1.0009 |
+| Optimized warm samples | 201.88, 202.20, 203.28 |
+| Optimized warm median | **202.20** |
+| Warm reduction | **62.48%** |
+| Slowest / median | 1.0053 |
 
-The optimized median is 37.62% of baseline and passes the 50%-of-baseline
+The optimized median is 37.52% of baseline and passes the 50%-of-baseline
 ceiling of 269.444737 seconds. The slowest valid sample is less than 1% above
 the median. Every run evaluated 893 pinned x86 cases plus the integrity
 attribute with four effective workers.

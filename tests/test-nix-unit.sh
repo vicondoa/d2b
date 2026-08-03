@@ -326,13 +326,26 @@ fi
 nix_unit_surface=nix-unit
 result_dir=$(d2b_mktemp ".d2b-nix-eval-jobs.XXXXXX")
 result_file="$result_dir/results.jsonl"
+tool_stderr="$result_dir/stderr"
+
+emit_sanitized_tool_stderr() {
+  local line
+  while IFS= read -r line; do
+    line=${line//"$flake_root"/<repo>}
+    if [ -n "${HOME:-}" ]; then
+      line=${line//"$HOME"/<home>}
+    fi
+    printf '%s\n' "$line" >&2
+  done <"$tool_stderr"
+}
+
 log "--> nix-eval-jobs --no-instantiate --flake ${flake_label}#nixUnitJobs.${system} --workers $workers --max-memory-size $memory_mb"
 if nix-eval-jobs \
   --no-instantiate \
   --flake "${flake_ref}#nixUnitJobs.${system}" \
   --workers "$workers" \
   --max-memory-size "$memory_mb" \
-  --show-trace >"$result_file"; then
+  --show-trace >"$result_file" 2>"$tool_stderr"; then
   tool_status=0
 else
   tool_status=$?
@@ -343,6 +356,7 @@ if [ ! -s "$result_file" ] || ! jq -s -e '
   and all(.[]; type == "object"
     and ((.attr? != null) or (.attrPath? != null)))
 ' "$result_file" >/dev/null; then
+  emit_sanitized_tool_stderr
   fail "nix-eval-jobs returned no valid JSON-lines attribute results" || true
   exit 1
 fi
@@ -352,7 +366,14 @@ mapfile -t failures < <(
   jq -r '
     select(type == "object" and (.error? != null))
     | (.attr // ((.attrPath // []) | join(".")))
-      + ": " + (.error | tostring | gsub("\n"; " ") | gsub("\r"; " "))
+      + ": "
+      + (
+          .error
+          | tostring
+          | split("\n")
+          | map(select(length > 0))
+          | last
+        )
   ' "$result_file"
 )
 result_count=$(jq -s 'length' "$result_file")
@@ -414,6 +435,9 @@ for failure in "${failures[@]}"; do
   printf '%s\n' "  FAIL: nix-unit attribute $failure" >&2
 done
 if [ "$tool_status" -ne 0 ]; then
+  if [ "${#failures[@]}" -eq 0 ]; then
+    emit_sanitized_tool_stderr
+  fi
   log "  FAIL: nix-eval-jobs exited with status $tool_status"
 fi
 if [ "${#failures[@]}" -ne 0 ] \

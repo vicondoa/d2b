@@ -652,8 +652,8 @@ set -euo pipefail
         )
         self.assertRegex(
             driver,
-            r'gsub\("\\n";\s*" "\).*gsub\("\\r";\s*" "\)',
-            msg="each multiline evaluator error must remain one failure entry",
+            r'(?s)split\("\\n"\).*map\(select\(length\s*>\s*0\)\).*last',
+            msg="each evaluator error must collapse to one concise failure entry",
         )
         self.assertRegex(
             driver,
@@ -672,6 +672,10 @@ set -euo pipefail
             driver,
             "successful full runs must not dump the raw JSONL result file",
         )
+        self.assertIn('2>"$tool_stderr"', driver)
+        self.assertIn("emit_sanitized_tool_stderr()", driver)
+        self.assertIn('line=${line//"$flake_root"/<repo>}', driver)
+        self.assertIn('line=${line//"$HOME"/<home>}', driver)
         self.assertIn("flake_label=d2b", driver)
         for line in driver.splitlines():
             if re.search(r"\blog\b", line) and "flake" in line.lower():
