@@ -124,6 +124,7 @@ struct CompiledProvider {
     input: ProviderInput,
     manifest: ProviderManifest,
     config_schema_digest: String,
+    config_schema: Value,
 }
 
 fn default_signature_id() -> String {
@@ -402,6 +403,14 @@ fn compile_providers(input: &CompileInput) -> Result<Vec<CompiledProvider>, CliE
         providers.push(CompiledProvider {
             input: clone_provider_input(provider),
             config_schema_digest: compiled.config_schema_digest().as_str().to_owned(),
+            config_schema: serde_json::from_slice(compiled.config_schema_bytes()).map_err(
+                |_| {
+                    CliError::new(
+                        "provider-config-schema-invalid",
+                        "verified Provider config schema could not be decoded",
+                    )
+                },
+            )?,
             manifest: compiled.manifest().clone(),
         });
     }
@@ -488,6 +497,15 @@ fn check_provider_resource_admission(
             .and_then(|metadata| metadata.get("name"))
             .and_then(Value::as_str)
             .unwrap_or("<provider>");
+        let config = spec
+            .get("config")
+            .cloned()
+            .unwrap_or(Value::Object(Map::new()));
+        validate_schema(
+            provider.config_schema.clone(),
+            &config,
+            &format!("Provider/{provider_name}.spec.config"),
+        )?;
         let schema_key = format!("Provider/{provider_name}");
         let expected = input
             .provider_schema_digests
@@ -717,6 +735,30 @@ impl SchemaCache {
 }
 
 fn validate_schema(schema: Value, value: &Value, path: &str) -> Result<(), CliError> {
+    let root = schema.clone();
+    validate_schema_root(&root, &schema, value, path)
+}
+
+fn validate_schema_root(
+    root: &Value,
+    schema: &Value,
+    value: &Value,
+    path: &str,
+) -> Result<(), CliError> {
+    if let Some(reference) = schema.get("$ref").and_then(Value::as_str) {
+        let Some(name) = reference.strip_prefix("#/definitions/") else {
+            return Err(schema_error(
+                path,
+                "contains an unsupported schema reference",
+            ));
+        };
+        let definition = root
+            .get("definitions")
+            .and_then(Value::as_object)
+            .and_then(|definitions| definitions.get(name))
+            .ok_or_else(|| schema_error(path, "references a missing schema definition"))?;
+        return validate_schema_root(root, definition, value, path);
+    }
     if let Some(expected) = schema.get("type") {
         let expected = expected
             .as_str()
@@ -778,7 +820,7 @@ fn validate_schema(schema: Value, value: &Value, path: &str) -> Result<(), CliEr
         }
         if let Some(item_schema) = schema.get("items") {
             for (index, item) in value.iter().enumerate() {
-                validate_schema(item_schema.clone(), item, &format!("{path}.{index}"))?;
+                validate_schema_root(root, item_schema, item, &format!("{path}.{index}"))?;
             }
         }
     }
@@ -803,7 +845,7 @@ fn validate_schema(schema: Value, value: &Value, path: &str) -> Result<(), CliEr
         }
         for (key, value) in value {
             if let Some(property_schema) = properties.get(key) {
-                validate_schema(property_schema.clone(), value, &format!("{path}.{key}"))?;
+                validate_schema_root(root, property_schema, value, &format!("{path}.{key}"))?;
             }
         }
     }
@@ -811,7 +853,7 @@ fn validate_schema(schema: Value, value: &Value, path: &str) -> Result<(), CliEr
         if let Some(branches) = schema.get(branch_name).and_then(Value::as_array) {
             let passed = branches
                 .iter()
-                .filter(|branch| validate_schema((*branch).clone(), value, path).is_ok())
+                .filter(|branch| validate_schema_root(root, branch, value, path).is_ok())
                 .count();
             if passed != expected_count {
                 return Err(schema_error(path, "does not satisfy the schema branch"));

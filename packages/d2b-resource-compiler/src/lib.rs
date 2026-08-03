@@ -305,6 +305,7 @@ pub struct CompiledArtifact {
     manifest: ProviderManifest,
     manifest_digest: ArtifactDigest,
     config_schema_digest: ArtifactDigest,
+    config_schema_bytes: Vec<u8>,
     executable_digests: BTreeMap<String, ArtifactDigest>,
 }
 
@@ -327,6 +328,11 @@ impl CompiledArtifact {
     /// Return the compiler digest of the canonical root config schema.
     pub const fn config_schema_digest(&self) -> &ArtifactDigest {
         &self.config_schema_digest
+    }
+
+    /// Return the verified canonical root config-schema bytes.
+    pub fn config_schema_bytes(&self) -> &[u8] {
+        &self.config_schema_bytes
     }
 
     /// Return the compiler digest for each enumerated executable.
@@ -665,6 +671,7 @@ where
         manifest,
         manifest_digest,
         config_schema_digest,
+        config_schema_bytes: schema_bytes,
         executable_digests,
     })
 }
