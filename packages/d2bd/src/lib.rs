@@ -26,6 +26,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use arc_swap::ArcSwapOption;
 use async_trait::async_trait;
+use d2b_contracts::v3::storage::ZoneStoreId;
 use d2b_contracts::{
     BROKER_SOCKET_PATH, KnownFeatureFlag,
     broker_wire::{
@@ -36,6 +37,7 @@ use d2b_contracts::{
         ApplySysctlRequest as BrokerApplySysctlRequest, BrokerCallerRole, BrokerErrorResponse,
         BrokerRequest, BrokerRequestEnvelope, BrokerResponse, DeregisterRunnerPidfdRequest,
         OpenPidfdRequest as BrokerOpenPidfdRequest,
+        OpenZoneStoreRequest as BrokerOpenZoneStoreRequest,
         QemuMediaBootRequest as BrokerQemuMediaBootRequest,
         QemuMediaHotplugRequest as BrokerQemuMediaHotplugRequest,
         QemuMediaRefreshRegistryRequest as BrokerQemuMediaRefreshRegistryRequest,
@@ -218,6 +220,7 @@ pub mod provider_shutdown;
 // path; they are initialized below after the trusted host bundle loads.
 pub mod provider_effects;
 pub mod provider_registry;
+pub mod resource_runtime;
 // In-daemon replacement for the
 // `d2b-audit-check.{service,timer}` host singleton + timer that
 // previously sanity-checked broker audit log shape on a daily cadence.
@@ -586,6 +589,10 @@ struct ServerState {
     /// pre-v3 bundle remains in explicit compatibility mode; a malformed
     /// v3 catalog is fail-closed rather than falling back.
     provider_runtime: Arc<provider_registry::ProviderRuntime>,
+    /// Daemon-owned production Zone resource plane. It is absent only while
+    /// trusted bundle/storage admission is incomplete; public resource
+    /// requests fail closed rather than falling back to the legacy path.
+    resource_plane: Arc<Mutex<Option<Arc<resource_runtime::ResourcePlane>>>>,
     /// Authoritative Zone index for daemon-side coordination state. USBIP
     /// reconciliation, force-stop generations, and activation staging all
     /// resolve through this index; no process-global lock carries that state.
@@ -1563,6 +1570,7 @@ pub async fn serve(options: ServeOptions) -> Result<(), TypedError> {
         op_locks: crate::concurrency::OpLockManager::new(),
         public_status_read_model: Arc::new(crate::PublicStatusReadModel::new()),
         provider_runtime: Arc::new(crate::provider_registry::ProviderRuntime::new()),
+        resource_plane: Arc::new(Mutex::new(None)),
         zone_coordinator: new_zone_coordinator(),
         security_key_sessions: Arc::new(parking_lot::Mutex::new(
             crate::security_key::SkSessionTable::default(),
@@ -1583,6 +1591,16 @@ pub async fn serve(options: ServeOptions) -> Result<(), TypedError> {
 
     match load_bundle_resolver(&state) {
         Ok(resolver) => {
+            let provider_ready = match state.provider_runtime.configure_from_host(&resolver.host) {
+                Ok(()) => true,
+                Err(error) => {
+                    tracing::error!(
+                        error = %error,
+                        "provider registry catalog refused; Provider lifecycle effects are disabled",
+                    );
+                    false
+                }
+            };
             if let Err(error) = register_authoritative_zones(&state, &resolver) {
                 tracing::error!(
                     error,
@@ -1590,12 +1608,41 @@ pub async fn serve(options: ServeOptions) -> Result<(), TypedError> {
                 );
             } else {
                 restore_configuration_staging_on_startup(&state);
-            }
-            if let Err(error) = state.provider_runtime.configure_from_host(&resolver.host) {
-                tracing::error!(
-                    error = %error,
-                    "provider registry catalog refused; Provider lifecycle effects are disabled",
-                );
+                match open_resource_plane(&state, &resolver, provider_ready).await {
+                    Ok(plane) => {
+                        if let Ok(mut slot) = state.resource_plane.lock() {
+                            for zone in plane.zone_ids() {
+                                audit_resource_plane(
+                                    &state,
+                                    &zone,
+                                    daemon_audit::ResourcePlaneAction::Start,
+                                    daemon_audit::ResourcePlaneResult::Ready,
+                                );
+                            }
+                            *slot = Some(plane);
+                        } else {
+                            tracing::error!(
+                                "resource plane state lock unavailable; refusing Zone runtime publication",
+                            );
+                        }
+                    }
+                    Err(error) => {
+                        for environment in &resolver.host.environments {
+                            if let Ok(zone) = ZoneId::parse(environment.env.clone()) {
+                                audit_resource_plane(
+                                    &state,
+                                    &zone,
+                                    daemon_audit::ResourcePlaneAction::Start,
+                                    daemon_audit::ResourcePlaneResult::Refused,
+                                );
+                            }
+                        }
+                        tracing::error!(
+                            error = %error,
+                            "production Zone resource plane failed to start; no legacy resource fallback is enabled",
+                        );
+                    }
+                }
             }
             let report = storage_lifecycle::run_startup_contract_check(&resolver);
             if report.has_only_legacy_contract_issue() {
@@ -1795,6 +1842,7 @@ pub async fn serve(options: ServeOptions) -> Result<(), TypedError> {
             if let Err(error) = handle_connection(stream, &state, None) {
                 eprintln!("{}", error.message());
             }
+            shutdown_resource_plane(&state).await;
             break;
         }
 
@@ -3395,7 +3443,62 @@ fn dispatch_request_locked(
             }
             audio_dispatch::dispatch_audio(state, op)
         }
+        wire::Request::Resource(request) => dispatch_resource_request(state, peer, request),
     }
+}
+
+fn dispatch_resource_request(
+    state: &ServerState,
+    peer: &PeerIdentity,
+    request: wire::ResourceRequest,
+) -> Result<Value, TypedError> {
+    if !matches!(peer.role, PeerRole::Admin | PeerRole::Launcher) {
+        return Ok(resource_runtime_error_frame(
+            resource_runtime::ResourceRuntimeError::RouteMismatch,
+        ));
+    }
+    let zone = request
+        .fields
+        .get("zoneRef")
+        .and_then(Value::as_str)
+        .and_then(|value| value.strip_prefix("Zone/"))
+        .and_then(|value| ZoneId::parse(value.to_owned()).ok());
+    let Some(zone) = zone else {
+        return Ok(resource_runtime_error_frame(
+            resource_runtime::ResourceRuntimeError::RouteMismatch,
+        ));
+    };
+    let plane = state
+        .resource_plane
+        .lock()
+        .ok()
+        .and_then(|plane| plane.clone());
+    let Some(plane) = plane else {
+        return Ok(resource_runtime_error_frame(
+            resource_runtime::ResourceRuntimeError::PlaneUnavailable,
+        ));
+    };
+    let runtime = match plane.zone(&zone) {
+        Ok(runtime) => runtime,
+        Err(error) => return Ok(resource_runtime_error_frame(error)),
+    };
+    match block_on_future(runtime.dispatch_cli_request(&request.value())) {
+        Ok(value) => Ok(value),
+        Err(error) => Ok(resource_runtime_error_frame(error)),
+    }
+}
+
+fn resource_runtime_error_frame(error: resource_runtime::ResourceRuntimeError) -> Value {
+    json!({
+        "type": "error",
+        "error": {
+            "kind": error.code(),
+            "errorClass": error.code(),
+            "retryClass": "never",
+            "message": error.code(),
+            "remediation": "inspect the Zone runtime readiness and retry after the authoritative resource plane is ready",
+        }
+    })
 }
 
 fn dispatch_workload(
@@ -4074,6 +4177,7 @@ mod workload_observability_tests {
             op_locks: concurrency::OpLockManager::new(),
             public_status_read_model: Arc::new(PublicStatusReadModel::new()),
             provider_runtime: Arc::new(crate::provider_registry::ProviderRuntime::new()),
+            resource_plane: Arc::new(Mutex::new(None)),
             zone_coordinator: new_zone_coordinator(),
             console_sessions: Arc::new(Mutex::new(console_session::ConsoleSessionTable::default())),
             security_key_sessions: Arc::new(parking_lot::Mutex::new(
@@ -12071,6 +12175,154 @@ fn load_bundle_resolver(state: &ServerState) -> Result<BundleResolver, TypedErro
     })
 }
 
+fn open_zone_store_from_broker(
+    state: &ServerState,
+    zone: &ZoneId,
+) -> Result<resource_runtime::OpenedZoneStore, TypedError> {
+    let zone_store_id =
+        ZoneStoreId::parse(format!("zone-store-{}", zone.as_str())).map_err(|_| {
+            TypedError::InternalConfig {
+                detail: "trusted Zone store id is invalid".to_owned(),
+            }
+        })?;
+    let (response, received_fds) = dispatch_broker_request_with_fds_timeout(
+        state,
+        BrokerRequest::OpenZoneStore(BrokerOpenZoneStoreRequest { zone_store_id }),
+        Duration::from_secs(10),
+    )?;
+    if received_fds.len() != 1 {
+        close_received_fds(&received_fds);
+        return Err(TypedError::InternalBrokerUnavailable {
+            path: broker_socket_path(state),
+            detail: "OpenZoneStore did not return exactly one descriptor".to_owned(),
+        });
+    }
+    let fd = duplicate_received_fd(&received_fds, 0, "duplicate Zone store fd")?;
+    close_received_fds(&received_fds);
+    match response {
+        BrokerResponse::OpenZoneStore(response) => {
+            if response.fd_index != 0
+                || response.zone_store_id.as_str() != format!("zone-store-{}", zone.as_str())
+            {
+                return Err(TypedError::InternalBrokerUnavailable {
+                    path: broker_socket_path(state),
+                    detail: "OpenZoneStore response did not match its request".to_owned(),
+                });
+            }
+            Ok(resource_runtime::OpenedZoneStore {
+                response,
+                database_fd: fd,
+            })
+        }
+        BrokerResponse::Error(error) => Err(TypedError::InternalBrokerUnavailable {
+            path: broker_socket_path(state),
+            detail: format!("OpenZoneStore refused: {}", error.kind),
+        }),
+        other => Err(TypedError::InternalBrokerUnavailable {
+            path: broker_socket_path(state),
+            detail: format!("OpenZoneStore returned unexpected response: {other:?}"),
+        }),
+    }
+}
+
+async fn open_resource_plane(
+    state: &ServerState,
+    resolver: &BundleResolver,
+    provider_ready: bool,
+) -> Result<Arc<resource_runtime::ResourcePlane>, resource_runtime::ResourceRuntimeError> {
+    if !provider_ready {
+        return Err(resource_runtime::ResourceRuntimeError::CoreStartupFailed);
+    }
+    let mut plane = resource_runtime::ResourcePlane::new();
+    let mut zones = BTreeSet::new();
+    for environment in &resolver.host.environments {
+        let zone = ZoneId::parse(environment.env.clone())
+            .map_err(|_| resource_runtime::ResourceRuntimeError::ZoneStoreIdInvalid)?;
+        zones.insert(zone);
+    }
+    for runtime in resolver.manifest.vms.values() {
+        if let Some(environment) = runtime.env.as_deref() {
+            let zone = ZoneId::parse(environment.to_owned())
+                .map_err(|_| resource_runtime::ResourceRuntimeError::ZoneStoreIdInvalid)?;
+            zones.insert(zone);
+        }
+    }
+    for zone in zones {
+        let opened = match open_zone_store_from_broker(state, &zone) {
+            Ok(opened) => opened,
+            Err(_) => {
+                let _ = plane.shutdown().await;
+                return Err(resource_runtime::ResourceRuntimeError::StoreOpenFailed);
+            }
+        };
+        let runtime = match resource_runtime::ZoneResourceRuntime::open(zone, opened).await {
+            Ok(runtime) => runtime,
+            Err(error) => {
+                let _ = plane.shutdown().await;
+                return Err(error);
+            }
+        };
+        if let Err(error) = plane.insert(runtime) {
+            let _ = plane.shutdown().await;
+            return Err(error);
+        }
+    }
+    if plane.ready_zone_count() == 0 {
+        return Err(resource_runtime::ResourceRuntimeError::PlaneUnavailable);
+    }
+    Ok(Arc::new(plane))
+}
+
+fn audit_resource_plane(
+    state: &ServerState,
+    zone: &ZoneId,
+    action: daemon_audit::ResourcePlaneAction,
+    result: daemon_audit::ResourcePlaneResult,
+) {
+    if let Err(error) =
+        state
+            .daemon_audit
+            .write_event(&daemon_audit::DaemonEvent::ResourcePlaneLifecycle {
+                zone: zone.as_str().to_owned(),
+                action,
+                result,
+            })
+    {
+        tracing::warn!(error = %error, "resource plane lifecycle audit write failed");
+    }
+}
+
+async fn shutdown_resource_plane(state: &ServerState) {
+    let plane = state
+        .resource_plane
+        .lock()
+        .ok()
+        .and_then(|mut slot| slot.take());
+    if let Some(plane) = plane {
+        for zone in plane.zone_ids() {
+            audit_resource_plane(
+                state,
+                &zone,
+                daemon_audit::ResourcePlaneAction::Shutdown,
+                daemon_audit::ResourcePlaneResult::Closed,
+            );
+        }
+        match Arc::try_unwrap(plane) {
+            Ok(plane) => {
+                if let Err(error) = plane.shutdown().await {
+                    tracing::warn!(error = %error, "resource plane shutdown failed");
+                }
+            }
+            Err(plane) => {
+                if let Ok(mut slot) = state.resource_plane.lock() {
+                    *slot = Some(plane);
+                }
+                tracing::warn!("resource plane still has live request owners during shutdown");
+            }
+        }
+    }
+}
+
 fn duplicate_received_fd(
     received_fds: &[RawFd],
     fd_index: u32,
@@ -20017,6 +20269,7 @@ mod public_status_tests {
             op_locks: crate::concurrency::OpLockManager::new(),
             public_status_read_model: Arc::new(crate::PublicStatusReadModel::new()),
             provider_runtime: Arc::new(crate::provider_registry::ProviderRuntime::new()),
+            resource_plane: Arc::new(Mutex::new(None)),
             zone_coordinator: new_zone_coordinator(),
             security_key_sessions: Arc::new(parking_lot::Mutex::new(
                 crate::security_key::SkSessionTable::default(),
@@ -22519,7 +22772,7 @@ fn read_frame_with_fds(socket: &impl AsRawFd) -> Result<(Vec<u8>, Vec<RawFd>), T
         socket.as_raw_fd(),
         &mut iov,
         Some(&mut control),
-        MsgFlags::empty(),
+        MsgFlags::MSG_CMSG_CLOEXEC,
     )
     .map_err(|err| TypedError::InternalIo {
         context: "recv seqpacket frame with fds".to_owned(),
@@ -22928,6 +23181,7 @@ mod detached_exec_routing_tests {
             op_locks: crate::concurrency::OpLockManager::new(),
             public_status_read_model: Arc::new(crate::PublicStatusReadModel::new()),
             provider_runtime: Arc::new(crate::provider_registry::ProviderRuntime::new()),
+            resource_plane: Arc::new(Mutex::new(None)),
             zone_coordinator: new_zone_coordinator(),
             security_key_sessions: Arc::new(parking_lot::Mutex::new(
                 crate::security_key::SkSessionTable::default(),
@@ -23644,6 +23898,7 @@ mod accept_loop_concurrency_tests {
             op_locks: crate::concurrency::OpLockManager::new(),
             public_status_read_model: Arc::new(crate::PublicStatusReadModel::new()),
             provider_runtime: Arc::new(crate::provider_registry::ProviderRuntime::new()),
+            resource_plane: Arc::new(Mutex::new(None)),
             zone_coordinator: new_zone_coordinator(),
             security_key_sessions: Arc::new(parking_lot::Mutex::new(
                 crate::security_key::SkSessionTable::default(),
@@ -24228,6 +24483,7 @@ mod broker_dispatch_tests {
             op_locks: crate::concurrency::OpLockManager::new(),
             public_status_read_model: Arc::new(crate::PublicStatusReadModel::new()),
             provider_runtime: Arc::new(crate::provider_registry::ProviderRuntime::new()),
+            resource_plane: Arc::new(Mutex::new(None)),
             zone_coordinator: new_zone_coordinator(),
             security_key_sessions: Arc::new(parking_lot::Mutex::new(
                 crate::security_key::SkSessionTable::default(),
@@ -24268,6 +24524,7 @@ mod broker_dispatch_tests {
             op_locks: crate::concurrency::OpLockManager::new(),
             public_status_read_model: Arc::new(crate::PublicStatusReadModel::new()),
             provider_runtime: Arc::new(crate::provider_registry::ProviderRuntime::new()),
+            resource_plane: Arc::new(Mutex::new(None)),
             zone_coordinator: new_zone_coordinator(),
             security_key_sessions: Arc::new(parking_lot::Mutex::new(
                 crate::security_key::SkSessionTable::default(),
@@ -26366,6 +26623,7 @@ mod broker_dispatch_tests {
             op_locks: crate::concurrency::OpLockManager::new(),
             public_status_read_model: Arc::new(crate::PublicStatusReadModel::new()),
             provider_runtime: Arc::new(crate::provider_registry::ProviderRuntime::new()),
+            resource_plane: Arc::new(Mutex::new(None)),
             zone_coordinator: new_zone_coordinator(),
             security_key_sessions: Arc::new(parking_lot::Mutex::new(
                 crate::security_key::SkSessionTable::default(),
@@ -26593,6 +26851,7 @@ mod broker_dispatch_tests {
             op_locks: crate::concurrency::OpLockManager::new(),
             public_status_read_model: Arc::new(crate::PublicStatusReadModel::new()),
             provider_runtime: Arc::new(crate::provider_registry::ProviderRuntime::new()),
+            resource_plane: Arc::new(Mutex::new(None)),
             zone_coordinator: new_zone_coordinator(),
             security_key_sessions: Arc::new(parking_lot::Mutex::new(
                 crate::security_key::SkSessionTable::default(),
@@ -26853,6 +27112,7 @@ mod broker_dispatch_tests {
             op_locks: crate::concurrency::OpLockManager::new(),
             public_status_read_model: Arc::new(crate::PublicStatusReadModel::new()),
             provider_runtime: Arc::new(crate::provider_registry::ProviderRuntime::new()),
+            resource_plane: Arc::new(Mutex::new(None)),
             zone_coordinator: new_zone_coordinator(),
             security_key_sessions: Arc::new(parking_lot::Mutex::new(
                 crate::security_key::SkSessionTable::default(),
@@ -28751,6 +29011,7 @@ mod broker_dispatch_tests {
             op_locks: crate::concurrency::OpLockManager::new(),
             public_status_read_model: Arc::new(crate::PublicStatusReadModel::new()),
             provider_runtime: Arc::new(crate::provider_registry::ProviderRuntime::new()),
+            resource_plane: Arc::new(Mutex::new(None)),
             zone_coordinator: new_zone_coordinator(),
             security_key_sessions: Arc::new(parking_lot::Mutex::new(
                 crate::security_key::SkSessionTable::default(),
@@ -29688,6 +29949,7 @@ mod broker_dispatch_tests {
             op_locks: crate::concurrency::OpLockManager::new(),
             public_status_read_model: Arc::new(crate::PublicStatusReadModel::new()),
             provider_runtime: Arc::new(crate::provider_registry::ProviderRuntime::new()),
+            resource_plane: Arc::new(Mutex::new(None)),
             zone_coordinator: new_zone_coordinator(),
             security_key_sessions: Arc::new(parking_lot::Mutex::new(
                 crate::security_key::SkSessionTable::default(),
@@ -29815,6 +30077,7 @@ mod broker_dispatch_tests {
             op_locks: crate::concurrency::OpLockManager::new(),
             public_status_read_model: Arc::new(crate::PublicStatusReadModel::new()),
             provider_runtime: Arc::new(crate::provider_registry::ProviderRuntime::new()),
+            resource_plane: Arc::new(Mutex::new(None)),
             zone_coordinator: new_zone_coordinator(),
             security_key_sessions: Arc::new(parking_lot::Mutex::new(
                 crate::security_key::SkSessionTable::default(),

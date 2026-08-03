@@ -7,7 +7,8 @@ use d2b_contracts::{
 use d2b_core::host::IfName;
 use semver::{Version as SemverVersion, VersionReq};
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
+use serde_json::{Map, Value, json};
+use std::collections::BTreeMap;
 
 pub use d2b_contracts::MAX_FRAME_SIZE;
 
@@ -60,6 +61,29 @@ pub enum Request {
     GatewayDisplay(public_wire::GatewayDisplayOp),
     Workload(public_wire::WorkloadOp),
     Audio(public_wire::AudioOp),
+    Resource(ResourceRequest),
+}
+
+/// Existing CLI Zone connector envelope. `zoneRef` is a route assertion only;
+/// the daemon selects the runtime from its trusted Zone index.
+#[derive(Debug, Clone)]
+pub struct ResourceRequest {
+    pub fields: BTreeMap<String, Value>,
+}
+
+impl ResourceRequest {
+    pub fn value(&self) -> Value {
+        Value::Object(
+            self.fields
+                .iter()
+                .map(|(key, value)| (key.clone(), value.clone()))
+                .collect::<Map<_, _>>(),
+        )
+    }
+
+    pub fn method(&self) -> Option<&str> {
+        self.fields.get("method").and_then(Value::as_str)
+    }
 }
 
 impl Request {
@@ -99,6 +123,7 @@ impl Request {
             Self::GatewayDisplay(_) => "gatewayDisplay",
             Self::Workload(_) => "workload",
             Self::Audio(_) => "audio",
+            Self::Resource(_) => "resourceRequest",
         }
     }
 
@@ -151,6 +176,23 @@ impl Request {
             | Self::GatewayDisplay(_)
             | Self::Workload(_)
             | Self::Audio(public_wire::AudioOp::Status(_)) => OpLockClass::ReadOnly,
+            Self::Resource(request)
+                if matches!(
+                    request.method(),
+                    Some(
+                        "Create"
+                            | "UpdateSpec"
+                            | "UpdateStatus"
+                            | "UpdateMetadata"
+                            | "UpdateFinalizers"
+                            | "Delete"
+                            | "Upgrade"
+                    )
+                ) =>
+            {
+                OpLockClass::Global
+            }
+            Self::Resource(_) => OpLockClass::ReadOnly,
         }
     }
 }
@@ -376,6 +418,9 @@ pub fn parse_request(bytes: &[u8]) -> Result<Request, TypedError> {
         "audio" => serde_json::from_value(Value::Object(object.clone()))
             .map(Request::Audio)
             .map_err(map_parse_error),
+        "resourceRequest" => Ok(Request::Resource(ResourceRequest {
+            fields: object.clone().into_iter().collect(),
+        })),
         _ => Err(TypedError::WireUnsupportedRequest { request_type }),
     }
 }
@@ -781,5 +826,19 @@ mod tests {
             parse_request(frame).expect("workload request"),
             Request::Workload(d2b_contracts::public_wire::WorkloadOp::LauncherExec(_))
         ));
+    }
+
+    #[test]
+    fn resource_request_preserves_cli_payload_for_authoritative_zone_dispatch() {
+        let request = parse_request(
+            br#"{"type":"resourceRequest","service":"d2b.resource.v3","method":"List","zoneRef":"Zone/work","resourceType":"Guest","limit":10}"#,
+        )
+        .expect("resource request");
+        let Request::Resource(request) = request else {
+            panic!("expected resource request");
+        };
+        assert_eq!(request.method(), Some("List"));
+        assert_eq!(request.fields["zoneRef"], "Zone/work");
+        assert_eq!(request.fields["limit"], 10);
     }
 }

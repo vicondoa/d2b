@@ -76,7 +76,7 @@ pub trait ResourceStoreBackend: Send + Sync {
 /// }
 /// ```
 pub struct RedbBackend {
-    store: d2b_resource_store_redb::RedbResourceStore,
+    store: Arc<d2b_resource_store_redb::RedbResourceStore>,
 }
 
 impl core::fmt::Debug for RedbBackend {
@@ -86,7 +86,14 @@ impl core::fmt::Debug for RedbBackend {
 }
 
 impl RedbBackend {
-    pub const fn new(store: d2b_resource_store_redb::RedbResourceStore) -> Self {
+    pub fn new(store: d2b_resource_store_redb::RedbResourceStore) -> Self {
+        Self {
+            store: Arc::new(store),
+        }
+    }
+
+    /// Bind the API to a store whose lifetime is owned by a Zone runtime.
+    pub const fn from_arc(store: Arc<d2b_resource_store_redb::RedbResourceStore>) -> Self {
         Self { store }
     }
 }

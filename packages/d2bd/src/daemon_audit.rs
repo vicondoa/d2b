@@ -127,6 +127,25 @@ pub enum VmShutdownOutcome {
     CleanupFailed,
 }
 
+/// Resource-plane lifecycle action.
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum ResourcePlaneAction {
+    Start,
+    RestartAdopt,
+    Shutdown,
+}
+
+/// Resource-plane lifecycle result.
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum ResourcePlaneResult {
+    Ready,
+    Refused,
+    Closed,
+    Error,
+}
+
 /// Daemon-side audit event variants.
 ///
 /// Additive-only: new variants may be added; existing ones must not be
@@ -272,6 +291,14 @@ pub enum DaemonEvent {
         provider: VmShutdownProvider,
         outcome: VmShutdownOutcome,
         elapsed_ms: u64,
+    },
+    /// Bounded Zone resource-plane lifecycle boundary. The Zone name is
+    /// trusted bundle identity; store paths and backend diagnostics are never
+    /// included.
+    ResourcePlaneLifecycle {
+        zone: String,
+        action: ResourcePlaneAction,
+        result: ResourcePlaneResult,
     },
 }
 

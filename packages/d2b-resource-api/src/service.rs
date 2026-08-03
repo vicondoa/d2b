@@ -17,8 +17,8 @@ use d2b_contracts::{
 };
 use d2b_resource_store::{
     ExpectedRevision, ResourceMutationKind, StoreCommitResult, StoreFilter, StoreGetRequest,
-    StoreInspectSchemaRequest, StoreListRequest, StoreMutation, StoreOperationContext,
-    StoreProjection, StoreResolveRequest, StoreWatchRequest, StoredResource,
+    StoreInspectSchemaRequest, StoreListRequest, StoreListResult, StoreMutation,
+    StoreOperationContext, StoreProjection, StoreResolveRequest, StoreWatchRequest, StoredResource,
 };
 use protobuf::{Message, MessageField};
 
@@ -178,6 +178,7 @@ where
 impl<S, U> ResourceService<S, U>
 where
     S: ResourceStoreBackend,
+    U: UpgradeDispatcher,
 {
     pub fn with_upgrade(
         store: Arc<S>,
@@ -190,6 +191,95 @@ where
             authorizer,
             upgrade,
         })
+    }
+
+    /// Read one resource from the daemon-owned runtime session.
+    ///
+    /// This is the production adapter used by a Zone runtime that has already
+    /// authenticated its fixed local controller session. It preserves the
+    /// same native authorization and checked-store path as the generated RPC
+    /// handlers; it does not expose the backend or a mutation seal.
+    pub async fn get_runtime(
+        &self,
+        subject: AuthenticatedSubjectContext,
+        authorization_state: AuthorizationState,
+        target: ResourceRef,
+        operation_id: impl Into<String>,
+    ) -> Result<StoredResource, ResourceError> {
+        let zone = ZoneId::parse(subject.zone_ref().name().as_str())
+            .map_err(|_| ref_error("authenticated Zone is invalid"))?;
+        let trusted =
+            TrustedRequest::from_session_capability(Arc::new(subject), authorization_state, ());
+        let identity = ParsedIdentity {
+            zone: zone.clone(),
+            resource_ref: target.clone(),
+            uid: None,
+        };
+        let grant = self.authorize(
+            &trusted,
+            authorization_for_identity(ApiMethod::Get, ResourceVerb::Get, &identity),
+        )?;
+        let _ = grant;
+        self.store
+            .get(StoreGetRequest {
+                operation: runtime_operation(operation_id),
+                zone,
+                target,
+                expected_uid: None,
+                projection: StoreProjection::Full,
+            })
+            .await
+            .map_err(map_store_error)
+    }
+
+    /// List one ResourceType from the daemon-owned runtime session.
+    pub async fn list_runtime(
+        &self,
+        subject: AuthenticatedSubjectContext,
+        authorization_state: AuthorizationState,
+        resource_type: ResourceTypeName,
+        operation_id: impl Into<String>,
+    ) -> Result<StoreListResult, ResourceError> {
+        let zone = ZoneId::parse(subject.zone_ref().name().as_str())
+            .map_err(|_| ref_error("authenticated Zone is invalid"))?;
+        let trusted =
+            TrustedRequest::from_session_capability(Arc::new(subject), authorization_state, ());
+        let identity = AuthorizationRequest {
+            method: ApiMethod::List,
+            zone: zone.clone(),
+            targets: vec![AuthorizationTarget {
+                resource_type: resource_type.clone(),
+                resource_name: None,
+                verb: ResourceVerb::List,
+                subresource: None,
+                execution_ref: None,
+            }],
+        };
+        let _ = self.authorize(&trusted, identity)?;
+        self.store
+            .list(StoreListRequest {
+                operation: runtime_operation(operation_id),
+                zone,
+                resource_types: vec![resource_type],
+                resource_names: Vec::new(),
+                filters: Vec::new(),
+                page_size: DEFAULT_LIST_PAGE_SIZE,
+                cursor: None,
+                projection: StoreProjection::Full,
+            })
+            .await
+            .map_err(map_store_error)
+    }
+}
+
+fn runtime_operation(operation_id: impl Into<String>) -> StoreOperationContext {
+    let operation_id = operation_id.into();
+    StoreOperationContext {
+        operation_id: operation_id.clone(),
+        idempotency_key: None,
+        correlation_id: operation_id,
+        trace_id: None,
+        deadline_ms: DEFAULT_REQUEST_DEADLINE_MS,
     }
 }
 
