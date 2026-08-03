@@ -55,6 +55,8 @@ mod values;
 
 pub mod conformance;
 pub mod fakes;
+pub mod manifest;
+pub mod schema;
 pub mod testing;
 
 pub use agent::{
