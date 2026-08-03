@@ -461,7 +461,7 @@ client were retained as invalid and excluded. Candidate artifacts are under
 | N0 - tuned Bash pool | Rejected | Four-worker warm observation: 337.13s. It exceeds the 269.445s ceiling and retains the repository-specific scheduler prohibited by the runner contract. |
 | N1 - pure aggregate | Rejected | The single evaluator remained inside whole-corpus evaluation after 610s and was terminated. No result derivation had been realized. |
 | N2 - lix-unit | Rejected | Tool acquisition took 452.48s, the fork retains the `nix-unit` binary name, and corpus evaluation repeatedly overflowed its stack. A 64 MiB stack retry still exceeded 600s. The dependency was not selected. |
-| N3 - nix-eval-jobs | Selected after refinement | Four workers with instantiation took 311.93s. Per-case `--no-instantiate` reached a 202.20s median but exhausted hosted memory. Seven shard aggregates took 543s. The selected file partition plus integrity reached a 231s local median and a 591s one-worker hosted-shape observation. |
+| N3 - nix-eval-jobs | Selected after refinement | Four workers with instantiation took 311.93s. Per-case `--no-instantiate` reached a 202.20s median but exhausted hosted memory. Seven shard aggregates took 543s. The selected file partition plus integrity reached a 231s local median and a 328s two-worker/2048 MiB hosted-shape observation. |
 | N4 - consolidated flake check | Rejected | The command is the already measured direct `nix flake check --no-build --keep-going` path. Its 565.495s baseline warm median exceeds the target and broadens focused iteration to the full flake. |
 | N5 - nix-fast-build | Not entered | N3 removed realization from the critical path. Parallel realization and grouped build logs were therefore not material. |
 
@@ -512,9 +512,9 @@ sample overlapped another Nix client.
 
 The final runner reserves 2048 MiB of process and flake overhead per worker
 plus 3072 MiB for the host when calculating the memory cap. GitHub Actions
-uses a 3072 MiB evaluator restart limit, while local development retains
-4096 MiB. A local one-worker hosted-shape run completed the full file
-partition plus integrity in 591s. Hosted success remains a merge condition.
+uses a 2048 MiB evaluator restart limit, while local development retains
+4096 MiB. A local two-worker hosted-shape run completed the full file
+partition plus integrity in 328s. Hosted success remains a merge condition.
 
 ## Nix-unit failure and coverage evidence
 
@@ -569,7 +569,7 @@ excluding source templates, and emit one attributable fallback when a file
 aggregate provides no real FAIL line.
 
 The local defaults remain four requested workers and a 4096 MiB evaluator
-limit. GitHub Actions requests one worker with a 3072 MiB limit on a 16 GiB
-runner. The local hosted-shape run completed in 591s, below the 20-minute job
-timeout and the 12m39s fixture critical path. Actual hosted success and
-duration are not claimed until the PR job passes.
+limit. GitHub Actions requests two workers with a 2048 MiB limit on a 16 GiB
+runner, for an 11 GiB modeled envelope including host reserve and worker
+overhead. The local hosted-shape run completed in 328s. Actual hosted success
+and duration are not claimed until the PR job passes.

@@ -176,7 +176,7 @@ fi
 if [ -n "${D2B_NIX_UNIT_WORKERS:-}" ]; then
   requested_workers=$D2B_NIX_UNIT_WORKERS
 elif [ "${GITHUB_ACTIONS:-}" = true ]; then
-  requested_workers=1
+  requested_workers=2
 else
   requested_workers=4
 fi
@@ -190,7 +190,7 @@ esac
 if [ -n "${D2B_NIX_UNIT_MEMORY_MB:-}" ]; then
   memory_mb=$D2B_NIX_UNIT_MEMORY_MB
 elif [ "${GITHUB_ACTIONS:-}" = true ]; then
-  memory_mb=3072
+  memory_mb=2048
 else
   memory_mb=4096
 fi

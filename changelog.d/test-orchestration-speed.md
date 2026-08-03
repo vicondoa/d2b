@@ -33,8 +33,8 @@
   one aggregate eval-jobs attribute per case file plus shard/pin integrity.
 - Reject the seven-aggregate candidate after its 543s local four-worker
   observation and the per-case candidate after hosted memory exhaustion.
-- Keep four requested local workers with a 4096 MiB default, use one worker
-  and a 3072 MiB limit on GitHub Actions, and retain exact case and file-job
+- Keep four requested local workers with a 4096 MiB default, use two workers
+  and a 2048 MiB limit on GitHub Actions, and retain exact case and file-job
   inventory checks.
 - Keep the separate enforcing fixture lane from duplicating the aggregate by
   honoring `D2B_SKIP_FIXTURE_BUILD=1` in the Layer-1 orchestration.

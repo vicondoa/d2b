@@ -1003,11 +1003,11 @@ printf '%s\n' "$sanitized_line"
         self.assertIn('elif [ "${GITHUB_ACTIONS:-}" = true ]; then', driver)
         self.assertRegex(
             driver,
-            r'(?s)GITHUB_ACTIONS[^}]*\}.*memory_mb=3072.*else.*memory_mb=4096',
+            r'(?s)GITHUB_ACTIONS[^}]*\}.*memory_mb=2048.*else.*memory_mb=4096',
         )
         self.assertRegex(
             driver,
-            r'(?s)D2B_NIX_UNIT_WORKERS.*GITHUB_ACTIONS[^}]*\}.*requested_workers=1'
+            r'(?s)D2B_NIX_UNIT_WORKERS.*GITHUB_ACTIONS[^}]*\}.*requested_workers=2'
             r'.*else.*requested_workers=4',
         )
         self.assertIn("D2B_NIX_UNIT_WORKERS", driver)
