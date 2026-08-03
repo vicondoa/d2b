@@ -11,7 +11,14 @@ SHELL := $(CURDIR)/tests/tools/scrub-shell-environment
 .PHONY: pre-tag smoke-lite i3-check \
         check check-static check-ci check-all check-fast check-tier0 \
         test test-unit \
-        test-lint test-rust test-rust-api-surface test-rust-main test-rust-remaining \
+        test-lint test-rust test-rust-api-surface test-rust-main \
+        test-rust-broker test-rust-guest-shell-runner test-rust-no-bash-ast \
+        test-rust-schema test-rust-inventory test-rust-supply-chain \
+        test-rust-leaf-api-surface test-rust-leaf-main-workspace \
+        test-rust-leaf-schema test-rust-leaf-inventory \
+        test-rust-leaf-fixture-contracts test-rust-leaf-broker \
+        test-rust-leaf-guest-shell-runner test-rust-leaf-no-bash-ast \
+        test-rust-leaf-supply-chain \
         test-fixture-contracts test-proofs test-flake test-nix-unit \
         test-performance-budgets test-adr-index-coverage test-ci-coverage \
         test-flake-list test-flake-partition \
@@ -102,24 +109,408 @@ test-unit:
 test-lint:
 	bash tests/test-lint.sh
 
-## test-rust - the comprehensive Rust gate (fmt, clippy, cargo test, contract
-## tests with D2B_FIXTURES, CLI-contract layer, no-bash-ast-walker, broker
-## workspace ×3 feature passes, schema-gen reproducibility, cargo-deny/audit,
-## stub-no-socket, assert-pinned-tests).
-test-rust:
-	bash tests/test-rust.sh
+###############################################################################
+# Rust DAG and resource budget.
+#
+# GNU Make owns the dependency graph. The recursive invocation is deliberately
+# marked with +$(MAKE), so the jobserver reaches the scheduler. Leaf recipes
+# below are ordinary non-submake recipes; Make closes its jobserver
+# descriptors before the leaf shell starts.
+#
+# D2B_RUST_BUDGET is a positive requested upper bound. Invalid values are
+# redacted, require a positive integer, and exit 2. Automatic sizing takes
+# the smaller of logical CPUs and the memory cap derived from MemAvailable and
+# cache-adjusted finite cgroup v2 memory.max or memory.high. It reserves 2 GiB
+# for the host and budgets 3 GiB per heavy job. A visible but unreadable
+# cgroup controller fails closed to budget 1 rather than guessing.
+#
+# When D2B_EXECUTION_MANIFEST is set, the plumbing helper removes the prior
+# evidence before dispatch, holds the persistent execution-manifest lock, and
+# publishes the deterministic v1 result after the scheduler exits. Its
+# execution-manifest clock injection and process/path test boundaries are
+# internal lifecycle hooks for hermetic tests;
+# production exposes no shutdown grace knob.
+###############################################################################
 
-## test-rust-api-surface / test-rust-main / test-rust-remaining - CI shards of
-## the comprehensive gate. Local developers should run test-rust, which executes
-## all three once in order.
+D2B_RUST_QUOTA_API ?= 1
+D2B_RUST_QUOTA_MAIN ?= 1
+D2B_RUST_QUOTA_SCHEMA ?= 1
+D2B_RUST_QUOTA_INVENTORY ?= 1
+D2B_RUST_QUOTA_FIXTURE ?= 1
+D2B_RUST_QUOTA_BROKER ?= 1
+D2B_RUST_QUOTA_GUEST ?= 1
+D2B_RUST_QUOTA_AST ?= 1
+D2B_RUST_QUOTA_SUPPLY ?= 1
+D2B_RUST_PROFILE ?= aggregate
+D2B_RUST_MAIN_PREREQS_aggregate := test-rust-leaf-schema
+D2B_RUST_MAIN_PREREQS_cold :=
+D2B_RUST_MAIN_PREREQS_api :=
+D2B_RUST_MAIN_PREREQS_main :=
+D2B_RUST_MAIN_PREREQS := $(D2B_RUST_MAIN_PREREQS_$(D2B_RUST_PROFILE))
+D2B_RUST_SCHEMA_PREREQS_aggregate := test-rust-leaf-inventory
+D2B_RUST_SCHEMA_PREREQS_cold := test-rust-leaf-inventory
+D2B_RUST_SCHEMA_PREREQS_schema :=
+D2B_RUST_SCHEMA_PREREQS := $(D2B_RUST_SCHEMA_PREREQS_$(D2B_RUST_PROFILE))
+D2B_RUST_BROKER_PREREQS_aggregate := test-rust-leaf-inventory
+D2B_RUST_BROKER_PREREQS_cold :=
+D2B_RUST_BROKER_PREREQS_broker :=
+D2B_RUST_BROKER_PREREQS := $(D2B_RUST_BROKER_PREREQS_$(D2B_RUST_PROFILE))
+D2B_RUST_FIXTURE_PREREQS_aggregate :=
+D2B_RUST_FIXTURE_PREREQS_cold := test-rust-leaf-api-surface test-rust-leaf-main-workspace test-rust-leaf-broker test-rust-leaf-guest-shell-runner test-rust-leaf-no-bash-ast test-rust-leaf-supply-chain
+D2B_RUST_FIXTURE_PREREQS_main :=
+D2B_RUST_FIXTURE_PREREQS := $(D2B_RUST_FIXTURE_PREREQS_$(D2B_RUST_PROFILE))
+D2B_RUST_INVENTORY_PREREQS_aggregate :=
+D2B_RUST_INVENTORY_PREREQS_cold := test-rust-leaf-fixture-contracts
+D2B_RUST_INVENTORY_PREREQS_inventory :=
+D2B_RUST_INVENTORY_PREREQS := $(D2B_RUST_INVENTORY_PREREQS_$(D2B_RUST_PROFILE))
+
+ifeq ($(D2B_SKIP_FIXTURE_BUILD),1)
+D2B_RUST_MAIN_LEAVES := test-rust-leaf-main-workspace
+else
+D2B_RUST_MAIN_LEAVES := test-rust-leaf-main-workspace test-rust-leaf-fixture-contracts
+endif
+
+# Execution-manifest v1 evidence is opt-in and starts before the recursive
+# scheduler. The helper anchors the manifest parent first with openat2
+# RESOLVE_NO_SYMLINKS and RESOLVE_NO_MAGICLINKS, then opens the persistent
+# current-user mode-0600 `.lock` with O_CLOEXEC and O_NOFOLLOW and acquires
+# nonblocking F_OFD_SETLK. It marks every evidence descriptor FD_CLOEXEC.
+# `manifest-lock-contended` telemetry has one path-free diagnostic:
+# execution-manifest lock is active; wait for the active run to finish and
+# retry. The remedy never names a filesystem path.
+#
+# Fragment plumbing creates an adjacent same-filesystem current-user mode-0700
+# directory with mkdirat mode 0700, rejects owner or mode mismatches with fstat,
+# st_uid and current uid checks, removes only the prior manifest and verified stale
+# entries, and uses unlinkat for anchored fd-relative cleanup. Invalid stale
+# paths are skipped with continue. Complete leaf fragments are atomically renamed,
+# and the final versioned manifest is atomically published. Failed and
+# interrupted runs publish partial completed_leaves and failed_surfaces evidence
+# with run_status failed or interrupted; passed runs publish run_status passed.
+# Policy tests cover scheduler success, failure, interruption, and
+# finalization-error paths. Failed and interrupted finalization publishes an
+# atomic manifest replacement.
+#
+# The scheduler has a dedicated process group created with setsid. Handled
+# SIGTERM or SIGINT is forwarded, waited for up to the fixed 10 seconds, then
+# remaining children receive SIGKILL and are reaped before idempotent
+# finalization. Close evidence file descriptors before exec. Clock,
+# process-control, and path boundaries are injectable for hermetic tests;
+# the preserved status is returned after finalization publishes evidence;
+# production has no public grace knob.
+define D2B_RUST_DISPATCH
+set -eu; \
+requested="$${D2B_RUST_BUDGET:-}"; \
+if [ -n "$$requested" ]; then \
+  case "$$requested" in \
+    ''|*[!0-9]*) echo "D2B_RUST_BUDGET must be a positive integer (value redacted)." >&2; exit 2 ;; \
+  esac; \
+  if [ "$$requested" -lt 1 ]; then \
+    echo "D2B_RUST_BUDGET must be a positive integer (value redacted)." >&2; exit 2; \
+  fi; \
+fi; \
+logical_cpus="$$(getconf _NPROCESSORS_ONLN 2>/dev/null || nproc 2>/dev/null || printf '1')"; \
+case "$$logical_cpus" in ''|*[!0-9]*) logical_cpus=1 ;; esac; \
+[ "$$logical_cpus" -ge 1 ] || logical_cpus=1; \
+mem_available_kib="$$(awk '/^MemAvailable:/ { print $$2; exit }' /proc/meminfo 2>/dev/null || true)"; \
+case "$$mem_available_kib" in ''|*[!0-9]*) mem_available_kib=0 ;; esac; \
+host_available_bytes=$$((mem_available_kib * 1024)); \
+cgroup_v2=0; \
+if grep -q '^0::' /proc/self/cgroup 2>/dev/null; then cgroup_v2=1; fi; \
+cgroup_unreadable=0; \
+cgroup_dir=; \
+if [ "$$cgroup_v2" -eq 1 ]; then \
+  cgroup_mount="$$(awk '$$0 ~ / - cgroup2 / { print $$5; exit }' /proc/self/mountinfo 2>/dev/null || true)"; \
+  cgroup_relative="$$(sed -n 's/^0:://p' /proc/self/cgroup | head -1)"; \
+  if [ -z "$$cgroup_mount" ] || [ -z "$$cgroup_relative" ]; then \
+    cgroup_unreadable=1; \
+  else \
+    cgroup_dir="$$cgroup_mount$$cgroup_relative"; \
+  fi; \
+  if [ "$$cgroup_unreadable" -eq 0 ] && { \
+    [ ! -r "$$cgroup_dir/memory.max" ] || \
+    [ ! -r "$$cgroup_dir/memory.high" ] || \
+    [ ! -r "$$cgroup_dir/memory.current" ] || \
+    [ ! -r "$$cgroup_dir/memory.stat" ]; \
+  }; then cgroup_unreadable=1; fi; \
+fi; \
+available_bytes="$$host_available_bytes"; \
+if [ "$$cgroup_v2" -eq 1 ] && [ "$$cgroup_unreadable" -eq 0 ]; then \
+  memory_max="$$(cat "$$cgroup_dir/memory.max" 2>/dev/null || true)"; \
+  memory_high="$$(cat "$$cgroup_dir/memory.high" 2>/dev/null || true)"; \
+  memory_current="$$(cat "$$cgroup_dir/memory.current" 2>/dev/null || true)"; \
+  inactive_file="$$(awk '$$1 == "inactive_file" { print $$2; exit }' "$$cgroup_dir/memory.stat" 2>/dev/null || true)"; \
+  case "$$memory_max" in max|*[!0-9]*) [ "$$memory_max" = max ] || cgroup_unreadable=1 ;; esac; \
+  case "$$memory_high" in max|*[!0-9]*) [ "$$memory_high" = max ] || cgroup_unreadable=1 ;; esac; \
+  case "$$memory_current" in ''|*[!0-9]*) cgroup_unreadable=1 ;; esac; \
+  case "$$inactive_file" in ''|*[!0-9]*) inactive_file=0 ;; esac; \
+  if [ "$$cgroup_unreadable" -eq 0 ]; then \
+    cached_usage=$$((memory_current - inactive_file)); \
+    [ "$$cached_usage" -lt 0 ] && cached_usage=0; \
+    remaining_bytes=; \
+    if [ "$$memory_max" != max ]; then remaining_bytes=$$((memory_max - cached_usage)); fi; \
+    if [ "$$memory_high" != max ]; then \
+      high_remaining=$$((memory_high - cached_usage)); \
+      if [ -z "$$remaining_bytes" ] || [ "$$high_remaining" -lt "$$remaining_bytes" ]; then remaining_bytes=$$high_remaining; fi; \
+    fi; \
+    if [ -n "$$remaining_bytes" ]; then \
+      [ "$$remaining_bytes" -lt 0 ] && remaining_bytes=0; \
+      if [ "$$remaining_bytes" -lt "$$available_bytes" ] || [ "$$available_bytes" -eq 0 ]; then available_bytes="$$remaining_bytes"; fi; \
+    fi; \
+  fi; \
+fi; \
+if [ "$$cgroup_unreadable" -ne 0 ]; then \
+  echo "Rust budget: cgroup v2 controller visibility is unreadable; failing closed to budget 1. Fix controller visibility or run outside the constrained environment." >&2; \
+  effective_budget=1; \
+else \
+  reserve_bytes=$$((2 * 1024 * 1024 * 1024)); \
+  per_heavy_job_bytes=$$((3 * 1024 * 1024 * 1024)); \
+  if [ "$$available_bytes" -le "$$reserve_bytes" ]; then \
+    memory_cap=1; \
+  else \
+    memory_cap=$$(( (available_bytes - reserve_bytes) / per_heavy_job_bytes )); \
+    [ "$$memory_cap" -ge 1 ] || memory_cap=1; \
+  fi; \
+  effective_budget="$$logical_cpus"; \
+  [ "$$memory_cap" -lt "$$effective_budget" ] && effective_budget="$$memory_cap"; \
+  if [ -n "$$requested" ] && [ "$$requested" -lt "$$effective_budget" ]; then effective_budget="$$requested"; fi; \
+fi; \
+[ "$$effective_budget" -ge 1 ] || effective_budget=1; \
+runtime_budget="$$effective_budget"; \
+profile='$(2)'; \
+cold_profile=0; \
+if [ "$$profile" = aggregate ] && [ ! -d packages/target ]; then \
+  profile=cold; \
+  cold_profile=1; \
+fi; \
+quota_api=1; \
+quota_main=1; \
+quota_schema=1; \
+quota_inventory=1; \
+quota_fixture=1; \
+quota_broker=1; \
+quota_guest=1; \
+quota_ast=1; \
+quota_supply=1; \
+case "$$profile" in \
+  aggregate) \
+    lane_count=9; \
+    active_lanes="$$runtime_budget"; \
+    [ "$$active_lanes" -le "$$lane_count" ] || active_lanes="$$lane_count"; \
+    if [ "$$runtime_budget" -gt "$$lane_count" ]; then \
+      quota_api=$$((runtime_budget - lane_count + 1)); \
+    fi; \
+    frontier_quota=$$((quota_api + active_lanes - 1)); \
+    ;; \
+  cold) \
+    active_lanes="$$runtime_budget"; \
+    [ "$$active_lanes" -le 4 ] || active_lanes=4; \
+    quota_api=1; \
+    quota_main=1; \
+    quota_broker=1; \
+    surplus=$$((runtime_budget - active_lanes)); \
+    turn=0; \
+    while [ "$$surplus" -gt 0 ]; do \
+      case $$((turn % 3)) in \
+        0) quota_main=$$((quota_main + 1)) ;; \
+        1) quota_broker=$$((quota_broker + 1)) ;; \
+        2) quota_api=$$((quota_api + 1)) ;; \
+      esac; \
+      turn=$$((turn + 1)); \
+      surplus=$$((surplus - 1)); \
+    done; \
+    quota_schema="$$runtime_budget"; \
+    quota_inventory="$$runtime_budget"; \
+    quota_fixture="$$runtime_budget"; \
+    if [ "$$active_lanes" -lt 3 ]; then \
+      frontier_quota="$$active_lanes"; \
+    elif [ "$$active_lanes" -eq 3 ]; then \
+      frontier_quota=$$((quota_api + quota_main + quota_broker)); \
+    else \
+      frontier_quota=$$((quota_api + quota_main + quota_broker + 1)); \
+    fi; \
+    ;; \
+  api) \
+    active_lanes=1; \
+    quota_api="$$runtime_budget"; \
+    frontier_quota="$$quota_api"; \
+    ;; \
+  main) \
+    if [ "$${D2B_SKIP_FIXTURE_BUILD:-0}" = 1 ]; then \
+      active_lanes=1; \
+      quota_main="$$runtime_budget"; \
+      frontier_quota="$$quota_main"; \
+    else \
+      active_lanes=2; \
+      [ "$$active_lanes" -le "$$runtime_budget" ] || active_lanes="$$runtime_budget"; \
+      if [ "$$runtime_budget" -eq 1 ]; then \
+        quota_main=1; \
+        quota_fixture=1; \
+        frontier_quota=1; \
+      else \
+        quota_fixture=$$((runtime_budget / 2)); \
+        quota_main=$$((runtime_budget - quota_fixture)); \
+        frontier_quota=$$((quota_main + quota_fixture)); \
+      fi; \
+    fi; \
+    ;; \
+  broker) \
+    active_lanes=1; \
+    quota_broker="$$runtime_budget"; \
+    frontier_quota="$$quota_broker"; \
+    ;; \
+  guest) \
+    active_lanes=1; \
+    quota_guest="$$runtime_budget"; \
+    frontier_quota="$$quota_guest"; \
+    ;; \
+  no-bash) \
+    active_lanes=1; \
+    quota_ast="$$runtime_budget"; \
+    frontier_quota="$$quota_ast"; \
+    ;; \
+  schema) \
+    active_lanes=1; \
+    quota_schema="$$runtime_budget"; \
+    frontier_quota="$$quota_schema"; \
+    ;; \
+  inventory) \
+    active_lanes=1; \
+    quota_inventory="$$runtime_budget"; \
+    frontier_quota="$$quota_inventory"; \
+    ;; \
+  supply) \
+    active_lanes=1; \
+    quota_supply="$$runtime_budget"; \
+    frontier_quota="$$quota_supply"; \
+    ;; \
+  *) echo "internal Rust profile is invalid" >&2; exit 2 ;; \
+esac; \
+test "$$frontier_quota" -le "$$runtime_budget" || { echo "frontier quota exceeds runtime budget" >&2; exit 1; }; \
+printf '%s\n' "Rust effective runtime budget: $$effective_budget job(s), $$active_lanes active lane(s), $$profile profile; D2B_RUST_BUDGET is the requested upper-bound control."; \
+set +e; \
+if [ -n "$${D2B_EXECUTION_MANIFEST:-}" ]; then \
+  perl tests/tools/execution-manifest.pl run \
+    --manifest "$$D2B_EXECUTION_MANIFEST" \
+    --target test-rust \
+    --commit "$$(git rev-parse --verify HEAD 2>/dev/null || printf '%s' unknown)" \
+    -- "$(MAKE)" --keep-going --output-sync=target --no-print-directory -j "$$active_lanes" \
+      "D2B_RUST_ROOT_PREREQS=0" \
+      "D2B_RUST_PROFILE=$$profile" \
+      "D2B_RUST_COLD_PROFILE=$$cold_profile" \
+      "D2B_RUST_EFFECTIVE_BUDGET=$$effective_budget" \
+      "D2B_RUST_ACTIVE_LANES=$$active_lanes" \
+      "D2B_RUST_QUOTA_API=$$quota_api" \
+      "D2B_RUST_QUOTA_MAIN=$$quota_main" \
+      "D2B_RUST_QUOTA_SCHEMA=$$quota_schema" \
+      "D2B_RUST_QUOTA_INVENTORY=$$quota_inventory" \
+      "D2B_RUST_QUOTA_FIXTURE=$$quota_fixture" \
+      "D2B_RUST_QUOTA_BROKER=$$quota_broker" \
+      "D2B_RUST_QUOTA_GUEST=$$quota_guest" \
+      "D2B_RUST_QUOTA_AST=$$quota_ast" \
+      "D2B_RUST_QUOTA_SUPPLY=$$quota_supply" \
+      $(1); \
+  rust_dispatch_rc="$$?"; \
+else \
+  "$(MAKE)" --keep-going --output-sync=target --no-print-directory -j "$$active_lanes" \
+    "D2B_RUST_ROOT_PREREQS=0" \
+    "D2B_RUST_PROFILE=$$profile" \
+    "D2B_RUST_COLD_PROFILE=$$cold_profile" \
+    "D2B_RUST_EFFECTIVE_BUDGET=$$effective_budget" \
+    "D2B_RUST_ACTIVE_LANES=$$active_lanes" \
+    "D2B_RUST_QUOTA_API=$$quota_api" \
+    "D2B_RUST_QUOTA_MAIN=$$quota_main" \
+    "D2B_RUST_QUOTA_SCHEMA=$$quota_schema" \
+    "D2B_RUST_QUOTA_INVENTORY=$$quota_inventory" \
+    "D2B_RUST_QUOTA_FIXTURE=$$quota_fixture" \
+    "D2B_RUST_QUOTA_BROKER=$$quota_broker" \
+    "D2B_RUST_QUOTA_GUEST=$$quota_guest" \
+    "D2B_RUST_QUOTA_AST=$$quota_ast" \
+    "D2B_RUST_QUOTA_SUPPLY=$$quota_supply" \
+    $(1); \
+  rust_dispatch_rc="$$?"; \
+fi; \
+set -e; \
+exit "$$rust_dispatch_rc"
+endef
+
+## test-rust - the bounded Make-owned Rust DAG. The prerequisite list is kept
+## explicit for policy and inventory checks; its recipes are discovery no-ops
+## while the recursive scheduler runs the same graph with the calculated
+## budget. This keeps one scheduler in charge of the real leaves.
+test-rust: test-rust-leaf-api-surface test-rust-leaf-main-workspace test-rust-leaf-schema test-rust-leaf-inventory test-rust-leaf-fixture-contracts test-rust-leaf-broker test-rust-leaf-guest-shell-runner test-rust-leaf-no-bash-ast test-rust-leaf-supply-chain
+	@# D2B_EXECUTION_MANIFEST is removed by the lifecycle helper before dispatch.
+	@# The recursive scheduler invokes +$(MAKE) --keep-going --output-sync=target.
+	+@$(call D2B_RUST_DISPATCH,test-rust-leaf-api-surface test-rust-leaf-main-workspace test-rust-leaf-fixture-contracts test-rust-leaf-broker test-rust-leaf-guest-shell-runner test-rust-leaf-no-bash-ast test-rust-leaf-schema test-rust-leaf-supply-chain test-rust-leaf-inventory,aggregate)
+
+test-rust: D2B_RUST_ROOT_PREREQS := 1
+
+## Stable CI shard targets. Local callers should prefer make test-rust.
 test-rust-api-surface:
-	bash tests/test-rust.sh api-surface
+	+@$(call D2B_RUST_DISPATCH,test-rust-leaf-api-surface,api)
 
 test-rust-main:
-	bash tests/test-rust.sh main-workspace
+	+@$(call D2B_RUST_DISPATCH,$(D2B_RUST_MAIN_LEAVES),main)
 
-test-rust-remaining:
-	bash tests/test-rust.sh remaining-suite
+test-rust-broker:
+	+@$(call D2B_RUST_DISPATCH,test-rust-leaf-broker,broker)
+
+test-rust-guest-shell-runner:
+	+@$(call D2B_RUST_DISPATCH,test-rust-leaf-guest-shell-runner,guest)
+
+test-rust-no-bash-ast:
+	+@$(call D2B_RUST_DISPATCH,test-rust-leaf-no-bash-ast,no-bash)
+
+test-rust-schema:
+	+@$(call D2B_RUST_DISPATCH,test-rust-leaf-schema,schema)
+
+test-rust-inventory:
+	+@$(call D2B_RUST_DISPATCH,test-rust-leaf-inventory,inventory)
+
+test-rust-supply-chain:
+	+@$(call D2B_RUST_DISPATCH,test-rust-leaf-supply-chain,supply)
+
+## Leaf recipes are ordinary non-submake recipes. When they are seen as
+## prerequisites of the outer test-rust declaration they intentionally do no
+## work; the recursive child owns the real leaf dispatch.
+test-rust-leaf-api-surface:
+	@if [ "$(D2B_RUST_ROOT_PREREQS)" = 1 ]; then exit 0; fi; D2B_RUST_CARGO_JOBS="$(D2B_RUST_QUOTA_API)" D2B_RUST_NEXTEST_THREADS="$(D2B_RUST_QUOTA_API)" bash tests/test-rust.sh api-surface
+
+test-rust-leaf-main-workspace: $(D2B_RUST_MAIN_PREREQS)
+	@if [ "$(D2B_RUST_ROOT_PREREQS)" = 1 ]; then exit 0; fi; D2B_RUST_CARGO_JOBS="$(D2B_RUST_QUOTA_MAIN)" D2B_RUST_NEXTEST_THREADS="$(D2B_RUST_QUOTA_MAIN)" bash tests/test-rust.sh main-workspace
+
+test-rust-leaf-schema: $(D2B_RUST_SCHEMA_PREREQS)
+	@if [ "$(D2B_RUST_ROOT_PREREQS)" = 1 ]; then exit 0; fi; D2B_RUST_CARGO_JOBS="$(D2B_RUST_QUOTA_SCHEMA)" D2B_RUST_NEXTEST_THREADS="$(D2B_RUST_QUOTA_SCHEMA)" bash tests/test-rust.sh schema-reproducibility
+
+test-rust-leaf-inventory: $(D2B_RUST_INVENTORY_PREREQS)
+	@if [ "$(D2B_RUST_ROOT_PREREQS)" = 1 ]; then exit 0; fi; D2B_RUST_CARGO_JOBS="$(D2B_RUST_QUOTA_INVENTORY)" D2B_RUST_NEXTEST_THREADS="$(D2B_RUST_QUOTA_INVENTORY)" bash tests/test-rust.sh inventory-stub
+
+## Fixture and CLI surfaces use a stable isolated target directory under
+## .scratch/rust-test-cache, so their Nix and Cargo work can overlap the main
+## workspace without sharing mutable Cargo state.
+test-rust-leaf-fixture-contracts: $(D2B_RUST_FIXTURE_PREREQS)
+	@if [ "$(D2B_RUST_ROOT_PREREQS)" = 1 ]; then exit 0; fi; \
+	if [ "$(D2B_SKIP_FIXTURE_BUILD)" = 1 ]; then \
+	  echo "Rust fixture/CLI surfaces skipped (D2B_SKIP_FIXTURE_BUILD=1; run the enforcing fixture lane separately)."; \
+	elif command -v nix >/dev/null 2>&1; then \
+	  D2B_ENABLE_FIXTURE_BUILD=1 D2B_RUST_CARGO_JOBS="$(D2B_RUST_QUOTA_FIXTURE)" D2B_RUST_NEXTEST_THREADS="$(D2B_RUST_QUOTA_FIXTURE)" bash tests/test-rust.sh fixture-contracts; \
+	else \
+	  echo "Rust fixture/CLI surfaces skipped (nix unavailable)."; \
+	fi
+
+test-rust-leaf-broker: $(D2B_RUST_BROKER_PREREQS)
+	@if [ "$(D2B_RUST_ROOT_PREREQS)" = 1 ]; then exit 0; fi; D2B_RUST_CARGO_JOBS="$(D2B_RUST_QUOTA_BROKER)" D2B_RUST_NEXTEST_THREADS="$(D2B_RUST_QUOTA_BROKER)" bash tests/test-rust.sh broker
+
+test-rust-leaf-guest-shell-runner:
+	@if [ "$(D2B_RUST_ROOT_PREREQS)" = 1 ]; then exit 0; fi; D2B_RUST_CARGO_JOBS="$(D2B_RUST_QUOTA_GUEST)" D2B_RUST_NEXTEST_THREADS="$(D2B_RUST_QUOTA_GUEST)" bash tests/test-rust.sh guest-shell-runner
+
+test-rust-leaf-no-bash-ast:
+	@if [ "$(D2B_RUST_ROOT_PREREQS)" = 1 ]; then exit 0; fi; D2B_RUST_CARGO_JOBS="$(D2B_RUST_QUOTA_AST)" D2B_RUST_NEXTEST_THREADS="$(D2B_RUST_QUOTA_AST)" bash tests/test-rust.sh no-bash-ast
+
+test-rust-leaf-supply-chain:
+	@if [ "$(D2B_RUST_ROOT_PREREQS)" = 1 ]; then exit 0; fi; D2B_RUST_CARGO_JOBS="$(D2B_RUST_QUOTA_SUPPLY)" D2B_RUST_NEXTEST_THREADS="$(D2B_RUST_QUOTA_SUPPLY)" bash tests/test-rust.sh supply-chain
+
+
 
 ## test-fixture-contracts - enforcing eval-rendered contract and CLI layer.
 ## Layer-1 local and CI orchestration set D2B_ENABLE_FIXTURE_BUILD=1.
