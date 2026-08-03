@@ -727,6 +727,11 @@ set -euo pipefail
         )
         self.assertIn('line=${line//"$flake_root"/<repo>}', driver)
         self.assertIn('line=${line//"$HOME"/<home>}', driver)
+        self.assertIn(
+            'while [[ "$line" =~ /nix/store/[A-Za-z0-9._+-]+ ]]; do',
+            driver,
+        )
+        self.assertIn('line=${line//"$store_path"/<store>}', driver)
         self.assertIn("flake_label=d2b", driver)
         for line in driver.splitlines():
             if re.search(r"\blog\b", line) and "flake" in line.lower():
@@ -739,6 +744,11 @@ set -euo pipefail
         failure_end = driver.index("done", failure_start)
         failure_reporting = driver[failure_start:failure_end]
         self.assertIn('failure=${failure//"$flake_root"/<repo>}', failure_reporting)
+        self.assertIn(
+            'while [[ "$failure" =~ /nix/store/[A-Za-z0-9._+-]+ ]]; do',
+            failure_reporting,
+        )
+        self.assertIn('failure=${failure//"$store_path"/<store>}', failure_reporting)
         self.assertIn(">&2", failure_reporting)
         self.assertNotIn(
             "log ",

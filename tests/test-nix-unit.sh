@@ -335,12 +335,16 @@ result_file="$result_dir/results.jsonl"
 tool_stderr="$result_dir/stderr"
 
 sanitize_stderr_file() {
-  local source="$1" line
+  local source="$1" line store_path
   while IFS= read -r line || [ -n "$line" ]; do
     line=${line//"$flake_root"/<repo>}
     if [ -n "${HOME:-}" ]; then
       line=${line//"$HOME"/<home>}
     fi
+    while [[ "$line" =~ /nix/store/[A-Za-z0-9._+-]+ ]]; do
+      store_path=${BASH_REMATCH[0]}
+      line=${line//"$store_path"/<store>}
+    done
     printf '%s\n' "$line" >&2
   done <"$source"
 }
@@ -562,6 +566,10 @@ for failure in "${failures[@]}"; do
   if [ -n "${HOME:-}" ]; then
     failure=${failure//"$HOME"/<home>}
   fi
+  while [[ "$failure" =~ /nix/store/[A-Za-z0-9._+-]+ ]]; do
+    store_path=${BASH_REMATCH[0]}
+    failure=${failure//"$store_path"/<store>}
+  done
   failure_attr=${failure%%$'\t'*}
   failure_line=${failure#*$'\t'}
   printf '%s\n' \
