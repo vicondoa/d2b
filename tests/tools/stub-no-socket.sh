@@ -176,7 +176,7 @@ log "--> cargo build --bin d2b --bin d2bd (stub smoke binaries)"
   CARGO_TARGET_DIR="$workspace_target_dir" \
   cargo build --manifest-path "$manifest" --quiet --bin d2b --bin d2bd)
 
-run_stub d2b "d2b 0.0.0-bootstrap (bootstrap stub)"
+run_stub d2b "d2b 0.0.0-bootstrap"
 run_stub d2bd "d2bd 0.0.0-bootstrap (bootstrap stub)"
 
 ok "Rust stubs left no socket/file runtime state"
