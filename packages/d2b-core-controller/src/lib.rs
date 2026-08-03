@@ -17,6 +17,7 @@ pub mod configuration;
 pub mod controllers;
 pub mod coordinator;
 pub mod dependencies;
+pub mod export_import;
 pub mod hints;
 pub mod main;
 pub mod metrics;
@@ -40,6 +41,10 @@ pub use controllers::{
     CurrencyAggregationError, HandlerOutcome, HandlerPhase, HandlerStatus,
 };
 pub use dependencies::{DependencyError, DependencyIndex, DependencyTrigger, UpgradeOrder};
+pub use export_import::{
+    AdmittedExport, AdmittedImport, ExportImportError, ProjectionServiceIdentity,
+    admit_binding_target, admit_export, admit_factory_pair, admit_import, projection_identity,
+};
 pub use hints::{
     ChangeField, ChangeRecord, ControllerBinding, ControllerHint, ControllerLeaseKey,
     CoreTriggerReason, FairAdmission, HintAdmissionError, HintAdmissionOutcome, HintTarget,

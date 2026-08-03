@@ -20,6 +20,8 @@ pub mod provider_registry;
 pub mod quota;
 pub mod resource;
 pub mod resource_bundle;
+pub mod resource_export;
+pub mod resource_import;
 pub mod resource_ref;
 pub mod resource_schema;
 pub mod resource_status;
@@ -79,6 +81,24 @@ pub use resource_bundle::{
     ARTIFACT_CATALOG_DOMAIN_TAG, BundleIntegrityPin, BundleResource, BundleResourceMetadata,
     MAX_BUNDLE_FINGERPRINTS, MAX_BUNDLE_RESOURCES, RESOURCE_BUNDLE_CONTENT_DOMAIN_TAG,
     ResourceBundle, ResourceBundleError,
+};
+pub use resource_export::{
+    ConsumerZonePolicy, ExportArbitration, ExportLeaseState, ExportLeaseSummary, ExportVisibility,
+    Fairness, MAX_RESOURCE_EXPORT_CAPABILITIES, MAX_RESOURCE_EXPORT_CONSUMERS,
+    MAX_RESOURCE_EXPORT_LEASE_DEADLINE_MS, MAX_RESOURCE_EXPORT_LEASE_SUMMARIES,
+    MAX_RESOURCE_EXPORT_OPERATIONS, MAX_RESOURCE_EXPORT_RATE,
+    MAX_RESOURCE_EXPORT_REVOCATION_GRACE_MS, MAX_RESOURCE_EXPORT_ZONES,
+    RESOURCE_EXPORT_DRAIN_FINALIZER, RESOURCE_EXPORT_RESOURCE_TYPE, ResourceExportConditionType,
+    ResourceExportContractError, ResourceExportError, ResourceExportSpec, ResourceExportState,
+    ResourceExportStatus, ResourceExportStatusResource, RevocationPolicy, ShareFairness,
+    ShareQuota,
+};
+pub use resource_import::{
+    ImportDisconnectPolicy, MAX_RESOURCE_IMPORT_CAPABILITIES, MAX_RESOURCE_IMPORT_EXPORT_KEY_BYTES,
+    MAX_RESOURCE_IMPORT_LEASE_COUNT, RESOURCE_IMPORT_DRAIN_FINALIZER,
+    RESOURCE_IMPORT_RESOURCE_TYPE, ResourceImportConditionType, ResourceImportContractError,
+    ResourceImportError, ResourceImportSpec, ResourceImportState, ResourceImportStatus,
+    ResourceImportStatusResource,
 };
 pub use resource_ref::{ResourceRef, ResourceRefError};
 pub use resource_schema::{

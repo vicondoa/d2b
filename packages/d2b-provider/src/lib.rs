@@ -40,6 +40,7 @@ mod identity;
 mod installation;
 mod registry;
 mod session;
+pub mod share_adapter;
 
 pub mod instance;
 pub mod rpc;
@@ -70,3 +71,7 @@ pub use registry::{
     RegistryDrainPolicy, RegistryLifecycle, RegistryLimits, RegistryShutdownReport,
 };
 pub use session::SessionIdentity;
+pub use share_adapter::{
+    ExportAdapter, ImportAdapter, ShareAdapter, ShareAdapterError, admit_binding_target,
+    admit_export, admit_factory_pair, admit_import, projection_protocol_version, service_type,
+};
