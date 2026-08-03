@@ -136,6 +136,7 @@ bundle-artifacts/nested-table-field-name-collisions-are-not-rows
 bundle-artifacts/nested-tables-are-not-artifact-rows
 bundle-artifacts/phase2-accepted-elf-shim-builds
 bundle-artifacts/phase2-compiler-is-the-build-validator
+bundle-artifacts/phase2-input-does-not-inline-duplicate-large-payloads
 bundle-artifacts/root-group-compat
 bundle-artifacts/storage-json-central-etc
 bundle-artifacts/v3-active-zone-installs-coherent-emitter
@@ -146,6 +147,7 @@ bundle-artifacts/v3-central-install-classification-and-mode
 bundle-artifacts/v3-null-provider-digest-is-not-verified
 bundle-artifacts/v3-provider-secret-config-rejected
 bundle-artifacts/v3-zone-content-hash-covers-shipped-resources
+bundle-artifacts/v3-zone-content-hash-has-one-prefix
 bundle-artifacts/v3-zone-data-matches-realised-json
 clipboard/bridge-root-allows-safe-child
 clipboard/bridge-root-rejects-dot-segment
