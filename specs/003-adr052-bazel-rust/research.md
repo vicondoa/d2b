@@ -731,6 +731,55 @@ distinguishability the wave-note lint needs. The fake supplies both routes and
 each caller's choice is asserted, so a site cannot silently inherit the other's
 policy.
 
+**The same parameter decides the leaf on the forced component-walk route.**
+An earlier draft of the runner-environment contract described that route as
+`O_NOFOLLOW` on every component *except the final one*, unconditionally. That
+is a silent downgrade of every strict caller on one of its two routes: the
+wave-note lint, cleanup, and the two output-path opens would all follow a
+symlink planted at the final name instead of refusing it, and the four-way
+errno distinguishability the lint depends on would collapse. Measured on the
+reference host against the same runfiles-shaped leaf symlink, the leaf flag is
+exactly the lever that reproduces the policy difference: `openat` on the leaf
+without `O_NOFOLLOW` opens and returns the same `st_ino` that `openat2` with
+`RESOLVE_NO_MAGICLINKS` returns, while `openat` on the leaf with `O_NOFOLLOW`
+fails `ELOOP`. Intermediate components stay `O_NOFOLLOW` under both policies;
+the errno there is `ENOTDIR` rather than `ELOOP`, because `O_DIRECTORY` reaches
+the refusal first, and a test that asserts one errno for both positions asserts
+something the kernel does not do.
+
+**What the walk route cannot reproduce is recorded, not approximated.**
+`RESOLVE_NO_MAGICLINKS` has no `openat` flag. Measured: a leaf symlink whose
+body names `/proc/<pid>/fd/<n>` is refused `ELOOP` by `openat2` under
+`RESOLVE_NO_MAGICLINKS`, opens successfully on the walk route's permissive
+leaf, and yields a handle carrying the target's own inode and the target's own
+`fstatfs` filesystem type, so it is indistinguishable from a handle opened
+through a leaf symlink that names the target directly. `fstatfs` was measured
+specifically to check whether it could stand in: it reports `0x9fa0` for a
+procfs regular file and `0x6e736673` for `nsfs`, but it reports the ordinary
+filesystem for the laundered case, which is the case that matters. A partial
+check that looks like a magic-link refusal and is not one is worse than the
+recorded difference, because it gets cited as one, so none is added. Two things
+bound the residual. Handle identity is untouched on that route, and handle
+identity is what protects a provider: kind, mode, freshness, the digest
+compared against the coverage map, and the bracketing `fstat` all still run on
+the resulting descriptor. And the kernel floor closes the production case
+outright: ADR 0008 pins supported hosts at `6.6` with the v1.1 uplift raising
+it to `6.9`, `openat2` landed in `5.6`, and the repository already relies on
+that floor unconditionally in
+`packages/d2b-host/src/bin/d2b-activation-helper.rs`.
+No supported host takes the walk route; it exists so the walk's ordering and
+errno mapping are provable through the fake.
+
+**Directory order is not an order.** The wave-note lint sorts enumerated entry
+names by unsigned byte order before it opens anything, and both the returned
+entry sequence and any one-based position label derive from that sorted
+sequence. Measured on the reference host, the same seven note names enumerate
+as `w2 w0 w1 w11 w3 w10 w9` on ext4 and as `w3 w11 w1 w0 w2 w10 w9` on tmpfs.
+A position label taken from raw enumeration therefore names a different entry
+in CI than it does locally, and a contributor handed such a refusal cannot
+reproduce it. Byte order rather than a locale collation, because it is total
+over raw directory-entry bytes and identical on every machine.
+
 **The wave-note lint reads its corpus through the same boundary.** It does not
 call `std::fs::read_dir`, does not call `std::fs::read_to_string`, and never
 concatenates a `DirEntry` onto a parent path. A guard whose own reads follow a
@@ -1108,7 +1157,8 @@ profiles.
 `CARGO_MANIFEST_DIR`, and move to a repository-owned locator with two arms:
 
 - **Under Bazel**, a run-time lookup through `@rules_rust//tools/runfiles`
-  against a declared runfiles path, with the binary a `data` dependency of the
+  against a declared runfiles-relative path, with the binary a `data`
+  dependency of the
   test target so a missing binary is an analysis failure. No test resolves
   anything by an absolute execution-root path under either executor.
 - **Under Cargo**, the existing environment, unchanged. Cargo defines
@@ -1120,7 +1170,8 @@ profiles.
 
 **Mode is selected once and the arms never chain.** The locator reads the
 runfiles environment exactly once; if it indicates a Bazel test, a missing
-runfiles entry is a hard failure naming the expected runfiles path, and it
+runfiles entry is a hard failure naming the declared runfiles-relative path,
+which is repository content rather than a local value, and it
 never falls back to the Cargo arm. Chaining is the failure that matters:
 `packages/target/` holds real, executable, out-of-date binaries for the whole
 shadow stage, so a fallback would find one and the test would go green against
@@ -1161,6 +1212,20 @@ the gate runs. Measured on this host rather than reasoned about:
   open uses `RESOLVE_NO_MAGICLINKS` alone and relies on handle identity rather
   than on link refusal, while `RESOLVE_NO_MAGICLINKS` still refuses a
   `/proc/<pid>/fd/<n>` path with `ELOOP`;
+- on the forced component-walk route the same leaf symlink opens without
+  `O_NOFOLLOW`, returning the same `st_ino` the `RESOLVE_NO_MAGICLINKS` open
+  returns, and fails `ELOOP` with `O_NOFOLLOW`, so the leaf flag is exactly the
+  lever that reproduces the resolve policy on that route, while an intermediate
+  directory symlink opened `O_DIRECTORY|O_NOFOLLOW` fails `ENOTDIR` rather than
+  `ELOOP`;
+- a leaf symlink whose body names `/proc/<pid>/fd/<n>` opens on the walk
+  route's permissive leaf and yields the target's own inode and the target's
+  own `fstatfs` filesystem type, so no descriptor-side check distinguishes it
+  from a leaf symlink naming the target directly; `fstatfs` reports `0x9fa0`
+  for a procfs regular file and `0x6e736673` for `nsfs` but reports the
+  ordinary filesystem for exactly the case that matters, which is why no
+  partial stand-in for `RESOLVE_NO_MAGICLINKS` is added and the difference is
+  recorded instead;
 - writing into an already-open regular file changes the bytes a later `pread`
   returns and moves `st_mtim` with `st_ino` unchanged, which is what the second
   `fstat` catches;

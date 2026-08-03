@@ -488,9 +488,25 @@ dependency-direction gate pins.
   classification, because it is `DT_UNKNOWN` on some filesystems; the
   authoritative answer is the errno the descriptor-relative open or read
   returns.
+- The enumerated names are **sorted by unsigned byte order before any entry is
+  opened**, and both the returned entry sequence and every one-based position
+  the renderer can fall back to derive from that sorted sequence. Directory
+  order is not an order. Measured on the reference host, the same seven note
+  names enumerate as `w2 w0 w1 w11 w3 w10 w9` on ext4 and as
+  `w3 w11 w1 w0 w2 w10 w9` on tmpfs, so an unsorted position label names a
+  different entry in CI than it does locally and neither run is reproducible
+  from the other's message. Byte order is used rather than a locale collation
+  because it is total over raw directory-entry bytes and identical everywhere.
 - Each entry is opened descriptor-relative from that same anchor under the same
   resolve policy and read through the boundary. Nothing reopens the directory,
   and no absolute path is ever constructed.
+- The strict policy binds on both of the boundary's routes. Where the boundary
+  takes its forced component-walk route it carries `O_NOFOLLOW` on the leaf as
+  well as on every intermediate component, because the policy parameter decides
+  the leaf. A walk route that exempted the leaf would follow a symlinked note
+  out of the directory this lint polices, which is the escape the lint exists
+  to refuse, performed by the lint. `runner-environment.md` states that rule
+  once for every call site.
 
 That policy is not decoration; it is what makes the four failure states
 distinguishable, and each was measured against this exact flag set on a plain
@@ -512,8 +528,11 @@ therefore split, and the split is structural:
 
 | Shape | Carries | Renders |
 | --- | --- | --- |
-| `PathLeak` | note name and the one-based line, and nothing else | the line, then the single remedy: rewrite the path as a `<worktree>`-rooted shape or drop it |
-| `ReadError` | note name and the preserved `std::io::Error` | the error, then the single file-level remedy: fix the entry's permissions or remove the invalid entry |
+| `PathLeak` | note label and the one-based line, and nothing else | the label, the line, then the single remedy: rewrite the path as a `<worktree>`-rooted shape or drop it |
+| `ReadError` | note label and the preserved `std::io::Error` | the label, the error, then the single file-level remedy: fix the entry's permissions or remove the invalid entry |
+
+The label is the entry name when the name passes the lint's own rules, and the
+entry's one-based position in the sorted enumeration when it does not.
 
 `PathLeak` has no error field to be `None` and `ReadError` has no line field to
 be zero, so neither of the two impossible states is expressible and no
@@ -540,24 +559,50 @@ note to name. It is a corpus-level error the enumerator returns instead of a
 list: `Unreadable` carries the real errno from the anchored open or the entry
 enumeration, so a directory the lint cannot read is a fail-closed refusal
 rather than a corpus that merely looks empty, and `Empty` carries no error
-because none occurred. Each renders its own remedy, restore the notes directory
-and its permissions, or add the wave's note, and cross-rendering any of the
+because none occurred. Each renders its own remedy, restore
+`specs/003-adr052-bazel-rust/wave-notes/` and its permissions, or add this
+wave's note under that directory, and cross-rendering any of the
 four remedies is a test failure.
+
+**Both corpus errors name the directory, and they name it as the fixed
+repository-relative literal `specs/003-adr052-bazel-rust/wave-notes/`.** A
+corpus error names no entry, so without the directory the remedy is
+"restore the notes directory" with no way to tell which one. The literal is
+compile-time text and is never the rendered form of the path the enumerator
+actually opened. That is not a style preference; it is forced. The enumerator
+resolves the corpus beneath `repo_root()`, so rendering what it opened would
+print the contributor's worktree, which is an absolute path FR-029 forbids in a
+refusal, and the lint's own self-application case would then catch its own
+message. The literal survives the lint's rules by construction: every `/` in it
+is preceded by an ordinary path character, so none of them is a `/`-rooted
+token, and it contains no worktree substring on any machine. The two remedy
+sentences stay distinguishable even though both carry the literal, so the
+per-variant assertion is on the whole remedy sentence and never on the shared
+directory text.
 
 The entry name is the only borrowed text any refusal prints, and it is checked
 before it is printed. The renderer runs the entry name through the same
-`/`-rooted-token and worktree-substring rules the note lines face; if the name
-itself carries a leak, the refusal names the entry by its one-based enumeration
-position instead and says so. Without that, the self-application test below
-would hold only for entry names that happen to be clean, which is a coincidence
-rather than a property.
+`/`-rooted-token and worktree-substring rules the note lines face; a name that
+fails them, or that is not valid UTF-8 and therefore cannot be rendered as a
+name at all, is replaced by the entry's one-based position in the **sorted**
+enumeration, and the refusal says so. Without the check, the self-application
+test below would hold only for entry names that happen to be clean, which is a
+coincidence rather than a property. Without the sort, the position would be a
+different entry on ext4 than on tmpfs, and a refusal a contributor cannot
+reproduce is a refusal that gets ignored.
 
 The scanner proves all of this about itself: one test runs every rendered
-refusal, from every planted input, back through the same path-token and
-worktree-substring rules and requires no violation, so a change that adds the
-token to a message fails the lint that added it. A second test asserts, per
-variant, that the correct remedy is present and that each of the other three
-remedies is absent, so a refactor cannot borrow a remedy across shapes.
+refusal and every rendered corpus error, from every planted input, back through
+the same path-token and worktree-substring rules and requires no violation, so
+a change that adds the token to a message, or that renders the resolved corpus
+path instead of the fixed literal, fails the lint that added it. A second test
+asserts, per variant, that the correct remedy is present and that each of the
+other three remedies is absent, so a refactor cannot borrow a remedy across
+shapes. A third supplies one corpus in two different enumeration orders and
+requires the returned entry sequence, the violation order, and every assigned
+position to be identical, with the removed sort planted as the mutation it must
+reject. A fourth requires each corpus error to carry the fixed
+repository-relative directory literal and no absolute path.
 
 The enumeration API returns a corpus `Result` at the outer level and a
 `std::io::Result` per entry carrying exactly what the boundary read returned.

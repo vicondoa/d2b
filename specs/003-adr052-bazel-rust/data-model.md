@@ -160,7 +160,7 @@ proofs, two `ProcessPerCase` and three `ProcessPerBinary`.
 | `path_source` | The path the executor supplies through `XML_OUTPUT_FILE`. |
 | `entries` | One per enumerated case, with `passed`, `failed`, or `ignored`. |
 | `permitted_content` | Stable case name, outcome, bounded duration, bounded sanitized failure text. |
-| `forbidden_content` | Environment values, arguments, absolute paths, store paths, socket paths, runfiles or worktree locations, unit names, PIDs, UIDs, opaque handles, terminal bytes, shell names, raw child output. |
+| `forbidden_content` | Environment values, arguments, absolute paths, store paths, socket paths, the runfiles root and any resolved absolute runfiles or worktree location, unit names, PIDs, UIDs, opaque handles, terminal bytes, shell names, raw child output. |
 | `raw_output_location` | The ordinary per-target `test.log` artifact only. |
 | `write_semantics` | Anchored close-on-exec parent descriptor, link and magic-link refusal, close-on-exec same-directory temporary, sync, descriptor-relative rename. |
 | `ownership` | Only a runner-created temporary is ever unlinked; a failed creation unlinks nothing. |
@@ -184,7 +184,7 @@ consumer to reach a boundary.
 
 | Boundary | Path | Serves | Supplied states |
 | --- | --- | --- | --- |
-| `FileSystem` | `packages/d2b-bazel-support/src/fsops.rs` | Per-case result publication, scratch cleanup, wave-note corpus enumeration, and every provider open, check, and execution | `openat2` and forced component-walk routes, both resolve policies, symlink and magic-link parents, anchored `..` escape, `EEXIST` collision, short write, `EINTR`, `EAGAIN`, `ENOSPC`, replacement race, tracked entry, foreign decoy, an unreadable and an empty note corpus, note entries failing `EACCES`, `EISDIR`, `ELOOP`, and non-UTF-8, an absent, non-regular, non-executable, out-of-date, or wrong-digest provider, a path rebound to a different inode after the provider open, handle metadata that changes across the digest read, and `spawn_verified` returning `ENOSYS`, `EACCES`, `ENOEXEC`, `ENOENT`, or `ETXTBSY` |
+| `FileSystem` | `packages/d2b-bazel-support/src/fsops.rs` | Per-case result publication, scratch cleanup, wave-note corpus enumeration, and every provider open, check, and execution | `openat2` and forced component-walk routes, both resolve policies on each route, a leaf symlink and an intermediate symlink under each policy, magic-link parents, anchored `..` escape, `EEXIST` collision, short write, `EINTR`, `EAGAIN`, `ENOSPC`, replacement race, tracked entry, foreign decoy, an unreadable and an empty note corpus, note-directory enumeration returned in two different orders, note entries failing `EACCES`, `EISDIR`, `ELOOP`, and non-UTF-8, an absent, non-regular, non-executable, out-of-date, or wrong-digest provider, a path rebound to a different inode after the provider open, handle metadata that changes across the digest read, and `spawn_verified` returning `ENOSYS`, `EACCES`, `ENOEXEC`, `ENOENT`, or `ETXTBSY` |
 | `RunfilesView` | `packages/d2b-bazel-support/src/runfiles.rs` | The locator's Bazel arm and the runner's child-binary resolution | A declared entry present, a declared entry missing, and a runfiles environment that indicates no Bazel test at all |
 | `Clock` and `UptimeSource` | `packages/d2b-bazel-runner/src/clock.rs` | Deadline parsing, remaining-budget arithmetic, child duration, expiry escalation | Every accepted and rejected uptime field, truncate on capture and round up on read, exactly-zero remaining budget, overflow, expiry reached without sleeping |
 | `YankedIndex` | `packages/xtask/src/bazel_yanked.rs` | The reviewed networked yanked-snapshot refresh | All-clear index, a yanked version, a key the locks declare and the index omits, a key no lock declares, a missing index revision, a transport failure, a malformed payload |
@@ -195,6 +195,15 @@ traits would let a composition satisfy both fakes while still executing by
 path, which is the exact defect the single-open rule removes; keeping them on
 one trait makes "holds a verified handle" and "can reach an execution route"
 the same reachability question.
+
+The resolve policy is one parameter with two routes and one meaning. On the
+`openat2` route it selects the resolve flags; on the forced component-walk
+route it selects `O_NOFOLLOW` on the final component, which every intermediate
+component carries under both policies. Strict callers are cleanup, the per-case
+directories, the `XML_OUTPUT_FILE` parent, and the wave-note lint; the provider
+open and each declared input its freshness check reads are the permissive ones.
+The route never changes what a policy means, which is why the fake supplies
+both routes for both policies and each call site's choice is asserted.
 
 `Clock` and `UptimeSource` stay in the runner rather than moving to the support
 crate, because only the runner's deadline and process paths read them. The
@@ -212,7 +221,7 @@ operation rather than two resolutions of one name.
 | --- | --- |
 | `anchor` | Close-on-exec directory descriptor: the runfiles root under Bazel, the parent of the `CARGO_BIN_EXE_<name>` value under Cargo. |
 | `relative` | One declared relative path, never absolute, never empty, never carrying `..`. |
-| `descriptor` | Exactly one `O_RDONLY` plus `O_CLOEXEC` open of `relative` beneath `anchor`, resolved with `RESOLVE_NO_MAGICLINKS`. `O_PATH` is invalid here because identity requires reading the bytes. |
+| `descriptor` | Exactly one `O_RDONLY` plus `O_CLOEXEC` open of `relative` beneath `anchor`, resolved with `RESOLVE_NO_MAGICLINKS`, or on the forced component-walk route with `O_NOFOLLOW` on every component except the leaf. `O_PATH` is invalid here because identity requires reading the bytes. |
 | `stat_before` and `stat_after` | `fstat` on the descriptor immediately before and immediately after the digest read; `st_dev`, `st_ino`, `st_size`, `st_mtim`, and `st_ctim` must agree. |
 | `kind_and_mode` | Regular file with an executable mode, from `stat_before`. The kernel's `EACCES` at exec time maps to the same refusal. |
 | `freshness` | `stat_before.st_mtim` at least the newest declared input's, each input read from its own descriptor through the same boundary. |
@@ -229,6 +238,13 @@ asserts it. One handle serves every case of a process-per-case topology, which
 is what makes "every case ran the bytes that were digested" true rather than
 merely likely.
 
+Every row above holds identically on both resolution routes. A leaf the
+provider policy accepted through a symlink is still `fstat`ed for kind and
+mode, still compared for freshness, still digested from offset zero to
+`st_size` against the coverage map's value, and still `fstat`ed again after the
+read. The route decides only what may be traversed to reach the leaf; it never
+decides what is proved about the descriptor that comes back.
+
 ## Wave-Note Lint Refusal
 
 The type-5 policy lint's outputs, modelled because an earlier draft rendered
@@ -238,23 +254,52 @@ Corpus level, returned instead of an entry list:
 
 | Variant | Members | Remedy |
 | --- | --- | --- |
-| `Unreadable` | The real `std::io::Error` from the anchored open or the entry enumeration | Restore the notes directory and its permissions. |
-| `Empty` | none | Add the wave's note before validating. |
+| `Unreadable` | The real `std::io::Error` from the anchored open or the entry enumeration | Restore `specs/003-adr052-bazel-rust/wave-notes/` and its permissions. |
+| `Empty` | none | Add this wave's note under `specs/003-adr052-bazel-rust/wave-notes/`. |
 
 Entry level:
 
 | Variant | Members | Remedy |
 | --- | --- | --- |
-| `PathLeak` | Note name and the one-based line | Rewrite the path as a `<worktree>`-rooted shape or drop it. |
-| `ReadError` | Note name and the preserved `std::io::Error` | Fix the entry's permissions or remove the invalid entry. |
+| `PathLeak` | `NoteLabel` and the one-based line | Rewrite the path as a `<worktree>`-rooted shape or drop it. |
+| `ReadError` | `NoteLabel` and the preserved `std::io::Error` | Fix the entry's permissions or remove the invalid entry. |
+
+`NoteLabel` is `Name(String)` or `Position(NonZeroUsize)`:
+
+| Variant | When |
+| --- | --- |
+| `Name` | The entry name is valid UTF-8 and passes the lint's own `/`-rooted-token and worktree-substring rules. |
+| `Position` | Anything else: a name that carries a leak, or a name that is not valid UTF-8 and therefore cannot be rendered as one. The value is the entry's one-based index in the **sorted** enumeration. |
 
 `PathLeak` has no error member to be absent and `ReadError` has no line member
 to be zero, so neither impossible state is expressible. No variant carries the
-offending token and none renders an absolute path. The note name is itself run
-through the lint's own path-token and worktree-substring rules before it is
-rendered; a name that fails them is replaced by the entry's one-based
-enumeration position. Remedies cannot be borrowed across variants, and a test
-asserts per variant that the other three remedies are absent.
+offending token and none renders an absolute path. The note label is checked
+before it is rendered, which is what makes the self-application test a property
+rather than a coincidence about the names that happen to be committed.
+Remedies cannot be borrowed across variants, and a test asserts per variant
+that the other three remedies are absent; the assertion is on the whole remedy
+sentence, because the two corpus remedies deliberately share the directory
+literal.
+
+The two corpus remedies name the corpus, and they name it as the fixed
+repository-relative literal `specs/003-adr052-bazel-rust/wave-notes/`. A corpus
+error names no entry, so a remedy without the directory tells the contributor
+to repair something unnamed. The literal is compile-time text, never the
+rendered form of the path the enumerator opened beneath `repo_root()`: that
+rendered form is an absolute path, FR-029 forbids one in a refusal, and the
+lint's own self-application case would catch its own message. The literal is
+safe under the lint's rules by construction, because every `/` in it is
+preceded by an ordinary path character and so is not a `/`-rooted token.
+
+**Enumeration order is defined, not inherited.** The enumerator sorts entry
+names by unsigned byte order before opening anything, and the returned entry
+sequence, the violation order, and every `Position` value derive from that
+sorted sequence. Measured, the same seven note names enumerate as
+`w2 w0 w1 w11 w3 w10 w9` on ext4 and `w3 w11 w1 w0 w2 w10 w9` on tmpfs, so an
+unsorted `Position` names a different entry in CI than it does locally and the
+refusal is not reproducible from the message. Byte order rather than a locale
+collation, because it is total over raw directory-entry bytes and identical
+everywhere.
 
 `ReadError` preserves the boundary's error unchanged for `EACCES`, `EISDIR`,
 `ELOOP`, and non-UTF-8 content. The one constructed error is
@@ -295,7 +340,7 @@ index revision the committing wave records.
 
 Every record identifies one affected first-party file and one of two
 dispositions. The disposition is the variant, so a record cannot claim to need
-no migration while also carrying a runfiles path.
+no migration while also carrying a declared runfiles-relative path.
 
 Common:
 

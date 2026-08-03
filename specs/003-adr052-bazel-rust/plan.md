@@ -329,9 +329,12 @@ gate already filters dev edges out of the direction check.
 | An earlier plan draft proved the locator's stale-provider negative by writing an out-of-date executable to the live Cargo path and removing a runfiles entry. | A guard whose setup writes an executable into `packages/target/` leaves that executable behind when the run is interrupted, in the one directory the shadow stage keeps full of real binaries. | The absent, non-executable, stale, and wrong-identity providers are all supplied states on the injected `FileSystem`, and the missing runfiles entry is a state on the injected `RunfilesView`. No provider test writes to or executes a live path. |
 | An earlier plan draft had the wave-note refusal name the whole offending token and modeled absent note content as `Option<String>`. | A refusal is republished into CI output, panel comments, and PR bodies, so echoing the token spreads the leak; and a failed read is a diagnosable error, not a blank. | The refusal carries the note, the one-based line, and one remediation only, proven by running the rendered refusals back through the scanner's own rules; the entry API returns `std::io::Result` at both levels and keeps the real error. |
 | An earlier plan draft had the locator check a provider by path and then let the caller run it by path. | Measured on the reference host: after the provider path is replaced, executing a retained descriptor runs the original verified bytes while a freshly path-opened descriptor runs the replacement. A check and a spawn that both resolve the same name are two resolutions, and the second one wins. | The locator opens the provider once with `openat2(O_RDONLY\|O_CLOEXEC, RESOLVE_NO_MAGICLINKS)`, runs mode, kind, freshness, digest, and a bracketing `fstat` comparison against that descriptor, returns a `VerifiedExecutable` with no path accessor, and executes it with `execveat(fd, "", argv, envp, AT_EMPTY_PATH)`. No `Command` by path, no `fexecve`, no `/proc/self/fd` fallback. |
-| An earlier plan draft applied one link-refusal policy to every anchored open. | Measured: on a runfiles-shaped symlink whose target lies outside the anchor, `RESOLVE_BENEATH` fails `EXDEV` and `RESOLVE_NO_SYMLINKS` fails `ELOOP`, so the strict policy would refuse every real Bazel provider. | The policy is a per-call-site parameter. Runner-created directories and committed files use `RESOLVE_BENEATH\|RESOLVE_NO_SYMLINKS\|RESOLVE_NO_MAGICLINKS`; providers use `RESOLVE_NO_MAGICLINKS` and rely on handle identity instead of link refusal. Each site's choice is asserted. |
+| An earlier plan draft applied one link-refusal policy to every anchored open. | Measured: on a runfiles-shaped symlink whose target lies outside the anchor, `RESOLVE_BENEATH` fails `EXDEV` and `RESOLVE_NO_SYMLINKS` fails `ELOOP`, so the strict policy would refuse every real Bazel provider. | The policy is a per-call-site parameter that decides the resolve flags on the `openat2` route and the leaf `O_NOFOLLOW` on the walk route. Runner-created directories and committed files use `RESOLVE_BENEATH\|RESOLVE_NO_SYMLINKS\|RESOLVE_NO_MAGICLINKS`; providers use `RESOLVE_NO_MAGICLINKS` and rely on handle identity instead of link refusal. Each site's choice is asserted. |
 | An earlier plan draft had the wave-note lint enumerate its corpus with `std::fs::read_dir` and read each entry with `std::fs::read_to_string` on a concatenated `DirEntry` path. | A guard that follows a symlink out of the directory it polices, and that resolves that directory a second time between enumeration and read, is the check-then-use shape the rest of this design refuses. | The lint reads the corpus through the shared `FileSystem` boundary: one anchored close-on-exec directory descriptor with `RESOLVE_BENEATH\|RESOLVE_NO_SYMLINKS\|RESOLVE_NO_MAGICLINKS`, enumeration by name only, and descriptor-relative reads. `packages/d2b-contract-tests` gains a dev-dependency on `packages/d2b-bazel-support` and the direction gate refuses any non-dev form of it. |
 | An earlier plan draft carried one wave-note violation type holding a line and an error together. | A permission denial has no line, and a leaked path token has no errno, so one type renders a line remedy for a file-level failure. | The type splits into `PathLeak`, carrying note name and one-based line and rendering the `<worktree>` rewrite-or-drop remedy, and `ReadError`, carrying note name and the preserved `std::io::Error` and rendering the fix-permissions-or-remove-the-entry remedy. An unreadable or empty corpus becomes a corpus-level error the enumerator returns instead of a list. Cross-rendering any remedy is a test failure. |
+| An earlier plan draft described the forced component-walk route as `O_NOFOLLOW` on every component except the final one, unconditionally. | Measured: `openat` on a runfiles-shaped leaf symlink without `O_NOFOLLOW` opens and returns the same `st_ino` that `openat2` with `RESOLVE_NO_MAGICLINKS` returns, while the same open with `O_NOFOLLOW` fails `ELOOP`. The leaf flag is the whole policy difference on that route, so hardcoding the exemption handed cleanup, the two output-path opens, and the wave-note lint a weaker guarantee on one of their two routes. | The resolve policy decides the leaf. Intermediate components stay `O_NOFOLLOW` under both policies; the strict policy adds `O_NOFOLLOW` on the leaf and the provider policy does not. `RESOLVE_NO_MAGICLINKS` has no `openat` equivalent, so the one property the walk route cannot reproduce is recorded with its measurement rather than approximated by a partial check, bounded by unchanged handle identity and by ADR 0008's `6.6`/`6.9` kernel floor, which puts `openat2` on every supported host. |
+| An earlier plan draft derived the wave-note position label from raw directory enumeration and rendered no directory in either corpus error. | Measured: the same seven note names enumerate as `w2 w0 w1 w11 w3 w10 w9` on ext4 and `w3 w11 w1 w0 w2 w10 w9` on tmpfs, so a position label names a different entry per filesystem; and a corpus error names no entry, so a remedy with no directory asks a contributor to repair something unnamed. | Names are sorted by unsigned byte order before any entry is opened, and the entry sequence, violation order, and every position derive from that. Both corpus remedies carry the fixed repository-relative literal `specs/003-adr052-bazel-rust/wave-notes/`, never the path resolved beneath `repo_root()`, which would be an absolute path FR-029 forbids and which the lint's own self-application case would catch. |
+| An earlier draft said a provider refusal names the expected runfiles path while the canonical redaction rule forbade a refusal from carrying a runfiles location. | Two different things wore one name. The string a `data` declaration produces is repository content, identical on every machine; the directory it resolves beneath is a local value. | The artifacts use "declared runfiles-relative path" for the permitted string and "runfiles root" or "resolved absolute runfiles location" for the forbidden one, and FR-029 states the split so the permission and the prohibition cannot be read as contradicting each other. |
 
 There is no eighteen-surface drift: committed code publishes eighteen with
 `D2B_SKIP_FIXTURE_BUILD=1` and two fixture surfaces when enabled.
@@ -431,6 +434,21 @@ which is the four-way distinguishability the rule below requires.
 `packages/d2b-contract-tests` reaches the boundary as a dev-dependency only,
 and the direction gate refuses any non-dev form of that edge.
 
+**The strict policy binds on both of the boundary's routes, and the
+enumeration is sorted before anything is opened.** The forced component-walk
+route carries `O_NOFOLLOW` on the leaf as well as on every intermediate
+component under the strict policy, because the resolve policy is what decides
+the leaf. A route that exempted the leaf would let this lint follow a symlinked
+note out of the directory it polices, which is the escape it exists to refuse,
+performed by the lint. And the enumerated names are sorted by unsigned byte
+order before any entry is opened, with the returned entry sequence, the
+violation order, and every one-based position label derived from that sorted
+sequence. Directory order is not an order: measured, the same seven note names
+enumerate as `w2 w0 w1 w11 w3 w10 w9` on ext4 and as `w3 w11 w1 w0 w2 w10 w9`
+on tmpfs, so a position taken from raw enumeration names a different entry in
+CI than it does locally and no contributor can reproduce the message they were
+handed.
+
 **The refusal itself is redacted, and there are two shapes of it.** A violation
 names the note, the one thing that identifies the condition, and one
 remediation sentence, and stops there. It never prints the offending token, not
@@ -463,16 +481,34 @@ nothing, each with its own remedy. One type holding an optional line beside an
 optional error would render a line remedy for a permission denial, which is a
 message that sends a contributor to fix a line that is not the problem.
 
+Both corpus remedies name the corpus, as the fixed repository-relative literal
+`specs/003-adr052-bazel-rust/wave-notes/`. A corpus error names no entry, so
+without the directory the remedy asks a contributor to repair something
+unnamed. The literal is compile-time text and never the rendered form of the
+path the enumerator opened beneath `repo_root()`, and that is forced rather
+than chosen: the rendered form is an absolute path, FR-029 forbids one in a
+refusal, and the lint's own self-application case would catch its own message.
+The literal passes the lint's rules by construction, because every `/` in it is
+preceded by an ordinary path character and so is not a `/`-rooted token. The
+two remedy sentences stay distinguishable even though both carry the literal,
+so the per-shape assertion is on the whole sentence and never on the shared
+directory text.
+
 The scanner refuses its own rendered refusals: one test runs every rendered
-refusal back through the same path-token and worktree-substring rules and
-requires no violation, so a future change that adds the token to the message
-fails the lint that added it. A second test asserts, per shape, that the right
-remedy is present and that each of the other three is absent, so no refactor
-can borrow a remedy across shapes. The entry name is the only borrowed text any
-refusal prints and it is checked before it is printed: a name that fails the
-lint's own rules is replaced by the entry's one-based enumeration position,
-which is what makes the self-application test a property rather than a
-coincidence about the names that happen to be committed.
+refusal and every rendered corpus error back through the same path-token and
+worktree-substring rules and requires no violation, so a future change that
+adds the token to the message, or that renders the resolved corpus path instead
+of the literal, fails the lint that added it. A second test asserts, per shape,
+that the right remedy is present and that each of the other three is absent, so
+no refactor can borrow a remedy across shapes. A third supplies one corpus in
+two different enumeration orders and requires identical entry order, violation
+order, and position values, with the removed sort as the planted mutation. The
+note label is the only borrowed text any refusal prints and it is checked
+before it is printed: a name that fails the lint's own rules, or that is not
+valid UTF-8 and so cannot be rendered as a name, is replaced by the entry's
+one-based position in the sorted enumeration, which is what makes the
+self-application test a property rather than a coincidence about the names that
+happen to be committed.
 
 **Absent content is an error, not a blank.** The per-entry content field holds
 exactly what the boundary read returned and is never collapsed into `None` or
@@ -670,13 +706,17 @@ that directory under `D2B_ENABLE_FIXTURE_BUILD=1 make test-fixture-contracts`,
 reading that corpus through one anchored close-on-exec descriptor with
 `RESOLVE_BENEATH`, `RESOLVE_NO_SYMLINKS`, and `RESOLVE_NO_MAGICLINKS` and never
 through `std::fs::read_dir`, `std::fs::read_to_string`, or a concatenated
-`DirEntry` path, with its planted absolute-path, empty-corpus, unreadable
+`DirEntry` path, sorting enumerated names by unsigned byte order before opening
+any entry, with its planted absolute-path, empty-corpus, unreadable
 corpus, `EACCES`, `ELOOP`, `EISDIR`, non-UTF-8, non-note-entry,
-leaking-entry-name, worktree-substring, and placeholder-spelling cases all
+leaking-entry-name, worktree-substring, placeholder-spelling,
+stable-enumeration-order, and fixed-corpus-directory cases all
 present and each observed failing against the inert seams before the real ones
-landed, its violation type split into `PathLeak` carrying note and line and
-`ReadError` carrying note and the preserved `std::io::Error`, its corpus error
-returned rather than folded into an empty list, and its rendered refusals
+landed, its violation type split into `PathLeak` carrying label and line and
+`ReadError` carrying label and the preserved `std::io::Error`, its corpus error
+returned rather than folded into an empty list and rendering the fixed
+repository-relative `specs/003-adr052-bazel-rust/wave-notes/` rather than any
+resolved path, and its rendered refusals
 carrying the correct remedy for their own shape, none of the other three
 remedies, and no offending token, proven by running those refusals back through
 the scanner's own rules; `packages/d2b-bazel-support/` declares no first-party
@@ -696,6 +736,11 @@ fake-driven lifecycle cases in
 landed test-first, and the host-backed conformance run in
 `packages/d2b-bazel-runner/tests/exec_handle.rs` both
 passing and the post-open path-rebind mutation observed failing;
+the forced component-walk route takes its leaf `O_NOFOLLOW` from the resolve
+policy, with the strict-leaf refusal, the provider-leaf acceptance whose handle
+still passes every identity check, and the intermediate-symlink refusal all
+present in `packages/d2b-bazel-support/tests/provider_handle.rs` and both
+hardcoded-leaf mutations observed failing;
 Cargo remains authoritative and green; the ten-role panel and wave PR are
 sealed and merged.
 
@@ -1012,7 +1057,7 @@ possible, each with the guard that catches it.
 | Failure | Guard | Rollback |
 | --- | --- | --- |
 | A sandboxed scan or generator passes because it scanned nothing, or scanned a tree it could not see. | Generator-derived exact census, declared-input equality in both directions, parsed count equal to declared count, `test-drift`, planted violation. | Revert the carrier; Cargo remains the authority. |
-| The locator misses under Bazel and silently finds a stale binary in `packages/target/`, which holds real executables for the whole shadow stage. | Mode is selected once and the arms never chain; a Bazel-mode miss fails naming the expected runfiles path; identity is asserted on the one descriptor the provider was opened on and before that same descriptor is executed; and the planted case supplies a stale, wrong-identity provider at the Cargo path through the injected `FileSystem` while the injected `RunfilesView` reports the entry missing, so the refusal is proven without any test writing an executable into a live path. | Revert the locator migration scope; the Cargo arm is unchanged. |
+| The locator misses under Bazel and silently finds a stale binary in `packages/target/`, which holds real executables for the whole shadow stage. | Mode is selected once and the arms never chain; a Bazel-mode miss fails naming the declared runfiles-relative path; identity is asserted on the one descriptor the provider was opened on and before that same descriptor is executed; and the planted case supplies a stale, wrong-identity provider at the Cargo path through the injected `FileSystem` while the injected `RunfilesView` reports the entry missing, so the refusal is proven without any test writing an executable into a live path. | Revert the locator migration scope; the Cargo arm is unchanged. |
 | A provider negative is arranged on disk instead of injected, so the shadow stage's own `packages/target/` becomes test scaffolding and one abandoned run leaves a stale executable behind that a later Cargo test finds. | Every provider negative, absent, non-regular, non-executable, out of date, wrong identity, and the post-open path rebind, is a supplied state on the shared `FileSystem` and `RunfilesView` fakes; the locator and topology never call the standard library directly, and no provider check executes the planted file, because identity is a digest read from the descriptor the checks already hold. | Revert the locator or topology scope; nothing was written outside the fake. |
 | The locator verifies one binary and the test runs another, because the provider path was rebound between the digest read and the spawn. `packages/target/` is replaced by rename during a concurrent Cargo build for the whole shadow stage, so the window is real, and the failure is silent and green. | The provider is opened once through the boundary and every check binds to that descriptor; `VerifiedExecutable` has no path accessor and no public constructor, so no caller can spawn by name; execution is `execveat(fd, "", argv, envp, AT_EMPTY_PATH)` on the same descriptor with no `Command`, no `fexecve`, and no `/proc/self/fd` fallback. The fake rebinds the path to a different inode after the open and requires the original bytes to run; mutations that re-resolve at exec time, digest from a second open, or fall back on `ENOSYS` all fail. `packages/d2b-bazel-runner/tests/exec_handle.rs` measures the kernel half against a first-party probe binary rather than asserting it. | Revert the locator or topology scope; the boundary is a W0-frozen module path, so the seam does not move. |
 | The provider handle leaks into the child, so a test's own descriptor table differs under Bazel and a later change silently depends on the inherited descriptor. | Every descriptor on this path is close-on-exec, and the conformance test asserts the provider inode is absent from the child while a deliberately non-close-on-exec control descriptor is present, so the assertion is proven able to fail. | Revert the runner scope; the descriptor policy is one boundary operation. |
@@ -1029,6 +1074,8 @@ possible, each with the guard that catches it.
 | The shared startup-option construction is put in the runner because that is where the wrapper lives, so `xtask` takes a dependency on the crate whose build targets `xtask` itself generates, and the next shared helper follows it there. | The construction lives in the neutral `packages/d2b-bazel-support/`, and `tests/unit/meta/w0-dep-direction.sh` refuses `xtask -> d2b-bazel-runner` in every dependency kind and refuses any first-party edge out of the support crate, resolving names with `cargo metadata` so a rename or a target-specific entry cannot evade it. | Move the helper into the support crate; the guard blocks the merge before the edge ships. |
 | The wave-note lint refuses a leaked absolute path and prints the token, so the leak is copied into CI output, a panel comment, and a PR body by the guard that caught it. | The refusal carries the note name, the one identifying detail for its shape, and one remediation and nothing else, and one test runs every rendered refusal back through the scanner's own path-token and worktree-substring rules. | Fix the message; the note itself never merged, because the lint refusal is merge-blocking. |
 | The wave-note lint enumerates its corpus with `std::fs::read_dir` and reads each entry by a concatenated `DirEntry` path, so a symlink committed into the notes directory makes the guard read a file outside it, and the directory is resolved a second time between enumeration and read. | The lint reads through the shared `FileSystem` boundary: one anchored close-on-exec descriptor with `RESOLVE_BENEATH`, `RESOLVE_NO_SYMLINKS`, and `RESOLVE_NO_MAGICLINKS`, enumeration by name only, and descriptor-relative reads. The symlink, subdirectory, permission, and non-UTF-8 negatives are supplied states of the fake and were measured to produce four distinguishable errnos under exactly that flag set. | Revert the lint scope; the boundary is W0-frozen and the corpus was never read by another route. |
+| The shared boundary's fallback route exempts the leaf from `O_NOFOLLOW` for every caller, so on that route a symlinked wave note, a symlinked per-case directory, or a symlinked `XML_OUTPUT_FILE` parent is followed out of its anchor and the lint's four-way errno distinguishability collapses, while every openat2-route test stays green. | The resolve policy decides the leaf on the walk route, and the fake supplies both routes for both policies. `packages/d2b-bazel-support/tests/provider_handle.rs` carries the strict-leaf refusal, the provider-leaf acceptance whose handle still passes kind, mode, freshness, digest, and the bracketing `fstat`, and the intermediate-symlink refusal, and both hardcoded-leaf mutations must fail. | Revert the boundary change in a second W0 prep commit; the trait is a W0-frozen module path and no scope owns it. |
+| A wave-note refusal falls back to a position label taken from raw directory enumeration, so the entry a message names differs between the contributor's ext4 checkout and the CI filesystem and neither run reproduces the other. | Names are sorted by unsigned byte order before any entry is opened, and the entry sequence, violation order, and every position derive from that sorted sequence. One test supplies the same corpus in two enumeration orders and requires identical output, with the removed sort as the planted mutation. | Revert the lint scope; the sort is inside the enumerator and nothing else derives an ordinal from the corpus. |
 | One wave-note violation type carries an optional line beside an optional error, so a permission denial renders the line remedy and a contributor is told to rewrite a line that is not the problem. | The type splits into `PathLeak`, note plus line, and `ReadError`, note plus preserved `std::io::Error`, with an unreadable or empty corpus returned as a corpus error instead of a violation. A test asserts per shape that the right remedy is present and the other three are absent. | Fix the rendering; the split is structural, so the cross-remedy state stops being expressible. |
 | The coverage guard is green while half its invariants never executed, because a Bazel test cannot query the graph. | Analysis-time dependency edges prove label existence; completeness and query drift run in the wrapper and `test-drift` over a committed drift-checked query result; no Bazel test invokes `bazel query`. | Revert the guard split; do not weaken either half. |
 | The disk cache is measured before asynchronous trimming finishes, so a compliant run refuses to publish forever. | An explicit synchronous on-demand collector runs as a named step before measurement and save; the size refusal stays a backstop. | Revert to the previous snapshot; the maintenance verdict is outside the Rust verdict. |
@@ -1037,7 +1084,7 @@ possible, each with the guard that catches it.
 | A third-party build script probes the host, diverges from Cargo behavior, or fails under sandboxing. | W0 enumerates every build-script-producing crate per hub, records required annotations, and pins a minimal action-environment allowlist that is itself a cache-key input. | Fix declared inputs and annotations, or stop the migration at W0. |
 | A `--test_output=streamed` run silently serializes every test and produces a measurement that means nothing. | The profile invalidation list forbids it, and every recorded sample carries the flags it ran under. | Invalidate and replace the sample. |
 | The equivalence streak is laundered by pairing runs that tested different trees, or by cancelling a run about to go red. | Records are push events on `v3` with a shared head commit; a Bazel run reaching no verdict while its paired Cargo run does is a mismatch that resets the streak. | Reset the streak; a double cancellation produces no record and buys nothing. |
-| Cleanup follows a replacement or leaks descriptors. | Descriptor-relative removal, forced fallback route, exec-leak and decoy race tests. | Revert W2; never use raw recursive removal. |
+| Cleanup follows a replacement or leaks descriptors. | Descriptor-relative removal, forced fallback route with the strict policy's leaf `O_NOFOLLOW` asserted on that route, exec-leak and decoy race tests. | Revert W2; never use raw recursive removal. |
 | A timeout kills the caller or leaves descendants alive. | Dedicated-group escalation order with real sibling and descendant tests. | Revert W5 to Cargo. |
 | Retirement deletes a public entry point along with its Cargo implementation. | The retirement inventory proves only the eighteen implementations disappeared and that `make test-rust` plus all eight leaf names still resolve to Bazel carriers. | Revert W7; W6 and W5 are unaffected. |
 

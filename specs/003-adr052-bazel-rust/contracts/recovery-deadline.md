@@ -11,16 +11,29 @@ or live matching server causes refusal before deletion.
 
 Cleanup performs every one of those operations through the same injectable
 filesystem trait in `packages/d2b-bazel-support/src/fsops.rs` that the per-case
-result writer, the topology provider checks, and the locator use. Those
+result writer, the topology provider path, the locator, and the wave-note
+policy lint use. Those
 subsystems enforce identical properties on
 identical syscalls, so a single implementation and a single mutation set cover
 them, and no cleanup test needs live host filesystem state: the tracked-file,
 symlink, magic-link, escape, replacement-race, decoy-survival, and
 descriptor-inheritance negatives are all produced by the injected fake. The
 forced component-walk route is selected through the same boundary rather than
-by finding a kernel that lacks `openat2`. The trait lives in the neutral
+by finding a kernel that lacks `openat2`. Cleanup uses the strict resolve
+policy, `RESOLVE_BENEATH` with `RESOLVE_NO_SYMLINKS` and
+`RESOLVE_NO_MAGICLINKS`, because it operates only on paths the runner created;
+the provider open uses `RESOLVE_NO_MAGICLINKS` alone for the reasons
+`runner-environment.md` records, and each call site's choice is asserted so
+neither inherits the other's. That choice binds the walk route too: on the
+forced component-walk route the strict policy carries `O_NOFOLLOW` on the leaf
+as well as on every intermediate component, so a symlink planted at the final
+name of a cleanup target is refused `ELOOP` whichever route the boundary took.
+A route that exempted the leaf would let cleanup follow a link out of
+`.scratch/bazel/` on the one route its own negatives force, which is the
+failure this whole subsystem exists to refuse. The trait lives in the neutral
 support crate rather than in the runner so that the locator can reach it
-without depending on the runner, and so `xtask` can reach the startup-option
+without depending on the runner, so `packages/d2b-contract-tests` can reach it
+as a dev-dependency, and so `xtask` can reach the startup-option
 construction beside it without an `xtask -> d2b-bazel-runner` edge.
 
 | Code | Required recovery |
@@ -58,7 +71,8 @@ Both the raw uptime field and the current instant arrive through
 a `Clock`. That boundary stays in the runner rather than moving to the shared
 support crate, because the deadline and process paths are its only readers; the
 locator resolves provider freshness from timestamps the filesystem boundary
-returns and needs no clock at all. Nothing in the deadline path opens
+returns from the provider's own descriptor and needs no clock at all. Nothing
+in the deadline path opens
 `/proc/uptime` or reads the host
 clock directly. That is what makes the grammar and rounding table testable:
 every accepted and rejected field, the truncate-on-capture and round-up-on-read

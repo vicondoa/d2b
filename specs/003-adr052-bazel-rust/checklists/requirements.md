@@ -140,3 +140,49 @@
   the coupling the prep rule exists to remove. Task count stays 174 and no task
   was renumbered. No functional requirement or success criterion was added or
   removed; the set remains FR-001 through FR-055 and SC-001 through SC-015.
+- Revalidated after the round-ten panel. Three defect classes, no requirement
+  added or removed. First, the shared filesystem boundary's forced
+  component-walk route described `O_NOFOLLOW` on every component *except* the
+  final one, unconditionally, so every strict caller lost its leaf link
+  refusal on one of its two routes: a symlinked wave note, a symlinked per-case
+  directory, or a symlinked `XML_OUTPUT_FILE` parent would have been followed
+  out of its anchor while every `openat2`-route test stayed green. The resolve
+  policy now decides the leaf on that route as well; intermediate components
+  stay `O_NOFOLLOW` under both policies; and the one property the walk route
+  cannot reproduce, `RESOLVE_NO_MAGICLINKS`, is recorded with its measurement
+  rather than approximated by a partial check, bounded by unchanged handle
+  identity and by ADR 0008's kernel floor. FR-052 now states that a
+  directory-reading guard's link refusal binds every path component including
+  the final one and holds identically on every resolution route, and SC-012
+  names the wrong-policy leaf as a planted negative in both directions. Second,
+  the wave-note corpus errors named no directory and the position label was
+  taken from raw directory enumeration. Both corpus remedies now carry the
+  fixed repository-relative literal `specs/003-adr052-bazel-rust/wave-notes/`,
+  never the path resolved beneath `repo_root()`, which is an absolute path
+  FR-029 forbids and which the lint's own self-application case would catch;
+  and the enumerator sorts names by unsigned byte order before opening
+  anything, with the entry sequence, the violation order, and every `Position`
+  derived from that sorted sequence. FR-052 gained the deterministic-ordering
+  requirement and SC-012 gained both planted negatives. `PathLeak` and
+  `ReadError` keep their separate remedies and their token redaction unchanged.
+  Third, a provider refusal was permitted to name "the expected runfiles path"
+  while the canonical redaction rule forbade a refusal from carrying "a
+  runfiles location", which read as a contradiction. The artifacts now use
+  "declared runfiles-relative path" for the permitted string, which is
+  repository content a `data` declaration produces, and "runfiles root" or
+  "resolved absolute runfiles location" for the forbidden one, and FR-029
+  states the split so the permission and the prohibition cannot be read against
+  each other. Every substrate claim behind the first two changes was measured
+  on the reference host rather than taken from documentation: `openat` on a
+  runfiles-shaped leaf symlink opening without `O_NOFOLLOW` and returning the
+  same `st_ino` as `openat2` with `RESOLVE_NO_MAGICLINKS` while failing `ELOOP`
+  with it, an intermediate directory symlink failing `ENOTDIR` rather than
+  `ELOOP` under `O_DIRECTORY|O_NOFOLLOW`, a leaf symlink naming
+  `/proc/<pid>/fd/<n>` opening on the permissive leaf and yielding the target's
+  own inode and `fstatfs` type where `openat2` refuses it, `fstatfs` reporting
+  `0x9fa0` for procfs and `0x6e736673` for `nsfs` but the ordinary filesystem
+  for the laundered case, and the same seven note names enumerating as
+  `w2 w0 w1 w11 w3 w10 w9` on ext4 and `w3 w11 w1 w0 w2 w10 w9` on tmpfs. Task
+  count stays 174 and no task was renumbered. No functional requirement or
+  success criterion was added or removed; the set remains FR-001 through FR-055
+  and SC-001 through SC-015.

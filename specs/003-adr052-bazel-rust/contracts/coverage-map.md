@@ -22,9 +22,9 @@ Each row contains:
   its reason;
 - `testTargets`: all transitively carried Rust tests;
 - `handwrittenFragments`: all non-generated BUILD fragments;
-- `binaryProviders`: expected provider label, runfiles path, and the byte
-  digest the located descriptor must match before that same descriptor is
-  executed;
+- `binaryProviders`: expected provider label, declared runfiles-relative path,
+  and the byte digest the located descriptor must match before that same
+  descriptor is executed;
 - `locatorFiles`: the migrated first-party files this surface's tests use, each
   `migrated` or `no-migration-needed` with a reason;
 - `deliberateDifferences`: applicable ADR section 13 entries;

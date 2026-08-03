@@ -393,6 +393,17 @@ require_match 'the exec is not AT_EMPTY_PATH on the open descriptor' \
   -nE 'AT_EMPTY_PATH' packages/d2b-bazel-support/src/fsops.rs
 require_match 'the provider open no longer refuses magic links' \
   -nE 'RESOLVE_NO_MAGICLINKS' packages/d2b-bazel-support/src/fsops.rs
+require_match 'the walk route no longer applies O_NOFOLLOW at all' \
+  -nE 'O_NOFOLLOW' packages/d2b-bazel-support/src/fsops.rs
+require_match 'the strict-leaf refusal on the walk route is gone' \
+  -n 'walk_route_strict_policy_refuses_a_leaf_symlink' \
+  packages/d2b-bazel-support/tests/provider_handle.rs
+require_match 'the provider-leaf acceptance on the walk route is gone' \
+  -n 'walk_route_provider_policy_accepts_a_leaf_symlink_and_still_verifies_identity' \
+  packages/d2b-bazel-support/tests/provider_handle.rs
+require_match 'the intermediate-symlink refusal is gone' \
+  -n 'walk_route_refuses_an_intermediate_symlink_under_both_policies' \
+  packages/d2b-bazel-support/tests/provider_handle.rs
 require_match 'the post-open path-rebind negative is gone' \
   -nE 'rebound|rebind' packages/d2b-bazel-support/tests/provider_handle.rs
 refute 'a first-party provider is spawned by path' \
@@ -413,7 +424,17 @@ cargo test -p d2b-bazel-runner --test exec_handle -- --nocapture
 
 `provider_handle.rs` is hermetic: every provider negative is a state of the
 `FileSystem` fake, which models inodes rather than paths, so "the path now
-names a different file" is representable. `exec_handle.rs` is the one
+names a different file" is representable. Read its three walk-route cases
+before trusting the boundary, because the walk route is where an earlier draft
+of the contract exempted the final component from `O_NOFOLLOW` for every
+caller. Under the strict policy a leaf symlink must be refused `ELOOP` with
+nothing read; under the provider policy the same leaf symlink must open, yield
+the inode the `openat2` route yields, and still pass kind, mode, freshness, the
+digest compared against the coverage map, and the bracketing `fstat`; and an
+intermediate symlink must be refused under both policies with `ENOTDIR`, not
+`ELOOP`, because `O_DIRECTORY` reaches the refusal first. Both hardcoded-leaf
+mutations, exempting the leaf always and applying `O_NOFOLLOW` always, must
+fail. `exec_handle.rs` is the one
 deliberately non-hermetic test in the design, and it is deliberate because
 every claim above about `execveat`, close-on-exec inheritance, and executing
 one descriptor repeatedly is a claim about the kernel, which a fake cannot
@@ -581,23 +602,52 @@ require_match 'the scanner no longer refuses its own rendered refusals' \
 require_match 'the per-shape remedy case is gone' \
   -n 'wave_note_refusals_carry_only_their_own_remedy' \
   packages/d2b-contract-tests/tests/policy_docs.rs
+require_match 'the stable-enumeration-order case is gone' \
+  -n 'wave_note_entries_are_sorted_before_any_label_is_assigned' \
+  packages/d2b-contract-tests/tests/policy_docs.rs
+require_match 'the fixed corpus-directory case is gone' \
+  -n 'wave_note_corpus_errors_name_the_repository_relative_directory' \
+  packages/d2b-contract-tests/tests/policy_docs.rs
 refute 'the lint reads the corpus with the standard library' \
   -nE 'std::fs::read_dir|std::fs::read_to_string|read_dir\(' \
   packages/d2b-contract-tests/tests/policy_docs.rs
 ```
 
 Read one refusal of each shape before trusting the lint. A `PathLeak` must name
-the note and the one-based line and give the rewrite-or-drop remedy; a
-`ReadError` must name the note and its errno and give the file-level remedy;
+the note label and the one-based line and give the rewrite-or-drop remedy; a
+`ReadError` must name the note label and its errno and give the file-level
+remedy; an `Unreadable` and an `Empty` must each name the fixed
+repository-relative `specs/003-adr052-bazel-rust/wave-notes/` and no resolved
+path, because a corpus error names no entry and the directory is the whole
+subject of its remedy;
 neither may print the offending token, and neither may carry the other's
 remedy. A refusal is republished into the target's output, into panel comments,
 and into PR bodies, so a message that echoes the leaked path has spread it
 further than the note did, and a message that carries the wrong remedy sends a
-contributor to fix a line that is not the problem. The last two `require_match`
-calls above are the mechanical half of both rules: one names the case that runs
-every rendered refusal back through the scanner's own path-token and
-worktree-substring tests, the other names the case that asserts each shape
-renders its own remedy and none of the other three.
+contributor to fix a line that is not the problem. The four `require_match`
+calls above are the mechanical half of those rules: one names the case that
+runs every rendered refusal and every rendered corpus error back through the
+scanner's own path-token and
+worktree-substring tests, the second names the case that asserts each shape
+renders its own remedy and none of the other three, the third names the case
+that supplies one corpus in two enumeration orders and requires identical entry
+order, violation order, and position labels, and the fourth names the case that
+pins the corpus directory literal.
+
+Why that literal is fixed rather than rendered is the same self-application
+argument: the enumerator resolves the corpus beneath `repo_root()`, so a
+message that printed what it opened would carry the contributor's worktree,
+which is an absolute path FR-029 forbids in a refusal and which
+`wave_note_refusals_carry_no_path_token` would then catch. That is left to the
+test rather than to a grep, because a `repo_root().join(...)` call can wrap
+across lines and a regex that misses the wrap reports a clean file it never
+understood.
+
+Sorting matters for the same reason. Directory order is not an order: the same
+seven note names enumerate as `w2 w0 w1 w11 w3 w10 w9` on ext4 and as
+`w3 w11 w1 w0 w2 w10 w9` on tmpfs, so a position label taken from raw
+enumeration names a different entry in CI than it does locally, and a refusal
+nobody can reproduce is a refusal that gets ignored.
 
 Two halves are not greppable and are deliberately left to the compiler and the
 tests. The first is the shape of the enumeration API: it returns a corpus error
@@ -705,8 +755,11 @@ Two negative controls matter more than the positive ones:
 - the planted stale-provider case, in which the injected `FileSystem` fake
   reports an out-of-date, wrong-digest executable at the Cargo path and the
   injected `RunfilesView` fake reports no entry, so the Bazel arm must fail
-  naming the expected runfiles path rather than passing against the stale
-  provider. Nothing is written to `packages/target/` to produce it: that
+  naming the declared runfiles-relative path rather than passing against the
+  stale provider. That path is repository content, the string the target's own
+  `data` declaration produces, so naming it leaks nothing; the runfiles root it
+  would resolve beneath is a local value and stays out of the message. Nothing
+  is written to `packages/target/` to produce it: that
   directory is the hazard, not the fixture. Beside it, the planted
   path-rebind case rebinds the provider path to a different inode after the
   open and requires the verified descriptor's bytes to be the ones that ran,
@@ -852,9 +905,14 @@ The targeted tests must exercise both cleanup syscall routes, descriptor
 inheritance, replacement race, dedicated process group, fixed grace, final
 SIGKILL, sibling survival, deadline grammar and rounding, stuck shutdown,
 message redaction, every wrong-remedy mutation, and the result-document
-filesystem cases: link and anchored-escape refusal, creation ownership,
+filesystem cases: link and anchored-escape refusal on both resolution routes,
+creation ownership,
 short-write and collision handling, sync before rename, close-on-exec, and
-child-reap ordering.
+child-reap ordering. Cleanup and the result writer are strict callers, so the
+forced component-walk route must carry `O_NOFOLLOW` on the leaf as well as on
+every intermediate component for both of them; a symlink planted at the final
+name of a cleanup target or of the `XML_OUTPUT_FILE` parent has to be refused
+`ELOOP` on that route and not only on the `openat2` one.
 
 Every one of those states is supplied through an injected boundary, not
 arranged on the host. Cleanup, the result writer, the topology provider checks,

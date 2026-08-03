@@ -634,7 +634,13 @@ retirement conditions independently block premature deletion.
   output-state hashes, user identifiers, process identifiers, raw deadline
   values, opaque handles, and unsafe recursive-removal instructions, MUST NOT
   echo the offending value a scan refused, and MUST carry the remedy for the
-  condition actually observed and no other condition's remedy.
+  condition actually observed and no other condition's remedy. A
+  repository-relative path and a declared runfiles-relative path are not
+  absolute paths and MAY appear where one is the subject of the remedy; the
+  runfiles root, any resolved absolute runfiles or worktree location, and any
+  path a message derives by resolving one of the former against a local root
+  MUST NOT. A refusal that names no directory when the directory is what the
+  contributor must repair does not satisfy the remedy requirement.
 - **FR-030**: The shadow continuous-integration workflow MUST remain
   non-required, MUST keep the existing required graph unchanged, and MUST
   publish no shared cache entry.
@@ -728,8 +734,14 @@ retirement conditions independently block premature deletion.
   without depending on live host filesystem state, a full disk, a privileged
   mount, the host clock, or a reachable network. A guard that reads a
   repository directory MUST read it through that filesystem boundary, anchored
-  and refusing symlinks and magic links, rather than by enumerating and
-  concatenating paths through the standard library. The one networked
+  and refusing symlinks and magic links at every path component **including the
+  final one**, rather than by enumerating and
+  concatenating paths through the standard library, and that refusal MUST hold
+  identically on every resolution route the boundary offers rather than on the
+  preferred one only. Such a guard MUST order its directory enumeration
+  deterministically before deriving any positional identifier, ordinal label,
+  or report ordering from it, because directory order differs by filesystem and
+  a message no other host reproduces is not evidence. The one networked
   implementation of an index boundary MUST be exercised only by the explicit
   contributor-run operation that owns it, outside the gate, and that run MUST
   be recorded as a measured observation rather than repeated as a gate
@@ -742,7 +754,8 @@ retirement conditions independently block premature deletion.
   enumerated case with explicit passed, failed, and ignored outcomes and only
   the stable case name, outcome, bounded duration, and bounded sanitized
   failure text. Environment values, command-line arguments, absolute paths,
-  store paths, socket paths, runfiles or worktree locations, unit names,
+  store paths, socket paths, the runfiles root and any resolved absolute
+  runfiles or worktree location, unit names,
   process identifiers, user identifiers, opaque handles, terminal bytes, shell
   names, and raw child output MUST be absent from it, while raw child output
   remains available in the executor's ordinary per-target log artifact. Each
@@ -843,8 +856,12 @@ retirement conditions independently block premature deletion.
   provider-handle, wave-note-lint, cache-policy, and workflow-policy guard
   rejects all of its planted negative variants and accepts its compliant
   positive case. For the provider-handle guard that set includes a provider
-  path rebound to a different file after the open, and for the wave-note lint
-  it includes each variant's remedy rendered for the wrong variant.
+  path rebound to a different file after the open, and a fallback resolution
+  route that applies the final-component link refusal from the wrong resolve
+  policy in either direction. For the wave-note lint it includes each variant's
+  remedy rendered for the wrong variant, a corpus error rendering a resolved
+  absolute directory instead of the fixed repository-relative one, and an
+  enumeration whose order is taken from the filesystem rather than sorted.
 - **SC-013**: In every observed Bazel failure, contributors can identify the
   failing surface and the failing test case from the same invocation without
   rerunning the complete aggregate.

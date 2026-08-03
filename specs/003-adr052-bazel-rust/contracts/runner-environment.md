@@ -48,7 +48,8 @@ therefore verifies one file and runs another, silently, and exits zero.
   a declared entry present, a declared entry missing, and a runfiles
   environment that indicates no Bazel test at all. Mode is chosen once from
   that last state; a missing entry in Bazel mode is a hard failure that names
-  the expected runfiles path and never falls back to the Cargo arm. The Cargo
+  the declared runfiles-relative path and never falls back to the Cargo arm.
+  The Cargo
   arm supplies the same anchor-and-relative pair by splitting the
   `CARGO_BIN_EXE_<name>` value the call-site macro expands, so both arms enter
   the filesystem boundary through one signature.
@@ -75,8 +76,13 @@ therefore verifies one file and runs another, silently, and exits zero.
   is refused before the open. The anchored form is what keeps an absolute
   execution-root path out of the design.
 - Where `openat2` is unavailable the boundary takes its forced component-walk
-  route, `O_NOFOLLOW` on every component except the final one, which is the
-  same route cleanup and the result writer already exercise.
+  route, which is the same route cleanup and the result writer already
+  exercise, and the resolve policy still decides what that route accepts:
+  `O_NOFOLLOW` on every intermediate component under both policies, and
+  `O_NOFOLLOW` on the **final** component only under the strict policy. A
+  provider open therefore reaches the same leaf on either route, and a strict
+  caller gets the same leaf refusal on either route. "The resolve policy on
+  both routes" below states that rule once, for every call site.
 
 ### Verification binds to the descriptor, never to the path
 
@@ -169,7 +175,7 @@ set the scoped repin child environment.
 
 | Reason | Named remediation |
 | --- | --- |
-| Runfiles entry missing in Bazel mode | Declare the binary as `data` on the test target; the expected runfiles path is named. |
+| Runfiles entry missing in Bazel mode | Declare the binary as `data` on the test target; the declared runfiles-relative path is named. |
 | Provider is not a regular file | Correct the `data` declaration for the target. |
 | Provider is not executable | Rebuild the target; the mode is reported and the path is not. |
 | Provider older than its newest declared input | Rebuild the target. |
@@ -178,8 +184,26 @@ set the scoped repin child environment.
 | `execveat` returned `ENOSYS` | The gate requires a kernel providing `execveat`; no path fallback is taken. |
 | `execveat` returned `EACCES`, `ENOEXEC`, `ENOENT`, or `ETXTBSY` | Rebuild the target; the errno is named and no path is printed. |
 
-No reason string carries an absolute path, a runfiles location, an environment
-value, or a descriptor number, per FR-029.
+No reason string carries an absolute path, the runfiles root, a resolved
+absolute runfiles location, an environment value, or a descriptor number, per
+FR-029.
+
+Two path-shaped strings are deliberately not the same thing, and the split
+resolves what would otherwise read as a contradiction between the row above and
+the rule beside it. The **declared runfiles-relative path** is repository
+content: it is the string the target's own `data` declaration produces, it is
+byte-identical on every machine and in every sandbox, and it is the subject of
+the remedy, so a refusal that omits it tells a contributor to declare something
+without saying what. The **runfiles root** and any **resolved absolute runfiles
+location** are local values in the same sense a home directory is, and they are
+forbidden here, in the per-case result document, and in a wave note alike. A
+refusal that names `_main/packages/d2b-bazel-runner/d2b-exec-probe` is
+actionable and carries nothing local; one that names the directory that path
+was resolved beneath has published a worktree location into CI output, panel
+comments, and PR bodies. Every reference in this feature's artifacts uses
+"declared runfiles-relative path" for the first and "runfiles root" or
+"resolved absolute runfiles location" for the second, and neither name is used
+for the other.
 
 ### Hermetic provider tests
 
@@ -196,16 +220,34 @@ Supplied states: an absent entry; a non-regular provider; a non-executable
 mode; a modification time older than the newest declared input; bytes whose
 digest differs from the recorded identity; **a path rebound to a different
 inode after `open_provider` returned**; metadata that changes between the two
-`fstat` calls around the digest read; a short read; and `spawn_verified`
-returning `ENOSYS`, `EACCES`, `ENOEXEC`, `ENOENT`, and `ETXTBSY`.
+`fstat` calls around the digest read; a short read; the forced component-walk
+route under each of the two resolve policies; a leaf that is a symlink to a
+regular file outside the anchor; an intermediate component that is a symlink;
+and `spawn_verified` returning `ENOSYS`, `EACCES`, `ENOEXEC`, `ENOENT`, and
+`ETXTBSY`.
+
+Three cases bind the walk route to its policy parameter, because the route is
+where an earlier draft of this contract silently exempted the leaf. Under the
+provider policy the walk route opens the leaf symlink and yields the same inode
+the `openat2` route yields, **and every identity check still runs on that
+handle**: kind, mode, freshness, the digest compared against the coverage map,
+and the bracketing `fstat`. Under the strict policy the same leaf symlink is
+refused `ELOOP` and nothing is read. And an intermediate symlink is refused
+under both policies, with `ENOTDIR` from the `O_DIRECTORY` open rather than
+`ELOOP`.
 
 Planted mutations each test must reject: re-resolving the declared path at exec
 time instead of executing the handle; computing the digest from a second open;
 falling back to `/proc/self/fd/<n>` or to `std::process::Command` when
 `execveat` is unavailable; clearing `O_CLOEXEC` on the provider handle;
 dropping the post-read `fstat` comparison; closing the handle and reopening it
-before the last child is spawned; and reporting a `spawn_verified` errno as a
-generic nonzero child exit.
+before the last child is spawned; reporting a `spawn_verified` errno as a
+generic nonzero child exit; **exempting the leaf from `O_NOFOLLOW` on the walk
+route regardless of policy**, which the strict case must fail; **applying
+`O_NOFOLLOW` to the leaf on the walk route regardless of policy**, which the
+provider case must fail; and **skipping the digest or the bracketing `fstat`
+when the leaf resolved through a symlink**, which is the shortcut that would
+turn the provider policy's accepted leaf into an unverified one.
 
 The stale-provider case in particular stays a supplied state: the fake reports
 an out-of-date, wrong-digest executable at the Cargo path while the fake
@@ -241,10 +283,13 @@ on an unmeasured claim about a syscall.
 - Permitted content is the stable case name, the outcome, a bounded duration,
   and bounded sanitized failure text.
 - The canonical forbidden set is environment values, command-line arguments,
-  absolute paths, Nix store paths, socket paths, runfiles or worktree
-  locations, systemd unit names, process identifiers, user identifiers, opaque
-  handles, terminal bytes, shell names, and raw child output. None of it enters
-  a case element, `system-out`, or `system-err`.
+  absolute paths, Nix store paths, socket paths, the runfiles root and any
+  resolved absolute runfiles or worktree location, systemd unit names, process
+  identifiers, user identifiers, opaque handles, terminal bytes, shell names,
+  and raw child output. None of it enters a case element, `system-out`, or
+  `system-err`. The permitted content list above is closed, so no path-shaped
+  string of any kind reaches this document; the declared runfiles-relative path
+  a provider refusal may name is a runner refusal reason, not case content.
 - Raw child stdout and stderr stay in Bazel's ordinary `test.log` artifact,
   reached through the failed target's test-log link or the Actions artifact, so
   removing raw output from the structured result does not remove the
@@ -300,12 +345,76 @@ on an unmeasured claim about a syscall.
   symlink forest and the two stricter policies were measured to refuse every
   real provider. A site that silently used the other site's policy would either
   refuse every Bazel provider or accept a symlinked note, so the policy is a
-  parameter the fake supplies and each caller's choice is asserted.
+  parameter the fake supplies and each caller's choice is asserted. That one
+  parameter also decides the leaf on the forced component-walk route, so a
+  route change cannot silently move a call site to the other policy.
 - No provider negative and no note-corpus negative depends on live host
   filesystem state either. `ENOSPC`, short writes, `EINTR` and `EAGAIN`
   retries, `EEXIST` collisions, replacement races, every absent,
   non-executable, out-of-date, or wrong-identity provider, the post-open path
   rebind, and every `spawn_verified` errno are produced by the injected fake.
+
+### The resolve policy on both routes
+
+The resolve policy is one parameter with two routes, and it means the same
+thing on each.
+
+| Policy | Callers | `openat2` route | Forced component-walk route |
+| --- | --- | --- | --- |
+| Strict | Cleanup, the per-case directories, the `XML_OUTPUT_FILE` parent, the wave-note lint | `RESOLVE_BENEATH\|RESOLVE_NO_SYMLINKS\|RESOLVE_NO_MAGICLINKS` | `O_NOFOLLOW` on every component **including the leaf** |
+| Provider | `open_provider` and each declared input its freshness check opens | `RESOLVE_NO_MAGICLINKS` | `O_NOFOLLOW` on every component **except the leaf** |
+
+Intermediate components carry `O_NOFOLLOW` under both policies. The leaf is the
+only component the policy moves, and it is the whole difference. Measured on
+the reference host against a runfiles-shaped leaf symlink whose target lies
+outside the anchor:
+
+| Call | Result |
+| --- | --- |
+| `openat2` leaf, `RESOLVE_NO_MAGICLINKS` | opens; `st_ino` is the outside target |
+| `openat2` leaf, `RESOLVE_NO_SYMLINKS` | `ELOOP` |
+| `openat2` leaf, `RESOLVE_BENEATH` | `EXDEV` |
+| `openat` leaf, no `O_NOFOLLOW` | opens; the **same** `st_ino` |
+| `openat` leaf, `O_NOFOLLOW` | `ELOOP` |
+| `openat` intermediate directory symlink, `O_DIRECTORY\|O_NOFOLLOW` | `ENOTDIR` |
+
+The leaf flag is therefore the exact lever that reproduces the policy
+difference on the walk route. Hardcoding the leaf exemption, which an earlier
+draft of this contract did, hands every strict caller a weaker guarantee on one
+of its two routes: a symlinked wave note, a symlinked per-case directory, or a
+symlinked `XML_OUTPUT_FILE` parent would be followed out of the anchor instead
+of refused, and the four-way errno distinguishability the wave-note lint
+depends on would collapse into "it read something". The last row is recorded
+because the errno differs by position: `O_DIRECTORY` reaches the refusal before
+`O_NOFOLLOW` does, so an intermediate symlink is `ENOTDIR` while a leaf symlink
+is `ELOOP`, and a test that asserts one errno for both asserts something the
+kernel does not do.
+
+**One property the walk route cannot reproduce, recorded rather than papered
+over.** `RESOLVE_NO_MAGICLINKS` has no `openat` flag. Measured: a leaf symlink
+whose body names `/proc/<pid>/fd/<n>` is refused `ELOOP` by `openat2` under
+`RESOLVE_NO_MAGICLINKS`, opens successfully on the walk route's permissive
+leaf, and yields a handle carrying the target's own `st_ino` and the target's
+own `fstatfs` filesystem type, indistinguishable from a handle opened through a
+leaf symlink that names the target directly. No descriptor-side test closes
+that, so none is added: a partial check shaped like a magic-link refusal is
+worse than a recorded difference, because it would be cited as one. Two things
+bound it. Handle identity, which is what protects a provider in the first
+place, is unchanged on this route: the laundered descriptor is still checked
+for regular-file kind and executable mode, digested from offset zero to
+`st_size`, compared against the value the coverage map records, and `fstat`ed
+again after the read, so a descriptor that does not carry the recorded provider
+bytes never reaches `spawn_verified`. And the kernel floor closes the
+production case outright: ADR 0008 pins supported hosts at `6.6`, with the v1.1
+uplift raising that to `6.9`, while `openat2` landed in `5.6`, so no supported
+host takes the walk route at all. It exists so the walk's ordering and errno
+mapping are provable through the fake, not to serve a kernel this project
+supports.
+
+The strict policy has no such gap. `O_NOFOLLOW` on every component including
+the leaf refuses a symlink of any kind before it is traversed, which is exactly
+what cleanup, the two output-path opens, and the wave-note lint require, and it
+is why those callers are strict.
 
 ## Publication is enforcing
 
@@ -366,6 +475,16 @@ escape. Each property carries a planted mutation the test must reject. The
 provider states, mutations, and the one host-backed `execveat` conformance test
 are listed under "Binary provider resolution and execution" above and carry the
 same requirement.
+
+Three further injected cases bind the resolve policy to the forced
+component-walk route, and they belong to every strict caller, not only to the
+provider path. On the walk route, a leaf symlink under the strict policy is
+refused `ELOOP` for a per-case directory, for the `XML_OUTPUT_FILE` parent, and
+for a wave note; the same leaf symlink under the provider policy opens and
+every identity check still runs against the resulting handle; and an
+intermediate symlink is refused under both policies. The planted mutation is
+the hardcoded leaf exemption: a walk route that drops `O_NOFOLLOW` on the final
+component regardless of policy must fail all three strict assertions.
 
 ## Scope of "no shell"
 
