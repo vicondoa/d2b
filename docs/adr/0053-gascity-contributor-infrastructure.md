@@ -421,28 +421,41 @@ the reverse of the order they were started, so specifying startup order once
 specifies shutdown order too. Writing two independent sequences and hoping they
 mirror is how they stop mirroring.
 
-| Order | Unit | Starts after | Stop-time coupling |
-| --- | --- | --- | --- |
-| 1 | `gascity-append-helper.service` | nothing | last to stop |
-| 2 | `gascity-worker-netns.service` | append helper | stops fourth |
-| 3 | `gascity-dashboard.service` | worker netns | stops third |
-| 4 | `gascity-orchestrator.service` | dashboard | stops second |
-| 5 | `gascity-discord-ingress.service` | orchestrator | first to stop |
+| Order | Unit | `After=` | `Requires=` / `BindsTo=` | Stop-time coupling |
+| --- | --- | --- | --- | --- |
+| 1 | `gascity-append-helper.service` | nothing | nothing | last to stop |
+| 2 | `gascity-worker-netns.service` | append helper | `Requires=` append helper | stops fourth |
+| 3 | `gascity-dashboard.service` | worker netns | nothing | stops third |
+| 4 | `gascity-orchestrator.service` | dashboard **and** worker netns | `Requires=` worker netns only | stops second |
+| 5 | `gascity-discord-ingress.service` | orchestrator | `BindsTo=` orchestrator | first to stop |
 
-The dependency edges carry meaning beyond ordering, and the three kinds are not
+The dependency edges carry meaning beyond ordering, and the kinds are not
 interchangeable:
 
 - `gascity-worker-netns.service` is `After=` and `Requires=` the append helper,
   because a namespace brought up while the audit store has no owner would let
   agent activity begin unrecorded.
-- `gascity-orchestrator.service` is `After=` and `Requires=` the worker netns,
-  because it spawns agents and must not be able to spawn one outside its
-  confinement.
-- `gascity-dashboard.service` is `After=` the worker netns and is **not**
-  `Requires=` or `BindsTo=` anything downstream. It is observation only, so it
-  must be able to run while the orchestrator is absent, still starting, or
-  failed. That is the point of starting it third: an operator watching a
-  troubled startup sees it.
+- `gascity-orchestrator.service` is
+  `After=gascity-dashboard.service gascity-worker-netns.service` and
+  `Requires=gascity-worker-netns.service`. The two edges do different jobs and
+  both are needed. `Requires=` on the netns is the safety edge: the orchestrator
+  spawns agents and must not be able to spawn one outside its confinement.
+  `After=` on the dashboard is the **ordering** edge, and it is what actually
+  makes position 3 and position 4 a chain rather than two siblings.
+
+  Without it, the dashboard and the orchestrator would both merely be `After=`
+  the netns, which constrains each against the netns and neither against the
+  other; systemd would be free to start them in either order, and because stop
+  order is the reverse of start order, it would be equally free to stop the
+  dashboard **before** the orchestrator. The dashboard would then go dark
+  exactly during the drain it exists to let an operator watch. The edge is
+  deliberately ordering-only, with no `Requires=`, so a dashboard that fails to
+  start delays the orchestrator's ordering but does not prevent it.
+- `gascity-dashboard.service` is `After=` the worker netns and carries **no**
+  `Requires=` or `BindsTo=` at all. It is observation only, so it must be able
+  to run while the orchestrator is absent, still starting, or failed. That is
+  the point of starting it third: an operator watching a troubled startup sees
+  it.
 - `gascity-discord-ingress.service` is `After=` and **`BindsTo=`** the
   orchestrator. `BindsTo` rather than `Requires` because if the orchestrator
   dies unexpectedly the ingress must stop with it; an ingress accepting
@@ -2070,13 +2083,26 @@ escaping change all produce a clean result that means nothing.
       - A destination `EMLINK` is driven by exhausting a shard's link count,
         and the rename is observed to **succeed into the next shard** after
         revalidating that shard's device and mount identifier, with both the
-        `periods` descriptor and the receiving shard synced. When that next
-        shard has to be created, `quarantine/` is observed `fsync`ed **before**
-        the period is moved into it, and a crash injected between the shard
-        creation and that sync leaves no period stranded in an unrecorded
-        shard: after recovery the period is reachable from `periods/` or from a
-        durable shard, never from neither.
-      - With every shard in the bounded set exhausted, the helper refuses with
+        `periods` descriptor and the receiving shard synced.
+      - **The parent sync is proven by a crash after the rename, not before
+        it.** When a new shard must be created, `quarantine/` is observed
+        `fsync`ed before the period is moved into it. The injection that
+        establishes why is placed **after the period has been renamed into the
+        newly created shard and before the later source and destination
+        directory syncs**. After recovery the period is reachable through the
+        shard, because the shard's own directory entry in `quarantine/` was
+        already durable when the rename happened. Remove the parent sync and
+        the same injection loses the period entirely: the shard entry never
+        reached disk, so the directory that now contains the period is itself
+        not there, and the period is reachable from neither `periods/` nor
+        `quarantine/`.
+
+        A crash injected **before** the rename is a control only. It leaves the
+        period in `periods/` untouched, which is a correct outcome under every
+        variant of this code including one with no parent sync at all, so it
+        demonstrates nothing about the sync and must not be reported as
+        covering it. Both injections are run, and only the post-rename one is
+        credited with the property.      - With every shard in the bounded set exhausted, the helper refuses with
         `audit-quarantine-link-limit` naming the period date and correlation
         digest and pointing at `gascity-audit status` and `converge`, and is
         observed to delete nothing to make room.
@@ -2139,19 +2165,27 @@ escaping change all produce a clean result that means nothing.
 - **M20 Startup and shutdown are exact reverses of one ordering chain.** Three
   parts, all traced.
 
-  1. **Startup order.** The five units become ready in the order of D5's table:
-     append helper, worker netns, dashboard, orchestrator, Discord ingress. The
-     helper is observed to hold the store lock before any other unit starts;
-     the netns unit is observed to exit zero only after the namespace,
-     interface, resolver and deny-by-default rules are all verified, not merely
-     after it ran; the dashboard is observed serving in backend-not-ready mode
-     while the orchestrator is still starting; the orchestrator adopts state
-     before becoming ready; and an interaction arriving before ingress opens is
-     refused rather than queued into a run still being recovered. The trace
-     shows no unlink, no reconciliation, and no period open for writing
-     preceding lock acquisition. Together with M18 part 9's overlap case, this
-     closes the window in which a second instance could clean up a first
-     instance's state.
+  1. **Startup order, including the chain edge.** The five units become ready
+     in the order of D5's table: append helper, worker netns, dashboard,
+     orchestrator, Discord ingress. The helper is observed to hold the store
+     lock before any other unit starts; the netns unit is observed to exit zero
+     only after the namespace, interface, resolver and deny-by-default rules
+     are all verified, not merely after it ran; the dashboard is observed
+     serving in backend-not-ready mode while the orchestrator is still
+     starting; the orchestrator adopts state before becoming ready; and an
+     interaction arriving before ingress opens is refused rather than queued
+     into a run still being recovered. The trace shows no unlink, no
+     reconciliation, and no period open for writing preceding lock acquisition.
+     Together with M18 part 9's overlap case, this closes the window in which a
+     second instance could clean up a first instance's state.
+
+     The dashboard-to-orchestrator edge is asserted specifically, by reading
+     the resolved unit properties rather than by inferring it from one observed
+     boot: `gascity-orchestrator.service` lists both
+     `gascity-dashboard.service` and `gascity-worker-netns.service` in `After=`
+     and only the netns in `Requires=`. A single successful boot proves nothing
+     here, because two units that are merely siblings under a common `After=`
+     can happen to start in the desired order and then stop in the wrong one.
 
   2. **Spawn is gated on proven readiness, not on unit ordering.** With the
      orchestrator running and ready, the worker netns unit is stopped or its
