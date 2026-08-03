@@ -148,6 +148,23 @@ reports rather than assumes, a wrong invocation shows up as "no hub lock
 changed" on the one run where a change is required, instead of succeeding
 quietly.
 
+## Actionable failure contract
+
+Every repository-owned refusal names the exact recovery and never echoes an
+environment value or local absolute path:
+
+| Failure | Required recovery text |
+| --- | --- |
+| Stale Bazel-side hub lock | Run `cargo xtask bazel-repin --hub <hub>` with the refused hub substituted exactly. |
+| Ambient `CARGO_BAZEL_REPIN`, `REPIN`, or `CARGO_BAZEL_REPIN_ONLY` | Unset all three named variables, then run `cargo xtask bazel-repin --hub <hub>`. The values are never printed. |
+| Generated BUILD, governed-source, `.bazelignore`, harness-free/doctest census, or hermeticity inventory drift | Run `cargo xtask gen-bazel`, inspect the generated diff, commit it, then rerun `cargo xtask gen-bazel --check`. |
+| Yanked snapshot key-set drift | Run `cargo xtask bazel-yanked-refresh`, review and commit `bazel/supply_chain/yanked-snapshot.json`, then rerun the offline drift check. |
+| Module lock drift | Update the declared module input, run the repository wrapper's measured Bazel module-lock refresh command with the same absolute startup options, review and commit only `MODULE.bazel.lock`, then rerun with `--lockfile_mode=error`. W0 records the exact measured command before this message can ship. |
+
+A table-driven test triggers every row, asserts the required command or file
+appears, asserts no remedy from another row appears, and plants local paths and
+environment values to prove they are absent.
+
 ## Tool acquisition
 
 - Bazel is `bazel_8` (8.6.0) from the pinned nixpkgs, reached through the dev
