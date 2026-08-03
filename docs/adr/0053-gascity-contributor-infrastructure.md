@@ -1,6 +1,6 @@
 # ADR 0053: Gas City as contributor infrastructure, not a d2b capability
 
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-08-02
 - Related: [ADR 0015](0015-daemon-only-clean-break.md) (daemon-only clean
   break, and its prohibition on host-singleton framework services),
