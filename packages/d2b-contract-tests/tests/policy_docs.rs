@@ -463,6 +463,20 @@ fn ui_color_contract_docs_match_schema_surface() {
             "ui color reference doc is missing required contract token: {required}"
         );
     }
+
+    let object = ObjectName("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+    assert_eq!(format!("{object:?}"), "ObjectName(<redacted>)");
+
+    let outcome = MigrateOutcome::Rebase {
+        target_ref: PANEL_MIGRATE_TARGET_REF,
+        from: ObjectName("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"),
+        onto: ObjectName("cccccccccccccccccccccccccccccccccccccccc"),
+    };
+    let rendered = format!("{outcome:?}");
+    assert!(rendered.contains("target_ref"));
+    assert!(rendered.contains("<redacted>"));
+    assert!(!rendered.contains("bbbbbbbb"));
+    assert!(!rendered.contains("cccccccc"));
 }
 
 #[test]
@@ -2963,8 +2977,14 @@ const PANEL_MIGRATE_GENERIC_ACCESS_PHRASES: &[&str] = &[
 
 /// A 40-hex object name. Modelled as its own type because the entire point of
 /// this fixture is that an object name is a precondition and never a target.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 struct ObjectName(&'static str);
+
+impl std::fmt::Debug for ObjectName {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("ObjectName(<redacted>)")
+    }
+}
 
 /// `upstream/v3` as the checkout had it before this run fetched.
 const CURRENT_UPSTREAM_V3: ObjectName = ObjectName("1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a");
@@ -3183,7 +3203,7 @@ struct MigrateContext {
     would_conflict: Vec<&'static str>,
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(PartialEq, Eq)]
 enum MigrateOutcome {
     /// The branch moves onto the fetched target ref, and onto nothing else.
     Rebase {
@@ -3192,6 +3212,23 @@ enum MigrateOutcome {
         onto: ObjectName,
     },
     Refuse(MigrateRefusal),
+}
+
+impl std::fmt::Debug for MigrateOutcome {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Rebase { target_ref, .. } => f
+                .debug_struct("MigrateOutcome::Rebase")
+                .field("target_ref", target_ref)
+                .field("from", &ObjectName("<redacted>"))
+                .field("onto", &ObjectName("<redacted>"))
+                .finish(),
+            Self::Refuse(refusal) => f
+                .debug_tuple("MigrateOutcome::Refuse")
+                .field(refusal)
+                .finish(),
+        }
+    }
 }
 
 #[derive(PartialEq, Eq)]
@@ -5607,9 +5644,9 @@ fn panel_migrate_rejects_a_remote_command_that_is_not_the_add_or_the_read() {
         ),
         (
             "another host over https",
-            "git remote add upstream https://gitlab.com/vicondoa/d2b.git".to_string(),
+            "git remote add upstream https://git.example.invalid/vicondoa/d2b.git".to_string(),
             RefusalReject::RemoteUrlNotCanonical {
-                url: "https://gitlab.com/vicondoa/d2b.git".to_string(),
+                url: "https://git.example.invalid/vicondoa/d2b.git".to_string(),
             },
         ),
         (
@@ -5621,9 +5658,9 @@ fn panel_migrate_rejects_a_remote_command_that_is_not_the_add_or_the_read() {
         ),
         (
             "the scp-like spelling on another host",
-            "git remote add upstream git@gitlab.com:vicondoa/d2b.git".to_string(),
+            "git remote add upstream git@git.example.invalid:vicondoa/d2b.git".to_string(),
             RefusalReject::RemoteUrlNotCanonical {
-                url: "git@gitlab.com:vicondoa/d2b.git".to_string(),
+                url: "git@git.example.invalid:vicondoa/d2b.git".to_string(),
             },
         ),
         (
@@ -5752,7 +5789,7 @@ fn panel_migrate_admits_the_ssh_service_account_and_no_other_userinfo() {
     // credential and must not be reported as one: the reject names what is
     // actually wrong, which is that the URL is outside the admitted set.
     for url in [
-        "git@gitlab.com:vicondoa/d2b.git",
+        "git@git.example.invalid:vicondoa/d2b.git",
         "git@github.com:someone/d2b.git",
         "git@github.com:vicondoa/other.git",
         "ssh://git@github.com/vicondoa/d2b.git",
