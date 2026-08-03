@@ -134,6 +134,8 @@ bundle-artifacts/extra-artifact-install-path-collision-conflicts
 bundle-artifacts/extra-artifact-reserved-name-collision-asserts
 bundle-artifacts/nested-table-field-name-collisions-are-not-rows
 bundle-artifacts/nested-tables-are-not-artifact-rows
+bundle-artifacts/phase2-accepted-elf-shim-builds
+bundle-artifacts/phase2-compiler-is-the-build-validator
 bundle-artifacts/root-group-compat
 bundle-artifacts/storage-json-central-etc
 bundle-artifacts/v3-active-zone-installs-coherent-emitter
