@@ -722,6 +722,8 @@
             "ifname-nix-rust-parity.nix"
             "observability.nix"
             "provider-catalog.nix"
+            "provider-projection-exportability.nix"
+            "provider-projection-fields.nix"
             "readiness-waves.nix"
             "resource-sharing.nix"
             "resources-bundle-telemetry.nix"
