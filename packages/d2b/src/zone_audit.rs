@@ -670,11 +670,13 @@ fn valid_service(value: &str) -> bool {
 }
 
 fn valid_route_component(value: &str) -> bool {
-    safe_public_text(value, true)
-        && !value.starts_with('/')
-        && value.bytes().all(|byte| {
-            byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b'_' | b'/' | b':')
-        })
+    if !safe_public_text(value, true) || value.starts_with('/') {
+        return false;
+    }
+    let mut components = value.split('/');
+    components.next().is_some_and(valid_code)
+        && components.next().is_some_and(valid_code)
+        && components.next().is_none()
 }
 
 fn valid_code(value: &str) -> bool {
@@ -870,6 +872,13 @@ mod tests {
         assert!(output.contains("\"export_error\":\"record-invalid\""));
         assert!(!output.contains("bearer"));
         assert!(!output.contains("secret"));
+    }
+
+    #[test]
+    fn route_method_validation_rejects_path_like_components() {
+        assert!(!valid_route_component("Host/../../secret"));
+        assert!(!valid_route_component("/host/private"));
+        assert!(valid_route_component("AuditService/Export"));
     }
 
     #[test]
