@@ -80,10 +80,11 @@ let
     d2b.zones.local-root.resources = lib.optionalAttrs
       (system == "x86_64-linux") {
       sample = {
-        type = "Provider";
+        type = "User";
         spec = {
-          artifactId = "sample";
-          config = { };
+          displayName = "Sample";
+          groups = [ ];
+          osUsername = "sample";
         };
       };
     };
@@ -104,6 +105,8 @@ let
         (builtins.readFile digestCfg.d2b._artifactCatalogV3.path));
   compilerPackage = digestCfg.d2b._resourceCompiler.phase2.compiler;
   compilerSource = builtins.readFile (flakeRoot + "/nixos-modules/bundle-zones.nix");
+  compilerMainSource =
+    builtins.readFile (flakeRoot + "/packages/d2b-resource-compiler/src/main.rs");
   hostileProviderOutput = pkgs.writeText "d2b-hostile-provider-output" "not-a-directory";
   hostileCompilerInput = pkgs.writeText "d2b-hostile-resource-compiler-input"
     (builtins.toJSON {
@@ -121,7 +124,7 @@ let
           executableDigest = "sha256:0000000000000000000000000000000000000000000000000000000000000001";
           manifestDigest = "sha256:0000000000000000000000000000000000000000000000000000000000000001";
           configSchemaDigest = "sha256:0000000000000000000000000000000000000000000000000000000000000001";
-          signingKey = "";
+          signingKey = "-----BEGIN PUBLIC KEY-----";
         }
       ];
       artifactCatalogPath = "${digestCfg.d2b._artifactCatalogV3.path}";
@@ -391,10 +394,13 @@ in
       sourceUsesCompiler =
         lib.hasInfix "d2b-resource-compiler compile" compilerSource
         && !(lib.hasInfix "python3 -" compilerSource);
+      sourceUsesFramedDigest =
+        lib.hasInfix "framed_canonical_digest" compilerMainSource;
       hostileFixture = builtins.readFile hostileCompilerBuild;
     };
     expected = {
       sourceUsesCompiler = true;
+      sourceUsesFramedDigest = true;
       hostileFixture = "compiler-ran\n";
     };
   };
