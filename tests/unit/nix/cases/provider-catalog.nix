@@ -629,6 +629,7 @@ in
           loginEndpointRef = null;
         };
       };
+
       order = [ "Credential" "Provider" "Provider" "User" ];
       evalBundleFields = [
         "bundleVersion"
@@ -675,6 +676,26 @@ in
         ];
       };
       retention = 3;
+    };
+  };
+
+  "provider-catalog/zone-resource-owner-ref-is-optional-but-validated" = {
+    expr = {
+      resourceWithoutOwnerRef = lib.any
+        (resource:
+          resource.type == "Provider"
+          && !(resource.metadata ? ownerRef))
+        zoneBundle.resources;
+      invalidOwnerRef = zoneRejects
+        "metadata.ownerRef must resolve in Zone local-root"
+        ({ ... }: {
+          d2b.zones.local-root.resources.display-wayland.metadata.ownerRef =
+            "User/missing";
+        });
+    };
+    expected = {
+      resourceWithoutOwnerRef = true;
+      invalidOwnerRef = true;
     };
   };
 

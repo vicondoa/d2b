@@ -609,7 +609,15 @@ in
       });
     expected = true;
   };
-
+  "volume-mounts/v3-layout-owner-ref-remains-required" = {
+    expr = hasFailure "ownerRef must resolve to a User"
+      (invalid {
+        d2b.zones.local-root.resources.state.spec.layout = [
+          (layoutEntry { ownerRef = "User/missing"; })
+        ];
+      });
+    expected = true;
+  };
   "volume-mounts/v3-attachment-settings-are-typed" = {
     expr = hasFailure "settings.cache must be auto, always, or never"
       (invalid {

@@ -126,15 +126,15 @@ let
     else stripExecutionDefaults resource.spec;
 
   optionalMetadata = resource:
-    lib.optionalAttrs (resource.metadata.ownerRef != null) {
-      inherit (resource.metadata) ownerRef;
-    }
-    // lib.optionalAttrs (resource.metadata.labels != { }) {
-      inherit (resource.metadata) labels;
-    }
-    // lib.optionalAttrs (resource.metadata.annotations != { }) {
-      inherit (resource.metadata) annotations;
-    };
+    let
+      metadata = resource.metadata or { };
+      ownerRef = metadata.ownerRef or null;
+      labels = metadata.labels or { };
+      annotations = metadata.annotations or { };
+    in
+    lib.optionalAttrs (ownerRef != null) { inherit ownerRef; }
+    // lib.optionalAttrs (labels != { }) { inherit labels; }
+    // lib.optionalAttrs (annotations != { }) { inherit annotations; };
 
   canonicalResource = zoneName: resourceName: resource: {
     inherit apiVersion;
