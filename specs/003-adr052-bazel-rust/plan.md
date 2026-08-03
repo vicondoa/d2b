@@ -303,6 +303,18 @@ home directory path in one has escaped just as surely as an echoed variable
 would have. Panels check notes for this, and the redaction fixtures that cover
 message text list the note paths in the same forbidden set.
 
+The notes have one fixed home, because a rule about a file no command can name
+is not enforceable. Each wave's notes are one committed file under
+`specs/003-adr052-bazel-rust/wave-notes/`, named `w0.md`, `w1.md`, and `w2.md`,
+and each is owned by the single scope that made the measurement: `generator` in
+W0, `aux` in W1, and `local-wrapper` in W2. One writer per file keeps the notes
+disjoint in the ownership map without a prep commit. Each wave's validation
+task scans every file in that directory, tracked or untracked, so a note left
+unstaged is scanned rather than skipped, and each such scan is first proved
+against a planted note carrying a synthetic absolute path that belongs to no
+machine involved. A scan that has only ever been run against notes that pass
+is not evidence that it can fail.
+
 ### Fixture-dependent validation rule
 
 `tests/test-rust.sh` sets `workspace_test_excludes=(--exclude
@@ -465,7 +477,9 @@ lock-bounded yanked snapshot exists, `cargo xtask bazel-yanked-check` passes
 offline for all three locks from both the carriers and a contributor shell,
 that validator names neither `YankedIndex` nor `IndexClient` so it cannot reach
 the index at all, the wave notes record the reviewed networked refresh that
-produced the snapshot as a command shape plus the index revision it observed,
+produced the snapshot as a command shape plus the index revision it observed
+and the W1 note scan refuses a planted note carrying a synthetic absolute path
+before it passes against the committed one,
 its drift refusal names refresh, review and commit, then the check, and it
 reports under the existing `rust-deny-*` identifiers without adding a
 nineteenth surface; every migrated test resolves its binary
@@ -531,7 +545,8 @@ every cleanup, result-file, and deadline property is proven through the
 injected `fsops` and `clock` boundaries with no live-host dependency; the W2
 wave notes record the consolidated startup-option construction as a command
 shape with `<worktree>` placeholders and a validation step proves no real
-absolute path appears in them;
+absolute path appears in them, having first proved that same scan refuses a
+planted note carrying a synthetic absolute path;
 panel and PR are sealed and merged.
 
 ### W3 - Shadow CI

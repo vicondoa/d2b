@@ -55,3 +55,13 @@
   SC-001 through SC-015. The three substrate claims behind these changes were
   measured against Bazel 8.6.0 rather than taken from documentation, and are
   recorded with their sources in `research.md`.
+- Revalidated after the round-four plan panel. FR-021 gained the injectable
+  index boundary for the networked snapshot refresh and the requirement that
+  the offline validator cannot reach it; FR-052 extended the injected-boundary
+  rule from filesystem and clock to networked registry-index responses and
+  named the one contributor-run measurement that covers the real client. Two
+  acceptance scenarios and three edge cases were added, for the two distinct
+  ambient-control refusals, the index boundary, and the two ways an
+  index-dependent design goes wrong. No functional requirement or success
+  criterion was added or removed; the set remains FR-001 through FR-055 and
+  SC-001 through SC-015.

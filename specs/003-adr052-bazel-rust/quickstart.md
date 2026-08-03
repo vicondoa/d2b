@@ -37,11 +37,18 @@ performs. Before any W0 branch is created, prove the amended record is present
 in the base by content, not by a remembered commit hash:
 
 ```bash
-grep -q '^- Status: Accepted$' docs/adr/0052-bazel-rust-build-and-test.md
-grep -q '^- Amended: 2026-08-03\.' docs/adr/0052-bazel-rust-build-and-test.md
-grep -q 'yanked' docs/adr/0052-bazel-rust-build-and-test.md
-grep -q 'bazel-repin' docs/adr/0052-bazel-rust-build-and-test.md
-grep -q '0052-bazel-rust-build-and-test.md' docs/adr/README.md
+fail() { printf '%s\n' "$*" >&2; exit 1; }
+grep -q '^- Status: Accepted$' docs/adr/0052-bazel-rust-build-and-test.md \
+  || fail 'ADR 0052 is not accepted'
+grep -q '^- Amended: 2026-08-03\.' \
+  docs/adr/0052-bazel-rust-build-and-test.md \
+  || fail 'ADR 0052 amendment is missing'
+grep -q 'yanked' docs/adr/0052-bazel-rust-build-and-test.md \
+  || fail 'ADR 0052 yanked carrier is missing'
+grep -q 'bazel-repin' docs/adr/0052-bazel-rust-build-and-test.md \
+  || fail 'ADR 0052 repin contract is missing'
+grep -q '0052-bazel-rust-build-and-test.md' docs/adr/README.md \
+  || fail 'ADR 0052 index row is missing'
 ```
 
 The record must be `Status: Accepted`, must carry the 2026-08-03 amendment
@@ -103,38 +110,60 @@ checks a literal is checking the wrong thing.
 Check the pinning and boundary invariants that are easy to get wrong quietly:
 
 ```bash
+fail() { printf '%s\n' "$*" >&2; exit 1; }
+
 # .bazelrc carries no startup line and no channel flag.
-! grep -qE '^[[:space:]]*startup[[:space:]]' .bazelrc
-! grep -q 'rust/toolchain/channel' .bazelrc
+if grep -qE '^[[:space:]]*startup[[:space:]]' .bazelrc; then
+  fail '.bazelrc contains a startup option'
+fi
+if grep -q 'rust/toolchain/channel' .bazelrc; then
+  fail '.bazelrc sets the global Rust channel'
+fi
 
 # Both module-graph checks fail closed rather than warn.
-grep -q '^common --lockfile_mode=error$' .bazelrc
-grep -q '^common --check_direct_dependencies=error$' .bazelrc
+grep -q '^common --lockfile_mode=error$' .bazelrc \
+  || fail 'lockfile mode is not fail-closed'
+grep -q '^common --check_direct_dependencies=error$' .bazelrc \
+  || fail 'direct dependency checks are not fail-closed'
 
 # All four hubs declare a Bazel-side lock, a Cargo lock, and the overwrite opt-out.
-grep -c 'lockfile' MODULE.bazel
-grep -c 'cargo_lockfile' MODULE.bazel
-grep -c 'skip_cargo_lockfile_overwrite = True' MODULE.bazel
+test "$(grep -c 'lockfile' MODULE.bazel)" -ge 4 \
+  || fail 'fewer than four hub locks are declared'
+test "$(grep -c 'cargo_lockfile' MODULE.bazel)" -eq 4 \
+  || fail 'Cargo lock declarations do not match four hubs'
+test "$(grep -c 'skip_cargo_lockfile_overwrite = True' MODULE.bazel)" -eq 4 \
+  || fail 'Cargo overwrite opt-out does not match four hubs'
 
 # No repin escape hatch anywhere on the gate path.
-! grep -rqE 'CARGO_BAZEL_REPIN|CARGO_BAZEL_REPIN_ONLY|(^|[^A-Z_])REPIN=' \
-  Makefile .github/workflows/
+if grep -rqE 'CARGO_BAZEL_REPIN|CARGO_BAZEL_REPIN_ONLY|(^|[^A-Z_])REPIN=' \
+  Makefile .github/workflows/; then
+  fail 'repin control is reachable from Make or CI'
+fi
 
 # None of the five contributor-only commands is reachable from Make or CI.
 contributor_only='bazel-repin|bazel-module-refresh|bazel-yanked-refresh'
 contributor_only="$contributor_only|bazel-yanked-check|bazel-evidence"
-! grep -rqE "xtask ($contributor_only)" Makefile .github/workflows/
+if grep -rqE "xtask ($contributor_only)" Makefile .github/workflows/; then
+  fail 'contributor-only xtask command is reachable from Make or CI'
+fi
 
 # The only site that may assign a repin control to a process environment.
-grep -rnE '\.env\("(CARGO_BAZEL_REPIN|CARGO_BAZEL_REPIN_ONLY|REPIN)"' \
-  packages/ | cut -d: -f1 | sort -u
+assignments="$(
+  grep -rnE '\.env\("(CARGO_BAZEL_REPIN|CARGO_BAZEL_REPIN_ONLY|REPIN)"' \
+    packages/ | cut -d: -f1 | sort -u
+)"
+test "$assignments" = 'packages/xtask/src/bazel.rs' \
+  || fail 'repin assignment exists outside packages/xtask/src/bazel.rs'
 
 # The only site that may set one process-globally is nowhere.
-! grep -rqE 'set_var\("(CARGO_BAZEL_REPIN|CARGO_BAZEL_REPIN_ONLY|REPIN)"' \
-  packages/
+if grep -rqE 'set_var\("(CARGO_BAZEL_REPIN|CARGO_BAZEL_REPIN_ONLY|REPIN)"' \
+  packages/; then
+  fail 'repin control uses process-global mutation'
+fi
 
 # The workspace boundary covers scratch and every Cargo output directory.
-grep -q '^\.scratch/$' .bazelignore
+grep -q '^\.scratch/$' .bazelignore \
+  || fail '.bazelignore omits .scratch/'
 ```
 
 The third `grep -c` must report four, not zero: at `rules_rust` 0.73.0
@@ -199,8 +228,11 @@ grep -rq 'cargo xtask bazel-module-refresh' packages/xtask/src/bazel.rs
 Confirm neither lock command is reachable from a build entry point:
 
 ```bash
-! grep -rqE 'xtask (bazel-repin|bazel-module-refresh)' \
-  Makefile .github/workflows/
+if grep -rqE 'xtask (bazel-repin|bazel-module-refresh)' \
+  Makefile .github/workflows/; then
+  printf '%s\n' 'lock regeneration is reachable from Make or CI' >&2
+  exit 1
+fi
 ```
 
 Each of the two commands refuses an exported repin control, and each refusal
@@ -209,19 +241,66 @@ both, because a single templated remedy would have to name a `--hub` that
 `bazel-module-refresh` never takes:
 
 ```bash
-CARGO_BAZEL_REPIN=1 cargo xtask bazel-repin --hub main 2>&1 \
-  | grep -qF 'then run `cargo xtask bazel-repin --hub main`.'
-CARGO_BAZEL_REPIN=1 cargo xtask bazel-module-refresh 2>&1 \
-  | grep -qF 'then run `cargo xtask bazel-module-refresh`.'
-CARGO_BAZEL_REPIN=1 cargo xtask bazel-module-refresh 2>&1 \
-  | grep -q 'bazel-repin' && exit 1
+# Plant a value nothing else could have produced. The digit 1 is not a
+# sentinel: it occurs in version strings, counts, and paths, so asserting
+# its absence asserts nothing.
+ambient_value='D2B-AMBIENT-SENTINEL-a41f7c'
+
+fail() { printf 'FAIL: %s\n' "$1" >&2; exit 1; }
+
+# Both commands must refuse, so exit zero is itself the defect. Capturing
+# the expected failure inside `if` keeps the non-zero exit from tripping
+# `set -e`.
+if repin_out="$(CARGO_BAZEL_REPIN="$ambient_value" \
+    cargo xtask bazel-repin --hub main 2>&1)"; then
+  fail 'bazel-repin ran under an ambient control instead of refusing'
+fi
+if refresh_out="$(CARGO_BAZEL_REPIN="$ambient_value" \
+    cargo xtask bazel-module-refresh 2>&1)"; then
+  fail 'bazel-module-refresh ran instead of refusing'
+fi
+
+# Each refusal ends on the command that was refused.
+printf '%s\n' "$repin_out" \
+  | grep -qF 'then run `cargo xtask bazel-repin --hub main`.' \
+  || fail 'the bazel-repin refusal lost its own remedy'
+printf '%s\n' "$refresh_out" \
+  | grep -qF 'then run `cargo xtask bazel-module-refresh`.' \
+  || fail 'the bazel-module-refresh refusal lost its own remedy'
+
+# The module-lock refusal must not name the hub command at all. The match
+# is literal and case-sensitive, so the `CARGO_BAZEL_REPIN` that refusal
+# does name is not a false positive.
+if printf '%s\n' "$refresh_out" | grep -qF 'bazel-repin'; then
+  fail 'the bazel-module-refresh refusal names bazel-repin'
+fi
+
+# Neither refusal may echo back the value it refused.
+if printf '%s\n' "$repin_out" | grep -qF "$ambient_value"; then
+  fail 'the bazel-repin refusal echoed the ambient value'
+fi
+if printf '%s\n' "$refresh_out" | grep -qF "$ambient_value"; then
+  fail 'the bazel-module-refresh refusal echoed the ambient value'
+fi
 ```
 
-The last check is the one that matters, and it is written as a refusal: the
-module-lock command's output must not mention `bazel-repin` at all. A shared
-row would have put it there, sending a contributor who was updating the module
-lock off to repin a hub they never named. The exported value `1` must appear
-nowhere in any of the three outputs.
+The two remedy checks are what a shared template would break: one row would
+have to name a `--hub` that the module-lock command never takes. The check
+after them is written as a refusal, because the module-lock command's output
+must not mention `bazel-repin` at all; a shared row would have put it there,
+sending a contributor who was updating the module lock off to repin a hub they
+never named. The last two checks assert that the planted value is absent from
+both refusal outputs, which is a claim worth making only because the value is
+unique: the ambient controls are named in the remedy, but what they were set
+to is never printed.
+
+Every check in that block is an explicit guard rather than a bare `!` line.
+Measured on bash 5.3.9: a command whose value is inverted with `!` is exempt
+from `set -e`, so under `set -e` a bare `! grep -q ...` neither stops the
+script nor prints anything, and a leak would pass unnoticed.
+`grep ... && exit 1` is worse: when the grep correctly finds nothing, the
+`&&` list itself reports non-zero, so the block ends in apparent failure
+exactly when it passed.
 
 Confirm `make test-rust` still invokes Cargo and remains authoritative:
 
@@ -484,8 +563,11 @@ sleeps to reach an expiry, or reads the host clock; a test that does is not
 reproducible and will be disabled later:
 
 ```bash
-! grep -rnE 'thread::sleep|SystemTime::now|/proc/uptime' \
-  packages/d2b-bazel-runner/tests/
+if grep -rnE 'thread::sleep|SystemTime::now|/proc/uptime' \
+  packages/d2b-bazel-runner/tests/; then
+  printf '%s\n' 'runner tests depend on ambient time or uptime' >&2
+  exit 1
+fi
 grep -rn 'fsops::' packages/d2b-bazel-runner/src/cleanup.rs | head
 grep -rn 'clock::' packages/d2b-bazel-runner/src/deadline.rs | head
 ```
