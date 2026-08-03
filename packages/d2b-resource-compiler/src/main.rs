@@ -662,7 +662,22 @@ fn validate_resources(input: &CompileInput, strict_secrets: bool) -> Result<(), 
                 .get("spec")
                 .cloned()
                 .unwrap_or(Value::Object(Map::new()));
-            validate_schema(schema, &spec, &format!("{resource_type}/{name}.spec"))?;
+            let spec_schema = schema
+                .get("properties")
+                .and_then(Value::as_object)
+                .and_then(|properties| properties.get("spec"))
+                .ok_or_else(|| {
+                    CliError::new(
+                        "resource-compiler-schema-invalid",
+                        format!("schema for ResourceType {resource_type} has no spec schema"),
+                    )
+                })?;
+            validate_schema_from_root(
+                &schema,
+                spec_schema,
+                &spec,
+                &format!("{resource_type}/{name}.spec"),
+            )?;
         }
     }
     Ok(())
@@ -736,7 +751,16 @@ impl SchemaCache {
 
 fn validate_schema(schema: Value, value: &Value, path: &str) -> Result<(), CliError> {
     let root = schema.clone();
-    validate_schema_root(&root, &schema, value, path)
+    validate_schema_from_root(&root, &schema, value, path)
+}
+
+fn validate_schema_from_root(
+    root: &Value,
+    schema: &Value,
+    value: &Value,
+    path: &str,
+) -> Result<(), CliError> {
+    validate_schema_root(root, schema, value, path)
 }
 
 fn validate_schema_root(
