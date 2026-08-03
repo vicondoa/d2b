@@ -352,24 +352,6 @@ obligation is a production measurement, not a re-reading of the proof result.
 The backend commit predates the amendment base, so it is outside this focused Gate 0 review and
 is not reverted or re-adjudicated here.
 
-Reviewing it surfaced a separate drift this amendment does not fix. Six destinations that the
-store and delivery specifications describe as absent are present at `c3e15b66`:
-`packages/d2b-resource-store-redb/src/{actor,transaction,revision_log,backup}.rs`,
-`packages/d2b-resource-api/src/watch.rs`, and
-`packages/d2b-controller-toolkit/benches/reaction.rs`. Only
-`packages/d2b-resource-store-redb/src/migration.rs` and
-`packages/d2b-priv-broker/src/ops/zone_store.rs` are still genuinely absent. The affected prose
-is `ADR046-store-002`/`-004`/`-005`'s Evidence rows, `ADR-046-validation-and-delivery` section
-3.2's `ADR046-store-004` determination ("Only contract modules exist in the crate") and its
-`ADR046-reconcile-003` row. Per "existing code is canon" the code wins and the prose is wrong.
-
-The RSS amendment touched some of those rows and deliberately did not correct the absence
-claims, because doing so asserts a different implementation state for four work items, and this
-amendment is forbidden from moving any item's state - a passing disposable proof must not
-advance a production item. Correcting an absence claim is a separate amendment with its own
-Gate 0 pass, and it must decide what `implementationState` those items now carry rather than
-inheriting it from a sentence. Recorded here rather than silently re-aligned.
-
 ## Complexity Tracking
 
 | Violation | Why Needed | Simpler Alternative Rejected Because |
