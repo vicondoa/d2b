@@ -1049,8 +1049,21 @@ printf '%s\n' "$sanitized_line"
     def test_nix_unit_resource_requests_fail_before_nix_entry(self) -> None:
         cases = (
             (
+                {"D2B_NIX_UNIT_JOBS": "2"},
+                "D2B_NIX_UNIT_JOBS is retired; unset it and use "
+                "D2B_NIX_UNIT_WORKERS (1 through 4).\n",
+            ),
+            (
                 {"D2B_NIX_UNIT_WORKERS": "5"},
                 "D2B_NIX_UNIT_WORKERS must be an integer from 1 through 4\n",
+            ),
+            (
+                {"D2B_NIX_UNIT_WORKERS": "abc"},
+                "D2B_NIX_UNIT_WORKERS must be an integer from 1 through 4\n",
+            ),
+            (
+                {"D2B_NIX_UNIT_MEMORY_MB": "abc"},
+                "D2B_NIX_UNIT_MEMORY_MB must be between 512 and 4096 MiB\n",
             ),
             (
                 {"D2B_NIX_UNIT_MEMORY_MB": "200"},
