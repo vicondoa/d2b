@@ -546,6 +546,7 @@ fn validate_named_database(
     expected_version: Option<u32>,
 ) -> Result<(), StoreError> {
     let database = open_named_database(parent, name, identity)?;
+    validate_table_set(&database, identity)?;
     let meta = read_meta(&database, identity)?;
     if expected_version.is_some_and(|expected| meta.schema_version != expected)
         || expected_version.is_none()
@@ -567,6 +568,7 @@ fn validate_database(
     identity: &StoreIdentity,
     expected_version: Option<u32>,
 ) -> Result<(), StoreError> {
+    validate_table_set(database, identity)?;
     let meta = read_meta(database, identity)?;
     if expected_version.is_some_and(|expected| meta.schema_version != expected)
         || expected_version.is_none()
@@ -579,6 +581,25 @@ fn validate_database(
     }
     validate_identity_fields(&meta, identity)?;
     validate_consistency(database).map_err(|_| quarantine(identity, "migration-database-corrupt"))
+}
+
+fn validate_table_set(database: &Database, identity: &StoreIdentity) -> Result<(), StoreError> {
+    let read = database
+        .begin_read()
+        .map_err(|_| quarantine(identity, "migration-table-set-invalid"))?;
+    if read
+        .list_tables()
+        .map_err(|_| quarantine(identity, "migration-table-set-invalid"))?
+        .count()
+        != ALL_TABLES.len()
+    {
+        return Err(quarantine(identity, "migration-table-set-invalid"));
+    }
+    for definition in ALL_TABLES {
+        read.open_table(definition)
+            .map_err(|_| quarantine(identity, "migration-table-set-invalid"))?;
+    }
+    Ok(())
 }
 
 fn validate_identity_fields(meta: &StoreMeta, identity: &StoreIdentity) -> Result<(), StoreError> {
