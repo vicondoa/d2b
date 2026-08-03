@@ -593,3 +593,123 @@ disagree on the module shape as well as on the number. Same resolution as
 section 3: existing code is canon, the destination is the directory module, and
 the cell is drift. Recorded here rather than in section 4 because it was found
 through this conflict and shares its amendment.
+
+## 8. Four rows from the final audit
+
+Appended on the same reasoning as section 4: these are work-item destination
+paths that do not resolve, checked against the tree at `f70046fc`. Two map to
+committed equivalents. **Two do not, and are recorded as active implementation
+gaps rather than adjudicated as mapped**, because in both cases something with
+a matching name exists and would pass a presence-only scan.
+
+No implementation state is changed by this section. Every one of the four items
+is `Planned` in `ADR-046-work-items.json` and stays `Planned`.
+
+| Task item | Destination not found | Verdict |
+| --- | --- | --- |
+| `ADR046-device-008` | `packages/d2b-contract-tests/tests/workspace_policy.rs` | **mapped** |
+| `ADR046-zone-control-014` | `nixos-modules/resource-type-validators.nix` | **mapped** |
+| `ADR046-zone-control-015` | `packages/d2b-resource-compiler/src/{bundle,schema,validator,digest,sort,secret_lint,generation}.rs`; `nixos-modules/resource-compiler.nix` | **active gap** |
+| `ADR046-telem-003` | `packages/d2b-bus/src/metrics.rs` | **active gap** |
+
+### 8.1 `ADR046-device-008` - mapped
+
+Destination: `packages/xtask/src/main.rs` (`check-provider-layout` subcommand)
+and `packages/d2b-contract-tests/tests/workspace_policy.rs` (provider-layout
+policy assertions).
+
+The first half resolves exactly. `packages/xtask/src/main.rs` dispatches both
+subcommands:
+
+```
+415:        [command] if command == "check-provider-crate-layout" => run_provider_crate_layout(),
+416:        [command] if command == "check-provider-layout" => run_provider_layout(),
+```
+
+`workspace_policy.rs` does not exist. The provider-layout policy assertions it
+names live in `packages/d2b-contract-tests/tests/policy_provider_crate_layout.rs`
+and `policy_provider_crates.rs`, the same file family already adjudicated in
+section 3.7. The destination is those files; the item stays `Planned` on its
+own validation obligations.
+
+### 8.2 `ADR046-zone-control-014` - mapped
+
+Destination: `nixos-modules/options-zones.nix`,
+`nixos-modules/generated/resource-types.nix`,
+`nixos-modules/generated/options-zones-<ResourceType>.nix`, and
+`nixos-modules/resource-type-validators.nix`.
+
+Three of four resolve under their manifest names. `options-zones.nix` and
+`generated/resource-types.nix` are present, and `generated/` carries per-type
+option modules matching the pattern.
+
+`resource-type-validators.nix` does not exist. Per-type validation is committed
+under two other names: `nixos-modules/resource-schema-validation.nix`
+("build-time validation of every emitted standard ResourceSpec") for the
+schema-driven half, and the per-type compiler seams such as
+`resources-zone-control.nix` and `resources-volume.nix` for the closed
+type-specific constraints. The destination is that pair.
+
+**One coverage observation that is not a destination question.** The
+`options-zones-<ResourceType>.nix` pattern currently resolves to two files,
+`options-zones-Zone.nix` and `options-zones-ZoneLink.nix`, against a
+nineteen-member standard ResourceType set. That is generator coverage, not path
+drift, and it is exactly the distinction section 5 draws: mapping a destination
+says where the work belongs and never that it is complete.
+
+### 8.3 `ADR046-zone-control-015` - active gap, and the crate name is the trap
+
+Destination:
+`packages/d2b-resource-compiler/src/{main,bundle,schema,validator,digest,sort,secret_lint,generation}.rs`,
+exposed as `pkgs.d2b-resource-compiler`, called from
+`nixos-modules/resource-compiler.nix`.
+
+A crate named `d2b-resource-compiler` exists, is substantial, and is exposed as
+a package. That is the whole trap:
+
+```
+$ ls packages/d2b-resource-compiler/src/
+lib.rs  linux.rs  main.rs
+
+$ ls nixos-modules/resource-compiler.nix
+ls: cannot access 'nixos-modules/resource-compiler.nix': No such file or directory
+```
+
+Seven of the eight named modules are absent, and the Nix seam that would call
+the compiler is absent. More decisively, the committed crate has a **different
+subject**. Its own documentation opens: "Build-time validation for one selected
+Provider artifact output," and its entry point is `compile_artifact`. The work
+item's compiler is the Zone resource bundle compiler - bundle assembly, schema
+validation, digesting, canonical sorting, secret linting, and generation
+identity.
+
+So the crate name matches, the package output matches, and the obligation does
+not. A scan keyed on `pkgs.d2b-resource-compiler` or on the crate directory
+would report this row satisfied. **It is an active implementation gap**, and it
+is recorded here rather than mapped so that the name collision is on the record
+before someone resolves it the other way.
+
+### 8.4 `ADR046-telem-003` - active gap
+
+Destination: `packages/d2b-resource-api/src/metrics.rs`,
+`packages/d2b-session/src/metrics.rs`, `packages/d2b-bus/src/metrics.rs`.
+
+Two of three exist under their exact manifest names. The third does not, and
+`d2b-bus` has no metrics surface under another name either - `lib.rs` declares
+seventeen modules and none of them is `metrics`. The matches on "metric" inside
+`audit.rs`, `routing.rs`, and `session/` are incidental prose, not a relocated
+module.
+
+This is the same shape as the `options-volumes.nix` row in section 4 and is
+worth the same emphasis: **a presence-only scan on the first two destinations
+would mark the row covered.** The bus half of the metric surface is genuinely
+outstanding, and the item stays `Planned`.
+
+### 8.5 What section 8 does not do
+
+It does not flip any implementation state, and it does not claim any of the
+four items is complete. Two destinations are mapped so an implementer writes to
+the committed path instead of creating a duplicate; two are named as gaps so a
+later reader does not infer coverage from a matching crate name or from two
+destinations out of three. All four remain `Planned`, and their `validation`
+columns are untouched and unassessed here.
