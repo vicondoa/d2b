@@ -950,6 +950,7 @@ dependencies = [
  "d2b-resource-store-redb",
  "d2b-session",
  "d2b-session-unix",
+ "d2b-telemetry",
  "getrandom 0.3.4",
  "quote",
  "serde_json",
