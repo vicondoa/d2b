@@ -735,6 +735,8 @@ mod tests {
     use d2b_resource_store::PolicySnapshot;
     use std::fs::OpenOptions;
 
+    use crate::transaction::STORE_META;
+
     fn identity() -> StoreIdentity {
         StoreIdentity::new(
             d2b_resource_store::StoreSlot::new(0).unwrap(),
@@ -846,13 +848,13 @@ mod tests {
 
     #[test]
     fn restore_publishes_only_after_staged_validation() {
-        let (directory, parent, mut marker) = parent();
+        let (directory, parent_fd, mut marker) = parent();
         let backup = empty_backup();
-        let outcome = restore_owned(&parent, &mut marker, &backup, &identity()).unwrap();
+        let outcome = restore_owned(&parent_fd, &mut marker, &backup, &identity()).unwrap();
         assert_eq!(outcome, MigrationOutcome::Restored);
         assert_eq!(
             backup::publication_state(
-                &parent,
+                &parent_fd,
                 DEFAULT_STAGED_FILE_NAME,
                 DEFAULT_ACTIVE_FILE_NAME,
                 DEFAULT_PRIOR_FILE_NAME
@@ -860,7 +862,7 @@ mod tests {
             .unwrap(),
             PublicationState::ActiveOnly
         );
-        let file = open_named_database(&parent, DEFAULT_ACTIVE_FILE_NAME, &identity()).unwrap();
+        let file = open_named_database(&parent_fd, DEFAULT_ACTIVE_FILE_NAME, &identity()).unwrap();
         validate_database(&file, &identity(), Some(CURRENT_PHYSICAL_SCHEMA_VERSION)).unwrap();
         drop(file);
         drop(directory);
@@ -868,10 +870,10 @@ mod tests {
 
     #[test]
     fn version_zero_upgrade_uses_a_new_file_and_is_idempotent() {
-        let (directory, parent, mut marker) = parent();
+        let (directory, parent_fd, mut marker) = parent();
         create_current_file(&directory, DEFAULT_ACTIVE_FILE_NAME);
         set_schema_version(&directory, 0);
-        let outcome = upgrade_owned(&parent, &mut marker, &identity()).unwrap();
+        let outcome = upgrade_owned(&parent_fd, &mut marker, &identity()).unwrap();
         assert_eq!(
             outcome,
             MigrationOutcome::Upgraded {
@@ -880,12 +882,12 @@ mod tests {
             }
         );
         assert_eq!(
-            upgrade_owned(&parent, &mut marker, &identity()).unwrap(),
+            upgrade_owned(&parent_fd, &mut marker, &identity()).unwrap(),
             MigrationOutcome::AlreadyCurrent
         );
         assert_eq!(
             backup::publication_state(
-                &parent,
+                &parent_fd,
                 DEFAULT_STAGED_FILE_NAME,
                 DEFAULT_ACTIVE_FILE_NAME,
                 DEFAULT_PRIOR_FILE_NAME
@@ -903,14 +905,14 @@ mod tests {
             PublicationBoundary::AfterActiveRename,
             PublicationBoundary::AfterFinalSync,
         ] {
-            let (directory, parent, _marker) = parent();
+            let (directory, parent_fd, _marker) = parent();
             create_current_file(&directory, DEFAULT_ACTIVE_FILE_NAME);
             create_staged_current(&directory);
-            let error = publish_with_rollback(&parent, Some(boundary), &identity()).unwrap_err();
+            let error = publish_with_rollback(&parent_fd, Some(boundary), &identity()).unwrap_err();
             assert!(error.reason_code().contains("migration-fault"));
             assert_eq!(
                 backup::publication_state(
-                    &parent,
+                    &parent_fd,
                     DEFAULT_STAGED_FILE_NAME,
                     DEFAULT_ACTIVE_FILE_NAME,
                     DEFAULT_PRIOR_FILE_NAME
@@ -918,33 +920,33 @@ mod tests {
                 .unwrap(),
                 PublicationState::ActiveOnly
             );
-            validate_named_current(&parent, DEFAULT_ACTIVE_FILE_NAME, &identity()).unwrap();
+            validate_named_current(&parent_fd, DEFAULT_ACTIVE_FILE_NAME, &identity()).unwrap();
         }
     }
 
     #[test]
     fn crash_states_resume_idempotently_and_corruption_quarantines() {
-        let (directory, parent, mut marker) = parent();
+        let (directory, parent_fd, mut marker) = parent();
         create_current_file(&directory, DEFAULT_ACTIVE_FILE_NAME);
         create_staged_current(&directory);
         renameat(
-            &parent,
+            &parent_fd,
             DEFAULT_ACTIVE_FILE_NAME,
-            &parent,
+            &parent_fd,
             DEFAULT_PRIOR_FILE_NAME,
         )
         .unwrap();
-        sync_parent(&parent, &identity()).unwrap();
+        sync_parent(&parent_fd, &identity()).unwrap();
         assert_eq!(
-            recover_owned(&parent, &mut marker, &identity()).unwrap(),
+            recover_owned(&parent_fd, &mut marker, &identity()).unwrap(),
             RecoveryOutcome::Resumed
         );
         assert_eq!(
-            recover_owned(&parent, &mut marker, &identity()).unwrap(),
+            recover_owned(&parent_fd, &mut marker, &identity()).unwrap(),
             RecoveryOutcome::Clean
         );
 
-        let (corrupt_directory, corrupt_parent, mut corrupt_marker) = parent();
+        let (corrupt_directory, corrupt_parent_fd, mut corrupt_marker) = parent();
         let corrupt = OpenOptions::new()
             .create_new(true)
             .read(true)
@@ -952,13 +954,14 @@ mod tests {
             .open(corrupt_directory.path().join(DEFAULT_STAGED_FILE_NAME))
             .unwrap();
         corrupt.sync_all().unwrap();
-        let error = recover_owned(&corrupt_parent, &mut corrupt_marker, &identity()).unwrap_err();
+        let error =
+            recover_owned(&corrupt_parent_fd, &mut corrupt_marker, &identity()).unwrap_err();
         assert_eq!(error.kind(), StoreErrorKind::StoreQuarantined);
     }
 
     #[test]
     fn marker_and_identity_mismatch_quarantine_before_stage_creation() {
-        let (directory, parent, mut marker) = parent();
+        let (directory, parent_fd, mut marker) = parent();
         let other = StoreIdentity::new(
             d2b_resource_store::StoreSlot::new(0).unwrap(),
             ResourceUid::parse("33333333-3333-4333-8333-333333333333").unwrap(),
@@ -967,11 +970,11 @@ mod tests {
             Timestamp::parse("2026-07-31T00:00:00.000Z").unwrap(),
             identity().revisions.clone(),
         );
-        let error = restore_owned(&parent, &mut marker, &empty_backup(), &other).unwrap_err();
+        let error = restore_owned(&parent_fd, &mut marker, &empty_backup(), &other).unwrap_err();
         assert_eq!(error.kind(), StoreErrorKind::StoreQuarantined);
         assert_eq!(
             backup::publication_state(
-                &parent,
+                &parent_fd,
                 DEFAULT_STAGED_FILE_NAME,
                 DEFAULT_ACTIVE_FILE_NAME,
                 DEFAULT_PRIOR_FILE_NAME
