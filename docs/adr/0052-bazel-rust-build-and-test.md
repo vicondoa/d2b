@@ -632,9 +632,9 @@ repository/download cache. Each is bounded and each is reclaimable.
   `--experimental_disk_cache_gc_idle_delay=0s`, the last because the flag
   defaults to five minutes and collection would otherwise never run. Bazel
   ships no collector for the repository cache, so the Make wrapper bounds it
-  at 2 GiB itself; over budget, the wrapper removes it as a whole after the
-  path proof below and prints the refetch cost, because it holds only
-  re-fetchable downloads.
+  at 2 GiB itself; over budget, the wrapper removes it as a whole through the
+  anchored deletion contract below and prints the refetch cost, because it
+  holds only re-fetchable downloads.
 - High-water checks. Before each invocation the wrapper measures the output
   user root with `du -s -B1`. Below the soft mark it is silent. At or above
   the soft mark it prints the measured size and the exact reclaim command. At
@@ -647,15 +647,36 @@ repository/download cache. Each is bounded and each is reclaimable.
   options**, because startup options select the server: a `shutdown` issued
   with different startup options starts a second server against a different
   output base and leaves the live one running, which is precisely how a
-  cleanup ends up deleting a tree a running server still owns. It then proves
-  the target path is inside the worktree scratch tree: resolve it with
-  `realpath -e`, require the resolved path to sit under
-  `<worktree>/.scratch/bazel/`, require it to contain no git-tracked file
-  (the `assert_removable` idiom in `tests/tools/clean-worktree.sh`), and
-  refuse when resolution crosses a symlink out of the worktree. A failed proof
-  is a refusal naming the resolved path, never a wider deletion. No recursive
-  removal is ever issued against an unvalidated path or against a live server
-  tree.
+  cleanup ends up deleting a tree a running server still owns. The deletion
+  that follows is **not** a `realpath` proof followed by a recursive remove
+  through the same string. Resolving a path and then deleting through that
+  path is a time-of-check-to-time-of-use window, and a check that a later
+  resolution can invalidate is not a check. Deletion is instead performed by
+  repository-owned cleanup plumbing that resolves once and never returns to
+  string path resolution afterwards. It opens the worktree scratch anchor
+  `<worktree>/.scratch/` exactly once and holds that descriptor for the whole
+  operation; it resolves the Bazel subtree beneath that anchor
+  descriptor-relative, refusing any symlink or magic link at any component
+  and refusing any escape above the anchor (`openat2` with
+  `RESOLVE_BENEATH|RESOLVE_NO_SYMLINKS|RESOLVE_NO_MAGICLINKS`, or the
+  equivalent component-by-component `openat` fd-walk with
+  `O_PATH|O_DIRECTORY|O_NOFOLLOW|O_CLOEXEC` and a per-descriptor type check
+  where that syscall is unavailable); and it removes entries with `unlinkat`
+  relative to the directory descriptor that enumerated them, never by
+  reconstructing a path string. This is the idiom already committed in
+  `tests/tools/execution-manifest.pl`, whose policy test in
+  `packages/d2b-contract-tests/tests/policy_docs.rs` requires the `openat` and
+  `unlinkat` markers and forbids path-based recursive cleanup outright, so
+  this is reuse of a proved mechanism rather than a new one. Two refusals
+  from the earlier contract are preserved: the subtree must hold no
+  git-tracked file (the `assert_removable` guard in
+  `tests/tools/clean-worktree.sh`), and only the Bazel subtree beneath the
+  anchor is ever a target, never the anchor itself and never anything above
+  it. A refused resolution names the requested path and deletes nothing; it
+  never widens. Nothing is deleted against a live server tree. This is local
+  developer disk reclamation, running as the invoking user inside a
+  gitignored directory it already owns: it is deliberately not a privileged
+  operation, not a broker op, and not a new host mutation surface.
 - `make clean` learns the scratch Bazel tree and reclaims it as one unit under
   the existing `D2B_CLEAN_KEEP_SCRATCH` control, so a contributor preserving
   scratch keeps the Bazel caches with it. That target already reclaimed 68 GB
@@ -911,31 +932,61 @@ contributor is left to guess. The enforcement is in band and actionable.
 
 - *Anchor.* The job records a monotonic anchor from `/proc/uptime`, which is
   boot-relative and immune to wall-clock steps, and records the epoch value
-  beside it only for the human-readable report. It exports the absolute
-  deadline through `$GITHUB_ENV`.
+  beside it only for the human-readable report. It exports through
+  `$GITHUB_ENV` exactly one control, and that control is an **absolute
+  deadline** in the same boot-relative `/proc/uptime` domain, computed as
+  `anchor + ceiling - checkout allowance`. It is a point in time, not a
+  duration, and no consumer may treat it as one.
 - *Where the anchor can sit, measured.* The anchor cannot precede checkout.
   `tests/unit/meta/ci-coverage.sh` requires every `shell:` declaration in
   every workflow to be exactly `shell: sh tests/tools/ci-shell {0}`, and
   `tests/tools/ci-shell` is a repository file, so no `run:` step can execute
   before `actions/checkout` has placed it. The anchor is therefore the first
   step after checkout, and the checkout step carries its own
-  `timeout-minutes: 2`. The budget handed to Make is the ceiling minus that
-  allowance, so the bounded checkout plus the bounded remainder is provably at
-  or under the ceiling, and the ceiling still covers checkout, Nix and Bazel
-  setup, fetch, analysis, build and tests. Nothing is carved out; the only
-  change is that one bounded segment is bounded by its own step timeout.
-- *Handoff.* The approved Make target reads the remaining budget in seconds
-  from the environment, validated the way `D2B_RUST_BUDGET` is validated: a
-  positive integer, an actionable message on a bad value, and no value echoed
-  back. Absent the control the target runs unbounded, which is the local
-  default; a structural assertion requires every Bazel Rust job in the
-  promoted workflow to set it.
-- *Bounding.* The target bounds the Bazel invocation with that budget. On
-  expiry it terminates the Bazel client and server, SIGTERM then SIGKILL after
-  a fixed grace, prints the measured duration against the ceiling and the
-  target that was executing, and exits nonzero naming only the two
-  pre-authorized remedies below. It never prints "relax the ceiling", because
-  that is not an available remedy.
+  `timeout-minutes: 2`. The deadline handed to Make is therefore the anchor
+  plus the ceiling minus that allowance, so the bounded checkout plus the
+  bounded remainder is provably at or under the ceiling, and the ceiling still
+  covers checkout, Nix and Bazel setup, fetch, analysis, build and tests.
+  Nothing is carved out; the only change is that one bounded segment is
+  bounded by its own step timeout.
+- *Handoff.* The approved Make target reads that **absolute deadline**, not a
+  remaining duration. It validates the value the way `D2B_RUST_BUDGET` is
+  validated: a positive integer, an actionable message on a bad value, and no
+  value echoed back. It then reads `/proc/uptime` itself, in the same
+  boot-relative domain the deadline was minted in, and computes
+  `remaining = deadline - now` with checked arithmetic, treating overflow or
+  a non-representable result as a bad value and refusing on it. If `remaining`
+  is zero or negative the target fails immediately, before starting any work,
+  with the same actionable budget report the expiry path prints: the elapsed
+  duration against the ceiling, the target that was about to run, and the two
+  authorized remedies below. Only that relative remaining duration is passed
+  to the child-bounding mechanism. The absolute deadline is never passed to
+  anything that interprets its argument as a duration - a boot-relative
+  timestamp read as a timeout is a bound of many hours, which is a silent
+  no-op rather than a visible failure, and that is the specific mistake this
+  paragraph exists to make impossible. Absent the control the target runs
+  unbounded, which is the local default; a structural assertion requires every
+  Bazel Rust job in the promoted workflow to set it.
+- *Bounding.* The target bounds the Bazel invocation with that computed
+  remaining duration. On expiry the wrapper signals only its own direct child,
+  the Bazel client process it spawned, and that child's process group: SIGTERM,
+  then SIGKILL after a fixed grace, then reap. It owns that identity by the
+  parent-child relationship, so it cannot be aiming at a recycled process
+  identifier. It never reads a server PID file and never signals a server
+  process identifier, because that process is detached, is not this wrapper's
+  child, is not reaped by it, and its identifier may already have been reused
+  between the file being written and the signal being sent; signalling it is a
+  signal aimed at whatever now holds that number. Server termination is
+  requested only after the client is reaped, and only through `bazel shutdown`
+  with the same startup options, which is the interface that owns server
+  identity. That shutdown carries its own short bound; if it does not complete
+  within that bound, the wrapper reports the stuck server and its output base
+  and fails, and does not escalate to a raw signal against a detached
+  identifier. The job-level `timeout-minutes` below stays the backstop for a
+  runner still stuck after all of that. In every path the target prints the
+  measured duration against the ceiling and the target that was executing, and
+  exits nonzero naming only the two pre-authorized remedies below. It never
+  prints "relax the ceiling", because that is not an available remedy.
 - *Backstop.* The job keeps a `timeout-minutes` slightly above the ceiling,
   17 against a 15-minute ceiling with a 2-minute checkout allowance, purely so
   a dead runner is still reaped. The in-band deadline is the failure a
@@ -1281,11 +1332,18 @@ provides each binary.
 15. A missed performance ceiling blocks promotion or fails a job in band with
     the measured duration and the two authorized remedies. It never licenses
     reducing coverage, reclassifying an enforcing surface as advisory, or
-    relaxing the ceiling.
+    relaxing the ceiling. The in-band bound is always a relative duration
+    derived from the exported absolute deadline at read time, never the
+    deadline itself, and the bounding wrapper signals only its own Bazel
+    client child and that child's process group, never a server process
+    identifier read from a file.
 16. Local Bazel state lives inside the worktree scratch tree, is size and age
     bounded, and is never deleted without first shutting the server down with
-    the same startup options and proving the resolved path is inside that
-    tree.
+    the same startup options. Deletion is anchored on a descriptor for the
+    worktree scratch tree, resolves the Bazel subtree beneath that descriptor
+    with no symlink or magic-link traversal, unlinks descriptor-relative
+    without returning to string path resolution, refuses any subtree holding a
+    git-tracked file, and reaches nothing but the Bazel subtree.
 17. The required continuous-integration context name `test-rust` does not
     change across promotion.
 18. `.github/workflows/pr-bazel-rust.yml` existing means promotion is
