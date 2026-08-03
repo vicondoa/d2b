@@ -20,6 +20,8 @@ impl !core::panic::unwind_safe::UnwindSafe for d2b_bus::session::zone_link::Zone
 impl !core::panic::unwind_safe::UnwindSafe for d2b_bus::streams::IncomingStream
 impl !core::panic::unwind_safe::UnwindSafe for d2b_bus::transport::unix::ZonePeerIdentity
 impl core::clone::Clone for d2b_bus::audit::BusErrorKind
+impl core::clone::Clone for d2b_bus::audit::RouteAuditContext
+impl core::clone::Clone for d2b_bus::audit::RouteAuditError
 impl core::clone::Clone for d2b_bus::authorization::AuthorizationError
 impl core::clone::Clone for d2b_bus::authorization::AuthorizationErrorClass
 impl core::clone::Clone for d2b_bus::operations::Cancellation
@@ -48,6 +50,13 @@ impl core::clone::Clone for d2b_bus::router::CancellationOutcome
 impl core::clone::Clone for d2b_bus::router::ResourceCall
 impl core::clone::Clone for d2b_bus::router::ResourceFilter
 impl core::clone::Clone for d2b_bus::router::ResourceQuery
+impl core::clone::Clone for d2b_bus::routing::BusErrorKind
+impl core::clone::Clone for d2b_bus::routing::CredentialCustody
+impl core::clone::Clone for d2b_bus::routing::RouteDirection
+impl core::clone::Clone for d2b_bus::routing::RouteServiceError
+impl core::clone::Clone for d2b_bus::routing::RouteTableError
+impl core::clone::Clone for d2b_bus::routing::ZoneSessionAuthority
+impl core::clone::Clone for d2b_bus::service_router::ServiceRoute
 impl core::clone::Clone for d2b_bus::session::contract::ZoneEndpointPolicy
 impl core::clone::Clone for d2b_bus::session::contract::ZoneEndpointPolicyIdentity
 impl core::clone::Clone for d2b_bus::session::contract::ZonePolicyError
@@ -87,6 +96,7 @@ impl core::clone::Clone for d2b_bus::zone_route::ZoneRouteError
 impl core::clone::Clone for d2b_bus::zone_route::ZoneRouteOutcome
 impl core::clone::Clone for d2b_bus::zone_route::ZoneRouteQuery
 impl core::cmp::Eq for d2b_bus::audit::BusErrorKind
+impl core::cmp::Eq for d2b_bus::audit::RouteAuditError
 impl core::cmp::Eq for d2b_bus::authorization::AuthorizationError
 impl core::cmp::Eq for d2b_bus::authorization::AuthorizationErrorClass
 impl core::cmp::Eq for d2b_bus::operations::OperationError
@@ -114,6 +124,13 @@ impl core::cmp::Eq for d2b_bus::router::CancellationOutcome
 impl core::cmp::Eq for d2b_bus::router::ResourceCall
 impl core::cmp::Eq for d2b_bus::router::ResourceFilter
 impl core::cmp::Eq for d2b_bus::router::ResourceQuery
+impl core::cmp::Eq for d2b_bus::routing::BusErrorKind
+impl core::cmp::Eq for d2b_bus::routing::CredentialCustody
+impl core::cmp::Eq for d2b_bus::routing::RouteDirection
+impl core::cmp::Eq for d2b_bus::routing::RouteServiceError
+impl core::cmp::Eq for d2b_bus::routing::RouteTableError
+impl core::cmp::Eq for d2b_bus::routing::ZoneSessionAuthority
+impl core::cmp::Eq for d2b_bus::service_router::ServiceRoute
 impl core::cmp::Eq for d2b_bus::session::contract::ZoneEndpointPolicy
 impl core::cmp::Eq for d2b_bus::session::contract::ZoneEndpointPolicyIdentity
 impl core::cmp::Eq for d2b_bus::session::contract::ZonePolicyError
@@ -170,6 +187,7 @@ impl core::cmp::Ord for d2b_bus::zone_route::RequestFingerprint
 impl core::cmp::Ord for d2b_bus::zone_route::ZoneLinkIdempotencyKey
 impl core::cmp::Ord for d2b_bus::zone_route::ZoneRouteError
 impl core::cmp::PartialEq for d2b_bus::audit::BusErrorKind
+impl core::cmp::PartialEq for d2b_bus::audit::RouteAuditError
 impl core::cmp::PartialEq for d2b_bus::authorization::AuthorizationError
 impl core::cmp::PartialEq for d2b_bus::authorization::AuthorizationErrorClass
 impl core::cmp::PartialEq for d2b_bus::operations::OperationError
@@ -197,6 +215,13 @@ impl core::cmp::PartialEq for d2b_bus::router::CancellationOutcome
 impl core::cmp::PartialEq for d2b_bus::router::ResourceCall
 impl core::cmp::PartialEq for d2b_bus::router::ResourceFilter
 impl core::cmp::PartialEq for d2b_bus::router::ResourceQuery
+impl core::cmp::PartialEq for d2b_bus::routing::BusErrorKind
+impl core::cmp::PartialEq for d2b_bus::routing::CredentialCustody
+impl core::cmp::PartialEq for d2b_bus::routing::RouteDirection
+impl core::cmp::PartialEq for d2b_bus::routing::RouteServiceError
+impl core::cmp::PartialEq for d2b_bus::routing::RouteTableError
+impl core::cmp::PartialEq for d2b_bus::routing::ZoneSessionAuthority
+impl core::cmp::PartialEq for d2b_bus::service_router::ServiceRoute
 impl core::cmp::PartialEq for d2b_bus::session::contract::ZoneEndpointPolicy
 impl core::cmp::PartialEq for d2b_bus::session::contract::ZoneEndpointPolicyIdentity
 impl core::cmp::PartialEq for d2b_bus::session::contract::ZonePolicyError
@@ -264,6 +289,7 @@ impl core::convert::From<d2b_resource_api::authz::AuthorizationPolicyError> for 
 impl core::convert::From<d2b_session::error::SessionError> for d2b_bus::registry::EndpointError
 impl core::default::Default for d2b_bus::router::BusConfig
 impl core::default::Default for d2b_bus::router::NoopBusObserver
+impl core::default::Default for d2b_bus::routing::RouteTable
 impl core::default::Default for d2b_bus::streams::StreamLimits
 impl core::default::Default for d2b_bus::zone_route::ZoneLinkDedupNamespace
 impl core::error::Error for d2b_bus::authorization::AuthorizationError
@@ -271,6 +297,7 @@ impl core::error::Error for d2b_bus::operations::OperationError
 impl core::error::Error for d2b_bus::registry::EndpointError
 impl core::error::Error for d2b_bus::registry::RegistryError
 impl core::error::Error for d2b_bus::router::BusError
+impl core::error::Error for d2b_bus::routing::RouteServiceError
 impl core::error::Error for d2b_bus::session::contract::ZonePolicyError
 impl core::error::Error for d2b_bus::session::enrollment::ZoneLinkEnrollmentError
 impl core::error::Error for d2b_bus::session::zone_link::ZoneLinkSessionError
@@ -278,6 +305,8 @@ impl core::error::Error for d2b_bus::streams::StreamError
 impl core::error::Error for d2b_bus::transport::credit::CreditError
 impl core::error::Error for d2b_bus::transport::unix::TransportAdmissionError
 impl core::fmt::Debug for d2b_bus::audit::BusErrorKind
+impl core::fmt::Debug for d2b_bus::audit::RouteAuditContext
+impl core::fmt::Debug for d2b_bus::audit::RouteAuditError
 impl core::fmt::Debug for d2b_bus::authorization::AuthorizationError
 impl core::fmt::Debug for d2b_bus::authorization::AuthorizationErrorClass
 impl core::fmt::Debug for d2b_bus::authorization::BusAuthorizer
@@ -318,6 +347,14 @@ impl core::fmt::Debug for d2b_bus::router::ResourceFilter
 impl core::fmt::Debug for d2b_bus::router::ResourceQuery
 impl core::fmt::Debug for d2b_bus::router::ZoneBus
 impl core::fmt::Debug for d2b_bus::router::ZoneRegistrar
+impl core::fmt::Debug for d2b_bus::routing::BusErrorKind
+impl core::fmt::Debug for d2b_bus::routing::CredentialCustody
+impl core::fmt::Debug for d2b_bus::routing::RouteDirection
+impl core::fmt::Debug for d2b_bus::routing::RouteServiceError
+impl core::fmt::Debug for d2b_bus::routing::RouteTable
+impl core::fmt::Debug for d2b_bus::routing::RouteTableError
+impl core::fmt::Debug for d2b_bus::routing::ZoneSessionAuthority
+impl core::fmt::Debug for d2b_bus::service_router::ServiceRoute
 impl core::fmt::Debug for d2b_bus::session::contract::ZoneEndpointPolicy
 impl core::fmt::Debug for d2b_bus::session::contract::ZoneEndpointPolicyIdentity
 impl core::fmt::Debug for d2b_bus::session::contract::ZonePolicyError
@@ -366,6 +403,7 @@ impl core::fmt::Display for d2b_bus::operations::OperationError
 impl core::fmt::Display for d2b_bus::registry::EndpointError
 impl core::fmt::Display for d2b_bus::registry::RegistryError
 impl core::fmt::Display for d2b_bus::router::BusError
+impl core::fmt::Display for d2b_bus::routing::RouteServiceError
 impl core::fmt::Display for d2b_bus::session::contract::ZonePolicyError
 impl core::fmt::Display for d2b_bus::session::enrollment::ZoneLinkEnrollmentError
 impl core::fmt::Display for d2b_bus::session::zone_link::ZoneLinkSessionError
@@ -390,6 +428,7 @@ impl core::hash::Hash for d2b_bus::zone_route::RequestFingerprint
 impl core::hash::Hash for d2b_bus::zone_route::ZoneLinkIdempotencyKey
 impl core::hash::Hash for d2b_bus::zone_route::ZoneRouteError
 impl core::marker::Copy for d2b_bus::audit::BusErrorKind
+impl core::marker::Copy for d2b_bus::audit::RouteAuditError
 impl core::marker::Copy for d2b_bus::authorization::AuthorizationError
 impl core::marker::Copy for d2b_bus::authorization::AuthorizationErrorClass
 impl core::marker::Copy for d2b_bus::operations::OperationError
@@ -407,6 +446,11 @@ impl core::marker::Copy for d2b_bus::router::BusError
 impl core::marker::Copy for d2b_bus::router::BusEvent
 impl core::marker::Copy for d2b_bus::router::BusFailureReason
 impl core::marker::Copy for d2b_bus::router::CancellationOutcome
+impl core::marker::Copy for d2b_bus::routing::BusErrorKind
+impl core::marker::Copy for d2b_bus::routing::CredentialCustody
+impl core::marker::Copy for d2b_bus::routing::RouteDirection
+impl core::marker::Copy for d2b_bus::routing::RouteServiceError
+impl core::marker::Copy for d2b_bus::routing::RouteTableError
 impl core::marker::Copy for d2b_bus::session::contract::ZonePolicyError
 impl core::marker::Copy for d2b_bus::session::enrollment::BootstrapPskIssuance
 impl core::marker::Copy for d2b_bus::session::enrollment::EnrollmentFingerprint
@@ -425,6 +469,8 @@ impl core::marker::Copy for d2b_bus::transport::unix::AllocatedSocketKind
 impl core::marker::Copy for d2b_bus::transport::unix::TransportAdmissionError
 impl core::marker::Copy for d2b_bus::zone_route::ZoneRouteError
 impl core::marker::Freeze for d2b_bus::audit::BusErrorKind
+impl core::marker::Freeze for d2b_bus::audit::RouteAuditContext
+impl core::marker::Freeze for d2b_bus::audit::RouteAuditError
 impl core::marker::Freeze for d2b_bus::authorization::AuthorizationError
 impl core::marker::Freeze for d2b_bus::authorization::AuthorizationErrorClass
 impl core::marker::Freeze for d2b_bus::operations::Cancellation
@@ -462,6 +508,14 @@ impl core::marker::Freeze for d2b_bus::router::ResourceFilter
 impl core::marker::Freeze for d2b_bus::router::ResourceQuery
 impl core::marker::Freeze for d2b_bus::router::ZoneBus
 impl core::marker::Freeze for d2b_bus::router::ZoneRegistrar
+impl core::marker::Freeze for d2b_bus::routing::BusErrorKind
+impl core::marker::Freeze for d2b_bus::routing::CredentialCustody
+impl core::marker::Freeze for d2b_bus::routing::RouteDirection
+impl core::marker::Freeze for d2b_bus::routing::RouteServiceError
+impl core::marker::Freeze for d2b_bus::routing::RouteTable
+impl core::marker::Freeze for d2b_bus::routing::RouteTableError
+impl core::marker::Freeze for d2b_bus::routing::ZoneSessionAuthority
+impl core::marker::Freeze for d2b_bus::service_router::ServiceRoute
 impl core::marker::Freeze for d2b_bus::session::contract::ZoneEndpointPolicy
 impl core::marker::Freeze for d2b_bus::session::contract::ZoneEndpointPolicyIdentity
 impl core::marker::Freeze for d2b_bus::session::contract::ZonePolicyError
@@ -506,6 +560,8 @@ impl core::marker::Freeze for d2b_bus::zone_route::ZoneRouteError
 impl core::marker::Freeze for d2b_bus::zone_route::ZoneRouteOutcome
 impl core::marker::Freeze for d2b_bus::zone_route::ZoneRouteQuery
 impl core::marker::Send for d2b_bus::audit::BusErrorKind
+impl core::marker::Send for d2b_bus::audit::RouteAuditContext
+impl core::marker::Send for d2b_bus::audit::RouteAuditError
 impl core::marker::Send for d2b_bus::authorization::AuthorizationError
 impl core::marker::Send for d2b_bus::authorization::AuthorizationErrorClass
 impl core::marker::Send for d2b_bus::authorization::BusAuthorizer
@@ -545,6 +601,14 @@ impl core::marker::Send for d2b_bus::router::ResourceFilter
 impl core::marker::Send for d2b_bus::router::ResourceQuery
 impl core::marker::Send for d2b_bus::router::ZoneBus
 impl core::marker::Send for d2b_bus::router::ZoneRegistrar
+impl core::marker::Send for d2b_bus::routing::BusErrorKind
+impl core::marker::Send for d2b_bus::routing::CredentialCustody
+impl core::marker::Send for d2b_bus::routing::RouteDirection
+impl core::marker::Send for d2b_bus::routing::RouteServiceError
+impl core::marker::Send for d2b_bus::routing::RouteTable
+impl core::marker::Send for d2b_bus::routing::RouteTableError
+impl core::marker::Send for d2b_bus::routing::ZoneSessionAuthority
+impl core::marker::Send for d2b_bus::service_router::ServiceRoute
 impl core::marker::Send for d2b_bus::session::contract::ZoneEndpointPolicy
 impl core::marker::Send for d2b_bus::session::contract::ZoneEndpointPolicyIdentity
 impl core::marker::Send for d2b_bus::session::contract::ZonePolicyError
@@ -590,6 +654,7 @@ impl core::marker::Send for d2b_bus::zone_route::ZoneRouteError
 impl core::marker::Send for d2b_bus::zone_route::ZoneRouteOutcome
 impl core::marker::Send for d2b_bus::zone_route::ZoneRouteQuery
 impl core::marker::StructuralPartialEq for d2b_bus::audit::BusErrorKind
+impl core::marker::StructuralPartialEq for d2b_bus::audit::RouteAuditError
 impl core::marker::StructuralPartialEq for d2b_bus::authorization::AuthorizationError
 impl core::marker::StructuralPartialEq for d2b_bus::authorization::AuthorizationErrorClass
 impl core::marker::StructuralPartialEq for d2b_bus::operations::OperationError
@@ -617,6 +682,13 @@ impl core::marker::StructuralPartialEq for d2b_bus::router::CancellationOutcome
 impl core::marker::StructuralPartialEq for d2b_bus::router::ResourceCall
 impl core::marker::StructuralPartialEq for d2b_bus::router::ResourceFilter
 impl core::marker::StructuralPartialEq for d2b_bus::router::ResourceQuery
+impl core::marker::StructuralPartialEq for d2b_bus::routing::BusErrorKind
+impl core::marker::StructuralPartialEq for d2b_bus::routing::CredentialCustody
+impl core::marker::StructuralPartialEq for d2b_bus::routing::RouteDirection
+impl core::marker::StructuralPartialEq for d2b_bus::routing::RouteServiceError
+impl core::marker::StructuralPartialEq for d2b_bus::routing::RouteTableError
+impl core::marker::StructuralPartialEq for d2b_bus::routing::ZoneSessionAuthority
+impl core::marker::StructuralPartialEq for d2b_bus::service_router::ServiceRoute
 impl core::marker::StructuralPartialEq for d2b_bus::session::contract::ZoneEndpointPolicy
 impl core::marker::StructuralPartialEq for d2b_bus::session::contract::ZoneEndpointPolicyIdentity
 impl core::marker::StructuralPartialEq for d2b_bus::session::contract::ZonePolicyError
@@ -656,6 +728,8 @@ impl core::marker::StructuralPartialEq for d2b_bus::zone_route::ZoneRouteError
 impl core::marker::StructuralPartialEq for d2b_bus::zone_route::ZoneRouteOutcome
 impl core::marker::StructuralPartialEq for d2b_bus::zone_route::ZoneRouteQuery
 impl core::marker::Sync for d2b_bus::audit::BusErrorKind
+impl core::marker::Sync for d2b_bus::audit::RouteAuditContext
+impl core::marker::Sync for d2b_bus::audit::RouteAuditError
 impl core::marker::Sync for d2b_bus::authorization::AuthorizationError
 impl core::marker::Sync for d2b_bus::authorization::AuthorizationErrorClass
 impl core::marker::Sync for d2b_bus::authorization::BusAuthorizer
@@ -695,6 +769,14 @@ impl core::marker::Sync for d2b_bus::router::ResourceFilter
 impl core::marker::Sync for d2b_bus::router::ResourceQuery
 impl core::marker::Sync for d2b_bus::router::ZoneBus
 impl core::marker::Sync for d2b_bus::router::ZoneRegistrar
+impl core::marker::Sync for d2b_bus::routing::BusErrorKind
+impl core::marker::Sync for d2b_bus::routing::CredentialCustody
+impl core::marker::Sync for d2b_bus::routing::RouteDirection
+impl core::marker::Sync for d2b_bus::routing::RouteServiceError
+impl core::marker::Sync for d2b_bus::routing::RouteTable
+impl core::marker::Sync for d2b_bus::routing::RouteTableError
+impl core::marker::Sync for d2b_bus::routing::ZoneSessionAuthority
+impl core::marker::Sync for d2b_bus::service_router::ServiceRoute
 impl core::marker::Sync for d2b_bus::session::contract::ZoneEndpointPolicy
 impl core::marker::Sync for d2b_bus::session::contract::ZoneEndpointPolicyIdentity
 impl core::marker::Sync for d2b_bus::session::contract::ZonePolicyError
@@ -740,6 +822,8 @@ impl core::marker::Sync for d2b_bus::zone_route::ZoneRouteError
 impl core::marker::Sync for d2b_bus::zone_route::ZoneRouteOutcome
 impl core::marker::Sync for d2b_bus::zone_route::ZoneRouteQuery
 impl core::marker::Unpin for d2b_bus::audit::BusErrorKind
+impl core::marker::Unpin for d2b_bus::audit::RouteAuditContext
+impl core::marker::Unpin for d2b_bus::audit::RouteAuditError
 impl core::marker::Unpin for d2b_bus::authorization::AuthorizationError
 impl core::marker::Unpin for d2b_bus::authorization::AuthorizationErrorClass
 impl core::marker::Unpin for d2b_bus::authorization::BusAuthorizer
@@ -779,6 +863,14 @@ impl core::marker::Unpin for d2b_bus::router::ResourceFilter
 impl core::marker::Unpin for d2b_bus::router::ResourceQuery
 impl core::marker::Unpin for d2b_bus::router::ZoneBus
 impl core::marker::Unpin for d2b_bus::router::ZoneRegistrar
+impl core::marker::Unpin for d2b_bus::routing::BusErrorKind
+impl core::marker::Unpin for d2b_bus::routing::CredentialCustody
+impl core::marker::Unpin for d2b_bus::routing::RouteDirection
+impl core::marker::Unpin for d2b_bus::routing::RouteServiceError
+impl core::marker::Unpin for d2b_bus::routing::RouteTable
+impl core::marker::Unpin for d2b_bus::routing::RouteTableError
+impl core::marker::Unpin for d2b_bus::routing::ZoneSessionAuthority
+impl core::marker::Unpin for d2b_bus::service_router::ServiceRoute
 impl core::marker::Unpin for d2b_bus::session::contract::ZoneEndpointPolicy
 impl core::marker::Unpin for d2b_bus::session::contract::ZoneEndpointPolicyIdentity
 impl core::marker::Unpin for d2b_bus::session::contract::ZonePolicyError
@@ -824,6 +916,8 @@ impl core::marker::Unpin for d2b_bus::zone_route::ZoneRouteError
 impl core::marker::Unpin for d2b_bus::zone_route::ZoneRouteOutcome
 impl core::marker::Unpin for d2b_bus::zone_route::ZoneRouteQuery
 impl core::marker::UnsafeUnpin for d2b_bus::audit::BusErrorKind
+impl core::marker::UnsafeUnpin for d2b_bus::audit::RouteAuditContext
+impl core::marker::UnsafeUnpin for d2b_bus::audit::RouteAuditError
 impl core::marker::UnsafeUnpin for d2b_bus::authorization::AuthorizationError
 impl core::marker::UnsafeUnpin for d2b_bus::authorization::AuthorizationErrorClass
 impl core::marker::UnsafeUnpin for d2b_bus::authorization::BusAuthorizer
@@ -863,6 +957,14 @@ impl core::marker::UnsafeUnpin for d2b_bus::router::ResourceFilter
 impl core::marker::UnsafeUnpin for d2b_bus::router::ResourceQuery
 impl core::marker::UnsafeUnpin for d2b_bus::router::ZoneBus
 impl core::marker::UnsafeUnpin for d2b_bus::router::ZoneRegistrar
+impl core::marker::UnsafeUnpin for d2b_bus::routing::BusErrorKind
+impl core::marker::UnsafeUnpin for d2b_bus::routing::CredentialCustody
+impl core::marker::UnsafeUnpin for d2b_bus::routing::RouteDirection
+impl core::marker::UnsafeUnpin for d2b_bus::routing::RouteServiceError
+impl core::marker::UnsafeUnpin for d2b_bus::routing::RouteTable
+impl core::marker::UnsafeUnpin for d2b_bus::routing::RouteTableError
+impl core::marker::UnsafeUnpin for d2b_bus::routing::ZoneSessionAuthority
+impl core::marker::UnsafeUnpin for d2b_bus::service_router::ServiceRoute
 impl core::marker::UnsafeUnpin for d2b_bus::session::contract::ZoneEndpointPolicy
 impl core::marker::UnsafeUnpin for d2b_bus::session::contract::ZoneEndpointPolicyIdentity
 impl core::marker::UnsafeUnpin for d2b_bus::session::contract::ZonePolicyError
@@ -911,6 +1013,8 @@ impl core::ops::drop::Drop for d2b_bus::router::BusIngress
 impl core::ops::drop::Drop for d2b_bus::router::BusStream
 impl core::ops::drop::Drop for d2b_bus::streams::IncomingStream
 impl core::panic::unwind_safe::RefUnwindSafe for d2b_bus::audit::BusErrorKind
+impl core::panic::unwind_safe::RefUnwindSafe for d2b_bus::audit::RouteAuditContext
+impl core::panic::unwind_safe::RefUnwindSafe for d2b_bus::audit::RouteAuditError
 impl core::panic::unwind_safe::RefUnwindSafe for d2b_bus::authorization::AuthorizationError
 impl core::panic::unwind_safe::RefUnwindSafe for d2b_bus::authorization::AuthorizationErrorClass
 impl core::panic::unwind_safe::RefUnwindSafe for d2b_bus::authorization::BusAuthorizer
@@ -944,6 +1048,14 @@ impl core::panic::unwind_safe::RefUnwindSafe for d2b_bus::router::NoopBusObserve
 impl core::panic::unwind_safe::RefUnwindSafe for d2b_bus::router::ResourceCall
 impl core::panic::unwind_safe::RefUnwindSafe for d2b_bus::router::ResourceFilter
 impl core::panic::unwind_safe::RefUnwindSafe for d2b_bus::router::ResourceQuery
+impl core::panic::unwind_safe::RefUnwindSafe for d2b_bus::routing::BusErrorKind
+impl core::panic::unwind_safe::RefUnwindSafe for d2b_bus::routing::CredentialCustody
+impl core::panic::unwind_safe::RefUnwindSafe for d2b_bus::routing::RouteDirection
+impl core::panic::unwind_safe::RefUnwindSafe for d2b_bus::routing::RouteServiceError
+impl core::panic::unwind_safe::RefUnwindSafe for d2b_bus::routing::RouteTable
+impl core::panic::unwind_safe::RefUnwindSafe for d2b_bus::routing::RouteTableError
+impl core::panic::unwind_safe::RefUnwindSafe for d2b_bus::routing::ZoneSessionAuthority
+impl core::panic::unwind_safe::RefUnwindSafe for d2b_bus::service_router::ServiceRoute
 impl core::panic::unwind_safe::RefUnwindSafe for d2b_bus::session::contract::ZoneEndpointPolicy
 impl core::panic::unwind_safe::RefUnwindSafe for d2b_bus::session::contract::ZoneEndpointPolicyIdentity
 impl core::panic::unwind_safe::RefUnwindSafe for d2b_bus::session::contract::ZonePolicyError
@@ -986,6 +1098,8 @@ impl core::panic::unwind_safe::RefUnwindSafe for d2b_bus::zone_route::ZoneRouteE
 impl core::panic::unwind_safe::RefUnwindSafe for d2b_bus::zone_route::ZoneRouteOutcome
 impl core::panic::unwind_safe::RefUnwindSafe for d2b_bus::zone_route::ZoneRouteQuery
 impl core::panic::unwind_safe::UnwindSafe for d2b_bus::audit::BusErrorKind
+impl core::panic::unwind_safe::UnwindSafe for d2b_bus::audit::RouteAuditContext
+impl core::panic::unwind_safe::UnwindSafe for d2b_bus::audit::RouteAuditError
 impl core::panic::unwind_safe::UnwindSafe for d2b_bus::authorization::AuthorizationError
 impl core::panic::unwind_safe::UnwindSafe for d2b_bus::authorization::AuthorizationErrorClass
 impl core::panic::unwind_safe::UnwindSafe for d2b_bus::authorization::BusAuthorizer
@@ -1019,6 +1133,14 @@ impl core::panic::unwind_safe::UnwindSafe for d2b_bus::router::NoopBusObserver
 impl core::panic::unwind_safe::UnwindSafe for d2b_bus::router::ResourceCall
 impl core::panic::unwind_safe::UnwindSafe for d2b_bus::router::ResourceFilter
 impl core::panic::unwind_safe::UnwindSafe for d2b_bus::router::ResourceQuery
+impl core::panic::unwind_safe::UnwindSafe for d2b_bus::routing::BusErrorKind
+impl core::panic::unwind_safe::UnwindSafe for d2b_bus::routing::CredentialCustody
+impl core::panic::unwind_safe::UnwindSafe for d2b_bus::routing::RouteDirection
+impl core::panic::unwind_safe::UnwindSafe for d2b_bus::routing::RouteServiceError
+impl core::panic::unwind_safe::UnwindSafe for d2b_bus::routing::RouteTable
+impl core::panic::unwind_safe::UnwindSafe for d2b_bus::routing::RouteTableError
+impl core::panic::unwind_safe::UnwindSafe for d2b_bus::routing::ZoneSessionAuthority
+impl core::panic::unwind_safe::UnwindSafe for d2b_bus::service_router::ServiceRoute
 impl core::panic::unwind_safe::UnwindSafe for d2b_bus::session::contract::ZoneEndpointPolicy
 impl core::panic::unwind_safe::UnwindSafe for d2b_bus::session::contract::ZoneEndpointPolicyIdentity
 impl core::panic::unwind_safe::UnwindSafe for d2b_bus::session::contract::ZonePolicyError
@@ -1061,6 +1183,7 @@ impl core::panic::unwind_safe::UnwindSafe for d2b_bus::zone_route::ZoneRouteErro
 impl core::panic::unwind_safe::UnwindSafe for d2b_bus::zone_route::ZoneRouteOutcome
 impl core::panic::unwind_safe::UnwindSafe for d2b_bus::zone_route::ZoneRouteQuery
 impl d2b_bus::audit::BusErrorKind
+impl d2b_bus::audit::RouteAuditContext
 impl d2b_bus::authorization::AuthorizationError
 impl d2b_bus::authorization::AuthorizationErrorClass
 impl d2b_bus::authorization::BusAuthorizer
@@ -1088,6 +1211,12 @@ impl d2b_bus::router::ResourceFilter
 impl d2b_bus::router::ResourceQuery
 impl d2b_bus::router::ZoneBus
 impl d2b_bus::router::ZoneRegistrar
+impl d2b_bus::routing::BusErrorKind
+impl d2b_bus::routing::RouteDirection
+impl d2b_bus::routing::RouteServiceError
+impl d2b_bus::routing::RouteTable
+impl d2b_bus::routing::ZoneSessionAuthority
+impl d2b_bus::service_router::ServiceRoute
 impl d2b_bus::session::contract::ZoneEndpointPolicy
 impl d2b_bus::session::contract::ZoneEndpointPolicyIdentity
 impl d2b_bus::session::contract::ZonePolicyError
@@ -1123,13 +1252,21 @@ impl d2b_bus::zone_route::RequestFingerprint
 impl d2b_bus::zone_route::ZoneLinkDedupNamespace
 impl d2b_bus::zone_route::ZoneLinkIdempotencyKey
 impl d2b_bus::zone_route::ZoneRouteQuery
+impl<'a> core::marker::Freeze for d2b_bus::audit::BusAuditWriter<'a>
 impl<'a> core::marker::Freeze for d2b_bus::relay::RelayHopRequest<'a>
+impl<'a> core::marker::Send for d2b_bus::audit::BusAuditWriter<'a>
 impl<'a> core::marker::Send for d2b_bus::relay::RelayHopRequest<'a>
+impl<'a> core::marker::Sync for d2b_bus::audit::BusAuditWriter<'a>
 impl<'a> core::marker::Sync for d2b_bus::relay::RelayHopRequest<'a>
+impl<'a> core::marker::Unpin for d2b_bus::audit::BusAuditWriter<'a>
 impl<'a> core::marker::Unpin for d2b_bus::relay::RelayHopRequest<'a>
+impl<'a> core::marker::UnsafeUnpin for d2b_bus::audit::BusAuditWriter<'a>
 impl<'a> core::marker::UnsafeUnpin for d2b_bus::relay::RelayHopRequest<'a>
+impl<'a> core::panic::unwind_safe::RefUnwindSafe for d2b_bus::audit::BusAuditWriter<'a>
 impl<'a> core::panic::unwind_safe::RefUnwindSafe for d2b_bus::relay::RelayHopRequest<'a>
+impl<'a> core::panic::unwind_safe::UnwindSafe for d2b_bus::audit::BusAuditWriter<'a>
 impl<'a> core::panic::unwind_safe::UnwindSafe for d2b_bus::relay::RelayHopRequest<'a>
+impl<'a> d2b_bus::audit::BusAuditWriter<'a>
 impl<'a> d2b_bus::relay::RelayHopRequest<'a>
 impl<O: d2b_bus::relay::RelayHopOracle> d2b_bus::relay::RelayHandler<O>
 impl<O> core::marker::Freeze for d2b_bus::relay::RelayHandler<O> where O: core::marker::Freeze
@@ -1140,6 +1277,7 @@ impl<O> core::marker::UnsafeUnpin for d2b_bus::relay::RelayHandler<O> where O: c
 impl<O> core::panic::unwind_safe::RefUnwindSafe for d2b_bus::relay::RelayHandler<O> where O: core::panic::unwind_safe::RefUnwindSafe
 impl<O> core::panic::unwind_safe::UnwindSafe for d2b_bus::relay::RelayHandler<O> where O: core::panic::unwind_safe::UnwindSafe
 impl<Q, K> indexmap::equivalent::Equivalent<K> for d2b_bus::audit::BusErrorKind where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
+impl<Q, K> indexmap::equivalent::Equivalent<K> for d2b_bus::audit::RouteAuditError where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
 impl<Q, K> indexmap::equivalent::Equivalent<K> for d2b_bus::authorization::AuthorizationError where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
 impl<Q, K> indexmap::equivalent::Equivalent<K> for d2b_bus::authorization::AuthorizationErrorClass where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
 impl<Q, K> indexmap::equivalent::Equivalent<K> for d2b_bus::operations::OperationError where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
@@ -1167,6 +1305,13 @@ impl<Q, K> indexmap::equivalent::Equivalent<K> for d2b_bus::router::Cancellation
 impl<Q, K> indexmap::equivalent::Equivalent<K> for d2b_bus::router::ResourceCall where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
 impl<Q, K> indexmap::equivalent::Equivalent<K> for d2b_bus::router::ResourceFilter where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
 impl<Q, K> indexmap::equivalent::Equivalent<K> for d2b_bus::router::ResourceQuery where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
+impl<Q, K> indexmap::equivalent::Equivalent<K> for d2b_bus::routing::BusErrorKind where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
+impl<Q, K> indexmap::equivalent::Equivalent<K> for d2b_bus::routing::CredentialCustody where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
+impl<Q, K> indexmap::equivalent::Equivalent<K> for d2b_bus::routing::RouteDirection where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
+impl<Q, K> indexmap::equivalent::Equivalent<K> for d2b_bus::routing::RouteServiceError where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
+impl<Q, K> indexmap::equivalent::Equivalent<K> for d2b_bus::routing::RouteTableError where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
+impl<Q, K> indexmap::equivalent::Equivalent<K> for d2b_bus::routing::ZoneSessionAuthority where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
+impl<Q, K> indexmap::equivalent::Equivalent<K> for d2b_bus::service_router::ServiceRoute where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
 impl<Q, K> indexmap::equivalent::Equivalent<K> for d2b_bus::session::contract::ZoneEndpointPolicy where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
 impl<Q, K> indexmap::equivalent::Equivalent<K> for d2b_bus::session::contract::ZoneEndpointPolicyIdentity where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
 impl<Q, K> indexmap::equivalent::Equivalent<K> for d2b_bus::session::contract::ZonePolicyError where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
@@ -1205,7 +1350,10 @@ impl<Q, K> indexmap::equivalent::Equivalent<K> for d2b_bus::zone_route::ZoneLink
 impl<Q, K> indexmap::equivalent::Equivalent<K> for d2b_bus::zone_route::ZoneRouteError where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
 impl<Q, K> indexmap::equivalent::Equivalent<K> for d2b_bus::zone_route::ZoneRouteOutcome where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
 impl<Q, K> indexmap::equivalent::Equivalent<K> for d2b_bus::zone_route::ZoneRouteQuery where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
+impl<T, U> core::convert::Into<U> for d2b_bus::audit::BusAuditWriter<'a> where U: core::convert::From<T>
 impl<T, U> core::convert::Into<U> for d2b_bus::audit::BusErrorKind where U: core::convert::From<T>
+impl<T, U> core::convert::Into<U> for d2b_bus::audit::RouteAuditContext where U: core::convert::From<T>
+impl<T, U> core::convert::Into<U> for d2b_bus::audit::RouteAuditError where U: core::convert::From<T>
 impl<T, U> core::convert::Into<U> for d2b_bus::authorization::AuthorizationError where U: core::convert::From<T>
 impl<T, U> core::convert::Into<U> for d2b_bus::authorization::AuthorizationErrorClass where U: core::convert::From<T>
 impl<T, U> core::convert::Into<U> for d2b_bus::authorization::BusAuthorizer where U: core::convert::From<T>
@@ -1247,6 +1395,14 @@ impl<T, U> core::convert::Into<U> for d2b_bus::router::ResourceFilter where U: c
 impl<T, U> core::convert::Into<U> for d2b_bus::router::ResourceQuery where U: core::convert::From<T>
 impl<T, U> core::convert::Into<U> for d2b_bus::router::ZoneBus where U: core::convert::From<T>
 impl<T, U> core::convert::Into<U> for d2b_bus::router::ZoneRegistrar where U: core::convert::From<T>
+impl<T, U> core::convert::Into<U> for d2b_bus::routing::BusErrorKind where U: core::convert::From<T>
+impl<T, U> core::convert::Into<U> for d2b_bus::routing::CredentialCustody where U: core::convert::From<T>
+impl<T, U> core::convert::Into<U> for d2b_bus::routing::RouteDirection where U: core::convert::From<T>
+impl<T, U> core::convert::Into<U> for d2b_bus::routing::RouteServiceError where U: core::convert::From<T>
+impl<T, U> core::convert::Into<U> for d2b_bus::routing::RouteTable where U: core::convert::From<T>
+impl<T, U> core::convert::Into<U> for d2b_bus::routing::RouteTableError where U: core::convert::From<T>
+impl<T, U> core::convert::Into<U> for d2b_bus::routing::ZoneSessionAuthority where U: core::convert::From<T>
+impl<T, U> core::convert::Into<U> for d2b_bus::service_router::ServiceRoute where U: core::convert::From<T>
 impl<T, U> core::convert::Into<U> for d2b_bus::session::contract::ZoneEndpointPolicy where U: core::convert::From<T>
 impl<T, U> core::convert::Into<U> for d2b_bus::session::contract::ZoneEndpointPolicyIdentity where U: core::convert::From<T>
 impl<T, U> core::convert::Into<U> for d2b_bus::session::contract::ZonePolicyError where U: core::convert::From<T>
@@ -1291,7 +1447,10 @@ impl<T, U> core::convert::Into<U> for d2b_bus::zone_route::ZoneLinkIdempotencyKe
 impl<T, U> core::convert::Into<U> for d2b_bus::zone_route::ZoneRouteError where U: core::convert::From<T>
 impl<T, U> core::convert::Into<U> for d2b_bus::zone_route::ZoneRouteOutcome where U: core::convert::From<T>
 impl<T, U> core::convert::Into<U> for d2b_bus::zone_route::ZoneRouteQuery where U: core::convert::From<T>
+impl<T, U> core::convert::TryFrom<U> for d2b_bus::audit::BusAuditWriter<'a> where U: core::convert::Into<T>
 impl<T, U> core::convert::TryFrom<U> for d2b_bus::audit::BusErrorKind where U: core::convert::Into<T>
+impl<T, U> core::convert::TryFrom<U> for d2b_bus::audit::RouteAuditContext where U: core::convert::Into<T>
+impl<T, U> core::convert::TryFrom<U> for d2b_bus::audit::RouteAuditError where U: core::convert::Into<T>
 impl<T, U> core::convert::TryFrom<U> for d2b_bus::authorization::AuthorizationError where U: core::convert::Into<T>
 impl<T, U> core::convert::TryFrom<U> for d2b_bus::authorization::AuthorizationErrorClass where U: core::convert::Into<T>
 impl<T, U> core::convert::TryFrom<U> for d2b_bus::authorization::BusAuthorizer where U: core::convert::Into<T>
@@ -1333,6 +1492,14 @@ impl<T, U> core::convert::TryFrom<U> for d2b_bus::router::ResourceFilter where U
 impl<T, U> core::convert::TryFrom<U> for d2b_bus::router::ResourceQuery where U: core::convert::Into<T>
 impl<T, U> core::convert::TryFrom<U> for d2b_bus::router::ZoneBus where U: core::convert::Into<T>
 impl<T, U> core::convert::TryFrom<U> for d2b_bus::router::ZoneRegistrar where U: core::convert::Into<T>
+impl<T, U> core::convert::TryFrom<U> for d2b_bus::routing::BusErrorKind where U: core::convert::Into<T>
+impl<T, U> core::convert::TryFrom<U> for d2b_bus::routing::CredentialCustody where U: core::convert::Into<T>
+impl<T, U> core::convert::TryFrom<U> for d2b_bus::routing::RouteDirection where U: core::convert::Into<T>
+impl<T, U> core::convert::TryFrom<U> for d2b_bus::routing::RouteServiceError where U: core::convert::Into<T>
+impl<T, U> core::convert::TryFrom<U> for d2b_bus::routing::RouteTable where U: core::convert::Into<T>
+impl<T, U> core::convert::TryFrom<U> for d2b_bus::routing::RouteTableError where U: core::convert::Into<T>
+impl<T, U> core::convert::TryFrom<U> for d2b_bus::routing::ZoneSessionAuthority where U: core::convert::Into<T>
+impl<T, U> core::convert::TryFrom<U> for d2b_bus::service_router::ServiceRoute where U: core::convert::Into<T>
 impl<T, U> core::convert::TryFrom<U> for d2b_bus::session::contract::ZoneEndpointPolicy where U: core::convert::Into<T>
 impl<T, U> core::convert::TryFrom<U> for d2b_bus::session::contract::ZoneEndpointPolicyIdentity where U: core::convert::Into<T>
 impl<T, U> core::convert::TryFrom<U> for d2b_bus::session::contract::ZonePolicyError where U: core::convert::Into<T>
@@ -1377,7 +1544,10 @@ impl<T, U> core::convert::TryFrom<U> for d2b_bus::zone_route::ZoneLinkIdempotenc
 impl<T, U> core::convert::TryFrom<U> for d2b_bus::zone_route::ZoneRouteError where U: core::convert::Into<T>
 impl<T, U> core::convert::TryFrom<U> for d2b_bus::zone_route::ZoneRouteOutcome where U: core::convert::Into<T>
 impl<T, U> core::convert::TryFrom<U> for d2b_bus::zone_route::ZoneRouteQuery where U: core::convert::Into<T>
+impl<T, U> core::convert::TryInto<U> for d2b_bus::audit::BusAuditWriter<'a> where U: core::convert::TryFrom<T>
 impl<T, U> core::convert::TryInto<U> for d2b_bus::audit::BusErrorKind where U: core::convert::TryFrom<T>
+impl<T, U> core::convert::TryInto<U> for d2b_bus::audit::RouteAuditContext where U: core::convert::TryFrom<T>
+impl<T, U> core::convert::TryInto<U> for d2b_bus::audit::RouteAuditError where U: core::convert::TryFrom<T>
 impl<T, U> core::convert::TryInto<U> for d2b_bus::authorization::AuthorizationError where U: core::convert::TryFrom<T>
 impl<T, U> core::convert::TryInto<U> for d2b_bus::authorization::AuthorizationErrorClass where U: core::convert::TryFrom<T>
 impl<T, U> core::convert::TryInto<U> for d2b_bus::authorization::BusAuthorizer where U: core::convert::TryFrom<T>
@@ -1419,6 +1589,14 @@ impl<T, U> core::convert::TryInto<U> for d2b_bus::router::ResourceFilter where U
 impl<T, U> core::convert::TryInto<U> for d2b_bus::router::ResourceQuery where U: core::convert::TryFrom<T>
 impl<T, U> core::convert::TryInto<U> for d2b_bus::router::ZoneBus where U: core::convert::TryFrom<T>
 impl<T, U> core::convert::TryInto<U> for d2b_bus::router::ZoneRegistrar where U: core::convert::TryFrom<T>
+impl<T, U> core::convert::TryInto<U> for d2b_bus::routing::BusErrorKind where U: core::convert::TryFrom<T>
+impl<T, U> core::convert::TryInto<U> for d2b_bus::routing::CredentialCustody where U: core::convert::TryFrom<T>
+impl<T, U> core::convert::TryInto<U> for d2b_bus::routing::RouteDirection where U: core::convert::TryFrom<T>
+impl<T, U> core::convert::TryInto<U> for d2b_bus::routing::RouteServiceError where U: core::convert::TryFrom<T>
+impl<T, U> core::convert::TryInto<U> for d2b_bus::routing::RouteTable where U: core::convert::TryFrom<T>
+impl<T, U> core::convert::TryInto<U> for d2b_bus::routing::RouteTableError where U: core::convert::TryFrom<T>
+impl<T, U> core::convert::TryInto<U> for d2b_bus::routing::ZoneSessionAuthority where U: core::convert::TryFrom<T>
+impl<T, U> core::convert::TryInto<U> for d2b_bus::service_router::ServiceRoute where U: core::convert::TryFrom<T>
 impl<T, U> core::convert::TryInto<U> for d2b_bus::session::contract::ZoneEndpointPolicy where U: core::convert::TryFrom<T>
 impl<T, U> core::convert::TryInto<U> for d2b_bus::session::contract::ZoneEndpointPolicyIdentity where U: core::convert::TryFrom<T>
 impl<T, U> core::convert::TryInto<U> for d2b_bus::session::contract::ZonePolicyError where U: core::convert::TryFrom<T>
@@ -1464,6 +1642,8 @@ impl<T, U> core::convert::TryInto<U> for d2b_bus::zone_route::ZoneRouteError whe
 impl<T, U> core::convert::TryInto<U> for d2b_bus::zone_route::ZoneRouteOutcome where U: core::convert::TryFrom<T>
 impl<T, U> core::convert::TryInto<U> for d2b_bus::zone_route::ZoneRouteQuery where U: core::convert::TryFrom<T>
 impl<T> alloc::borrow::ToOwned for d2b_bus::audit::BusErrorKind where T: core::clone::Clone
+impl<T> alloc::borrow::ToOwned for d2b_bus::audit::RouteAuditContext where T: core::clone::Clone
+impl<T> alloc::borrow::ToOwned for d2b_bus::audit::RouteAuditError where T: core::clone::Clone
 impl<T> alloc::borrow::ToOwned for d2b_bus::authorization::AuthorizationError where T: core::clone::Clone
 impl<T> alloc::borrow::ToOwned for d2b_bus::authorization::AuthorizationErrorClass where T: core::clone::Clone
 impl<T> alloc::borrow::ToOwned for d2b_bus::operations::Cancellation where T: core::clone::Clone
@@ -1492,6 +1672,13 @@ impl<T> alloc::borrow::ToOwned for d2b_bus::router::CancellationOutcome where T:
 impl<T> alloc::borrow::ToOwned for d2b_bus::router::ResourceCall where T: core::clone::Clone
 impl<T> alloc::borrow::ToOwned for d2b_bus::router::ResourceFilter where T: core::clone::Clone
 impl<T> alloc::borrow::ToOwned for d2b_bus::router::ResourceQuery where T: core::clone::Clone
+impl<T> alloc::borrow::ToOwned for d2b_bus::routing::BusErrorKind where T: core::clone::Clone
+impl<T> alloc::borrow::ToOwned for d2b_bus::routing::CredentialCustody where T: core::clone::Clone
+impl<T> alloc::borrow::ToOwned for d2b_bus::routing::RouteDirection where T: core::clone::Clone
+impl<T> alloc::borrow::ToOwned for d2b_bus::routing::RouteServiceError where T: core::clone::Clone
+impl<T> alloc::borrow::ToOwned for d2b_bus::routing::RouteTableError where T: core::clone::Clone
+impl<T> alloc::borrow::ToOwned for d2b_bus::routing::ZoneSessionAuthority where T: core::clone::Clone
+impl<T> alloc::borrow::ToOwned for d2b_bus::service_router::ServiceRoute where T: core::clone::Clone
 impl<T> alloc::borrow::ToOwned for d2b_bus::session::contract::ZoneEndpointPolicy where T: core::clone::Clone
 impl<T> alloc::borrow::ToOwned for d2b_bus::session::contract::ZoneEndpointPolicyIdentity where T: core::clone::Clone
 impl<T> alloc::borrow::ToOwned for d2b_bus::session::contract::ZonePolicyError where T: core::clone::Clone
@@ -1535,13 +1722,17 @@ impl<T> alloc::string::ToString for d2b_bus::operations::OperationError where T:
 impl<T> alloc::string::ToString for d2b_bus::registry::EndpointError where T: core::fmt::Display + ?core::marker::Sized
 impl<T> alloc::string::ToString for d2b_bus::registry::RegistryError where T: core::fmt::Display + ?core::marker::Sized
 impl<T> alloc::string::ToString for d2b_bus::router::BusError where T: core::fmt::Display + ?core::marker::Sized
+impl<T> alloc::string::ToString for d2b_bus::routing::RouteServiceError where T: core::fmt::Display + ?core::marker::Sized
 impl<T> alloc::string::ToString for d2b_bus::session::contract::ZonePolicyError where T: core::fmt::Display + ?core::marker::Sized
 impl<T> alloc::string::ToString for d2b_bus::session::enrollment::ZoneLinkEnrollmentError where T: core::fmt::Display + ?core::marker::Sized
 impl<T> alloc::string::ToString for d2b_bus::session::zone_link::ZoneLinkSessionError where T: core::fmt::Display + ?core::marker::Sized
 impl<T> alloc::string::ToString for d2b_bus::streams::StreamError where T: core::fmt::Display + ?core::marker::Sized
 impl<T> alloc::string::ToString for d2b_bus::transport::credit::CreditError where T: core::fmt::Display + ?core::marker::Sized
 impl<T> alloc::string::ToString for d2b_bus::transport::unix::TransportAdmissionError where T: core::fmt::Display + ?core::marker::Sized
+impl<T> core::any::Any for d2b_bus::audit::BusAuditWriter<'a> where T: 'static + ?core::marker::Sized
 impl<T> core::any::Any for d2b_bus::audit::BusErrorKind where T: 'static + ?core::marker::Sized
+impl<T> core::any::Any for d2b_bus::audit::RouteAuditContext where T: 'static + ?core::marker::Sized
+impl<T> core::any::Any for d2b_bus::audit::RouteAuditError where T: 'static + ?core::marker::Sized
 impl<T> core::any::Any for d2b_bus::authorization::AuthorizationError where T: 'static + ?core::marker::Sized
 impl<T> core::any::Any for d2b_bus::authorization::AuthorizationErrorClass where T: 'static + ?core::marker::Sized
 impl<T> core::any::Any for d2b_bus::authorization::BusAuthorizer where T: 'static + ?core::marker::Sized
@@ -1583,6 +1774,14 @@ impl<T> core::any::Any for d2b_bus::router::ResourceFilter where T: 'static + ?c
 impl<T> core::any::Any for d2b_bus::router::ResourceQuery where T: 'static + ?core::marker::Sized
 impl<T> core::any::Any for d2b_bus::router::ZoneBus where T: 'static + ?core::marker::Sized
 impl<T> core::any::Any for d2b_bus::router::ZoneRegistrar where T: 'static + ?core::marker::Sized
+impl<T> core::any::Any for d2b_bus::routing::BusErrorKind where T: 'static + ?core::marker::Sized
+impl<T> core::any::Any for d2b_bus::routing::CredentialCustody where T: 'static + ?core::marker::Sized
+impl<T> core::any::Any for d2b_bus::routing::RouteDirection where T: 'static + ?core::marker::Sized
+impl<T> core::any::Any for d2b_bus::routing::RouteServiceError where T: 'static + ?core::marker::Sized
+impl<T> core::any::Any for d2b_bus::routing::RouteTable where T: 'static + ?core::marker::Sized
+impl<T> core::any::Any for d2b_bus::routing::RouteTableError where T: 'static + ?core::marker::Sized
+impl<T> core::any::Any for d2b_bus::routing::ZoneSessionAuthority where T: 'static + ?core::marker::Sized
+impl<T> core::any::Any for d2b_bus::service_router::ServiceRoute where T: 'static + ?core::marker::Sized
 impl<T> core::any::Any for d2b_bus::session::contract::ZoneEndpointPolicy where T: 'static + ?core::marker::Sized
 impl<T> core::any::Any for d2b_bus::session::contract::ZoneEndpointPolicyIdentity where T: 'static + ?core::marker::Sized
 impl<T> core::any::Any for d2b_bus::session::contract::ZonePolicyError where T: 'static + ?core::marker::Sized
@@ -1627,7 +1826,10 @@ impl<T> core::any::Any for d2b_bus::zone_route::ZoneLinkIdempotencyKey where T: 
 impl<T> core::any::Any for d2b_bus::zone_route::ZoneRouteError where T: 'static + ?core::marker::Sized
 impl<T> core::any::Any for d2b_bus::zone_route::ZoneRouteOutcome where T: 'static + ?core::marker::Sized
 impl<T> core::any::Any for d2b_bus::zone_route::ZoneRouteQuery where T: 'static + ?core::marker::Sized
+impl<T> core::borrow::Borrow<T> for d2b_bus::audit::BusAuditWriter<'a> where T: ?core::marker::Sized
 impl<T> core::borrow::Borrow<T> for d2b_bus::audit::BusErrorKind where T: ?core::marker::Sized
+impl<T> core::borrow::Borrow<T> for d2b_bus::audit::RouteAuditContext where T: ?core::marker::Sized
+impl<T> core::borrow::Borrow<T> for d2b_bus::audit::RouteAuditError where T: ?core::marker::Sized
 impl<T> core::borrow::Borrow<T> for d2b_bus::authorization::AuthorizationError where T: ?core::marker::Sized
 impl<T> core::borrow::Borrow<T> for d2b_bus::authorization::AuthorizationErrorClass where T: ?core::marker::Sized
 impl<T> core::borrow::Borrow<T> for d2b_bus::authorization::BusAuthorizer where T: ?core::marker::Sized
@@ -1669,6 +1871,14 @@ impl<T> core::borrow::Borrow<T> for d2b_bus::router::ResourceFilter where T: ?co
 impl<T> core::borrow::Borrow<T> for d2b_bus::router::ResourceQuery where T: ?core::marker::Sized
 impl<T> core::borrow::Borrow<T> for d2b_bus::router::ZoneBus where T: ?core::marker::Sized
 impl<T> core::borrow::Borrow<T> for d2b_bus::router::ZoneRegistrar where T: ?core::marker::Sized
+impl<T> core::borrow::Borrow<T> for d2b_bus::routing::BusErrorKind where T: ?core::marker::Sized
+impl<T> core::borrow::Borrow<T> for d2b_bus::routing::CredentialCustody where T: ?core::marker::Sized
+impl<T> core::borrow::Borrow<T> for d2b_bus::routing::RouteDirection where T: ?core::marker::Sized
+impl<T> core::borrow::Borrow<T> for d2b_bus::routing::RouteServiceError where T: ?core::marker::Sized
+impl<T> core::borrow::Borrow<T> for d2b_bus::routing::RouteTable where T: ?core::marker::Sized
+impl<T> core::borrow::Borrow<T> for d2b_bus::routing::RouteTableError where T: ?core::marker::Sized
+impl<T> core::borrow::Borrow<T> for d2b_bus::routing::ZoneSessionAuthority where T: ?core::marker::Sized
+impl<T> core::borrow::Borrow<T> for d2b_bus::service_router::ServiceRoute where T: ?core::marker::Sized
 impl<T> core::borrow::Borrow<T> for d2b_bus::session::contract::ZoneEndpointPolicy where T: ?core::marker::Sized
 impl<T> core::borrow::Borrow<T> for d2b_bus::session::contract::ZoneEndpointPolicyIdentity where T: ?core::marker::Sized
 impl<T> core::borrow::Borrow<T> for d2b_bus::session::contract::ZonePolicyError where T: ?core::marker::Sized
@@ -1713,7 +1923,10 @@ impl<T> core::borrow::Borrow<T> for d2b_bus::zone_route::ZoneLinkIdempotencyKey 
 impl<T> core::borrow::Borrow<T> for d2b_bus::zone_route::ZoneRouteError where T: ?core::marker::Sized
 impl<T> core::borrow::Borrow<T> for d2b_bus::zone_route::ZoneRouteOutcome where T: ?core::marker::Sized
 impl<T> core::borrow::Borrow<T> for d2b_bus::zone_route::ZoneRouteQuery where T: ?core::marker::Sized
+impl<T> core::borrow::BorrowMut<T> for d2b_bus::audit::BusAuditWriter<'a> where T: ?core::marker::Sized
 impl<T> core::borrow::BorrowMut<T> for d2b_bus::audit::BusErrorKind where T: ?core::marker::Sized
+impl<T> core::borrow::BorrowMut<T> for d2b_bus::audit::RouteAuditContext where T: ?core::marker::Sized
+impl<T> core::borrow::BorrowMut<T> for d2b_bus::audit::RouteAuditError where T: ?core::marker::Sized
 impl<T> core::borrow::BorrowMut<T> for d2b_bus::authorization::AuthorizationError where T: ?core::marker::Sized
 impl<T> core::borrow::BorrowMut<T> for d2b_bus::authorization::AuthorizationErrorClass where T: ?core::marker::Sized
 impl<T> core::borrow::BorrowMut<T> for d2b_bus::authorization::BusAuthorizer where T: ?core::marker::Sized
@@ -1755,6 +1968,14 @@ impl<T> core::borrow::BorrowMut<T> for d2b_bus::router::ResourceFilter where T: 
 impl<T> core::borrow::BorrowMut<T> for d2b_bus::router::ResourceQuery where T: ?core::marker::Sized
 impl<T> core::borrow::BorrowMut<T> for d2b_bus::router::ZoneBus where T: ?core::marker::Sized
 impl<T> core::borrow::BorrowMut<T> for d2b_bus::router::ZoneRegistrar where T: ?core::marker::Sized
+impl<T> core::borrow::BorrowMut<T> for d2b_bus::routing::BusErrorKind where T: ?core::marker::Sized
+impl<T> core::borrow::BorrowMut<T> for d2b_bus::routing::CredentialCustody where T: ?core::marker::Sized
+impl<T> core::borrow::BorrowMut<T> for d2b_bus::routing::RouteDirection where T: ?core::marker::Sized
+impl<T> core::borrow::BorrowMut<T> for d2b_bus::routing::RouteServiceError where T: ?core::marker::Sized
+impl<T> core::borrow::BorrowMut<T> for d2b_bus::routing::RouteTable where T: ?core::marker::Sized
+impl<T> core::borrow::BorrowMut<T> for d2b_bus::routing::RouteTableError where T: ?core::marker::Sized
+impl<T> core::borrow::BorrowMut<T> for d2b_bus::routing::ZoneSessionAuthority where T: ?core::marker::Sized
+impl<T> core::borrow::BorrowMut<T> for d2b_bus::service_router::ServiceRoute where T: ?core::marker::Sized
 impl<T> core::borrow::BorrowMut<T> for d2b_bus::session::contract::ZoneEndpointPolicy where T: ?core::marker::Sized
 impl<T> core::borrow::BorrowMut<T> for d2b_bus::session::contract::ZoneEndpointPolicyIdentity where T: ?core::marker::Sized
 impl<T> core::borrow::BorrowMut<T> for d2b_bus::session::contract::ZonePolicyError where T: ?core::marker::Sized
@@ -1800,6 +2021,8 @@ impl<T> core::borrow::BorrowMut<T> for d2b_bus::zone_route::ZoneRouteError where
 impl<T> core::borrow::BorrowMut<T> for d2b_bus::zone_route::ZoneRouteOutcome where T: ?core::marker::Sized
 impl<T> core::borrow::BorrowMut<T> for d2b_bus::zone_route::ZoneRouteQuery where T: ?core::marker::Sized
 impl<T> core::clone::CloneToUninit for d2b_bus::audit::BusErrorKind where T: core::clone::Clone
+impl<T> core::clone::CloneToUninit for d2b_bus::audit::RouteAuditContext where T: core::clone::Clone
+impl<T> core::clone::CloneToUninit for d2b_bus::audit::RouteAuditError where T: core::clone::Clone
 impl<T> core::clone::CloneToUninit for d2b_bus::authorization::AuthorizationError where T: core::clone::Clone
 impl<T> core::clone::CloneToUninit for d2b_bus::authorization::AuthorizationErrorClass where T: core::clone::Clone
 impl<T> core::clone::CloneToUninit for d2b_bus::operations::Cancellation where T: core::clone::Clone
@@ -1828,6 +2051,13 @@ impl<T> core::clone::CloneToUninit for d2b_bus::router::CancellationOutcome wher
 impl<T> core::clone::CloneToUninit for d2b_bus::router::ResourceCall where T: core::clone::Clone
 impl<T> core::clone::CloneToUninit for d2b_bus::router::ResourceFilter where T: core::clone::Clone
 impl<T> core::clone::CloneToUninit for d2b_bus::router::ResourceQuery where T: core::clone::Clone
+impl<T> core::clone::CloneToUninit for d2b_bus::routing::BusErrorKind where T: core::clone::Clone
+impl<T> core::clone::CloneToUninit for d2b_bus::routing::CredentialCustody where T: core::clone::Clone
+impl<T> core::clone::CloneToUninit for d2b_bus::routing::RouteDirection where T: core::clone::Clone
+impl<T> core::clone::CloneToUninit for d2b_bus::routing::RouteServiceError where T: core::clone::Clone
+impl<T> core::clone::CloneToUninit for d2b_bus::routing::RouteTableError where T: core::clone::Clone
+impl<T> core::clone::CloneToUninit for d2b_bus::routing::ZoneSessionAuthority where T: core::clone::Clone
+impl<T> core::clone::CloneToUninit for d2b_bus::service_router::ServiceRoute where T: core::clone::Clone
 impl<T> core::clone::CloneToUninit for d2b_bus::session::contract::ZoneEndpointPolicy where T: core::clone::Clone
 impl<T> core::clone::CloneToUninit for d2b_bus::session::contract::ZoneEndpointPolicyIdentity where T: core::clone::Clone
 impl<T> core::clone::CloneToUninit for d2b_bus::session::contract::ZonePolicyError where T: core::clone::Clone
@@ -1866,7 +2096,10 @@ impl<T> core::clone::CloneToUninit for d2b_bus::zone_route::ZoneLinkIdempotencyK
 impl<T> core::clone::CloneToUninit for d2b_bus::zone_route::ZoneRouteError where T: core::clone::Clone
 impl<T> core::clone::CloneToUninit for d2b_bus::zone_route::ZoneRouteOutcome where T: core::clone::Clone
 impl<T> core::clone::CloneToUninit for d2b_bus::zone_route::ZoneRouteQuery where T: core::clone::Clone
+impl<T> core::convert::From<T> for d2b_bus::audit::BusAuditWriter<'a>
 impl<T> core::convert::From<T> for d2b_bus::audit::BusErrorKind
+impl<T> core::convert::From<T> for d2b_bus::audit::RouteAuditContext
+impl<T> core::convert::From<T> for d2b_bus::audit::RouteAuditError
 impl<T> core::convert::From<T> for d2b_bus::authorization::AuthorizationError
 impl<T> core::convert::From<T> for d2b_bus::authorization::AuthorizationErrorClass
 impl<T> core::convert::From<T> for d2b_bus::authorization::BusAuthorizer
@@ -1908,6 +2141,14 @@ impl<T> core::convert::From<T> for d2b_bus::router::ResourceFilter
 impl<T> core::convert::From<T> for d2b_bus::router::ResourceQuery
 impl<T> core::convert::From<T> for d2b_bus::router::ZoneBus
 impl<T> core::convert::From<T> for d2b_bus::router::ZoneRegistrar
+impl<T> core::convert::From<T> for d2b_bus::routing::BusErrorKind
+impl<T> core::convert::From<T> for d2b_bus::routing::CredentialCustody
+impl<T> core::convert::From<T> for d2b_bus::routing::RouteDirection
+impl<T> core::convert::From<T> for d2b_bus::routing::RouteServiceError
+impl<T> core::convert::From<T> for d2b_bus::routing::RouteTable
+impl<T> core::convert::From<T> for d2b_bus::routing::RouteTableError
+impl<T> core::convert::From<T> for d2b_bus::routing::ZoneSessionAuthority
+impl<T> core::convert::From<T> for d2b_bus::service_router::ServiceRoute
 impl<T> core::convert::From<T> for d2b_bus::session::contract::ZoneEndpointPolicy
 impl<T> core::convert::From<T> for d2b_bus::session::contract::ZoneEndpointPolicyIdentity
 impl<T> core::convert::From<T> for d2b_bus::session::contract::ZonePolicyError
@@ -1952,7 +2193,10 @@ impl<T> core::convert::From<T> for d2b_bus::zone_route::ZoneLinkIdempotencyKey
 impl<T> core::convert::From<T> for d2b_bus::zone_route::ZoneRouteError
 impl<T> core::convert::From<T> for d2b_bus::zone_route::ZoneRouteOutcome
 impl<T> core::convert::From<T> for d2b_bus::zone_route::ZoneRouteQuery
+impl<T> crossbeam_epoch::atomic::Pointable for d2b_bus::audit::BusAuditWriter<'a>
 impl<T> crossbeam_epoch::atomic::Pointable for d2b_bus::audit::BusErrorKind
+impl<T> crossbeam_epoch::atomic::Pointable for d2b_bus::audit::RouteAuditContext
+impl<T> crossbeam_epoch::atomic::Pointable for d2b_bus::audit::RouteAuditError
 impl<T> crossbeam_epoch::atomic::Pointable for d2b_bus::authorization::AuthorizationError
 impl<T> crossbeam_epoch::atomic::Pointable for d2b_bus::authorization::AuthorizationErrorClass
 impl<T> crossbeam_epoch::atomic::Pointable for d2b_bus::authorization::BusAuthorizer
@@ -1994,6 +2238,14 @@ impl<T> crossbeam_epoch::atomic::Pointable for d2b_bus::router::ResourceFilter
 impl<T> crossbeam_epoch::atomic::Pointable for d2b_bus::router::ResourceQuery
 impl<T> crossbeam_epoch::atomic::Pointable for d2b_bus::router::ZoneBus
 impl<T> crossbeam_epoch::atomic::Pointable for d2b_bus::router::ZoneRegistrar
+impl<T> crossbeam_epoch::atomic::Pointable for d2b_bus::routing::BusErrorKind
+impl<T> crossbeam_epoch::atomic::Pointable for d2b_bus::routing::CredentialCustody
+impl<T> crossbeam_epoch::atomic::Pointable for d2b_bus::routing::RouteDirection
+impl<T> crossbeam_epoch::atomic::Pointable for d2b_bus::routing::RouteServiceError
+impl<T> crossbeam_epoch::atomic::Pointable for d2b_bus::routing::RouteTable
+impl<T> crossbeam_epoch::atomic::Pointable for d2b_bus::routing::RouteTableError
+impl<T> crossbeam_epoch::atomic::Pointable for d2b_bus::routing::ZoneSessionAuthority
+impl<T> crossbeam_epoch::atomic::Pointable for d2b_bus::service_router::ServiceRoute
 impl<T> crossbeam_epoch::atomic::Pointable for d2b_bus::session::contract::ZoneEndpointPolicy
 impl<T> crossbeam_epoch::atomic::Pointable for d2b_bus::session::contract::ZoneEndpointPolicyIdentity
 impl<T> crossbeam_epoch::atomic::Pointable for d2b_bus::session::contract::ZonePolicyError
@@ -2039,6 +2291,8 @@ impl<T> crossbeam_epoch::atomic::Pointable for d2b_bus::zone_route::ZoneRouteErr
 impl<T> crossbeam_epoch::atomic::Pointable for d2b_bus::zone_route::ZoneRouteOutcome
 impl<T> crossbeam_epoch::atomic::Pointable for d2b_bus::zone_route::ZoneRouteQuery
 impl<T> dyn_clone::DynClone for d2b_bus::audit::BusErrorKind where T: core::clone::Clone
+impl<T> dyn_clone::DynClone for d2b_bus::audit::RouteAuditContext where T: core::clone::Clone
+impl<T> dyn_clone::DynClone for d2b_bus::audit::RouteAuditError where T: core::clone::Clone
 impl<T> dyn_clone::DynClone for d2b_bus::authorization::AuthorizationError where T: core::clone::Clone
 impl<T> dyn_clone::DynClone for d2b_bus::authorization::AuthorizationErrorClass where T: core::clone::Clone
 impl<T> dyn_clone::DynClone for d2b_bus::operations::Cancellation where T: core::clone::Clone
@@ -2067,6 +2321,13 @@ impl<T> dyn_clone::DynClone for d2b_bus::router::CancellationOutcome where T: co
 impl<T> dyn_clone::DynClone for d2b_bus::router::ResourceCall where T: core::clone::Clone
 impl<T> dyn_clone::DynClone for d2b_bus::router::ResourceFilter where T: core::clone::Clone
 impl<T> dyn_clone::DynClone for d2b_bus::router::ResourceQuery where T: core::clone::Clone
+impl<T> dyn_clone::DynClone for d2b_bus::routing::BusErrorKind where T: core::clone::Clone
+impl<T> dyn_clone::DynClone for d2b_bus::routing::CredentialCustody where T: core::clone::Clone
+impl<T> dyn_clone::DynClone for d2b_bus::routing::RouteDirection where T: core::clone::Clone
+impl<T> dyn_clone::DynClone for d2b_bus::routing::RouteServiceError where T: core::clone::Clone
+impl<T> dyn_clone::DynClone for d2b_bus::routing::RouteTableError where T: core::clone::Clone
+impl<T> dyn_clone::DynClone for d2b_bus::routing::ZoneSessionAuthority where T: core::clone::Clone
+impl<T> dyn_clone::DynClone for d2b_bus::service_router::ServiceRoute where T: core::clone::Clone
 impl<T> dyn_clone::DynClone for d2b_bus::session::contract::ZoneEndpointPolicy where T: core::clone::Clone
 impl<T> dyn_clone::DynClone for d2b_bus::session::contract::ZoneEndpointPolicyIdentity where T: core::clone::Clone
 impl<T> dyn_clone::DynClone for d2b_bus::session::contract::ZonePolicyError where T: core::clone::Clone
@@ -2105,7 +2366,10 @@ impl<T> dyn_clone::DynClone for d2b_bus::zone_route::ZoneLinkIdempotencyKey wher
 impl<T> dyn_clone::DynClone for d2b_bus::zone_route::ZoneRouteError where T: core::clone::Clone
 impl<T> dyn_clone::DynClone for d2b_bus::zone_route::ZoneRouteOutcome where T: core::clone::Clone
 impl<T> dyn_clone::DynClone for d2b_bus::zone_route::ZoneRouteQuery where T: core::clone::Clone
+impl<T> typenum::type_operators::Same for d2b_bus::audit::BusAuditWriter<'a>
 impl<T> typenum::type_operators::Same for d2b_bus::audit::BusErrorKind
+impl<T> typenum::type_operators::Same for d2b_bus::audit::RouteAuditContext
+impl<T> typenum::type_operators::Same for d2b_bus::audit::RouteAuditError
 impl<T> typenum::type_operators::Same for d2b_bus::authorization::AuthorizationError
 impl<T> typenum::type_operators::Same for d2b_bus::authorization::AuthorizationErrorClass
 impl<T> typenum::type_operators::Same for d2b_bus::authorization::BusAuthorizer
@@ -2147,6 +2411,14 @@ impl<T> typenum::type_operators::Same for d2b_bus::router::ResourceFilter
 impl<T> typenum::type_operators::Same for d2b_bus::router::ResourceQuery
 impl<T> typenum::type_operators::Same for d2b_bus::router::ZoneBus
 impl<T> typenum::type_operators::Same for d2b_bus::router::ZoneRegistrar
+impl<T> typenum::type_operators::Same for d2b_bus::routing::BusErrorKind
+impl<T> typenum::type_operators::Same for d2b_bus::routing::CredentialCustody
+impl<T> typenum::type_operators::Same for d2b_bus::routing::RouteDirection
+impl<T> typenum::type_operators::Same for d2b_bus::routing::RouteServiceError
+impl<T> typenum::type_operators::Same for d2b_bus::routing::RouteTable
+impl<T> typenum::type_operators::Same for d2b_bus::routing::RouteTableError
+impl<T> typenum::type_operators::Same for d2b_bus::routing::ZoneSessionAuthority
+impl<T> typenum::type_operators::Same for d2b_bus::service_router::ServiceRoute
 impl<T> typenum::type_operators::Same for d2b_bus::session::contract::ZoneEndpointPolicy
 impl<T> typenum::type_operators::Same for d2b_bus::session::contract::ZoneEndpointPolicyIdentity
 impl<T> typenum::type_operators::Same for d2b_bus::session::contract::ZonePolicyError
@@ -2214,7 +2486,10 @@ pub async fn d2b_bus::session::zone_link::ZoneLinkSession::send_forwarded_stream
 pub async fn d2b_bus::streams::IncomingStream::grant(&self, &d2b_bus::streams::StreamName, usize) -> core::result::Result<(), d2b_bus::streams::StreamError>
 pub async fn d2b_bus::streams::IncomingStream::grant_frame(&self, &d2b_bus::streams::ReceivedFrame, usize) -> core::result::Result<(), d2b_bus::streams::StreamError>
 pub async fn d2b_bus::streams::IncomingStream::receive_next(&self) -> core::result::Result<d2b_bus::streams::ReceivedFrame, d2b_bus::streams::StreamError>
+pub const d2b_bus::audit::BusAuditWriter<'a>::ALIGN: usize
 pub const d2b_bus::audit::BusErrorKind::ALIGN: usize
+pub const d2b_bus::audit::RouteAuditContext::ALIGN: usize
+pub const d2b_bus::audit::RouteAuditError::ALIGN: usize
 pub const d2b_bus::authorization::AuthorizationError::ALIGN: usize
 pub const d2b_bus::authorization::AuthorizationErrorClass::ALIGN: usize
 pub const d2b_bus::authorization::BusAuthorizer::ALIGN: usize
@@ -2262,6 +2537,19 @@ pub const d2b_bus::router::ResourceFilter::ALIGN: usize
 pub const d2b_bus::router::ResourceQuery::ALIGN: usize
 pub const d2b_bus::router::ZoneBus::ALIGN: usize
 pub const d2b_bus::router::ZoneRegistrar::ALIGN: usize
+pub const d2b_bus::routing::BusErrorKind::ALIGN: usize
+pub const d2b_bus::routing::CredentialCustody::ALIGN: usize
+pub const d2b_bus::routing::DEFAULT_MAX_MUTATION_RECORDS: usize
+pub const d2b_bus::routing::DEFAULT_MAX_SHORTCUTS: usize
+pub const d2b_bus::routing::DEFAULT_MAX_ZONE_BINDINGS: usize
+pub const d2b_bus::routing::MAX_DISPATCH_IN_FLIGHT: usize
+pub const d2b_bus::routing::RouteDirection::ALIGN: usize
+pub const d2b_bus::routing::RouteServiceError::ALIGN: usize
+pub const d2b_bus::routing::RouteTable::ALIGN: usize
+pub const d2b_bus::routing::RouteTableError::ALIGN: usize
+pub const d2b_bus::routing::ZONE_SERVICE_NAME: &str
+pub const d2b_bus::routing::ZoneSessionAuthority::ALIGN: usize
+pub const d2b_bus::service_router::ServiceRoute::ALIGN: usize
 pub const d2b_bus::session::BOOTSTRAP_PSK_TTL_MS_DEFAULT: u64
 pub const d2b_bus::session::BOOTSTRAP_PSK_TTL_MS_MAX: u64
 pub const d2b_bus::session::BOOTSTRAP_PSK_TTL_MS_MIN: u64
@@ -2327,6 +2615,7 @@ pub const d2b_bus::zone_route::ZoneLinkIdempotencyKey::ALIGN: usize
 pub const d2b_bus::zone_route::ZoneRouteError::ALIGN: usize
 pub const d2b_bus::zone_route::ZoneRouteOutcome::ALIGN: usize
 pub const d2b_bus::zone_route::ZoneRouteQuery::ALIGN: usize
+pub const fn d2b_bus::audit::BusAuditWriter<'a>::new(&'a d2b_audit::sink::AuditSink) -> Self
 pub const fn d2b_bus::audit::BusErrorKind::code(self) -> &'static str
 pub const fn d2b_bus::authorization::AuthorizationError::class(self) -> d2b_bus::authorization::AuthorizationErrorClass
 pub const fn d2b_bus::authorization::AuthorizationError::native_denial(self) -> core::option::Option<d2b_resource_api::authz::AuthorizationDenial>
@@ -2375,6 +2664,13 @@ pub const fn d2b_bus::router::DeliveredStream::operation(&self) -> &d2b_bus::ope
 pub const fn d2b_bus::router::DeliveredStream::resource_call(&self) -> core::option::Option<&d2b_bus::router::ResourceCall>
 pub const fn d2b_bus::router::DeliveredStream::route(&self) -> &d2b_bus::registry::RouteKey
 pub const fn d2b_bus::router::ManualClock::new(u64) -> Self
+pub const fn d2b_bus::routing::BusErrorKind::code(self) -> &'static str
+pub const fn d2b_bus::routing::RouteDirection::as_str(self) -> &'static str
+pub const fn d2b_bus::routing::RouteServiceError::code(self) -> &'static str
+pub const fn d2b_bus::routing::ZoneSessionAuthority::custody(&self) -> d2b_bus::routing::CredentialCustody
+pub const fn d2b_bus::routing::ZoneSessionAuthority::peer_role(&self) -> d2b_contracts::v3::zone_session::EndpointRole
+pub const fn d2b_bus::routing::ZoneSessionAuthority::zone(&self) -> &d2b_contracts::v3::identity::ZoneId
+pub const fn d2b_bus::service_router::ServiceRoute::direction(&self) -> d2b_bus::routing::RouteDirection
 pub const fn d2b_bus::session::contract::ZonePolicyError::as_str(self) -> &'static str
 pub const fn d2b_bus::session::enrollment::BootstrapPskIssuance::issuance(self) -> u64
 pub const fn d2b_bus::session::enrollment::EnrollmentRecord::fingerprint(&self) -> d2b_bus::session::enrollment::EnrollmentFingerprint
@@ -2545,6 +2841,8 @@ pub d2b_bus::audit::BusErrorKind::Denied
 pub d2b_bus::audit::BusErrorKind::Error
 pub d2b_bus::audit::BusErrorKind::NotFound
 pub d2b_bus::audit::BusErrorKind::Ok
+pub d2b_bus::audit::RouteAuditError::Record(d2b_audit::record_types::AuditRecordError)
+pub d2b_bus::audit::RouteAuditError::Sink(d2b_audit::sink::AuditSinkError)
 pub d2b_bus::authorization::AuthorizationError::DiagnosticBinding
 pub d2b_bus::authorization::AuthorizationError::InvalidResourceCall
 pub d2b_bus::authorization::AuthorizationError::Native(d2b_resource_api::authz::AuthorizationDenial)
@@ -2674,6 +2972,25 @@ pub d2b_bus::router::ResourceCall::UpdateSpec(d2b_contracts::v3::resource_ref::R
 pub d2b_bus::router::ResourceCall::UpdateStatus(d2b_contracts::v3::resource_ref::ResourceRef)
 pub d2b_bus::router::ResourceCall::Upgrade(d2b_contracts::v3::resource_ref::ResourceRef)
 pub d2b_bus::router::ResourceCall::Watch(d2b_bus::router::ResourceQuery)
+pub d2b_bus::routing::BusErrorKind::Denied
+pub d2b_bus::routing::BusErrorKind::Error
+pub d2b_bus::routing::BusErrorKind::NotFound
+pub d2b_bus::routing::BusErrorKind::Ok
+pub d2b_bus::routing::CredentialCustody::GatewayGuest
+pub d2b_bus::routing::CredentialCustody::None
+pub d2b_bus::routing::RouteDirection::Guest
+pub d2b_bus::routing::RouteDirection::Host
+pub d2b_bus::routing::RouteDirection::Local
+pub d2b_bus::routing::RouteDirection::ZoneLink
+pub d2b_bus::routing::RouteServiceError::CustodyMismatch
+pub d2b_bus::routing::RouteServiceError::DispatchSaturated
+pub d2b_bus::routing::RouteServiceError::RoleNotAdmissible
+pub d2b_bus::routing::RouteServiceError::ShuttingDown
+pub d2b_bus::routing::RouteTableError::AuditUnavailable
+pub d2b_bus::routing::RouteTableError::DuplicateService
+pub d2b_bus::routing::RouteTableError::EmptyService
+pub d2b_bus::routing::RouteTableError::MethodNotFound
+pub d2b_bus::routing::RouteTableError::ServiceNotFound
 pub d2b_bus::session::ZoneEndpointPolicy::attachment_policy: d2b_contracts::v3::component_session::AttachmentPolicy
 pub d2b_bus::session::ZoneEndpointPolicy::initiator_role: d2b_contracts::v3::zone_session::EndpointRole
 pub d2b_bus::session::ZoneEndpointPolicy::limits: d2b_contracts::v3::component_session::LimitProfile
@@ -2857,6 +3174,7 @@ pub enum d2b_bus::RouteMember
 pub enum d2b_bus::RouteTarget
 pub enum d2b_bus::StreamError
 pub enum d2b_bus::audit::BusErrorKind
+pub enum d2b_bus::audit::RouteAuditError
 pub enum d2b_bus::authorization::AuthorizationError
 pub enum d2b_bus::authorization::AuthorizationErrorClass
 pub enum d2b_bus::operations::OperationError
@@ -2872,6 +3190,11 @@ pub enum d2b_bus::router::BusEvent
 pub enum d2b_bus::router::BusFailureReason
 pub enum d2b_bus::router::CancellationOutcome
 pub enum d2b_bus::router::ResourceCall
+pub enum d2b_bus::routing::BusErrorKind
+pub enum d2b_bus::routing::CredentialCustody
+pub enum d2b_bus::routing::RouteDirection
+pub enum d2b_bus::routing::RouteServiceError
+pub enum d2b_bus::routing::RouteTableError
 pub enum d2b_bus::session::ZoneLinkEnrollmentError
 pub enum d2b_bus::session::ZoneLinkSessionError
 pub enum d2b_bus::session::ZoneLinkState
@@ -2898,6 +3221,15 @@ pub fn d2b_bus::BusEndpoint::invoke<'life0, 'async_trait>(&'life0 self, d2b_bus:
 pub fn d2b_bus::BusEndpoint::open_stream<'life0, 'async_trait>(&'life0 self, d2b_bus::router::DeliveredStream) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<(), d2b_bus::registry::EndpointError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
 pub fn d2b_bus::BusEndpoint::terminalize_cancel(&self, &d2b_bus::operations::OperationId, &d2b_bus::operations::Cancellation) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<(), d2b_bus::registry::EndpointError>> + core::marker::Send + 'static)>>
 pub fn d2b_bus::BusObserver::record(&self, d2b_bus::router::BusEvent, d2b_bus::router::BusFailureReason)
+pub fn d2b_bus::audit::BusAuditWriter<'a>::append_route(&self, &d2b_audit::record_types::AuditRecord) -> core::result::Result<d2b_audit::sink::AuditWriteOutcome, d2b_audit::sink::AuditSinkError>
+pub fn d2b_bus::audit::BusAuditWriter<'a>::borrow(&self) -> &T
+pub fn d2b_bus::audit::BusAuditWriter<'a>::borrow_mut(&mut self) -> &mut T
+pub fn d2b_bus::audit::BusAuditWriter<'a>::from(T) -> T
+pub fn d2b_bus::audit::BusAuditWriter<'a>::into(self) -> U
+pub fn d2b_bus::audit::BusAuditWriter<'a>::record_resolution(&self, &d2b_bus::audit::RouteAuditContext, &str, &str, d2b_bus::routing::RouteDirection, core::result::Result<(), d2b_bus::routing::RouteTableError>) -> core::result::Result<d2b_audit::sink::AuditWriteOutcome, d2b_bus::audit::RouteAuditError>
+pub fn d2b_bus::audit::BusAuditWriter<'a>::try_from(U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+pub fn d2b_bus::audit::BusAuditWriter<'a>::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+pub fn d2b_bus::audit::BusAuditWriter<'a>::type_id(&self) -> core::any::TypeId
 pub fn d2b_bus::audit::BusErrorKind::__clone_box(&self, dyn_clone::sealed::Private) -> *mut ()
 pub fn d2b_bus::audit::BusErrorKind::borrow(&self) -> &T
 pub fn d2b_bus::audit::BusErrorKind::borrow_mut(&mut self) -> &mut T
@@ -2912,7 +3244,35 @@ pub fn d2b_bus::audit::BusErrorKind::to_owned(&self) -> T
 pub fn d2b_bus::audit::BusErrorKind::try_from(U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
 pub fn d2b_bus::audit::BusErrorKind::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
 pub fn d2b_bus::audit::BusErrorKind::type_id(&self) -> core::any::TypeId
+pub fn d2b_bus::audit::RouteAuditContext::__clone_box(&self, dyn_clone::sealed::Private) -> *mut ()
+pub fn d2b_bus::audit::RouteAuditContext::borrow(&self) -> &T
+pub fn d2b_bus::audit::RouteAuditContext::borrow_mut(&mut self) -> &mut T
+pub fn d2b_bus::audit::RouteAuditContext::clone(&self) -> d2b_bus::audit::RouteAuditContext
+pub fn d2b_bus::audit::RouteAuditContext::clone_into(&self, &mut T)
+pub fn d2b_bus::audit::RouteAuditContext::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub fn d2b_bus::audit::RouteAuditContext::from(T) -> T
+pub fn d2b_bus::audit::RouteAuditContext::into(self) -> U
+pub fn d2b_bus::audit::RouteAuditContext::new(u64, impl core::convert::Into<alloc::string::String>, impl core::convert::Into<alloc::string::String>, impl core::convert::Into<alloc::string::String>, impl core::convert::Into<alloc::string::String>, d2b_telemetry::audit_hash::AuditHash, impl core::convert::Into<alloc::string::String>, impl core::convert::Into<alloc::string::String>, u64, core::option::Option<d2b_telemetry::trace_context::TraceContext>) -> Self
+pub fn d2b_bus::audit::RouteAuditContext::to_owned(&self) -> T
+pub fn d2b_bus::audit::RouteAuditContext::try_from(U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+pub fn d2b_bus::audit::RouteAuditContext::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+pub fn d2b_bus::audit::RouteAuditContext::type_id(&self) -> core::any::TypeId
+pub fn d2b_bus::audit::RouteAuditError::__clone_box(&self, dyn_clone::sealed::Private) -> *mut ()
+pub fn d2b_bus::audit::RouteAuditError::borrow(&self) -> &T
+pub fn d2b_bus::audit::RouteAuditError::borrow_mut(&mut self) -> &mut T
+pub fn d2b_bus::audit::RouteAuditError::clone(&self) -> d2b_bus::audit::RouteAuditError
+pub fn d2b_bus::audit::RouteAuditError::clone_into(&self, &mut T)
+pub fn d2b_bus::audit::RouteAuditError::eq(&self, &d2b_bus::audit::RouteAuditError) -> bool
+pub fn d2b_bus::audit::RouteAuditError::equivalent(&self, &K) -> bool
+pub fn d2b_bus::audit::RouteAuditError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub fn d2b_bus::audit::RouteAuditError::from(T) -> T
+pub fn d2b_bus::audit::RouteAuditError::into(self) -> U
+pub fn d2b_bus::audit::RouteAuditError::to_owned(&self) -> T
+pub fn d2b_bus::audit::RouteAuditError::try_from(U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+pub fn d2b_bus::audit::RouteAuditError::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+pub fn d2b_bus::audit::RouteAuditError::type_id(&self) -> core::any::TypeId
 pub fn d2b_bus::audit::route_admission_record(u64, impl core::convert::Into<alloc::string::String>, impl core::convert::Into<alloc::string::String>, impl core::convert::Into<alloc::string::String>, impl core::convert::Into<alloc::string::String>, d2b_telemetry::audit_hash::AuditHash, impl core::convert::Into<alloc::string::String>, impl core::convert::Into<alloc::string::String>, impl core::convert::Into<alloc::string::String>, impl core::convert::Into<alloc::string::String>, impl core::convert::Into<alloc::string::String>, u64, impl core::convert::Into<alloc::string::String>) -> core::result::Result<d2b_audit::record_types::AuditRecord, d2b_audit::record_types::AuditRecordError>
+pub fn d2b_bus::audit::route_admission_record_with_trace(u64, impl core::convert::Into<alloc::string::String>, impl core::convert::Into<alloc::string::String>, impl core::convert::Into<alloc::string::String>, impl core::convert::Into<alloc::string::String>, d2b_telemetry::audit_hash::AuditHash, impl core::convert::Into<alloc::string::String>, impl core::convert::Into<alloc::string::String>, impl core::convert::Into<alloc::string::String>, impl core::convert::Into<alloc::string::String>, impl core::convert::Into<alloc::string::String>, u64, impl core::convert::Into<alloc::string::String>, core::option::Option<&d2b_telemetry::trace_context::TraceContext>) -> core::result::Result<d2b_audit::record_types::AuditRecord, d2b_audit::record_types::AuditRecordError>
 pub fn d2b_bus::authorization::AuthorizationError::__clone_box(&self, dyn_clone::sealed::Private) -> *mut ()
 pub fn d2b_bus::authorization::AuthorizationError::borrow(&self) -> &T
 pub fn d2b_bus::authorization::AuthorizationError::borrow_mut(&mut self) -> &mut T
@@ -3485,6 +3845,123 @@ pub fn d2b_bus::router::ZoneRegistrar::into(self) -> U
 pub fn d2b_bus::router::ZoneRegistrar::try_from(U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
 pub fn d2b_bus::router::ZoneRegistrar::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
 pub fn d2b_bus::router::ZoneRegistrar::type_id(&self) -> core::any::TypeId
+pub fn d2b_bus::routing::BusErrorKind::__clone_box(&self, dyn_clone::sealed::Private) -> *mut ()
+pub fn d2b_bus::routing::BusErrorKind::borrow(&self) -> &T
+pub fn d2b_bus::routing::BusErrorKind::borrow_mut(&mut self) -> &mut T
+pub fn d2b_bus::routing::BusErrorKind::clone(&self) -> d2b_bus::routing::BusErrorKind
+pub fn d2b_bus::routing::BusErrorKind::clone_into(&self, &mut T)
+pub fn d2b_bus::routing::BusErrorKind::eq(&self, &d2b_bus::routing::BusErrorKind) -> bool
+pub fn d2b_bus::routing::BusErrorKind::equivalent(&self, &K) -> bool
+pub fn d2b_bus::routing::BusErrorKind::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub fn d2b_bus::routing::BusErrorKind::from(T) -> T
+pub fn d2b_bus::routing::BusErrorKind::into(self) -> U
+pub fn d2b_bus::routing::BusErrorKind::to_owned(&self) -> T
+pub fn d2b_bus::routing::BusErrorKind::try_from(U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+pub fn d2b_bus::routing::BusErrorKind::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+pub fn d2b_bus::routing::BusErrorKind::type_id(&self) -> core::any::TypeId
+pub fn d2b_bus::routing::CredentialCustody::__clone_box(&self, dyn_clone::sealed::Private) -> *mut ()
+pub fn d2b_bus::routing::CredentialCustody::borrow(&self) -> &T
+pub fn d2b_bus::routing::CredentialCustody::borrow_mut(&mut self) -> &mut T
+pub fn d2b_bus::routing::CredentialCustody::clone(&self) -> d2b_bus::routing::CredentialCustody
+pub fn d2b_bus::routing::CredentialCustody::clone_into(&self, &mut T)
+pub fn d2b_bus::routing::CredentialCustody::eq(&self, &d2b_bus::routing::CredentialCustody) -> bool
+pub fn d2b_bus::routing::CredentialCustody::equivalent(&self, &K) -> bool
+pub fn d2b_bus::routing::CredentialCustody::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub fn d2b_bus::routing::CredentialCustody::from(T) -> T
+pub fn d2b_bus::routing::CredentialCustody::into(self) -> U
+pub fn d2b_bus::routing::CredentialCustody::to_owned(&self) -> T
+pub fn d2b_bus::routing::CredentialCustody::try_from(U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+pub fn d2b_bus::routing::CredentialCustody::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+pub fn d2b_bus::routing::CredentialCustody::type_id(&self) -> core::any::TypeId
+pub fn d2b_bus::routing::RouteDirection::__clone_box(&self, dyn_clone::sealed::Private) -> *mut ()
+pub fn d2b_bus::routing::RouteDirection::borrow(&self) -> &T
+pub fn d2b_bus::routing::RouteDirection::borrow_mut(&mut self) -> &mut T
+pub fn d2b_bus::routing::RouteDirection::clone(&self) -> d2b_bus::routing::RouteDirection
+pub fn d2b_bus::routing::RouteDirection::clone_into(&self, &mut T)
+pub fn d2b_bus::routing::RouteDirection::eq(&self, &d2b_bus::routing::RouteDirection) -> bool
+pub fn d2b_bus::routing::RouteDirection::equivalent(&self, &K) -> bool
+pub fn d2b_bus::routing::RouteDirection::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub fn d2b_bus::routing::RouteDirection::from(T) -> T
+pub fn d2b_bus::routing::RouteDirection::into(self) -> U
+pub fn d2b_bus::routing::RouteDirection::to_owned(&self) -> T
+pub fn d2b_bus::routing::RouteDirection::try_from(U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+pub fn d2b_bus::routing::RouteDirection::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+pub fn d2b_bus::routing::RouteDirection::type_id(&self) -> core::any::TypeId
+pub fn d2b_bus::routing::RouteServiceError::__clone_box(&self, dyn_clone::sealed::Private) -> *mut ()
+pub fn d2b_bus::routing::RouteServiceError::borrow(&self) -> &T
+pub fn d2b_bus::routing::RouteServiceError::borrow_mut(&mut self) -> &mut T
+pub fn d2b_bus::routing::RouteServiceError::clone(&self) -> d2b_bus::routing::RouteServiceError
+pub fn d2b_bus::routing::RouteServiceError::clone_into(&self, &mut T)
+pub fn d2b_bus::routing::RouteServiceError::eq(&self, &d2b_bus::routing::RouteServiceError) -> bool
+pub fn d2b_bus::routing::RouteServiceError::equivalent(&self, &K) -> bool
+pub fn d2b_bus::routing::RouteServiceError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub fn d2b_bus::routing::RouteServiceError::from(T) -> T
+pub fn d2b_bus::routing::RouteServiceError::into(self) -> U
+pub fn d2b_bus::routing::RouteServiceError::to_owned(&self) -> T
+pub fn d2b_bus::routing::RouteServiceError::to_string(&self) -> alloc::string::String
+pub fn d2b_bus::routing::RouteServiceError::try_from(U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+pub fn d2b_bus::routing::RouteServiceError::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+pub fn d2b_bus::routing::RouteServiceError::type_id(&self) -> core::any::TypeId
+pub fn d2b_bus::routing::RouteTable::borrow(&self) -> &T
+pub fn d2b_bus::routing::RouteTable::borrow_mut(&mut self) -> &mut T
+pub fn d2b_bus::routing::RouteTable::default() -> d2b_bus::routing::RouteTable
+pub fn d2b_bus::routing::RouteTable::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub fn d2b_bus::routing::RouteTable::from(T) -> T
+pub fn d2b_bus::routing::RouteTable::into(self) -> U
+pub fn d2b_bus::routing::RouteTable::register(&mut self, impl core::convert::Into<alloc::string::String>, impl core::iter::traits::collect::IntoIterator<Item = impl core::convert::Into<alloc::string::String>>) -> core::result::Result<(), d2b_bus::routing::RouteTableError>
+pub fn d2b_bus::routing::RouteTable::resolve(&self, &str, &str) -> core::result::Result<(), d2b_bus::routing::RouteTableError>
+pub fn d2b_bus::routing::RouteTable::try_from(U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+pub fn d2b_bus::routing::RouteTable::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+pub fn d2b_bus::routing::RouteTable::type_id(&self) -> core::any::TypeId
+pub fn d2b_bus::routing::RouteTableError::__clone_box(&self, dyn_clone::sealed::Private) -> *mut ()
+pub fn d2b_bus::routing::RouteTableError::borrow(&self) -> &T
+pub fn d2b_bus::routing::RouteTableError::borrow_mut(&mut self) -> &mut T
+pub fn d2b_bus::routing::RouteTableError::clone(&self) -> d2b_bus::routing::RouteTableError
+pub fn d2b_bus::routing::RouteTableError::clone_into(&self, &mut T)
+pub fn d2b_bus::routing::RouteTableError::eq(&self, &d2b_bus::routing::RouteTableError) -> bool
+pub fn d2b_bus::routing::RouteTableError::equivalent(&self, &K) -> bool
+pub fn d2b_bus::routing::RouteTableError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub fn d2b_bus::routing::RouteTableError::from(T) -> T
+pub fn d2b_bus::routing::RouteTableError::into(self) -> U
+pub fn d2b_bus::routing::RouteTableError::to_owned(&self) -> T
+pub fn d2b_bus::routing::RouteTableError::try_from(U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+pub fn d2b_bus::routing::RouteTableError::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+pub fn d2b_bus::routing::RouteTableError::type_id(&self) -> core::any::TypeId
+pub fn d2b_bus::routing::ZoneSessionAuthority::__clone_box(&self, dyn_clone::sealed::Private) -> *mut ()
+pub fn d2b_bus::routing::ZoneSessionAuthority::borrow(&self) -> &T
+pub fn d2b_bus::routing::ZoneSessionAuthority::borrow_mut(&mut self) -> &mut T
+pub fn d2b_bus::routing::ZoneSessionAuthority::clone(&self) -> d2b_bus::routing::ZoneSessionAuthority
+pub fn d2b_bus::routing::ZoneSessionAuthority::clone_into(&self, &mut T)
+pub fn d2b_bus::routing::ZoneSessionAuthority::eq(&self, &d2b_bus::routing::ZoneSessionAuthority) -> bool
+pub fn d2b_bus::routing::ZoneSessionAuthority::equivalent(&self, &K) -> bool
+pub fn d2b_bus::routing::ZoneSessionAuthority::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub fn d2b_bus::routing::ZoneSessionAuthority::from(T) -> T
+pub fn d2b_bus::routing::ZoneSessionAuthority::gateway_peer(d2b_contracts::v3::identity::ZoneId) -> core::result::Result<Self, d2b_bus::routing::RouteServiceError>
+pub fn d2b_bus::routing::ZoneSessionAuthority::into(self) -> U
+pub fn d2b_bus::routing::ZoneSessionAuthority::local_controller(d2b_contracts::v3::identity::ZoneId) -> core::result::Result<Self, d2b_bus::routing::RouteServiceError>
+pub fn d2b_bus::routing::ZoneSessionAuthority::new(d2b_contracts::v3::identity::ZoneId, d2b_contracts::v3::zone_session::EndpointRole, d2b_bus::routing::CredentialCustody) -> core::result::Result<Self, d2b_bus::routing::RouteServiceError>
+pub fn d2b_bus::routing::ZoneSessionAuthority::to_owned(&self) -> T
+pub fn d2b_bus::routing::ZoneSessionAuthority::try_from(U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+pub fn d2b_bus::routing::ZoneSessionAuthority::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+pub fn d2b_bus::routing::ZoneSessionAuthority::type_id(&self) -> core::any::TypeId
+pub fn d2b_bus::service_router::ServiceRoute::__clone_box(&self, dyn_clone::sealed::Private) -> *mut ()
+pub fn d2b_bus::service_router::ServiceRoute::borrow(&self) -> &T
+pub fn d2b_bus::service_router::ServiceRoute::borrow_mut(&mut self) -> &mut T
+pub fn d2b_bus::service_router::ServiceRoute::clone(&self) -> d2b_bus::service_router::ServiceRoute
+pub fn d2b_bus::service_router::ServiceRoute::clone_into(&self, &mut T)
+pub fn d2b_bus::service_router::ServiceRoute::eq(&self, &d2b_bus::service_router::ServiceRoute) -> bool
+pub fn d2b_bus::service_router::ServiceRoute::equivalent(&self, &K) -> bool
+pub fn d2b_bus::service_router::ServiceRoute::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub fn d2b_bus::service_router::ServiceRoute::from(T) -> T
+pub fn d2b_bus::service_router::ServiceRoute::into(self) -> U
+pub fn d2b_bus::service_router::ServiceRoute::method(&self) -> &str
+pub fn d2b_bus::service_router::ServiceRoute::service(&self) -> &str
+pub fn d2b_bus::service_router::ServiceRoute::to_owned(&self) -> T
+pub fn d2b_bus::service_router::ServiceRoute::try_from(U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+pub fn d2b_bus::service_router::ServiceRoute::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+pub fn d2b_bus::service_router::ServiceRoute::type_id(&self) -> core::any::TypeId
+pub fn d2b_bus::service_router::admit_route(&d2b_bus::routing::RouteTable, impl core::convert::Into<alloc::string::String>, impl core::convert::Into<alloc::string::String>, d2b_bus::routing::RouteDirection) -> core::result::Result<d2b_bus::service_router::ServiceRoute, d2b_bus::routing::RouteTableError>
+pub fn d2b_bus::service_router::admit_route_with_audit(&d2b_bus::routing::RouteTable, impl core::convert::Into<alloc::string::String>, impl core::convert::Into<alloc::string::String>, d2b_bus::routing::RouteDirection, &d2b_bus::audit::RouteAuditContext, &d2b_bus::audit::BusAuditWriter<'_>) -> core::result::Result<d2b_bus::service_router::ServiceRoute, d2b_bus::routing::RouteTableError>
 pub fn d2b_bus::session::contract::ZoneEndpointPolicy::__clone_box(&self, dyn_clone::sealed::Private) -> *mut ()
 pub fn d2b_bus::session::contract::ZoneEndpointPolicy::borrow(&self) -> &T
 pub fn d2b_bus::session::contract::ZoneEndpointPolicy::borrow_mut(&mut self) -> &mut T
@@ -4194,6 +4671,8 @@ pub mod d2b_bus::operations
 pub mod d2b_bus::registry
 pub mod d2b_bus::relay
 pub mod d2b_bus::router
+pub mod d2b_bus::routing
+pub mod d2b_bus::service_router
 pub mod d2b_bus::session
 pub mod d2b_bus::session::contract
 pub mod d2b_bus::session::enrollment
@@ -4230,6 +4709,8 @@ pub struct d2b_bus::StreamLimits
 pub struct d2b_bus::StreamName(_)
 pub struct d2b_bus::ZoneBus
 pub struct d2b_bus::ZoneRegistrar
+pub struct d2b_bus::audit::BusAuditWriter<'a>
+pub struct d2b_bus::audit::RouteAuditContext
 pub struct d2b_bus::authorization::BusAuthorizer
 pub struct d2b_bus::operations::Cancellation(_)
 pub struct d2b_bus::operations::OperationId(_)
@@ -4256,6 +4737,9 @@ pub struct d2b_bus::router::ResourceFilter
 pub struct d2b_bus::router::ResourceQuery
 pub struct d2b_bus::router::ZoneBus
 pub struct d2b_bus::router::ZoneRegistrar
+pub struct d2b_bus::routing::RouteTable
+pub struct d2b_bus::routing::ZoneSessionAuthority
+pub struct d2b_bus::service_router::ServiceRoute
 pub struct d2b_bus::session::BootstrapPskIssuance
 pub struct d2b_bus::session::EnrollmentFingerprint(_)
 pub struct d2b_bus::session::EnrollmentRecord
@@ -4303,11 +4787,25 @@ pub trait d2b_bus::relay::RelayHopOracle
 pub trait d2b_bus::router::BusClock: core::marker::Send + core::marker::Sync + 'static
 pub trait d2b_bus::router::BusObserver: core::marker::Send + core::marker::Sync
 pub trait d2b_bus::zone_route::ZoneRouteOracle
+pub type d2b_bus::audit::BusAuditWriter<'a>::Error = <U as core::convert::TryFrom<T>>::Error
+pub type d2b_bus::audit::BusAuditWriter<'a>::Error = core::convert::Infallible
+pub type d2b_bus::audit::BusAuditWriter<'a>::Init = T
+pub type d2b_bus::audit::BusAuditWriter<'a>::Output = T
 pub type d2b_bus::audit::BusErrorKind::Error = <U as core::convert::TryFrom<T>>::Error
 pub type d2b_bus::audit::BusErrorKind::Error = core::convert::Infallible
 pub type d2b_bus::audit::BusErrorKind::Init = T
 pub type d2b_bus::audit::BusErrorKind::Output = T
 pub type d2b_bus::audit::BusErrorKind::Owned = T
+pub type d2b_bus::audit::RouteAuditContext::Error = <U as core::convert::TryFrom<T>>::Error
+pub type d2b_bus::audit::RouteAuditContext::Error = core::convert::Infallible
+pub type d2b_bus::audit::RouteAuditContext::Init = T
+pub type d2b_bus::audit::RouteAuditContext::Output = T
+pub type d2b_bus::audit::RouteAuditContext::Owned = T
+pub type d2b_bus::audit::RouteAuditError::Error = <U as core::convert::TryFrom<T>>::Error
+pub type d2b_bus::audit::RouteAuditError::Error = core::convert::Infallible
+pub type d2b_bus::audit::RouteAuditError::Init = T
+pub type d2b_bus::audit::RouteAuditError::Output = T
+pub type d2b_bus::audit::RouteAuditError::Owned = T
 pub type d2b_bus::authorization::AuthorizationError::Error = <U as core::convert::TryFrom<T>>::Error
 pub type d2b_bus::authorization::AuthorizationError::Error = core::convert::Infallible
 pub type d2b_bus::authorization::AuthorizationError::Init = T
@@ -4500,6 +4998,45 @@ pub type d2b_bus::router::ZoneRegistrar::Error = <U as core::convert::TryFrom<T>
 pub type d2b_bus::router::ZoneRegistrar::Error = core::convert::Infallible
 pub type d2b_bus::router::ZoneRegistrar::Init = T
 pub type d2b_bus::router::ZoneRegistrar::Output = T
+pub type d2b_bus::routing::BusErrorKind::Error = <U as core::convert::TryFrom<T>>::Error
+pub type d2b_bus::routing::BusErrorKind::Error = core::convert::Infallible
+pub type d2b_bus::routing::BusErrorKind::Init = T
+pub type d2b_bus::routing::BusErrorKind::Output = T
+pub type d2b_bus::routing::BusErrorKind::Owned = T
+pub type d2b_bus::routing::CredentialCustody::Error = <U as core::convert::TryFrom<T>>::Error
+pub type d2b_bus::routing::CredentialCustody::Error = core::convert::Infallible
+pub type d2b_bus::routing::CredentialCustody::Init = T
+pub type d2b_bus::routing::CredentialCustody::Output = T
+pub type d2b_bus::routing::CredentialCustody::Owned = T
+pub type d2b_bus::routing::RouteDirection::Error = <U as core::convert::TryFrom<T>>::Error
+pub type d2b_bus::routing::RouteDirection::Error = core::convert::Infallible
+pub type d2b_bus::routing::RouteDirection::Init = T
+pub type d2b_bus::routing::RouteDirection::Output = T
+pub type d2b_bus::routing::RouteDirection::Owned = T
+pub type d2b_bus::routing::RouteServiceError::Error = <U as core::convert::TryFrom<T>>::Error
+pub type d2b_bus::routing::RouteServiceError::Error = core::convert::Infallible
+pub type d2b_bus::routing::RouteServiceError::Init = T
+pub type d2b_bus::routing::RouteServiceError::Output = T
+pub type d2b_bus::routing::RouteServiceError::Owned = T
+pub type d2b_bus::routing::RouteTable::Error = <U as core::convert::TryFrom<T>>::Error
+pub type d2b_bus::routing::RouteTable::Error = core::convert::Infallible
+pub type d2b_bus::routing::RouteTable::Init = T
+pub type d2b_bus::routing::RouteTable::Output = T
+pub type d2b_bus::routing::RouteTableError::Error = <U as core::convert::TryFrom<T>>::Error
+pub type d2b_bus::routing::RouteTableError::Error = core::convert::Infallible
+pub type d2b_bus::routing::RouteTableError::Init = T
+pub type d2b_bus::routing::RouteTableError::Output = T
+pub type d2b_bus::routing::RouteTableError::Owned = T
+pub type d2b_bus::routing::ZoneSessionAuthority::Error = <U as core::convert::TryFrom<T>>::Error
+pub type d2b_bus::routing::ZoneSessionAuthority::Error = core::convert::Infallible
+pub type d2b_bus::routing::ZoneSessionAuthority::Init = T
+pub type d2b_bus::routing::ZoneSessionAuthority::Output = T
+pub type d2b_bus::routing::ZoneSessionAuthority::Owned = T
+pub type d2b_bus::service_router::ServiceRoute::Error = <U as core::convert::TryFrom<T>>::Error
+pub type d2b_bus::service_router::ServiceRoute::Error = core::convert::Infallible
+pub type d2b_bus::service_router::ServiceRoute::Init = T
+pub type d2b_bus::service_router::ServiceRoute::Output = T
+pub type d2b_bus::service_router::ServiceRoute::Owned = T
 pub type d2b_bus::session::contract::ZoneEndpointPolicy::Error = <U as core::convert::TryFrom<T>>::Error
 pub type d2b_bus::session::contract::ZoneEndpointPolicy::Error = core::convert::Infallible
 pub type d2b_bus::session::contract::ZoneEndpointPolicy::Init = T
@@ -4714,11 +5251,25 @@ pub type d2b_bus::zone_route::ZoneRouteQuery::Error = core::convert::Infallible
 pub type d2b_bus::zone_route::ZoneRouteQuery::Init = T
 pub type d2b_bus::zone_route::ZoneRouteQuery::Output = T
 pub type d2b_bus::zone_route::ZoneRouteQuery::Owned = T
+pub unsafe fn d2b_bus::audit::BusAuditWriter<'a>::deref<'a>(usize) -> &'a T
+pub unsafe fn d2b_bus::audit::BusAuditWriter<'a>::deref_mut<'a>(usize) -> &'a mut T
+pub unsafe fn d2b_bus::audit::BusAuditWriter<'a>::drop(usize)
+pub unsafe fn d2b_bus::audit::BusAuditWriter<'a>::init(<T as crossbeam_epoch::atomic::Pointable>::Init) -> usize
 pub unsafe fn d2b_bus::audit::BusErrorKind::clone_to_uninit(&self, *mut u8)
 pub unsafe fn d2b_bus::audit::BusErrorKind::deref<'a>(usize) -> &'a T
 pub unsafe fn d2b_bus::audit::BusErrorKind::deref_mut<'a>(usize) -> &'a mut T
 pub unsafe fn d2b_bus::audit::BusErrorKind::drop(usize)
 pub unsafe fn d2b_bus::audit::BusErrorKind::init(<T as crossbeam_epoch::atomic::Pointable>::Init) -> usize
+pub unsafe fn d2b_bus::audit::RouteAuditContext::clone_to_uninit(&self, *mut u8)
+pub unsafe fn d2b_bus::audit::RouteAuditContext::deref<'a>(usize) -> &'a T
+pub unsafe fn d2b_bus::audit::RouteAuditContext::deref_mut<'a>(usize) -> &'a mut T
+pub unsafe fn d2b_bus::audit::RouteAuditContext::drop(usize)
+pub unsafe fn d2b_bus::audit::RouteAuditContext::init(<T as crossbeam_epoch::atomic::Pointable>::Init) -> usize
+pub unsafe fn d2b_bus::audit::RouteAuditError::clone_to_uninit(&self, *mut u8)
+pub unsafe fn d2b_bus::audit::RouteAuditError::deref<'a>(usize) -> &'a T
+pub unsafe fn d2b_bus::audit::RouteAuditError::deref_mut<'a>(usize) -> &'a mut T
+pub unsafe fn d2b_bus::audit::RouteAuditError::drop(usize)
+pub unsafe fn d2b_bus::audit::RouteAuditError::init(<T as crossbeam_epoch::atomic::Pointable>::Init) -> usize
 pub unsafe fn d2b_bus::authorization::AuthorizationError::clone_to_uninit(&self, *mut u8)
 pub unsafe fn d2b_bus::authorization::AuthorizationError::deref<'a>(usize) -> &'a T
 pub unsafe fn d2b_bus::authorization::AuthorizationError::deref_mut<'a>(usize) -> &'a mut T
@@ -4911,6 +5462,45 @@ pub unsafe fn d2b_bus::router::ZoneRegistrar::deref<'a>(usize) -> &'a T
 pub unsafe fn d2b_bus::router::ZoneRegistrar::deref_mut<'a>(usize) -> &'a mut T
 pub unsafe fn d2b_bus::router::ZoneRegistrar::drop(usize)
 pub unsafe fn d2b_bus::router::ZoneRegistrar::init(<T as crossbeam_epoch::atomic::Pointable>::Init) -> usize
+pub unsafe fn d2b_bus::routing::BusErrorKind::clone_to_uninit(&self, *mut u8)
+pub unsafe fn d2b_bus::routing::BusErrorKind::deref<'a>(usize) -> &'a T
+pub unsafe fn d2b_bus::routing::BusErrorKind::deref_mut<'a>(usize) -> &'a mut T
+pub unsafe fn d2b_bus::routing::BusErrorKind::drop(usize)
+pub unsafe fn d2b_bus::routing::BusErrorKind::init(<T as crossbeam_epoch::atomic::Pointable>::Init) -> usize
+pub unsafe fn d2b_bus::routing::CredentialCustody::clone_to_uninit(&self, *mut u8)
+pub unsafe fn d2b_bus::routing::CredentialCustody::deref<'a>(usize) -> &'a T
+pub unsafe fn d2b_bus::routing::CredentialCustody::deref_mut<'a>(usize) -> &'a mut T
+pub unsafe fn d2b_bus::routing::CredentialCustody::drop(usize)
+pub unsafe fn d2b_bus::routing::CredentialCustody::init(<T as crossbeam_epoch::atomic::Pointable>::Init) -> usize
+pub unsafe fn d2b_bus::routing::RouteDirection::clone_to_uninit(&self, *mut u8)
+pub unsafe fn d2b_bus::routing::RouteDirection::deref<'a>(usize) -> &'a T
+pub unsafe fn d2b_bus::routing::RouteDirection::deref_mut<'a>(usize) -> &'a mut T
+pub unsafe fn d2b_bus::routing::RouteDirection::drop(usize)
+pub unsafe fn d2b_bus::routing::RouteDirection::init(<T as crossbeam_epoch::atomic::Pointable>::Init) -> usize
+pub unsafe fn d2b_bus::routing::RouteServiceError::clone_to_uninit(&self, *mut u8)
+pub unsafe fn d2b_bus::routing::RouteServiceError::deref<'a>(usize) -> &'a T
+pub unsafe fn d2b_bus::routing::RouteServiceError::deref_mut<'a>(usize) -> &'a mut T
+pub unsafe fn d2b_bus::routing::RouteServiceError::drop(usize)
+pub unsafe fn d2b_bus::routing::RouteServiceError::init(<T as crossbeam_epoch::atomic::Pointable>::Init) -> usize
+pub unsafe fn d2b_bus::routing::RouteTable::deref<'a>(usize) -> &'a T
+pub unsafe fn d2b_bus::routing::RouteTable::deref_mut<'a>(usize) -> &'a mut T
+pub unsafe fn d2b_bus::routing::RouteTable::drop(usize)
+pub unsafe fn d2b_bus::routing::RouteTable::init(<T as crossbeam_epoch::atomic::Pointable>::Init) -> usize
+pub unsafe fn d2b_bus::routing::RouteTableError::clone_to_uninit(&self, *mut u8)
+pub unsafe fn d2b_bus::routing::RouteTableError::deref<'a>(usize) -> &'a T
+pub unsafe fn d2b_bus::routing::RouteTableError::deref_mut<'a>(usize) -> &'a mut T
+pub unsafe fn d2b_bus::routing::RouteTableError::drop(usize)
+pub unsafe fn d2b_bus::routing::RouteTableError::init(<T as crossbeam_epoch::atomic::Pointable>::Init) -> usize
+pub unsafe fn d2b_bus::routing::ZoneSessionAuthority::clone_to_uninit(&self, *mut u8)
+pub unsafe fn d2b_bus::routing::ZoneSessionAuthority::deref<'a>(usize) -> &'a T
+pub unsafe fn d2b_bus::routing::ZoneSessionAuthority::deref_mut<'a>(usize) -> &'a mut T
+pub unsafe fn d2b_bus::routing::ZoneSessionAuthority::drop(usize)
+pub unsafe fn d2b_bus::routing::ZoneSessionAuthority::init(<T as crossbeam_epoch::atomic::Pointable>::Init) -> usize
+pub unsafe fn d2b_bus::service_router::ServiceRoute::clone_to_uninit(&self, *mut u8)
+pub unsafe fn d2b_bus::service_router::ServiceRoute::deref<'a>(usize) -> &'a T
+pub unsafe fn d2b_bus::service_router::ServiceRoute::deref_mut<'a>(usize) -> &'a mut T
+pub unsafe fn d2b_bus::service_router::ServiceRoute::drop(usize)
+pub unsafe fn d2b_bus::service_router::ServiceRoute::init(<T as crossbeam_epoch::atomic::Pointable>::Init) -> usize
 pub unsafe fn d2b_bus::session::contract::ZoneEndpointPolicy::clone_to_uninit(&self, *mut u8)
 pub unsafe fn d2b_bus::session::contract::ZoneEndpointPolicy::deref<'a>(usize) -> &'a T
 pub unsafe fn d2b_bus::session::contract::ZoneEndpointPolicy::deref_mut<'a>(usize) -> &'a mut T
