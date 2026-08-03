@@ -30,7 +30,7 @@
   flake label for command progress.
 - Record Nix-unit execution evidence as the seven stable baseline leaves while
   keeping evaluation-only runs free of installables and realized checks; use
-  one aggregate eval-jobs attribute per case file.
+  one aggregate eval-jobs attribute per case file plus shard/pin integrity.
 - Reject the seven-aggregate candidate after its 543s local four-worker
   observation and the per-case candidate after hosted memory exhaustion.
 - Keep four requested local workers with a 4096 MiB default, use 3072 MiB on

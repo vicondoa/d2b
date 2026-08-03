@@ -1006,7 +1006,7 @@ fn execution_manifest_schema_and_prose_agree_with_non_empty_discovery() {
             && flake.contains("nixUnitCorpus.caseNames")
             && flake.contains("nixUnitCorpus.jobNames")
             && flake.contains("builtins.sort builtins.lessThan nixUnitCorpus.caseNames")
-            && flake.contains("builtins.sort builtins.lessThan nixUnitCorpus.jobNames")
+            && flake.contains("nixUnitCorpus.jobNames ++ [ \"nix-unit\" ]")
             && !flake.contains("nixUnitCaseNames")
             && !flake.contains("nixUnitCorpus.jobs")
             && !flake.contains("__nix_unit_integrity"),
@@ -1020,7 +1020,8 @@ fn execution_manifest_schema_and_prose_agree_with_non_empty_discovery() {
     assert!(
         jobs_block.contains("fileJobs")
             && jobs_block.contains("nixUnitCorpus.fileJobs")
-            && !jobs_block.contains("self.checks")
+            && jobs_block.contains("nix-unit = self.checks.${system}.nix-unit")
+            && jobs_block.matches("self.checks").count() == 1
             && !jobs_block.contains("nixUnitCorpus.jobs")
             && !jobs_block.contains("jobsFor"),
         "execution-manifest-policy: Nix-unit jobs must expose per-file fileJobs, not seven self.checks-only attrs"
@@ -1171,7 +1172,8 @@ fn execution_manifest_schema_and_prose_agree_with_non_empty_discovery() {
         "keys | sort",
         "test(\"^[[:space:]]*FAIL [^:]+: \")",
         "contains(\"${\") | not",
-        "evaluation failed without a FAIL line",
+        "$error_lines[-1]",
+        "evaluation failed without diagnostic",
         "failure_attr",
         "failure_line",
         "result_count=$(jq -s 'length'",

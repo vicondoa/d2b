@@ -626,11 +626,8 @@ set -euo pipefail
         jobs_block = flake[jobs_match.start() : inventory_match.start()]
         self.assertIn("fileJobs", jobs_block)
         self.assertIn("nixUnitCorpus.fileJobs", jobs_block)
-        self.assertNotIn(
-            "self.checks",
-            jobs_block,
-            "nixUnitJobs must not be a seven-self.checks-only surface",
-        )
+        self.assertIn("nix-unit = self.checks.${system}.nix-unit", jobs_block)
+        self.assertEqual(jobs_block.count("self.checks"), 1)
         self.assertNotIn("nixUnitCorpus.jobs", jobs_block)
         self.assertNotIn("__nix_unit_integrity", jobs_block)
         self.assertNotIn("jobsFor", flake)
@@ -640,7 +637,7 @@ set -euo pipefail
         self.assertIn("nixUnitCorpus.caseNames", inventory_block)
         self.assertIn("nixUnitCorpus.jobNames", inventory_block)
         self.assertIn("builtins.sort builtins.lessThan nixUnitCorpus.caseNames", inventory_block)
-        self.assertIn("builtins.sort builtins.lessThan nixUnitCorpus.jobNames", inventory_block)
+        self.assertIn('nixUnitCorpus.jobNames ++ [ "nix-unit" ]', inventory_block)
         self.assertEqual(driver.count("nixUnitInventory"), 1)
         self.assertIn("--json", driver)
         self.assertIn("--impure", driver)
@@ -697,7 +694,8 @@ set -euo pipefail
         )
         self.assertIn('jq -r -s', driver)
         self.assertIn('contains("${") | not', driver)
-        self.assertIn("evaluation failed without a FAIL line", driver)
+        self.assertIn("$error_lines[-1]", driver)
+        self.assertIn("evaluation failed without diagnostic", driver)
         self.assertIn("failure_attr", driver)
         self.assertIn("failure_line", driver)
         self.assertRegex(

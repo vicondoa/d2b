@@ -29,8 +29,9 @@ failed fragment is best effort and the original test status is preserved.
 The Nix-unit target uses the same lifecycle. Its full pass invokes the locked
 `nix-eval-jobs` tool on the `nixUnitJobs.<system>` attrset with
 `--no-instantiate`. That attrset contains exactly one aggregate attr per
-current `*.nix` case file (45 file jobs), with stable `case-<basename>` names.
-Each file job and the seven existing topical `checks.<system>` leaves reuse
+current `*.nix` case file (45 file jobs), with stable `case-<basename>` names,
+plus the `nix-unit` shard/pin integrity attr. Each file job and the seven
+existing topical `checks.<system>` leaves reuse
 the same `casesFor`/`resultsFor`/failure-report constructor. The runner
 compares sorted result attrs by symmetric difference with the locked file-job
 names, so each worker evaluates one file aggregate rather than one case or
@@ -182,8 +183,9 @@ as separate full-budget Make jobs before the stable `test-rust` join.
 
 For Nix-unit, compare the seven completed leaves listed above with the
 baseline execution manifest, then compare the source case and file-job
-inventories separately. A passing full run must contain exactly the 45 current
-file-job result attributes and all 893 case names in the single inventory; it
+inventories separately. A passing full run must contain the 45 current
+file-job result attributes plus integrity and all 893 case names in the single
+inventory; it
 publishes all seven leaves. A selected run evaluates and publishes only its one
 selected topical leaf. A failed or interrupted record is diagnostic partial
 evidence and cannot satisfy coverage acceptance.

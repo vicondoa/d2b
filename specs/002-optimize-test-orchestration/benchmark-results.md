@@ -555,10 +555,12 @@ latency.
 
 The selected refinement changes only the Nix-unit evaluation surface.
 `nixUnitJobs.<system>` contains exactly one aggregate
-attr per current case file (45 file jobs), using the shared constructor also
-used by the seven topical flake checks. `nixUnitInventory.<system>` is one
+attr per current case file (45 file jobs), plus the `nix-unit` shard/pin
+integrity attr, using the shared constructor also used by the seven topical
+flake checks. `nixUnitInventory.<system>` is one
 locked, sorted inventory object containing both full `caseNames` and file-job
-`jobNames`, derived without forcing case expressions. The runner evaluates that
+`jobNames`, including integrity, derived without forcing case expressions. The
+runner evaluates that
 inventory once through `git+file`, compares result attrs exactly with
 `jobNames`, and compares `caseNames` exactly with the common and native-system
 pins. Aggregate errors retain every real `FAIL <case>: <detail>` line,

@@ -409,6 +409,10 @@ if ! jq -r -s '
         .error
         | tostring
         | split("\n")
+        | map(select(length > 0))
+      ) as $error_lines
+    | (
+        $error_lines
         | map(
             select(
               test("^[[:space:]]*FAIL [^:]+: ")
@@ -418,7 +422,13 @@ if ! jq -r -s '
           )
       ) as $fail_lines
     | if ($fail_lines | length) == 0 then
-        "\($attr)\tevaluation failed without a FAIL line"
+        "\($attr)\t\(
+          if ($error_lines | length) == 0 then
+            "evaluation failed without diagnostic"
+          else
+            $error_lines[-1]
+          end
+        )"
       else
         $fail_lines[] | "\($attr)\t\(.)"
       end

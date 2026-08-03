@@ -230,7 +230,8 @@ replace source inventory, `make test-policy`, or
 `make test-nix-unit` uses the established `nix-eval-jobs` runner with
 `--no-instantiate` against the locked `nixUnitJobs.<system>` flake output.
 That output contains one aggregate attr per current `*.nix` case file (45
-file jobs), with stable names of the form `case-<basename>`. Each file job
+file jobs), plus the `nix-unit` shard/pin integrity attr. File jobs use stable
+names of the form `case-<basename>`. Each file job
 reuses the same `casesFor`/`resultsFor`/failure-report constructor as the
 seven topical `checks.<system>` leaves, so it reports every
 `FAIL <case>: <detail>` from its file without submitting installables to the
@@ -239,9 +240,9 @@ The seven topical checks remain the stable manifest leaves:
 `nix-unit`, `nix-unit-daemon`, `nix-unit-guest`, `nix-unit-misc`,
 `nix-unit-network`, `nix-unit-runtime`, and `nix-unit-state`.
 `nixUnitInventory.<system>` is one locked object containing sorted `caseNames`
-and sorted `jobNames`, derived from the same corpus without forcing case
-expressions. The runner evaluates that inventory once, compares `jobNames`
-exactly with the result attrs, and compares `caseNames` exactly with the
+and sorted `jobNames`, including the integrity attr. The runner evaluates that
+inventory once, compares `jobNames` exactly with the result attrs, and compares
+`caseNames` exactly with the
 common and native-system pin files. Discovery is empty-set failure, and
 missing or unexpected names still direct operators to `run make nix-unit-pin`.
 

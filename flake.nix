@@ -1313,7 +1313,9 @@
         let
           nixUnitCorpus = nixUnitCorpusFor system;
         in
-        nixUnitCorpus.fileJobs
+        nixUnitCorpus.fileJobs // {
+          nix-unit = self.checks.${system}.nix-unit;
+        }
       );
 
       # One locked, evaluation-only inventory keeps both exact source case
@@ -1325,7 +1327,8 @@
         in
         {
           caseNames = builtins.sort builtins.lessThan nixUnitCorpus.caseNames;
-          jobNames = builtins.sort builtins.lessThan nixUnitCorpus.jobNames;
+          jobNames =
+            builtins.sort builtins.lessThan (nixUnitCorpus.jobNames ++ [ "nix-unit" ]);
         }
       );
 

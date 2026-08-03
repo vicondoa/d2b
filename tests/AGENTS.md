@@ -228,7 +228,8 @@ budget, including budget 1. Top-level Make `-j` is not the Rust budget knob.
 `make test-nix-unit` uses `nix-eval-jobs --no-instantiate` against the locked
 `nixUnitJobs.<system>` output. The output contains exactly one aggregate job
 per current `*.nix` case file (45 file jobs), named bijectively as
-`case-<basename>`. The `fileJobs` constructor reuses the same
+`case-<basename>`, plus the `nix-unit` shard/pin integrity job. The `fileJobs`
+constructor reuses the same
 `casesFor`/`resultsFor`/failure-report semantics as the seven existing flake
 shard checks, so every file job reports all of its real
 `FAIL <case>: <detail>` lines. No installable is submitted and no derivation
@@ -238,7 +239,7 @@ The seven existing flake checks remain the stable manifest leaves:
 `nix-unit`, `nix-unit-daemon`, `nix-unit-guest`, `nix-unit-misc`,
 `nix-unit-network`, `nix-unit-runtime`, and `nix-unit-state`.
 The single locked `nixUnitInventory.<system>` output contains sorted
-`caseNames` and sorted `jobNames` from the same corpus and does not force case
+`caseNames` and sorted `jobNames`, including integrity, and does not force case
 expressions. The runner evaluates it once with a `git+file` flake reference,
 compares result attrs by exact symmetric difference with `jobNames`, and
 compares `caseNames` exactly with `tests/unit/nix/pinned/common.txt` plus the
