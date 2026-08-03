@@ -630,6 +630,11 @@ provider-catalog/zone-resource-bundle-credential-envelope-and-digest
 provider-catalog/zone-resource-credential-invalid-inputs-rejected
 provider-catalog/zone-resource-credential-secret-shaped-rejected
 provider-catalog/zone-resource-runtime-metadata-and-store-path-absent
+provider-projection-exportability/matching-factory-is-accepted
+provider-projection-exportability/matching-fingerprints-do-not-mask-exportability
+provider-projection-fields/all-eight-published-fields-match
+provider-projection-fields/every-published-field-mismatch-is-rejected
+provider-projection-fields/legacy-absent-version-is-version-skew
 readiness-waves/daemon-auto-default
 readiness-waves/has-p0
 readiness-waves/has-p1

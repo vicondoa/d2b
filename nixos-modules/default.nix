@@ -30,6 +30,7 @@
     ./bundle-artifacts.nix
     ./options-observability.nix
     ./provider-catalog.nix
+    ./provider-projection-validate.nix
     ./options-ownership-matrix.nix
     ./index.nix
     ./assertions.nix
