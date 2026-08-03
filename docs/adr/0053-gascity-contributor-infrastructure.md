@@ -414,58 +414,97 @@ the argument for layer 2 existing at all: this is a body of generic host
 behaviour large enough to be worth testing once, in a module with its own NixOS
 VM tests, rather than re-deriving per consumer inside a policy repository.
 
-**Shutdown is ordered, and the order is the specification.** Stopping these
-services in an arbitrary order loses work, strands runs, and can leave the
-audit trail describing a state the store never reached. The sequence is:
+**Five units, one ordering chain, and shutdown is its exact reverse.** The
+generic module ships five ordered units, and the reverse property is obtained
+from systemd rather than hand-written: units related by `After=` are stopped in
+the reverse of the order they were started, so specifying startup order once
+specifies shutdown order too. Writing two independent sequences and hoping they
+mirror is how they stop mirroring.
 
-1. **Refuse new Discord interactions, first.** Human ingress is the one path
-   that injects new authority into a running deployment, so it closes before
-   anything else moves. The ingress does not merely stop listening: while the
-   rest of the sequence runs it **actively refuses** arriving interactions, so
-   an approval submitted during shutdown is rejected rather than silently
-   dropped, half-applied, or accepted against a workflow that is already
-   draining. Closing this last, as an earlier draft did, meant a decision could
-   land against state that had already been parked.
-2. **Stop admitting work.** The orchestrator stops accepting new runs and new
-   task claims. Nothing new enters from this point.
-3. **Park or drain the workflow.** In-flight nodes reach a durable boundary: a
-   task at a safe point is allowed to finish, anything else is parked on its
-   gate so it resumes rather than restarts.
-4. **Stop agent sessions with a bounded grace period.** Sessions are asked to
-   stop, given a bounded interval, and then terminated. The bound is
-   configuration, not an open-ended wait, because an agent that will not exit
-   must not prevent the host from shutting down.
-5. **Tear down the worker network namespace only now.** Per D15 its lifetime
-   strictly contains every agent process, so the namespace, its interface, its
-   DNS proxy and its firewall rules survive until step 4 has confirmed every
-   session has exited or been killed. An agent that outlives the teardown of
-   its own confinement is an unconfined agent.
-6. **Preserve durable state.** Workflow state, session records, and the
-   protected integration object store are flushed and consistent before
-   anything that owns them exits.
-7. **Stop the read-only dashboard.** It stays up through the steps above on
-   purpose, so an operator can watch a shutdown that is doing exactly the
-   thing they need to see. Being read-only under D13, it cannot mutate
-   anything while it observes. It stops once state has settled.
-8. **Flush and close audit appends.** Every in-flight append completes or is
-   abandoned with its temporary unlinked per D12, and no append is left
-   acknowledged but unsynced.
-9. **Release the locks last.** The append-helper's single-owner lock is
+| Order | Unit | Starts after | Stop-time coupling |
+| --- | --- | --- | --- |
+| 1 | `gascity-append-helper.service` | nothing | last to stop |
+| 2 | `gascity-worker-netns.service` | append helper | stops fourth |
+| 3 | `gascity-dashboard.service` | worker netns | stops third |
+| 4 | `gascity-orchestrator.service` | dashboard | stops second |
+| 5 | `gascity-discord-ingress.service` | orchestrator | first to stop |
+
+The dependency edges carry meaning beyond ordering, and the three kinds are not
+interchangeable:
+
+- `gascity-worker-netns.service` is `After=` and `Requires=` the append helper,
+  because a namespace brought up while the audit store has no owner would let
+  agent activity begin unrecorded.
+- `gascity-orchestrator.service` is `After=` and `Requires=` the worker netns,
+  because it spawns agents and must not be able to spawn one outside its
+  confinement.
+- `gascity-dashboard.service` is `After=` the worker netns and is **not**
+  `Requires=` or `BindsTo=` anything downstream. It is observation only, so it
+  must be able to run while the orchestrator is absent, still starting, or
+  failed. That is the point of starting it third: an operator watching a
+  troubled startup sees it.
+- `gascity-discord-ingress.service` is `After=` and **`BindsTo=`** the
+  orchestrator. `BindsTo` rather than `Requires` because if the orchestrator
+  dies unexpectedly the ingress must stop with it; an ingress accepting
+  approvals with no orchestrator behind it is the confused state D12's
+  authority rules exist to prevent.
+
+**Startup, in order.**
+
+1. **The append helper acquires and adopts the store.** It takes the
+   single-owner lock, reconciles per D12, and becomes ready. Nothing else
+   starts until it has, so no component can act before its actions can be
+   recorded.
+2. **The worker namespace, interface, DNS proxy and firewall become ready.**
+   This unit is `Type=oneshot` with `RemainAfterExit=yes` and exits zero only
+   after verifying the namespace exists, the interface is up, the resolver
+   answers, and the deny-by-default rules are loaded. Ordering alone would only
+   prove the unit ran.
+3. **The read-only dashboard may start**, in a backend-not-ready observation
+   mode. It is expected to come up before the orchestrator and to display that
+   the backend is not yet ready rather than failing, because the startup it is
+   most useful for observing is the one that is not going well.
+4. **The orchestrator acquires and adopts its state and becomes ready.**
+   Spawning is impossible before namespace readiness is **proven**, not merely
+   ordered: beyond `Requires=`, the orchestrator re-checks namespace readiness
+   immediately before each spawn and refuses if it is absent. Unit ordering
+   establishes the initial state and says nothing about a namespace unit
+   restarted underneath a running orchestrator, which is exactly when an
+   unconfined agent would otherwise appear.
+5. **Discord ingress starts last.** Human authority enters only once everything
+   that would act on it has adopted its state and is ready.
+
+**Shutdown, which is the same chain reversed.**
+
+1. **Ingress refuses and stops first.** While the rest proceeds it **actively
+   refuses** arriving interactions, so an approval submitted during shutdown is
+   rejected rather than dropped, queued, or applied against a draining
+   workflow.
+2. **The orchestrator parks or drains and terminates every agent session**, the
+   namespace still standing throughout. In-flight nodes reach a durable
+   boundary: a task at a safe point finishes, anything else parks on its gate
+   so it resumes rather than restarts. Sessions are asked to stop, given a
+   bounded grace period from configuration, then terminated, because an agent
+   that will not exit must not prevent the host from shutting down.
+3. **The dashboard stops** once orchestrator state has settled, having stayed
+   up through the drain so an operator can watch it.
+4. **The namespace, firewall and DNS proxy tear down**, only after every agent
+   and the orchestrator itself have exited. Per D15 the confinement's lifetime
+   strictly contains every process it confines; an agent outliving the teardown
+   of its own confinement is an unconfined agent, and the race is removed by
+   ordering rather than narrowed by timing.
+5. **The append helper flushes, closes and releases its locks last.** Every
+   in-flight append completes or is abandoned with its temporary unlinked per
+   D12, nothing is left acknowledged but unsynced, and the single-owner lock is
    released only after every writer above has stopped, so the lock's lifetime
    strictly contains every operation it guards.
 
-**Startup is the reverse, and adoption precedes everything.** A starting
-instance acquires exclusive ownership, then reads existing state, then
-reconciles, then brings up the orchestrator, then the worker network namespace,
-then the dashboard, and **starts Discord ingress last**. Ingress opening before
-the orchestrator has adopted and reconciled would let an approval arrive for a
-run whose state is still being recovered, which is the same defect as accepting
-one during a drain.
-
-It never cleans up before adopting, because a sweep by an instance that does
-not own the store can delete the in-flight state of one that does. D12 states
-that rule for the append helper's temporaries; D5 makes it the general shape
-for every stateful principal here.
+**Adoption always precedes cleanup.** Each stateful unit acquires ownership,
+reads existing state, reconciles, and only then resumes work. It never cleans
+before adopting, because a sweep by an instance that does not own the store can
+delete the in-flight state of one that does. D12 states that rule for the
+append helper's temporaries; D5 makes it the general shape for every stateful
+principal here.
 
 D2 still holds throughout: none of this uses `d2bd`, the broker, a microVM, or
 any other d2b component. It is systemd, Unix identities, and namespaces.
@@ -964,20 +1003,36 @@ period missing an arbitrary subset of its records, which is exactly the state
 the invariant above forbids and is indistinguishable from tampering. The timer
 therefore proceeds in this order:
 
-1. `renameat2(RENAME_NOREPLACE)` the whole period directory from `periods/`
+1. **If a new shard is needed, create it and make the shard entry durable
+   first.** A shard directory is created fd-relatively under `quarantine/`,
+   validated for device and mount identifier like every other shard, and then
+   `quarantine/` itself is `fsync`ed **before** anything is moved into the new
+   shard. Skipping that sync allows a crash in which the period has been
+   renamed into a shard whose own directory entry never reached disk, leaving
+   the period reachable from neither `periods/` nor a surviving shard: an
+   invisible period, which is worse than either state the invariant permits.
+2. `renameat2(RENAME_NOREPLACE)` the whole period directory from `periods/`
    into a validated quarantine shard, under the name `<YYYY-MM-DD>.<token>`,
    both descriptors pinned and both close-on-exec. A destination `EMLINK`
-   selects the next shard and retries, per the sharding rule above.
-2. `fsync` **both directories that the rename modified**: the `periods`
+   selects the next shard and retries, per the sharding rule above, repeating
+   step 1 if that shard must be created.
+3. `fsync` **both directories that the rename modified**: the `periods`
    descriptor, which lost an entry, and the **selected shard** descriptor,
    which gained one. Syncing a common parent is not equivalent and is not what
    this requires; a cross-directory rename changes two directories and both
    must be made durable before anything depends on the move having happened.
    When a retry moved the destination to a different shard, the descriptor
    synced is the shard that actually received the directory.
-3. Append the `retention-deletion` record naming the period date, its
+4. Append the `retention-deletion` record naming the period date, its
    quarantine correlation id, its record count, and its seal digest.
-4. Only then remove the quarantined directory's contents recursively.
+5. Only then remove the quarantined directory's contents recursively.
+6. **Remove the now-empty quarantined period directory itself**, unlinked
+   fd-relatively from its shard, and `fsync` that shard descriptor. An emptied
+   directory that is never removed still holds a link in its shard, so a
+   deployment that retains for a year would march toward the very link-count
+   limit the sharding exists to survive, one directory per day, while looking
+   like it had cleaned up. Reclaiming the directory is what makes retention
+   steady-state rather than merely slower-growing.
 
 Ordering the two `fsync` calls before the record is what keeps the audit trail
 honest. A record appended before the rename was durable could describe a
@@ -1052,10 +1107,27 @@ two directories that rename modified.
 
 If every shard in the bounded set is exhausted, the helper emits
 `audit-quarantine-link-limit` naming the period date and its correlation
-digest, and directs the operator to `gascity-audit status` for the outstanding
-set and `gascity-audit converge` to complete the sequence once space exists. It
-does not copy, and it does not delete anything to make room, because both would
-trade the invariant for throughput on a path that is already exceptional.
+digest, with a remediation that is a sequence rather than an instruction to go
+and delete something:
+
+1. run `gascity-audit status` to see the outstanding quarantines and why each
+   is still there;
+2. if any is blocked on a failed audit append, repair the `append-helper` unit,
+   which is the usual cause;
+3. run `gascity-audit converge`.
+
+`converge` processes the outstanding quarantines that are already audited,
+removing their contents and then their now-empty directories per step 6 above,
+which is what frees link capacity in the shard. So the remediation resolves the
+condition by **completing work the system already owed**, not by discarding
+anything: an audited quarantine was always going to be removed, and converge
+simply does it now. It never asks the operator to delete a store entry by hand,
+because a human unlinking things inside the audit store is the failure mode
+this whole design is built to make unnecessary.
+
+The helper does not copy, and does not delete anything unaudited to make room,
+because both would trade the invariant for throughput on a path that is
+already exceptional.
 
 **Recovery resumes, and never deletes unaudited.** Under the exclusive
 ownership established at startup, the timer enumerates `quarantine/` and
@@ -1085,8 +1157,11 @@ configuration repository owns `gascity-audit`, whose relevant subcommands are:
   tomorrow. It performs the **same** sequence with the same ordering: it cannot
   skip, defer, or substitute for the missing `retention-deletion` append, and a
   quarantine whose record still cannot be appended is still retained rather
-  than removed. The documented flow is `status` first to see what is
-  outstanding and why, remediate the `append-helper`, then `converge`.
+  than removed. For quarantines that are already audited it completes the
+  removal, including unlinking the now-empty period directory and syncing its
+  shard, which is how it frees shard link capacity. The documented flow is
+  `status` first to see what is outstanding and why, remediate the
+  `append-helper`, then `converge`.
 - `gascity-audit verify` checks integrity. With `--period <date>` it verifies a
   sealed period against its seal manifest, reporting any record present in the
   manifest and missing from the directory, or present in the directory and
@@ -1995,11 +2070,26 @@ escaping change all produce a clean result that means nothing.
       - A destination `EMLINK` is driven by exhausting a shard's link count,
         and the rename is observed to **succeed into the next shard** after
         revalidating that shard's device and mount identifier, with both the
-        `periods` descriptor and the receiving shard synced.
+        `periods` descriptor and the receiving shard synced. When that next
+        shard has to be created, `quarantine/` is observed `fsync`ed **before**
+        the period is moved into it, and a crash injected between the shard
+        creation and that sync leaves no period stranded in an unrecorded
+        shard: after recovery the period is reachable from `periods/` or from a
+        durable shard, never from neither.
       - With every shard in the bounded set exhausted, the helper refuses with
         `audit-quarantine-link-limit` naming the period date and correlation
         digest and pointing at `gascity-audit status` and `converge`, and is
         observed to delete nothing to make room.
+      - **Link count reaches steady state rather than climbing.** Retention is
+        run repeatedly over many simulated days, and the link count of each
+        shard is sampled throughout: it does not increase monotonically,
+        because each audited quarantine's now-empty period directory is
+        unlinked and its shard `fsync`ed at step 6. Then the reclamation path
+        is exercised directly: with the append helper broken, quarantines
+        accumulate and a shard approaches its limit; after the helper is
+        repaired, `gascity-audit converge` is observed to process the audited
+        outstanding quarantines, remove their directories, and **reduce** the
+        shard's link count, with no operator ever unlinking anything by hand.
 
       With `renameat2` unavailable or `RENAME_NOREPLACE` unsupported, startup
       refuses with a typed error rather than selecting an alternative install
@@ -2046,47 +2136,59 @@ escaping change all produce a clean result that means nothing.
      return clean.
 
 
-- **M20 Shutdown is ordered and startup adopts before it opens.** Two parts,
-  both traced.
+- **M20 Startup and shutdown are exact reverses of one ordering chain.** Three
+  parts, all traced.
 
-  1. **Shutdown order.** A full stop is traced and the nine steps of D5 are
-     observed in order. The first assertion is the ingress one: a Discord
-     interaction injected **after** shutdown begins and **before** any drain
-     step has started is observed to be actively **refused**, and the trace
-     shows the refusal preceding the first park or drain event. An interaction
-     that is merely dropped, queued, or accepted-then-discarded fails this
-     item, since the operator's approval must not vanish silently.
+  1. **Startup order.** The five units become ready in the order of D5's table:
+     append helper, worker netns, dashboard, orchestrator, Discord ingress. The
+     helper is observed to hold the store lock before any other unit starts;
+     the netns unit is observed to exit zero only after the namespace,
+     interface, resolver and deny-by-default rules are all verified, not merely
+     after it ran; the dashboard is observed serving in backend-not-ready mode
+     while the orchestrator is still starting; the orchestrator adopts state
+     before becoming ready; and an interaction arriving before ingress opens is
+     refused rather than queued into a run still being recovered. The trace
+     shows no unlink, no reconciliation, and no period open for writing
+     preceding lock acquisition. Together with M18 part 9's overlap case, this
+     closes the window in which a second instance could clean up a first
+     instance's state.
 
-     Then: no run or task claim is admitted after step 2; an in-flight task
-     either completes or is parked such that a subsequent start resumes rather
-     than restarts it; an agent session that ignores the stop request is
-     terminated at the configured bound rather than waited on indefinitely; the
-     worker network namespace and its firewall are torn down only after that
-     termination, per M17's confinement-lifetime part; the read-only dashboard
-     is observed still serving reads during the drain and stopping only after
+  2. **Spawn is gated on proven readiness, not on unit ordering.** With the
+     orchestrator running and ready, the worker netns unit is stopped or its
+     namespace removed out of band, and a spawn is then requested: it is
+     **refused**. This is the case unit ordering cannot cover, since ordering
+     described only the initial start, and it is the case in which an
+     unconfined agent would otherwise appear.
+
+  3. **Shutdown is the reverse.** A full stop is traced and the units are
+     observed stopping in exactly the reverse of the order they started:
+     ingress, orchestrator, dashboard, netns, append helper. The reversal is
+     asserted as a property of the recorded start and stop sequences rather
+     than by matching against a second hand-written list, so a future unit
+     inserted into the chain is covered without editing this item.
+
+     Within that reversal: an interaction injected after shutdown begins and
+     before any drain step is **actively refused**, with the trace showing the
+     refusal preceding the first park or drain event, and an interaction that
+     is merely dropped, queued, or accepted-then-discarded fails this item; an
+     in-flight task either completes or parks such that a subsequent start
+     resumes rather than restarts it; an agent ignoring its stop request is
+     terminated at the configured bound; the namespace is torn down only after
+     that termination, per M17's confinement-lifetime part; the dashboard is
+     observed still serving reads during the drain and stopping only after
      state settles; no append is left acknowledged but unsynced and no
-     temporary survives a clean shutdown; and the append-helper lock is
-     released after every writer has exited, not before.
+     temporary survives a clean shutdown; and the lock is released after every
+     writer has exited.
 
-  2. **Startup order.** A start against a store with existing state acquires
-     exclusive ownership, reads state, reconciles, brings up the orchestrator,
-     then the worker namespace, then the dashboard, and starts Discord ingress
-     **last**. An interaction arriving before ingress opens is refused rather
-     than queued into a run still being recovered. The trace shows no unlink,
-     no reconciliation, and no period open for writing preceding lock
-     acquisition. Together with M18 part 9's overlap case, this closes the
-     window in which a second instance could clean up a first instance's state.
-
-  **The trace itself must be shown to work.** Both parts assert the *absence*
+  **The trace itself must be shown to work.** These parts assert the *absence*
   of events in an interval, and a tracer that attached late, filtered wrongly,
-  or captured nothing at all satisfies an absence assertion trivially. Each run
+  or captured nothing satisfies an absence assertion trivially. Each run
   therefore includes a planted, detectable control event of the same class it
   is asserting about: a deliberate unlink of a scratch file inside the traced
   interval, which the trace must capture. A run whose trace does not contain
-  the planted event is a failed run rather than a passing one, regardless of
-  what else it did or did not show.
+  the planted event is a failed run, regardless of what else it showed.
 
-  Both parts run against the generic module, not against d2b-specific
+  All three parts run against the generic module, not against d2b-specific
   configuration, since D5 assigns this behaviour to the module layer and it
   must hold for any consumer.
 
