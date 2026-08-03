@@ -1073,6 +1073,7 @@ fn execution_manifest_schema_and_prose_agree_with_non_empty_discovery() {
     assert!(
         nix_driver.contains("2>\"$tool_stderr\"")
             && nix_driver.contains("emit_sanitized_tool_stderr()")
+            && nix_driver.contains("while IFS= read -r line || [ -n \"$line\" ]; do")
             && nix_driver.contains("line=${line//\"$flake_root\"/<repo>}")
             && nix_driver.contains("line=${line//\"$HOME\"/<home>}"),
         "execution-manifest-policy: evaluator stderr must be captured and path-sanitized"
@@ -1107,6 +1108,12 @@ fn execution_manifest_schema_and_prose_agree_with_non_empty_discovery() {
         "unexpected_cases",
         "comm -23",
         "comm -13",
+        "if ! jq -r ",
+        "if ! comm -23 ",
+        "if ! comm -13 ",
+        "failures_file",
+        "missing_cases_file",
+        "unexpected_cases_file",
         "sort -u",
         "missing evaluated case",
         "unexpected evaluated case",

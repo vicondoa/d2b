@@ -641,11 +641,8 @@ set -euo pipefail
 
         # The aggregate must finish observing every selected check before it
         # decides the final status. A first-failure exit would hide siblings.
-        self.assertRegex(
-            driver,
-            r"(?is)(?:mapfile|readarray|while\s+read).{0,300}"
-            r"(?:jq|json).{0,500}(?:error|failed)",
-        )
+        self.assertIn('failures_file="$result_dir/failures"', driver)
+        self.assertIn('mapfile -t failures <"$failures_file"', driver)
         self.assertRegex(
             driver,
             r"(?is)(?:select|filter).{0,180}(?:\.error|error\?)",
@@ -674,6 +671,11 @@ set -euo pipefail
         )
         self.assertIn('2>"$tool_stderr"', driver)
         self.assertIn("emit_sanitized_tool_stderr()", driver)
+        self.assertIn(
+            'while IFS= read -r line || [ -n "$line" ]; do',
+            driver,
+            "stderr sanitization must retain an unterminated final line",
+        )
         self.assertIn('line=${line//"$flake_root"/<repo>}', driver)
         self.assertIn('line=${line//"$HOME"/<home>}', driver)
         self.assertIn("flake_label=d2b", driver)
@@ -701,6 +703,15 @@ set -euo pipefail
         self.assertIn("unexpected_cases", driver)
         self.assertIn("comm -23", driver)
         self.assertIn("comm -13", driver)
+        self.assertIn('if ! jq -r ', driver)
+        self.assertIn('if ! comm -23 ', driver)
+        self.assertIn('if ! comm -13 ', driver)
+        for array_name in ("failures", "missing_cases", "unexpected_cases"):
+            self.assertNotRegex(
+                driver,
+                rf"mapfile\s+-t\s+{array_name}\s*<\s*<\(",
+                msg=f"{array_name} must not discard a producer exit status",
+            )
         self.assertIn("case_names_ok", driver)
         self.assertIn("run make nix-unit-pin", driver)
         self.assertRegex(

@@ -330,7 +330,7 @@ tool_stderr="$result_dir/stderr"
 
 emit_sanitized_tool_stderr() {
   local line
-  while IFS= read -r line; do
+  while IFS= read -r line || [ -n "$line" ]; do
     line=${line//"$flake_root"/<repo>}
     if [ -n "${HOME:-}" ]; then
       line=${line//"$HOME"/<home>}
@@ -362,8 +362,8 @@ if [ ! -s "$result_file" ] || ! jq -s -e '
 fi
 
 failures=()
-mapfile -t failures < <(
-  jq -r '
+failures_file="$result_dir/failures"
+if ! jq -r '
     select(type == "object" and (.error? != null))
     | (.attr // ((.attrPath // []) | join(".")))
       + ": "
@@ -372,10 +372,14 @@ mapfile -t failures < <(
           | tostring
           | split("\n")
           | map(select(length > 0))
-          | last
+          | if length > 0 then last else "evaluation failed without diagnostic" end
         )
-  ' "$result_file"
-)
+  ' "$result_file" >"$failures_file"; then
+  emit_sanitized_tool_stderr
+  fail "could not parse nix-eval-jobs attribute failures" || true
+  exit 1
+fi
+mapfile -t failures <"$failures_file"
 result_count=$(jq -s 'length' "$result_file")
 integrity_count=$(jq -s '
   [ .[]
@@ -407,8 +411,18 @@ jq -r -s '
 ' "$result_file" | sort -u >"$actual_cases_file"
 missing_cases=()
 unexpected_cases=()
-mapfile -t missing_cases < <(comm -23 "$expected_cases_file" "$actual_cases_file")
-mapfile -t unexpected_cases < <(comm -13 "$expected_cases_file" "$actual_cases_file")
+missing_cases_file="$result_dir/missing-cases"
+unexpected_cases_file="$result_dir/unexpected-cases"
+if ! comm -23 "$expected_cases_file" "$actual_cases_file" >"$missing_cases_file"; then
+  fail "could not compare pinned and evaluated Nix-unit cases" || true
+  exit 1
+fi
+if ! comm -13 "$expected_cases_file" "$actual_cases_file" >"$unexpected_cases_file"; then
+  fail "could not compare evaluated and pinned Nix-unit cases" || true
+  exit 1
+fi
+mapfile -t missing_cases <"$missing_cases_file"
+mapfile -t unexpected_cases <"$unexpected_cases_file"
 case_count_ok=1
 if [ "$case_count" -ne "$expected_case_count" ]; then
   log "  FAIL: nix-unit corpus returned $case_count case attributes; expected $expected_case_count pinned cases for $system; run make nix-unit-pin"
