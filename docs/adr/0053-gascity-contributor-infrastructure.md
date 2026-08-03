@@ -314,13 +314,14 @@ expensive part and produced nothing.
 
 Existing users get a cutover, not a deprecation window. This is contributor
 tooling with one operator, so no window is required; what is required is that
-the remedy is explicit. The preflight has one operator spelling, `make panel-preflight`, which runs the
+the remedy is explicit. The preflight gains one operator spelling, `make panel-preflight`, running the
 existing binding checks and the harness receipt resolver and version checks
-together. `scripts/copilot/check-bindings.mjs` remains what the target invokes;
-it is no longer a second operator-facing spelling of the same step, because two
-names for one preflight is how a contributor ends up running the older one. Its
-failure names the unsupported or missing resolver and the pinned Copilot CLI
-version to upgrade to.
+together, with `scripts/copilot/check-bindings.mjs` as what the target invokes.
+Two operator-facing spellings for one preflight is how a contributor ends up
+running only half of it. The target is introduced by this implementation and
+does not exist today; the current operator command stays the node script until
+it does. The preflight failure names the unsupported or missing resolver and
+the pinned Copilot CLI version to upgrade to.
 
 **D4. Four layers of ownership.**
 
@@ -589,18 +590,26 @@ applies:
 | `HarnessReceiptBindingMismatch` | The resolved binding contradicts the record; the panel must be re-run under the pinned binding |
 | `SelfAssertedBindingRejected` | A record supplied binding strings instead of a locator; update the adapter to capture the receipt |
 
-**The preflight is one repository command: `make panel-preflight`.** It runs
-the existing binding checks together with the harness receipt resolver and
+**The preflight becomes one repository command, `make panel-preflight`.** It
+runs the existing binding checks together with the harness receipt resolver and
 version preflight, and it is what must pass **before any seat is dispatched**.
 Contributors get one command to remember rather than a list, and every error
 variant below names it.
 
+That target **does not exist yet**; it is proposed by this record and lands
+with the implementation. Until then the operator command remains
+`node scripts/copilot/check-bindings.mjs`, which is what
+`docs/contributing/copilot-agents.md` documents today. Contributor docs
+describe what works now; this record describes what replaces it.
+
 Every variant carries a **structured remedy**, not a prose string. Each error
 holds a `RemedyAction` list drawn from a closed set, currently
-`RunPanelPreflight`, `RunPanelMigrate`, `UpgradePinnedHarness` and
-`RerunOriginalPanelCommand`, and `Display` renders that list into the fixed
-command text. Callers and tests match on the actions; nothing parses a message
-to decide what to do, and no action carries argv.
+`RunPanelPreflight`, `RunPanelMigrate`, `UpgradePinnedHarness`,
+`RerunOriginalPanelCommand` and
+`RetryGasCityPanelStage { stage: SafeStageId }`, and `Display` renders that
+list into the fixed command text. Callers and tests match on the actions;
+nothing parses a message to decide what to do, and no action carries argv or a
+free-form string.
 
 **No error prints the panel invocation or its arguments, and none stores it
 either.** An earlier revision required the exact active
@@ -623,15 +632,30 @@ differ:
   Gas City already holds durably in beads. No alias and no mapping are needed
   because the orchestrator knows where the run is.
 
-The remedy sequences are:
+**The core error carries only producer-neutral actions; adapters compose the
+rest.** The verifier does not know which producer it is serving and should not
+have to: a core error that always carried `RunPanelMigrate` would tell a Gas
+City run to migrate a standalone skill it does not use. So the core error holds
+only what is true for every producer, and the presenting adapter appends the
+contextual action.
+
+Core actions by variant:
 
 - `HarnessResolverMissing`, `HarnessVersionUnsupported { current, supported }`
   and `HarnessVersionUnparseable`: `UpgradePinnedHarness`, then
-  `RunPanelPreflight`, then the producer-appropriate rerun above.
-- `HarnessReceiptUnresolvable` and `HarnessReceiptBindingMismatch`:
-  `RunPanelPreflight`, then the producer-appropriate rerun.
-- `SelfAssertedBindingRejected`: `RunPanelMigrate`, then `RunPanelPreflight`,
-  then the producer-appropriate rerun.
+  `RunPanelPreflight`.
+- `HarnessReceiptUnresolvable`, `HarnessReceiptBindingMismatch` and
+  `SelfAssertedBindingRejected`: `RunPanelPreflight`.
+
+Contextual actions appended by the adapter:
+
+- **Standalone**: for `SelfAssertedBindingRejected`, `RunPanelMigrate` first,
+  since the legacy manually-entered values live in the checked-out skill; then
+  `RerunOriginalPanelCommand` for every variant.
+- **Gas City**: `RetryGasCityPanelStage { stage: SafeStageId }` for every
+  variant, and **never** `RunPanelMigrate`. `SafeStageId` is a bounded newtype
+  over a closed stage identifier, not prose and not a formula path, so the
+  action stays free of free-form strings like every other.
 
 **`make panel-migrate` is a wrapper that fails closed**, not a documented pair
 of git commands. It brings the checked-out standalone skill and adapter to the
@@ -642,13 +666,19 @@ Its two refusals name exact commands and mutate nothing:
 - **Dirty tree**: run `git status --short`; then either commit the changes, or
   `git stash push -u -m panel-migrate`; then rerun `make panel-migrate`; and
   after it succeeds, `git stash pop` if that path was taken.
-- **Conflicting update**: run `git status` to see the conflicting paths, and
-  resolve them before rerunning. Because detection happens before any rebase
-  starts, there is no in-progress state to continue or abort. If a future
-  implementation cannot detect conflicts up front and must start the rebase,
-  it states the exact in-progress state and names `git add <paths>` then
-  `git rebase --continue`, or `git rebase --abort`; the preferred design
-  detects first and never reaches that.
+- **Conflicting update**: the wrapper **prints the exact list of paths that
+  would conflict**. It already computed that list to decide to refuse, so
+  telling the contributor to go run `git status` to rediscover it is asking
+  them to redo work the tool has already done, and `git status` on an untouched
+  tree does not show a conflict that has not happened yet. The remedy is:
+  inspect the printed paths, reconcile them through normal branch integration,
+  then rerun `make panel-migrate`. Because detection precedes any rebase, there
+  is no in-progress state to continue or abort.
+
+  A future mode that starts a rebase before detecting conflicts would be a
+  separate design with the standard `git add <paths>`, `git rebase --continue`
+  and `git rebase --abort` remedies. The v1 preflight mode refuses with the
+  tree untouched.
 
 Telling a contributor to run `git rebase origin/v3` inside an error message
 invites exactly the half-finished rebase that then fails the preflight for a
@@ -1577,14 +1607,20 @@ and it ships planted violations it must reject.
      because extracting a plausible-looking version from attacker-influenced
      bytes is how the hostile content gets carried forward under a safe-looking
      type.
-  2. **Policy control, at the type level.** Two assertions through the
-     repository's existing policy-test mechanism over the source or API
-     surface: the panel receipt error enum carries an **explicit** `Debug`
-     implementation and not a derived one; and **every protected field is a
-     redacting newtype**, with no raw `String` or path type among them. The
-     second is the one that matters most, because manual formatting is a
+  2. **Policy control, at the type level, with a planted control.** Two
+     assertions through the repository's existing policy-test mechanism over
+     the source or API surface: the panel receipt error enum carries an
+     **explicit** `Debug` implementation and not a derived one; and **every
+     protected field is a redacting newtype**, with no raw `String` or path
+     type among them. The second matters most, because manual formatting is a
      promise a refactor can break silently while a newtype whose `Debug` is
      safe by construction cannot be leaked by forgetting.
+
+     A planted mock type carrying a raw `String` field, a path field and a
+     **derived** `Debug` is submitted to the same policy test and must be
+     **rejected**; the check reports how many types it examined and fails
+     closed on an empty corpus. A policy test that has only ever seen compliant
+     types has not been shown to reject a non-compliant one.
   3. **Rendering control, with a planted negative.** The `Debug` and `Display`
      renderings of every variant are scanned and must contain no protected
      field, no invocation or argv, and no filesystem path. A **mock error type
@@ -1657,24 +1693,50 @@ and it ships planted violations it must reject.
   - a submission carrying model and effort strings instead of a locator returns
     `SelfAssertedBindingRejected`.
 
-  **Each variant's remedy is asserted as structured actions, not text.** Tests
-  match on the `RemedyAction` list rather than parsing a message: every variant
-  carries `RunPanelPreflight`; `HarnessResolverMissing`,
+  **Remedies are asserted as structured actions, split by layer.** Tests match
+  on the `RemedyAction` list rather than parsing a message.
+
+  Core, producer-neutral, asserted on the error the verifier returns: every
+  variant carries `RunPanelPreflight`; `HarnessResolverMissing`,
   `HarnessVersionUnsupported` and `HarnessVersionUnparseable` additionally
-  carry `UpgradePinnedHarness`; `SelfAssertedBindingRejected` additionally
-  carries `RunPanelMigrate` first; and the standalone producer's list ends with
-  `RerunOriginalPanelCommand` while the Gas City producer's names the formula
-  stage and retry route instead. No action carries argv.
+  carry `UpgradePinnedHarness`. The core error for
+  `SelfAssertedBindingRejected` is asserted **not** to carry
+  `RunPanelMigrate`, because that is the adapter's to add.
+
+  Composed, asserted per producer: the standalone adapter's list for
+  `SelfAssertedBindingRejected` is `RunPanelMigrate` then `RunPanelPreflight`
+  then `RerunOriginalPanelCommand`, and for the other variants ends with
+  `RerunOriginalPanelCommand`; the Gas City adapter's list ends with
+  `RetryGasCityPanelStage { stage }` carrying a bounded `SafeStageId` and
+  **never** contains `RunPanelMigrate` for any variant. Each producer's wrong
+  action set, including a Gas City list containing `RunPanelMigrate`, is
+  asserted to be rejected by the test rather than merely absent. No action
+  carries argv.
 
   **No rendered message contains an invocation, argv, or a path**, asserted by
   scanning every rendered message across all six variants. A test that accepts
   any refusal, or any remedy list, for any of these cases does not satisfy this
   item.
 
-  `make panel-migrate` is separately exercised: it brings the skill and adapter
-  to the pinned revision on a clean tree, and it **refuses** on a dirty tree
-  and on a conflicting update, in each case naming which condition it hit and
-  leaving the tree untouched.
+  **Display is verified positively, per action.** A table test maps **every**
+  `RemedyAction` variant to its expected safe rendered command or phrase and
+  asserts the exact output. Control flow still never parses a string; this
+  covers the other half, that a correct action list does not render into
+  something useless or wrong for a human. A new variant with no expected
+  rendering fails the test.
+
+  `make panel-migrate` is separately exercised on all three paths, with its
+  **output** asserted, not only its exit status:
+
+  - clean tree: brings the skill and adapter to the pinned revision;
+  - dirty tree: refuses, output contains exactly `git status --short`,
+    `git stash push -u -m panel-migrate`, the rerun of `make panel-migrate`,
+    and `git stash pop`, and the tree is byte-identical afterwards;
+  - conflicting update: refuses, output contains the **exact list of
+    would-conflict paths** matched against the known planted conflict set, plus
+    the exact rerun command, and the tree is byte-identical afterwards. An
+    output that names `git status` instead of printing the paths fails this
+    case.
 
   The same shape is exercised for the controller variant: evidence absent,
   evidence untrusted, evidence contradicting the record, and a record carrying
