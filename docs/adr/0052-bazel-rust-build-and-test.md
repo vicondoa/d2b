@@ -803,6 +803,11 @@ and invokes no shell. It:
   with one case element per enumerated case and explicit passed, failed and
   ignored outcomes, so BEP and the Actions test UI preserve per-case
   attribution rather than collapsing the carrier to target-level status;
+- emits only the stable case name, outcome, bounded duration and bounded
+  sanitized failure text in that JUnit document. It emits no environment
+  variable, command-line argument, absolute path, runfiles root, worktree
+  location, user identifier or opaque handle, and it does not copy raw child
+  stdout or stderr into `system-out` or `system-err`;
 - derives each child environment from the Bazel test environment, gives each
   case its own directory beneath `TEST_TMPDIR`, resolves the test binary
   through runfiles, and forwards only the declared test environment rather
@@ -2346,7 +2351,10 @@ closed when any `.bazelrc` line or wrapper argument sets that flag.
    repository-owned case runner writes per-case JUnit results to
    `XML_OUTPUT_FILE`, uses a per-case directory beneath `TEST_TMPDIR`, resolves
    test binaries through runfiles, and preserves passed, failed and ignored
-   status in BEP-visible evidence.
+   status in BEP-visible evidence. That JUnit output is a redacted bounded
+   record: stable case name, outcome, duration and sanitized failure text only,
+   with no environment, argv, absolute path, runfiles/worktree location, user
+   identifier, opaque handle or raw child output.
 6. Pull requests never publish a shared cache entry and never hold
    `actions: write`, and a structural policy test with committed negative and
    positive fixtures enforces both. Exactly one job writes, and only on a push
