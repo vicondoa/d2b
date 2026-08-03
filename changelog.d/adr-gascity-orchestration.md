@@ -1,5 +1,10 @@
 ### Added
 
+- Accepted ADR 0053, which defines an optional Gas City contributor workflow
+  for this repository. The design extends Gas City's native build formulas,
+  preserves standalone contributor tools, makes Gas City orchestrate the
+  binding ten-seat panel, opens pull requests with canonical panel evidence,
+  and keeps merge as an explicit human action.
 - Contributor policy coverage that keeps the documented panel preflight and the
   `Makefile` in agreement: the operator command in
   `docs/contributing/copilot-agents.md` and the notice beside it may only
