@@ -137,23 +137,129 @@ fn contributing_docs_reflect_daemon_only_end_state() {
     );
 }
 
+const CONTRIBUTING_DIR: &str = "docs/contributing";
+
+/// Why a directory listing could not be turned into a scan set. Both cases are
+/// failures: a lint whose input set silently shrinks reports a clean scan of
+/// the docs it managed to read.
+#[derive(Debug, PartialEq, Eq)]
+enum DirScanFault {
+    /// A `read_dir` entry could not be read. An unreadable entry is a doc the
+    /// scan did not look at, and a doc the scan did not look at is not a doc
+    /// the scan cleared.
+    UnreadableEntry { dir: String, detail: String },
+    /// The directory holds no Markdown file at all, so the scan below it would
+    /// pass by having nothing to scan.
+    NoMarkdownFiles { dir: String },
+}
+
+/// The sorted repo-relative Markdown paths in one directory listing.
+///
+/// Taking `Result` items rather than a directory path is what makes the
+/// fail-closed half testable: the entry error this must not discard cannot be
+/// provoked from a real `read_dir` on demand. Non-Markdown entries are filtered
+/// normally - they are not errors - but an `Err` entry ends the scan.
+fn markdown_docs_in<I>(dir: &str, entries: I) -> Result<Vec<String>, DirScanFault>
+where
+    I: IntoIterator<Item = std::io::Result<String>>,
+{
+    let mut out: Vec<String> = Vec::new();
+    for entry in entries {
+        let name = entry.map_err(|err| DirScanFault::UnreadableEntry {
+            dir: dir.to_string(),
+            detail: err.to_string(),
+        })?;
+        if name.ends_with(".md") {
+            out.push(format!("{dir}/{name}"));
+        }
+    }
+    out.sort();
+    if out.is_empty() {
+        return Err(DirScanFault::NoMarkdownFiles {
+            dir: dir.to_string(),
+        });
+    }
+    Ok(out)
+}
+
 /// Repo-relative paths of every Markdown file under `docs/contributing/`.
 fn contributing_docs() -> Vec<String> {
-    let dir = d2b_contract_tests::repo_root().join("docs/contributing");
-    let mut out: Vec<String> = std::fs::read_dir(&dir)
-        .expect("docs/contributing must exist; AGENTS.md routes to it")
-        .filter_map(|entry| {
-            let name = entry.ok()?.file_name().to_string_lossy().into_owned();
-            name.ends_with(".md")
-                .then(|| format!("docs/contributing/{name}"))
+    let dir = d2b_contract_tests::repo_root().join(CONTRIBUTING_DIR);
+    let entries = std::fs::read_dir(&dir)
+        .unwrap_or_else(|err| {
+            panic!("{CONTRIBUTING_DIR} must exist; AGENTS.md routes to it: {err}")
         })
-        .collect();
-    out.sort();
-    assert!(
-        !out.is_empty(),
-        "docs/contributing must contain the process docs AGENTS.md routes to"
+        .map(|entry| entry.map(|entry| entry.file_name().to_string_lossy().into_owned()));
+
+    markdown_docs_in(CONTRIBUTING_DIR, entries).unwrap_or_else(|fault| {
+        panic!(
+            "{CONTRIBUTING_DIR} could not be enumerated, so the scans below it have not run: \
+             {fault:?}"
+        )
+    })
+}
+
+#[test]
+fn contributing_doc_enumeration_fails_closed_on_an_unreadable_entry() {
+    let entries = |names: Vec<std::io::Result<String>>| markdown_docs_in(CONTRIBUTING_DIR, names);
+
+    // Markdown is collected, sorted, and prefixed; other entries are filtered.
+    assert_eq!(
+        entries(vec![
+            Ok("workflow.md".to_string()),
+            Ok("README".to_string()),
+            Ok("assets".to_string()),
+            Ok("architecture.md".to_string()),
+        ]),
+        Ok(vec![
+            format!("{CONTRIBUTING_DIR}/architecture.md"),
+            format!("{CONTRIBUTING_DIR}/workflow.md"),
+        ])
     );
-    out
+
+    // The fail-open shape this replaced: `entry.ok()?` in a `filter_map` turned
+    // the unreadable entry below into one fewer scanned doc and a green run.
+    // The error is reported whether or not readable Markdown was also found,
+    // and whether it arrives before or after that Markdown.
+    for entries_with_error in [
+        vec![
+            Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "workflow.md: denied",
+            )),
+            Ok("architecture.md".to_string()),
+        ],
+        vec![
+            Ok("architecture.md".to_string()),
+            Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "workflow.md: denied",
+            )),
+        ],
+    ] {
+        assert_eq!(
+            entries(entries_with_error),
+            Err(DirScanFault::UnreadableEntry {
+                dir: CONTRIBUTING_DIR.to_string(),
+                detail: "workflow.md: denied".to_string(),
+            }),
+            "an unreadable directory entry must fail the scan, not shrink it"
+        );
+    }
+
+    // A directory with no Markdown in it at all.
+    assert_eq!(
+        entries(vec![Ok("assets".to_string())]),
+        Err(DirScanFault::NoMarkdownFiles {
+            dir: CONTRIBUTING_DIR.to_string(),
+        })
+    );
+    assert_eq!(
+        entries(vec![]),
+        Err(DirScanFault::NoMarkdownFiles {
+            dir: CONTRIBUTING_DIR.to_string(),
+        })
+    );
 }
 
 /// AGENTS.md is injected into every agent session by every harness, so its size
@@ -2222,5 +2328,1028 @@ fn safe_type_census_fails_closed_on_a_root_set_that_governs_nothing() {
         Err(CensusReject::RootExaminedNothing {
             root: "AttemptCount".to_string(),
         })
+    );
+}
+
+// ---------------------------------------------------------------------------
+// panel-migrate refusal model + remedy-output fixtures.
+//
+// `make panel-migrate` does not exist in this repository yet, and neither does
+// the wrapper this models. **Nothing below is the wrapper**, nothing below
+// invokes git, reads a repository, or touches a worktree, and no assertion here
+// is evidence about a shipped command. What lands now is the decision model,
+// the renderer contract its refusals have to satisfy, and the corpus that
+// exercises both - so the one instruction that must never ship is rejected by a
+// check that exists before the thing that would emit it.
+//
+// The instruction in question is `git rebase <pinned-sha>`. The migration is
+// pinned to a commit, so naming that pin as the rebase target reads correct and
+// moves the contributor's branch *backwards* onto a historical commit, dropping
+// every protected commit merged since. The pin is a **precondition** - the
+// migration must be reachable from the fetched `origin/v3` - and never a
+// target. A migration that is not yet published is a typed refusal, not a
+// detour through the pin to get the files.
+//
+// So the audit below is deliberately two-sided. Positive: a conflict refusal
+// must print the exact would-conflict paths it already computed, plus
+// `git fetch origin v3`, `git rebase origin/v3`, `git add <paths>`,
+// `git rebase --continue`, `git rebase --abort`, and the `make panel-migrate`
+// rerun. Negative: no rendered refusal may name a 40-hex object name, or any
+// ref other than `origin/v3`, as a rebase target, and a refusal that mutates
+// nothing and offers no way forward yet may not carry a git command at all.
+//
+// **Wiring contract for the implementation commit.** The commit that writes the
+// wrapper renders its refusals through a real renderer and feeds that output to
+// `audit_refusal_output` - the same predicate, not a second one - keeping the
+// planted outputs below as its negative corpus.
+// ---------------------------------------------------------------------------
+
+const PANEL_MIGRATE_COMMAND: &str = "make panel-migrate";
+/// The only ref a refusal may name as a rebase target.
+const PANEL_MIGRATE_TARGET_REF: &str = "origin/v3";
+const PANEL_MIGRATE_FETCH: &str = "git fetch origin v3";
+const PANEL_MIGRATE_REBASE: &str = "git rebase origin/v3";
+const PANEL_MIGRATE_CONTINUE: &str = "git rebase --continue";
+const PANEL_MIGRATE_ABORT: &str = "git rebase --abort";
+const PANEL_MIGRATE_STATUS: &str = "git status --short";
+const PANEL_MIGRATE_STASH_PUSH: &str = "git stash push -u -m panel-migrate";
+const PANEL_MIGRATE_STASH_POP: &str = "git stash pop";
+const PANEL_MIGRATE_ADD_PREFIX: &str = "git add ";
+
+/// A 40-hex object name. Modelled as its own type because the entire point of
+/// this fixture is that an object name is a precondition and never a target.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ObjectName(&'static str);
+
+/// `origin/v3` as the checkout had it before this run fetched.
+const CURRENT_ORIGIN_V3: ObjectName = ObjectName("1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a");
+/// `origin/v3` as this run's fetch resolved it: the only supported target.
+const FETCHED_ORIGIN_V3: ObjectName = ObjectName("2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b");
+/// The pinned panel migration. A precondition on the fetched target, and the
+/// exact value a plausible-looking `git rebase <sha>` would name.
+const PINNED_MIGRATION: ObjectName = ObjectName("3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c");
+
+/// The planted would-conflict set, deliberately unsorted and bounded: the
+/// refusal has to print what it computed, in a stable order, not echo git's.
+const PLANTED_CONFLICT_PATHS: &[&str] = &[
+    "skills/panel/adapter.mjs",
+    "docs/contributing/copilot-agents.md",
+    "skills/panel/SKILL.md",
+];
+
+/// What the wrapper found before deciding. `Conflicting` is the state this
+/// fixture exists for; `Clean` is the only one that proceeds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TreeState {
+    Clean,
+    Dirty,
+    Conflicting,
+}
+
+/// The facts a decision is made from. Everything here is supplied by the
+/// caller: nothing is read from a repository.
+#[derive(Debug, Clone)]
+struct MigrateContext {
+    current_origin_v3: ObjectName,
+    /// `origin/v3` as this run's fetch resolved it. `None` models a fetch that
+    /// produced no such ref: no target, so no rebase.
+    fetched_origin_v3: Option<ObjectName>,
+    /// The pinned migration that must be present. Never a target.
+    required_migration: ObjectName,
+    /// Whether `required_migration` is reachable from `fetched_origin_v3`.
+    migration_reachable: bool,
+    state: TreeState,
+    /// The paths the wrapper computed would conflict, in the order it found
+    /// them.
+    would_conflict: Vec<&'static str>,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum MigrateOutcome {
+    /// The branch moves onto the fetched target ref, and onto nothing else.
+    Rebase {
+        target_ref: &'static str,
+        from: ObjectName,
+        onto: ObjectName,
+    },
+    Refuse(MigrateRefusal),
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum MigrateRefusal {
+    /// The fetch produced no `origin/v3`. There is no supported place to land,
+    /// and the pin is not a substitute for one.
+    TargetUnavailable {
+        current: ObjectName,
+    },
+    /// The required migration is not reachable from the fetched target: it has
+    /// not been published. Detaching to the pin to obtain the files would move
+    /// the branch backwards, so this refusal offers no git command at all.
+    UnpublishedMigration {
+        required: ObjectName,
+        fetched: ObjectName,
+    },
+    DirtyTree,
+    /// The refusal that prints work already done: the exact would-conflict
+    /// paths, sorted, plus the commands that resolve them.
+    ConflictingUpdate {
+        onto: ObjectName,
+        paths: Vec<&'static str>,
+    },
+}
+
+/// A caller that contradicts itself. Not a refusal - a refusal is a decision
+/// about a repository, and these are decisions that were never made.
+#[derive(Debug, PartialEq, Eq)]
+enum MigrateFault {
+    /// A conflicting state with no computed path. The refusal's whole value is
+    /// printing the paths, so an empty list would render a refusal telling the
+    /// contributor to go rediscover a conflict that has not happened yet.
+    ConflictWithoutPaths,
+    /// Paths computed for a state that is not conflicting.
+    PathsWithoutConflictState { state: TreeState },
+}
+
+/// The decision, as a pure function of the facts.
+///
+/// Order matters: with no fetched target there is nothing to compare against,
+/// and with the migration unpublished there is nothing supported to land on, so
+/// both precede any statement about the working tree.
+fn plan_migration(ctx: &MigrateContext) -> Result<MigrateOutcome, MigrateFault> {
+    match ctx.state {
+        TreeState::Conflicting if ctx.would_conflict.is_empty() => {
+            return Err(MigrateFault::ConflictWithoutPaths);
+        }
+        TreeState::Clean | TreeState::Dirty if !ctx.would_conflict.is_empty() => {
+            return Err(MigrateFault::PathsWithoutConflictState { state: ctx.state });
+        }
+        _ => {}
+    }
+
+    let Some(fetched) = ctx.fetched_origin_v3 else {
+        return Ok(MigrateOutcome::Refuse(MigrateRefusal::TargetUnavailable {
+            current: ctx.current_origin_v3,
+        }));
+    };
+    if !ctx.migration_reachable {
+        return Ok(MigrateOutcome::Refuse(
+            MigrateRefusal::UnpublishedMigration {
+                required: ctx.required_migration,
+                fetched,
+            },
+        ));
+    }
+
+    Ok(match ctx.state {
+        TreeState::Dirty => MigrateOutcome::Refuse(MigrateRefusal::DirtyTree),
+        TreeState::Conflicting => {
+            let mut paths = ctx.would_conflict.clone();
+            paths.sort_unstable();
+            paths.dedup();
+            MigrateOutcome::Refuse(MigrateRefusal::ConflictingUpdate {
+                onto: fetched,
+                paths,
+            })
+        }
+        TreeState::Clean => MigrateOutcome::Rebase {
+            target_ref: PANEL_MIGRATE_TARGET_REF,
+            from: ctx.current_origin_v3,
+            onto: fetched,
+        },
+    })
+}
+
+/// Render one refusal. Object names appear only in prose diagnosis, never in a
+/// command, and the rebase target is spelled `origin/v3` at every site.
+fn render_refusal(refusal: &MigrateRefusal) -> Vec<String> {
+    match refusal {
+        MigrateRefusal::TargetUnavailable { current } => vec![
+            "panel-migrate: refusing to migrate; nothing has been changed.".to_string(),
+            format!(
+                "Fetching {PANEL_MIGRATE_TARGET_REF} produced no such ref, so there is no \
+                 supported branch to move onto."
+            ),
+            format!(
+                "This checkout still has {PANEL_MIGRATE_TARGET_REF} at {}.",
+                current.0
+            ),
+            "Restore access to the remote, then rerun:".to_string(),
+            format!("  {PANEL_MIGRATE_COMMAND}"),
+        ],
+        MigrateRefusal::UnpublishedMigration { required, fetched } => vec![
+            "panel-migrate: refusing to migrate; nothing has been changed.".to_string(),
+            format!(
+                "The required panel migration {} is not reachable from the fetched \
+                 {PANEL_MIGRATE_TARGET_REF} {}.",
+                required.0, fetched.0
+            ),
+            "It has not been published yet. That revision names the migration that must be \
+             present, not a place to land: moving this branch onto it would drop every \
+             protected commit merged since."
+                .to_string(),
+            format!("Wait for the migration to reach {PANEL_MIGRATE_TARGET_REF}, then rerun:"),
+            format!("  {PANEL_MIGRATE_COMMAND}"),
+        ],
+        MigrateRefusal::DirtyTree => vec![
+            "panel-migrate: refusing to migrate; the working tree has uncommitted changes."
+                .to_string(),
+            "Nothing has been changed. Review them:".to_string(),
+            format!("  {PANEL_MIGRATE_STATUS}"),
+            "Then either commit them, or set them aside:".to_string(),
+            format!("  {PANEL_MIGRATE_STASH_PUSH}"),
+            "Then rerun:".to_string(),
+            format!("  {PANEL_MIGRATE_COMMAND}"),
+            "If you stashed, restore them once it succeeds:".to_string(),
+            format!("  {PANEL_MIGRATE_STASH_POP}"),
+        ],
+        MigrateRefusal::ConflictingUpdate { paths, .. } => {
+            let mut out = vec![
+                "panel-migrate: refusing to migrate; nothing has been changed.".to_string(),
+                format!("Updating onto {PANEL_MIGRATE_TARGET_REF} would conflict in these paths:"),
+            ];
+            out.extend(paths.iter().map(|path| format!("  {path}")));
+            out.push(
+                "Move the branch forward yourself, starting from the protected branch:".to_string(),
+            );
+            out.push(format!("  {PANEL_MIGRATE_FETCH}"));
+            out.push(format!("  {PANEL_MIGRATE_REBASE}"));
+            out.push("Resolve the paths listed above, then continue the rebase:".to_string());
+            out.push(format!("  {PANEL_MIGRATE_ADD_PREFIX}{}", paths.join(" ")));
+            out.push(format!("  {PANEL_MIGRATE_CONTINUE}"));
+            out.push("To stop and leave the branch exactly where it is now:".to_string());
+            out.push(format!("  {PANEL_MIGRATE_ABORT}"));
+            out.push("Once the rebase finishes, rerun:".to_string());
+            out.push(format!("  {PANEL_MIGRATE_COMMAND}"));
+            out
+        }
+    }
+}
+
+/// Why a rendered refusal is not acceptable output.
+#[derive(Debug, PartialEq, Eq)]
+enum RefusalReject {
+    /// The backwards-migration instruction: a rebase onto a 40-hex object name.
+    /// It looks like a correct command and moves the branch behind protected
+    /// `v3`, which is exactly what a human reading the output waves through.
+    RebaseOntoObjectName { target: String },
+    /// A rebase onto some ref that is not `origin/v3`.
+    RebaseOntoForeignRef { target: String },
+    /// `git rebase` with nothing at all after it.
+    RebaseWithoutTarget,
+    /// An object name inside some other git command - a `checkout`, a `reset` -
+    /// which reaches the same backwards state by another route.
+    ObjectNameInCommand { command: String },
+    /// A refusal with no supported way forward yet printed a git command.
+    GitCommandInBlockedRefusal { command: String },
+    /// A refusal that is not about conflicts told the contributor to rebase.
+    UnexpectedRebaseInstruction { command: String },
+    /// The output omits a command the contributor needs.
+    MissingCommand { command: String },
+    /// Two commands are printed in an order that does not work when run.
+    CommandsOutOfOrder { earlier: String, later: String },
+    /// The conflict refusal printed no path, sending the contributor to
+    /// rediscover a conflict that has not happened yet.
+    NoConflictPathsPrinted,
+    /// A computed path is missing from the printed list.
+    ConflictPathMissing { path: String },
+    /// A printed path the wrapper never computed.
+    UnexpectedConflictPath { path: String },
+    /// The printed paths are in some order other than sorted.
+    ConflictPathsUnsorted,
+    /// The `git add` line omits a path the contributor has to resolve.
+    AddCommandOmitsPath { path: String },
+    /// The diagnosis does not name what it is about.
+    MissingDiagnosis { needle: String },
+}
+
+/// A 40-hex object name, the shape that must never be a rebase target.
+fn is_object_name(token: &str) -> bool {
+    token.len() == 40 && token.chars().all(|c| c.is_ascii_hexdigit())
+}
+
+/// The command a line gives an operator, if it gives one.
+fn migrate_command(line: &str) -> Option<&str> {
+    let trimmed = line.trim();
+    (trimmed.starts_with("git ") || trimmed.starts_with("make ")).then_some(trimmed)
+}
+
+/// The paths a refusal printed: the bare, whitespace-free entries of its path
+/// block. Deliberately not "any line mentioning the path", so deleting the
+/// printed list is not covered up by the `git add` line that repeats it.
+fn printed_paths(output: &[String]) -> Vec<&str> {
+    output
+        .iter()
+        .map(|line| line.trim())
+        .filter(|line| {
+            !line.is_empty()
+                && migrate_command(line).is_none()
+                && !line.chars().any(char::is_whitespace)
+        })
+        .collect()
+}
+
+fn command_position(output: &[String], command: &str) -> Option<usize> {
+    output
+        .iter()
+        .position(|line| migrate_command(line) == Some(command))
+}
+
+/// `steps` are `(command, line index)` in the order they must be run. An order
+/// that reads fine and does not work when run is not a remedy.
+fn ordered_commands(steps: &[(&str, usize)]) -> Result<(), RefusalReject> {
+    for pair in steps.windows(2) {
+        if pair[0].1 > pair[1].1 {
+            return Err(RefusalReject::CommandsOutOfOrder {
+                earlier: pair[0].0.to_string(),
+                later: pair[1].0.to_string(),
+            });
+        }
+    }
+    Ok(())
+}
+
+/// What the audit examined. Reported rather than asserted away: an audit that
+/// cannot say what it checked cannot be shown to have checked anything.
+#[derive(Debug, PartialEq, Eq)]
+struct RefusalAudit {
+    lines: usize,
+    commands: usize,
+    paths: usize,
+}
+
+/// Accept a rendered refusal, or say exactly why it is not acceptable.
+///
+/// `refusal` is the decision the model made; `output` is the text some renderer
+/// produced for it, which is why the planted-output fixtures below can hand
+/// this a real refusal with text no correct renderer would emit.
+fn audit_refusal_output(
+    refusal: &MigrateRefusal,
+    output: &[String],
+) -> Result<RefusalAudit, RefusalReject> {
+    // Target safety first, over every line of every refusal: a rebase target is
+    // either `origin/v3` or a defect, whatever else the output gets right.
+    for line in output {
+        let Some(command) = migrate_command(line) else {
+            continue;
+        };
+        if let Some(rest) = command.strip_prefix("git rebase") {
+            let args: Vec<&str> = rest.split_whitespace().collect();
+            if let Some(name) = args.iter().find(|arg| is_object_name(arg)) {
+                return Err(RefusalReject::RebaseOntoObjectName {
+                    target: (*name).to_string(),
+                });
+            }
+            match args.iter().find(|arg| !arg.starts_with('-')) {
+                // `--continue` / `--abort` name no target and need none.
+                None if args.is_empty() => return Err(RefusalReject::RebaseWithoutTarget),
+                None => {}
+                Some(target) if *target != PANEL_MIGRATE_TARGET_REF => {
+                    return Err(RefusalReject::RebaseOntoForeignRef {
+                        target: (*target).to_string(),
+                    });
+                }
+                Some(_) => {}
+            }
+            continue;
+        }
+        if command.split_whitespace().any(is_object_name) {
+            return Err(RefusalReject::ObjectNameInCommand {
+                command: command.to_string(),
+            });
+        }
+    }
+
+    let require = |command: &str| -> Result<usize, RefusalReject> {
+        command_position(output, command).ok_or_else(|| RefusalReject::MissingCommand {
+            command: command.to_string(),
+        })
+    };
+    let mention = |needle: &str| -> Result<(), RefusalReject> {
+        output
+            .iter()
+            .any(|line| line.contains(needle))
+            .then_some(())
+            .ok_or_else(|| RefusalReject::MissingDiagnosis {
+                needle: needle.to_string(),
+            })
+    };
+    let no_git_commands = || -> Result<(), RefusalReject> {
+        match output
+            .iter()
+            .filter_map(|line| migrate_command(line))
+            .find(|command| command.starts_with("git "))
+        {
+            Some(command) => Err(RefusalReject::GitCommandInBlockedRefusal {
+                command: command.to_string(),
+            }),
+            None => Ok(()),
+        }
+    };
+    let no_rebase = || -> Result<(), RefusalReject> {
+        match output
+            .iter()
+            .filter_map(|line| migrate_command(line))
+            .find(|command| command.starts_with("git rebase"))
+        {
+            Some(command) => Err(RefusalReject::UnexpectedRebaseInstruction {
+                command: command.to_string(),
+            }),
+            None => Ok(()),
+        }
+    };
+
+    let (commands, paths_checked) = match refusal {
+        MigrateRefusal::TargetUnavailable { current } => {
+            mention(PANEL_MIGRATE_TARGET_REF)?;
+            mention(current.0)?;
+            no_git_commands()?;
+            require(PANEL_MIGRATE_COMMAND)?;
+            (1, 0)
+        }
+        MigrateRefusal::UnpublishedMigration { required, fetched } => {
+            mention(PANEL_MIGRATE_TARGET_REF)?;
+            mention(required.0)?;
+            mention(fetched.0)?;
+            // The pin is named as the missing precondition and nowhere else:
+            // no fetch, no rebase, no detour to obtain the files.
+            no_git_commands()?;
+            require(PANEL_MIGRATE_COMMAND)?;
+            (1, 0)
+        }
+        MigrateRefusal::DirtyTree => {
+            no_rebase()?;
+            let status = require(PANEL_MIGRATE_STATUS)?;
+            let stash = require(PANEL_MIGRATE_STASH_PUSH)?;
+            let rerun = require(PANEL_MIGRATE_COMMAND)?;
+            let pop = require(PANEL_MIGRATE_STASH_POP)?;
+            ordered_commands(&[
+                (PANEL_MIGRATE_STATUS, status),
+                (PANEL_MIGRATE_STASH_PUSH, stash),
+                (PANEL_MIGRATE_COMMAND, rerun),
+                (PANEL_MIGRATE_STASH_POP, pop),
+            ])?;
+            (4, 0)
+        }
+        MigrateRefusal::ConflictingUpdate { paths, .. } => {
+            let printed = printed_paths(output);
+            if printed.is_empty() {
+                return Err(RefusalReject::NoConflictPathsPrinted);
+            }
+            for path in paths {
+                if !printed.iter().any(|printed| printed == path) {
+                    return Err(RefusalReject::ConflictPathMissing {
+                        path: (*path).to_string(),
+                    });
+                }
+            }
+            for printed_path in &printed {
+                if !paths.iter().any(|path| path == printed_path) {
+                    return Err(RefusalReject::UnexpectedConflictPath {
+                        path: (*printed_path).to_string(),
+                    });
+                }
+            }
+            if !printed.is_sorted() {
+                return Err(RefusalReject::ConflictPathsUnsorted);
+            }
+
+            let fetch = require(PANEL_MIGRATE_FETCH)?;
+            let rebase = require(PANEL_MIGRATE_REBASE)?;
+            let add = output
+                .iter()
+                .position(|line| {
+                    migrate_command(line).is_some_and(|c| c.starts_with(PANEL_MIGRATE_ADD_PREFIX))
+                })
+                .ok_or_else(|| RefusalReject::MissingCommand {
+                    command: PANEL_MIGRATE_ADD_PREFIX.trim_end().to_string(),
+                })?;
+            let add_command = migrate_command(&output[add]).expect("the add line is a command");
+            for path in paths {
+                if !add_command.split_whitespace().any(|arg| arg == *path) {
+                    return Err(RefusalReject::AddCommandOmitsPath {
+                        path: (*path).to_string(),
+                    });
+                }
+            }
+            let continued = require(PANEL_MIGRATE_CONTINUE)?;
+            require(PANEL_MIGRATE_ABORT)?;
+            require(PANEL_MIGRATE_COMMAND)?;
+
+            // Fetch before rebase, and resolve before continue: an order that
+            // reads fine and does not work when run is not a remedy.
+            ordered_commands(&[(PANEL_MIGRATE_FETCH, fetch), (PANEL_MIGRATE_REBASE, rebase)])?;
+            ordered_commands(&[
+                (PANEL_MIGRATE_ADD_PREFIX.trim_end(), add),
+                (PANEL_MIGRATE_CONTINUE, continued),
+            ])?;
+            (6, printed.len())
+        }
+    };
+
+    Ok(RefusalAudit {
+        lines: output.len(),
+        commands,
+        paths: paths_checked,
+    })
+}
+
+// --- in-memory fixtures for the refusal corpus -----------------------------
+
+/// A self-consistent context: fetched target present, migration published, and
+/// would-conflict paths exactly when the state is `Conflicting`.
+fn migrate_context(state: TreeState) -> MigrateContext {
+    MigrateContext {
+        current_origin_v3: CURRENT_ORIGIN_V3,
+        fetched_origin_v3: Some(FETCHED_ORIGIN_V3),
+        required_migration: PINNED_MIGRATION,
+        migration_reachable: true,
+        state,
+        would_conflict: match state {
+            TreeState::Conflicting => PLANTED_CONFLICT_PATHS.to_vec(),
+            TreeState::Clean | TreeState::Dirty => Vec::new(),
+        },
+    }
+}
+
+fn refusal_for(ctx: &MigrateContext) -> MigrateRefusal {
+    match plan_migration(ctx).expect("the fixture context is self-consistent") {
+        MigrateOutcome::Refuse(refusal) => refusal,
+        outcome => panic!("expected a refusal, got {outcome:?}"),
+    }
+}
+
+fn conflict_refusal() -> MigrateRefusal {
+    refusal_for(&migrate_context(TreeState::Conflicting))
+}
+
+/// Drop every line whose command starts with `prefix`.
+fn without_command(output: &[String], prefix: &str) -> Vec<String> {
+    output
+        .iter()
+        .filter(|line| !line.trim().starts_with(prefix))
+        .cloned()
+        .collect()
+}
+
+/// Drop every line that is exactly `line` once trimmed.
+fn without_line(output: &[String], dropped: &str) -> Vec<String> {
+    output
+        .iter()
+        .filter(|line| line.trim() != dropped)
+        .cloned()
+        .collect()
+}
+
+/// Replace the line that is exactly `target` with `replacement`, keeping the
+/// indent the renderer uses. This is how a planted renderer output is built:
+/// one line of otherwise-correct output says something it must not say.
+fn planting(output: &[String], target: &str, replacement: &str) -> Vec<String> {
+    let planted: Vec<String> = output
+        .iter()
+        .map(|line| {
+            if line.trim() == target {
+                format!("  {replacement}")
+            } else {
+                line.clone()
+            }
+        })
+        .collect();
+    assert_ne!(
+        planted.as_slice(),
+        output,
+        "the planted fixture must actually change the output; `{target}` was not there"
+    );
+    planted
+}
+
+#[test]
+fn panel_migrate_conflict_refusal_prints_the_paths_it_computed() {
+    let refusal = conflict_refusal();
+
+    // The computed set is sorted, whatever order it was found in.
+    assert_eq!(
+        refusal,
+        MigrateRefusal::ConflictingUpdate {
+            onto: FETCHED_ORIGIN_V3,
+            paths: vec![
+                "docs/contributing/copilot-agents.md",
+                "skills/panel/SKILL.md",
+                "skills/panel/adapter.mjs",
+            ],
+        },
+        "the refusal names the fetched target, and its paths are sorted rather than in the \
+         order they were computed"
+    );
+
+    // Exact content and exact order. The conflicting paths are printed because
+    // the wrapper already computed them: sending the contributor to run
+    // `git status` on an untouched tree asks them to rediscover work already
+    // done, and shows nothing, because the conflict has not happened yet.
+    assert_eq!(
+        render_refusal(&refusal),
+        vec![
+            "panel-migrate: refusing to migrate; nothing has been changed.",
+            "Updating onto origin/v3 would conflict in these paths:",
+            "  docs/contributing/copilot-agents.md",
+            "  skills/panel/SKILL.md",
+            "  skills/panel/adapter.mjs",
+            "Move the branch forward yourself, starting from the protected branch:",
+            "  git fetch origin v3",
+            "  git rebase origin/v3",
+            "Resolve the paths listed above, then continue the rebase:",
+            "  git add docs/contributing/copilot-agents.md skills/panel/SKILL.md \
+             skills/panel/adapter.mjs",
+            "  git rebase --continue",
+            "To stop and leave the branch exactly where it is now:",
+            "  git rebase --abort",
+            "Once the rebase finishes, rerun:",
+            "  make panel-migrate",
+        ]
+    );
+
+    assert!(
+        !render_refusal(&refusal)
+            .iter()
+            .any(|line| line.contains("git status")),
+        "an output that names `git status` instead of printing the paths is the failure mode \
+         this refusal exists to avoid"
+    );
+
+    assert_eq!(
+        audit_refusal_output(&refusal, &render_refusal(&refusal)),
+        Ok(RefusalAudit {
+            lines: 15,
+            commands: 6,
+            paths: 3,
+        })
+    );
+}
+
+#[test]
+fn panel_migrate_rejects_a_rebase_onto_anything_but_the_fetched_branch() {
+    let refusal = conflict_refusal();
+    let accepted = render_refusal(&refusal);
+
+    // The exact backwards-migration instruction: the pinned migration commit,
+    // which is a precondition on `origin/v3` and never a place to land.
+    assert_eq!(
+        audit_refusal_output(
+            &refusal,
+            &planting(
+                &accepted,
+                PANEL_MIGRATE_REBASE,
+                &format!("git rebase {}", PINNED_MIGRATION.0)
+            )
+        ),
+        Err(RefusalReject::RebaseOntoObjectName {
+            target: PINNED_MIGRATION.0.to_string(),
+        })
+    );
+
+    // Same instruction wearing a flag, and with an unrelated object name.
+    for planted in [
+        format!("git rebase --onto {} origin/v3", PINNED_MIGRATION.0),
+        format!("git rebase {}", CURRENT_ORIGIN_V3.0),
+    ] {
+        assert!(
+            matches!(
+                audit_refusal_output(
+                    &refusal,
+                    &planting(&accepted, PANEL_MIGRATE_REBASE, &planted)
+                ),
+                Err(RefusalReject::RebaseOntoObjectName { .. })
+            ),
+            "a 40-hex rebase target is rejected however it is spelled: {planted}"
+        );
+    }
+
+    // Any other ref, and a rebase with no target at all.
+    assert_eq!(
+        audit_refusal_output(
+            &refusal,
+            &planting(&accepted, PANEL_MIGRATE_REBASE, "git rebase upstream/main")
+        ),
+        Err(RefusalReject::RebaseOntoForeignRef {
+            target: "upstream/main".to_string(),
+        })
+    );
+    assert_eq!(
+        audit_refusal_output(
+            &refusal,
+            &planting(&accepted, PANEL_MIGRATE_REBASE, "git rebase")
+        ),
+        Err(RefusalReject::RebaseWithoutTarget)
+    );
+
+    // The same backwards move by another route.
+    assert_eq!(
+        audit_refusal_output(
+            &refusal,
+            &planting(
+                &accepted,
+                PANEL_MIGRATE_REBASE,
+                &format!("git checkout {}", PINNED_MIGRATION.0)
+            )
+        ),
+        Err(RefusalReject::ObjectNameInCommand {
+            command: format!("git checkout {}", PINNED_MIGRATION.0),
+        })
+    );
+
+    // The accepted output names `origin/v3` as its only rebase target, so none
+    // of the above is rejected for some incidental reason.
+    assert!(audit_refusal_output(&refusal, &accepted).is_ok());
+}
+
+#[test]
+fn panel_migrate_rejects_conflict_output_missing_any_remedy_step() {
+    let refusal = conflict_refusal();
+    let accepted = render_refusal(&refusal);
+    let add_line = format!(
+        "{PANEL_MIGRATE_ADD_PREFIX}docs/contributing/copilot-agents.md skills/panel/SKILL.md \
+         skills/panel/adapter.mjs"
+    );
+
+    let cases: Vec<(&str, Vec<String>, RefusalReject)> = vec![
+        (
+            "fetch dropped",
+            without_command(&accepted, PANEL_MIGRATE_FETCH),
+            RefusalReject::MissingCommand {
+                command: PANEL_MIGRATE_FETCH.to_string(),
+            },
+        ),
+        (
+            "rebase onto origin/v3 dropped",
+            without_command(&accepted, PANEL_MIGRATE_REBASE),
+            RefusalReject::MissingCommand {
+                command: PANEL_MIGRATE_REBASE.to_string(),
+            },
+        ),
+        (
+            "add dropped",
+            without_command(&accepted, PANEL_MIGRATE_ADD_PREFIX),
+            RefusalReject::MissingCommand {
+                command: "git add".to_string(),
+            },
+        ),
+        (
+            "continue dropped",
+            without_command(&accepted, PANEL_MIGRATE_CONTINUE),
+            RefusalReject::MissingCommand {
+                command: PANEL_MIGRATE_CONTINUE.to_string(),
+            },
+        ),
+        (
+            "abort dropped",
+            without_command(&accepted, PANEL_MIGRATE_ABORT),
+            RefusalReject::MissingCommand {
+                command: PANEL_MIGRATE_ABORT.to_string(),
+            },
+        ),
+        (
+            "rerun dropped",
+            without_command(&accepted, PANEL_MIGRATE_COMMAND),
+            RefusalReject::MissingCommand {
+                command: PANEL_MIGRATE_COMMAND.to_string(),
+            },
+        ),
+        (
+            "one computed path never printed",
+            without_line(&accepted, "skills/panel/SKILL.md"),
+            RefusalReject::ConflictPathMissing {
+                path: "skills/panel/SKILL.md".to_string(),
+            },
+        ),
+        (
+            "a path nobody computed printed",
+            {
+                let mut planted = accepted.clone();
+                planted.insert(5, "  skills/panel/unrelated.mjs".to_string());
+                planted
+            },
+            RefusalReject::UnexpectedConflictPath {
+                path: "skills/panel/unrelated.mjs".to_string(),
+            },
+        ),
+        (
+            "paths printed in the order git happened to report them",
+            {
+                let mut planted = accepted.clone();
+                planted.swap(2, 4);
+                planted
+            },
+            RefusalReject::ConflictPathsUnsorted,
+        ),
+        (
+            "add omits a path the contributor must resolve",
+            planting(
+                &accepted,
+                &add_line,
+                "git add docs/contributing/copilot-agents.md skills/panel/SKILL.md",
+            ),
+            RefusalReject::AddCommandOmitsPath {
+                path: "skills/panel/adapter.mjs".to_string(),
+            },
+        ),
+        (
+            "fetch and rebase inverted",
+            {
+                let mut planted = accepted.clone();
+                planted.swap(6, 7);
+                planted
+            },
+            RefusalReject::CommandsOutOfOrder {
+                earlier: PANEL_MIGRATE_FETCH.to_string(),
+                later: PANEL_MIGRATE_REBASE.to_string(),
+            },
+        ),
+    ];
+
+    for (label, planted, expected) in cases {
+        assert_eq!(
+            audit_refusal_output(&refusal, &planted),
+            Err(expected),
+            "planted conflict output was not rejected as expected ({label})"
+        );
+    }
+}
+
+#[test]
+fn panel_migrate_conflict_state_requires_the_paths_it_claims() {
+    // A conflicting state with nothing to print: the refusal's whole value is
+    // the list, so an empty one is a modelling fault, not a refusal.
+    let mut ctx = migrate_context(TreeState::Conflicting);
+    ctx.would_conflict.clear();
+    assert_eq!(
+        plan_migration(&ctx),
+        Err(MigrateFault::ConflictWithoutPaths)
+    );
+
+    // The mirror: paths computed for a state that is not conflicting.
+    for state in [TreeState::Clean, TreeState::Dirty] {
+        let mut ctx = migrate_context(state);
+        ctx.would_conflict = PLANTED_CONFLICT_PATHS.to_vec();
+        assert_eq!(
+            plan_migration(&ctx),
+            Err(MigrateFault::PathsWithoutConflictState { state })
+        );
+    }
+
+    // And an empty printed list, if some renderer produced one anyway.
+    let refusal = conflict_refusal();
+    let accepted = render_refusal(&refusal);
+    let mut stripped = accepted.clone();
+    stripped.drain(2..5);
+    assert_eq!(
+        audit_refusal_output(&refusal, &stripped),
+        Err(RefusalReject::NoConflictPathsPrinted)
+    );
+}
+
+#[test]
+fn panel_migrate_unpublished_migration_refuses_without_a_mutation() {
+    let mut ctx = migrate_context(TreeState::Clean);
+    ctx.migration_reachable = false;
+    let refusal = refusal_for(&ctx);
+    assert_eq!(
+        refusal,
+        MigrateRefusal::UnpublishedMigration {
+            required: PINNED_MIGRATION,
+            fetched: FETCHED_ORIGIN_V3,
+        },
+        "an unreachable migration is its own typed refusal, not a rebase onto the pin"
+    );
+
+    let output = render_refusal(&refusal);
+    assert_eq!(
+        audit_refusal_output(&refusal, &output),
+        Ok(RefusalAudit {
+            lines: 5,
+            commands: 1,
+            paths: 0,
+        })
+    );
+    assert!(
+        output
+            .iter()
+            .all(|line| migrate_command(line).is_none_or(|command| !command.starts_with("git "))),
+        "the contributor cannot migrate to something unpublished, so this refusal offers no \
+         git command at all: {output:?}"
+    );
+    assert!(
+        !output.join("\n").contains("git rebase"),
+        "and above all no rebase, onto the pin or anything else"
+    );
+    assert!(
+        output.iter().any(|line| line.contains(PINNED_MIGRATION.0)),
+        "the pin is still named - as the missing precondition, in prose"
+    );
+
+    // A planted renderer that helpfully suggests a way to get the files.
+    for (planted, expected) in [
+        (
+            format!("git rebase {}", PINNED_MIGRATION.0),
+            RefusalReject::RebaseOntoObjectName {
+                target: PINNED_MIGRATION.0.to_string(),
+            },
+        ),
+        (
+            PANEL_MIGRATE_FETCH.to_string(),
+            RefusalReject::GitCommandInBlockedRefusal {
+                command: PANEL_MIGRATE_FETCH.to_string(),
+            },
+        ),
+    ] {
+        let mut planted_output = output.clone();
+        planted_output.push(format!("  {planted}"));
+        assert_eq!(
+            audit_refusal_output(&refusal, &planted_output),
+            Err(expected),
+            "a blocked refusal that grew a git command must be rejected: {planted}"
+        );
+    }
+}
+
+#[test]
+fn panel_migrate_clean_tree_lands_on_the_fetched_branch_and_never_the_pin() {
+    assert_eq!(
+        plan_migration(&migrate_context(TreeState::Clean)),
+        Ok(MigrateOutcome::Rebase {
+            target_ref: PANEL_MIGRATE_TARGET_REF,
+            from: CURRENT_ORIGIN_V3,
+            onto: FETCHED_ORIGIN_V3,
+        }),
+        "the branch moves onto the fetched protected branch: forward, and never onto the pin"
+    );
+
+    // No fetched target is a refusal, not a fallback to the pinned revision.
+    let mut ctx = migrate_context(TreeState::Clean);
+    ctx.fetched_origin_v3 = None;
+    let refusal = refusal_for(&ctx);
+    assert_eq!(
+        refusal,
+        MigrateRefusal::TargetUnavailable {
+            current: CURRENT_ORIGIN_V3,
+        }
+    );
+    assert_eq!(
+        audit_refusal_output(&refusal, &render_refusal(&refusal)),
+        Ok(RefusalAudit {
+            lines: 5,
+            commands: 1,
+            paths: 0,
+        })
+    );
+}
+
+#[test]
+fn panel_migrate_refusal_corpus_is_counted_and_non_empty() {
+    // The planted object names are really 40-hex, so the rejection above is the
+    // rejection of the instruction that ships, not of a malformed fixture.
+    for name in [CURRENT_ORIGIN_V3, FETCHED_ORIGIN_V3, PINNED_MIGRATION] {
+        assert!(
+            is_object_name(name.0),
+            "{} is not a 40-hex object name",
+            name.0
+        );
+    }
+
+    let mut unpublished = migrate_context(TreeState::Clean);
+    unpublished.migration_reachable = false;
+    let mut unavailable = migrate_context(TreeState::Clean);
+    unavailable.fetched_origin_v3 = None;
+
+    let corpus = [
+        migrate_context(TreeState::Dirty),
+        migrate_context(TreeState::Conflicting),
+        unpublished,
+        unavailable,
+    ];
+
+    let audits: Vec<RefusalAudit> = corpus
+        .iter()
+        .map(|ctx| {
+            let refusal = refusal_for(ctx);
+            audit_refusal_output(&refusal, &render_refusal(&refusal)).unwrap_or_else(|reject| {
+                panic!("the modelled refusal renders acceptably: {reject:?}")
+            })
+        })
+        .collect();
+
+    assert_eq!(
+        audits.len(),
+        4,
+        "every modelled refusal is rendered and audited; an empty or shrinking corpus is a \
+         scan that examined nothing"
+    );
+    assert_eq!(
+        audits.iter().map(|audit| audit.commands).sum::<usize>(),
+        12,
+        "the audited command total: 6 for the conflict refusal, 4 for the dirty tree, and the \
+         rerun for each blocked one"
+    );
+    assert_eq!(
+        audits.iter().map(|audit| audit.paths).sum::<usize>(),
+        PLANTED_CONFLICT_PATHS.len()
     );
 }

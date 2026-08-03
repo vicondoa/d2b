@@ -689,10 +689,25 @@ Returned plans, fixed per producer and variant:
   path, so the action stays free of free-form strings like every other.
 
 **`make panel-migrate` is a wrapper that fails closed**, not a documented pair
-of git commands. It brings the checked-out standalone skill and adapter to the
-pinned supported revision, and it **detects conflicts before it starts**,
-refusing with the tree untouched rather than leaving a half-finished rebase.
-Its two refusals name exact commands and mutate nothing:
+of git commands. **It moves the contributor's branch forward onto current
+protected `v3`**, which is where the supported skill and adapter live. It does
+**not** rebase onto the pinned supported revision. A pin is a historical commit
+and `git rebase <pinned-sha>` onto one moves the branch **backwards**, throwing
+away every protected commit merged since and producing a branch that no longer
+contains the work it was based on. The pinned revision names the migration that
+must be present, not the place to land.
+
+So the pin is used as a **precondition, not a target**. The wrapper's preflight
+fetches `origin/v3` and verifies the required panel migration commit is
+**reachable from** it. If it is not, the wrapper refuses with a typed error
+saying the supported migration is not published yet, which is the honest
+diagnosis: the contributor cannot migrate to something that has not landed, and
+detaching to the pinned SHA to get the files would be a worse outcome than
+waiting.
+
+The wrapper **detects conflicts before it starts**, refusing with the tree
+untouched rather than leaving a half-finished rebase. Its two refusals name
+exact commands and mutate nothing:
 
 - **Dirty tree**: run `git status --short`; then either commit the changes, or
   `git stash push -u -m panel-migrate`; then rerun `make panel-migrate`; and
@@ -701,22 +716,24 @@ Its two refusals name exact commands and mutate nothing:
   would conflict**. It already computed that list to decide to refuse, so
   telling the contributor to go run `git status` to rediscover it is asking
   them to redo work the tool has already done, and `git status` on an untouched
-  tree does not show a conflict that has not happened yet. The wrapper also
-  prints the full pinned supported revision and the exact commands:
-  `git fetch origin v3`, then `git rebase <pinned-supported-revision>`.
-  The contributor resolves the printed paths, runs `git add <paths>` and
+  tree does not show a conflict that has not happened yet. The wrapper prints
+  the exact commands: `git fetch origin v3`, then `git rebase origin/v3`. The
+  contributor resolves the printed paths, runs `git add <paths>` and
   `git rebase --continue`, or uses `git rebase --abort`, then reruns
-  `make panel-migrate`. Because detection precedes this explicit operator
+  `make panel-migrate`. No refusal ever prints a rebase onto a pinned or
+  otherwise historical SHA. Because detection precedes this explicit operator
   action, the wrapper itself leaves no in-progress rebase behind.
 
   A future mode that starts a rebase before detecting conflicts would be a
-  separate design with the standard `git add <paths>`, `git rebase --continue`
-  and `git rebase --abort` remedies. The v1 preflight mode refuses with the
-  tree untouched.
+  separate design with the same `git add <paths>`, `git rebase --continue` and
+  `git rebase --abort` remedies. The v1 preflight mode refuses with the tree
+  untouched.
 
-Telling a contributor to run `git rebase origin/v3` inside an error message
-invites exactly the half-finished rebase that then fails the preflight for a
-second, unrelated reason.
+Naming `git rebase origin/v3` is safe precisely because the wrapper has already
+determined the conflict and mutated nothing: the contributor is starting the
+rebase deliberately, with the conflicting paths in front of them, rather than
+discovering mid-operation that a tool left them in a state they did not ask
+for.
 
 **Redaction is type-level, the type set is closed, and the outer `Debug` is
 derived on purpose.** The governed surface is a **declared closed set of
@@ -1853,21 +1870,36 @@ and it ships planted violations it must reject.
   does not render into something useless, out of sequence, or wrong for a
   human. A new variant with no expected rendering fails the test.
 
-  `make panel-migrate` is separately exercised on all three paths, with its
+  `make panel-migrate` is separately exercised on all four paths, with its
   **output** asserted, not only its exit status:
 
-  - clean tree: brings the skill and adapter to the pinned revision;
+  - clean tree: brings the branch onto current `origin/v3`, carrying the
+    supported skill and adapter, and the resulting head is asserted to be a
+    descendant of the fetched `origin/v3` rather than of any pinned SHA;
+  - unpublished migration: the required panel migration commit is planted as
+    **not reachable** from the fetched `origin/v3`, and the wrapper refuses
+    with the typed unpublished-migration error, mutating nothing;
   - dirty tree: refuses, output contains exactly `git status --short`,
     `git stash push -u -m panel-migrate`, the rerun of `make panel-migrate`,
     and `git stash pop`, and the tree is byte-identical afterwards;
   - conflicting update: refuses, output contains the **exact list of
-    would-conflict paths** matched against the known planted conflict set, the
-    full pinned supported revision, `git fetch origin v3`,
-    `git rebase <pinned-supported-revision>`, `git add <paths>`,
+    would-conflict paths** matched against the known planted conflict set,
+    `git fetch origin v3`, `git rebase origin/v3`, `git add <paths>`,
     `git rebase --continue`, `git rebase --abort`, and the exact rerun command,
     and the tree is byte-identical afterwards. An output that names
-    `git status` instead of printing the paths, or omits the pinned target,
-    fails this case.
+    `git status` instead of printing the paths fails this case.
+
+  **A rebase onto anything other than `origin/v3` is asserted to be rejected.**
+  A planted renderer output instructing `git rebase <40-hex-sha>`, or naming
+  the pinned supported revision as a rebase target, fails the test. This is the
+  backwards-migration control: an instruction that looks correct and moves the
+  contributor's branch behind protected `v3` is exactly the output a
+  human-readable assertion waves through. The scan counts the rendered
+  refusals it examined and fails closed on an empty corpus.
+
+  The renderer policy test and its fixtures land in **this** pull request,
+  alongside the contributing-docs fail-open fix, so the backwards-rebase
+  instruction is rejected by a check that exists before the wrapper does.
 
   The same shape is exercised for the controller variant: evidence absent,
   evidence untrusted, evidence contradicting the record, and a record carrying
