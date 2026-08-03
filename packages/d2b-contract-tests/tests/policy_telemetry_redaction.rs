@@ -175,12 +175,12 @@ const LITERAL_FIELD_EXEMPTIONS: &[LiteralExemption] = &[
         occurrences: 1,
     },
     LiteralExemption {
-        path: "packages/d2b/src/lib.rs",
+        path: "packages/d2b/src/legacy.rs",
         snippet: "[\"d2b\", \"realm\", \"enter\", \"work\"]",
         occurrences: 1,
     },
     LiteralExemption {
-        path: "packages/d2b/src/lib.rs",
+        path: "packages/d2b/src/legacy.rs",
         snippet: "[\"d2b\", \"realm\", \"run\", \"work\", \"--\", \"d2b\", \"vm\", \"list\"]",
         occurrences: 1,
     },
