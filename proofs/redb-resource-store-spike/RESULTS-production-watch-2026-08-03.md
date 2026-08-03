@@ -18,13 +18,47 @@ backend-only result remains unchanged.
 | Cache bound | 4,194,304 bytes |
 | Metric | GNU `time -v` whole-process `Maximum resident set size (kbytes)` |
 | Baseline subtraction | None |
+| Harness owner at measurement | `packages/d2b-resource-store-redb/tests/production_watch_rss.rs` |
+| Harness owner now | `packages/d2b-bus/tests/production_watch_rss.rs` (relocated by `ef4f5455`, after this measurement) |
+
+### Harness relocation, and what it does not change
+
+`ef4f5455` moved this fixture from the redb crate's integration-test target to
+the bus crate's, so the redb crate no longer depends on `d2b-resource-api` and
+the sealed mutation policy holds again. The move is a rename with no content
+change to the fixture.
+
+**The numbers below were measured before that move and have not been
+re-measured.** They are recorded against Source SHA `728d2124`, where the
+fixture still lived under `d2b-resource-store-redb`. Nothing in this artifact is
+a claim that the relocated target has been run: the measured path through redb,
+the Resource API, the bounded named stream, and the controller queue is
+unchanged by a target rename, but the reading is provenance-bound to the SHA
+above and not to the current tree. A converged heavy rerun will restamp this
+provenance; until it does, treat the SHA, not the file path, as what these
+values attach to.
+
+The sibling backend-only artifact,
+[`RESULTS-production-2026-08-03.md`](./RESULTS-production-2026-08-03.md), is
+**unaffected**. It measures the `--lib` target
+`d2b-resource-store-redb/src/tests.rs`, which `ef4f5455` did not move. The two
+artifacts run same-named tests in different targets, so a global rename of the
+owner would have been wrong.
 
 ## Command
 
-The hard fixture ran through the public heavy-gate semaphore:
+The hard fixture ran through the public heavy-gate semaphore. **As run**, at
+Source SHA `728d2124`, against the then-current redb target:
 
 ```text
 cargo run --quiet --manifest-path packages/Cargo.toml -p xtask -- heavy-gate -- cargo test --release --manifest-path packages/Cargo.toml -p d2b-resource-store-redb --test production_watch_rss production_backend_hard_fixture_rss -- --ignored --nocapture --test-threads=1
+```
+
+The equivalent invocation **on the current tree**, after `ef4f5455`, differs
+only in the package selector. It has not been run for this artifact:
+
+```text
+cargo run --quiet --manifest-path packages/Cargo.toml -p xtask -- heavy-gate -- cargo test --release --manifest-path packages/Cargo.toml -p d2b-bus --test production_watch_rss production_backend_hard_fixture_rss -- --ignored --nocapture --test-threads=1
 ```
 
 The parent created a fresh provisioned redb image for each run. GNU `time`
