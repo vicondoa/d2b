@@ -1307,10 +1307,12 @@ Bazel cache budget. Incomplete pagination, a failed usage query, and an
 ambiguous prefix match are the same failure with the same shape. Guessing is
 never the fallback.
 
-Pull-request jobs carry `permissions: contents: read` and never
-`actions: write`, and the structural policy test asserts that no
-`pull_request`-reachable job requests `actions: write`. Cache deletion is a
-protected-`v3` capability by construction, not by convention.
+At promotion, pull-request jobs carry `permissions: contents: read` and never
+`actions: write`. The implementation must add the structural policy test that
+asserts no `pull_request`-reachable job requests `actions: write`; this ADR
+does not claim that test exists or that the current Cargo workflow already
+satisfies the future policy. Cache deletion is a protected-`v3` capability by
+construction, not by convention.
 
 **Cache maintenance and the Rust verdict are separate.** Cache maintenance is
 its own job. It is not part of the `test-rust` rollup, its failure never marks
@@ -1507,8 +1509,9 @@ contributor is left to guess. The enforcement is in band and actionable.
   boot-relative timestamp read as a timeout is a bound of many hours, which
   is a silent no-op rather than a visible failure, and that is the specific
   mistake this paragraph exists to make impossible. Absent the control the
-  target runs unbounded, which is the local default; a structural assertion
-  requires every Bazel Rust job in the promoted workflow to set it.
+  target runs unbounded, which is the local default; the implementation must
+  add a structural assertion requiring every Bazel Rust job in the promoted
+  workflow to set it.
 - *Bounding.* The target bounds the Bazel invocation with that computed
   remaining duration. The Bazel client is spawned into a **new dedicated
   process group**, created between fork and exec by repository-owned Rust
@@ -1849,6 +1852,11 @@ ships with a **planted negative fixture or mutation that proves the guard
 fails when the invariant is removed**, because a checker that has never been
 observed failing is an assertion about the author's intent rather than about
 the code.
+
+Every test, fixture and structural assertion described in this section is an
+implementation requirement that must land with the plumbing it constrains.
+This ADR does not claim those tests or fixtures exist before their named
+implementation wave.
 
 The tests are wired into surfaces that already exist. Behavioural tests are
 Layer-1 Rust tests in the crate that owns the plumbing, carried by the
@@ -2432,10 +2440,11 @@ closed when any `.bazelrc` line or wrapper argument sets that flag.
    injected outcome cases must land with the runner and prove both branches,
    rejecting a mutation that returns success without evidence or overwrites the
    original test failure.
-6. Pull requests never publish a shared cache entry and never hold
-   `actions: write`, and a structural policy test with committed negative and
-   positive fixtures enforces both. Exactly one job writes, and only on a push
-   to protected `v3`.
+6. After promotion, pull requests never publish a shared cache entry and never
+   hold `actions: write`. The implementation must add a structural policy test
+   with committed negative and positive fixtures enforcing both. Exactly one
+   job writes, and only on a push to protected `v3`; this invariant does not
+   claim the pre-promotion Cargo workflow already satisfies the future policy.
 7. Cache credentials never enter a `run:` step or the Bazel process
    environment. No remote cache and no remote execution are configured.
 8. The Bazel output base is never cached as a blob. The action cache and the
