@@ -15,9 +15,11 @@
   binary is wired into the enforcing `test-policy` lane.
 - Migration-remedy output controls, as a modelled decision and renderer audit
   with an accepted corpus and planted rejected fixtures. The canonical
-  repository is reached through a remote named `upstream` at exactly
-  `https://github.com/vicondoa/d2b.git`, and the one supported target is
-  `upstream/v3`. A conflicting update prints the sorted paths it predicts will
+  repository is reached through a remote named `upstream` at one of two exact
+  URLs, one per transport - `https://github.com/vicondoa/d2b.git` and
+  `git@github.com:vicondoa/d2b.git` - and the one supported target is
+  `upstream/v3`. An `upstream` already configured at either one is accepted and
+  proceeds. A conflicting update prints the sorted paths it predicts will
   conflict as an advisory planning list, then `git fetch upstream` and
   `git rebase upstream/v3`, then the per-stop sequence `git status --short`,
   `git add <resolved-paths-for-this-stop>` and `git rebase --continue`, with
@@ -40,15 +42,28 @@
   configured tracking branch, and every script built on either. The audit
   rejects any command whose object is `origin`, in any position, along with any
   ref under it, any push-remote reconfiguration, and any mention of it in prose.
+  Its URL is read for exactly one decision and is never printed: a recognised
+  GitHub HTTPS origin, including a contributor fork, selects the HTTPS canonical
+  upstream, the scp-like `git@github.com:<owner>/<repo>.git` origin selects the
+  SSH one, and no `origin`, another host, or a URL that parses into no owner and
+  repository all select HTTPS. The rule is total, so the wrapper asks nothing
+  and two runs in the same tree render the same command; matching what the
+  contributor already uses matters because handing an SSH-only checkout an
+  HTTPS remote produces a credential prompt rather than a fetch. The repair is
+  asserted per origin against the exact URL it must render, so a constant that
+  happens to match one case cannot pass for the selection.
 - Within that same model, three separate conditions produce no usable
   `upstream/v3`, and each names the one that actually caused it and prints the
   repair for it. A missing `upstream` remote - the ordinary first run for
-  someone who cloned their fork - renders `git remote add upstream
-  https://github.com/vicondoa/d2b.git`, `git fetch upstream` and the rerun, in
+  someone who cloned their fork - renders `git remote add upstream` with the
+  canonical URL its `origin` selected, `git fetch upstream` and the rerun, in
   that order, and names no rebase, because nothing has been attempted and the
-  target does not resolve yet. An `upstream` that exists and points elsewhere is
-  read, never rewritten: the refusal renders `git remote get-url upstream`,
-  names the expected canonical URL in prose, and asks the contributor to choose
+  target does not resolve yet. Rendering the canonical URL of the transport that
+  was not selected is rejected on its own terms, since both URLs are canonical
+  and no URL check would catch it. An `upstream` that exists and points at a
+  third value is read, never rewritten: the refusal renders
+  `git remote get-url upstream`, names both accepted canonical URLs in prose so
+  the contributor knows what would satisfy the check, and asks them to choose
   the arrangement they want, because that remote may be a mirror or a second
   project and only they know. A canonical `upstream` whose branch is simply
   absent renders no git command and says the remedy is outside the tree: wait
@@ -57,11 +72,16 @@
   this output, because it covers all three at once and sends someone to debug a
   network that is working. The three render three distinct command sets, so none
   of them can be collapsed into another. The audit admits only two remote forms
-  and only that one URL: `git remote rename`, `git remote set-url` and
+  and only those two URLs: `git remote rename`, `git remote set-url` and
   `git remote remove` are on no list in any form, and another repository,
-  another scheme, a query or fragment, an ssh spelling, and any URL carrying a
-  userinfo component, a token, or an `x-access-token` form are all rejected,
-  because a remote URL is written verbatim into plain `.git/config`. The URL a
+  another owner, another host, another scheme, a query or fragment, an `ssh://`
+  spelling of the right target, and any URL carrying userinfo that is not
+  GitHub's fixed scp-like service account, a token, or an `x-access-token` form
+  are all rejected, because a remote URL is written verbatim into plain
+  `.git/config`. That service account is admitted rather than read as a
+  credential: it is the same constant in every SSH clone, and the key it
+  authenticates with is on disk and not in the URL, so rejecting it would refuse
+  the ordinary clone every SSH-only contributor already has. The URL a
   contributor already configured is never echoed back at them: the refusal that
   reports it has no field to hold it.
 

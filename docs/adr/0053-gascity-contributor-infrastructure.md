@@ -773,7 +773,7 @@ commands and mutate nothing:
   cloned their fork, and the repair adds a remote rather than moving one:
 
   ```
-  git remote add upstream https://github.com/vicondoa/d2b.git
+  git remote add upstream <canonical-url>
   git fetch upstream
   make panel-migrate
   ```
@@ -782,25 +782,62 @@ commands and mutate nothing:
   path prints **no rebase**: the target does not resolve yet, so a rebase
   command here would be a sequence the contributor cannot complete.
 
-  The remote URL is a fixed literal carrying **no credentials**: no userinfo
-  component, no token, no `x-access-token` form. A remote URL is stored in
-  plain `.git/config`, so a credential printed into one is a credential written
-  to disk by a tool the contributor trusted.
+  **Exactly two canonical URLs are accepted, one per transport**:
+
+  ```
+  https://github.com/vicondoa/d2b.git
+  git@github.com:vicondoa/d2b.git
+  ```
+
+  The SSH form is not a credential-bearing URL. `git@github.com:` is GitHub's
+  fixed service account in the standard scp-like syntax, identical for every
+  user, and the secret it authenticates with is a key on disk that the URL does
+  not contain. Rejecting it as "userinfo" would confuse a constant with a
+  credential and force SSH-only contributors onto a transport they may have
+  deliberately not configured.
+
+  Everything else stays rejected: any other userinfo, any other scp-like host
+  or user, tokens and `x-access-token` forms, any other repository or owner,
+  query strings and fragments, and `ssh://` URL forms. Two literals is the
+  entire allowed set. An `ssh://git@github.com/vicondoa/d2b.git` is equivalent
+  in effect but is a third spelling to validate and a third to keep in step, so
+  it is excluded until someone needs it.
+
+  **The wrapper picks the transport deterministically from `origin`.** If
+  `origin`'s URL is a GitHub URL, `upstream` gets the matching transport: an
+  `https://github.com/...` origin selects the HTTPS canonical URL, a
+  `git@github.com:...` origin selects the SSH one. In every other case,
+  including no `origin` at all, a non-GitHub host, or a URL it cannot parse, it
+  selects **HTTPS**.
+
+  HTTPS is the default because this remote is fetched and never pushed, and
+  anonymous HTTPS fetch of a public repository works with no configuration,
+  while SSH fails for anyone without a key registered. Matching `origin` first
+  matters because a contributor on SSH usually has HTTPS credentials unset
+  entirely, and handing them an HTTPS remote produces a prompt rather than a
+  clone. The rule is a total function of one observable value, so the wrapper
+  never asks a question and two runs in the same tree render the same command.
 - **Upstream remote mismatch** (`UpstreamRemoteMismatch`): a remote named
-  `upstream` exists with a URL that is not the canonical one. The wrapper
-  performs **no `git remote set-url` and no rename**, and emits no mutating
-  command. Hijacking a remote a contributor configured deliberately, perhaps a
-  mirror or a second project, would be the tool silently deciding it owns a
-  name it merely wanted.
+  `upstream` exists with a URL equal to neither canonical URL. Either accepted
+  form is canonical and proceeds normally; only a third value refuses. The
+  wrapper performs **no `git remote set-url` and no rename**, and emits no
+  mutating command. Hijacking a remote a contributor configured deliberately,
+  perhaps a mirror or a second project, would be the tool silently deciding it
+  owns a name it merely wanted.
 
   The refusal prints `git remote get-url upstream` so the contributor can see
-  what is actually configured, prints the expected canonical URL, and asks them
-  to choose a remote arrangement themselves before rerunning
-  `make panel-migrate`. The record does not prescribe which arrangement,
+  what is actually configured, prints **both** accepted canonical URLs so they
+  know what would satisfy the check, and asks them to choose a remote
+  arrangement themselves before rerunning `make panel-migrate`. It does **not**
+  print the configured non-canonical URL: that value is contributor
+  configuration this record has no claim on, and it is exactly the kind of
+  string that turns out to carry a token. The contributor reads it with the
+  printed command, in their own terminal, rather than receiving it back through
+  an error surface. The record does not prescribe which arrangement to adopt,
   because the right answer depends on what that remote is for and only the
   contributor knows.
 - **Canonical target missing** (`CanonicalTargetMissing`): `upstream` is
-  present with the canonical URL, the fetch succeeded, and there is still no
+  present with an accepted canonical URL, the fetch succeeded, and there is still no
   `upstream/v3`. No change of remote layout repairs a branch that is not there,
   so this refusal carries **no git command at all**. It states that the
   canonical protected branch is unavailable or not yet published, and that the
@@ -1971,8 +2008,11 @@ and it ships planted violations it must reject.
 
   `make panel-migrate` is exercised over a corpus of **seven contexts**, one
   success and six refusals, with its **output** asserted, not only its exit
-  status. Seven is the exact size of the `MigrateContext` corpus, and the test
-  asserts that size so a new context cannot be added without a case here:
+  status. Seven is the exact size of the migration-state corpus, and the test
+  asserts that size so a new state cannot be added without a case here.
+  Transport selection is covered separately by a counted five-origin corpus,
+  and both canonical configured upstream URLs are covered by two positive
+  fixtures; those seven additional fixtures do not multiply the state machine:
 
   - **clean tree**: brings the branch onto current `upstream/v3`, carrying the
     supported skill and adapter, and the resulting head is asserted to be a
@@ -1994,28 +2034,36 @@ and it ships planted violations it must reject.
     that names `git status` instead of printing the paths fails this case;
   - **upstream remote missing** (`UpstreamRemoteMissing`): no `upstream` remote
     is planted. Output is asserted to contain exactly
-    `git remote add upstream https://github.com/vicondoa/d2b.git`,
-    `git fetch upstream` and the `make panel-migrate` rerun, in that order, and
-    **no rebase command**. The URL is asserted to be the exact canonical
-    literal with **no userinfo component**, and a planted output carrying a
-    credential-bearing URL is rejected. A generic access or connectivity
-    message fails this case, because it sends a contributor to debug a working
-    network;
+    `git remote add upstream <canonical-url>`, `git fetch upstream` and the
+    `make panel-migrate` rerun, in that order, and **no rebase command**. A
+    generic access or connectivity message fails this case, because it sends a
+    contributor to debug a working network.
+
+    **Transport selection is asserted per fixture, not merely that some
+    canonical URL appears.** An `https://github.com/<user>/d2b.git` origin
+    renders the HTTPS canonical URL; a `git@github.com:<user>/d2b.git` origin
+    renders the SSH one; and no `origin`, a non-GitHub origin, and an
+    unparseable origin each render HTTPS. A fixture that renders the wrong
+    transport for its origin fails, so the rule is proven to be the total
+    function D8 describes rather than a constant that happens to match one
+    case;
   - **upstream remote mismatch** (`UpstreamRemoteMismatch`): an `upstream`
-    remote is planted with a non-canonical URL. The wrapper is asserted to emit
-    **no mutating git command**: no `git remote set-url`, no
-    `git remote rename`, no `git remote add`, and nothing touching `origin`. It
-    refuses with the typed error, whose output is asserted to contain
-    `git remote get-url upstream`, the expected canonical URL, and the rerun
-    command. The planted non-canonical URL is asserted **not** to appear in the
-    output, since it is contributor configuration and may itself carry
-    credentials;
+    remote is planted with a URL equal to neither canonical form. The wrapper
+    is asserted to emit **no mutating git command**: no `git remote set-url`,
+    no `git remote rename`, no `git remote add`, and nothing touching `origin`.
+    It refuses with the typed error, whose output is asserted to contain
+    `git remote get-url upstream`, **both** accepted canonical URLs, and the
+    rerun command. The planted non-canonical URL is asserted **not** to appear
+    anywhere in the output, since it is contributor configuration and may
+    itself carry credentials. Two further fixtures plant `upstream` at each
+    accepted canonical URL and assert the wrapper **does not refuse**, proving
+    both transports are accepted rather than one being tolerated by accident;
   - **canonical branch missing** (`CanonicalTargetMissing`): `upstream` is
     planted with the canonical URL and the fetch resolves **no**
     `upstream/v3`. The wrapper refuses with the typed error, emits **no git
     command at all**, and the tree is unchanged. The output is asserted **not**
     to contain the missing-upstream repair, in particular no
-    `git remote add`, since the remote is already correct and re-adding it
+    `git remote add`, since the remote is already canonical and re-adding it
     repairs nothing. It is also asserted not to render a generic network or
     access message: the fetch succeeded and the branch is what is absent.
 
@@ -2066,9 +2114,18 @@ and it ships planted violations it must reject.
     remote, a foreign branch and a bare pinned revision;
   - rejects any command whose object is `origin`, in any position, so a
     rendering cannot rename, re-point or remove the contributor's push remote;
-  - rejects any URL that is not the exact canonical remote literal, and any URL
-    carrying a userinfo component, a token or an `x-access-token` form, on the
-    grounds that a remote URL lands in plain `.git/config`.
+  - rejects any URL outside the exact two-literal canonical set,
+    `https://github.com/vicondoa/d2b.git` and
+    `git@github.com:vicondoa/d2b.git`. Planted rejections include a wrong SSH
+    host (`git@gitlab.com:vicondoa/d2b.git`), a wrong SSH user
+    (`git@github.com:someone/d2b.git`), a wrong repository
+    (`git@github.com:vicondoa/other.git`), an `ssh://` spelling of an otherwise
+    correct target, a URL carrying a userinfo component or token, an
+    `x-access-token` form, and a canonical URL with an appended query string or
+    fragment. The standard `git@github.com:` prefix on the exact canonical
+    repository is **accepted**: it is a fixed service account, not a secret,
+    and treating it as userinfo would reject the ordinary SSH clone every
+    SSH-only contributor already has.
 
   Refusals that carry no git command at all - `UnpublishedMigration` and
   `CanonicalTargetMissing` - are audited for the absence of any git command

@@ -2769,16 +2769,29 @@ fn safe_type_census_fails_closed_on_a_root_set_that_governs_nothing() {
 // exercises both - so the instructions that must never ship are rejected by a
 // check that exists before the thing that would emit them.
 //
-// **`origin` belongs to the contributor and is not part of this model.**
+// **`origin` belongs to the contributor and no rendered command touches it.**
 // Canonical `vicondoa/d2b` is reached through a remote named `upstream`, whose
-// URL is exactly one literal, and the migration target is `upstream/v3`. An
-// earlier design had this inverted: it required `origin` to be canonical and
-// offered to rename the contributor's fork out of the way. Renaming `origin`
-// breaks `git push`, every configured tracking branch, and every habit and
-// script built on it, to serve a read-only fetch that could have happened under
-// any other name. So the audit treats `origin` as a category of its own: no
-// rendered line may name it as a command object, as part of a ref, or in prose,
-// and no rendered command may reconfigure a push remote at all.
+// URL is one of exactly two literals - one per transport - and the migration
+// target is `upstream/v3`. An earlier design had this inverted: it required
+// `origin` to be canonical and offered to rename the contributor's fork out of
+// the way. Renaming `origin` breaks `git push`, every configured tracking
+// branch, and every habit and script built on it, to serve a read-only fetch
+// that could have happened under any other name. So the audit treats `origin`
+// as a category of its own: no rendered line may name it as a command object,
+// as part of a ref, or in prose, and no rendered command may reconfigure a push
+// remote at all.
+//
+// `origin`'s URL enters the model at one point and one only: it selects which
+// canonical transport the add repair names. A recognised GitHub HTTPS origin,
+// including a contributor fork, selects the HTTPS upstream; the scp-like
+// `git@github.com:<owner>/<repo>.git` origin selects the SSH one; an absent, a
+// non-GitHub, and an unparseable origin all select HTTPS, because this remote
+// is fetched and never pushed and anonymous HTTPS needs no configured key. The
+// selection is total, so the wrapper asks no question and two runs in the same
+// tree render the same command. Reading a value to choose between two published
+// constants is not touching the remote: the selected URL is one of the two
+// literals, never anything observed, and the origin URL itself is never
+// rendered.
 //
 // Four instructions are in question.
 //
@@ -2810,10 +2823,16 @@ fn safe_type_census_fails_closed_on_a_root_set_that_governs_nothing() {
 // wanted. Two things are load-bearing on the one remote command that does
 // mutate. A remote URL is written verbatim into plain `.git/config`, so a URL
 // carrying a userinfo component, a token, or an `x-access-token` form is a
-// credential put on disk by a tool the contributor trusted; the only admitted
-// URL is one exact literal. And a remote that is present with some other URL is
-// never echoed back: the refusal that reports it carries no URL field at all,
-// so no renderer has the contributor's configured URL to print.
+// credential put on disk by a tool the contributor trusted; the admitted set is
+// two exact literals and nothing else. The scp-like `git@github.com:` prefix on
+// the canonical repository is one of those two: it is GitHub's fixed service
+// account, identical for every user, and the secret it authenticates with is a
+// key on disk that the URL does not contain, so rejecting it as userinfo would
+// confuse a constant with a credential and force SSH-only contributors onto a
+// transport they may deliberately not have configured. And a remote that is
+// present with some third URL is never echoed back: the refusal that reports it
+// carries no URL field at all, so no renderer has the contributor's configured
+// URL to print.
 //
 // The fourth is the *absence* of an instruction. A canonical `upstream` that
 // fetches cleanly and still resolves no `upstream/v3` was refused with a
@@ -2831,17 +2850,19 @@ fn safe_type_census_fails_closed_on_a_root_set_that_governs_nothing() {
 // `git add <resolved-paths-for-this-stop>` / `git rebase --continue` sequence,
 // the `git rebase --abort` way out, and the `make panel-migrate` rerun, in an
 // order that works when run; a missing `upstream` must print
-// `git remote add upstream <canonical>`, `git fetch upstream` and the rerun, in
-// that order, because fetching a remote before it exists is a step that fails;
-// and a noncanonical `upstream` must print the read `git remote get-url
-// upstream`, the expected canonical URL in prose, and the rerun, and nothing
-// that mutates. Negative: every command line is **parsed** rather than
-// keyword-scanned. An unrecognised subcommand or flag is a rejection, not a
-// token to skip; a 40-hex object name anywhere on the line is a rejection,
-// including inside `--onto=<sha>`, which is the backwards rebase wearing a
-// flag; a refusal that mutates nothing and offers no way forward yet may not
-// carry a git command at all; and the three upstream states render three
-// distinct command sets, so none of them can be collapsed into the others.
+// `git remote add upstream <selected-canonical>`, `git fetch upstream` and the
+// rerun, in that order, because fetching a remote before it exists is a step
+// that fails, and the URL it names must be the transport its `origin` selected
+// rather than whichever constant happens to be first; and a noncanonical
+// `upstream` must print the read `git remote get-url upstream`, both accepted
+// canonical URLs in prose, and the rerun, and nothing that mutates. Negative:
+// every command line is **parsed** rather than keyword-scanned. An unrecognised
+// subcommand or flag is a rejection, not a token to skip; a 40-hex object name
+// anywhere on the line is a rejection, including inside `--onto=<sha>`, which
+// is the backwards rebase wearing a flag; a refusal that mutates nothing and
+// offers no way forward yet may not carry a git command at all; and the three
+// upstream states render three distinct command sets, so none of them can be
+// collapsed into the others.
 //
 // **Wiring contract for the implementation commit.** The commit that writes the
 // wrapper renders its refusals through a real renderer and feeds that output to
@@ -2855,17 +2876,37 @@ const PANEL_MIGRATE_TARGET_REF: &str = "upstream/v3";
 /// The one remote this model knows about. It is read, and added when it is
 /// absent; it is never renamed, re-pointed, or removed.
 const PANEL_MIGRATE_REMOTE: &str = "upstream";
-/// The contributor's own remote. It is in this file only so the audit can
-/// reject it: it is what they push through, and a migration has no business
-/// reading it, renaming it, or reconfiguring anything that points at it.
+/// The contributor's own remote. It is named here so the audit can reject it:
+/// it is what they push through, so no rendered command reads it, renames it,
+/// or reconfigures anything that points at it. Its URL is a model input for one
+/// decision - which canonical transport the add repair names - and reaches no
+/// rendered line.
 const PANEL_MIGRATE_CONTRIBUTOR_REMOTE: &str = "origin";
-/// The only URL a refusal may name. Exact, and carrying no credential: a remote
-/// URL is written verbatim into plain `.git/config`, so userinfo or a token
-/// printed into one is a credential put on disk by a tool the contributor
-/// trusted.
-const PANEL_MIGRATE_CANONICAL_URL: &str = "https://github.com/vicondoa/d2b.git";
-const PANEL_MIGRATE_REMOTE_ADD: &str =
+/// The two URLs a refusal may name, one per transport. Both are exact, and
+/// neither carries a credential: a remote URL is written verbatim into plain
+/// `.git/config`, so userinfo or a token printed into one is a credential put
+/// on disk by a tool the contributor trusted.
+const PANEL_MIGRATE_CANONICAL_HTTPS_URL: &str = "https://github.com/vicondoa/d2b.git";
+/// The scp-like SSH spelling. `git@github.com:` is GitHub's fixed service
+/// account, identical for every user, and the key it authenticates with is on
+/// disk and not in this string, so it is a constant rather than userinfo
+/// carrying a secret. Rejecting it would force every SSH-only contributor onto
+/// a transport they may deliberately not have configured.
+const PANEL_MIGRATE_CANONICAL_SSH_URL: &str = "git@github.com:vicondoa/d2b.git";
+/// The whole admitted set. Two literals, and no third spelling: an
+/// `ssh://git@github.com/vicondoa/d2b.git` is equivalent in effect but is a
+/// third form to validate and keep in step, so it stays rejected.
+const PANEL_MIGRATE_CANONICAL_URLS: &[&str] = &[
+    PANEL_MIGRATE_CANONICAL_HTTPS_URL,
+    PANEL_MIGRATE_CANONICAL_SSH_URL,
+];
+/// The scp-like user in the accepted SSH spelling, named so the credential
+/// check can tell a fixed service account from userinfo carrying a secret.
+const SSH_SERVICE_ACCOUNT: &str = "git";
+const PANEL_MIGRATE_REMOTE_ADD_HTTPS: &str =
     "git remote add upstream https://github.com/vicondoa/d2b.git";
+const PANEL_MIGRATE_REMOTE_ADD_SSH: &str =
+    "git remote add upstream git@github.com:vicondoa/d2b.git";
 /// The one remote command that is a read. It shows the contributor what their
 /// own configuration says without this model ever holding that value.
 const PANEL_MIGRATE_REMOTE_GET_URL: &str = "git remote get-url upstream";
@@ -2895,7 +2936,7 @@ const OBJECT_NAME_LEN: usize = 40;
 /// already correct to add it again.
 const PANEL_MIGRATE_MISSING_DIAGNOSIS: &str = "no remote named upstream is configured here";
 const PANEL_MIGRATE_MISMATCH_DIAGNOSIS: &str =
-    "the remote named upstream does not carry the canonical vicondoa/d2b URL";
+    "the remote named upstream carries neither canonical vicondoa/d2b URL";
 const PANEL_MIGRATE_CANONICAL_DIAGNOSIS: &str = "upstream is canonical vicondoa/d2b";
 /// The mismatch refusal asks rather than decides: which arrangement is right
 /// depends on what that remote is for, and only the contributor knows.
@@ -2939,6 +2980,19 @@ const PINNED_MIGRATION: ObjectName = ObjectName("3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3
 /// reason to repeat it back at them.
 const PLANTED_NONCANONICAL_URL: &str = "https://git.example.invalid/mirrors/d2b.git";
 
+/// The contributor's fork over HTTPS: the ordinary layout for someone who
+/// cloned their own fork from the web UI.
+const PLANTED_FORK_HTTPS_ORIGIN: &str = "https://github.com/contributor/d2b.git";
+/// The same fork over SSH, in the scp-like spelling git itself writes.
+const PLANTED_FORK_SSH_ORIGIN: &str = "git@github.com:contributor/d2b.git";
+/// An origin on some other host entirely: a company mirror, a local bare
+/// repository, a second forge.
+const PLANTED_NON_GITHUB_ORIGIN: &str = "https://git.example.invalid/contributor/d2b.git";
+/// An origin this model cannot parse into an owner and a repository. It opens
+/// like the recognised SSH shape and carries neither, so it proves a half-match
+/// falls to the default rather than being read as the transport it resembles.
+const PLANTED_UNPARSEABLE_ORIGIN: &str = "git@github.com";
+
 /// The planted would-conflict set, deliberately unsorted and bounded: the
 /// refusal has to print what it computed, in a stable order, not echo git's.
 const PLANTED_CONFLICT_PATHS: &[&str] = &[
@@ -2946,6 +3000,105 @@ const PLANTED_CONFLICT_PATHS: &[&str] = &[
     "docs/contributing/copilot-agents.md",
     "skills/panel/SKILL.md",
 ];
+
+/// Which canonical URL a repair names. Two transports, two literals, and the
+/// selection between them is a total function of the contributor's `origin`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Transport {
+    Https,
+    Ssh,
+}
+
+/// Both transports, so a corpus can assert it covered each one rather than
+/// happening to exercise the default twice.
+const PANEL_MIGRATE_TRANSPORTS: &[Transport] = &[Transport::Https, Transport::Ssh];
+
+impl Transport {
+    fn canonical_url(self) -> &'static str {
+        match self {
+            Self::Https => PANEL_MIGRATE_CANONICAL_HTTPS_URL,
+            Self::Ssh => PANEL_MIGRATE_CANONICAL_SSH_URL,
+        }
+    }
+
+    fn remote_add(self) -> &'static str {
+        match self {
+            Self::Https => PANEL_MIGRATE_REMOTE_ADD_HTTPS,
+            Self::Ssh => PANEL_MIGRATE_REMOTE_ADD_SSH,
+        }
+    }
+
+    /// The transport that was not selected. Both URLs are canonical, so no URL
+    /// check catches a repair rendering the other one; the audit needs to name
+    /// it to reject it.
+    fn other(self) -> Self {
+        match self {
+            Self::Https => Self::Ssh,
+            Self::Ssh => Self::Https,
+        }
+    }
+}
+
+/// What the contributor's own remote points at, as far as the caller could
+/// tell. This is model input for exactly one decision and reaches no rendered
+/// line: nothing below reads, renames, re-points or removes `origin`.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum OriginRemote {
+    /// No remote named `origin` at all: a checkout made by some other route
+    /// than a clone, or one whose remotes were rearranged.
+    Absent,
+    /// Present, with the URL the contributor configured.
+    Configured { url: &'static str },
+}
+
+/// Redacting, for the same reason the refusals never echo a configured URL: the
+/// contributor's own remote may be a private host or carry a credential of its
+/// own, so it does not belong in a panic message either.
+impl fmt::Debug for OriginRemote {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Absent => f.write_str("OriginRemote::Absent"),
+            Self::Configured { .. } => write!(f, "OriginRemote::Configured({REDACTED})"),
+        }
+    }
+}
+
+/// The `<owner>/<repo>` pair behind a recognised GitHub prefix, if there is
+/// one. A trailing `.git` is optional because both spellings are in the wild;
+/// an empty half, or a deeper path, is not a fork URL this model claims to
+/// recognise.
+fn github_owner_repo(rest: &str) -> Option<(&str, &str)> {
+    let (owner, repo) = rest.split_once('/')?;
+    let repo = repo.strip_suffix(".git").unwrap_or(repo);
+    (!owner.is_empty() && !repo.is_empty() && !repo.contains('/')).then_some((owner, repo))
+}
+
+/// Which canonical transport `origin` selects.
+///
+/// Total by construction: a recognised GitHub HTTPS origin selects HTTPS, the
+/// recognised scp-like GitHub origin selects SSH, and everything else - absent,
+/// another host, or a value that parses into no owner and repository - selects
+/// HTTPS. HTTPS is the default because this remote is fetched and never pushed
+/// and anonymous HTTPS needs no configured key, while SSH fails for anyone
+/// without one. Matching `origin` first matters because a contributor on SSH
+/// usually has HTTPS credentials unset entirely, so an HTTPS remote hands them
+/// a prompt rather than a fetch.
+fn select_transport(origin: OriginRemote) -> Transport {
+    let OriginRemote::Configured { url } = origin else {
+        return Transport::Https;
+    };
+    if let Some(rest) = url.strip_prefix("https://github.com/")
+        && github_owner_repo(rest).is_some()
+    {
+        return Transport::Https;
+    }
+    if let Some(rest) = url.strip_prefix("git@github.com:")
+        && github_owner_repo(rest).is_some()
+    {
+        return Transport::Ssh;
+    }
+    Transport::Https
+}
 
 /// What the remote named `upstream` is, as far as the caller could tell. The
 /// supported migration lands on `upstream/v3`, so this is a precondition on the
@@ -2955,12 +3108,26 @@ enum UpstreamRemote {
     /// No remote by that name at all. The ordinary first run for a contributor
     /// who cloned their own fork.
     Missing,
-    /// Present, with exactly the canonical URL.
+    /// Present, with one of the two accepted canonical URLs. Which one is not
+    /// carried: both are canonical, this state proceeds, and nothing downstream
+    /// re-adds a remote that already exists.
     Canonical,
-    /// Present, pointing somewhere else. The URL is carried here so a fixture
+    /// Present, pointing at a third value. The URL is carried here so a fixture
     /// can plant one; it deliberately reaches no refusal, because no refusal
     /// has a field to hold it.
     Noncanonical { url: &'static str },
+}
+
+/// Classify the URL a remote named `upstream` is configured with. Either
+/// canonical spelling is canonical - one transport is not tolerated by accident
+/// while the other is blessed - and a third value is not, whatever it points
+/// at.
+fn classify_upstream(url: Option<&'static str>) -> UpstreamRemote {
+    match url {
+        None => UpstreamRemote::Missing,
+        Some(url) if PANEL_MIGRATE_CANONICAL_URLS.contains(&url) => UpstreamRemote::Canonical,
+        Some(url) => UpstreamRemote::Noncanonical { url },
+    }
 }
 
 /// Redacting, for the same reason the refusals never echo the value: a
@@ -2999,6 +3166,9 @@ enum TreeState {
 struct MigrateContext {
     /// What the `upstream` remote is, as far as the caller could tell.
     upstream: UpstreamRemote,
+    /// What the contributor's own remote is. Read once, to select which
+    /// canonical transport a repair names, and never rendered.
+    origin: OriginRemote,
     current_upstream_v3: ObjectName,
     /// `upstream/v3` as this run's fetch resolved it. `None` models a fetch
     /// that produced no such ref: no target, so no rebase.
@@ -3030,12 +3200,16 @@ enum MigrateRefusal {
     /// have fetched the protected branch. The repair adds a remote under a name
     /// of its own and leaves every existing remote alone; it names no rebase,
     /// because nothing has been attempted and the target does not resolve yet.
-    UpstreamRemoteMissing,
-    /// A remote named `upstream` exists and points somewhere else. This refusal
-    /// carries no URL: the contributor's configured value is theirs, may carry
-    /// a credential of its own, and is read back by a command they run rather
-    /// than echoed by this tool. The repair is a decision only they can make,
-    /// so this refusal mutates nothing.
+    /// The transport is the one `origin` selected, and is the only thing the
+    /// contributor's own remote contributes to any output.
+    UpstreamRemoteMissing {
+        transport: Transport,
+    },
+    /// A remote named `upstream` exists and points at a third value. This
+    /// refusal carries no URL: the contributor's configured value is theirs,
+    /// may carry a credential of its own, and is read back by a command they
+    /// run rather than echoed by this tool. The repair is a decision only they
+    /// can make, so this refusal mutates nothing.
     UpstreamRemoteMismatch,
     /// `upstream` is canonical, the fetch succeeded, and it still produced no
     /// `upstream/v3`. No change of remote layout repairs a branch that is not
@@ -3063,7 +3237,7 @@ impl MigrateRefusal {
     /// The variant name, and nothing out of the payload.
     fn variant_name(&self) -> &'static str {
         match self {
-            Self::UpstreamRemoteMissing => "UpstreamRemoteMissing",
+            Self::UpstreamRemoteMissing { .. } => "UpstreamRemoteMissing",
             Self::UpstreamRemoteMismatch => "UpstreamRemoteMismatch",
             Self::CanonicalTargetMissing { .. } => "CanonicalTargetMissing",
             Self::UnpublishedMigration { .. } => "UnpublishedMigration",
@@ -3075,14 +3249,17 @@ impl MigrateRefusal {
 
 /// Variant only. `ConflictingUpdate` carries the repository paths the wrapper
 /// predicted, and a refusal is the thing most likely to reach a log or a panic
-/// message, so the payload does not travel with the name. Equality still
+/// message, so the payload does not travel with the name. The selected
+/// transport is redacted on the same rule rather than on its own merits: it is
+/// derived from the contributor's `origin`, and one rule over every payload is
+/// what stops the next field being waved through as harmless. Equality still
 /// compares the whole payload, so every assertion below discriminates on the
-/// paths and object names it always did.
+/// paths, object names and transport it always did.
 impl fmt::Debug for MigrateRefusal {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let name = self.variant_name();
         match self {
-            Self::UpstreamRemoteMissing | Self::UpstreamRemoteMismatch | Self::DirtyTree => {
+            Self::UpstreamRemoteMismatch | Self::DirtyTree => {
                 write!(f, "MigrateRefusal::{name}")
             }
             _ => write!(f, "MigrateRefusal::{name}({REDACTED})"),
@@ -3128,7 +3305,9 @@ fn plan_migration(ctx: &MigrateContext) -> Result<MigrateOutcome, MigrateFault> 
     match ctx.upstream {
         UpstreamRemote::Missing => {
             return Ok(MigrateOutcome::Refuse(
-                MigrateRefusal::UpstreamRemoteMissing,
+                MigrateRefusal::UpstreamRemoteMissing {
+                    transport: select_transport(ctx.origin),
+                },
             ));
         }
         UpstreamRemote::Noncanonical { .. } => {
@@ -3180,11 +3359,12 @@ const PANEL_MIGRATE_REFUSING: &str =
 
 /// Render one refusal. Object names appear only in prose diagnosis, never in a
 /// command; the rebase target is spelled `upstream/v3` at every site; the
-/// predicted paths are printed as a list and never pasted into a command; and
+/// predicted paths are printed as a list and never pasted into a command; the
+/// one URL a repair names is the canonical literal its transport selected; and
 /// `origin` appears nowhere at all.
 fn render_refusal(refusal: &MigrateRefusal) -> Vec<String> {
     match refusal {
-        MigrateRefusal::UpstreamRemoteMissing => vec![
+        MigrateRefusal::UpstreamRemoteMissing { transport } => vec![
             PANEL_MIGRATE_REFUSING.to_string(),
             format!(
                 "There is no {PANEL_MIGRATE_TARGET_REF} to land on: \
@@ -3194,7 +3374,7 @@ fn render_refusal(refusal: &MigrateRefusal) -> Vec<String> {
             "Add it under a name of its own. Every remote you already have keeps the name and \
              the URL you gave it:"
                 .to_string(),
-            format!("  {PANEL_MIGRATE_REMOTE_ADD}"),
+            format!("  {}", transport.remote_add()),
             format!("  {PANEL_MIGRATE_FETCH}"),
             "Then rerun:".to_string(),
             format!("  {PANEL_MIGRATE_COMMAND}"),
@@ -3210,8 +3390,9 @@ fn render_refusal(refusal: &MigrateRefusal) -> Vec<String> {
                 .to_string(),
             format!("  {PANEL_MIGRATE_REMOTE_GET_URL}"),
             format!(
-                "The migration expects exactly {PANEL_MIGRATE_CANONICAL_URL} on the \
-                 {PANEL_MIGRATE_REMOTE} remote."
+                "The migration expects exactly {PANEL_MIGRATE_CANONICAL_HTTPS_URL} or \
+                 {PANEL_MIGRATE_CANONICAL_SSH_URL} on the {PANEL_MIGRATE_REMOTE} remote, and \
+                 either one satisfies it."
             ),
             format!("Then {PANEL_MIGRATE_OPERATOR_CHOICE}, and rerun:"),
             format!("  {PANEL_MIGRATE_COMMAND}"),
@@ -3347,16 +3528,23 @@ enum RefusalReject {
     /// A remote name that is not the one this operation may touch: reading or
     /// adding under some other name.
     UnexpectedRemoteName { operation: String, name: String },
-    /// A remote URL that is not the exact canonical literal: another repository,
-    /// another scheme, or the canonical path with something appended. Checked
-    /// wherever a URL appears, in a command or in prose, because a URL in prose
-    /// is read and pasted exactly like one in a command.
+    /// A remote URL that is not one of the two canonical literals: another
+    /// repository, another owner, another host, another scheme, another
+    /// spelling of the right target, or the canonical path with something
+    /// appended. Checked wherever a URL appears, in a command or in prose,
+    /// because a URL in prose is read and pasted exactly like one in a command.
     RemoteUrlNotCanonical { url: String },
-    /// A remote URL carrying a credential - a userinfo component, a token
-    /// parameter, or the `x-access-token` form. A remote URL is written
-    /// verbatim into plain `.git/config`, so this is a secret the contributor's
-    /// tool put on disk for them.
+    /// A remote URL carrying a credential - userinfo that is not the fixed
+    /// scp-like service account, a token parameter, or the `x-access-token`
+    /// form. A remote URL is written verbatim into plain `.git/config`, so this
+    /// is a secret the contributor's tool put on disk for them.
     CredentialBearingUrl { url: String },
+    /// The add repair named the transport `origin` did not select. Both URLs
+    /// are canonical, so no URL check catches this; what is wrong is that the
+    /// selection is a total function of one observable value and this output is
+    /// not what it returned. Handing an SSH-only contributor an HTTPS remote
+    /// produces a credential prompt rather than a fetch.
+    RemoteAddTransportMismatch { command: String },
     /// A line the audit cannot place: it names a program without being a
     /// command line the parser accepts.
     UnclassifiedLine { line: String },
@@ -3417,6 +3605,7 @@ impl RefusalReject {
             Self::UnexpectedRemoteName { .. } => "UnexpectedRemoteName",
             Self::RemoteUrlNotCanonical { .. } => "RemoteUrlNotCanonical",
             Self::CredentialBearingUrl { .. } => "CredentialBearingUrl",
+            Self::RemoteAddTransportMismatch { .. } => "RemoteAddTransportMismatch",
             Self::UnclassifiedLine { .. } => "UnclassifiedLine",
             Self::BareLineInRefusal { .. } => "BareLineInRefusal",
             Self::GitCommandInBlockedRefusal { .. } => "GitCommandInBlockedRefusal",
@@ -3508,7 +3697,7 @@ fn url_like_token(token: &str) -> bool {
 /// The steps a refusal is allowed to name.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum GitStep {
-    RemoteAdd,
+    RemoteAdd(Transport),
     RemoteGetUrl,
     Fetch,
     Rebase,
@@ -3525,7 +3714,7 @@ enum GitStep {
 /// string, or it is not that step.
 fn step_command(step: GitStep) -> &'static str {
     match step {
-        GitStep::RemoteAdd => PANEL_MIGRATE_REMOTE_ADD,
+        GitStep::RemoteAdd(transport) => transport.remote_add(),
         GitStep::RemoteGetUrl => PANEL_MIGRATE_REMOTE_GET_URL,
         GitStep::Fetch => PANEL_MIGRATE_FETCH,
         GitStep::Rebase => PANEL_MIGRATE_REBASE,
@@ -3546,7 +3735,7 @@ fn step_command(step: GitStep) -> &'static str {
 fn is_mutating_git_step(step: GitStep) -> bool {
     match step {
         GitStep::RemoteGetUrl | GitStep::Status | GitStep::Rerun => false,
-        GitStep::RemoteAdd
+        GitStep::RemoteAdd(_)
         | GitStep::Fetch
         | GitStep::Rebase
         | GitStep::Add
@@ -3570,22 +3759,28 @@ fn allowed_flags(subcommand: &str) -> &'static [&'static str] {
     }
 }
 
-/// Accept the one URL a refusal may name, or say what is wrong with it. The
+/// Accept either URL a refusal may name, or say what is wrong with it. The
 /// credential shapes are checked first so the rejection names the danger - a
 /// secret written into plain `.git/config` - rather than reporting it as one
-/// more string that is not the literal.
+/// more string that is not a literal.
 fn check_remote_url(url: &str) -> Result<(), RefusalReject> {
     let after_scheme = url.split_once("://").map_or(url, |(_, rest)| rest);
     let authority = after_scheme.split('/').next().unwrap_or_default();
+    let userinfo = authority.split_once('@').map(|(user, _)| user);
     let query = url.split_once('?').map_or("", |(_, rest)| rest);
-    // A userinfo component covers `https://user@…`, the `x-access-token:…@…`
-    // token form, and the scp-style `git@github.com:…` spelling at once.
-    if authority.contains('@') || query.contains("token=") || url.contains("x-access-token") {
+    // `git@` is GitHub's fixed service account in the scp-like syntax: a
+    // constant every SSH clone already carries, not a secret. Anything else in
+    // that position - a contributor name, a `user:token` pair, the
+    // `x-access-token` form - is a credential this output would write to disk.
+    // A wrong host or owner behind that constant is not a credential, and is
+    // rejected below for being outside the admitted set, which is what it is.
+    let credential_userinfo = userinfo.is_some_and(|user| user != SSH_SERVICE_ACCOUNT);
+    if credential_userinfo || query.contains("token=") || url.contains("x-access-token") {
         return Err(RefusalReject::CredentialBearingUrl {
             url: url.to_string(),
         });
     }
-    if url != PANEL_MIGRATE_CANONICAL_URL {
+    if !PANEL_MIGRATE_CANONICAL_URLS.contains(&url) {
         return Err(RefusalReject::RemoteUrlNotCanonical {
             url: url.to_string(),
         });
@@ -3762,7 +3957,16 @@ fn parse_command(command: &str, predicted: &[&str]) -> Result<GitStep, RefusalRe
                         });
                     }
                     check_remote_url(url)?;
-                    Ok(GitStep::RemoteAdd)
+                    // Total by the check above, which admits only the two
+                    // canonical literals; still fail-closed rather than
+                    // asserted, so a URL set that grows without a transport
+                    // beside it is rejected instead of panicking.
+                    PANEL_MIGRATE_TRANSPORTS
+                        .iter()
+                        .copied()
+                        .find(|transport| transport.canonical_url() == *url)
+                        .map(GitStep::RemoteAdd)
+                        .ok_or_else(unexpected)
                 }
                 "get-url" => {
                     let [name] = operands else {
@@ -3993,7 +4197,7 @@ fn audit_refusal_output(
     };
 
     match refusal {
-        MigrateRefusal::UpstreamRemoteMissing => {
+        MigrateRefusal::UpstreamRemoteMissing { transport } => {
             // The specific condition before the ref it is about: the line that
             // names one names the other, and reporting the generic half would
             // point at the wrong half of a rendering that dropped both.
@@ -4004,15 +4208,31 @@ fn audit_refusal_output(
             // out of one - belongs in this output. Nor does the read that
             // belongs to the mismatch refusal: this remote is not there to read.
             no_rebase()?;
-            only_steps(&[GitStep::RemoteAdd, GitStep::Fetch, GitStep::Rerun])?;
+            // Before the step set is narrowed: the other transport's add is a
+            // canonical URL under the right remote name, so every other check
+            // here passes it, and reporting it as an unexpected step would name
+            // the wrong fault.
+            if let Some((step, _)) = steps
+                .iter()
+                .find(|(step, _)| *step == GitStep::RemoteAdd(transport.other()))
+            {
+                return Err(RefusalReject::RemoteAddTransportMismatch {
+                    command: step_command(*step).to_string(),
+                });
+            }
+            only_steps(&[
+                GitStep::RemoteAdd(*transport),
+                GitStep::Fetch,
+                GitStep::Rerun,
+            ])?;
 
-            let add = require(GitStep::RemoteAdd)?;
+            let add = require(GitStep::RemoteAdd(*transport))?;
             let fetch = require(GitStep::Fetch)?;
             let rerun = require(GitStep::Rerun)?;
             // Fetching a remote before it exists is a step that fails and
             // leaves the contributor where they started.
             ordered_steps(&[
-                (GitStep::RemoteAdd, add),
+                (GitStep::RemoteAdd(*transport), add),
                 (GitStep::Fetch, fetch),
                 (GitStep::Rerun, rerun),
             ])?;
@@ -4020,7 +4240,11 @@ fn audit_refusal_output(
         MigrateRefusal::UpstreamRemoteMismatch => {
             mention(PANEL_MIGRATE_MISMATCH_DIAGNOSIS)?;
             mention(PANEL_MIGRATE_TARGET_REF)?;
-            mention(PANEL_MIGRATE_CANONICAL_URL)?;
+            // Both, not either: a contributor told only about the transport
+            // they are not on reads the refusal as a demand to switch.
+            for url in PANEL_MIGRATE_CANONICAL_URLS {
+                mention(url)?;
+            }
             mention(PANEL_MIGRATE_OPERATOR_CHOICE)?;
             // The remote is the contributor's; this refusal reports and asks.
             // Re-adding it would fail on the occupied name anyway, and
@@ -4122,12 +4346,15 @@ fn audit_refusal_output(
 
 // --- in-memory fixtures for the refusal corpus -----------------------------
 
-/// A self-consistent context: canonical `upstream`, the fetched target present,
-/// the migration published, and would-conflict paths exactly when the state is
-/// `Conflicting`.
+/// A self-consistent context: canonical `upstream`, a fork `origin` over the
+/// transport most contributors have, the fetched target present, the migration
+/// published, and would-conflict paths exactly when the state is `Conflicting`.
 fn migrate_context(state: TreeState) -> MigrateContext {
     MigrateContext {
-        upstream: UpstreamRemote::Canonical,
+        upstream: classify_upstream(Some(PANEL_MIGRATE_CANONICAL_HTTPS_URL)),
+        origin: OriginRemote::Configured {
+            url: PLANTED_FORK_HTTPS_ORIGIN,
+        },
         current_upstream_v3: CURRENT_UPSTREAM_V3,
         fetched_upstream_v3: Some(FETCHED_UPSTREAM_V3),
         required_migration: PINNED_MIGRATION,
@@ -4145,8 +4372,16 @@ fn migrate_context(state: TreeState) -> MigrateContext {
 /// repository into this checkout.
 fn upstream_missing_context() -> MigrateContext {
     let mut ctx = migrate_context(TreeState::Clean);
-    ctx.upstream = UpstreamRemote::Missing;
+    ctx.upstream = classify_upstream(None);
     ctx.fetched_upstream_v3 = None;
+    ctx
+}
+
+/// The same first run with a stated `origin`, which is the only thing that
+/// decides which canonical URL the repair names.
+fn upstream_missing_context_with_origin(origin: OriginRemote) -> MigrateContext {
+    let mut ctx = upstream_missing_context();
+    ctx.origin = origin;
     ctx
 }
 
@@ -4154,9 +4389,7 @@ fn upstream_missing_context() -> MigrateContext {
 /// own choosing.
 fn upstream_mismatch_context() -> MigrateContext {
     let mut ctx = migrate_context(TreeState::Clean);
-    ctx.upstream = UpstreamRemote::Noncanonical {
-        url: PLANTED_NONCANONICAL_URL,
-    };
+    ctx.upstream = classify_upstream(Some(PLANTED_NONCANONICAL_URL));
     ctx.fetched_upstream_v3 = None;
     ctx
 }
@@ -4188,6 +4421,45 @@ fn migrate_corpus() -> Vec<(&'static str, MigrateContext)> {
     ]
 }
 
+/// The five `origin` shapes the transport rule has to be total over: a
+/// recognised GitHub fork on each transport, no `origin` at all, an origin on
+/// another host, and one that parses into no owner and repository. Labelled so
+/// the counted corpus reports what it examined, and paired with the transport
+/// each one must select.
+fn origin_selection_corpus() -> Vec<(&'static str, OriginRemote, Transport)> {
+    vec![
+        (
+            "a GitHub fork over https",
+            OriginRemote::Configured {
+                url: PLANTED_FORK_HTTPS_ORIGIN,
+            },
+            Transport::Https,
+        ),
+        (
+            "a GitHub fork over ssh",
+            OriginRemote::Configured {
+                url: PLANTED_FORK_SSH_ORIGIN,
+            },
+            Transport::Ssh,
+        ),
+        ("no origin at all", OriginRemote::Absent, Transport::Https),
+        (
+            "an origin on another host",
+            OriginRemote::Configured {
+                url: PLANTED_NON_GITHUB_ORIGIN,
+            },
+            Transport::Https,
+        ),
+        (
+            "an origin that does not parse",
+            OriginRemote::Configured {
+                url: PLANTED_UNPARSEABLE_ORIGIN,
+            },
+            Transport::Https,
+        ),
+    ]
+}
+
 fn refusal_for(ctx: &MigrateContext) -> MigrateRefusal {
     match plan_migration(ctx).expect("the fixture context is self-consistent") {
         MigrateOutcome::Refuse(refusal) => refusal,
@@ -4201,6 +4473,12 @@ fn conflict_refusal() -> MigrateRefusal {
 
 fn missing_remote_refusal() -> MigrateRefusal {
     refusal_for(&upstream_missing_context())
+}
+
+/// The same refusal for a stated `origin`, which is what decides the transport
+/// its repair names.
+fn missing_remote_refusal_for(origin: OriginRemote) -> MigrateRefusal {
+    refusal_for(&upstream_missing_context_with_origin(origin))
 }
 
 fn mismatched_remote_refusal() -> MigrateRefusal {
@@ -5011,7 +5289,9 @@ fn panel_migrate_missing_upstream_prints_the_exact_add_repair() {
     let refusal = missing_remote_refusal();
     assert_eq!(
         refusal,
-        MigrateRefusal::UpstreamRemoteMissing,
+        MigrateRefusal::UpstreamRemoteMissing {
+            transport: Transport::Https,
+        },
         "an absent canonical remote is its own typed refusal, not a fallback to the pinned commit"
     );
 
@@ -5034,17 +5314,21 @@ fn panel_migrate_missing_upstream_prints_the_exact_add_repair() {
         ]
     );
 
-    // The URL is the canonical literal, over https, carrying no userinfo. A
-    // remote URL is written verbatim into plain `.git/config`.
+    // The URL is a canonical literal, the one this fixture's origin selected,
+    // and carries no credential. A remote URL is written verbatim into plain
+    // `.git/config`.
     let add = rendered
         .iter()
         .find(|line| line.trim().starts_with("git remote add"))
         .expect("the repair adds the canonical remote");
-    assert_eq!(add.trim(), PANEL_MIGRATE_REMOTE_ADD);
-    assert!(
-        add.contains(PANEL_MIGRATE_CANONICAL_URL) && !add.contains('@'),
-        "the added URL is the canonical literal and carries no credential: {add}"
-    );
+    assert_eq!(add.trim(), PANEL_MIGRATE_REMOTE_ADD_HTTPS);
+    let url = add
+        .trim()
+        .rsplit(' ')
+        .next()
+        .expect("the add carries a URL");
+    assert_eq!(url, PANEL_MIGRATE_CANONICAL_HTTPS_URL);
+    assert_eq!(check_remote_url(url), Ok(()));
 
     // No rebase on this path: the migration has not been attempted and the
     // target does not resolve, so a rebase is a sequence nobody can finish.
@@ -5061,6 +5345,153 @@ fn panel_migrate_missing_upstream_prints_the_exact_add_repair() {
             paths: 0,
         })
     );
+}
+
+#[test]
+fn panel_migrate_missing_upstream_selects_the_transport_from_origin() {
+    // The whole rule, over every shape of `origin` it has to be total on. Each
+    // fixture asserts the exact URL the repair renders, so a constant that
+    // happens to match the default cannot pass for a selection.
+    let corpus = origin_selection_corpus();
+    assert_eq!(
+        corpus.len(),
+        5,
+        "the selection is asserted over a GitHub fork on each transport, an absent origin, \
+         another host, and a value that does not parse"
+    );
+
+    let mut selected: Vec<Transport> = Vec::new();
+    for (label, origin, expected) in &corpus {
+        assert_eq!(
+            select_transport(*origin),
+            *expected,
+            "the transport is a total function of origin ({label})"
+        );
+
+        let refusal = missing_remote_refusal_for(*origin);
+        assert_eq!(
+            refusal,
+            MigrateRefusal::UpstreamRemoteMissing {
+                transport: *expected,
+            },
+            "the refusal carries the transport its origin selected ({label})"
+        );
+
+        let rendered = render_refusal(&refusal);
+        let add: Vec<&str> = rendered
+            .iter()
+            .map(|line| line.trim())
+            .filter(|line| line.starts_with("git remote add"))
+            .collect();
+        assert_eq!(
+            add,
+            vec![expected.remote_add()],
+            "the repair renders exactly the selected canonical URL ({label})"
+        );
+        assert!(
+            !rendered
+                .iter()
+                .any(|line| line.contains(expected.other().canonical_url())),
+            "the transport that was not selected appears nowhere ({label}): {rendered:?}"
+        );
+        assert_eq!(
+            audit_refusal_output(&refusal, &rendered),
+            Ok(RefusalAudit {
+                lines: 7,
+                commands: 3,
+                paths: 0,
+            }),
+            "the selected rendering is acceptable output ({label})"
+        );
+        if !selected.contains(expected) {
+            selected.push(*expected);
+        }
+    }
+    assert_eq!(
+        selected.len(),
+        PANEL_MIGRATE_TRANSPORTS.len(),
+        "a corpus that never selects one of the two transports has not exercised the rule"
+    );
+
+    // Half a recognised shape is not a recognised shape. Each of these opens
+    // like one of the two prefixes and carries no owner and repository behind
+    // it, so it falls to the default rather than being read as the transport it
+    // resembles.
+    for half in [
+        "https://github.com/",
+        "https://github.com/contributor",
+        "git@github.com:",
+        "git@github.com:contributor",
+    ] {
+        assert_eq!(
+            select_transport(OriginRemote::Configured { url: half }),
+            Transport::Https,
+            "an origin that parses into no owner and repository selects the default: {half}"
+        );
+    }
+
+    // And the selection is the *only* thing origin reaches: no rendered line
+    // carries the URL it was read from, whichever shape it had.
+    for (label, origin, _) in &corpus {
+        let OriginRemote::Configured { url } = origin else {
+            continue;
+        };
+        let rendered = render_refusal(&missing_remote_refusal_for(*origin));
+        assert!(
+            !rendered.iter().any(|line| line.contains(url)),
+            "the contributor's own remote URL is model input, never output ({label}): \
+             {rendered:?}"
+        );
+    }
+}
+
+#[test]
+fn panel_migrate_missing_upstream_rejects_the_transport_that_was_not_selected() {
+    // Both URLs are canonical, so the URL check passes either one. What is
+    // wrong is that the repair renders something other than what `origin`
+    // selected: an SSH-only contributor handed an HTTPS remote gets a
+    // credential prompt instead of a fetch, and the reverse fails outright for
+    // anyone with no key registered.
+    for (origin, expected) in [
+        (
+            OriginRemote::Configured {
+                url: PLANTED_FORK_HTTPS_ORIGIN,
+            },
+            Transport::Https,
+        ),
+        (
+            OriginRemote::Configured {
+                url: PLANTED_FORK_SSH_ORIGIN,
+            },
+            Transport::Ssh,
+        ),
+    ] {
+        let refusal = missing_remote_refusal_for(origin);
+        let accepted = render_refusal(&refusal);
+        assert!(audit_refusal_output(&refusal, &accepted).is_ok());
+
+        let other = expected.other();
+        assert_eq!(
+            audit_refusal_output(
+                &refusal,
+                &planting(&accepted, expected.remote_add(), other.remote_add())
+            ),
+            Err(RefusalReject::RemoteAddTransportMismatch {
+                command: other.remote_add().to_string(),
+            }),
+            "a canonical URL is not enough: it has to be the one the origin selected"
+        );
+
+        // Both, which is the shape a renderer reaches for when it cannot
+        // decide. It is still not the selection, and the contributor is still
+        // left choosing.
+        assert_eq!(
+            audit_refusal_output(&refusal, &appending(&accepted, other.remote_add())),
+            Err(RefusalReject::RemoteAddTransportMismatch {
+                command: other.remote_add().to_string(),
+            })
+        );
+    }
 }
 
 #[test]
@@ -5117,7 +5548,7 @@ fn panel_migrate_rejects_a_remote_command_that_is_not_the_add_or_the_read() {
         ),
         (
             "a set-url, which rewrites the remote rather than reporting it",
-            format!("git remote set-url upstream {PANEL_MIGRATE_CANONICAL_URL}"),
+            format!("git remote set-url upstream {PANEL_MIGRATE_CANONICAL_HTTPS_URL}"),
             RefusalReject::UnknownRemoteOperation {
                 operation: "set-url".to_string(),
             },
@@ -5131,7 +5562,7 @@ fn panel_migrate_rejects_a_remote_command_that_is_not_the_add_or_the_read() {
         ),
         (
             "a remote flag nobody allowed",
-            format!("git remote add -f upstream {PANEL_MIGRATE_CANONICAL_URL}"),
+            format!("git remote add -f upstream {PANEL_MIGRATE_CANONICAL_HTTPS_URL}"),
             RefusalReject::UnknownFlag {
                 subcommand: "remote".to_string(),
                 flag: "-f".to_string(),
@@ -5139,7 +5570,7 @@ fn panel_migrate_rejects_a_remote_command_that_is_not_the_add_or_the_read() {
         ),
         (
             "the canonical URL added under some other name",
-            format!("git remote add mirror {PANEL_MIGRATE_CANONICAL_URL}"),
+            format!("git remote add mirror {PANEL_MIGRATE_CANONICAL_HTTPS_URL}"),
             RefusalReject::UnexpectedRemoteName {
                 operation: "add".to_string(),
                 name: "mirror".to_string(),
@@ -5175,10 +5606,45 @@ fn panel_migrate_rejects_a_remote_command_that_is_not_the_add_or_the_read() {
             },
         ),
         (
+            "another host over https",
+            "git remote add upstream https://gitlab.com/vicondoa/d2b.git".to_string(),
+            RefusalReject::RemoteUrlNotCanonical {
+                url: "https://gitlab.com/vicondoa/d2b.git".to_string(),
+            },
+        ),
+        (
             "cleartext http",
             "git remote add upstream http://github.com/vicondoa/d2b.git".to_string(),
             RefusalReject::RemoteUrlNotCanonical {
                 url: "http://github.com/vicondoa/d2b.git".to_string(),
+            },
+        ),
+        (
+            "the scp-like spelling on another host",
+            "git remote add upstream git@gitlab.com:vicondoa/d2b.git".to_string(),
+            RefusalReject::RemoteUrlNotCanonical {
+                url: "git@gitlab.com:vicondoa/d2b.git".to_string(),
+            },
+        ),
+        (
+            "the scp-like spelling with another owner",
+            "git remote add upstream git@github.com:someone/d2b.git".to_string(),
+            RefusalReject::RemoteUrlNotCanonical {
+                url: "git@github.com:someone/d2b.git".to_string(),
+            },
+        ),
+        (
+            "the scp-like spelling with another repository",
+            "git remote add upstream git@github.com:vicondoa/other.git".to_string(),
+            RefusalReject::RemoteUrlNotCanonical {
+                url: "git@github.com:vicondoa/other.git".to_string(),
+            },
+        ),
+        (
+            "the scp-like spelling with another user in the service-account position",
+            "git remote add upstream deploy@github.com:vicondoa/d2b.git".to_string(),
+            RefusalReject::CredentialBearingUrl {
+                url: "deploy@github.com:vicondoa/d2b.git".to_string(),
             },
         ),
         (
@@ -5189,10 +5655,24 @@ fn panel_migrate_rejects_a_remote_command_that_is_not_the_add_or_the_read() {
             },
         ),
         (
-            "a fragment appended to the canonical URL",
-            format!("git remote add upstream {PANEL_MIGRATE_CANONICAL_URL}#v3"),
+            "the ssh URL spelling of the exact canonical target, a third form to keep in step",
+            "git remote add upstream ssh://git@github.com/vicondoa/d2b.git".to_string(),
             RefusalReject::RemoteUrlNotCanonical {
-                url: format!("{PANEL_MIGRATE_CANONICAL_URL}#v3"),
+                url: "ssh://git@github.com/vicondoa/d2b.git".to_string(),
+            },
+        ),
+        (
+            "a fragment appended to the canonical URL",
+            format!("git remote add upstream {PANEL_MIGRATE_CANONICAL_HTTPS_URL}#v3"),
+            RefusalReject::RemoteUrlNotCanonical {
+                url: format!("{PANEL_MIGRATE_CANONICAL_HTTPS_URL}#v3"),
+            },
+        ),
+        (
+            "a query string appended to the canonical ssh URL",
+            format!("git remote add upstream {PANEL_MIGRATE_CANONICAL_SSH_URL}?depth=1"),
+            RefusalReject::RemoteUrlNotCanonical {
+                url: format!("{PANEL_MIGRATE_CANONICAL_SSH_URL}?depth=1"),
             },
         ),
         (
@@ -5214,24 +5694,24 @@ fn panel_migrate_rejects_a_remote_command_that_is_not_the_add_or_the_read() {
         (
             "a token in the query string",
             format!(
-                "git remote add upstream {PANEL_MIGRATE_CANONICAL_URL}?access_token=placeholder"
+                "git remote add upstream {PANEL_MIGRATE_CANONICAL_HTTPS_URL}?access_token=placeholder"
             ),
             RefusalReject::CredentialBearingUrl {
-                url: format!("{PANEL_MIGRATE_CANONICAL_URL}?access_token=placeholder"),
+                url: format!("{PANEL_MIGRATE_CANONICAL_HTTPS_URL}?access_token=placeholder"),
             },
         ),
         (
-            "the scp-style ssh spelling, which carries userinfo of its own",
-            "git remote add upstream git@github.com:vicondoa/d2b.git".to_string(),
-            RefusalReject::CredentialBearingUrl {
-                url: "git@github.com:vicondoa/d2b.git".to_string(),
+            "the canonical ssh URL, which this origin did not select",
+            format!("git remote add upstream {PANEL_MIGRATE_CANONICAL_SSH_URL}"),
+            RefusalReject::RemoteAddTransportMismatch {
+                command: PANEL_MIGRATE_REMOTE_ADD_SSH.to_string(),
             },
         ),
         (
             "a remote command the parser cannot place",
-            format!("sudo git remote add upstream {PANEL_MIGRATE_CANONICAL_URL}"),
+            format!("sudo git remote add upstream {PANEL_MIGRATE_CANONICAL_HTTPS_URL}"),
             RefusalReject::UnclassifiedLine {
-                line: format!("sudo git remote add upstream {PANEL_MIGRATE_CANONICAL_URL}"),
+                line: format!("sudo git remote add upstream {PANEL_MIGRATE_CANONICAL_HTTPS_URL}"),
             },
         ),
     ];
@@ -5240,7 +5720,7 @@ fn panel_migrate_rejects_a_remote_command_that_is_not_the_add_or_the_read() {
         assert_eq!(
             audit_refusal_output(
                 &refusal,
-                &planting(&accepted, PANEL_MIGRATE_REMOTE_ADD, &planted)
+                &planting(&accepted, PANEL_MIGRATE_REMOTE_ADD_HTTPS, &planted)
             ),
             Err(expected),
             "a remote command that is not the exact add or the exact read must fail closed \
@@ -5254,6 +5734,70 @@ fn panel_migrate_rejects_a_remote_command_that_is_not_the_add_or_the_read() {
 }
 
 #[test]
+fn panel_migrate_admits_the_ssh_service_account_and_no_other_userinfo() {
+    // `git@github.com:` is a constant every SSH clone already carries: GitHub's
+    // fixed service account in the standard scp-like syntax, authenticating
+    // with a key on disk that the URL does not contain. Classifying it as
+    // userinfo would confuse a constant with a secret and reject the ordinary
+    // clone every SSH-only contributor has.
+    for url in PANEL_MIGRATE_CANONICAL_URLS {
+        assert_eq!(
+            check_remote_url(url),
+            Ok(()),
+            "both canonical spellings are admitted: {url}"
+        );
+    }
+
+    // A wrong host, owner or repository behind that constant is not a
+    // credential and must not be reported as one: the reject names what is
+    // actually wrong, which is that the URL is outside the admitted set.
+    for url in [
+        "git@gitlab.com:vicondoa/d2b.git",
+        "git@github.com:someone/d2b.git",
+        "git@github.com:vicondoa/other.git",
+        "ssh://git@github.com/vicondoa/d2b.git",
+    ] {
+        assert_eq!(
+            check_remote_url(url),
+            Err(RefusalReject::RemoteUrlNotCanonical {
+                url: url.to_string(),
+            }),
+            "a fixed service account in front of the wrong target is not a credential: {url}"
+        );
+    }
+
+    // Everything else in the userinfo position is a secret this output would
+    // write verbatim into plain `.git/config`, including the scp-like spelling
+    // with anything but the service account in front of it.
+    for url in [
+        "https://contributor@github.com/vicondoa/d2b.git",
+        "https://x-access-token:placeholder@github.com/vicondoa/d2b.git",
+        "git:placeholder@github.com:vicondoa/d2b.git",
+        "deploy@github.com:vicondoa/d2b.git",
+    ] {
+        assert_eq!(
+            check_remote_url(url),
+            Err(RefusalReject::CredentialBearingUrl {
+                url: url.to_string(),
+            }),
+            "userinfo that is not the fixed service account is a credential: {url}"
+        );
+    }
+
+    // And a token beside an otherwise canonical URL, on either transport.
+    for url in PANEL_MIGRATE_CANONICAL_URLS {
+        let with_token = format!("{url}?access_token=placeholder");
+        assert_eq!(
+            check_remote_url(&with_token),
+            Err(RefusalReject::CredentialBearingUrl {
+                url: with_token.clone(),
+            }),
+            "a token parameter is a credential whichever transport carries it: {with_token}"
+        );
+    }
+}
+
+#[test]
 fn panel_migrate_rejects_missing_upstream_output_missing_or_reordered() {
     let refusal = missing_remote_refusal();
     let accepted = render_refusal(&refusal);
@@ -5261,9 +5805,9 @@ fn panel_migrate_rejects_missing_upstream_output_missing_or_reordered() {
     let cases: Vec<(&str, Vec<String>, RefusalReject)> = vec![
         (
             "the canonical remote never added",
-            without_command(&accepted, PANEL_MIGRATE_REMOTE_ADD),
+            without_command(&accepted, PANEL_MIGRATE_REMOTE_ADD_HTTPS),
             RefusalReject::MissingCommand {
-                command: PANEL_MIGRATE_REMOTE_ADD.to_string(),
+                command: PANEL_MIGRATE_REMOTE_ADD_HTTPS.to_string(),
             },
         ),
         (
@@ -5282,9 +5826,13 @@ fn panel_migrate_rejects_missing_upstream_output_missing_or_reordered() {
         ),
         (
             "a fetch of a remote that does not exist yet",
-            swapping(&accepted, PANEL_MIGRATE_REMOTE_ADD, PANEL_MIGRATE_FETCH),
+            swapping(
+                &accepted,
+                PANEL_MIGRATE_REMOTE_ADD_HTTPS,
+                PANEL_MIGRATE_FETCH,
+            ),
             RefusalReject::CommandsOutOfOrder {
-                earlier: PANEL_MIGRATE_REMOTE_ADD.to_string(),
+                earlier: PANEL_MIGRATE_REMOTE_ADD_HTTPS.to_string(),
                 later: PANEL_MIGRATE_FETCH.to_string(),
             },
         ),
@@ -5358,11 +5906,11 @@ fn panel_migrate_missing_upstream_rejects_a_generic_access_diagnosis() {
     // A URL printed as a bare line is not a command the parser vouched for, so
     // nothing has checked what it points at.
     let mut bare = accepted.clone();
-    bare.insert(3, format!("  {PANEL_MIGRATE_CANONICAL_URL}"));
+    bare.insert(3, format!("  {PANEL_MIGRATE_CANONICAL_HTTPS_URL}"));
     assert_eq!(
         audit_refusal_output(&refusal, &bare),
         Err(RefusalReject::BareLineInRefusal {
-            line: PANEL_MIGRATE_CANONICAL_URL.to_string(),
+            line: PANEL_MIGRATE_CANONICAL_HTTPS_URL.to_string(),
         })
     );
 }
@@ -5381,13 +5929,14 @@ fn panel_migrate_noncanonical_upstream_reads_the_remote_and_mutates_nothing() {
         rendered,
         vec![
             "panel-migrate: refusing to migrate; nothing has been changed.",
-            "There is no canonical upstream/v3 to land on: the remote named upstream does not \
-             carry the canonical vicondoa/d2b URL.",
+            "There is no canonical upstream/v3 to land on: the remote named upstream carries \
+             neither canonical vicondoa/d2b URL.",
             "That remote is yours - a mirror, a second project, or a deliberate pin - so \
              nothing here rewrites it. Read what it points at:",
             "  git remote get-url upstream",
-            "The migration expects exactly https://github.com/vicondoa/d2b.git on the upstream \
-             remote.",
+            "The migration expects exactly https://github.com/vicondoa/d2b.git or \
+             git@github.com:vicondoa/d2b.git on the upstream remote, and either one satisfies \
+             it.",
             "Then choose the remote arrangement you want yourself, and rerun:",
             "  make panel-migrate",
         ]
@@ -5411,11 +5960,13 @@ fn panel_migrate_noncanonical_upstream_reads_the_remote_and_mutates_nothing() {
         "this refusal reports and asks: it reads the remote and changes nothing"
     );
 
-    // Every mutating shape, including the repair that belongs to the state
-    // where the remote is absent. Re-adding an occupied name fails, and
-    // re-pointing it takes a decision that is not this tool's to take.
+    // Every mutating shape, including both spellings of the repair that belongs
+    // to the state where the remote is absent. Re-adding an occupied name
+    // fails, and re-pointing it takes a decision that is not this tool's to
+    // take.
     for planted in [
-        PANEL_MIGRATE_REMOTE_ADD,
+        PANEL_MIGRATE_REMOTE_ADD_HTTPS,
+        PANEL_MIGRATE_REMOTE_ADD_SSH,
         PANEL_MIGRATE_FETCH,
         PANEL_MIGRATE_REBASE,
         PANEL_MIGRATE_STASH_PUSH,
@@ -5444,7 +5995,7 @@ fn panel_migrate_noncanonical_upstream_reads_the_remote_and_mutates_nothing() {
         ("git remote set-url upstream ", "set-url"),
     ] {
         let line = if operation == "set-url" {
-            format!("{planted}{PANEL_MIGRATE_CANONICAL_URL}")
+            format!("{planted}{PANEL_MIGRATE_CANONICAL_HTTPS_URL}")
         } else {
             planted.to_string()
         };
@@ -5491,13 +6042,15 @@ fn panel_migrate_noncanonical_upstream_never_echoes_the_configured_url() {
          read back by a command they run rather than echoed here: {rendered:?}"
     );
 
-    // The expected URL is named, in prose, as the one this migration wants.
-    assert!(
-        rendered
-            .iter()
-            .any(|line| line.contains(PANEL_MIGRATE_CANONICAL_URL)),
-        "the contributor still has to be told which URL is expected: {rendered:?}"
-    );
+    // Both accepted URLs are named, in prose, as what would satisfy the check.
+    // Naming only one reads as a demand to switch transport to the contributor
+    // who is not on it.
+    for url in PANEL_MIGRATE_CANONICAL_URLS {
+        assert!(
+            rendered.iter().any(|line| line.contains(url)),
+            "the contributor has to be told every URL that would satisfy this: {rendered:?}"
+        );
+    }
 
     // A renderer that helpfully repeats what it found, in prose rather than in
     // a command, where an unchecked URL would otherwise have hidden.
@@ -5532,7 +6085,6 @@ fn panel_migrate_noncanonical_upstream_never_echoes_the_configured_url() {
     // what it found or what it wanted.
     for needle in [
         PANEL_MIGRATE_MISMATCH_DIAGNOSIS,
-        PANEL_MIGRATE_CANONICAL_URL,
         PANEL_MIGRATE_OPERATOR_CHOICE,
     ] {
         assert_eq!(
@@ -5541,6 +6093,27 @@ fn panel_migrate_noncanonical_upstream_never_echoes_the_configured_url() {
                 needle: needle.to_string(),
             }),
             "a refusal that drops `{needle}` no longer says what it found or what it wanted"
+        );
+    }
+
+    // Naming one accepted URL and not the other is its own rejection: both are
+    // canonical, so the one that is missing is the one this contributor may be
+    // configured with. The line is replaced rather than dropped, so exactly the
+    // named URL goes and the rest of the diagnosis stays.
+    for transport in PANEL_MIGRATE_TRANSPORTS {
+        let only_the_other = format!(
+            "The migration expects exactly {} on the {PANEL_MIGRATE_REMOTE} remote.",
+            transport.other().canonical_url()
+        );
+        assert_eq!(
+            audit_refusal_output(
+                &refusal,
+                &replacing_line_containing(&rendered, transport.canonical_url(), &only_the_other)
+            ),
+            Err(RefusalReject::MissingDiagnosis {
+                needle: transport.canonical_url().to_string(),
+            }),
+            "an accepted URL the refusal never names is a transport it silently refuses"
         );
     }
 }
@@ -5611,10 +6184,12 @@ fn panel_migrate_canonical_upstream_without_the_branch_names_no_command() {
         })
     );
 
-    // The remote is already the one it should be, so re-adding it repairs
-    // nothing and reading it answers a question nobody asked.
+    // The remote is already the one it should be, whichever accepted URL it
+    // carries, so re-adding it repairs nothing and reading it answers a
+    // question nobody asked.
     for planted in [
-        PANEL_MIGRATE_REMOTE_ADD,
+        PANEL_MIGRATE_REMOTE_ADD_HTTPS,
+        PANEL_MIGRATE_REMOTE_ADD_SSH,
         PANEL_MIGRATE_REMOTE_GET_URL,
         PANEL_MIGRATE_FETCH,
     ] {
@@ -5651,17 +6226,25 @@ fn panel_migrate_upstream_states_render_distinct_command_sets() {
         }
     }
 
-    // The add repair belongs to exactly one of the three. The other two have
-    // the remote already.
-    assert!(
-        rendered_commands(&missing).contains(&PANEL_MIGRATE_REMOTE_ADD.to_string()),
-        "the state with no remote is the one that adds it"
-    );
-    for refusal in [&mismatch, &absent_branch] {
+    // The add repair belongs to exactly one of the three, on either transport.
+    // The other two have the remote already.
+    for transport in PANEL_MIGRATE_TRANSPORTS {
+        let missing_for_transport = missing_remote_refusal_for(OriginRemote::Configured {
+            url: match transport {
+                Transport::Https => PLANTED_FORK_HTTPS_ORIGIN,
+                Transport::Ssh => PLANTED_FORK_SSH_ORIGIN,
+            },
+        });
         assert!(
-            !rendered_commands(refusal).contains(&PANEL_MIGRATE_REMOTE_ADD.to_string()),
-            "re-adding a remote that exists repairs nothing: {refusal:?}"
+            rendered_commands(&missing_for_transport).contains(&transport.remote_add().to_string()),
+            "the state with no remote is the one that adds it: {transport:?}"
         );
+        for refusal in [&mismatch, &absent_branch] {
+            assert!(
+                !rendered_commands(refusal).contains(&transport.remote_add().to_string()),
+                "re-adding a remote that exists repairs nothing: {refusal:?}"
+            );
+        }
     }
 
     // And each names its own condition and no other's.
@@ -5709,6 +6292,20 @@ fn panel_migrate_never_names_the_contributor_remote() {
         assert!(audit_refusal_output(&refusal, &rendered).is_ok());
     }
 
+    // And over every `origin` the selection rule reads, since that is the one
+    // place this model looks at the contributor's remote at all: it decides
+    // between two published constants and echoes nothing it read.
+    for (label, origin, _) in origin_selection_corpus() {
+        let rendered = render_refusal(&missing_remote_refusal_for(origin));
+        for line in &rendered {
+            assert_eq!(
+                contributor_remote_token(line),
+                None,
+                "reading origin to select a transport is not naming it ({label}): {line}"
+            );
+        }
+    }
+
     // Every shape the inverted design would have printed, planted onto the
     // refusal that used to carry it.
     let refusal = missing_remote_refusal();
@@ -5750,9 +6347,7 @@ fn panel_migrate_noncanonical_upstream_never_lands_on_its_refs() {
     // the fetch produced.
     for state in [TreeState::Clean, TreeState::Dirty, TreeState::Conflicting] {
         let mut ctx = migrate_context(state);
-        ctx.upstream = UpstreamRemote::Noncanonical {
-            url: PLANTED_NONCANONICAL_URL,
-        };
+        ctx.upstream = classify_upstream(Some(PLANTED_NONCANONICAL_URL));
         assert_eq!(
             plan_migration(&ctx),
             Ok(MigrateOutcome::Refuse(
@@ -5766,13 +6361,79 @@ fn panel_migrate_noncanonical_upstream_never_lands_on_its_refs() {
     // The same for a remote that is absent while a stale tracking ref survives.
     for state in [TreeState::Clean, TreeState::Dirty, TreeState::Conflicting] {
         let mut ctx = migrate_context(state);
-        ctx.upstream = UpstreamRemote::Missing;
+        ctx.upstream = classify_upstream(None);
         assert_eq!(
             plan_migration(&ctx),
             Ok(MigrateOutcome::Refuse(
-                MigrateRefusal::UpstreamRemoteMissing
+                MigrateRefusal::UpstreamRemoteMissing {
+                    transport: Transport::Https,
+                }
             )),
             "a stale tracking ref is not a fetched protected branch ({state:?})"
+        );
+    }
+}
+
+#[test]
+fn panel_migrate_accepts_either_canonical_upstream_url() {
+    // Both spellings are canonical, and a configured `upstream` at either one
+    // proceeds. Asserted per URL rather than over the pair, so one transport
+    // cannot be tolerated by accident while the other is the one that works.
+    for &url in PANEL_MIGRATE_CANONICAL_URLS {
+        assert_eq!(
+            classify_upstream(Some(url)),
+            UpstreamRemote::Canonical,
+            "an upstream already configured at {url} is canonical"
+        );
+
+        let mut ctx = migrate_context(TreeState::Clean);
+        ctx.upstream = classify_upstream(Some(url));
+        assert_eq!(
+            plan_migration(&ctx),
+            Ok(MigrateOutcome::Rebase {
+                target_ref: PANEL_MIGRATE_TARGET_REF,
+                from: CURRENT_UPSTREAM_V3,
+                onto: FETCHED_UPSTREAM_V3,
+            }),
+            "a canonical upstream over either transport proceeds rather than refusing: {url}"
+        );
+
+        // The transport `origin` would have selected is irrelevant once the
+        // remote exists: nothing re-points a remote that is already canonical.
+        for (label, origin, _) in origin_selection_corpus() {
+            let mut ctx = migrate_context(TreeState::Clean);
+            ctx.upstream = classify_upstream(Some(url));
+            ctx.origin = origin;
+            assert!(
+                matches!(plan_migration(&ctx), Ok(MigrateOutcome::Rebase { .. })),
+                "an accepted upstream is accepted whatever origin is ({label}): {url}"
+            );
+        }
+    }
+
+    // A third value is not canonical, whatever it points at, and the near
+    // misses are third values: same repository over another scheme, same host
+    // with another owner, and the spelling this set deliberately excludes.
+    for url in [
+        PLANTED_NONCANONICAL_URL,
+        "http://github.com/vicondoa/d2b.git",
+        "https://github.com/someone/d2b.git",
+        "ssh://git@github.com/vicondoa/d2b.git",
+        "git@github.com:vicondoa/d2b",
+    ] {
+        assert_eq!(
+            classify_upstream(Some(url)),
+            UpstreamRemote::Noncanonical { url },
+            "only the two literals are canonical: {url}"
+        );
+
+        let mut ctx = migrate_context(TreeState::Clean);
+        ctx.upstream = classify_upstream(Some(url));
+        assert_eq!(
+            plan_migration(&ctx),
+            Ok(MigrateOutcome::Refuse(
+                MigrateRefusal::UpstreamRemoteMismatch
+            ))
         );
     }
 }
@@ -5902,6 +6563,47 @@ fn panel_migrate_refusal_debug_redacts_paths_commands_and_urls() {
         !remote.contains(PLANTED_NONCANONICAL_URL),
         "the modelled remote state must not print the configured URL either: {remote}"
     );
+
+    // And the contributor's own remote, which this model reads to select a
+    // transport. One redaction rule over every payload derived from their
+    // configuration, rather than a judgement per field about how sensitive it
+    // looks.
+    let origin = format!(
+        "{:?}",
+        OriginRemote::Configured {
+            url: PLANTED_FORK_SSH_ORIGIN,
+        }
+    );
+    assert_eq!(origin, format!("OriginRemote::Configured({REDACTED})"));
+    assert!(
+        !origin.contains(PLANTED_FORK_SSH_ORIGIN),
+        "the contributor's own remote URL must not print either: {origin}"
+    );
+    assert_eq!(
+        format!("{:?}", OriginRemote::Absent),
+        "OriginRemote::Absent"
+    );
+    for transport in PANEL_MIGRATE_TRANSPORTS {
+        assert_eq!(
+            format!(
+                "{:?}",
+                MigrateRefusal::UpstreamRemoteMissing {
+                    transport: *transport,
+                }
+            ),
+            format!("MigrateRefusal::UpstreamRemoteMissing({REDACTED})"),
+            "the selected transport is derived from origin, so it is redacted on the same rule"
+        );
+    }
+    assert_ne!(
+        MigrateRefusal::UpstreamRemoteMissing {
+            transport: Transport::Https,
+        },
+        MigrateRefusal::UpstreamRemoteMissing {
+            transport: Transport::Ssh,
+        },
+        "redacting the transport does not stop equality discriminating on it"
+    );
 }
 
 #[test]
@@ -5921,6 +6623,23 @@ fn panel_migrate_refusal_corpus_is_counted_and_non_empty() {
         corpus.len(),
         7,
         "the wrapper is modelled on seven paths: one that proceeds and six typed refusals"
+    );
+
+    // The admitted URL set is exactly the transports, counted rather than
+    // assumed: a literal added without a transport beside it, or a transport
+    // with no literal, is a set that no longer describes what is rendered.
+    assert_eq!(PANEL_MIGRATE_CANONICAL_URLS.len(), 2);
+    assert_eq!(
+        PANEL_MIGRATE_TRANSPORTS
+            .iter()
+            .map(|transport| transport.canonical_url())
+            .collect::<Vec<&str>>(),
+        PANEL_MIGRATE_CANONICAL_URLS.to_vec(),
+        "every admitted URL is one transport's, and every transport has one"
+    );
+    assert_ne!(
+        PANEL_MIGRATE_CANONICAL_HTTPS_URL, PANEL_MIGRATE_CANONICAL_SSH_URL,
+        "two spellings of the same literal would make the selection unobservable"
     );
 
     let mut proceeded = 0usize;
@@ -6016,5 +6735,49 @@ fn panel_migrate_refusal_corpus_is_counted_and_non_empty() {
         audits.iter().map(|(_, audit)| audit.paths).sum::<usize>(),
         PLANTED_CONFLICT_PATHS.len(),
         "the predicted paths are printed exactly once, by the one refusal that computed them"
+    );
+
+    // The transport corpus is counted beside it. It varies one thing the state
+    // corpus holds fixed - the contributor's `origin` - so the two are separate
+    // counts rather than one product that would say less about either.
+    let origins = origin_selection_corpus();
+    assert_eq!(
+        origins.len(),
+        5,
+        "the selection is total over a GitHub fork on each transport, an absent origin, another \
+         host, and a value that does not parse"
+    );
+    let mut transport_audits: Vec<(&str, RefusalAudit)> = Vec::new();
+    for (label, origin, expected) in &origins {
+        let refusal = missing_remote_refusal_for(*origin);
+        let rendered = render_refusal(&refusal);
+        assert!(
+            rendered
+                .iter()
+                .any(|line| line.trim() == expected.remote_add()),
+            "the repair names the selected transport ({label}): {rendered:?}"
+        );
+        transport_audits.push((
+            label,
+            audit_refusal_output(&refusal, &rendered).unwrap_or_else(|reject| {
+                panic!("the selected rendering is acceptable ({label}): {reject:?}")
+            }),
+        ));
+    }
+    assert_eq!(
+        transport_audits
+            .iter()
+            .map(|(_, audit)| audit.commands)
+            .sum::<usize>(),
+        15,
+        "the add-upstream repair is three commands, and every origin renders it once"
+    );
+    assert_eq!(
+        transport_audits
+            .iter()
+            .map(|(_, audit)| audit.paths)
+            .sum::<usize>(),
+        0,
+        "no refusal about a remote prints a repository path"
     );
 }
