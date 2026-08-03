@@ -443,3 +443,94 @@ warm/cold profile switch, all eight CI Make targets, schema/inventory
 dependency chains, isolated and shared API/fixture targets, PTY behavior under
 the manifest helper, invalid budget exit 2, and all harness-free smoke checks
 without libtest arguments.
+
+## Nix-unit candidate comparison
+
+Every candidate started from committed base `28aa3b57`. Timing commands ran
+sequentially with no other candidate active. Samples with an external Nix
+client were retained as invalid and excluded. Candidate artifacts are under
+`.scratch/test-speedup-nix-candidates/`.
+
+| Candidate | Result | Evidence and disposition |
+| --- | --- | --- |
+| N0 - tuned Bash pool | Rejected | Four-worker warm observation: 337.13s. It exceeds the 269.445s ceiling and retains the repository-specific scheduler prohibited by the runner contract. |
+| N1 - pure aggregate | Rejected | The single evaluator remained inside whole-corpus evaluation after 610s and was terminated. No result derivation had been realized. |
+| N2 - lix-unit | Rejected | Tool acquisition took 452.48s, the fork retains the `nix-unit` binary name, and corpus evaluation repeatedly overflowed its stack. A 64 MiB stack retry still exceeded 600s. The dependency was not selected. |
+| N3 - nix-eval-jobs | Selected | Four workers with instantiation took 311.93s warm. Adding `--no-instantiate` reduced the committed prime to 204.26s and a fresh-cache observation to 204.53s. |
+| N4 - consolidated flake check | Rejected | The command is the already measured direct `nix flake check --no-build --keep-going` path. Its 565.495s baseline warm median exceeds the target and broadens focused iteration to the full flake. |
+| N5 - nix-fast-build | Not entered | N3 removed realization from the critical path. Parallel realization and grouped build logs were therefore not material. |
+
+The selected runner exposes one derivation-shaped attribute per case plus one
+integrity attribute and invokes `nix-eval-jobs --no-instantiate`. It preserves
+the existing case evaluator and all pin and shard checks while avoiding 894
+derivation writes and all output realization. The runner owns parallel
+evaluation; the shell only validates output and caps the requested worker
+count by logical CPUs, finite cgroup CPU quota, and available memory.
+
+The focused locked dev shell supplies `nix-eval-jobs` and `jq`. Plain
+`make test-nix-unit` enters it once when necessary. The retired
+`D2B_NIX_UNIT_JOBS` variable fails with status 2 and names
+`D2B_NIX_EVAL_JOBS_WORKERS` as its replacement.
+
+## Nix-unit optimized result
+
+The representative warm samples on the integrated runner were:
+
+| Result | Seconds |
+| --- | ---: |
+| Baseline warm median | 538.889473 |
+| Optimized warm samples | 203.05, 203.65, 205.32 |
+| Optimized warm median | **203.65** |
+| Warm reduction | **62.21%** |
+| Slowest / median | 1.0082 |
+
+The optimized median is 37.79% of baseline and passes the 50%-of-baseline
+ceiling of 269.444737 seconds. The slowest valid sample is less than 1% above
+the median. Every run evaluated 893 pinned x86 cases plus the integrity
+attribute with four effective workers.
+
+The final fresh-cache observation used plain `make test-nix-unit`, a newly
+created `XDG_CACHE_HOME`, locked tool self-provisioning, and
+`D2B_EXECUTION_MANIFEST`. It completed in 209.74s, compared with the
+659.700177s baseline cold median, a 68.20% reduction. The shared Nix store was
+retained. No candidate or final accepted sample overlapped another Nix client.
+
+Warm resource samples used four effective workers and the 4096 MiB
+nix-eval-jobs per-worker restart limit. Client peak RSS ranged from
+17,897,588 KiB to 20,905,300 KiB. Combining client CPU time with readable
+nix-daemon cgroup deltas produced approximately 96-97% utilization of the
+four-worker budget. Daemon CPU deltas were under 4.3s because the selected
+path does not instantiate or realize outputs. The final runner reserves an
+additional 1024 MiB of process and flake overhead per worker when calculating
+the memory cap so smaller CI runners reduce concurrency before exhausting
+memory.
+
+## Nix-unit failure and coverage evidence
+
+The passing manifest is
+`.scratch/test-speedup-optimized/test-nix-unit-executed.json`. It records
+`run_status = "passed"`, the seven baseline leaves, no failed surface, no
+installable, and no realized check. The completed leaves are:
+
+```text
+nix-unit
+nix-unit-daemon
+nix-unit-guest
+nix-unit-misc
+nix-unit-network
+nix-unit-runtime
+nix-unit-state
+```
+
+An isolated committed probe changed one daemon case and one state case. One
+invocation reported both exact case names, counted two attribute failures, and
+published `.scratch/test-speedup-optimized/test-nix-unit-failed.json` with
+`run_status = "failed"` and no stale completed leaf. A second committed probe
+forced empty check discovery; it failed before evaluator dispatch and
+published `.scratch/test-speedup-optimized/test-nix-unit-empty.json`.
+
+The retained selector probe
+`D2B_NIX_UNIT_CHECK=nix-unit-misc make test-nix-unit` passed and published a
+manifest containing only `nix-unit-misc`. CI no longer uses the selector: the
+generated workflow contains one enforcing `test-nix-unit` job whose test
+command is exactly `make test-nix-unit`.
