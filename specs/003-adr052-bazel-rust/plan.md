@@ -419,8 +419,11 @@ one site that may; both schema generations report the exact generated nonempty
 valid census; the build-script
 and action-environment inventory is committed and drift-checked; the W0 wave
 notes record both measured invocations as command shapes with `<worktree>`
-placeholders and contain no real absolute path; Cargo remains
-authoritative and green; the ten-role panel and wave PR are sealed and merged.
+placeholders and a scan of every file in the notes directory, tracked or
+untracked, proves no real absolute path appears in them, having first proved
+that same scan refuses a planted note carrying a synthetic absolute path;
+Cargo remains authoritative and green; the ten-role panel and wave PR are
+sealed and merged.
 
 ### W1 - Coverage carriers
 

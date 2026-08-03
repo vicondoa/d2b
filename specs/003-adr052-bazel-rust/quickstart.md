@@ -30,6 +30,69 @@ come from the pinned dev shell. Drift must fail rather than rewrite a lock. Do
 not use Bazelisk, direct Bazel workflow commands, a remote cache, or a shared
 worktree output tree.
 
+## Assertion helpers
+
+Every block in this guide that asserts an invariant starts with the same two
+lines: `set -e`, then a source of one shared helper file. Write the file once
+per validation worktree:
+
+```bash
+set -e
+mkdir -p .scratch
+cat > .scratch/adr052-assert.sh <<'HELPERS'
+fail() { printf 'FAIL: %s\n' "$*" >&2; exit 1; }
+
+# Every path an absence claim inspects must be readable, and a directory that
+# holds no files makes the claim vacuous rather than true.
+require_input() {
+  local path
+  for path in "$@"; do
+    test -r "$path" || fail "cannot read $path"
+    if test -d "$path"; then
+      test -n "$(find "$path" -type f -print -quit)" \
+        || fail "$path holds no files"
+    fi
+  done
+}
+
+# One absence claim. Measured on GNU grep: exit 0 means the pattern is
+# present, exit 1 means it is absent, and exit 2 or higher means grep could
+# not inspect its input, which is an inspection failure and never a pass.
+# Only exit 1 passes. Keeping the grep inside `if` also keeps its non-zero
+# exit from tripping `set -e`.
+refute() {
+  local desc="$1" rc
+  shift
+  if grep "$@"; then
+    fail "$desc"
+  else
+    rc=$?
+    test "$rc" -eq 1 || fail "grep exited $rc while checking: $desc"
+  fi
+}
+HELPERS
+. .scratch/adr052-assert.sh
+```
+
+`.scratch/` is already ignored by Git, so writing the helper leaves
+`git status --short` empty and does not disturb any check below that requires
+a clean tree. The helper file sets no shell option of its own, so sourcing it
+is safe in an interactive shell; each checking block arms `set -e` itself.
+Sourcing rather than executing it is what lets the `exit` inside `fail` stop
+the calling block on the line that failed. Run each block as a script; the
+checks do not depend on `set -e` because every one of them ends in an explicit
+`fail`, but the surrounding `make` and `cargo` lines do.
+
+The exit-code split is the whole point of the helper. A bare
+`if grep -q PATTERN FILE; then fail; fi` treats a deleted, renamed, or
+unreadable `FILE` exactly like a clean tree: grep exits 2, the `if` takes the
+false branch, and the block reports that the forbidden pattern is absent from
+a file it never read. The same hazard is worse for `grep -r` over a directory,
+because a whole missing tree, for instance `.github/workflows/` after a
+rename, is the most likely way that failure arrives. Every absence claim below
+therefore goes through `refute`, and every path those claims inspect goes
+through `require_input` first.
+
 ## Amended ADR verification - before W0
 
 The ADR 0052 amendment is a merged prerequisite, not work this feature
@@ -37,7 +100,9 @@ performs. Before any W0 branch is created, prove the amended record is present
 in the base by content, not by a remembered commit hash:
 
 ```bash
-fail() { printf '%s\n' "$*" >&2; exit 1; }
+set -e
+. .scratch/adr052-assert.sh
+require_input docs/adr/0052-bazel-rust-build-and-test.md docs/adr/README.md
 grep -q '^- Status: Accepted$' docs/adr/0052-bazel-rust-build-and-test.md \
   || fail 'ADR 0052 is not accepted'
 grep -q '^- Amended: 2026-08-03\.' \
@@ -110,15 +175,16 @@ checks a literal is checking the wrong thing.
 Check the pinning and boundary invariants that are easy to get wrong quietly:
 
 ```bash
-fail() { printf '%s\n' "$*" >&2; exit 1; }
+set -e
+. .scratch/adr052-assert.sh
+require_input .bazelrc MODULE.bazel .bazelignore Makefile \
+  .github/workflows/ packages/
 
 # .bazelrc carries no startup line and no channel flag.
-if grep -qE '^[[:space:]]*startup[[:space:]]' .bazelrc; then
-  fail '.bazelrc contains a startup option'
-fi
-if grep -q 'rust/toolchain/channel' .bazelrc; then
-  fail '.bazelrc sets the global Rust channel'
-fi
+refute '.bazelrc contains a startup option' \
+  -qE '^[[:space:]]*startup[[:space:]]' .bazelrc
+refute '.bazelrc sets the global Rust channel' \
+  -q 'rust/toolchain/channel' .bazelrc
 
 # Both module-graph checks fail closed rather than warn.
 grep -q '^common --lockfile_mode=error$' .bazelrc \
@@ -127,39 +193,46 @@ grep -q '^common --check_direct_dependencies=error$' .bazelrc \
   || fail 'direct dependency checks are not fail-closed'
 
 # All four hubs declare a Bazel-side lock, a Cargo lock, and the overwrite opt-out.
-test "$(grep -c 'lockfile' MODULE.bazel)" -ge 4 \
-  || fail 'fewer than four hub locks are declared'
-test "$(grep -c 'cargo_lockfile' MODULE.bazel)" -eq 4 \
+test "$(grep -cE '^[[:space:]]*lockfile[[:space:]]*=' MODULE.bazel)" -eq 4 \
+  || fail 'Bazel-side lock declarations do not match four hubs'
+test "$(grep -cE '^[[:space:]]*cargo_lockfile[[:space:]]*=' MODULE.bazel)" -eq 4 \
   || fail 'Cargo lock declarations do not match four hubs'
-test "$(grep -c 'skip_cargo_lockfile_overwrite = True' MODULE.bazel)" -eq 4 \
+test "$(
+  grep -cE '^[[:space:]]*skip_cargo_lockfile_overwrite[[:space:]]*=[[:space:]]*True' \
+    MODULE.bazel
+)" -eq 4 \
   || fail 'Cargo overwrite opt-out does not match four hubs'
 
 # No repin escape hatch anywhere on the gate path.
-if grep -rqE 'CARGO_BAZEL_REPIN|CARGO_BAZEL_REPIN_ONLY|(^|[^A-Z_])REPIN=' \
-  Makefile .github/workflows/; then
-  fail 'repin control is reachable from Make or CI'
-fi
+refute 'repin control is reachable from Make or CI' \
+  -rqE 'CARGO_BAZEL_REPIN|CARGO_BAZEL_REPIN_ONLY|(^|[^A-Z_])REPIN=' \
+  Makefile .github/workflows/
 
 # None of the five contributor-only commands is reachable from Make or CI.
 contributor_only='bazel-repin|bazel-module-refresh|bazel-yanked-refresh'
 contributor_only="$contributor_only|bazel-yanked-check|bazel-evidence"
-if grep -rqE "xtask ($contributor_only)" Makefile .github/workflows/; then
-  fail 'contributor-only xtask command is reachable from Make or CI'
-fi
+refute 'contributor-only xtask command is reachable from Make or CI' \
+  -rqE "xtask ($contributor_only)" Makefile .github/workflows/
 
 # The only site that may assign a repin control to a process environment.
-assignments="$(
-  grep -rnE '\.env\("(CARGO_BAZEL_REPIN|CARGO_BAZEL_REPIN_ONLY|REPIN)"' \
-    packages/ | cut -d: -f1 | sort -u
-)"
+# The scan must exit 0: exit 1 means the one allowlisted site vanished, and
+# exit 2 or higher means the tree was not read, so neither is a pass.
+assign_pattern='\.env\("(CARGO_BAZEL_REPIN|CARGO_BAZEL_REPIN_ONLY|REPIN)"'
+if scan="$(grep -rnE "$assign_pattern" packages/)"; then
+  rc=0
+else
+  rc=$?
+fi
+test "$rc" -eq 0 \
+  || fail "the repin assignment scan exited $rc rather than matching"
+assignments="$(printf '%s\n' "$scan" | cut -d: -f1 | sort -u)"
 test "$assignments" = 'packages/xtask/src/bazel.rs' \
   || fail 'repin assignment exists outside packages/xtask/src/bazel.rs'
 
 # The only site that may set one process-globally is nowhere.
-if grep -rqE 'set_var\("(CARGO_BAZEL_REPIN|CARGO_BAZEL_REPIN_ONLY|REPIN)"' \
-  packages/; then
-  fail 'repin control uses process-global mutation'
-fi
+setvar_pattern='set_var\("(CARGO_BAZEL_REPIN|CARGO_BAZEL_REPIN_ONLY|REPIN)"'
+refute 'repin control uses process-global mutation' \
+  -rqE "$setvar_pattern" packages/
 
 # The workspace boundary covers scratch and every Cargo output directory.
 grep -q '^\.scratch/$' .bazelignore \
@@ -168,11 +241,14 @@ grep -q '^\.scratch/$' .bazelignore \
 
 The third `grep -c` must report four, not zero: at `rules_rust` 0.73.0
 `skip_cargo_lockfile_overwrite` defaults to false, so a repin would otherwise
-rewrite the authoritative `Cargo.lock`. The assignment grep must print exactly
-`packages/xtask/src/bazel.rs`. Grepping for the bare variable names instead
-would also match `packages/xtask/tests/policy_ci.rs`, which necessarily
-contains all three literals because it is the guard that refuses them, so the
-check is on the assignment form, which is what the rule is actually about.
+rewrite the authoritative `Cargo.lock`. The assignment scan must resolve to
+exactly `packages/xtask/src/bazel.rs`, and it is written so that a grep that
+could not read part of `packages/` fails instead of narrowing the result to
+the one path that happened to be readable. Grepping for the bare variable
+names instead would also match `packages/xtask/tests/policy_ci.rs`, which
+necessarily contains all three literals because it is the guard that refuses
+them, so the check is on the assignment form, which is what the rule is
+actually about.
 
 Regenerating a hub lock is a single reviewed command, never an exported
 variable. It is deliberately not a Make target:
@@ -222,17 +298,21 @@ under your home directory instead of `.scratch/`. Confirm the repository
 remediation is what actually ships:
 
 ```bash
-grep -rq 'cargo xtask bazel-module-refresh' packages/xtask/src/bazel.rs
+set -e
+. .scratch/adr052-assert.sh
+require_input packages/xtask/src/bazel.rs
+grep -q 'cargo xtask bazel-module-refresh' packages/xtask/src/bazel.rs \
+  || fail 'the module-lock remediation string does not ship'
 ```
 
 Confirm neither lock command is reachable from a build entry point:
 
 ```bash
-if grep -rqE 'xtask (bazel-repin|bazel-module-refresh)' \
-  Makefile .github/workflows/; then
-  printf '%s\n' 'lock regeneration is reachable from Make or CI' >&2
-  exit 1
-fi
+set -e
+. .scratch/adr052-assert.sh
+require_input Makefile .github/workflows/
+refute 'lock regeneration is reachable from Make or CI' \
+  -rqE 'xtask (bazel-repin|bazel-module-refresh)' Makefile .github/workflows/
 ```
 
 Each of the two commands refuses an exported repin control, and each refusal
@@ -241,12 +321,13 @@ both, because a single templated remedy would have to name a `--hub` that
 `bazel-module-refresh` never takes:
 
 ```bash
+set -e
+. .scratch/adr052-assert.sh
+
 # Plant a value nothing else could have produced. The digit 1 is not a
 # sentinel: it occurs in version strings, counts, and paths, so asserting
 # its absence asserts nothing.
 ambient_value='D2B-AMBIENT-SENTINEL-a41f7c'
-
-fail() { printf 'FAIL: %s\n' "$1" >&2; exit 1; }
 
 # Both commands must refuse, so exit zero is itself the defect. Capturing
 # the expected failure inside `if` keeps the non-zero exit from tripping
@@ -260,7 +341,10 @@ if refresh_out="$(CARGO_BAZEL_REPIN="$ambient_value" \
   fail 'bazel-module-refresh ran instead of refusing'
 fi
 
-# Each refusal ends on the command that was refused.
+# Each refusal ends on the command that was refused. The captured output is
+# an in-memory string, so grep reads standard input rather than a file, but
+# the exit-code rule is the same: only 1 is an absence and only 0 is a
+# presence, and any higher status means grep did not read what it was given.
 printf '%s\n' "$repin_out" \
   | grep -qF 'then run `cargo xtask bazel-repin --hub main`.' \
   || fail 'the bazel-repin refusal lost its own remedy'
@@ -271,17 +355,14 @@ printf '%s\n' "$refresh_out" \
 # The module-lock refusal must not name the hub command at all. The match
 # is literal and case-sensitive, so the `CARGO_BAZEL_REPIN` that refusal
 # does name is not a false positive.
-if printf '%s\n' "$refresh_out" | grep -qF 'bazel-repin'; then
-  fail 'the bazel-module-refresh refusal names bazel-repin'
-fi
+refute 'the bazel-module-refresh refusal names bazel-repin' \
+  -qF 'bazel-repin' <<<"$refresh_out"
 
 # Neither refusal may echo back the value it refused.
-if printf '%s\n' "$repin_out" | grep -qF "$ambient_value"; then
-  fail 'the bazel-repin refusal echoed the ambient value'
-fi
-if printf '%s\n' "$refresh_out" | grep -qF "$ambient_value"; then
-  fail 'the bazel-module-refresh refusal echoed the ambient value'
-fi
+refute 'the bazel-repin refusal echoed the ambient value' \
+  -qF "$ambient_value" <<<"$repin_out"
+refute 'the bazel-module-refresh refusal echoed the ambient value' \
+  -qF "$ambient_value" <<<"$refresh_out"
 ```
 
 The two remedy checks are what a shared template would break: one row would
@@ -294,13 +375,16 @@ both refusal outputs, which is a claim worth making only because the value is
 unique: the ambient controls are named in the remedy, but what they were set
 to is never printed.
 
-Every check in that block is an explicit guard rather than a bare `!` line.
-Measured on bash 5.3.9: a command whose value is inverted with `!` is exempt
-from `set -e`, so under `set -e` a bare `! grep -q ...` neither stops the
-script nor prints anything, and a leak would pass unnoticed.
-`grep ... && exit 1` is worse: when the grep correctly finds nothing, the
-`&&` list itself reports non-zero, so the block ends in apparent failure
-exactly when it passed.
+The three absence checks go through `refute` and are fed by a here-string
+rather than a pipe. A pipe would run `refute` in a subshell, where the `exit`
+inside `fail` leaves only that subshell; the here-string keeps the helper in
+the current shell, so a detected leak stops the block on the line that found
+it. Neither shape is a bare `!` line. Measured on bash 5.3.9: a command whose
+value is inverted with `!` is exempt from `set -e`, so under `set -e` a bare
+`! grep -q ...` neither stops the script nor prints anything, and a leak would
+pass unnoticed. `grep ... && exit 1` is worse: when the grep correctly finds
+nothing, the `&&` list itself reports non-zero, so the block ends in apparent
+failure exactly when it passed.
 
 Confirm `make test-rust` still invokes Cargo and remains authoritative:
 
@@ -475,20 +559,40 @@ through one boundary so its failure paths are testable without a network.
 Confirm the boundary is where it is claimed to be:
 
 ```bash
+set -e
+. .scratch/adr052-assert.sh
+require_input packages/xtask/src/
+
 # The trait and its single networked implementation live together.
-grep -q 'trait YankedIndex' packages/xtask/src/bazel_yanked.rs
-grep -q 'struct IndexClient' packages/xtask/src/bazel_yanked.rs
+grep -q 'trait YankedIndex' packages/xtask/src/bazel_yanked.rs \
+  || fail 'the YankedIndex boundary is missing'
+grep -q 'struct IndexClient' packages/xtask/src/bazel_yanked.rs \
+  || fail 'the networked IndexClient is missing'
 
 # Only the refresh and its routing seam name the networked implementation.
-grep -rn 'IndexClient' packages/xtask/src/ | cut -d: -f1 | sort -u
+# The scan must exit 0: exit 1 means the implementation vanished, and exit 2
+# or higher means part of the tree was never read, so neither is a pass.
+if client_scan="$(grep -rn 'IndexClient' packages/xtask/src/)"; then
+  rc=0
+else
+  rc=$?
+fi
+test "$rc" -eq 0 \
+  || fail "the IndexClient scan exited $rc rather than matching"
+client_files="$(printf '%s\n' "$client_scan" | cut -d: -f1 | sort -u)"
+expected_client_files="$(printf '%s\n' \
+  packages/xtask/src/bazel_yanked.rs packages/xtask/src/main.rs | sort -u)"
+test "$client_files" = "$expected_client_files" \
+  || fail 'IndexClient is named outside the refresh and its routing seam'
 
 # Every refresh case runs against an injected fake, so this passes offline.
 cargo test -p xtask bazel_yanked
 ```
 
-The `grep -rn` must print exactly `packages/xtask/src/bazel_yanked.rs` and
-`packages/xtask/src/main.rs`, and nothing on the validator's path may name
-`YankedIndex` or `IndexClient`. The `cargo test` line is the real check: every
+The scan resolves to exactly `packages/xtask/src/bazel_yanked.rs` and
+`packages/xtask/src/main.rs`, compared against a generated list rather than
+read by eye, and nothing on the validator's path may name `YankedIndex` or
+`IndexClient`. The `cargo test` line is the real check: every
 refresh case in that module supplies its index answer through an injected fake,
 so it must pass with no route to the index at all. Run it that way. What no
 fake can prove is that `IndexClient` speaks to the real index correctly; that
@@ -563,14 +667,24 @@ sleeps to reach an expiry, or reads the host clock; a test that does is not
 reproducible and will be disabled later:
 
 ```bash
-if grep -rnE 'thread::sleep|SystemTime::now|/proc/uptime' \
-  packages/d2b-bazel-runner/tests/; then
-  printf '%s\n' 'runner tests depend on ambient time or uptime' >&2
-  exit 1
-fi
+set -e
+. .scratch/adr052-assert.sh
+require_input packages/d2b-bazel-runner/tests/ \
+  packages/d2b-bazel-runner/src/cleanup.rs \
+  packages/d2b-bazel-runner/src/deadline.rs
+refute 'runner tests depend on ambient time or uptime' \
+  -rnE 'thread::sleep|SystemTime::now|/proc/uptime' \
+  packages/d2b-bazel-runner/tests/
 grep -rn 'fsops::' packages/d2b-bazel-runner/src/cleanup.rs | head
 grep -rn 'clock::' packages/d2b-bazel-runner/src/deadline.rs | head
 ```
+
+The `refute` line is the one that could go quiet. Written as a bare
+`if grep -rn ... tests/; then ... fi`, a renamed or not-yet-created
+`packages/d2b-bazel-runner/tests/` makes grep exit 2, the `if` take the false
+branch, and the block report that no test reads the host clock when it read no
+test at all. `require_input` refuses a missing or empty directory first, and
+`refute` refuses every exit above 1 after that.
 
 Prove startup options are byte-identical across every command the wrapper
 issues, because a mismatch starts a second server:
