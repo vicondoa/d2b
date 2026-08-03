@@ -14,8 +14,8 @@ use std::{
 };
 
 use d2b_contracts::v3::{
-    ArtifactDigest, ArtifactId, CanonicalJsonValue, ProviderManifest, canonical_digest,
-    canonical_json_bytes,
+    ArtifactDigest, ArtifactId, CanonicalJsonValue, ProviderManifest, canonical_json_bytes,
+    framed_canonical_digest,
 };
 use d2b_resource_compiler::{
     ArtifactCatalogEntry, CatalogDigests, Diagnostic, StaticPublisherKeys, compile_linux_artifact,
@@ -229,7 +229,7 @@ fn compile(
     validate_resources(&input, strict_secrets)?;
 
     let resources_bytes = canonical_value_bytes(&Value::Array(input.resources.clone()))?;
-    let content_hash = canonical_digest(RESOURCE_BUNDLE_DOMAIN_TAG, &resources_bytes);
+    let content_hash = framed_canonical_digest(RESOURCE_BUNDLE_DOMAIN_TAG, &resources_bytes);
     let content_hash = format!("sha256:{content_hash}");
     if let Some(expected) = input.expected_content_hash.as_deref()
         && expected != content_hash

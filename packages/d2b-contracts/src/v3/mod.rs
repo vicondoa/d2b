@@ -102,12 +102,12 @@ pub use resource_import::{
 };
 pub use resource_ref::{ResourceRef, ResourceRefError};
 pub use resource_schema::{
-    BaseSchemaBinding, BaseSchemaIdentity, CANONICAL_JSON_PROFILE, CanonicalJsonCodecReason,
-    CanonicalJsonError, CanonicalJsonObject, CanonicalJsonValue, ExtensionSchemaId,
-    ExtensionSchemaLayer, ObjectFieldSchema, ProviderExtensionRegistration,
+    BaseSchemaBinding, BaseSchemaIdentity, CANONICAL_DIGEST_FRAME_VERSION, CANONICAL_JSON_PROFILE,
+    CanonicalJsonCodecReason, CanonicalJsonError, CanonicalJsonObject, CanonicalJsonValue,
+    ExtensionSchemaId, ExtensionSchemaLayer, ObjectFieldSchema, ProviderExtensionRegistration,
     RESOURCE_ENVELOPE_DOMAIN_TAG, RESOURCE_SPEC_DOMAIN_TAG, RESOURCE_STATUS_DOMAIN_TAG,
     ResourceSchemaContract, ResourceSchemaError, SCHEMA_DOMAIN_TAG, SchemaVersion,
-    canonical_digest, canonical_json_bytes,
+    canonical_digest, canonical_json_bytes, framed_canonical_digest,
 };
 pub use resource_status::{
     ConditionState, ProviderStatusExtension, ResourceCondition, ResourceCurrencySet,
