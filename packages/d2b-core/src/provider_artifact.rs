@@ -256,6 +256,11 @@ pub trait ReadableFile: Send {
     /// Return the descriptor's byte length established by `fstat`.
     fn len(&self) -> u64;
 
+    /// Whether the descriptor contains no bytes.
+    fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
     /// Read a bounded prefix from the already-open descriptor.
     fn read_prefix(&mut self, out: &mut [u8]) -> Result<usize, LayoutError>;
 
