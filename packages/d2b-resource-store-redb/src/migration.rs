@@ -992,7 +992,7 @@ mod tests {
             ZoneId::parse("work").unwrap(),
             ResourceUid::parse("22222222-2222-4222-8222-222222222222").unwrap(),
             Timestamp::parse("2026-07-31T00:00:00.000Z").unwrap(),
-            identity().revisions.clone(),
+            identity().revisions,
         );
         let error = restore_owned(&parent_fd, &mut marker, &empty_backup(), &other).unwrap_err();
         assert_eq!(error.kind(), StoreErrorKind::StoreQuarantined);
