@@ -49,7 +49,7 @@ pub use keys::{
 pub use migration::{
     CURRENT_PHYSICAL_SCHEMA_VERSION, DEFAULT_ACTIVE_FILE_NAME, DEFAULT_PRIOR_FILE_NAME,
     DEFAULT_STAGED_FILE_NAME, MigrationOutcome, MigrationStep, REGISTERED_MIGRATIONS,
-    RecoveryOutcome, recover_owned, restore_owned, upgrade_owned,
+    RecoveryOutcome, migration_chain, recover_owned, restore_owned, upgrade_owned,
 };
 pub use ownership::{
     MAX_OWNER_CHAIN_DEPTH, OwnerBinding, OwnerIndex, OwnerIndexMutation, OwnershipError,

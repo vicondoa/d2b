@@ -248,12 +248,15 @@ fn prepare_restore_stage(
     identity: &StoreIdentity,
 ) -> Result<(), StoreError> {
     let staged = create_stage(parent, identity)?;
-    let database = backup
-        .restore_file(staged, identity)
-        .map_err(|_| quarantine(identity, "migration-staged-restore-invalid"))?;
-    drop(database);
-    validate_named_current(parent, DEFAULT_STAGED_FILE_NAME, identity)?;
-    sync_named_stage(parent, identity)
+    let result = (|| {
+        let database = backup
+            .restore_file(staged, identity)
+            .map_err(|_| quarantine(identity, "migration-staged-restore-invalid"))?;
+        drop(database);
+        validate_named_current(parent, DEFAULT_STAGED_FILE_NAME, identity)?;
+        sync_named_stage(parent, identity)
+    })();
+    cleanup_failed_stage(parent, identity, result)
 }
 
 fn prepare_upgrade_stage(
@@ -263,16 +266,34 @@ fn prepare_upgrade_stage(
     from: u32,
 ) -> Result<(), StoreError> {
     let staged = create_stage(parent, identity)?;
-    let backend = FileBackend::new(staged)
-        .map_err(|_| quarantine(identity, "migration-staged-open-failed"))?;
-    let target = Database::builder()
-        .set_cache_size(REDB_CACHE_SIZE)
-        .create_with_backend(backend)
-        .map_err(|_| quarantine(identity, "migration-staged-open-failed"))?;
-    copy_registered_step(source, &target, from, identity)?;
-    drop(target);
-    validate_named_current(parent, DEFAULT_STAGED_FILE_NAME, identity)?;
-    sync_named_stage(parent, identity)
+    let result = (|| {
+        let backend = FileBackend::new(staged)
+            .map_err(|_| quarantine(identity, "migration-staged-open-failed"))?;
+        let target = Database::builder()
+            .set_cache_size(REDB_CACHE_SIZE)
+            .create_with_backend(backend)
+            .map_err(|_| quarantine(identity, "migration-staged-open-failed"))?;
+        copy_registered_step(source, &target, from, identity)?;
+        drop(target);
+        validate_named_current(parent, DEFAULT_STAGED_FILE_NAME, identity)?;
+        sync_named_stage(parent, identity)
+    })();
+    cleanup_failed_stage(parent, identity, result)
+}
+
+fn cleanup_failed_stage<T>(
+    parent: &File,
+    identity: &StoreIdentity,
+    result: Result<T, StoreError>,
+) -> Result<T, StoreError> {
+    let Err(error) = result else {
+        return result;
+    };
+    if entry_type(parent, DEFAULT_STAGED_FILE_NAME)?.is_some() {
+        remove_regular(parent, DEFAULT_STAGED_FILE_NAME, identity)?;
+        sync_parent(parent, identity)?;
+    }
+    Err(error)
 }
 
 fn copy_registered_step(
@@ -377,7 +398,7 @@ fn publish_once(
     ) {
         return Err(quarantine(identity, "migration-publication-state-invalid"));
     }
-    if fault == Some(PublicationBoundary::AfterStageSync) {
+    if fault == Some(PublicationBoundary::StageSync) {
         return Err(injected_fault("migration-fault-after-stage-sync", identity));
     }
     if matches!(state, PublicationState::ActiveAndStaged) {
@@ -389,7 +410,7 @@ fn publish_once(
         )
         .map_err(|_| quarantine(identity, "migration-prior-rename-failed"))?;
         sync_parent(parent, identity)?;
-        if fault == Some(PublicationBoundary::AfterPriorRename) {
+        if fault == Some(PublicationBoundary::PriorRename) {
             return Err(injected_fault(
                 "migration-fault-after-prior-rename",
                 identity,
@@ -403,14 +424,14 @@ fn publish_once(
         DEFAULT_ACTIVE_FILE_NAME,
     )
     .map_err(|_| quarantine(identity, "migration-active-rename-failed"))?;
-    if fault == Some(PublicationBoundary::AfterActiveRename) {
+    if fault == Some(PublicationBoundary::ActiveRename) {
         return Err(injected_fault(
             "migration-fault-after-active-rename",
             identity,
         ));
     }
     sync_parent(parent, identity)?;
-    if fault == Some(PublicationBoundary::AfterFinalSync) {
+    if fault == Some(PublicationBoundary::FinalSync) {
         return Err(injected_fault("migration-fault-after-final-sync", identity));
     }
     Ok(())
@@ -440,6 +461,7 @@ fn rollback_publication(parent: &File, identity: &StoreIdentity) -> Result<(), S
             sync_parent(parent, identity)
         }
         PublicationState::StagedAndPrior => {
+            validate_named_supported(parent, DEFAULT_PRIOR_FILE_NAME, identity)?;
             remove_regular(parent, DEFAULT_STAGED_FILE_NAME, identity)?;
             renameat(
                 parent,
@@ -452,6 +474,7 @@ fn rollback_publication(parent: &File, identity: &StoreIdentity) -> Result<(), S
         }
         PublicationState::ActiveAndPrior => {
             remove_regular(parent, DEFAULT_ACTIVE_FILE_NAME, identity)?;
+            validate_named_supported(parent, DEFAULT_PRIOR_FILE_NAME, identity)?;
             renameat(
                 parent,
                 DEFAULT_PRIOR_FILE_NAME,
@@ -473,6 +496,7 @@ fn finalize_prior(parent: &File, identity: &StoreIdentity) -> Result<(), StoreEr
         entry_type(parent, DEFAULT_PRIOR_FILE_NAME)?,
         Some(FileType::RegularFile)
     ) {
+        validate_named_supported(parent, DEFAULT_PRIOR_FILE_NAME, identity)?;
         remove_regular(parent, DEFAULT_PRIOR_FILE_NAME, identity)?;
         sync_parent(parent, identity)?;
     } else if entry_type(parent, DEFAULT_PRIOR_FILE_NAME)?.is_some() {
@@ -722,10 +746,10 @@ fn injected_fault(reason: &'static str, identity: &StoreIdentity) -> StoreError 
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PublicationBoundary {
-    AfterStageSync,
-    AfterPriorRename,
-    AfterActiveRename,
-    AfterFinalSync,
+    StageSync,
+    PriorRename,
+    ActiveRename,
+    FinalSync,
 }
 
 #[cfg(test)]
@@ -900,10 +924,10 @@ mod tests {
     #[test]
     fn every_publication_boundary_rolls_back_without_changing_active() {
         for boundary in [
-            PublicationBoundary::AfterStageSync,
-            PublicationBoundary::AfterPriorRename,
-            PublicationBoundary::AfterActiveRename,
-            PublicationBoundary::AfterFinalSync,
+            PublicationBoundary::StageSync,
+            PublicationBoundary::PriorRename,
+            PublicationBoundary::ActiveRename,
+            PublicationBoundary::FinalSync,
         ] {
             let (directory, parent_fd, _marker) = parent();
             create_current_file(&directory, DEFAULT_ACTIVE_FILE_NAME);
