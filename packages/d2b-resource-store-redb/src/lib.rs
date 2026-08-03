@@ -63,7 +63,7 @@ pub use values::{
 };
 
 /// Bound redb's page cache so database scale cannot turn into process RSS.
-pub const REDB_CACHE_SIZE: usize = 4 * 1024 * 1024;
+pub(crate) const REDB_CACHE_SIZE: usize = 4 * 1024 * 1024;
 
 /// Immutable identity and generation binding for one already-provisioned store.
 #[derive(Clone, PartialEq, Eq)]
