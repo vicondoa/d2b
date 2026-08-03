@@ -478,11 +478,20 @@ fn check_provider_resource_admission(
             .and_then(|metadata| metadata.get("name"))
             .and_then(Value::as_str)
             .unwrap_or("<provider>");
-        if let Some(expected) = input
+        let schema_key = format!("Provider/{provider_name}");
+        let expected = input
             .provider_schema_digests
-            .get(&format!("Provider/{provider_name}"))
-            && expected != &provider.config_schema_digest
-        {
+            .get(&schema_key)
+            .ok_or_else(|| {
+                CliError::new(
+                    "provider-schema-digest-missing",
+                    format!(
+                        "Provider {} has no declared schema digest",
+                        safe_token(provider_name)
+                    ),
+                )
+            })?;
+        if expected != &provider.config_schema_digest {
             return Err(CliError::new(
                 "provider-schema-digest-mismatch",
                 format!(
