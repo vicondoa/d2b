@@ -238,9 +238,10 @@ by the locked flake inputs; an existing toolchain or development shell runs
 directly. `D2B_NIX_UNIT_JOBS` is retired and returns status 2 with a migration
 message. Use the bounded `D2B_NIX_EVAL_JOBS_WORKERS` control. Its effective
 count is capped by four workers, logical CPUs, any finite cgroup CPU quota, and
-available memory after a 2 GiB reserve at 4096 MiB per worker, so four workers
-remain available on the reference 12-CPU, 62-GiB host while smaller runners
-are capped safely.
+available memory after a 2 GiB reserve at the 4096 MiB evaluator limit plus
+1024 MiB of process and flake overhead per worker, so four workers remain
+available on the reference 12-CPU, 62-GiB host while smaller runners are capped
+safely.
 
 `D2B_NIX_UNIT_CHECK` remains the manual single-shard selector. When
 `D2B_EXECUTION_MANIFEST` is set, enter the shared secure lifecycle before Nix

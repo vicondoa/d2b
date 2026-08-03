@@ -242,13 +242,15 @@ development shell with both commands runs directly. `D2B_NIX_UNIT_JOBS` is
 retired and exits with status 2; use
 `D2B_NIX_EVAL_JOBS_WORKERS=<1..4>` instead. The requested worker count is
 bounded by the CPU cap `min(4, logical CPUs, finite cgroup CPU quota)` and the
-memory cap `max(1, floor((effective available MiB - 2048) / 4096))`.
+memory cap `max(1, floor((effective available MiB - 2048) / 5120))`. The
+memory budget combines the retained 4096 MiB evaluator limit with 1024 MiB of
+per-worker process and flake overhead.
 Effective available memory is the smaller of `MemAvailable` and the finite
 cgroup allowance after reclaimable file cache. A visible but unreadable cgroup
 controller fails closed to one worker. On the reference 12-CPU, 62-GiB host
 the effective cap preserves four workers.
-`D2B_NIX_EVAL_JOBS_MEMORY_MB` may lower the retained 4096 MiB per-worker limit
-but cannot raise it.
+`D2B_NIX_EVAL_JOBS_MEMORY_MB` may lower the retained 4096 MiB evaluator limit
+but cannot raise it; the 1024 MiB overhead remains reserved.
 
 `D2B_NIX_UNIT_CHECK=<name>` remains the manual single-shard selector. It
 requires a discovered `nix-unit` or `nix-unit-*` check and evaluates only that

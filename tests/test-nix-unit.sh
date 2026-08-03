@@ -274,10 +274,11 @@ if [ "$cgroup_memory_unknown" -eq 1 ]; then
 else
   available_mb=$((effective_memory_bytes / 1024 / 1024))
   reserve_mb=2048
+  worker_budget_mb=$((memory_mb + 1024))
   if [ "$available_mb" -le "$reserve_mb" ]; then
     memory_cap=1
   else
-    memory_cap=$(((available_mb - reserve_mb) / memory_mb))
+    memory_cap=$(((available_mb - reserve_mb) / worker_budget_mb))
     [ "$memory_cap" -ge 1 ] || memory_cap=1
   fi
 fi
@@ -285,7 +286,7 @@ workers=$requested_workers
 [ "$workers" -le "$cpu_cap" ] || workers=$cpu_cap
 [ "$workers" -le "$memory_cap" ] || workers=$memory_cap
 [ "$workers" -ge 1 ] || workers=1
-log "  nix-eval-jobs workers: requested $requested_workers, effective $workers (CPU cap $cpu_cap, memory cap $memory_cap, $memory_mb MiB per worker)"
+log "  nix-eval-jobs workers: requested $requested_workers, effective $workers (CPU cap $cpu_cap, memory cap $memory_cap, $memory_mb MiB evaluator limit plus 1024 MiB overhead per worker)"
 
 if [ -n "${D2B_NIX_UNIT_CHECK:-}" ]; then
   check="$D2B_NIX_UNIT_CHECK"
