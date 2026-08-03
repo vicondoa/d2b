@@ -380,18 +380,19 @@ surface and reported:
 
 | CI Make target | Duration |
 | --- | ---: |
-| `test-rust-api-surface` | 4m22s |
-| `test-rust-main` | 6m11s |
-| `test-rust-broker` | 4m16s |
-| `test-rust-guest-shell-runner` | 1m56s |
-| `test-rust-no-bash-ast` | 1m18s |
-| `test-rust-schema` | 2m02s |
-| `test-rust-inventory` | 7m35s |
-| `test-rust-supply-chain` | 1m28s |
-| `test-rust` rollup | 8s |
-| `test-fixture-contracts` | 12m32s |
+| `test-rust-api-surface` | 4m09s |
+| `test-rust-main` | 6m50s |
+| `test-rust-broker` | 4m15s |
+| `test-rust-guest-shell-runner` | 2m10s |
+| `test-rust-no-bash-ast` | 1m30s |
+| `test-rust-schema` | 2m19s |
+| `test-rust-inventory` | 7m33s |
+| `test-rust-supply-chain` | 1m30s |
+| `test-rust` rollup | 7s |
+| `test-fixture-contracts` | 12m12s |
 
-The complete PR workflow ran from 23:22:42Z through 23:36:18Z, a 13m36s
+The final PR workflow at `39b09ca4` ran from 00:54:35Z through 01:08:22Z, a
+13m47s
 critical path. Every Rust leaf is below eight minutes and the adjacent
 fixture lane remains below 15 minutes.
 
