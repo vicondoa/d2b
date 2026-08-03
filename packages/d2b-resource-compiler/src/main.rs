@@ -32,6 +32,7 @@ const MAX_SCHEMA_BYTES: usize = 8 * 1024 * 1024;
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct CliError {
     code: &'static str,
+    exit_code: u8,
     message: String,
 }
 
@@ -39,6 +40,15 @@ impl CliError {
     fn new(code: &'static str, message: impl AsRef<str>) -> Self {
         Self {
             code,
+            exit_code: 1,
+            message: bound_ascii(message.as_ref()),
+        }
+    }
+
+    fn with_exit_code(code: &'static str, exit_code: u8, message: impl AsRef<str>) -> Self {
+        Self {
+            code,
+            exit_code,
             message: bound_ascii(message.as_ref()),
         }
     }
@@ -54,7 +64,7 @@ impl std::error::Error for CliError {}
 
 impl From<Diagnostic> for CliError {
     fn from(error: Diagnostic) -> Self {
-        Self::new(error.code(), error.message())
+        Self::with_exit_code(error.code(), error.exit_code(), error.message())
     }
 }
 
@@ -125,7 +135,7 @@ fn main() -> ExitCode {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
             eprintln!("{error}");
-            ExitCode::from(1)
+            ExitCode::from(error.exit_code)
         }
     }
 }
