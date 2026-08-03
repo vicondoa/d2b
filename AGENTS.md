@@ -114,13 +114,12 @@ implementation details unless a target or `tests/AGENTS.md` says otherwise.
 bootstrap a private toolchain when it is missing, so working inside the dev
 shell just skips that setup.
 
-CI splits the Rust gate into three independent jobs, `make
-test-rust-api-surface`, `make test-rust-main` and `make test-rust-remaining`,
-behind the stable required `test-rust` rollup context. `make test-rust` still
-runs all three partitions exactly once, so it stays the local command; reach
-for a partition target only to rerun the part that failed. The API census is a
-separate shard because it shares nothing with the workspace build; see
-[gates and lints](./docs/contributing/gates-and-lints.md).
+CI runs eight independent Rust leaf jobs - API, main workspace, broker, guest
+shell runner, no-bash AST, schema, inventory and supply chain - behind the
+stable required `test-rust` rollup context. Each leaf receives the full runner
+budget and does not inherit local-only dependency edges. `make test-rust`
+remains the local aggregate; use a `make test-rust-<leaf>` target to rerun one
+CI leaf. See [gates and lints](./docs/contributing/gates-and-lints.md).
 
 ```bash
 make check        # PR-equivalent Layer-1 gate; runs tests/layer1-jobs.json
@@ -143,9 +142,12 @@ is advisory.
 
 Two coverage traps worth knowing before you claim a change is validated:
 
-- **`test-rust` excludes `d2b-contract-tests`**, so a green `test-rust` does
-  not validate the fixture-dependent contract and policy layer. That runs in
-  `test-fixture-contracts`.
+- **Layer-1 Rust orchestration excludes `d2b-contract-tests` from its Rust
+  shards** by setting `D2B_SKIP_FIXTURE_BUILD=1`, then runs the enforcing
+  `test-fixture-contracts` lane separately. The direct local `make test-rust`
+  target includes the fixture and CLI contract surfaces when Nix is available.
+  Cite `test-fixture-contracts`, not a Rust shard, when claiming Layer-1
+  fixture-dependent coverage.
 - **Doctests and `harness = false` binaries are not nextest surfaces** and get
   explicit companion runs. Several `compile_fail` doctests are capability
   seals. Do not "simplify" them away.

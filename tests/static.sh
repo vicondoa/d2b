@@ -457,11 +457,12 @@ export D2B_STATIC_CACHE
 # timing-test flake risk. Nothing between here and the join touches the shared
 # cargo target dir; the gate's entire $ROOT footprint is gitignored, so
 # concurrent git-fetcher flake evals never stat it.
+cd "$ROOT"
 _STATIC_RUST_GATE_OVERLAP=0
 if [ -n "${D2B_STATIC_PARALLEL_RUST:-}" ] && [ -d "$ROOT/packages" ] && [ -x "$ROOT/tests/test-rust.sh" ]; then
   _STATIC_RUST_GATE_OVERLAP=1
-  log "==> launching test-rust.sh as background long pole (D2B_STATIC_PARALLEL_RUST=1; overlaps flake check + smoke evals)"
-  d2b_static_longpole_spawn "tests/test-rust.sh" bash "$ROOT/tests/test-rust.sh"
+  log "==> launching make test-rust as background long pole (D2B_STATIC_PARALLEL_RUST=1; fixture lane remains separate)"
+  d2b_static_longpole_spawn "make test-rust" env D2B_SKIP_FIXTURE_BUILD=1 make test-rust
 fi
 
 log "==> Layer 1: parse + eval"
@@ -722,7 +723,7 @@ d2b_static_parallel_wait_all
 # Rust tests finish against light Nix load, and the heavy Nix builds then run
 # without Rust contention.
 if [ "${_STATIC_RUST_GATE_OVERLAP:-0}" -eq 1 ]; then
-  log "==> joining background test-rust.sh long pole (before heavy mid-tier evals)"
+  log "==> joining background make test-rust long pole (before heavy mid-tier evals)"
   d2b_static_longpole_join
   _STATIC_RUST_GATE_OVERLAP=2
 fi
@@ -1155,23 +1156,23 @@ d2b_static_gate_end "tests/unit/meta/layer1-self-inventory.sh"
 # Rust workspace gate. By default (serial) this runs inline here. When the
 # optional D2B_STATIC_PARALLEL_RUST overlap launched the background long pole, it
 # was already joined above (after the smoke-eval region, before the heavy
-# evals), so this is a no-op in that case. tests/tools/stub-no-socket.sh is invoked by
-# test-rust.sh after the cargo gates.
+# evals), so this is a no-op in that case. The public Make target owns the DAG;
+# fixture and policy coverage remain explicit authoritative lanes below.
 # -----------------------------------------------------------------------------
 if [ "$_STATIC_RUST_GATE_OVERLAP" -eq 2 ]; then
   : # Overlap mode: already joined above (after smoke evals, before heavy evals).
 elif [ "$_STATIC_RUST_GATE_OVERLAP" -eq 1 ]; then
   # Defensive: overlap spawned but not yet joined (e.g. smoke-eval region
   # skipped). Join now.
-  log "==> joining background test-rust.sh long pole"
+  log "==> joining background make test-rust long pole"
   d2b_static_longpole_join
 else
-  d2b_static_gate_begin "tests/test-rust.sh" "tests/test-rust.sh"
+  d2b_static_gate_begin "D2B_SKIP_FIXTURE_BUILD=1 make test-rust" "D2B_SKIP_FIXTURE_BUILD=1 make test-rust"
   if [ -d "$ROOT/packages" ] && [ -x "$ROOT/tests/test-rust.sh" ]; then
-    if bash "$ROOT/tests/test-rust.sh" >/dev/null 2>&1; then
+    if D2B_SKIP_FIXTURE_BUILD=1 make test-rust >/dev/null 2>&1; then
       ok "rust-workspace-checks"
     else
-      bash "$ROOT/tests/test-rust.sh" 2>&1 | tail -80 >&2 || true
+      D2B_SKIP_FIXTURE_BUILD=1 make test-rust 2>&1 | tail -80 >&2 || true
       fail "rust-workspace-checks"
     fi
   elif [ -d "$ROOT/packages" ]; then
@@ -1179,8 +1180,26 @@ else
   else
     log "  no packages/ - skipping rust workspace checks (W0a unstaged)"
   fi
-  d2b_static_gate_end "tests/test-rust.sh"
+  d2b_static_gate_end "D2B_SKIP_FIXTURE_BUILD=1 make test-rust"
 fi
+
+d2b_static_gate_begin "make test-policy" "make test-policy"
+if make test-policy >/dev/null 2>&1; then
+  ok "test-policy"
+else
+  make test-policy 2>&1 | tail -80 >&2 || true
+  fail "test-policy"
+fi
+d2b_static_gate_end "make test-policy"
+
+d2b_static_gate_begin "D2B_ENABLE_FIXTURE_BUILD=1 make test-fixture-contracts" "D2B_ENABLE_FIXTURE_BUILD=1 make test-fixture-contracts"
+if D2B_ENABLE_FIXTURE_BUILD=1 make test-fixture-contracts >/dev/null 2>&1; then
+  ok "test-fixture-contracts"
+else
+  D2B_ENABLE_FIXTURE_BUILD=1 make test-fixture-contracts 2>&1 | tail -80 >&2 || true
+  fail "test-fixture-contracts"
+fi
+d2b_static_gate_end "D2B_ENABLE_FIXTURE_BUILD=1 make test-fixture-contracts"
 
 # -----------------------------------------------------------------------------
 # bundle/schema drift, public vms.json parity, and static portability

@@ -46,16 +46,16 @@ files: **drift gates** (`tests/unit/gates/` - `xtask gen-* + git diff`) and
 **meta gates** (`tests/unit/meta/` - guard the test infra itself).
 
 Fixture-backed type 4 tests and fixture-dependent type 5 tests in
-`d2b-contract-tests` are routed through the manifest's
-`test-fixture-contracts` job. That job is enforcing: both the local and
-pull-request lanes set `D2B_ENABLE_FIXTURE_BUILD=1`, it materializes
-`D2B_FIXTURES` from evaluated Nix artifact data and runs the crate together
-with the CLI-contract cases, and invoking it without that variable fails rather
-than skipping. `test-rust` excludes this
-fixture-dependent crate, so cite the fixture lane rather than `test-rust` when
-claiming this coverage ran. Selected hermetic policy files may
-also have explicit enforcing entrypoints under `test-policy`; check its driver
-before citing one.
+`d2b-contract-tests` are included once by the default `test-rust` aggregate
+when Nix is available. The aggregate and `test-rust-main` honor
+`D2B_SKIP_FIXTURE_BUILD=1`, which is set by the local and pull-request
+Layer-1 orchestration so the separate enforcing
+`D2B_ENABLE_FIXTURE_BUILD=1 make test-fixture-contracts` job does not duplicate
+the contract and CLI surfaces. The fixture target materializes `D2B_FIXTURES`
+from evaluated Nix artifact data and invoking it without the enable variable
+fails rather than skipping. Selected hermetic policy files may also have
+explicit enforcing entrypoints under `test-policy`; check its driver before
+citing one.
 
 `test-policy` also runs `guest-workspace-drift`. It fails when the guest crates
 copied by `mkGuestRustPackagesSrc` diverge from
@@ -187,6 +187,50 @@ back into a single invocation:
 The privileged broker workspace stays on `cargo test`. Its tests are not
 process-per-test safe, and it runs 528 tests in about 1.4 s, so nextest has
 nothing to win there.
+
+`make test-rust` owns the bounded local GNU Make DAG. Its stable leaves cover
+the API, main format/clippy/workspace, conditional fixture/CLI, broker,
+guest-shell-runner, no-bash AST, schema, supply-chain, stub, and pinned-test
+surfaces. Fixture and CLI leaves use an isolated stable target below
+`.scratch/rust-test-cache`, so they can overlap the main workspace without
+sharing mutable Cargo state; `D2B_SKIP_FIXTURE_BUILD=1` omits them for the
+Layer-1 graph. The focused `make test-rust-main` retains the same conditional
+fixture behavior. The public and private rustdoc censuses use separate stable
+targets and overlap only when the API leaf has at least two admitted jobs,
+with split Cargo quotas bounded by that leaf's budget. The snapshot checker
+uses its release profile for the measured CPU-bound JSON pass. Budgets through
+nine admit one job per active lane; surplus jobs above nine go to the measured
+API long pole while the full nine-lane frontier remains within budget. Direct
+`tests/test-rust.sh` calls require exactly one leaf mode and must not be used
+as an aggregate scheduler. The broker passes remain
+serial, and the main workspace, schema, and inventory leaves retain their
+dependency edges.
+
+Those dependency edges are warm-local-profile only. CI dispatches API, main,
+broker, guest, no-bash, schema, inventory and supply-chain Make targets as
+eight separate jobs, each with the full runner budget. When a local aggregate
+starts without `packages/target`, its cold profile restores shared
+workspace targets while retaining the warm-local split API census cache across
+`make clean`. It overlaps a bounded API/main/broker prebuild frontier, then
+runs fixture, inventory and schema as a full-budget chain so discovery reuses
+all prior builds before schema generation. CI alone uses the shared API census
+target.
+
+The local Rust budget control is `D2B_RUST_BUDGET`, a positive requested upper
+bound. Its automatic cap uses logical CPUs and cache-adjusted available memory,
+reserves 2 GiB for the host, and budgets 3 GiB per heavy job. A visible but
+unreadable cgroup v2 memory controller fails closed to budget 1. Cargo and
+nextest quotas are derived so every active frontier stays within the effective
+budget, including budget 1. Top-level Make `-j` is not the Rust budget knob.
+
+`D2B_EXECUTION_MANIFEST=<path>` opts the Rust aggregate into execution evidence.
+The binding v1 schema and secure lifecycle live in
+[`../docs/reference/test-execution-manifest.md`](../docs/reference/test-execution-manifest.md).
+The prior record is invalidated before dispatch, fragments are same-filesystem
+atomic evidence, and failed or handled-interruption runs publish partial
+status. This evidence supplements source discovery and does not replace
+`make test-policy` or
+`D2B_ENABLE_FIXTURE_BUILD=1 make test-fixture-contracts`.
 
 Tests that shell out to `cargo` cache their scratch trees between runs under
 `.scratch/rust-test-cache/`, keyed on `rustc -vV`, because compiled artifacts
