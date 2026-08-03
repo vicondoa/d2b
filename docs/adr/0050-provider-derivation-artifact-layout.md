@@ -1,6 +1,6 @@
 # ADR 0050: Provider derivation artifact layout
 
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-08-02
 - Related: [ADR 0046](0046-d2b-3-provider-control-plane.md) (d2b 3.0 Provider
   control plane) and its decisions D012, D059, D075, D101, and D120 in
