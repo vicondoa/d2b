@@ -266,9 +266,11 @@ the effective cap preserves four workers.
 `D2B_NIX_UNIT_MEMORY_MB` may set the evaluator limit from 512 through 4096 MiB;
 the 2048 MiB overhead remains reserved. Successful full runs
 suppress raw JSONL output. Every real `FAIL <case>: <detail>` line from an
-aggregate error is printed as one concise, repository-root-sanitized stderr
-entry; source-code template lines are ignored, and an aggregate with no real
-FAIL line receives one attributable fallback diagnostic. Result attributes are
+aggregate error is printed as one concise, path-sanitized stderr entry.
+Repository and home roots become fixed placeholders; Nix store hashes are
+redacted while derivation names remain visible. Source-code template lines are
+ignored, and an aggregate with no real FAIL line receives one attributable
+fallback diagnostic. Result attributes are
 also compared exactly with the locked file-job names. Command progress uses the
 fixed path-free `d2b` flake label.
 

@@ -261,9 +261,11 @@ available on the reference 12-CPU, 62-GiB host.
 `D2B_NIX_UNIT_MEMORY_MB` may set the limit from 512 through 4096 MiB.
 Successful full runs suppress raw JSONL output. Every real `FAIL <case>:
 <detail>` line from an aggregate error is parsed and printed as one concise,
-repository-root-sanitized stderr entry; source-code template lines such as
-`${result.name}` are excluded. If an aggregate has no real FAIL line, one
-final fallback diagnostic remains attributable to that result attribute.
+path-sanitized stderr entry. Repository and home roots become fixed
+placeholders; Nix store hashes are hidden without removing derivation names.
+Source-code template lines such as `${result.name}` are excluded. If an
+aggregate has no real FAIL line, one final fallback diagnostic remains
+attributable to that result attribute.
 Command progress uses the fixed path-free `d2b` flake label.
 
 `D2B_NIX_UNIT_CHECK` remains the manual single-shard selector. When

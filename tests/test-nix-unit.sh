@@ -334,18 +334,24 @@ result_dir=$(d2b_mktemp ".d2b-nix-eval-jobs.XXXXXX")
 result_file="$result_dir/results.jsonl"
 tool_stderr="$result_dir/stderr"
 
+sanitize_observable_line() {
+  local value="$1" store_hash
+  value=${value//"$flake_root"/<repo>}
+  if [ -n "${HOME:-}" ]; then
+    value=${value//"$HOME"/<home>}
+  fi
+  while [[ "$value" =~ /nix/store/[a-z0-9]{32} ]]; do
+    store_hash=${BASH_REMATCH[0]}
+    value=${value//"$store_hash"/<store>}
+  done
+  sanitized_line=$value
+}
+
 sanitize_stderr_file() {
-  local source="$1" line store_path
+  local source="$1" line
   while IFS= read -r line || [ -n "$line" ]; do
-    line=${line//"$flake_root"/<repo>}
-    if [ -n "${HOME:-}" ]; then
-      line=${line//"$HOME"/<home>}
-    fi
-    while [[ "$line" =~ /nix/store/[A-Za-z0-9._+-]+ ]]; do
-      store_path=${BASH_REMATCH[0]}
-      line=${line//"$store_path"/<store>}
-    done
-    printf '%s\n' "$line" >&2
+    sanitize_observable_line "$line"
+    printf '%s\n' "$sanitized_line" >&2
   done <"$source"
 }
 
@@ -562,14 +568,8 @@ if [ "${#missing_cases[@]}" -ne 0 ] \
 fi
 
 for failure in "${failures[@]}"; do
-  failure=${failure//"$flake_root"/<repo>}
-  if [ -n "${HOME:-}" ]; then
-    failure=${failure//"$HOME"/<home>}
-  fi
-  while [[ "$failure" =~ /nix/store/[A-Za-z0-9._+-]+ ]]; do
-    store_path=${BASH_REMATCH[0]}
-    failure=${failure//"$store_path"/<store>}
-  done
+  sanitize_observable_line "$failure"
+  failure=$sanitized_line
   failure_attr=${failure%%$'\t'*}
   failure_line=${failure#*$'\t'}
   printf '%s\n' \

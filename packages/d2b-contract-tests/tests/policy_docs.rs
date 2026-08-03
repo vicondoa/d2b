@@ -1116,10 +1116,12 @@ fn execution_manifest_schema_and_prose_agree_with_non_empty_discovery() {
         nix_driver.contains("2>\"$tool_stderr\"")
             && nix_driver.contains("emit_sanitized_tool_stderr()")
             && nix_driver.contains("while IFS= read -r line || [ -n \"$line\" ]; do")
-            && nix_driver.contains("line=${line//\"$flake_root\"/<repo>}")
-            && nix_driver.contains("line=${line//\"$HOME\"/<home>}")
-            && nix_driver.contains("while [[ \"$line\" =~ /nix/store/[A-Za-z0-9._+-]+ ]]; do")
-            && nix_driver.contains("line=${line//\"$store_path\"/<store>}"),
+            && nix_driver.contains("sanitize_observable_line()")
+            && nix_driver.contains("value=${value//\"$flake_root\"/<repo>}")
+            && nix_driver.contains("value=${value//\"$HOME\"/<home>}")
+            && nix_driver.contains("while [[ \"$value\" =~ /nix/store/[a-z0-9]{32} ]]; do")
+            && nix_driver.contains("value=${value//\"$store_hash\"/<store>}")
+            && nix_driver.contains("sanitize_observable_line \"$line\""),
         "execution-manifest-policy: evaluator stderr must be captured and path-sanitized"
     );
     assert!(
@@ -1140,15 +1142,13 @@ fn execution_manifest_schema_and_prose_agree_with_non_empty_discovery() {
         .and_then(|region| region.split("if [ \"$tool_status\"").next())
         .expect("execution-manifest-policy: Nix-unit failure reporting loop is missing");
     assert!(
-        failure_reporting.contains("failure=${failure//\"$flake_root\"/<repo>}")
+        failure_reporting.contains("sanitize_observable_line \"$failure\"")
+            && failure_reporting.contains("failure=$sanitized_line")
             && failure_reporting.contains("failure_attr")
             && failure_reporting.contains("failure_line")
-            && failure_reporting
-                .contains("while [[ \"$failure\" =~ /nix/store/[A-Za-z0-9._+-]+ ]]; do")
-            && failure_reporting.contains("failure=${failure//\"$store_path\"/<store>}")
             && failure_reporting.contains(">&2")
             && !failure_reporting.contains("log "),
-        "execution-manifest-policy: evaluator failures must be root-sanitized and printed directly to stderr"
+        "execution-manifest-policy: evaluator failures must be path-sanitized and printed directly to stderr"
     );
     for marker in [
         "expected_cases_file",

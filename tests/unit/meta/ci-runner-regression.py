@@ -725,13 +725,15 @@ set -euo pipefail
             driver,
             "stderr sanitization must retain an unterminated final line",
         )
-        self.assertIn('line=${line//"$flake_root"/<repo>}', driver)
-        self.assertIn('line=${line//"$HOME"/<home>}', driver)
+        self.assertIn("sanitize_observable_line()", driver)
+        self.assertIn('value=${value//"$flake_root"/<repo>}', driver)
+        self.assertIn('value=${value//"$HOME"/<home>}', driver)
         self.assertIn(
-            'while [[ "$line" =~ /nix/store/[A-Za-z0-9._+-]+ ]]; do',
+            'while [[ "$value" =~ /nix/store/[a-z0-9]{32} ]]; do',
             driver,
         )
-        self.assertIn('line=${line//"$store_path"/<store>}', driver)
+        self.assertIn('value=${value//"$store_hash"/<store>}', driver)
+        self.assertIn('sanitize_observable_line "$line"', driver)
         self.assertIn("flake_label=d2b", driver)
         for line in driver.splitlines():
             if re.search(r"\blog\b", line) and "flake" in line.lower():
@@ -743,17 +745,41 @@ set -euo pipefail
         failure_start = driver.index("for failure in")
         failure_end = driver.index('if [ "$tool_status"', failure_start)
         failure_reporting = driver[failure_start:failure_end]
-        self.assertIn('failure=${failure//"$flake_root"/<repo>}', failure_reporting)
-        self.assertIn(
-            'while [[ "$failure" =~ /nix/store/[A-Za-z0-9._+-]+ ]]; do',
-            failure_reporting,
-        )
-        self.assertIn('failure=${failure//"$store_path"/<store>}', failure_reporting)
+        self.assertIn('sanitize_observable_line "$failure"', failure_reporting)
+        self.assertIn("failure=$sanitized_line", failure_reporting)
         self.assertIn(">&2", failure_reporting)
         self.assertNotIn(
             "log ",
             failure_reporting,
             "evaluator failures must go directly to stderr, not timestamped log",
+        )
+
+        sanitizer_start = driver.index("sanitize_observable_line()")
+        sanitizer_end = driver.index("sanitize_stderr_file()", sanitizer_start)
+        sanitizer = driver[sanitizer_start:sanitizer_end]
+        probe = subprocess.run(
+            [
+                "bash",
+                "-c",
+                sanitizer
+                + r'''
+flake_root=/repo/private
+HOME=/home/private
+sanitize_observable_line \
+  "/repo/private/src /home/private/cache /nix/store/0123456789abcdefghijklmnopqrstuv-openssl-3.0/lib"
+printf '%s\n' "$sanitized_line"
+''',
+            ],
+            cwd=ROOT,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(probe.returncode, 0, msg=probe.stderr)
+        self.assertEqual(
+            probe.stdout,
+            "<repo>/src <home>/cache <store>-openssl-3.0/lib\n",
         )
 
         self.assertIn("expected_cases_file", driver)
