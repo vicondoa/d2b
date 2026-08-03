@@ -1296,7 +1296,7 @@ fn production_backend_hard_fixture_rss() {
     let executable = std::env::current_exe().expect("production RSS test executable");
     let mut raw_runs = Vec::with_capacity(3);
     for run in 1..=3 {
-        let output = Command::new("/usr/bin/time")
+        let output = Command::new(gnu_time_program())
             .args([
                 "-v",
                 executable.to_str().expect("test executable is UTF-8"),
@@ -1351,6 +1351,22 @@ fn parse_maximum_rss_kib(stderr: &str) -> u64 {
                 .and_then(|value| value.trim().parse::<u64>().ok())
         })
         .expect("GNU time did not report whole-process maximum RSS")
+}
+
+fn gnu_time_program() -> String {
+    if let Some(program) = std::env::var_os("D2B_GNU_TIME") {
+        return program.to_string_lossy().into_owned();
+    }
+    for candidate in [
+        "/usr/bin/time",
+        "/bin/time",
+        "/run/current-system/sw/bin/time",
+    ] {
+        if std::path::Path::new(candidate).is_file() {
+            return candidate.to_owned();
+        }
+    }
+    "time".to_owned()
 }
 
 async fn production_backend_hard_fixture_child() {
