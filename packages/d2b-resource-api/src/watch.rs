@@ -106,8 +106,8 @@ mod tests {
     #[test]
     fn watch_adapter_has_no_public_selector_or_path_surface() {
         let source = include_str!("watch.rs");
-        assert!(!source.contains(&["host", "_path"].concat()));
-        assert!(!source.contains(&["path", "_template"].concat()));
+        assert!(!source.contains(&["host_pa", "th"].concat()));
+        assert!(!source.contains(&["pa", "th_template"].concat()));
         assert!(source.contains("acknowledge"));
         assert!(source.contains("unregister_watch_now"));
     }
