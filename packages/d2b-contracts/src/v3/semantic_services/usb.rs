@@ -27,8 +27,8 @@
 use std::sync::OnceLock;
 
 use super::{
-    super::provider::BindingTargetType, SemanticFamily, SemanticPairContract,
-    SemanticPairDeclaration,
+    super::provider::BindingTargetType, NonEmpty, SemanticBackingDeclaration, SemanticFamily,
+    SemanticPairContract, SemanticPairDeclaration,
 };
 
 /// The dot-qualified API ResourceType of the USB owner authority and consumer
@@ -79,9 +79,6 @@ const PROJECTION_SPEC_ALLOWED: &[&str] = &[
 ];
 const PROJECTION_SPEC_REQUIRED: &[&str] = &["providerRef", "mode", "accessPolicy"];
 
-/// The owner Service references a same-Zone physical standard `Device`.
-const ALLOWED_BACKING_REF_TYPES: &[&str] = &["Device"];
-
 /// A USB Binding is per-Guest.
 const ALLOWED_BINDING_TARGET_REF_TYPES: &[BindingTargetType] = &[BindingTargetType::Guest];
 
@@ -95,7 +92,10 @@ const DECLARATION: SemanticPairDeclaration = SemanticPairDeclaration {
     binding_spec_allowed: BINDING_SPEC_ALLOWED,
     binding_spec_required: BINDING_SPEC_REQUIRED,
     binding_status_allowed: BINDING_STATUS_ALLOWED,
-    allowed_backing_ref_types: Some(ALLOWED_BACKING_REF_TYPES),
+    backing: SemanticBackingDeclaration::Constrained {
+        types: NonEmpty::of("Device"),
+        fields: NonEmpty::of("backingDeviceRef"),
+    },
     allowed_binding_target_ref_types: ALLOWED_BINDING_TARGET_REF_TYPES,
     projection_spec_allowed: PROJECTION_SPEC_ALLOWED,
     projection_spec_required: PROJECTION_SPEC_REQUIRED,

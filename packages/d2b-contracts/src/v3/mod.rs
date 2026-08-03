@@ -151,11 +151,11 @@ pub use zone_link::{
 // `pub use semantic_services::...` line inside this region so it stays one
 // contiguous block.
 pub use semantic_services::{
-    PROVIDER_REF_FIELD, SEMANTIC_BASE_SCHEMA_MAJOR, SEMANTIC_BASE_SCHEMA_MINOR,
-    SEMANTIC_PROJECTION_PROTOCOL_VERSION, SemanticContractError, SemanticFamily, SemanticLayer,
-    SemanticLayerSchema, SemanticPairContract, SemanticProjectionBinding, SemanticRole,
-    SemanticSchemaId, SemanticTypeContract, UPDATE_POLICY_FIELD,
-    catalog as semantic_service_catalog,
+    LEGACY_ABSENT_PROTOCOL_VERSION, PROVIDER_REF_FIELD, SEMANTIC_BASE_SCHEMA_MAJOR,
+    SEMANTIC_BASE_SCHEMA_MINOR, SEMANTIC_PROJECTION_PROTOCOL_VERSION, SemanticContractError,
+    SemanticFamily, SemanticLayer, SemanticLayerSchema, SemanticPairContract,
+    SemanticProjectionBinding, SemanticProjectionProtocolVersion, SemanticRole, SemanticSchemaId,
+    SemanticTypeContract, UPDATE_POLICY_FIELD, catalog as semantic_service_catalog,
 };
 
 // The `volume_state` module's re-exports. Keep every

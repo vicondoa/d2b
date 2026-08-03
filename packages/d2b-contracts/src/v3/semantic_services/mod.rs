@@ -32,6 +32,13 @@
 
 use std::collections::BTreeSet;
 
+use schemars::{
+    JsonSchema,
+    r#gen::SchemaGenerator,
+    schema::{InstanceType, Schema, SchemaObject, SingleOrVec},
+};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
 use super::{
     identity::{ResourceTypeName, SchemaFingerprint},
     provider::{BindingTargetType, Exportability, ProjectionFactory, ProviderContractError},
@@ -62,9 +69,144 @@ pub const SEMANTIC_BASE_SCHEMA_MINOR: u32 = 0;
 /// fingerprint.
 ///
 /// The specification requires the factory fingerprint to bind this value and
-/// requires it to exclude Provider and adapter identity, but it does not fix
-/// the value's spelling. This is the initial value for the initial bases.
-pub const SEMANTIC_PROJECTION_PROTOCOL_VERSION: &str = "1.0";
+/// requires it to exclude Provider and adapter identity. This Core installs
+/// version `1.1`; a protocol meaning change moves this value and all factory
+/// fingerprints without moving the base schema version.
+pub const SEMANTIC_PROJECTION_PROTOCOL_VERSION: &str = "1.1";
+
+/// The protocol version assumed when a legacy descriptor omits the declared
+/// projection-protocol field.
+pub const LEGACY_ABSENT_PROTOCOL_VERSION: &str = "1.0";
+
+const MAX_SEMANTIC_PROJECTION_PROTOCOL_VERSION_BYTES: usize = 7;
+
+/// A bounded semantic projection-protocol version.
+///
+/// This is a descriptor value rather than free-form Provider text. Its
+/// grammar is exactly `<major>.<minor>`, with one to three digits per
+/// component and no leading zeroes in multi-digit components.
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct SemanticProjectionProtocolVersion(String);
+
+impl SemanticProjectionProtocolVersion {
+    /// Parse a bounded projection-protocol version.
+    pub fn parse(value: impl Into<String>) -> Result<Self, SemanticContractError> {
+        let value = value.into();
+        if value.len() > MAX_SEMANTIC_PROJECTION_PROTOCOL_VERSION_BYTES {
+            return Err(SemanticContractError::SchemaViolation);
+        }
+        let (major, minor) = value
+            .split_once('.')
+            .ok_or(SemanticContractError::SchemaViolation)?;
+        if !valid_protocol_component(major) || !valid_protocol_component(minor) {
+            return Err(SemanticContractError::SchemaViolation);
+        }
+        Ok(Self(value))
+    }
+
+    /// Borrow the canonical version spelling.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    /// Render the canonical version spelling.
+    pub fn to_canonical_string(&self) -> String {
+        self.0.clone()
+    }
+}
+
+fn valid_protocol_component(component: &str) -> bool {
+    !component.is_empty()
+        && component.len() <= 3
+        && (component.len() == 1 || !component.starts_with('0'))
+        && component.bytes().all(|byte| byte.is_ascii_digit())
+}
+
+impl core::fmt::Debug for SemanticProjectionProtocolVersion {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str("SemanticProjectionProtocolVersion(<redacted>)")
+    }
+}
+
+impl core::fmt::Display for SemanticProjectionProtocolVersion {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str("SemanticProjectionProtocolVersion(<redacted>)")
+    }
+}
+
+impl Serialize for SemanticProjectionProtocolVersion {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(self.as_str())
+    }
+}
+
+impl<'de> Deserialize<'de> for SemanticProjectionProtocolVersion {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        Self::parse(String::deserialize(deserializer)?).map_err(serde::de::Error::custom)
+    }
+}
+
+impl JsonSchema for SemanticProjectionProtocolVersion {
+    fn schema_name() -> String {
+        "SemanticProjectionProtocolVersion".to_owned()
+    }
+
+    fn json_schema(_gen: &mut SchemaGenerator) -> Schema {
+        let mut schema = SchemaObject {
+            instance_type: Some(SingleOrVec::Single(Box::new(InstanceType::String))),
+            ..Default::default()
+        };
+        schema.string().pattern = Some("^(0|[1-9][0-9]{0,2})\\.(0|[1-9][0-9]{0,2})$".to_owned());
+        Schema::Object(schema)
+    }
+}
+
+/// A statically non-empty list of catalog constants.
+///
+/// The first element is a field rather than an index, so an empty list has no
+/// spelling. Const-constructible as `NonEmpty::of("Device")`.
+///
+/// ```compile_fail
+/// use d2b_contracts::v3::semantic_services::NonEmpty;
+/// let _ = NonEmpty::<&'static str> { rest: &[] };
+/// ```
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) struct NonEmpty<T: 'static> {
+    first: T,
+    rest: &'static [T],
+}
+
+impl<T: 'static> NonEmpty<T> {
+    pub(crate) const fn of(first: T) -> Self {
+        Self { first, rest: &[] }
+    }
+}
+
+impl<T: Copy + 'static> NonEmpty<T> {
+    fn iter(&self) -> impl Iterator<Item = T> + '_ {
+        std::iter::once(self.first).chain(self.rest.iter().copied())
+    }
+}
+
+/// What a semantic family declares about its owner Service's same-Zone
+/// backing, as one value. There is no "we do not know" state.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SemanticBackingDeclaration {
+    /// The provider-neutral Service base names no backing resource.
+    NoBacking,
+    /// The base names backing-reference fields, and this is their closed
+    /// ResourceType set. Both lists are non-empty by construction.
+    Constrained {
+        types: NonEmpty<&'static str>,
+        fields: NonEmpty<&'static str>,
+    },
+}
 
 /// The reserved base spec field naming the selected implementation.
 pub const PROVIDER_REF_FIELD: &str = "providerRef";
@@ -159,10 +301,6 @@ pub enum SemanticContractError {
     MinimalBaseReservedField,
     /// The reference does not name this catalog member's ResourceType.
     WrongResourceType,
-    /// The specification does not fix this family's closed set of allowed
-    /// same-Zone backing reference types, so a signed projection factory
-    /// cannot be derived from the semantic base alone.
-    BackingRefTypesUndetermined,
     /// A projection factory could not be constructed from the derived
     /// semantic binding.
     ProjectionFactoryInvalid,
@@ -179,7 +317,6 @@ impl SemanticContractError {
             Self::MinimalBaseFieldSetMismatch => "semantic-minimal-base-field-set-mismatch",
             Self::MinimalBaseReservedField => "semantic-minimal-base-reserved-field",
             Self::WrongResourceType => "semantic-wrong-resource-type",
-            Self::BackingRefTypesUndetermined => "semantic-backing-ref-types-undetermined",
             Self::ProjectionFactoryInvalid => "semantic-projection-factory-invalid",
         }
     }
@@ -505,6 +642,86 @@ impl core::fmt::Debug for SemanticTypeContract {
     }
 }
 
+/// Every Service base field in the catalog that is not a backing reference.
+///
+/// This list is deliberately explicit. A suffix heuristic would classify
+/// authority and relationship references as physical backings.
+const NON_BACKING_SERVICE_BASE_FIELDS: &[&str] = &[
+    "accessPolicy",
+    "authority",
+    "authorityDescriptor",
+    "backingAuthority",
+    "mode",
+    "operations",
+    "policy",
+    "providerRef",
+    "quota",
+    "serviceRole",
+    "signals",
+    "sourceSchemaFingerprint",
+    "updatePolicy",
+];
+
+impl SemanticBackingDeclaration {
+    fn type_names(self) -> Vec<&'static str> {
+        match self {
+            Self::NoBacking => Vec::new(),
+            Self::Constrained { types, .. } => types.iter().collect(),
+        }
+    }
+
+    fn field_names(self) -> Vec<&'static str> {
+        match self {
+            Self::NoBacking => Vec::new(),
+            Self::Constrained { fields, .. } => fields.iter().collect(),
+        }
+    }
+
+    fn has_backing_fields(self) -> bool {
+        matches!(self, Self::Constrained { .. })
+    }
+}
+
+fn validate_declared_backing_fields(
+    service_spec_allowed: &[&str],
+    backing: SemanticBackingDeclaration,
+) -> Result<(), SemanticContractError> {
+    if backing
+        .field_names()
+        .iter()
+        .any(|field| !service_spec_allowed.contains(field))
+    {
+        return Err(SemanticContractError::SchemaViolation);
+    }
+    Ok(())
+}
+
+fn validate_service_field_classification(
+    service_spec_allowed: &[&str],
+    backing: SemanticBackingDeclaration,
+    non_backing_fields: &[&str],
+) -> Result<(), SemanticContractError> {
+    let declared_backing_fields = backing.field_names();
+    for field in service_spec_allowed {
+        if !non_backing_fields.contains(field) && !declared_backing_fields.contains(field) {
+            return Err(SemanticContractError::SchemaViolation);
+        }
+    }
+    if declared_backing_fields
+        .iter()
+        .any(|field| non_backing_fields.contains(field))
+    {
+        return Err(SemanticContractError::SchemaViolation);
+    }
+    let has_unclassified_backing = service_spec_allowed
+        .iter()
+        .any(|field| !non_backing_fields.contains(field));
+    if has_unclassified_backing != backing.has_backing_fields() {
+        return Err(SemanticContractError::SchemaViolation);
+    }
+    Ok(())
+}
+
 /// The semantic projection binding of one catalog pair.
 ///
 /// This is the provider-neutral half of a signed D096 projection factory.
@@ -516,7 +733,8 @@ impl core::fmt::Debug for SemanticTypeContract {
 pub struct SemanticProjectionBinding {
     service_type: ResourceTypeName,
     binding_type: ResourceTypeName,
-    allowed_backing_ref_types: Option<BTreeSet<ResourceTypeName>>,
+    backing_declaration: SemanticBackingDeclaration,
+    allowed_backing_ref_types: BTreeSet<ResourceTypeName>,
     allowed_binding_target_ref_types: BTreeSet<BindingTargetType>,
     projection_allowed: BTreeSet<&'static str>,
     projection_required: BTreeSet<&'static str>,
@@ -530,20 +748,19 @@ impl SemanticProjectionBinding {
         namespace: &str,
         service_type: ResourceTypeName,
         binding_type: ResourceTypeName,
-        allowed_backing_ref_types: Option<&'static [&'static str]>,
+        backing_declaration: SemanticBackingDeclaration,
         allowed_binding_target_ref_types: &[BindingTargetType],
         projection_allowed: &'static [&'static str],
         projection_required: &'static [&'static str],
     ) -> Self {
-        let allowed_backing_ref_types = allowed_backing_ref_types.map(|names| {
-            names
-                .iter()
-                .map(|name| {
-                    ResourceTypeName::parse(*name)
-                        .expect("a catalog backing ref type is a valid ResourceType")
-                })
-                .collect::<BTreeSet<_>>()
-        });
+        let allowed_backing_ref_types = backing_declaration
+            .type_names()
+            .into_iter()
+            .map(|name| {
+                ResourceTypeName::parse(name)
+                    .expect("a catalog backing ref type is a valid ResourceType")
+            })
+            .collect::<BTreeSet<_>>();
         let allowed_binding_target_ref_types: BTreeSet<_> =
             allowed_binding_target_ref_types.iter().copied().collect();
         let projection_spec_fields = ObjectFieldSchema::new(
@@ -566,7 +783,7 @@ impl SemanticProjectionBinding {
         let factory_fingerprint = factory_fingerprint(
             &service_type,
             &binding_type,
-            allowed_backing_ref_types.as_ref(),
+            &allowed_backing_ref_types,
             &allowed_binding_target_ref_types,
             &projection_schema_fingerprint,
         );
@@ -574,6 +791,7 @@ impl SemanticProjectionBinding {
         Self {
             service_type,
             binding_type,
+            backing_declaration,
             allowed_backing_ref_types,
             allowed_binding_target_ref_types,
             projection_allowed: projection_allowed.iter().copied().collect(),
@@ -596,10 +814,16 @@ impl SemanticProjectionBinding {
 
     /// The closed same-Zone backing reference set the owner Service may name.
     ///
-    /// `None` means the specification does not fix this family's set from the
-    /// semantic base alone. It is never an empty permitted set.
-    pub const fn allowed_backing_ref_types(&self) -> Option<&BTreeSet<ResourceTypeName>> {
-        self.allowed_backing_ref_types.as_ref()
+    /// An empty set is a determinate deny-all declaration, never an absent or
+    /// unconstrained value.
+    pub const fn allowed_backing_ref_types(&self) -> &BTreeSet<ResourceTypeName> {
+        &self.allowed_backing_ref_types
+    }
+
+    /// The catalog declaration that grounds the resolved backing set.
+    #[cfg(test)]
+    pub(crate) const fn backing_declaration(&self) -> SemanticBackingDeclaration {
+        self.backing_declaration
     }
 
     /// The closed target set a Binding of this pair may name.
@@ -633,19 +857,11 @@ impl SemanticProjectionBinding {
     }
 
     /// Derive the provider-neutral half of a signed projection factory.
-    ///
-    /// Fails with [`SemanticContractError::BackingRefTypesUndetermined`] when
-    /// the specification does not fix this family's backing set, rather than
-    /// substituting a plausible one.
     pub fn projection_factory(&self) -> Result<ProjectionFactory, SemanticContractError> {
-        let backing = self
-            .allowed_backing_ref_types
-            .as_ref()
-            .ok_or(SemanticContractError::BackingRefTypesUndetermined)?;
         Ok(ProjectionFactory::new(
             self.service_type.clone(),
             self.binding_type.clone(),
-            backing.iter().cloned(),
+            self.allowed_backing_ref_types.iter().cloned(),
             self.allowed_binding_target_ref_types.iter().copied(),
             self.projection_schema_fingerprint.clone(),
             self.factory_fingerprint.clone(),
@@ -680,8 +896,8 @@ impl core::fmt::Debug for SemanticProjectionBinding {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("SemanticProjectionBinding")
             .field(
-                "backing_ref_types_determined",
-                &self.allowed_backing_ref_types.is_some(),
+                "backing_ref_type_count",
+                &self.allowed_backing_ref_types.len(),
             )
             .field(
                 "binding_target_types",
@@ -694,15 +910,32 @@ impl core::fmt::Debug for SemanticProjectionBinding {
 fn factory_fingerprint(
     service_type: &ResourceTypeName,
     binding_type: &ResourceTypeName,
-    allowed_backing_ref_types: Option<&BTreeSet<ResourceTypeName>>,
+    allowed_backing_ref_types: &BTreeSet<ResourceTypeName>,
     allowed_binding_target_ref_types: &BTreeSet<BindingTargetType>,
     projection_schema_fingerprint: &SchemaFingerprint,
 ) -> SchemaFingerprint {
-    let backing: Option<Vec<String>> = allowed_backing_ref_types.map(|set| {
-        set.iter()
-            .map(ResourceTypeName::to_canonical_string)
-            .collect()
-    });
+    factory_fingerprint_for_protocol(
+        service_type,
+        binding_type,
+        allowed_backing_ref_types,
+        allowed_binding_target_ref_types,
+        projection_schema_fingerprint,
+        SEMANTIC_PROJECTION_PROTOCOL_VERSION,
+    )
+}
+
+fn factory_fingerprint_for_protocol(
+    service_type: &ResourceTypeName,
+    binding_type: &ResourceTypeName,
+    allowed_backing_ref_types: &BTreeSet<ResourceTypeName>,
+    allowed_binding_target_ref_types: &BTreeSet<BindingTargetType>,
+    projection_schema_fingerprint: &SchemaFingerprint,
+    projection_protocol_version: &str,
+) -> SchemaFingerprint {
+    let backing: Vec<String> = allowed_backing_ref_types
+        .iter()
+        .map(ResourceTypeName::to_canonical_string)
+        .collect();
     let targets: Vec<&str> = allowed_binding_target_ref_types
         .iter()
         .map(|target| match target {
@@ -717,7 +950,7 @@ fn factory_fingerprint(
         "allowedBackingRefTypes": backing,
         "allowedBindingTargetRefTypes": targets,
         "projectionSchemaFingerprint": projection_schema_fingerprint.as_str(),
-        "projectionProtocolVersion": SEMANTIC_PROJECTION_PROTOCOL_VERSION,
+        "projectionProtocolVersion": projection_protocol_version,
     });
     let bytes = super::resource_schema::canonical_json_bytes(&declaration)
         .expect("a catalog factory declaration is canonicalizable");
@@ -745,7 +978,7 @@ pub(crate) struct SemanticPairDeclaration {
     pub(crate) binding_spec_allowed: &'static [&'static str],
     pub(crate) binding_spec_required: &'static [&'static str],
     pub(crate) binding_status_allowed: &'static [&'static str],
-    pub(crate) allowed_backing_ref_types: Option<&'static [&'static str]>,
+    pub(crate) backing: SemanticBackingDeclaration,
     pub(crate) allowed_binding_target_ref_types: &'static [BindingTargetType],
     pub(crate) projection_spec_allowed: &'static [&'static str],
     pub(crate) projection_spec_required: &'static [&'static str],
@@ -772,11 +1005,19 @@ impl SemanticPairContract {
             declaration.binding_status_allowed,
             &[],
         );
+        validate_declared_backing_fields(declaration.service_spec_allowed, declaration.backing)
+            .expect("every declared backing field names a Service base field");
+        validate_service_field_classification(
+            declaration.service_spec_allowed,
+            declaration.backing,
+            NON_BACKING_SERVICE_BASE_FIELDS,
+        )
+        .expect("every Service base field has one backing classification");
         let projection = SemanticProjectionBinding::build(
             namespace,
             service.resource_type.clone(),
             binding.resource_type.clone(),
-            declaration.allowed_backing_ref_types,
+            declaration.backing,
             declaration.allowed_binding_target_ref_types,
             declaration.projection_spec_allowed,
             declaration.projection_spec_required,
@@ -833,10 +1074,12 @@ impl SemanticPairContract {
         Ok(())
     }
 
-    /// Admit a `ResourceExport.resourceRef`.
+    /// Check the ResourceType half of a `ResourceExport.resourceRef`.
     ///
     /// It must target the owner Service, never a `Device`, an `Endpoint`, or
-    /// a `*Binding`.
+    /// a `*Binding`. This type-only helper does not establish resource origin;
+    /// final export admission must use the stored envelope through
+    /// [`ProjectionFactory::admits_export_target`].
     pub fn admit_export_target(
         &self,
         resource_ref: &super::resource_ref::ResourceRef,
@@ -889,6 +1132,60 @@ pub(crate) mod tests_support {
     /// Parse a canonical JSON object literal.
     pub(crate) fn object(json: &str) -> CanonicalJsonObject {
         CanonicalJsonObject::parse(json.as_bytes()).expect("a test fixture is canonical JSON")
+    }
+
+    /// Build a minimal stored resource row for origin-admission tests.
+    pub(crate) fn resource_envelope(
+        resource_type: &str,
+        owner_ref: Option<&str>,
+    ) -> crate::v3::ResourceEnvelope {
+        let owner_ref = owner_ref
+            .map(serde_json::Value::from)
+            .unwrap_or(serde_json::Value::Null);
+        let value = serde_json::json!({
+            "apiVersion": "resources.d2bus.org/v3",
+            "type": resource_type,
+            "metadata": {
+                "name": "resource",
+                "zone": "dev",
+                "uid": "123e4567-e89b-42d3-a456-426614174000",
+                "generation": 1,
+                "revision": 1,
+                "ownerRef": owner_ref,
+                "finalizers": [],
+                "deletionRequestedAt": null,
+                "createdAt": "2026-07-22T00:00:00.000Z",
+                "updatedAt": "2026-07-22T00:00:00.000Z",
+                "managedBy": "controller",
+                "configurationGeneration": null,
+                "controllerGeneration": null,
+                "providerGeneration": null
+            },
+            "spec": {},
+            "status": {
+                "completedAt": null,
+                "conditions": [],
+                "lastReconciledAt": null,
+                "observedGeneration": 0,
+                "outcome": null,
+                "phase": "Pending",
+                "resource": {},
+                "startedAt": null,
+                "update": {
+                    "dependencies": {"count": 0, "refs": []},
+                    "disruption": "None",
+                    "lastAssessedAt": null,
+                    "observedGeneration": 0,
+                    "operationId": null,
+                    "owned": {"count": 0, "refs": []},
+                    "preserveState": true,
+                    "reasons": [],
+                    "state": "Unknown",
+                    "targetGeneration": 1
+                }
+            }
+        });
+        crate::v3::ResourceEnvelope::from_json(&serde_json::to_vec(&value).unwrap()).unwrap()
     }
 
     /// Assert that the canonical minimal base Spec is accepted with no
@@ -1219,6 +1516,166 @@ mod tests {
         )
     }
 
+    #[test]
+    fn every_declared_backing_field_is_a_service_base_field() {
+        let pairs = catalog();
+        let expected_constrained = pairs
+            .iter()
+            .filter(|pair| pair.projection().backing_declaration().has_backing_fields())
+            .count();
+        let mut visited_constrained = 0;
+        let mut field_checks = 0;
+        for pair in pairs {
+            let allowed: Vec<&str> = pair.service().spec().allowed_names().collect();
+            match pair.projection().backing_declaration() {
+                SemanticBackingDeclaration::NoBacking => {}
+                SemanticBackingDeclaration::Constrained { fields, .. } => {
+                    visited_constrained += 1;
+                    for field in fields.iter() {
+                        field_checks += 1;
+                        assert!(allowed.contains(&field));
+                    }
+                }
+            }
+        }
+        assert_eq!(visited_constrained, expected_constrained);
+        assert!(visited_constrained > 0);
+        assert!(field_checks > 0);
+
+        let planted = SemanticBackingDeclaration::Constrained {
+            types: NonEmpty::of("Endpoint"),
+            fields: NonEmpty::of("backingEndpointRef"),
+        };
+        let usb_allowed: Vec<&str> = usb::contract().service().spec().allowed_names().collect();
+        assert_eq!(
+            validate_declared_backing_fields(&usb_allowed, planted),
+            Err(SemanticContractError::SchemaViolation)
+        );
+    }
+
+    #[test]
+    fn every_service_base_field_is_classified_exactly_once() {
+        let pairs = catalog();
+        let mut visited_families = 0;
+        let mut classification_checks = 0;
+        for pair in pairs {
+            visited_families += 1;
+            let allowed: Vec<&str> = pair.service().spec().allowed_names().collect();
+            classification_checks += allowed.len();
+            assert!(!allowed.is_empty());
+            assert_eq!(
+                validate_service_field_classification(
+                    &allowed,
+                    pair.projection().backing_declaration(),
+                    NON_BACKING_SERVICE_BASE_FIELDS,
+                ),
+                Ok(())
+            );
+        }
+        assert_eq!(visited_families, catalog().len());
+        assert!(visited_families > 0);
+        assert!(classification_checks > 0);
+        assert!(!NON_BACKING_SERVICE_BASE_FIELDS.is_empty());
+
+        let usb = usb::contract();
+        let mut unclassified = usb.service().spec().allowed_names().collect::<Vec<_>>();
+        unclassified.push("unclassifiedBaseField");
+        assert_eq!(
+            validate_service_field_classification(
+                &unclassified,
+                usb.projection().backing_declaration(),
+                NON_BACKING_SERVICE_BASE_FIELDS,
+            ),
+            Err(SemanticContractError::SchemaViolation)
+        );
+
+        let mut disjointness_violation = NON_BACKING_SERVICE_BASE_FIELDS.to_vec();
+        disjointness_violation.push("backingDeviceRef");
+        let usb_allowed: Vec<&str> = usb.service().spec().allowed_names().collect();
+        assert_eq!(
+            validate_service_field_classification(
+                &usb_allowed,
+                usb.projection().backing_declaration(),
+                &disjointness_violation,
+            ),
+            Err(SemanticContractError::SchemaViolation)
+        );
+    }
+
+    #[test]
+    fn no_backing_is_declared_exactly_when_no_base_field_is_a_backing_reference() {
+        for pair in catalog() {
+            let allowed: Vec<&str> = pair.service().spec().allowed_names().collect();
+            assert_eq!(
+                validate_service_field_classification(
+                    &allowed,
+                    pair.projection().backing_declaration(),
+                    NON_BACKING_SERVICE_BASE_FIELDS,
+                ),
+                Ok(())
+            );
+        }
+
+        let security = security_key::contract();
+        let security_allowed: Vec<&str> = security.service().spec().allowed_names().collect();
+        let falsely_constrained = SemanticBackingDeclaration::Constrained {
+            types: NonEmpty::of("Device"),
+            fields: NonEmpty::of("mode"),
+        };
+        assert_eq!(
+            validate_service_field_classification(
+                &security_allowed,
+                falsely_constrained,
+                NON_BACKING_SERVICE_BASE_FIELDS,
+            ),
+            Err(SemanticContractError::SchemaViolation)
+        );
+
+        let usb = usb::contract();
+        let usb_allowed: Vec<&str> = usb.service().spec().allowed_names().collect();
+        assert_eq!(
+            validate_service_field_classification(
+                &usb_allowed,
+                SemanticBackingDeclaration::NoBacking,
+                NON_BACKING_SERVICE_BASE_FIELDS,
+            ),
+            Err(SemanticContractError::SchemaViolation)
+        );
+    }
+
+    #[test]
+    fn no_backing_classification_uses_a_ref_suffix_heuristic() {
+        assert!(NON_BACKING_SERVICE_BASE_FIELDS.contains(&"providerRef"));
+        for pair in catalog() {
+            let fields = pair.projection().backing_declaration().field_names();
+            assert!(!fields.contains(&"providerRef"));
+            assert!(!fields.contains(&"serviceRef"));
+            assert!(!fields.contains(&"authorityRef"));
+        }
+    }
+
+    #[test]
+    fn every_family_yields_a_projection_factory() {
+        for pair in catalog() {
+            assert!(pair.projection().projection_factory().is_ok());
+        }
+    }
+
+    #[test]
+    fn no_backing_declaration_state_is_undetermined() {
+        assert!(matches!(
+            security_key::contract().projection().backing_declaration(),
+            SemanticBackingDeclaration::NoBacking
+        ));
+        for pair in catalog() {
+            assert!(matches!(
+                pair.projection().backing_declaration(),
+                SemanticBackingDeclaration::NoBacking
+                    | SemanticBackingDeclaration::Constrained { .. }
+            ));
+        }
+    }
+
     fn object(json: &str) -> CanonicalJsonObject {
         CanonicalJsonObject::parse(json.as_bytes()).unwrap()
     }
@@ -1404,6 +1861,61 @@ mod tests {
                 projection.projection_schema_fingerprint(),
             );
             assert_ne!(projection.factory_fingerprint(), &swapped);
+        }
+    }
+
+    #[test]
+    fn the_factory_fingerprint_binds_the_projection_protocol_version() {
+        let projection = catalog()[0].projection();
+        let current = factory_fingerprint_for_protocol(
+            projection.service_type(),
+            projection.binding_type(),
+            projection.allowed_backing_ref_types(),
+            projection.allowed_binding_target_ref_types(),
+            projection.projection_schema_fingerprint(),
+            SEMANTIC_PROJECTION_PROTOCOL_VERSION,
+        );
+        let legacy = factory_fingerprint_for_protocol(
+            projection.service_type(),
+            projection.binding_type(),
+            projection.allowed_backing_ref_types(),
+            projection.allowed_binding_target_ref_types(),
+            projection.projection_schema_fingerprint(),
+            LEGACY_ABSENT_PROTOCOL_VERSION,
+        );
+        assert_eq!(projection.factory_fingerprint(), &current);
+        assert_ne!(current, legacy);
+    }
+
+    #[test]
+    fn promoting_the_protocol_version_to_a_declared_field_moves_no_fingerprint() {
+        let expected = [
+            (
+                SemanticFamily::Audio,
+                "sha256:67352424b92e8da62d2c39f664d9028c85fdede9c38f6a9e3e1423d3009a33a6",
+            ),
+            (
+                SemanticFamily::SecurityKey,
+                "sha256:8101ab8d17bac0cc1f57f957223fa531a3a5d231f93bc8e56e540dc499830027",
+            ),
+            (
+                SemanticFamily::Telemetry,
+                "sha256:6e6c64a3e39554c76f7d745758a8faf2b81135556dbcd82ea085a073c7334218",
+            ),
+            (
+                SemanticFamily::Usb,
+                "sha256:f73ce4a2ef7d6c21bfdf4f14da51be28d8ee7b53ecf85751f87c29df9a8d9115",
+            ),
+        ];
+        for (family, fingerprint) in expected {
+            assert_eq!(
+                family
+                    .contract()
+                    .projection()
+                    .factory_fingerprint()
+                    .as_str(),
+                fingerprint
+            );
         }
     }
 

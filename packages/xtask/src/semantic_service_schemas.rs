@@ -54,6 +54,9 @@ fn layer_schema(resource_type: &str, layer: &SemanticLayerSchema, description: &
 /// Render the strict projection schema of one family.
 fn projection_schema(pair: &SemanticPairContract) -> Value {
     let projection = pair.projection();
+    let factory = projection
+        .projection_factory()
+        .expect("every catalog projection has a constructible factory");
     let service_type = projection.service_type().to_canonical_string();
     let mut properties = serde_json::Map::new();
     for name in projection.projection_allowed_names() {
@@ -66,11 +69,16 @@ fn projection_schema(pair: &SemanticPairContract) -> Value {
         "description": "Strict deny-unknown semantic base schema for a Core-generated projection Service. It carries only providerRef, the semantic base and import fields, and ResourceImport ownership; spec.provider is forbidden.",
         "x-d2b-resource-type": service_type,
         "x-d2b-binding-resource-type": projection.binding_type().to_canonical_string(),
+        "x-d2b-projection-protocol-version": factory.projection_protocol_version().as_str(),
+        "x-d2b-allowed-backing-ref-types": factory
+            .allowed_backing_ref_types()
+            .iter()
+            .map(|name| name.to_canonical_string())
+            .collect::<Vec<_>>(),
+        "x-d2b-allowed-binding-target-ref-types": factory.allowed_binding_target_ref_types(),
+        "x-d2b-exportability": factory.exportability(),
         "x-d2b-projection-schema-fingerprint": projection.projection_schema_fingerprint().as_str(),
         "x-d2b-factory-fingerprint": projection.factory_fingerprint().as_str(),
-        "x-d2b-allowed-backing-ref-types": projection
-            .allowed_backing_ref_types()
-            .map(|set| set.iter().map(|name| name.to_canonical_string()).collect::<Vec<_>>()),
         "type": "object",
         "additionalProperties": false,
         "required": projection.projection_required_names().collect::<Vec<_>>(),
@@ -192,5 +200,76 @@ mod tests {
             assert_eq!(rendered["additionalProperties"], json!(false));
             assert!(rendered["properties"].get("provider").is_none());
         }
+    }
+
+    #[test]
+    fn every_declared_factory_field_is_published_by_the_generator() {
+        for pair in catalog() {
+            let rendered = projection_schema(pair);
+            let factory = pair.projection().projection_factory().unwrap();
+            let expected = [
+                (
+                    "x-d2b-resource-type",
+                    json!(factory.service_type().to_canonical_string()),
+                ),
+                (
+                    "x-d2b-binding-resource-type",
+                    json!(factory.binding_type().to_canonical_string()),
+                ),
+                (
+                    "x-d2b-projection-protocol-version",
+                    json!(factory.projection_protocol_version().as_str()),
+                ),
+                (
+                    "x-d2b-allowed-backing-ref-types",
+                    json!(
+                        factory
+                            .allowed_backing_ref_types()
+                            .iter()
+                            .map(|name| name.to_canonical_string())
+                            .collect::<Vec<_>>()
+                    ),
+                ),
+                (
+                    "x-d2b-allowed-binding-target-ref-types",
+                    serde_json::to_value(factory.allowed_binding_target_ref_types()).unwrap(),
+                ),
+                (
+                    "x-d2b-exportability",
+                    serde_json::to_value(factory.exportability()).unwrap(),
+                ),
+                (
+                    "x-d2b-projection-schema-fingerprint",
+                    json!(factory.projection_schema_fingerprint().as_str()),
+                ),
+                (
+                    "x-d2b-factory-fingerprint",
+                    json!(factory.factory_fingerprint().as_str()),
+                ),
+            ];
+            for (key, value) in expected {
+                assert_eq!(rendered[key], value, "generator drifted for {key}");
+            }
+        }
+    }
+
+    #[test]
+    fn an_artifact_missing_exportability_is_rejected_by_the_completeness_control() {
+        let mut rendered = projection_schema(catalog()[0]);
+        rendered
+            .as_object_mut()
+            .unwrap()
+            .remove("x-d2b-exportability");
+        let required = [
+            "x-d2b-resource-type",
+            "x-d2b-binding-resource-type",
+            "x-d2b-projection-protocol-version",
+            "x-d2b-allowed-backing-ref-types",
+            "x-d2b-allowed-binding-target-ref-types",
+            "x-d2b-exportability",
+            "x-d2b-projection-schema-fingerprint",
+            "x-d2b-factory-fingerprint",
+        ];
+        assert!(required.iter().any(|key| rendered.get(*key).is_none()));
     }
 }

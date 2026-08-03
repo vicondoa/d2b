@@ -35,8 +35,13 @@ use super::{
         BoundedToken, ExecutionDomain, PrimitiveSpecError, redacted_debug, string_schema,
     },
     identity::{ResourceTypeName, SchemaFingerprint},
+    resource::ResourceEnvelope,
     resource_ref::ResourceRef,
     resource_schema::{CanonicalJsonObject, ExtensionSchemaId, SchemaVersion},
+    semantic_services::{
+        LEGACY_ABSENT_PROTOCOL_VERSION, SEMANTIC_PROJECTION_PROTOCOL_VERSION,
+        SemanticProjectionProtocolVersion,
+    },
     volume::{MAX_VIEWS, ViewRight, ViewSpec},
     volume_state::{
         MigrationPolicy, PersistenceClass, SensitivityClass, VolumeStateSchema, VolumeStateSchemaId,
@@ -117,6 +122,12 @@ pub enum ProviderContractError {
     /// A projection factory is absent, mismatched, or inconsistent with the
     /// capability it claims to export.
     ProjectionFactoryInvalid,
+    /// The stored resource is owned by a ResourceImport and therefore is a
+    /// leased projection rather than a local authority or backing.
+    ImportOwnedOriginRejected,
+    /// The descriptor was minted against a different semantic projection
+    /// protocol version than this Core installs.
+    ProjectionProtocolVersionMismatch,
     /// A cross-Zone export was requested for a capability whose
     /// exportability is forbidden.
     ExportForbidden,
@@ -164,6 +175,10 @@ impl ProviderContractError {
             Self::DescriptorFingerprintMismatch => "provider-descriptor-fingerprint-mismatch",
             Self::StateSchemaIncompatible => "provider-state-schema-incompatible",
             Self::ProjectionFactoryInvalid => "provider-projection-factory-invalid",
+            Self::ImportOwnedOriginRejected => "provider-import-owned-origin-rejected",
+            Self::ProjectionProtocolVersionMismatch => {
+                "provider-projection-protocol-version-mismatch"
+            }
             Self::ExportForbidden => "provider-export-forbidden",
             Self::ComponentStateNotJustified => "component-state-not-justified",
             Self::ComponentKindInvalid => "component-kind-invalid",
@@ -1539,6 +1554,7 @@ pub enum BindingTargetType {
 pub struct ProjectionFactory {
     service_type: ResourceTypeName,
     binding_type: ResourceTypeName,
+    projection_protocol_version: SemanticProjectionProtocolVersion,
     allowed_backing_ref_types: BTreeSet<ResourceTypeName>,
     allowed_binding_target_ref_types: BTreeSet<BindingTargetType>,
     projection_schema_fingerprint: SchemaFingerprint,
@@ -1561,6 +1577,32 @@ impl ProjectionFactory {
         factory_fingerprint: SchemaFingerprint,
         exportability: Exportability,
     ) -> Result<Self, ProviderContractError> {
+        let projection_protocol_version =
+            SemanticProjectionProtocolVersion::parse(SEMANTIC_PROJECTION_PROTOCOL_VERSION)
+                .expect("the installed projection protocol version is valid");
+        Self::new_with_protocol_version(
+            service_type,
+            binding_type,
+            projection_protocol_version,
+            allowed_backing_ref_types,
+            allowed_binding_target_ref_types,
+            projection_schema_fingerprint,
+            factory_fingerprint,
+            exportability,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn new_with_protocol_version(
+        service_type: ResourceTypeName,
+        binding_type: ResourceTypeName,
+        projection_protocol_version: SemanticProjectionProtocolVersion,
+        allowed_backing_ref_types: impl IntoIterator<Item = ResourceTypeName>,
+        allowed_binding_target_ref_types: impl IntoIterator<Item = BindingTargetType>,
+        projection_schema_fingerprint: SchemaFingerprint,
+        factory_fingerprint: SchemaFingerprint,
+        exportability: Exportability,
+    ) -> Result<Self, ProviderContractError> {
         let allowed_backing_ref_types: BTreeSet<_> =
             allowed_backing_ref_types.into_iter().collect();
         let allowed_binding_target_ref_types: BTreeSet<_> =
@@ -1571,15 +1613,20 @@ impl ProjectionFactory {
         if service_type == binding_type {
             return Err(ProviderContractError::ConflictingFields);
         }
-        if allowed_backing_ref_types.is_empty()
-            || allowed_binding_target_ref_types.is_empty()
+        if allowed_binding_target_ref_types.is_empty()
             || allowed_backing_ref_types.len() > MAX_PROJECTION_REF_TYPES
         {
             return Err(ProviderContractError::BoundExceeded);
         }
+        if allowed_backing_ref_types.contains(&service_type)
+            || allowed_backing_ref_types.contains(&binding_type)
+        {
+            return Err(ProviderContractError::ConflictingFields);
+        }
         Ok(Self {
             service_type,
             binding_type,
+            projection_protocol_version,
             allowed_backing_ref_types,
             allowed_binding_target_ref_types,
             projection_schema_fingerprint,
@@ -1596,6 +1643,11 @@ impl ProjectionFactory {
     /// The local consumer intent ResourceType.
     pub const fn binding_type(&self) -> &ResourceTypeName {
         &self.binding_type
+    }
+
+    /// The semantic projection-protocol version declared by this factory.
+    pub const fn projection_protocol_version(&self) -> &SemanticProjectionProtocolVersion {
+        &self.projection_protocol_version
     }
 
     /// The closed backing reference set the owner Service may name.
@@ -1623,20 +1675,52 @@ impl ProjectionFactory {
         self.exportability
     }
 
-    /// Decide whether an export may target the supplied resource.
+    /// Decide whether an export may target the supplied stored resource.
     ///
-    /// `ResourceExport.resourceRef` must target the owner Service, never a
-    /// Device, an Endpoint, or a Binding.
+    /// `ResourceExport.resourceRef` must target a locally owned authority
+    /// Service. An import-owned projection is never re-exportable.
     pub fn admits_export_target(
         &self,
-        resource_ref: &ResourceRef,
+        resource: &ResourceEnvelope,
     ) -> Result<(), ProviderContractError> {
-        if resource_ref.resource_type() == &self.service_type {
+        if resource.resource_type() != &self.service_type {
+            return Err(ProviderContractError::ProjectionFactoryInvalid);
+        }
+        if is_import_owned(resource) {
+            return Err(ProviderContractError::ImportOwnedOriginRejected);
+        }
+        Ok(())
+    }
+
+    /// Decide whether an owner Service may name the supplied stored resource
+    /// as its same-Zone backing.
+    ///
+    /// The allowlist is unconditional: an empty set admits no backing. An
+    /// import-owned row is denied even when its ResourceType is otherwise
+    /// allowed.
+    pub fn admits_backing_ref(
+        &self,
+        backing: &ResourceEnvelope,
+    ) -> Result<(), ProviderContractError> {
+        if is_import_owned(backing) {
+            return Err(ProviderContractError::ImportOwnedOriginRejected);
+        }
+        if self
+            .allowed_backing_ref_types
+            .contains(backing.resource_type())
+        {
             Ok(())
         } else {
             Err(ProviderContractError::ProjectionFactoryInvalid)
         }
     }
+}
+
+fn is_import_owned(resource: &ResourceEnvelope) -> bool {
+    resource
+        .metadata()
+        .owner_ref()
+        .is_some_and(|owner| owner.resource_type().as_str() == "ResourceImport")
 }
 
 impl core::fmt::Debug for ProjectionFactory {
@@ -1652,6 +1736,11 @@ impl core::fmt::Debug for ProjectionFactory {
     }
 }
 
+fn legacy_absent_protocol_version() -> SemanticProjectionProtocolVersion {
+    SemanticProjectionProtocolVersion::parse(LEGACY_ABSENT_PROTOCOL_VERSION)
+        .expect("the legacy protocol version constant is valid")
+}
+
 impl<'de> Deserialize<'de> for ProjectionFactory {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         #[derive(Deserialize)]
@@ -1659,6 +1748,8 @@ impl<'de> Deserialize<'de> for ProjectionFactory {
         struct Wire {
             service_type: ResourceTypeName,
             binding_type: ResourceTypeName,
+            #[serde(default = "legacy_absent_protocol_version")]
+            projection_protocol_version: SemanticProjectionProtocolVersion,
             allowed_backing_ref_types: BTreeSet<ResourceTypeName>,
             allowed_binding_target_ref_types: BTreeSet<BindingTargetType>,
             projection_schema_fingerprint: SchemaFingerprint,
@@ -1666,9 +1757,10 @@ impl<'de> Deserialize<'de> for ProjectionFactory {
             exportability: Exportability,
         }
         let wire = Wire::deserialize(deserializer)?;
-        Self::new(
+        Self::new_with_protocol_version(
             wire.service_type,
             wire.binding_type,
+            wire.projection_protocol_version,
             wire.allowed_backing_ref_types,
             wire.allowed_binding_target_ref_types,
             wire.projection_schema_fingerprint,
@@ -1677,6 +1769,29 @@ impl<'de> Deserialize<'de> for ProjectionFactory {
         )
         .map_err(serde::de::Error::custom)
     }
+}
+
+fn admit_projection_factory(
+    factory: &ProjectionFactory,
+    expected: &ProjectionFactory,
+) -> Result<(), ProviderContractError> {
+    if factory.projection_protocol_version() != expected.projection_protocol_version() {
+        return Err(ProviderContractError::ProjectionProtocolVersionMismatch);
+    }
+    if factory.service_type() != expected.service_type()
+        || factory.binding_type() != expected.binding_type()
+        || factory.allowed_backing_ref_types() != expected.allowed_backing_ref_types()
+        || factory.allowed_binding_target_ref_types() != expected.allowed_binding_target_ref_types()
+        || factory.exportability() != expected.exportability()
+    {
+        return Err(ProviderContractError::ProjectionFactoryInvalid);
+    }
+    if factory.projection_schema_fingerprint() != expected.projection_schema_fingerprint()
+        || factory.factory_fingerprint() != expected.factory_fingerprint()
+    {
+        return Err(ProviderContractError::DescriptorFingerprintMismatch);
+    }
+    Ok(())
 }
 
 /// How a controller reports a change it cannot apply in place.
@@ -1800,6 +1915,16 @@ impl ProviderManifest {
         for factory in &projection_factories {
             if !bound_types.contains(factory.service_type()) {
                 return Err(ProviderContractError::ProjectionFactoryInvalid);
+            }
+            if let Some(pair) = super::semantic_services::catalog()
+                .into_iter()
+                .find(|pair| pair.projection().service_type() == factory.service_type())
+            {
+                let expected = pair
+                    .projection()
+                    .projection_factory()
+                    .map_err(|_| ProviderContractError::ProjectionFactoryInvalid)?;
+                admit_projection_factory(factory, &expected)?;
             }
         }
         Ok(Self {
@@ -2138,6 +2263,56 @@ mod tests {
         .unwrap()
     }
 
+    fn envelope(resource_type: &str, owner_ref: Option<&str>) -> ResourceEnvelope {
+        let owner_ref = owner_ref
+            .map(serde_json::Value::from)
+            .unwrap_or(serde_json::Value::Null);
+        let value = serde_json::json!({
+            "apiVersion": "resources.d2bus.org/v3",
+            "type": resource_type,
+            "metadata": {
+                "name": "resource",
+                "zone": "dev",
+                "uid": "123e4567-e89b-42d3-a456-426614174000",
+                "generation": 1,
+                "revision": 1,
+                "ownerRef": owner_ref,
+                "finalizers": [],
+                "deletionRequestedAt": null,
+                "createdAt": "2026-07-22T00:00:00.000Z",
+                "updatedAt": "2026-07-22T00:00:00.000Z",
+                "managedBy": "controller",
+                "configurationGeneration": null,
+                "controllerGeneration": null,
+                "providerGeneration": null
+            },
+            "spec": {},
+            "status": {
+                "completedAt": null,
+                "conditions": [],
+                "lastReconciledAt": null,
+                "observedGeneration": 0,
+                "outcome": null,
+                "phase": "Pending",
+                "resource": {},
+                "startedAt": null,
+                "update": {
+                    "dependencies": {"count": 0, "refs": []},
+                    "disruption": "None",
+                    "lastAssessedAt": null,
+                    "observedGeneration": 0,
+                    "operationId": null,
+                    "owned": {"count": 0, "refs": []},
+                    "preserveState": true,
+                    "reasons": [],
+                    "state": "Unknown",
+                    "targetGeneration": 1
+                }
+            }
+        });
+        ResourceEnvelope::from_json(&serde_json::to_vec(&value).unwrap()).unwrap()
+    }
+
     fn manifest() -> ProviderManifest {
         ProviderManifest::new(
             ArtifactId::parse("provider-volume-local").unwrap(),
@@ -2154,6 +2329,49 @@ mod tests {
             },
         )
         .unwrap()
+    }
+
+    fn manifest_with_projection_factory(
+        factory: ProjectionFactory,
+    ) -> Result<ProviderManifest, ProviderContractError> {
+        let service_type = factory.service_type().clone();
+        let controller = ComponentDescriptor::new(
+            BoundedToken::parse("semantic-controller").unwrap(),
+            ComponentType::Controller,
+            [service_type.clone()],
+            [],
+            [ExecutionDomain::System],
+            1,
+            ArtifactDigest::parse(DIGEST_A).unwrap(),
+            [],
+            false,
+        )
+        .unwrap();
+        let binding = ResourceApiBinding::new(
+            service_type,
+            SchemaVersion::new(1, 0).unwrap(),
+            fingerprint("2"),
+            SchemaVersion::new(1, 0).unwrap(),
+            fingerprint("3"),
+            StandardCapabilityMatrix::default(),
+            None,
+            None,
+        )
+        .unwrap();
+        ProviderManifest::new(
+            ArtifactId::parse("provider-semantic").unwrap(),
+            digests(),
+            trusted(),
+            compatibility(),
+            [controller],
+            [binding],
+            [factory],
+            UpgradePolicy {
+                drain_before_upgrade: true,
+                max_automatic_disposition: UpgradeDisposition::InPlace,
+                preserves_durable_state: true,
+            },
+        )
     }
 
     #[test]
@@ -2619,14 +2837,12 @@ mod tests {
         .unwrap();
         assert!(
             factory
-                .admits_export_target(
-                    &ResourceRef::parse("audio.d2bus.org.AudioService/desk").unwrap()
-                )
+                .admits_export_target(&envelope("audio.d2bus.org.AudioService", None))
                 .is_ok()
         );
-        for rejected in ["Device/headset", "audio.d2bus.org.AudioBinding/desk"] {
+        for rejected in ["Device", "audio.d2bus.org.AudioBinding"] {
             assert_eq!(
-                factory.admits_export_target(&ResourceRef::parse(rejected).unwrap()),
+                factory.admits_export_target(&envelope(rejected, None)),
                 Err(ProviderContractError::ProjectionFactoryInvalid)
             );
         }
@@ -2642,6 +2858,237 @@ mod tests {
             ),
             Err(ProviderContractError::ExportForbidden)
         );
+    }
+
+    #[test]
+    fn an_empty_backing_set_is_accepted_and_an_empty_target_set_is_not() {
+        let service = ResourceTypeName::parse("security-key.d2bus.org.SecurityKeyService").unwrap();
+        let binding = ResourceTypeName::parse("security-key.d2bus.org.SecurityKeyBinding").unwrap();
+        let empty = ProjectionFactory::new(
+            service.clone(),
+            binding.clone(),
+            [],
+            [BindingTargetType::Guest],
+            fingerprint("4"),
+            fingerprint("5"),
+            Exportability::ExplicitExport,
+        )
+        .unwrap();
+        assert!(empty.allowed_backing_ref_types().is_empty());
+        assert_eq!(
+            empty.admits_backing_ref(&envelope("Device", None)),
+            Err(ProviderContractError::ProjectionFactoryInvalid)
+        );
+        assert_eq!(
+            ProjectionFactory::new(
+                service.clone(),
+                binding.clone(),
+                [],
+                [],
+                fingerprint("4"),
+                fingerprint("5"),
+                Exportability::ExplicitExport,
+            ),
+            Err(ProviderContractError::BoundExceeded)
+        );
+        assert_eq!(
+            ProjectionFactory::new(
+                service.clone(),
+                binding.clone(),
+                [service],
+                [BindingTargetType::Guest],
+                fingerprint("4"),
+                fingerprint("5"),
+                Exportability::ExplicitExport,
+            ),
+            Err(ProviderContractError::ConflictingFields)
+        );
+        assert_eq!(
+            ProjectionFactory::new(
+                ResourceTypeName::parse("audio.d2bus.org.AudioService").unwrap(),
+                binding,
+                [ResourceTypeName::parse("security-key.d2bus.org.SecurityKeyBinding").unwrap()],
+                [BindingTargetType::Guest],
+                fingerprint("4"),
+                fingerprint("5"),
+                Exportability::ExplicitExport,
+            ),
+            Err(ProviderContractError::ConflictingFields)
+        );
+    }
+
+    #[test]
+    fn import_owned_resources_are_never_export_targets_or_backings() {
+        let factory = ProjectionFactory::new(
+            ResourceTypeName::parse("audio.d2bus.org.AudioService").unwrap(),
+            ResourceTypeName::parse("audio.d2bus.org.AudioBinding").unwrap(),
+            [ResourceTypeName::parse("Endpoint").unwrap()],
+            [BindingTargetType::Guest],
+            fingerprint("4"),
+            fingerprint("5"),
+            Exportability::ExplicitExport,
+        )
+        .unwrap();
+        let locally_owned_service = envelope("audio.d2bus.org.AudioService", None);
+        let imported_service = envelope(
+            "audio.d2bus.org.AudioService",
+            Some("ResourceImport/yubikey-primary"),
+        );
+        assert_eq!(factory.admits_export_target(&locally_owned_service), Ok(()));
+        assert_eq!(
+            factory.admits_export_target(&imported_service),
+            Err(ProviderContractError::ImportOwnedOriginRejected)
+        );
+
+        let locally_owned_endpoint = envelope("Endpoint", None);
+        let imported_endpoint = envelope("Endpoint", Some("ResourceImport/yubikey-primary"));
+        assert_eq!(factory.admits_backing_ref(&locally_owned_endpoint), Ok(()));
+        assert_eq!(
+            factory.admits_backing_ref(&imported_endpoint),
+            Err(ProviderContractError::ImportOwnedOriginRejected)
+        );
+        assert_eq!(
+            factory.admits_backing_ref(&envelope("Volume", None)),
+            Err(ProviderContractError::ProjectionFactoryInvalid)
+        );
+        assert_ne!(
+            factory.admits_backing_ref(&imported_endpoint),
+            Err(ProviderContractError::ProjectionFactoryInvalid)
+        );
+    }
+
+    #[test]
+    fn provider_errors_are_typed_and_redacted() {
+        for error in [
+            ProviderContractError::ImportOwnedOriginRejected,
+            ProviderContractError::ProjectionProtocolVersionMismatch,
+        ] {
+            let rendered = format!("{error:?} {error}");
+            assert!(!rendered.contains("yubikey-primary"));
+            assert!(!rendered.contains("ResourceImport"));
+            assert!(!rendered.contains("1.0"));
+            assert!(!rendered.contains("dev"));
+        }
+        assert_eq!(
+            ProviderContractError::ImportOwnedOriginRejected.code(),
+            "provider-import-owned-origin-rejected"
+        );
+        assert_eq!(
+            ProviderContractError::ProjectionProtocolVersionMismatch.code(),
+            "provider-projection-protocol-version-mismatch"
+        );
+    }
+
+    #[test]
+    fn factory_admission_reports_version_skew_before_fingerprint_mismatch() {
+        let expected = crate::v3::semantic_services::SemanticFamily::Audio
+            .contract()
+            .projection()
+            .projection_factory()
+            .unwrap();
+        let mut legacy_wire = serde_json::to_value(&expected).unwrap();
+        legacy_wire
+            .as_object_mut()
+            .unwrap()
+            .remove("projectionProtocolVersion");
+        let legacy: ProjectionFactory = serde_json::from_value(legacy_wire).unwrap();
+        assert_eq!(
+            legacy.projection_protocol_version().as_str(),
+            LEGACY_ABSENT_PROTOCOL_VERSION
+        );
+        assert_eq!(
+            admit_projection_factory(&legacy, &expected),
+            Err(ProviderContractError::ProjectionProtocolVersionMismatch)
+        );
+        assert_eq!(
+            manifest_with_projection_factory(legacy),
+            Err(ProviderContractError::ProjectionProtocolVersionMismatch)
+        );
+
+        let mut altered = expected.clone();
+        altered.factory_fingerprint = fingerprint("9");
+        assert_eq!(
+            admit_projection_factory(&altered, &expected),
+            Err(ProviderContractError::DescriptorFingerprintMismatch)
+        );
+        assert_eq!(
+            manifest_with_projection_factory(altered),
+            Err(ProviderContractError::DescriptorFingerprintMismatch)
+        );
+    }
+
+    #[test]
+    fn an_exportability_mismatch_is_caught_even_when_no_fingerprint_binds_it() {
+        let expected = crate::v3::semantic_services::SemanticFamily::Audio
+            .contract()
+            .projection()
+            .projection_factory()
+            .unwrap();
+        let mut altered = expected.clone();
+        altered.exportability = Exportability::Forbidden;
+        assert_eq!(
+            altered.factory_fingerprint(),
+            expected.factory_fingerprint()
+        );
+        assert_eq!(
+            admit_projection_factory(&altered, &expected),
+            Err(ProviderContractError::ProjectionFactoryInvalid)
+        );
+        assert_eq!(
+            manifest_with_projection_factory(altered),
+            Err(ProviderContractError::ProjectionFactoryInvalid)
+        );
+    }
+
+    #[test]
+    fn projection_protocol_wire_default_is_legacy_and_validation_stays_strict() {
+        let expected = crate::v3::semantic_services::SemanticFamily::Audio
+            .contract()
+            .projection()
+            .projection_factory()
+            .unwrap();
+        let mut absent = serde_json::to_value(&expected).unwrap();
+        absent
+            .as_object_mut()
+            .unwrap()
+            .remove("projectionProtocolVersion");
+        let parsed: ProjectionFactory = serde_json::from_value(absent).unwrap();
+        assert_eq!(
+            parsed.projection_protocol_version().as_str(),
+            LEGACY_ABSENT_PROTOCOL_VERSION
+        );
+        assert_ne!(
+            parsed.projection_protocol_version().as_str(),
+            SEMANTIC_PROJECTION_PROTOCOL_VERSION
+        );
+
+        for malformed in [
+            serde_json::json!(""),
+            serde_json::json!("1"),
+            serde_json::json!("1.x"),
+            serde_json::json!("1.2.3"),
+            serde_json::json!("01.0"),
+            serde_json::json!("1".repeat(64)),
+            serde_json::json!(7),
+        ] {
+            let mut wire = serde_json::to_value(&expected).unwrap();
+            wire["projectionProtocolVersion"] = malformed;
+            assert!(serde_json::from_value::<ProjectionFactory>(wire).is_err());
+        }
+
+        for supported_shape in ["2.0", "0.9"] {
+            let mut wire = serde_json::to_value(&expected).unwrap();
+            wire["projectionProtocolVersion"] = serde_json::json!(supported_shape);
+            let parsed: ProjectionFactory = serde_json::from_value(wire).unwrap();
+            assert_eq!(
+                admit_projection_factory(&parsed, &expected),
+                Err(ProviderContractError::ProjectionProtocolVersionMismatch)
+            );
+        }
+
+        let mut unknown = serde_json::to_value(&expected).unwrap();
+        unknown["unexpected"] = serde_json::json!(true);
+        assert!(serde_json::from_value::<ProjectionFactory>(unknown).is_err());
     }
 
     #[test]
