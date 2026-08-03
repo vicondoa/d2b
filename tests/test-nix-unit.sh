@@ -17,7 +17,7 @@ export ROOT D2B_LOG
 
 if [ "${D2B_NIX_UNIT_JOBS+x}" = x ]; then
   printf '%s\n' \
-    "D2B_NIX_UNIT_JOBS is retired; unset it and use D2B_NIX_EVAL_JOBS_WORKERS (1 through 4)." \
+    "D2B_NIX_UNIT_JOBS is retired; unset it and use D2B_NIX_UNIT_WORKERS (1 through 4)." \
     >&2
   exit 2
 fi
@@ -70,16 +70,16 @@ nix_unit_exit() {
   if [ "$manifest_exit_publication_enabled" -eq 1 ] \
     && [ -n "${D2B_EXECUTION_MANIFEST:-}" ] \
     && [ -n "$nix_unit_surface" ]; then
-    if publish_manifest_fragment "$nix_unit_surface" failed; then
+    if ! publish_manifest_fragment "$nix_unit_surface" failed; then
       if [ "$nix_unit_command_succeeded" -eq 1 ]; then
         printf '%s\n' \
           "test-nix-unit: required execution-manifest fragment publication failed after successful surface '$nix_unit_surface'; evidence is incomplete; retry the target." \
           >&2
+      else
+        printf '%s\n' \
+          "test-nix-unit: failed to record failed Nix-unit surface '$nix_unit_surface' in the execution manifest; preserving the original status." \
+          >&2
       fi
-    elif [ "$nix_unit_command_succeeded" -eq 0 ]; then
-      printf '%s\n' \
-        "test-nix-unit: failed to record failed Nix-unit surface '$nix_unit_surface' in the execution manifest; preserving the original status." \
-        >&2
     fi
   fi
   run_cleanups || true
@@ -89,6 +89,7 @@ trap nix_unit_exit EXIT
 
 flake_root=$(git rev-parse --show-toplevel)
 flake_ref=$(d2b_flake_ref "$flake_root")
+flake_label=d2b
 if ! command -v nix >/dev/null 2>&1; then
   fail "nix is required for Nix-unit discovery and the locked toolchain shell" || true
   exit 2
@@ -172,19 +173,19 @@ fi
 
 # `nix-eval-jobs` owns evaluation concurrency. The request is deliberately
 # bounded before it is capped by the host's CPU and available memory.
-requested_workers=${D2B_NIX_EVAL_JOBS_WORKERS:-4}
+requested_workers=${D2B_NIX_UNIT_WORKERS:-4}
 case "$requested_workers" in
   1|2|3|4) ;;
   *)
-    fail "D2B_NIX_EVAL_JOBS_WORKERS must be an integer from 1 through 4" || true
+    fail "D2B_NIX_UNIT_WORKERS must be an integer from 1 through 4" || true
     exit 2
     ;;
 esac
-memory_mb=${D2B_NIX_EVAL_JOBS_MEMORY_MB:-4096}
+memory_mb=${D2B_NIX_UNIT_MEMORY_MB:-4096}
 if ! [[ "$memory_mb" =~ ^[0-9]+$ ]] \
   || [ "$memory_mb" -lt 512 ] \
   || [ "$memory_mb" -gt 4096 ]; then
-  fail "nix-eval-jobs per-worker memory must be between 512 and 4096 MiB" || true
+  fail "D2B_NIX_UNIT_MEMORY_MB must be between 512 and 4096 MiB" || true
   exit 2
 fi
 
@@ -291,7 +292,7 @@ log "  nix-eval-jobs workers: requested $requested_workers, effective $workers (
 if [ -n "${D2B_NIX_UNIT_CHECK:-}" ]; then
   check="$D2B_NIX_UNIT_CHECK"
   nix_unit_surface="$check"
-  log "--> nix eval --raw ${flake_ref}#checks.${system}.${check}.drvPath (instantiate-only)"
+  log "--> nix eval --raw ${flake_label}#checks.${system}.${check}.drvPath (instantiate-only)"
   if nix eval --raw "${flake_ref}#checks.${system}.${check}.drvPath" >/dev/null; then
     nix_unit_command_succeeded=1
     if ! publish_manifest_fragment "$check" passed; then
@@ -325,7 +326,7 @@ fi
 nix_unit_surface=nix-unit
 result_dir=$(d2b_mktemp ".d2b-nix-eval-jobs.XXXXXX")
 result_file="$result_dir/results.jsonl"
-log "--> nix-eval-jobs --no-instantiate --flake ${flake_ref}#nixUnitJobs.${system} --workers $workers --max-memory-size $memory_mb"
+log "--> nix-eval-jobs --no-instantiate --flake ${flake_label}#nixUnitJobs.${system} --workers $workers --max-memory-size $memory_mb"
 if nix-eval-jobs \
   --no-instantiate \
   --flake "${flake_ref}#nixUnitJobs.${system}" \
@@ -342,12 +343,10 @@ if [ ! -s "$result_file" ] || ! jq -s -e '
   and all(.[]; type == "object"
     and ((.attr? != null) or (.attrPath? != null)))
 ' "$result_file" >/dev/null; then
-  cat "$result_file" >&2 || true
   fail "nix-eval-jobs returned no valid JSON-lines attribute results" || true
   exit 1
 fi
 
-cat "$result_file"
 failures=()
 mapfile -t failures < <(
   jq -r '
@@ -365,24 +364,54 @@ integrity_count=$(jq -s '
 common_pin_file="$ROOT/tests/unit/nix/pinned/common.txt"
 system_pin_file="$ROOT/tests/unit/nix/pinned/$system.txt"
 if [ ! -f "$common_pin_file" ] || [ ! -f "$system_pin_file" ]; then
-  fail "nix-unit case-presence pin files are missing for $system" || true
+  missing_pin_files=()
+  [ -f "$common_pin_file" ] || missing_pin_files+=("common.txt")
+  [ -f "$system_pin_file" ] || missing_pin_files+=("$system.txt")
+  fail "nix-unit case-presence pin files are missing for $system (${missing_pin_files[*]}); run make nix-unit-pin" || true
   exit 1
 fi
 common_case_count=$(awk '!/^#/ && NF { count++ } END { print count + 0 }' "$common_pin_file")
 system_case_count=$(awk '!/^#/ && NF { count++ } END { print count + 0 }' "$system_pin_file")
 expected_case_count=$((common_case_count + system_case_count))
 case_count=$((result_count - integrity_count))
+expected_cases_file="$result_dir/expected-cases"
+actual_cases_file="$result_dir/actual-cases"
+awk '!/^#/ && NF { print $1 }' "$common_pin_file" "$system_pin_file" \
+  | sort -u >"$expected_cases_file"
+jq -r -s '
+  .[]
+  | select(type == "object")
+  | (.attr // ((.attrPath // []) | join("/")))
+  | select(. != "__nix_unit_integrity" and . != "")
+' "$result_file" | sort -u >"$actual_cases_file"
+missing_cases=()
+unexpected_cases=()
+mapfile -t missing_cases < <(comm -23 "$expected_cases_file" "$actual_cases_file")
+mapfile -t unexpected_cases < <(comm -13 "$expected_cases_file" "$actual_cases_file")
 case_count_ok=1
 if [ "$case_count" -ne "$expected_case_count" ]; then
-  log "  FAIL: nix-unit corpus returned $case_count case attributes; expected $expected_case_count pinned cases for $system"
+  log "  FAIL: nix-unit corpus returned $case_count case attributes; expected $expected_case_count pinned cases for $system; run make nix-unit-pin"
   case_count_ok=0
+fi
+case_names_ok=1
+if [ "${#missing_cases[@]}" -ne 0 ] \
+  || [ "${#unexpected_cases[@]}" -ne 0 ]; then
+  log "  FAIL: nix-unit evaluated case names drift from pins for $system; run make nix-unit-pin"
+  for case_name in "${missing_cases[@]}"; do
+    log "    missing evaluated case: $case_name"
+  done
+  for case_name in "${unexpected_cases[@]}"; do
+    log "    unexpected evaluated case: $case_name"
+  done
+  case_names_ok=0
 fi
 
 if [ "$integrity_count" -ne 1 ]; then
   log "  FAIL: nix-unit integrity attribute was not evaluated exactly once"
 fi
 for failure in "${failures[@]}"; do
-  log "  FAIL: nix-unit attribute $failure"
+  failure=${failure//"$flake_root"/<repo>}
+  printf '%s\n' "  FAIL: nix-unit attribute $failure" >&2
 done
 if [ "$tool_status" -ne 0 ]; then
   log "  FAIL: nix-eval-jobs exited with status $tool_status"
@@ -390,7 +419,8 @@ fi
 if [ "${#failures[@]}" -ne 0 ] \
   || [ "$tool_status" -ne 0 ] \
   || [ "$integrity_count" -ne 1 ] \
-  || [ "$case_count_ok" -ne 1 ]; then
+  || [ "$case_count_ok" -ne 1 ] \
+  || [ "$case_names_ok" -ne 1 ]; then
   fail "nix-unit corpus ($system): ${#failures[@]} attribute failure(s) across $result_count results" || true
   exit 1
 fi

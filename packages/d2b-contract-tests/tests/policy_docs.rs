@@ -769,6 +769,10 @@ fn execution_manifest_schema_and_prose_agree_with_non_empty_discovery() {
     let makefile = read_repo_file("Makefile");
     let rust_driver = read_repo_file("tests/test-rust.sh");
     let nix_driver = read_repo_file("tests/test-nix-unit.sh");
+    let tests_readme = read_repo_file("tests/README.md");
+    let tests_agents = read_repo_file("tests/AGENTS.md");
+    let changelog = read_repo_file("changelog.d/test-orchestration-speed.md");
+    let benchmark = read_repo_file("specs/002-optimize-test-orchestration/benchmark-results.md");
     let nix_jobs = read_repo_file("tests/unit/nix/eval-jobs.nix");
     let flake = read_repo_file("flake.nix");
     let api_driver = read_repo_file("tests/tools/api-surface-json.sh");
@@ -1012,8 +1016,10 @@ fn execution_manifest_schema_and_prose_agree_with_non_empty_discovery() {
         "execution-manifest-policy: focused locked Nix-unit dev shell is missing"
     );
     assert!(
-        nix_driver.contains("D2B_NIX_EVAL_JOBS_WORKERS")
-            && nix_driver.contains("D2B_NIX_EVAL_JOBS_MEMORY_MB")
+        nix_driver.contains("D2B_NIX_UNIT_WORKERS")
+            && nix_driver.contains("D2B_NIX_UNIT_MEMORY_MB")
+            && !nix_driver.contains("D2B_NIX_EVAL_JOBS_WORKERS")
+            && !nix_driver.contains("D2B_NIX_EVAL_JOBS_MEMORY_MB")
             && nix_driver.contains("cpu_cap")
             && nix_driver.contains("memory_cap")
             && nix_driver.contains("--workers")
@@ -1032,6 +1038,86 @@ fn execution_manifest_schema_and_prose_agree_with_non_empty_discovery() {
     assert!(
         nix_driver[retired_knob..].contains("exit 2"),
         "execution-manifest-policy: retired Nix-unit worker knob must exit 2"
+    );
+    assert!(
+        nix_driver.contains("D2B_NIX_UNIT_WORKERS")
+            && !nix_driver.contains("D2B_NIX_EVAL_JOBS_WORKERS"),
+        "execution-manifest-policy: retired knob remedy must name the operator-intent worker control"
+    );
+    for (label, doc) in [
+        ("tests README", tests_readme.as_str()),
+        ("tests AGENTS", tests_agents.as_str()),
+        ("changelog", changelog.as_str()),
+        ("benchmark", benchmark.as_str()),
+    ] {
+        assert!(
+            doc.contains("D2B_NIX_UNIT_WORKERS")
+                && doc.contains("D2B_NIX_UNIT_MEMORY_MB")
+                && !doc.contains("D2B_NIX_EVAL_JOBS_WORKERS")
+                && !doc.contains("D2B_NIX_EVAL_JOBS_MEMORY_MB"),
+            "execution-manifest-policy: {label} has stale implementation-specific Nix-unit resource knobs"
+        );
+    }
+    assert!(
+        nix_driver.contains("if ! publish_manifest_fragment \"$nix_unit_surface\" failed; then")
+            && !nix_driver.contains("if publish_manifest_fragment \"$nix_unit_surface\" failed; then")
+            && nix_driver.contains("local rc=$?")
+            && nix_driver.contains("exit \"$rc\"")
+            && nix_driver.contains("nix_unit_command_succeeded"),
+        "execution-manifest-policy: Nix-unit EXIT trap must diagnose only failed publication and preserve status/evidence semantics"
+    );
+    assert!(
+        !nix_driver.contains("cat \"$result_file\""),
+        "execution-manifest-policy: Nix-unit full runs must not dump raw JSONL results"
+    );
+    assert!(
+        nix_driver.contains("flake_label=d2b"),
+        "execution-manifest-policy: Nix-unit progress must use a fixed path-free flake label"
+    );
+    for line in nix_driver.lines() {
+        if line.contains("log ") && line.to_ascii_lowercase().contains("flake") {
+            assert!(
+                !line.contains("flake_ref"),
+                "execution-manifest-policy: path-bearing flake reference appears in progress log: {line}"
+            );
+        }
+    }
+    let failure_reporting = nix_driver
+        .split("for failure in")
+        .nth(1)
+        .and_then(|region| region.split("done").next())
+        .expect("execution-manifest-policy: Nix-unit failure reporting loop is missing");
+    assert!(
+        failure_reporting.contains("failure=${failure//\"$flake_root\"/<repo>}")
+            && failure_reporting.contains(">&2")
+            && !failure_reporting.contains("log "),
+        "execution-manifest-policy: evaluator failures must be root-sanitized and printed directly to stderr"
+    );
+    for marker in [
+        "expected_cases_file",
+        "actual_cases_file",
+        "missing_cases",
+        "unexpected_cases",
+        "comm -23",
+        "comm -13",
+        "sort -u",
+        "missing evaluated case",
+        "unexpected evaluated case",
+        "run make nix-unit-pin",
+        "case_names_ok",
+        "select(. != \"__nix_unit_integrity\"",
+        "result_count=$(jq -s 'length'",
+        "case_count=$((result_count - integrity_count))",
+        "integrity_count",
+    ] {
+        assert!(
+            nix_driver.contains(marker),
+            "execution-manifest-policy: Nix-unit pin/integrity diagnostic marker is missing: {marker}"
+        );
+    }
+    assert!(
+        nix_driver.contains("|| [ \"$case_names_ok\" -ne 1 ]; then"),
+        "execution-manifest-policy: Nix-unit must fail on symmetric-difference drift even when counts match"
     );
 
     // Lifecycle entry must precede every Nix evaluator, runner, or toolchain

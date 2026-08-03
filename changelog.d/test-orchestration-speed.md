@@ -17,8 +17,13 @@
 - Run the complete Nix-unit corpus through locked `nix-eval-jobs
   --no-instantiate`, with focused toolchain self-provisioning, bounded worker
   control, and complete multi-failure reporting.
-- Use `D2B_NIX_EVAL_JOBS_WORKERS` for Nix-unit worker requests and retire
+- Use the operator-intent `D2B_NIX_UNIT_WORKERS` and
+  `D2B_NIX_UNIT_MEMORY_MB` controls for Nix-unit resource requests, and retire
   `D2B_NIX_UNIT_JOBS` with an actionable migration error.
+- Keep successful full runs concise while retaining one sanitized stderr
+  attribution per failed attribute, and report evaluated-vs-pinned case-name
+  drift with the `run make nix-unit-pin` remedy; use a fixed path-free `d2b`
+  flake label for command progress.
 - Record Nix-unit execution evidence as the seven stable baseline leaves while
   keeping evaluation-only runs free of installables and realized checks.
 - Keep the separate enforcing fixture lane from duplicating the aggregate by

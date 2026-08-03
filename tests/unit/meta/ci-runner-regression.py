@@ -623,6 +623,22 @@ set -euo pipefail
     def test_nix_unit_reports_all_failures_and_rejects_empty_discovery(self) -> None:
         driver = executable_shell_source(source_text(NIX_UNIT_DRIVER))
 
+        exit_handler = driver[
+            driver.index("nix_unit_exit()") : driver.index("trap nix_unit_exit EXIT")
+        ]
+        self.assertIn(
+            'if ! publish_manifest_fragment "$nix_unit_surface" failed; then',
+            exit_handler,
+            "failed-surface evidence must enter the diagnostic branch only when publication fails",
+        )
+        self.assertNotIn(
+            'if publish_manifest_fragment "$nix_unit_surface" failed; then',
+            exit_handler,
+            "the EXIT trap must not diagnose successful fragment publication",
+        )
+        self.assertIn("local rc=$?", exit_handler)
+        self.assertIn('exit "$rc"', exit_handler)
+
         # The aggregate must finish observing every selected check before it
         # decides the final status. A first-failure exit would hide siblings.
         self.assertRegex(
@@ -649,6 +665,44 @@ set -euo pipefail
             r"(?is)(?:checks|discovered|jobs).{0,260}"
             r"(?:-eq\s+0|==\s*0|length\s*[=!]=\s*0|empty).{0,260}"
             r"(?:no|empty|zero|discovered).{0,260}(?:exit|return)\s+1\b",
+        )
+
+        self.assertNotIn(
+            'cat "$result_file"',
+            driver,
+            "successful full runs must not dump the raw JSONL result file",
+        )
+        self.assertIn("flake_label=d2b", driver)
+        for line in driver.splitlines():
+            if re.search(r"\blog\b", line) and "flake" in line.lower():
+                self.assertNotIn(
+                    "flake_ref",
+                    line,
+                    "path-bearing flake references must not appear in progress logs",
+                )
+        failure_start = driver.index("for failure in")
+        failure_end = driver.index("done", failure_start)
+        failure_reporting = driver[failure_start:failure_end]
+        self.assertIn('failure=${failure//"$flake_root"/<repo>}', failure_reporting)
+        self.assertIn(">&2", failure_reporting)
+        self.assertNotIn(
+            "log ",
+            failure_reporting,
+            "evaluator failures must go directly to stderr, not timestamped log",
+        )
+
+        self.assertIn("expected_cases_file", driver)
+        self.assertIn("actual_cases_file", driver)
+        self.assertIn("missing_cases", driver)
+        self.assertIn("unexpected_cases", driver)
+        self.assertIn("comm -23", driver)
+        self.assertIn("comm -13", driver)
+        self.assertIn("case_names_ok", driver)
+        self.assertIn("run make nix-unit-pin", driver)
+        self.assertRegex(
+            driver,
+            r"(?s)case_names_ok.{0,1200}"
+            r"\[\s*\"\$case_names_ok\"\s*-\s*ne\s*1\s*\]",
         )
 
     def test_nix_unit_invalidates_requested_manifest_before_nix_evaluation(self) -> None:
@@ -830,6 +884,10 @@ set -euo pipefail
             r"(?is)(?:log|echo|printf).{0,300}\$[A-Za-z_][A-Za-z0-9_]*"
             r".{0,180}(?:worker|memory|MiB|MB)",
         )
+        self.assertIn("D2B_NIX_UNIT_WORKERS", driver)
+        self.assertIn("D2B_NIX_UNIT_MEMORY_MB", driver)
+        self.assertNotIn("D2B_NIX_EVAL_JOBS_WORKERS", driver)
+        self.assertNotIn("D2B_NIX_EVAL_JOBS_MEMORY_MB", driver)
 
     def test_nix_unit_handles_retired_worker_knobs_actionably(self) -> None:
         driver = executable_shell_source(source_text(NIX_UNIT_DRIVER))
@@ -855,6 +913,7 @@ set -euo pipefail
             region,
             r"(?i)(?:migration|replace|use|supported|instead|control)",
         )
+        self.assertIn("D2B_NIX_UNIT_WORKERS", region)
         self.assertNotRegex(
             driver,
             rf"\$\{{[^}}\n]*{re.escape(knob)}[^}}\n]*:-",

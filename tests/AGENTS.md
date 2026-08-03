@@ -236,12 +236,18 @@ The target enters `devShells.<system>.nix-unit` once when `nix-eval-jobs` or
 `jq` is missing. That focused shell is a standard `mkShellNoCC` output backed
 by the locked flake inputs; an existing toolchain or development shell runs
 directly. `D2B_NIX_UNIT_JOBS` is retired and returns status 2 with a migration
-message. Use the bounded `D2B_NIX_EVAL_JOBS_WORKERS` control. Its effective
-count is capped by four workers, logical CPUs, any finite cgroup CPU quota, and
-available memory after a 2 GiB reserve at the 4096 MiB evaluator limit plus
-1024 MiB of process and flake overhead per worker, so four workers remain
-available on the reference 12-CPU, 62-GiB host while smaller runners are capped
-safely.
+message naming `D2B_NIX_UNIT_WORKERS`. Use that bounded operator-intent
+control. Its effective count is capped by four workers, logical CPUs, any
+finite cgroup CPU quota, and available memory after a 2 GiB reserve at the
+4096 MiB evaluator limit plus 1024 MiB of process and flake overhead per
+worker, so four workers remain available on the reference 12-CPU, 62-GiB host
+while smaller runners are capped safely. `D2B_NIX_UNIT_MEMORY_MB` may lower
+the retained 4096 MiB evaluator limit but cannot raise it. Successful full
+runs suppress raw JSONL output; failed attributes are reported one per
+concise, repository-root-sanitized stderr line, and evaluated case-name drift
+names every missing or unexpected case and reminds operators to
+`run make nix-unit-pin`. Command progress uses the fixed path-free `d2b` flake
+label.
 
 `D2B_NIX_UNIT_CHECK` remains the manual single-shard selector. When
 `D2B_EXECUTION_MANIFEST` is set, enter the shared secure lifecycle before Nix

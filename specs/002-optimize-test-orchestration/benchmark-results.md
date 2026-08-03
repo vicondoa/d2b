@@ -470,7 +470,16 @@ count by logical CPUs, finite cgroup CPU quota, and available memory.
 The focused locked dev shell supplies `nix-eval-jobs` and `jq`. Plain
 `make test-nix-unit` enters it once when necessary. The retired
 `D2B_NIX_UNIT_JOBS` variable fails with status 2 and names
-`D2B_NIX_EVAL_JOBS_WORKERS` as its replacement.
+`D2B_NIX_UNIT_WORKERS` as its replacement. The operator-intent
+`D2B_NIX_UNIT_MEMORY_MB` control lowers, but cannot raise, the retained
+per-worker evaluator limit.
+
+Successful full runs suppress the raw JSONL result dump. Failed attributes
+remain individually attributable as concise stderr entries with the
+repository root replaced by `<repo>`, while evaluated-vs-pinned case-name
+drift names every missing or unexpected case and directs operators to
+`run make nix-unit-pin`. Command progress uses the fixed path-free `d2b` flake
+label.
 
 ## Nix-unit optimized result
 
