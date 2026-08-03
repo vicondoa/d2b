@@ -1,6 +1,13 @@
 { mkEval, lib, pkgs, ... }:
 
 let
+  compilerStub = pkgs.writeShellScriptBin
+    "d2b-resource-compiler-generation-eval-stub" "exit 0";
+  mkEvalStub = modules: mkEval (modules ++ [
+    ({ lib, ... }: {
+      d2b._resourceCompiler.phase2.compiler = lib.mkForce compilerStub;
+    })
+  ]);
   catalogShape = import ../../../../nixos-modules/generated/provider-catalog-shape.nix;
   catalogEntry = name:
     let
@@ -52,7 +59,7 @@ let
       netVmSystemArtifactId = "net-vm-base";
     };
   };
-  generation = includeNetwork: (mkEval [ host {
+  generation = includeNetwork: (mkEvalStub [ host {
     d2b.zones.work.resources = {
       network-local = provider;
     } // lib.optionalAttrs includeNetwork {
