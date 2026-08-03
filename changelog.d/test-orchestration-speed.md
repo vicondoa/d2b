@@ -35,7 +35,8 @@
   observation and the per-case candidate after hosted memory exhaustion.
 - Keep four requested local workers with a 4096 MiB default, use one worker
   and a 1024 MiB limit on GitHub Actions, and retain exact case and file-job
-  inventory checks.
+  inventory checks. Set `D2B_NIX_UNIT_MEMORY_MB=2048` to restore the prior
+  hosted evaluator limit when a larger runner has sufficient memory.
 - Keep the separate enforcing fixture lane from duplicating the aggregate by
   honoring `D2B_SKIP_FIXTURE_BUILD=1` in the Layer-1 orchestration.
 - Keep the measured parallel profile for warm local runs, retain its API cache
