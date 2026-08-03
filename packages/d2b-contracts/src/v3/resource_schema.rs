@@ -31,7 +31,7 @@ pub const RESOURCE_STATUS_DOMAIN_TAG: &str = "d2b:v3:resource-status";
 /// Domain tag for schemas.
 pub const SCHEMA_DOMAIN_TAG: &str = "d2b:v3:schema";
 /// Framing profile for digests emitted by the Nix bundle compiler.
-pub const CANONICAL_DIGEST_FRAME_VERSION: &str = "d2b-digest/v1";
+pub(crate) const CANONICAL_DIGEST_FRAME_VERSION: &str = "d2b-digest/v1";
 /// Maximum bytes in a printable ASCII canonical JSON object key.
 pub const MAX_CANONICAL_KEY_BYTES: usize = 64;
 
@@ -531,7 +531,7 @@ pub fn canonical_digest(domain_tag: &str, canonical_bytes: &[u8]) -> String {
 /// Keeping the domain and payload as separate canonical-JSON fields avoids a
 /// raw NUL separator while preserving domain separation and unambiguous
 /// payload framing.
-pub fn framed_canonical_digest(domain_tag: &str, canonical_bytes: &[u8]) -> String {
+pub(crate) fn framed_canonical_digest(domain_tag: &str, canonical_bytes: &[u8]) -> String {
     let payload =
         String::from_utf8(canonical_bytes.to_vec()).expect("canonical JSON bytes are UTF-8");
     let mut frame = BTreeMap::new();

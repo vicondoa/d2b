@@ -11,8 +11,9 @@ use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::v3::{
     CanonicalJsonError, CanonicalJsonObject, ResourceBundleGenerationId, ResourceName, ResourceRef,
-    ResourceTypeName, SchemaFingerprint, ZoneId, canonical_json_bytes, framed_canonical_digest,
+    ResourceTypeName, SchemaFingerprint, ZoneId, canonical_json_bytes,
 };
+use crate::v3::resource_schema::framed_canonical_digest;
 
 /// Bundle schema version for the resource-plane contract.
 pub const ZONE_BUNDLE_SCHEMA_VERSION: u32 = 3;
