@@ -12550,6 +12550,10 @@ async fn open_resource_plane(
     }
     let mut plane = resource_runtime::ResourcePlane::new();
     let mut zones = BTreeSet::new();
+    zones.insert(
+        ZoneId::parse("local-root".to_owned())
+            .map_err(|_| resource_runtime::ResourceRuntimeError::ZoneStoreIdInvalid)?,
+    );
     for environment in &resolver.host.environments {
         let zone = ZoneId::parse(environment.env.clone())
             .map_err(|_| resource_runtime::ResourceRuntimeError::ZoneStoreIdInvalid)?;

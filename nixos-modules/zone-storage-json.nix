@@ -2,7 +2,9 @@
 
 let
   cfg = config.d2b;
-  zoneNames = lib.unique ([ cfg._zoneCompiler.localRoot ] ++ builtins.attrNames cfg.zones);
+  enabledEnvNames = builtins.attrNames (lib.filterAttrs (_: env: env.enable) cfg.envs);
+  zoneNames = lib.unique
+    ([ cfg._zoneCompiler.localRoot ] ++ enabledEnvNames ++ builtins.attrNames cfg.zones);
 
   storageRow = zoneName: {
     zoneStoreId = "zone-store-${zoneName}";

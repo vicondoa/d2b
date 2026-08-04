@@ -35,7 +35,7 @@ use d2b_resource_api::{
     },
 };
 use d2b_resource_store::{PolicySnapshot, StoreSlot};
-use d2b_resource_store_redb::{RedbResourceStore, StoreIdentity};
+use d2b_resource_store_redb::{RedbResourceStore, StoreIdentity, write_provisioning_marker};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
@@ -174,12 +174,22 @@ impl ZoneResourceRuntime {
         let acceptor = authorizer
             .take_store_seal(store_identity.seal_identity())
             .map_err(|_| ResourceRuntimeError::StoreSealUnavailable)?;
+        let disposition = opened.response.disposition;
         let file = File::from(opened.database_fd);
-        let store = Arc::new(
-            RedbResourceStore::open_owned(file, store_identity, acceptor)
-                .await
-                .map_err(|_| ResourceRuntimeError::StoreOpenFailed)?,
-        );
+        let store = match disposition {
+            ZoneStoreDisposition::Provisioned => {
+                let mut marker =
+                    tempfile::tempfile().map_err(|_| ResourceRuntimeError::StoreOpenFailed)?;
+                write_provisioning_marker(&mut marker, &store_identity)
+                    .map_err(|_| ResourceRuntimeError::StoreOpenFailed)?;
+                RedbResourceStore::provision_owned(file, marker, store_identity, acceptor).await
+            }
+            ZoneStoreDisposition::Opened => {
+                RedbResourceStore::open_owned(file, store_identity, acceptor).await
+            }
+        }
+        .map_err(|_| ResourceRuntimeError::StoreOpenFailed)?;
+        let store = Arc::new(store);
         let authorization_state = runtime_authorization_state()?;
         let subject = runtime_subject(&zone)?;
         let api = Arc::new(
@@ -746,5 +756,39 @@ mod tests {
         assert_eq!(list["resources"].as_array().map(Vec::len), Some(0));
         runtime.shutdown().await.unwrap();
         assert!(fd >= 0);
+    }
+
+    #[tokio::test]
+    async fn production_runtime_provisions_a_broker_provisioned_store() {
+        let directory = tempfile::tempdir().unwrap();
+        let database_path = directory.path().join("store.redb");
+        let database = OpenOptions::new()
+            .create_new(true)
+            .read(true)
+            .write(true)
+            .open(&database_path)
+            .unwrap();
+        let zone = ZoneId::parse("work").unwrap();
+        let marker_identity = "sha256:".to_owned() + &"c".repeat(64);
+        let runtime = ZoneResourceRuntime::open(
+            zone,
+            OpenedZoneStore {
+                response: OpenZoneStoreResponse {
+                    zone_store_id: d2b_contracts::v3::storage::ZoneStoreId::parse(
+                        "zone-store-work",
+                    )
+                    .unwrap(),
+                    store_identity: marker_identity,
+                    disposition: ZoneStoreDisposition::Provisioned,
+                    fd_index: 0,
+                },
+                database_fd: database.into(),
+            },
+        )
+        .await
+        .unwrap();
+        assert!(runtime.readiness().store_ready);
+        assert!(runtime.readiness().resource_api_ready);
+        runtime.shutdown().await.unwrap();
     }
 }

@@ -91,6 +91,13 @@ if True:
     )
     machine.succeed("systemctl restart d2bd.service")
     machine.wait_for_unit("d2bd.service")
+    machine.succeed(
+        "test -f /etc/d2b/zones/local-root/storage.json && "
+        "test -f /etc/d2b/zones/work/storage.json && "
+        "getent passwd d2b-zonert >/dev/null && "
+        "getent group d2b-zonert >/dev/null && "
+        "test -d /var/lib/d2b"
+    )
 
     machine.succeed("systemctl start user@1000.service")
     alice_user = (

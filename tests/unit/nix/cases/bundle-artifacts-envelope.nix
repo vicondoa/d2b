@@ -8,7 +8,10 @@ let
     defaultedArtifact
     expectedZoneStorageData
     installedZoneStorage
+    installedZoneStorageEnv
+    zoneStoragePrincipal
     zoneStorageArtifact
+    zoneStorageEnvArtifact
     ;
 in
 {
@@ -84,6 +87,51 @@ in
         user = "root";
         group = "d2bd";
       };
+    };
+  };
+
+  "zone-storage-contract/env-storage-row-and-etc-wiring" = {
+    expr = {
+      data = zoneStorageEnvArtifact.data;
+      installFileName = zoneStorageEnvArtifact.installFileName;
+      sourceMatches = installedZoneStorageEnv.source == zoneStorageEnvArtifact.path;
+      inherit (installedZoneStorageEnv) mode user group;
+    };
+    expected = {
+      data = {
+        zoneStoreId = "zone-store-work";
+        storageOwnerPrincipal = "d2b-zonert";
+        parentDirectoryId = "zone-store-parent-work";
+        ownership = {
+          owner = "d2b-zonert";
+          group = "d2b-zonert";
+          mode = "0640";
+          linkCount = 1;
+        };
+        filesystem = "regular-file-anchored-fd-relative-no-follow";
+        locking = "ofd-close-on-exec";
+        marker.identityMarkerId = "zone-store-marker-work";
+        replacementDetection = "fail-closed-on-missing-replaced-or-identity-mismatch";
+        fsync = "database-and-parent-directory";
+        publication = {
+          descriptor = "owned-descriptor-close-on-exec-verified-before-concurrency";
+          replacement = "atomic-rename-retain-prior-quarantine-ambiguity";
+        };
+      };
+      installFileName = "zones/work/storage.json";
+      sourceMatches = true;
+      mode = "0640";
+      user = "root";
+      group = "d2bd";
+    };
+  };
+
+  "zone-storage-contract/principal-is-installed" = {
+    expr = zoneStoragePrincipal;
+    expected = {
+      userExists = true;
+      groupExists = true;
+      userGroup = "d2b-zonert";
     };
   };
 
