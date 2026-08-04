@@ -9220,6 +9220,11 @@ fn run_typed_shell_owner(stream: Socket, state: ServerState, peer: PeerIdentity,
     let established = match rt.block_on(establish_shell_backend(&state, peer.uid, &attach)) {
         Ok(value) => value,
         Err(error) => {
+            tracing::warn!(
+                operation = method,
+                error_kind = error.kind(),
+                "typed shell attachment refused"
+            );
             let _ = write_json_frame(&stream, &wire::error_frame(&error));
             return;
         }
