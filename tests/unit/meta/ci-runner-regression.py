@@ -1410,13 +1410,22 @@ printf '%s\n' "$sanitized_line"
                 f"{binary} must appear exactly once in the shared policy-binary list",
             )
         self.assertIn(
-            'for testname in "${D2B_FIXTURE_INDEPENDENT_POLICY_BINARIES[@]}"; do',
+            "run_policy_cargo_binaries()",
             policy_driver,
         )
         self.assertIn(
-            'run_policy_cargo_binary "${testname//_/-}" "$testname"',
+            'cargo_args+=(--test "$testname")',
             policy_driver,
         )
+        self.assertIn(
+            'cargo test -p d2b-contract-tests "${cargo_args[@]}"',
+            policy_driver,
+        )
+        self.assertIn(
+            'target="Running tests/$testname.rs "',
+            policy_driver,
+        )
+        self.assertEqual(policy_driver.count("run_policy_cargo_binaries\n"), 1)
         self.assertIn(
             'for testname in "${D2B_FIXTURE_INDEPENDENT_POLICY_BINARIES[@]}"; do',
             rust_driver,
