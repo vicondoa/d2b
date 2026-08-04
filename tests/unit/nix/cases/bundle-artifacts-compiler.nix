@@ -2,20 +2,55 @@
 
 let
   h = import ../helpers/bundle-artifacts.nix ctx;
+  splitCaseSources = map
+    (relativePath: builtins.readFile (ctx.flakeRoot + relativePath)) [
+      "/tests/unit/nix/helpers/bundle-artifacts.nix"
+      "/tests/unit/nix/cases/bundle-artifacts-compiler.nix"
+      "/tests/unit/nix/cases/bundle-artifacts-digest.nix"
+      "/tests/unit/nix/cases/bundle-artifacts-envelope.nix"
+    ];
+  forbiddenRealizationFragments = [
+    "builtins.fromJSON (builtins.readFile " + "digestBundle.path"
+    "builtins.readFile " + "hostileCompilerBuild"
+    "builtins.readFile " + "acceptedShimBuild"
+    "builtins.readFile " + "compilerBuild"
+    "toString " + "firstBundle.path"
+    "toString " + "secondBundle.path"
+    "pkgs." + "runCommand"
+    "nativeBuildInputs = [ " + "compilerPackage ]"
+  ];
+  noRealCompilerDerivationReads = lib.all
+    (source:
+      lib.all
+        (fragment: !(lib.hasInfix fragment source))
+        forbiddenRealizationFragments)
+    splitCaseSources;
 in
 {
   "bundle-artifacts/phase2-compiler-is-the-build-validator" = {
     expr = {
+      fakeCompilerSelected = h.compilerSelected;
+      fakeCompilerCommand = h.compilerCommand;
+      noRealCompilerDerivationReads = noRealCompilerDerivationReads;
       sourceUsesCompiler =
         lib.hasInfix "d2b-resource-compiler compile" h.compilerSource
         && !(lib.hasInfix "python3 -" h.compilerSource);
+      sourceWiresCompilerInput =
+        lib.hasInfix "compilerInput = pkgs.writeText" h.compilerSource
+        && lib.hasInfix
+          ("nativeBuildInputs = [ " + "compilerPackage ]")
+          h.compilerSource;
       sourceUsesFramedDigest =
         lib.hasInfix "framed_canonical_digest" h.compilerMainSource;
       commandReceivesExpectedHash =
         lib.hasInfix "expectedContentHash = data.contentHash" h.compilerSource;
     };
     expected = {
+      fakeCompilerSelected = true;
+      fakeCompilerCommand = "d2b-resource-compiler";
+      noRealCompilerDerivationReads = true;
       sourceUsesCompiler = true;
+      sourceWiresCompilerInput = true;
       sourceUsesFramedDigest = true;
       commandReceivesExpectedHash = true;
     };
@@ -29,9 +64,7 @@ in
       noCatalogPayloadCopy = !(lib.hasInfix "catalogData" h.compilerSource);
       noSchemaPayloadCopy = !(lib.hasInfix "schemaRootData" h.compilerSource);
       noPythonCompiler = !(lib.hasInfix "python3 -" h.compilerSource);
-      fakeCompilerIsEvalOnly =
-        lib.hasInfix "d2b-resource-compiler-eval-stub"
-          (toString h.compilerStub);
+      fakeCompilerIsEvalOnly = h.compilerSelected;
     };
     expected = {
       usesPrivatePathRefs = true;

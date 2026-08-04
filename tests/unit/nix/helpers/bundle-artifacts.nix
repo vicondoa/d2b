@@ -2,8 +2,10 @@
 
 let
   digestHelpers = import ../../../../nixos-modules/resources-bundle.nix { inherit lib; };
+  compilerCommand = "d2b-resource-compiler";
   compilerStub = pkgs.writeShellScriptBin
-    "d2b-resource-compiler-eval-stub" "exit 0";
+    compilerCommand
+    "exit 0";
   mkEvalStub = modules: mkEval (modules ++ [
     ({ lib, ... }: {
       d2b._resourceCompiler.phase2.compiler = lib.mkForce compilerStub;
@@ -81,6 +83,14 @@ let
   compilerSource = builtins.readFile (flakeRoot + "/nixos-modules/bundle-zones.nix");
   compilerMainSource =
     builtins.readFile (flakeRoot + "/packages/d2b-resource-compiler/src/main.rs");
+  compilerSelected =
+    let
+      selected = cfgDaemon.d2b._resourceCompiler.phase2.compiler;
+      selectedPath =
+        builtins.unsafeDiscardStringContext (toString selected);
+      stubPath = builtins.unsafeDiscardStringContext (toString compilerStub);
+    in
+    selectedPath == stubPath;
   providerSecretCfg = (mkEvalStub [ base ({ ... }: {
     d2b.artifacts.provider = {
       package = pkgs.writeText "provider-secret-artifact" "provider";
@@ -117,8 +127,10 @@ in
 {
   inherit
     compilerMainSource
+    compilerCommand
     compilerSource
     compilerStub
+    compilerSelected
     base
     cfgCompat
     cfgDaemon
@@ -127,6 +139,7 @@ in
     expectedZoneStorageData
     helperWiringCfg
     installedZoneStorage
+    mkEvalStub
     nullProviderCfg
     providerSecretCfg
     storePathString

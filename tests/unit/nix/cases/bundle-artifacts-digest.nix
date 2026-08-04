@@ -31,11 +31,19 @@ let
 in
 {
   "bundle-artifacts/v3-zone-content-hash-covers-shipped-resources" = {
-    expr = "sha256:${bundleDigest}"
-      == "sha256:${h.digestHelpers.framedDigest
-        "d2b:v3:resource-bundle"
-        resourcesJson}";
-    expected = true;
+    expr = {
+      digest = "sha256:${bundleDigest}"
+        == "sha256:${h.digestHelpers.framedDigest
+          "d2b:v3:resource-bundle"
+          resourcesJson}";
+      compilerSelected = h.compilerSelected;
+      compilerCommand = h.compilerCommand;
+    };
+    expected = {
+      digest = true;
+      compilerSelected = true;
+      compilerCommand = "d2b-resource-compiler";
+    };
   };
 
   "bundle-artifacts/v3-zone-content-hash-has-one-prefix" = {

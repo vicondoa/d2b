@@ -103,7 +103,7 @@ in
   "bundle-artifacts/nested-table-field-name-collisions-are-not-rows" = {
     expr =
       let
-        cfg = (ctx.mkEval [
+        cfg = (h.mkEvalStub [
           h.base
           h.defaultedArtifact
           ({ ... }: {
@@ -134,7 +134,7 @@ in
   "bundle-artifacts/extra-artifact-reserved-name-collision-asserts" = {
     expr =
       let
-        cfg = (ctx.mkEval [
+        cfg = (h.mkEvalStub [
           h.base
           h.defaultedArtifact
           ({ ... }: {
@@ -157,7 +157,7 @@ in
   "bundle-artifacts/extra-artifact-install-path-collision-conflicts" = {
     expr =
       let
-        cfg = (ctx.mkEval [
+        cfg = (h.mkEvalStub [
           h.base
           h.defaultedArtifact
           ({ ... }: {

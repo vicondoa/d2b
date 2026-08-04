@@ -1,8 +1,10 @@
 { mkEval, lib, pkgs, ... }:
 
 let
+  compilerCommand = "d2b-resource-compiler";
   compilerStub = pkgs.writeShellScriptBin
-    "d2b-resource-compiler-generation-eval-stub" "exit 0";
+    compilerCommand
+    "exit 0";
   mkEvalStub = modules: mkEval (modules ++ [
     ({ lib, ... }: {
       d2b._resourceCompiler.phase2.compiler = lib.mkForce compilerStub;
@@ -80,10 +82,19 @@ let
   redeclaredTypes = map (resource: resource.type)
     redeclaredBundle.data.resources;
   cleanup = first.d2b._resourceCompiler.zones.work;
+  compilerSelected =
+    let
+      selected = first.d2b._resourceCompiler.phase2.compiler;
+      selectedPath =
+        builtins.unsafeDiscardStringContext (toString selected);
+      stubPath = builtins.unsafeDiscardStringContext (toString compilerStub);
+    in
+    selectedPath == stubPath;
 in
 {
   "generation-cleanup-absent-network/compiler-contract" = {
     expr = {
+      fakeCompilerSelected = compilerSelected;
       networkRemoved = builtins.elem "Network" firstTypes
         && !(builtins.elem "Network" secondTypes);
       identicalNetworkRedeclared = builtins.elem "Network" firstTypes
@@ -100,6 +111,7 @@ in
       cleanupBlocksActivation = cleanup.transition.cleanupBlocksActivation;
     };
     expected = {
+      fakeCompilerSelected = true;
       networkRemoved = true;
       identicalNetworkRedeclared = true;
       removedNetworkChangesArtifact = true;
