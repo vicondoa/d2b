@@ -58,6 +58,8 @@ export SCCACHE_CACHE_SIZE="${SCCACHE_CACHE_SIZE:-10G}"
 # Hermetic d2b-contract-tests policy binaries owned by `make test-policy`.
 # The fixture-contract lane excludes these exact binaries so the Layer-1 graph
 # does not run their repository-wide source and documentation scans twice.
+# ShellCheck analyzes this sourced library without either consuming driver.
+# shellcheck disable=SC2034
 readonly -a D2B_FIXTURE_INDEPENDENT_POLICY_BINARIES=(
   policy_dash_gate
   policy_adr046_work_items
