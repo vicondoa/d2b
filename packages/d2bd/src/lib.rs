@@ -9365,20 +9365,13 @@ fn list_typed_shell_sessions_for_target(
     peer: &PeerIdentity,
     target: &str,
 ) -> Result<Value, TypedError> {
-    if !configured_shell_targets(state)?
+    let result = list_typed_shell_target(state, peer, target.to_owned())?;
+    let bindings = result
+        .sessions
         .iter()
-        .any(|configured| configured == target)
-    {
-        let result = list_typed_shell_target(state, peer, target.to_owned())?;
-        return serde_json::to_value(result).map_err(|_| shell_protocol_failed());
-    }
-    let result = list_configured_typed_shell_targets(state, peer)?
-        .into_iter()
-        .find(|(configured, _)| configured == target)
-        .map(|(_, result)| result)
-        .ok_or_else(|| TypedError::WorkloadTargetNotFound {
-            target: target.to_owned(),
-        })?;
+        .map(|session| (session.name.clone(), target.to_owned()))
+        .collect::<Vec<_>>();
+    cache_target_local_typed_shell_session_targets(state, peer.uid, &bindings)?;
     serde_json::to_value(result).map_err(|_| shell_protocol_failed())
 }
 
@@ -9433,6 +9426,29 @@ fn cache_unambiguous_typed_shell_session_targets(
             workload_id,
             detail: "ShellSession name exists on more than one execution target".to_owned(),
         });
+    }
+    Ok(())
+}
+
+fn cache_target_local_typed_shell_session_targets(
+    state: &ServerState,
+    peer_uid: u32,
+    bindings: &[(public_wire::ShellName, String)],
+) -> Result<(), TypedError> {
+    let mut names = BTreeSet::new();
+    for (name, _) in bindings {
+        if !names.insert(name.as_str().to_owned()) {
+            forget_typed_shell_session_target(state, peer_uid, name);
+            return Err(TypedError::WorkloadAliasConflict {
+                workload_id: name.as_str().to_owned(),
+                detail:
+                    "ShellSession name appears more than once on the requested execution target"
+                        .to_owned(),
+            });
+        }
+    }
+    for (name, target) in bindings {
+        remember_typed_shell_session_target(state, peer_uid, name, target);
     }
     Ok(())
 }
@@ -30285,6 +30301,57 @@ mod broker_dispatch_tests {
             super::cached_typed_shell_session_target(&state, 1000, &unaffected).as_deref(),
             Some("new.target"),
             "unrelated unambiguous bindings remain cacheable after a conflict"
+        );
+    }
+
+    #[test]
+    fn targeted_typed_shell_bindings_wait_for_local_alias_validation() {
+        let state = test_state_with_broker_socket(unreachable_broker_socket_path(
+            "targeted-shell-bindings",
+        ));
+        let duplicate = d2b_contracts::public_wire::ShellName::new("primary").unwrap();
+        let unique = d2b_contracts::public_wire::ShellName::new("other").unwrap();
+        let error = super::cache_target_local_typed_shell_session_targets(
+            &state,
+            1000,
+            &[
+                (duplicate.clone(), "healthy".to_owned()),
+                (unique.clone(), "healthy".to_owned()),
+                (duplicate.clone(), "healthy".to_owned()),
+            ],
+        )
+        .expect_err("a target-local duplicate must fail closed");
+        assert!(matches!(
+            error,
+            super::typed_error::TypedError::WorkloadAliasConflict { .. }
+        ));
+        assert_eq!(
+            super::cached_typed_shell_session_target(&state, 1000, &duplicate),
+            None,
+            "a conflicting target-local result must invalidate the duplicate binding"
+        );
+        assert_eq!(
+            super::cached_typed_shell_session_target(&state, 1000, &unique),
+            None,
+            "a target-local result must not cache any session before validation"
+        );
+
+        super::cache_target_local_typed_shell_session_targets(
+            &state,
+            1000,
+            &[
+                (duplicate.clone(), "healthy".to_owned()),
+                (unique.clone(), "healthy".to_owned()),
+            ],
+        )
+        .expect("an unambiguous target-local result caches its sessions");
+        assert_eq!(
+            super::cached_typed_shell_session_target(&state, 1000, &duplicate).as_deref(),
+            Some("healthy")
+        );
+        assert_eq!(
+            super::cached_typed_shell_session_target(&state, 1000, &unique).as_deref(),
+            Some("healthy")
         );
     }
 
