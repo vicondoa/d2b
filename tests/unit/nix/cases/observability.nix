@@ -59,12 +59,28 @@ let
       ];
     };
 
+  # Scenario keys preserve assertion granularity while sharing the full
+  # nixosSystem evaluation across projections.
+  scenarios = {
+    default = { ... }: { };
+    observability-disabled = { ... }: { d2b.observability.enable = false; };
+    observability-enabled = { ... }: { d2b.observability.enable = true; };
+    observability-enabled-corp-vm = { ... }: {
+      d2b.observability.enable = true;
+      d2b.vms.corp-vm.observability.enable = true;
+    };
+  };
+
   evalCase = caseSpec:
     let
       kind = caseSpec.kind or (if caseSpec ? extract || caseSpec ? expectedExtract then "expect-success" else "expect-failure");
       caseSystem = caseSpec.system or shared.defaultSystem;
       override = caseSpec.override or ({ ... }: { });
-      nixos = mkNixos { inherit caseSystem override; };
+      nixos =
+        if caseSpec ? scenario then
+          evaluatedScenarios.${caseSpec.scenario}.${caseSystem}
+        else
+          mkNixos { inherit caseSystem override; };
       failureAttempt =
         if kind == "expect-failure" then
           builtins.tryEval nixos.config.assertions
@@ -122,12 +138,13 @@ let
 
   caseSpecs = {
     obs-disabled-default = {
+      scenario = "default";
       extract = nixos: (manifest nixos)._observability.enabled;
       expectedExtract = false;
     };
 
     obs-default-off-no-units = {
-      override = { ... }: { d2b.observability.enable = false; };
+      scenario = "observability-disabled";
       extract = nixos: {
         otelServiceNames = sortStrings (
           builtins.filter
@@ -140,7 +157,7 @@ let
     };
 
     obs-enabled-defaults = {
-      override = { ... }: { d2b.observability.enable = true; };
+      scenario = "observability-enabled";
       extract = nixos:
         let
           manifestData = manifest nixos;
@@ -245,7 +262,7 @@ let
     };
 
     obs-manifest-fields = {
-      override = { ... }: { d2b.observability.enable = true; };
+      scenario = "observability-enabled";
       extract = nixos:
         let vmObs = lib.attrByPath [ "corp-vm" "observability" ] { } (manifest nixos);
         in {
@@ -263,10 +280,7 @@ let
     };
 
     obs-relay-acl-surface = {
-      override = { ... }: {
-        d2b.observability.enable = true;
-        d2b.vms.corp-vm.observability.enable = true;
-      };
+      scenario = "observability-enabled-corp-vm";
       extract = nixos:
         let
           processes = nixos.config.d2b._bundle.processesJson.data;
@@ -379,10 +393,7 @@ let
     };
 
     obs-alerting-surface = {
-      override = { ... }: {
-        d2b.observability.enable = true;
-        d2b.vms.corp-vm.observability.enable = true;
-      };
+      scenario = "observability-enabled-corp-vm";
       extract = nixos:
         let
           obsVm = nixos.config.d2b.observability.vmName;
@@ -412,16 +423,13 @@ let
     };
 
     obs-vm-toggle-default-off = {
-      override = { ... }: { d2b.observability.enable = true; };
+      scenario = "observability-enabled";
       extract = nixos: lib.attrByPath [ "corp-vm" "observability" "enabled" ] null (manifest nixos);
       expectedExtract = false;
     };
 
     obs-journal-default-on = {
-      override = { ... }: {
-        d2b.observability.enable = true;
-        d2b.vms.corp-vm.observability.enable = true;
-      };
+      scenario = "observability-enabled-corp-vm";
       extract = nixos:
         let workGuest = nixos.config.d2b._computed.corp-vm.config;
         in
@@ -507,7 +515,7 @@ let
     };
 
     obs-cli-traces-default-on = {
-      override = { ... }: { d2b.observability.enable = true; };
+      scenario = "observability-enabled";
       extract = nixos: nixos.config.d2b.observability.cli.traces.enable;
       expectedExtract = true;
       aux = nixos: { cliDrvPath = (cliPkg nixos).drvPath; };
@@ -524,14 +532,14 @@ let
     };
 
     obs-cli-trace-attr-allowlist = {
-      override = { ... }: { d2b.observability.enable = true; };
+      scenario = "observability-enabled";
       extract = _nixos: true;
       expectedExtract = true;
       aux = nixos: { cliDrvPath = (cliPkg nixos).drvPath; };
     };
 
     obs-reserved-prefix-exempt = {
-      override = { ... }: { d2b.observability.enable = true; };
+      scenario = "observability-enabled";
       extract = nixos: builtins.hasAttr "sys-obs" nixos.config.d2b.vms;
       expectedExtract = true;
     };
@@ -543,6 +551,7 @@ let
     };
 
     obs-dashboards-schema = {
+      scenario = "default";
       extract = _nixos: {
         dashboardFileCount = builtins.length dashboardPaths;
         retiredDashboardDirIsEmpty = dashboardPaths == [ ];
@@ -554,10 +563,7 @@ let
     };
 
     obs-rules-promtool = {
-      override = { ... }: {
-        d2b.observability.enable = true;
-        d2b.vms.corp-vm.observability.enable = true;
-      };
+      scenario = "observability-enabled-corp-vm";
       extract = nixos:
         let
           obsVm = nixos.config.d2b.observability.vmName;
@@ -579,10 +585,7 @@ let
     };
 
     obs-metric-references = {
-      override = { ... }: {
-        d2b.observability.enable = true;
-        d2b.vms.corp-vm.observability.enable = true;
-      };
+      scenario = "observability-enabled-corp-vm";
       extract = nixos:
         let
           obsVm = nixos.config.d2b.observability.vmName;
@@ -614,10 +617,7 @@ let
     };
 
     obs-scrape-job-stability = {
-      override = { ... }: {
-        d2b.observability.enable = true;
-        d2b.vms.corp-vm.observability.enable = true;
-      };
+      scenario = "observability-enabled-corp-vm";
       extract = nixos:
         let
           obsVm = nixos.config.d2b.observability.vmName;
@@ -643,10 +643,7 @@ let
     };
 
     obs-stability = {
-      override = { ... }: {
-        d2b.observability.enable = true;
-        d2b.vms.corp-vm.observability.enable = true;
-      };
+      scenario = "observability-enabled-corp-vm";
       extract = nixos:
         let
           obsVm = nixos.config.d2b.observability.vmName;
@@ -717,7 +714,7 @@ let
     # ----- ADR 0033: host collector parity + hostname identity -----
 
     obs-host-collector-default-off = {
-      override = { ... }: { d2b.observability.enable = true; };
+      scenario = "observability-enabled";
       extract = nixos:
         let
           cfg = nixos.config.d2b.observability._internal.hostCollectorConfig;
@@ -919,6 +916,21 @@ let
       expectedSubstring = "the host OTel collector only";
     };
   };
+
+  scenarioSystems =
+    lib.unique (map (caseSpec: caseSpec.system or shared.defaultSystem) (builtins.attrValues caseSpecs));
+  evaluatedScenarios = builtins.mapAttrs
+    (_scenarioName: scenarioOverride:
+      builtins.listToAttrs (map
+        (caseSystem: {
+          name = caseSystem;
+          value = mkNixos {
+            inherit caseSystem;
+            override = scenarioOverride;
+          };
+        })
+        scenarioSystems))
+    scenarios;
 
   evaluated = builtins.mapAttrs (_name: spec: evalCase spec) caseSpecs;
 
