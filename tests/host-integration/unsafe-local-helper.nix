@@ -44,6 +44,8 @@ pkgs.testers.runNixOSTest {
 
   testScript = ''
 if True:
+    import json
+
     start_all()
     machine.wait_for_unit("d2bd.service")
     machine.wait_for_file("/run/d2b/unsafe-local-helper.sock", timeout=60)
@@ -274,10 +276,12 @@ PY
         "SHELL_COMMAND='printf shell-roundtrip-canary' "
         + cli_shell
     )
-    machine.succeed(
-        shell_client + " list | tee /dev/stderr | jq -e "
-        "'.defaultName == \"primary\" and "
-        "(.sessions | any(.name == \"primary\" and .attached == false))'"
+    shell_list = json.loads(machine.succeed(shell_client + " list"))
+    print(shell_list)
+    assert shell_list["defaultName"] == "primary"
+    assert any(
+        session["name"] == "primary" and not session["attached"]
+        for session in shell_list["sessions"]
     )
     machine.succeed(
         "SHELL_COMMAND='printf reattach-continuity-canary' "
