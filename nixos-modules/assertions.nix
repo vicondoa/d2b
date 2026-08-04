@@ -868,29 +868,10 @@ let
         (lib.filter (row: row.kind == "unsafe-local") realmWorkloadRows);
       localVmConfiguredCount = builtins.length
         (lib.filter hasConfiguredLocalVmLaunch realmWorkloadRows);
-    in [
-      {
-        assertion = unsafeLocalCount <= 256;
-        message = ''
-          d2b declares more than the supported maximum of 256 enabled
-          unsafe-local workloads.
-        '';
-      }
-      {
-        assertion = localVmConfiguredCount <= 256;
-        message = ''
-          d2b declares more than the supported maximum of 256 enabled local-vm
-          workloads with configured launch.
-        '';
-      }
-      {
-        assertion = unsafeLocalCount + localVmConfiguredCount <= 512;
-        message = ''
-          d2b declares more than the supported maximum of 512 private configured
-          workloads.
-        '';
-      }
-    ];
+    in
+    d2bLib.privateConfiguredWorkloadCountAssertions {
+      inherit unsafeLocalCount localVmConfiguredCount;
+    };
 
   gatewayStateBoundaryAssertions =
     lib.mapAttrsToList

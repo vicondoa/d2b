@@ -21,7 +21,7 @@
 #     realmPath as array, canonicalTarget, providerId); kind and runtimeProviderId
 #     are absent at the workload root
 #   • launcher canonicalTarget override uses a valid .d2b target address
-{ mkEval, lib, ... }:
+{ mkEval, lib, d2bLib, ... }:
 
 let
   # ── shared schema base ─────────────────────────────────────────────────────
@@ -251,27 +251,80 @@ let
   unsafeCfg = (mkEval [ unsafeLocalFixture ]).config;
   unsafeRow = builtins.head unsafeCfg.d2b._index.realms.workloads.enabled;
 
-  workloadNames = prefix: count:
-    map (n: "${prefix}-${toString n}") (lib.range 1 count);
-  unsafeBoundFixture = lib.recursiveUpdate workloadSchemaBase {
+  privateAssertionAt = index: unsafeLocalCount: localVmConfiguredCount:
+    builtins.elemAt
+      (d2bLib.privateConfiguredWorkloadCountAssertions {
+        inherit unsafeLocalCount localVmConfiguredCount;
+      })
+      index;
+  expectedUnsafeLimitMessage = ''
+    d2b declares more than the supported maximum of 256 enabled
+    unsafe-local workloads.
+  '';
+  expectedLocalVmLimitMessage = ''
+    d2b declares more than the supported maximum of 256 enabled local-vm
+    workloads with configured launch.
+  '';
+  expectedTotalLimitMessage = ''
+    d2b declares more than the supported maximum of 512 private configured
+    workloads.
+  '';
+  privateAssertionMatches =
+    index: unsafeLocalCount: localVmConfiguredCount: expected: message:
+    let
+      record = privateAssertionAt index unsafeLocalCount localVmConfiguredCount;
+    in
+    record.assertion == expected && record.message == message;
+  privateLimitsExact =
+    d2bLib.privateConfiguredWorkloadLimits == {
+      unsafeLocal = 256;
+      localVmConfigured = 256;
+      total = 512;
+    };
+  privateUnsafeBoundaryChecks = lib.all
+    (probe: privateAssertionMatches
+      0
+      probe.count
+      0
+      probe.expected
+      expectedUnsafeLimitMessage)
+    [
+      { count = 255; expected = true; }
+      { count = 256; expected = true; }
+      { count = 257; expected = false; }
+    ];
+  privateLocalVmBoundaryChecks = lib.all
+    (probe: privateAssertionMatches
+      1
+      0
+      probe.count
+      probe.expected
+      expectedLocalVmLimitMessage)
+    [
+      { count = 255; expected = true; }
+      { count = 256; expected = true; }
+      { count = 257; expected = false; }
+    ];
+  privateTotalBoundaryChecks = lib.all
+    (probe: privateAssertionMatches
+      2
+      probe.unsafe
+      probe.localVm
+      probe.expected
+      expectedTotalLimitMessage)
+    [
+      { unsafe = 255; localVm = 256; expected = true; }
+      { unsafe = 256; localVm = 256; expected = true; }
+      { unsafe = 256; localVm = 257; expected = false; }
+    ];
+
+  limitProbeBase = lib.recursiveUpdate workloadBase {
     d2b.daemonExperimental.enable = true;
     d2b.realms.host = {
       allowedUsers = [ "alice" ];
       policy.allowUnsafeLocal = true;
-      workloads = lib.genAttrs (workloadNames "unsafe" 257) (_: {
+      workloads.tools = {
         kind = "unsafe-local";
-        launcher.items.run = {
-          type = "exec";
-          argv = [ "true" ];
-        };
-      });
-    };
-  };
-  localVmBoundFixture = lib.recursiveUpdate workloadSchemaBase {
-    d2b.realms.work = {
-      allowedUsers = [ "alice" ];
-      workloads = lib.genAttrs (workloadNames "local" 257) (_: {
-        kind = "local-vm";
         launcher = {
           enable = true;
           items.run = {
@@ -279,9 +332,85 @@ let
             argv = [ "true" ];
           };
         };
-      });
+      };
+    };
+    d2b.realms.work = {
+      path = "work";
+      env = "work";
+      network.envs = [ "work" ];
+      allowedUsers = [ "alice" ];
+      workloads.laptop = {
+        kind = "local-vm";
+        legacyVmName = "corpbox";
+        launcher = {
+          enable = true;
+          items.run = {
+            type = "exec";
+            argv = [ "true" ];
+          };
+        };
+      };
     };
   };
+  limitProbeBaseCfg = (mkEval [ limitProbeBase ]).config;
+  limitProbeRows = limitProbeBaseCfg.d2b._index.realms.workloads.enabled;
+  limitProbeUnsafeRow = lib.findFirst
+    (row: row.kind == "unsafe-local")
+    null
+    limitProbeRows;
+  limitProbeLocalVmRow = lib.findFirst
+    (row: row.kind == "local-vm")
+    null
+    limitProbeRows;
+
+  # Force compact copies of one real index row so the production assertion
+  # path sees boundary counts without expanding hundreds of workload modules.
+  limitProbeCfgWithRows = rows:
+    (mkEval [
+      limitProbeBase
+      ({ ... }: {
+        d2b._index.realms.workloads.enabled = lib.mkForce rows;
+      })
+    ]).config;
+  limitProbeUnsafeCfg =
+    limitProbeCfgWithRows (lib.replicate 257 limitProbeUnsafeRow);
+  limitProbeLocalVmCfg =
+    limitProbeCfgWithRows (lib.replicate 257 limitProbeLocalVmRow);
+  limitProbeTotalCfg =
+    limitProbeCfgWithRows (
+      (lib.replicate 257 limitProbeUnsafeRow)
+      ++ (lib.replicate 256 limitProbeLocalVmRow)
+    );
+  productionAssertionMatches = cfg: needles: expectedMessage:
+    let
+      record = lib.findFirst
+        (assertion:
+          assertion.assertion == false
+          && lib.all
+            (needle: lib.hasInfix needle assertion.message)
+            needles)
+        null
+        cfg.assertions;
+    in
+    record != null
+    && record.assertion == false
+    && record.message == expectedMessage;
+  productionUnsafeOverflow = productionAssertionMatches
+    limitProbeUnsafeCfg
+    [ "maximum of 256" "unsafe-local workloads" ]
+    expectedUnsafeLimitMessage;
+  productionLocalVmOverflow = productionAssertionMatches
+    limitProbeLocalVmCfg
+    [ "maximum of 256" "local-vm" "configured launch" ]
+    expectedLocalVmLimitMessage;
+  productionTotalUnsafeOverflow = productionAssertionMatches
+    limitProbeTotalCfg
+    [ "maximum of 256" "unsafe-local workloads" ]
+    expectedUnsafeLimitMessage;
+  productionTotalOverflow = productionAssertionMatches
+    limitProbeTotalCfg
+    [ "maximum of 512" "private configured" "workloads" ]
+    expectedTotalLimitMessage;
 
   # ── helpers ─────────────────────────────────────────────────────────────────
   failureMessages = modules:
@@ -491,12 +620,19 @@ in
 
   "realm-workloads/private-configured-workload-bounds" = {
     expr = {
-      unsafeOverflow = hasMessage
-        [ "maximum of 256" "unsafe-local workloads" ]
-        (failureMessages [ unsafeBoundFixture ]);
-      localVmOverflow = hasMessage
-        [ "maximum of 256" "local-vm" "configured launch" ]
-        (failureMessages [ localVmBoundFixture ]);
+      unsafeOverflow =
+        privateLimitsExact
+        && privateUnsafeBoundaryChecks
+        && privateTotalBoundaryChecks
+        && productionUnsafeOverflow
+        && productionTotalUnsafeOverflow
+        && productionTotalOverflow;
+      localVmOverflow =
+        privateLimitsExact
+        && privateLocalVmBoundaryChecks
+        && privateTotalBoundaryChecks
+        && productionLocalVmOverflow
+        && productionTotalOverflow;
     };
     expected = {
       unsafeOverflow = true;
