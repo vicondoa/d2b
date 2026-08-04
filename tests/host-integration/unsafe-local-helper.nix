@@ -217,7 +217,6 @@ while select.select([master], [], [], 0)[0]:
             )
             break
         raise
-output.clear()
 command = os.environ.get("SHELL_COMMAND", "printf cli-shell-attach-canary")
 expected = command.split()[-1].encode()
 deadline = time.monotonic() + 30
