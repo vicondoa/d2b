@@ -3523,8 +3523,9 @@ fn typed_shell_resource_request(request: &Value) -> bool {
     let shell_ref = request
         .get("resourceRef")
         .and_then(Value::as_str)
-        .is_some_and(|value| value.starts_with("ShellSession/"));
-    let shell_list = request.get("resourceType").and_then(Value::as_str) == Some("ShellSession");
+        .is_some_and(is_typed_shell_resource_ref);
+    let shell_list = request.get("resourceType").and_then(Value::as_str)
+        == Some("shell-terminal.d2bus.org.ShellSession");
     (shell_ref || shell_list)
         && matches!(
             request.get("method").and_then(Value::as_str),
@@ -3554,7 +3555,7 @@ fn dispatch_typed_shell_resource_request(
         .and_then(|sessions| sessions.get(&resource).cloned())
         .ok_or_else(shell_protocol_failed)?;
     let name = resource
-        .strip_prefix("ShellSession/")
+        .strip_prefix("shell-terminal.d2bus.org.ShellSession/")
         .and_then(|value| public_wire::ShellName::new(value).ok())
         .ok_or_else(shell_protocol_failed)?;
     let op = match request.get("method").and_then(Value::as_str) {
@@ -9125,11 +9126,16 @@ fn typed_shell_request(request: &Value) -> bool {
     matches!(
         request.get("method").and_then(Value::as_str),
         Some("Create" | "Attach")
-    ) && (request.get("resourceType").and_then(Value::as_str) == Some("ShellSession")
+    ) && (request.get("resourceType").and_then(Value::as_str)
+        == Some("shell-terminal.d2bus.org.ShellSession")
         || request
             .get("resourceRef")
             .and_then(Value::as_str)
-            .is_some_and(|value| value.starts_with("ShellSession/")))
+            .is_some_and(is_typed_shell_resource_ref))
+}
+
+fn is_typed_shell_resource_ref(value: &str) -> bool {
+    value.starts_with("shell-terminal.d2bus.org.ShellSession/")
 }
 
 fn run_typed_shell_owner(stream: Socket, state: ServerState, peer: PeerIdentity, request: Value) {
@@ -9152,7 +9158,7 @@ fn run_typed_shell_owner(stream: Socket, state: ServerState, peer: PeerIdentity,
             request
                 .get("name")
                 .and_then(Value::as_str)
-                .map(|name| format!("ShellSession/{name}"))
+                .map(|name| format!("shell-terminal.d2bus.org.ShellSession/{name}"))
         })
     else {
         let _ = write_json_frame(&stream, &wire::error_frame(&shell_protocol_failed()));
@@ -9188,7 +9194,7 @@ fn run_typed_shell_owner(stream: Socket, state: ServerState, peer: PeerIdentity,
         target
     };
     let name = match resource
-        .strip_prefix("ShellSession/")
+        .strip_prefix("shell-terminal.d2bus.org.ShellSession/")
         .and_then(|name| public_wire::ShellName::new(name).ok())
     {
         Some(name) => name,

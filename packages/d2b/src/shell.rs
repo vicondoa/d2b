@@ -8,6 +8,8 @@ use crate::{
     context::{OutputMode, RequestDeadline, ZoneContext, parse_resource_ref},
 };
 
+const SHELL_SESSION_TYPE: &str = "shell-terminal.d2bus.org.ShellSession";
+
 #[derive(Debug, Args, Clone)]
 pub(crate) struct ShellArgs {
     #[command(subcommand)]
@@ -108,8 +110,9 @@ fn open(
     }
     warn_unsafe_local(&execution_ref, mode);
     let name = args.name.as_deref().unwrap_or("primary");
-    let session_ref = d2b_contracts::v3::ResourceRef::parse(&format!("ShellSession/{name}"))
-        .map_err(|_| context.failure("ref-invalid", "invalid shell session name", mode, 2))?;
+    let session_ref =
+        d2b_contracts::v3::ResourceRef::parse(&format!("{SHELL_SESSION_TYPE}/{name}"))
+            .map_err(|_| context.failure("ref-invalid", "invalid shell session name", mode, 2))?;
     context.attach_shell(session_ref, Some(execution_ref), args.force, true, deadline)?;
     Ok(0)
 }
@@ -157,7 +160,7 @@ fn list(
     let value = context.invoke(
         "List",
         json!({
-            "resourceType": "ShellSession",
+            "resourceType": SHELL_SESSION_TYPE,
             "executionRef": execution_ref.map(|reference| reference.to_canonical_string()),
         }),
         deadline,
@@ -226,13 +229,12 @@ fn validate_session_ref(
     value: &str,
     mode: OutputMode,
 ) -> Result<d2b_contracts::v3::ResourceRef, CliFailure> {
-    let resource_ref = parse_resource_ref(value, None)?;
-    if resource_ref.resource_type().as_str() != "ShellSession"
-        && !resource_ref
-            .resource_type()
-            .as_str()
-            .contains("ShellSession")
-    {
+    let canonical = value
+        .strip_prefix("ShellSession/")
+        .map(|name| format!("{SHELL_SESSION_TYPE}/{name}"))
+        .unwrap_or_else(|| value.to_owned());
+    let resource_ref = parse_resource_ref(&canonical, None)?;
+    if resource_ref.resource_type().as_str() != SHELL_SESSION_TYPE {
         return Err(context.failure(
             "ref-invalid",
             "shell command requires a ShellSession ResourceRef",

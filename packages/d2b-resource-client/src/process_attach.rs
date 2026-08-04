@@ -32,6 +32,7 @@ pub const MAX_PROCESS_ATTACH_MESSAGE_BYTES: usize =
 const STREAM_OPEN: u8 = 0;
 const STREAM_CLOSING: u8 = 1;
 const STREAM_CLOSED: u8 = 2;
+const SHELL_SESSION_TYPE: &str = "shell-terminal.d2bus.org.ShellSession";
 
 /// The two resource classes that may be named by an attach request.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -97,7 +98,7 @@ impl ProcessAttachTarget {
         execution_ref: Option<ResourceRef>,
         force: bool,
     ) -> Result<Self, ClientError> {
-        if resource.resource_type().as_str() != "ShellSession"
+        if resource.resource_type().as_str() != SHELL_SESSION_TYPE
             || execution_ref.as_ref().is_some_and(|reference| {
                 !matches!(reference.resource_type().as_str(), "Host" | "Guest")
             })
