@@ -9247,6 +9247,9 @@ fn run_typed_shell_owner(stream: Socket, state: ServerState, peer: PeerIdentity,
             }
         }
     }
+    let _ = established
+        .backend
+        .close_attachment(rt.handle(), &mut control_sequence);
 }
 
 fn run_shell_owner(
