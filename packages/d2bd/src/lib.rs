@@ -561,18 +561,10 @@ struct CachedTypedShellSessionTarget {
     target: String,
 }
 
+#[derive(Default)]
 struct TypedShellSessionTargetCache {
     entries: BTreeMap<(u32, String), CachedTypedShellSessionTarget>,
     recency: VecDeque<(u32, String)>,
-}
-
-impl Default for TypedShellSessionTargetCache {
-    fn default() -> Self {
-        Self {
-            entries: BTreeMap::new(),
-            recency: VecDeque::new(),
-        }
-    }
 }
 
 impl std::fmt::Debug for TypedShellSessionTargetCache {
