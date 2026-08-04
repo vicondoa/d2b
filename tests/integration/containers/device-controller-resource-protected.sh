@@ -20,7 +20,7 @@ nlc_require_podman
 cargo test --manifest-path packages/Cargo.toml -p d2b-core-controller \
   --test config_cleanup --no-run
 
-binary=$(find packages/target/debug/deps -maxdepth 1 -type f \
+binary=$(find "$ROOT/packages/target/debug/deps" -maxdepth 1 -type f \
   -name 'config_cleanup-*' -perm -111 -print | sort | tail -1)
 [ -n "$binary" ] || nlc_fail "config_cleanup test binary was not built"
 
