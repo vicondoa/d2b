@@ -207,7 +207,7 @@ pid, master = pty.fork()
 if pid == 0:
     os.execv(
         "/run/current-system/sw/bin/d2b",
-        ["d2b", "shell", "attach", "ShellSession/cli-e2e"],
+        ["d2b", "shell", "attach", "ShellSession/cli-e2e", "--force"],
     )
 fcntl.ioctl(master, termios.TIOCSWINSZ, struct.pack("HHHH", 24, 80, 0, 0))
 output = bytearray()
