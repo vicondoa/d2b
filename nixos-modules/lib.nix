@@ -18,6 +18,24 @@ let
     total = 512;
   };
 
+  hasConfiguredLocalVmLaunch = { realms }: row:
+    let
+      declared = realms.${row.realmName}.workloads.${row.workloadName};
+    in
+    row.kind == "local-vm"
+    && row.launcherEnabled
+    && (declared.launcher.items != { }
+      || declared.launcher.defaultItem != null
+      || declared.shell.enable);
+
+  privateConfiguredWorkloadCounts = { rows, realms }:
+    {
+      unsafeLocalCount = builtins.length
+        (lib.filter (row: row.kind == "unsafe-local") rows);
+      localVmConfiguredCount = builtins.length
+        (lib.filter (hasConfiguredLocalVmLaunch { inherit realms; }) rows);
+    };
+
   privateConfiguredWorkloadCountAssertions =
     { unsafeLocalCount
     , localVmConfiguredCount
@@ -111,6 +129,7 @@ in
 rec {
   inherit hex2;
   inherit d2bReadAudioState;
+  inherit hasConfiguredLocalVmLaunch privateConfiguredWorkloadCounts;
   inherit privateConfiguredWorkloadLimits privateConfiguredWorkloadCountAssertions;
 
   cleanRustPackagesSource = packagesPath:

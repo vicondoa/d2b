@@ -273,9 +273,11 @@ option/assertion cases and add focused env/VM layers only where the contract
 needs them. Retain at least one full positive and one full negative
 `nixosSystem` integration path per affected module family. Identical scenario
 configurations share one evaluated thunk while preserving one case per
-contract. Cardinality boundaries use a pure production assertion helper plus
-an actual negative module-wiring probe; do not materialize hundreds of typed
-submodules solely to test a fixed count.
+contract. Cardinality boundaries use three tiers: pure limit/helper checks, a pure
+production counter composed with the helper at boundary rows, and a small
+real-wiring config pinning declarations -> index -> counter -> assertion
+records. Do not force an internal `_index` value or materialize hundreds of
+typed submodules solely to test a fixed count.
 
 `D2B_NIX_UNIT_CHECK` remains the manual single-shard selector. When
 set, it exits through the selected Nix check before eval-jobs bootstrap or

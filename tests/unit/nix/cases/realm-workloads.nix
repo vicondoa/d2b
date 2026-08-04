@@ -367,17 +367,35 @@ let
         enable = true;
         kind = "local-vm";
         launcher = {
-          enable = true;
+          enable = false;
           items.run = {
             type = "exec";
             argv = [ "true" ];
           };
         };
       };
+      workloads.shellonly = {
+        enable = true;
+        kind = "local-vm";
+        launcher = {
+          enable = true;
+          defaultItem = null;
+          items = { };
+        };
+        shell.enable = true;
+      };
     };
   };
   wiringProbeCfg = (mkEval [ wiringProbeFixture ]).config;
   wiringProbeRows = wiringProbeCfg.d2b._index.realms.workloads.enabled;
+  wiringProbeUnsafeRow = lib.findFirst
+    (row: row.kind == "unsafe-local")
+    null
+    wiringProbeRows;
+  wiringProbeLocalVmRow = lib.findFirst
+    (row: row.kind == "local-vm" && row.workloadName == "laptop")
+    null
+    wiringProbeRows;
   wiringProbeDeclaredRows = realmName:
     lib.mapAttrsToList
       (workloadName: workload: {
@@ -388,6 +406,20 @@ let
       (lib.filterAttrs
         (_: workload: workload.enable)
         wiringProbeCfg.d2b.realms.${realmName}.workloads);
+  wiringProbeExpectedDeclarations = [
+    { realmName = "host"; name = "scripts"; kind = "unsafe-local"; }
+    { realmName = "host"; name = "tools"; kind = "unsafe-local"; }
+    { realmName = "work"; name = "desktop"; kind = "local-vm"; }
+    { realmName = "work"; name = "laptop"; kind = "local-vm"; }
+    { realmName = "work"; name = "shellonly"; kind = "local-vm"; }
+  ];
+  wiringProbeDeclarationsMatch =
+    lib.sortOn (row: "${row.realmName}/${row.name}") (
+      wiringProbeDeclaredRows "host"
+      ++ wiringProbeDeclaredRows "work"
+    )
+    == lib.sortOn (row: "${row.realmName}/${row.name}")
+      wiringProbeExpectedDeclarations;
   wiringProbeIndexRows = map
     (row: {
       realmName = row.realmName;
@@ -401,19 +433,64 @@ let
       wiringProbeDeclaredRows "host"
       ++ wiringProbeDeclaredRows "work"
     );
-  wiringProbeUnsafeLocalCount = builtins.length
-    (lib.filter (row: row.kind == "unsafe-local") wiringProbeRows);
-  wiringProbeLocalVmConfiguredCount = builtins.length
-    (lib.filter
-      (row: row.kind == "local-vm" && row.launcherItems != [ ])
-      wiringProbeRows);
-  wiringProbeCountsMatch = {
-    unsafeLocal = wiringProbeUnsafeLocalCount;
-    localVmConfigured = wiringProbeLocalVmConfiguredCount;
-  } == {
-    unsafeLocal = 2;
-    localVmConfigured = 2;
+  wiringProbeCounts = d2bLib.privateConfiguredWorkloadCounts {
+    rows = wiringProbeRows;
+    realms = wiringProbeCfg.d2b.realms;
   };
+  wiringProbeCountsMatch = wiringProbeCounts == {
+    unsafeLocalCount = 2;
+    localVmConfiguredCount = 2;
+  };
+  privateProductionAssertionAt = index: rows:
+    let
+      counts = d2bLib.privateConfiguredWorkloadCounts {
+        inherit rows;
+        realms = wiringProbeCfg.d2b.realms;
+      };
+    in
+    builtins.elemAt
+      (d2bLib.privateConfiguredWorkloadCountAssertions counts)
+      index;
+  privateProductionAssertionMatches =
+    index: rows: expected: message:
+    let
+      record = privateProductionAssertionAt index rows;
+    in
+    record.assertion == expected && record.message == message;
+  privateProductionUnsafeBoundaryChecks = lib.all
+    (probe: privateProductionAssertionMatches
+      0
+      (lib.replicate probe.count wiringProbeUnsafeRow)
+      probe.expected
+      expectedUnsafeLimitMessage)
+    [
+      { count = 255; expected = true; }
+      { count = 256; expected = true; }
+      { count = 257; expected = false; }
+    ];
+  privateProductionLocalVmBoundaryChecks = lib.all
+    (probe: privateProductionAssertionMatches
+      1
+      (lib.replicate probe.count wiringProbeLocalVmRow)
+      probe.expected
+      expectedLocalVmLimitMessage)
+    [
+      { count = 255; expected = true; }
+      { count = 256; expected = true; }
+      { count = 257; expected = false; }
+    ];
+  privateProductionTotalBoundaryChecks = lib.all
+    (probe: privateProductionAssertionMatches
+      2
+      ((lib.replicate probe.unsafe wiringProbeUnsafeRow)
+        ++ (lib.replicate probe.localVm wiringProbeLocalVmRow))
+      probe.expected
+      expectedTotalLimitMessage)
+    [
+      { unsafe = 255; localVm = 256; expected = true; }
+      { unsafe = 256; localVm = 256; expected = true; }
+      { unsafe = 256; localVm = 257; expected = false; }
+    ];
   wiringProbeAssertionMatches = expectedMessage:
     let
       record = lib.findFirst
@@ -642,6 +719,9 @@ in
         privateLimitsExact
         && privateUnsafeBoundaryChecks
         && privateTotalBoundaryChecks
+        && privateProductionUnsafeBoundaryChecks
+        && privateProductionTotalBoundaryChecks
+        && wiringProbeDeclarationsMatch
         && wiringProbeRowsMatch
         && wiringProbeCountsMatch
         && wiringProbeProductionAssertions;
@@ -649,6 +729,9 @@ in
         privateLimitsExact
         && privateLocalVmBoundaryChecks
         && privateTotalBoundaryChecks
+        && privateProductionLocalVmBoundaryChecks
+        && privateProductionTotalBoundaryChecks
+        && wiringProbeDeclarationsMatch
         && wiringProbeRowsMatch
         && wiringProbeCountsMatch
         && wiringProbeProductionAssertions;

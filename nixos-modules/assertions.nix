@@ -161,15 +161,6 @@ let
   # (Same-VM references across realms share a CID by design and are not
   # flagged here; the global vmVsockCidCollisions check covers per-VM uniqueness.)
   realmWorkloadRows = realmIndex.workloads.enabled;
-  hasConfiguredLocalVmLaunch = row:
-    let
-      declared = cfg.realms.${row.realmName}.workloads.${row.workloadName};
-    in
-    row.kind == "local-vm"
-    && row.launcherEnabled
-    && (declared.launcher.items != { }
-      || declared.launcher.defaultItem != null
-      || declared.shell.enable);
   nixosWorkloadRows =
     lib.filter
       (row:
@@ -864,14 +855,12 @@ let
 
   privateConfiguredWorkloadCountAssertions =
     let
-      unsafeLocalCount = builtins.length
-        (lib.filter (row: row.kind == "unsafe-local") realmWorkloadRows);
-      localVmConfiguredCount = builtins.length
-        (lib.filter hasConfiguredLocalVmLaunch realmWorkloadRows);
+      counts = d2bLib.privateConfiguredWorkloadCounts {
+        rows = realmWorkloadRows;
+        realms = cfg.realms;
+      };
     in
-    d2bLib.privateConfiguredWorkloadCountAssertions {
-      inherit unsafeLocalCount localVmConfiguredCount;
-    };
+    d2bLib.privateConfiguredWorkloadCountAssertions counts;
 
   gatewayStateBoundaryAssertions =
     lib.mapAttrsToList
