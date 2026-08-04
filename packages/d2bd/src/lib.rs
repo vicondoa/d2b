@@ -555,6 +555,72 @@ struct RuntimeIdentity {
     expect_root_owned_parent: bool,
 }
 
+const MAX_TYPED_SHELL_SESSION_TARGETS: usize = 256;
+
+struct CachedTypedShellSessionTarget {
+    target: String,
+    generation: u64,
+}
+
+struct TypedShellSessionTargetCache {
+    entries: BTreeMap<(u32, String), CachedTypedShellSessionTarget>,
+    next_generation: u64,
+}
+
+impl Default for TypedShellSessionTargetCache {
+    fn default() -> Self {
+        Self {
+            entries: BTreeMap::new(),
+            next_generation: 0,
+        }
+    }
+}
+
+impl TypedShellSessionTargetCache {
+    fn next_generation(&mut self) -> u64 {
+        let generation = self.next_generation;
+        self.next_generation = self.next_generation.saturating_add(1);
+        generation
+    }
+
+    fn remember(&mut self, key: (u32, String), target: String) {
+        let generation = self.next_generation();
+        if let Some(entry) = self.entries.get_mut(&key) {
+            entry.target = target;
+            entry.generation = generation;
+            return;
+        }
+        if self.entries.len() >= MAX_TYPED_SHELL_SESSION_TARGETS {
+            let oldest = self
+                .entries
+                .iter()
+                .min_by(|(left_key, left), (right_key, right)| {
+                    left.generation
+                        .cmp(&right.generation)
+                        .then_with(|| left_key.cmp(right_key))
+                })
+                .map(|(key, _)| key.clone());
+            if let Some(oldest) = oldest {
+                self.entries.remove(&oldest);
+            }
+        }
+        self.entries
+            .insert(key, CachedTypedShellSessionTarget { target, generation });
+    }
+
+    fn cached(&mut self, key: &(u32, String)) -> Option<String> {
+        let generation = self.next_generation();
+        self.entries.get_mut(key).map(|entry| {
+            entry.generation = generation;
+            entry.target.clone()
+        })
+    }
+
+    fn forget(&mut self, key: &(u32, String)) {
+        self.entries.remove(key);
+    }
+}
+
 #[derive(Debug, Clone)]
 struct ServerState {
     config: DaemonConfig,
@@ -593,10 +659,11 @@ struct ServerState {
     /// trusted bundle/storage admission is incomplete; public resource
     /// requests fail closed rather than falling back to the legacy path.
     resource_plane: Arc<Mutex<Option<Arc<resource_runtime::ResourcePlane>>>>,
-    /// Execution-target bindings for qualified ShellSession resources. The
-    /// provider may remove a killed session before a retry arrives, so the
-    /// daemon keeps the exact target binding independently of provider lists.
-    typed_shell_session_targets: Arc<Mutex<BTreeMap<(u32, String), String>>>,
+    /// Bounded execution-target bindings for qualified ShellSession resources.
+    /// The provider may remove a killed session before a retry arrives, so the
+    /// daemon keeps recent exact target bindings independently of provider
+    /// lists.
+    typed_shell_session_targets: Arc<Mutex<TypedShellSessionTargetCache>>,
     /// Authoritative Zone index for daemon-side coordination state. USBIP
     /// reconciliation, force-stop generations, and activation staging all
     /// resolve through this index; no process-global lock carries that state.
@@ -614,8 +681,8 @@ fn new_zone_coordinator() -> Arc<Mutex<ZoneCoordinator>> {
     Arc::new(Mutex::new(ZoneCoordinator::new()))
 }
 
-fn new_typed_shell_session_targets() -> Arc<Mutex<BTreeMap<(u32, String), String>>> {
-    Arc::new(Mutex::new(BTreeMap::new()))
+fn new_typed_shell_session_targets() -> Arc<Mutex<TypedShellSessionTargetCache>> {
+    Arc::new(Mutex::new(TypedShellSessionTargetCache::default()))
 }
 
 /// Populate the daemon's Zone authority index from the trusted host bundle.
@@ -9290,7 +9357,7 @@ fn remember_typed_shell_session_target(
     target: &str,
 ) {
     if let Ok(mut sessions) = state.typed_shell_session_targets.lock() {
-        sessions.insert((peer_uid, name.as_str().to_owned()), target.to_owned());
+        sessions.remember((peer_uid, name.as_str().to_owned()), target.to_owned());
     }
 }
 
@@ -9300,7 +9367,7 @@ fn forget_typed_shell_session_target(
     name: &public_wire::ShellName,
 ) {
     if let Ok(mut sessions) = state.typed_shell_session_targets.lock() {
-        sessions.remove(&(peer_uid, name.as_str().to_owned()));
+        sessions.forget(&(peer_uid, name.as_str().to_owned()));
     }
 }
 
@@ -9334,7 +9401,16 @@ fn cached_typed_shell_session_target(
         .typed_shell_session_targets
         .lock()
         .ok()
-        .and_then(|sessions| sessions.get(&(peer_uid, name.as_str().to_owned())).cloned())
+        .and_then(|mut sessions| sessions.cached(&(peer_uid, name.as_str().to_owned())))
+}
+
+#[cfg(test)]
+fn typed_shell_session_target_cache_len(state: &ServerState) -> usize {
+    state
+        .typed_shell_session_targets
+        .lock()
+        .map(|sessions| sessions.entries.len())
+        .unwrap_or(0)
 }
 
 fn find_typed_shell_session_target(
@@ -30106,9 +30182,8 @@ mod broker_dispatch_tests {
 
     #[test]
     fn listed_typed_shell_bindings_are_cached_after_an_unambiguous_scan() {
-        let (state, _dir) = test_state_with_broker_socket(unreachable_broker_socket_path(
-            "listed-shell-bindings",
-        ));
+        let (state, _dir) =
+            test_state_with_broker_socket(unreachable_broker_socket_path("listed-shell-bindings"));
         let name = d2b_contracts::public_wire::ShellName::new("primary").unwrap();
         let other_name = d2b_contracts::public_wire::ShellName::new("other").unwrap();
         super::cache_unambiguous_typed_shell_session_targets(
@@ -30148,6 +30223,53 @@ mod broker_dispatch_tests {
             super::cached_typed_shell_session_target(&state, 1000, &name),
             None,
             "an ambiguous list must invalidate any stale cached target"
+        );
+    }
+
+    #[test]
+    fn typed_shell_target_cache_is_bounded_and_preserves_recent_exact_retries() {
+        let (state, _dir) =
+            test_state_with_broker_socket(unreachable_broker_socket_path("bounded-shell-bindings"));
+        let retained = d2b_contracts::public_wire::ShellName::new("retained").unwrap();
+        super::remember_typed_shell_session_target(&state, 1000, &retained, "tools.host.d2b");
+
+        for index in 0..super::MAX_TYPED_SHELL_SESSION_TARGETS {
+            assert_eq!(
+                super::cached_typed_shell_session_target(&state, 1000, &retained).as_deref(),
+                Some("tools.host.d2b"),
+                "a retry must refresh the exact target binding before churn"
+            );
+            let name =
+                d2b_contracts::public_wire::ShellName::new(format!("churn-{index:03}")).unwrap();
+            super::remember_typed_shell_session_target(&state, 1000, &name, "work");
+        }
+
+        assert_eq!(
+            super::typed_shell_session_target_cache_len(&state),
+            super::MAX_TYPED_SHELL_SESSION_TARGETS
+        );
+        assert_eq!(
+            super::cached_typed_shell_session_target(&state, 1000, &retained).as_deref(),
+            Some("tools.host.d2b"),
+            "recent exact-session retries must survive bounded eviction"
+        );
+        let evicted =
+            d2b_contracts::public_wire::ShellName::new("churn-000").expect("valid churn name");
+        assert_eq!(
+            super::cached_typed_shell_session_target(&state, 1000, &evicted),
+            None,
+            "eviction must be deterministic and remove the oldest binding"
+        );
+
+        super::remember_typed_shell_session_target(&state, 1001, &retained, "other.target");
+        assert_eq!(
+            super::cached_typed_shell_session_target(&state, 1000, &retained).as_deref(),
+            Some("tools.host.d2b")
+        );
+        assert_eq!(
+            super::cached_typed_shell_session_target(&state, 1001, &retained).as_deref(),
+            Some("other.target"),
+            "bounded eviction must retain UID scoping"
         );
     }
 
