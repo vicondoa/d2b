@@ -162,7 +162,10 @@ let
     (pkg: containsRemoteRegistryMarker (hostPackageRef pkg))
     goodCfg.environment.systemPackages;
   hostHasPackageNameContaining = needle:
-    lib.any (pkg: lib.hasInfix needle (hostPackageName pkg))
+    lib.any
+      (pkg:
+        lib.hasInfix needle (hostPackageName pkg)
+        || lib.hasInfix needle (toString pkg))
       goodCfg.environment.systemPackages;
   guestPackageName = pkg: pkg.pname or (lib.getName pkg);
   gatewayGuestHasPackage = wanted:
@@ -516,12 +519,18 @@ in
 
   "gateway-vm/host-activation-and-services-exclude-realm-provider-material" = {
     expr = {
+      activationScriptsNonEmpty =
+        (builtins.attrNames goodCfg.system.activationScripts) != [ ];
       activationCarriesRelayOrAcaMaterial = activationCarriesForbiddenRealmMaterial;
+      servicesNonEmpty =
+        (builtins.attrNames goodCfg.systemd.services) != [ ];
       servicesCarryRelayOrAcaMaterial = servicesCarryForbiddenRealmMaterial;
       inherit servicesCarryGatewayRuntime;
     };
     expected = {
+      activationScriptsNonEmpty = true;
       activationCarriesRelayOrAcaMaterial = false;
+      servicesNonEmpty = true;
       servicesCarryRelayOrAcaMaterial = false;
       servicesCarryGatewayRuntime = false;
     };
@@ -555,12 +564,14 @@ in
 
   "gateway-vm/host-system-packages-exclude-realm-provider-material" = {
     expr = {
+      systemPackagesNonEmpty = goodCfg.environment.systemPackages != [ ];
       carriesRelayOrAcaMaterial = hostPackagesCarryForbiddenRealmMaterial;
       carriesRemoteNodeRegistry = hostPackagesCarryRemoteRegistryMarker;
       hasGatewayRelayPackage = hostHasPackageNameContaining "d2b-gateway-relay";
       hasGatewayRuntimePackage = hostHasPackageNameContaining "d2b-gateway-runtime";
     };
     expected = {
+      systemPackagesNonEmpty = true;
       carriesRelayOrAcaMaterial = false;
       carriesRemoteNodeRegistry = false;
       hasGatewayRelayPackage = false;
