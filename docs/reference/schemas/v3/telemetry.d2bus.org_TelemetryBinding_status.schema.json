@@ -8,6 +8,6 @@
   "title": "telemetry.d2bus.org/TelemetryBinding/status",
   "type": "object",
   "x-d2b-resource-type": "telemetry.d2bus.org.TelemetryBinding",
-  "x-d2b-schema-fingerprint": "sha256:439b10a2f6a06784e9f8e4a2d009796b387754e2832da18fbca1c81c22a0a6a1",
+  "x-d2b-schema-fingerprint": "sha256:bfb94a170bb592761a16cd92c30dcaab8d17fbf990e0a212a816ea258fd0a8db",
   "x-d2b-schema-version": "1.0"
 }

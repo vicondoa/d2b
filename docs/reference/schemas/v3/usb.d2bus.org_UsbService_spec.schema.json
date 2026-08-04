@@ -20,6 +20,6 @@
   "title": "usb.d2bus.org/UsbService/spec",
   "type": "object",
   "x-d2b-resource-type": "usb.d2bus.org.UsbService",
-  "x-d2b-schema-fingerprint": "sha256:6e60a334d5b696f14740006c5a56eb125f1fa5019d3fb8fa9656cc1c123c2f60",
+  "x-d2b-schema-fingerprint": "sha256:adad84c30e6db889e0255f647ad3bb887161b0f16f40df083c318956ae60d4b8",
   "x-d2b-schema-version": "1.0"
 }

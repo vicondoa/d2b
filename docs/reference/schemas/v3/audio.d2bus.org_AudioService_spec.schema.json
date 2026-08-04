@@ -20,6 +20,6 @@
   "title": "audio.d2bus.org/AudioService/spec",
   "type": "object",
   "x-d2b-resource-type": "audio.d2bus.org.AudioService",
-  "x-d2b-schema-fingerprint": "sha256:d1ae72b9a56ac46f83406609bee1a0991fa1dc9f9cf7b0b63b52dd3b6c67b62b",
+  "x-d2b-schema-fingerprint": "sha256:c68e98abb4e124fce0cebcbb9bc6552513a198a979c787193a0e5b95f468dfcb",
   "x-d2b-schema-version": "1.0"
 }

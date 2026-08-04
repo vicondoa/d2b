@@ -20,8 +20,8 @@
   ],
   "x-d2b-binding-resource-type": "security-key.d2bus.org.SecurityKeyBinding",
   "x-d2b-exportability": "explicit-export",
-  "x-d2b-factory-fingerprint": "sha256:8101ab8d17bac0cc1f57f957223fa531a3a5d231f93bc8e56e540dc499830027",
+  "x-d2b-factory-fingerprint": "sha256:03ea1bca976cacb065995968bc850922f934a0bd482d53e6be57ef480838ca46",
   "x-d2b-projection-protocol-version": "1.1",
-  "x-d2b-projection-schema-fingerprint": "sha256:8b63b67989477970d9a0196695aa040b806061a13bacc79e6e71fbc274006d6f",
+  "x-d2b-projection-schema-fingerprint": "sha256:b849696b791bafdf020245315600402aa814386297588c3a42168d4e6222d25b",
   "x-d2b-resource-type": "security-key.d2bus.org.SecurityKeyService"
 }

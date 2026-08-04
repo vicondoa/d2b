@@ -675,6 +675,14 @@ at `[]` and the other three at their existing sets:
 | telemetry | `sha256:de3ef22c8138fbe84c7905fa029d5b3c3f5bed364063b35affe8e0638ca26185` | `sha256:6e6c64a3e39554c76f7d745758a8faf2b81135556dbcd82ea085a073c7334218` | decision 9 | unchanged |
 | USB | `sha256:72b5cafbd2409d187b523b1d6076094f8d6246d0a5714240d1b7bac775ed7b45` | `sha256:f73ce4a2ef7d6c21bfdf4f14da51be28d8ee7b53ecf85751f87c29df9a8d9115` | decision 9 | unchanged |
 
+The table records the fingerprint algorithm in force when this decision was
+accepted. The later `d2b-digest/v1` framing migration changes the encoded
+preimage without changing this decision's field sets or protocol semantics.
+The current generated factory fingerprints are `826bba4a...3efe9` (audio),
+`03ea1bca...ca46` (security key), `c270a695...6eff` (telemetry), and
+`75523203...3c46` (USB); the generated schemas and Rust conformance tests are
+the current machine-readable pins.
+
 Security key's published `x-d2b-allowed-backing-ref-types` additionally moves
 from `null` to `[]`, which is decision 1's visible half. Every
 `projectionSchemaFingerprint` is unchanged because no projection

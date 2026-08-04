@@ -23,8 +23,8 @@
   ],
   "x-d2b-binding-resource-type": "audio.d2bus.org.AudioBinding",
   "x-d2b-exportability": "explicit-export",
-  "x-d2b-factory-fingerprint": "sha256:67352424b92e8da62d2c39f664d9028c85fdede9c38f6a9e3e1423d3009a33a6",
+  "x-d2b-factory-fingerprint": "sha256:826bba4a79e7640376e7920f30e089f6ab68772a54e32b11d0b7f7166fc3efe9",
   "x-d2b-projection-protocol-version": "1.1",
-  "x-d2b-projection-schema-fingerprint": "sha256:e0aafd9924df4b1bf21792a0c4fc7b8d1637dde960dfae33e9d7de2452028690",
+  "x-d2b-projection-schema-fingerprint": "sha256:90ecf287ee78fda81144ad649496ca48de2354ec7dc4651f3b934b7028d70be4",
   "x-d2b-resource-type": "audio.d2bus.org.AudioService"
 }

@@ -11,6 +11,6 @@
   "title": "usb.d2bus.org/UsbService/status",
   "type": "object",
   "x-d2b-resource-type": "usb.d2bus.org.UsbService",
-  "x-d2b-schema-fingerprint": "sha256:247cf6c2bb4b0deb52ce057963ead91469f9308b35270047f1ff910d3e1321d7",
+  "x-d2b-schema-fingerprint": "sha256:3bea942754f083a88ace057f904b2b979f56200aa6bb5e916b281889ece325b1",
   "x-d2b-schema-version": "1.0"
 }

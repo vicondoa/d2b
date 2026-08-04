@@ -17,6 +17,6 @@
   "title": "audio.d2bus.org/AudioService/status",
   "type": "object",
   "x-d2b-resource-type": "audio.d2bus.org.AudioService",
-  "x-d2b-schema-fingerprint": "sha256:b8269d1a7ebeeb3a2846392c6a1e08142b07fc66c16dd93cf5857a69f942c509",
+  "x-d2b-schema-fingerprint": "sha256:8988ec7499b3f6c5fde41644e61320617f5f5cbeead02f3a918fa959ba80c311",
   "x-d2b-schema-version": "1.0"
 }

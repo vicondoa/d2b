@@ -28,8 +28,8 @@
   ],
   "x-d2b-binding-resource-type": "telemetry.d2bus.org.TelemetryBinding",
   "x-d2b-exportability": "explicit-export",
-  "x-d2b-factory-fingerprint": "sha256:6e6c64a3e39554c76f7d745758a8faf2b81135556dbcd82ea085a073c7334218",
+  "x-d2b-factory-fingerprint": "sha256:c270a695b0545e2265354fda804ffa6eab13b8a2ae9176197cf69bbc49a36eff",
   "x-d2b-projection-protocol-version": "1.1",
-  "x-d2b-projection-schema-fingerprint": "sha256:3dcf48e504120108df3972f37f2f6a3a1a4239e78a23753a0942207b876c6ef9",
+  "x-d2b-projection-schema-fingerprint": "sha256:2888dcd08efe2dc8f5ea8b0363ffce51e5eb38ab0bdb9b1388fea1601acb23e7",
   "x-d2b-resource-type": "telemetry.d2bus.org.TelemetryService"
 }

@@ -1892,19 +1892,19 @@ mod tests {
         let expected = [
             (
                 SemanticFamily::Audio,
-                "sha256:67352424b92e8da62d2c39f664d9028c85fdede9c38f6a9e3e1423d3009a33a6",
+                "sha256:826bba4a79e7640376e7920f30e089f6ab68772a54e32b11d0b7f7166fc3efe9",
             ),
             (
                 SemanticFamily::SecurityKey,
-                "sha256:8101ab8d17bac0cc1f57f957223fa531a3a5d231f93bc8e56e540dc499830027",
+                "sha256:03ea1bca976cacb065995968bc850922f934a0bd482d53e6be57ef480838ca46",
             ),
             (
                 SemanticFamily::Telemetry,
-                "sha256:6e6c64a3e39554c76f7d745758a8faf2b81135556dbcd82ea085a073c7334218",
+                "sha256:c270a695b0545e2265354fda804ffa6eab13b8a2ae9176197cf69bbc49a36eff",
             ),
             (
                 SemanticFamily::Usb,
-                "sha256:f73ce4a2ef7d6c21bfdf4f14da51be28d8ee7b53ecf85751f87c29df9a8d9115",
+                "sha256:75523203f0e399b91240e4712f98df1bfb6f0196a5b0826ae9a9d0ba23cb3c46",
             ),
         ];
         for (family, fingerprint) in expected {

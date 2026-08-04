@@ -24,8 +24,8 @@
   ],
   "x-d2b-binding-resource-type": "usb.d2bus.org.UsbBinding",
   "x-d2b-exportability": "explicit-export",
-  "x-d2b-factory-fingerprint": "sha256:f73ce4a2ef7d6c21bfdf4f14da51be28d8ee7b53ecf85751f87c29df9a8d9115",
+  "x-d2b-factory-fingerprint": "sha256:75523203f0e399b91240e4712f98df1bfb6f0196a5b0826ae9a9d0ba23cb3c46",
   "x-d2b-projection-protocol-version": "1.1",
-  "x-d2b-projection-schema-fingerprint": "sha256:dc40fd25748ca024cdd03f74566494f949de8531046ee997cf0e6787e58b34c6",
+  "x-d2b-projection-schema-fingerprint": "sha256:def48ad632ecff0d47f7322de7e05cde5e60305c6cb568e35367a24bc05a8be7",
   "x-d2b-resource-type": "usb.d2bus.org.UsbService"
 }

@@ -10,6 +10,6 @@
   "title": "security-key.d2bus.org/SecurityKeyBinding/status",
   "type": "object",
   "x-d2b-resource-type": "security-key.d2bus.org.SecurityKeyBinding",
-  "x-d2b-schema-fingerprint": "sha256:500bc092662f209088e350667a7b49164241eb785e45c74cc08c77f178911d2a",
+  "x-d2b-schema-fingerprint": "sha256:97e627b40509c99362a303f9d173b26f8345b05bcb07ba63d751449497449d1e",
   "x-d2b-schema-version": "1.0"
 }

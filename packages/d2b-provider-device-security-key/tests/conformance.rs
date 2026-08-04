@@ -81,11 +81,11 @@ fn semantic_descriptor_is_derived_from_the_security_key_catalog() {
     );
     assert_eq!(
         factory.projection_schema_fingerprint().as_str(),
-        "sha256:8b63b67989477970d9a0196695aa040b806061a13bacc79e6e71fbc274006d6f"
+        "sha256:b849696b791bafdf020245315600402aa814386297588c3a42168d4e6222d25b"
     );
     assert_eq!(
         factory.factory_fingerprint().as_str(),
-        "sha256:8101ab8d17bac0cc1f57f957223fa531a3a5d231f93bc8e56e540dc499830027"
+        "sha256:03ea1bca976cacb065995968bc850922f934a0bd482d53e6be57ef480838ca46"
     );
     assert_eq!(
         security_key_projection_schema_fingerprint().unwrap(),

@@ -16,6 +16,6 @@
   "title": "security-key.d2bus.org/SecurityKeyService/spec",
   "type": "object",
   "x-d2b-resource-type": "security-key.d2bus.org.SecurityKeyService",
-  "x-d2b-schema-fingerprint": "sha256:dad09ca42fc4522279883e090c2bd22222006ad865b0dca83eea7b36d1ba85a3",
+  "x-d2b-schema-fingerprint": "sha256:faf55f03eb0cab51ce444eaab9b51cbff80b639cd24ffa234bbfa5719bd7107c",
   "x-d2b-schema-version": "1.0"
 }
