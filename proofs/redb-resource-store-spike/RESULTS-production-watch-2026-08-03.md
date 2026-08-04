@@ -9,7 +9,7 @@ backend-only result remains unchanged.
 
 | Item | Value |
 | --- | --- |
-| Source SHA | `728d2124e278f8e2fcd0acd5145de51717069d8e` |
+| Source SHA | `1413cbbd3b6f7215864cd27b55867235b871bdfb` |
 | Measurement date | 2026-08-03 |
 | Toolchain | `rustc 1.97.0` / `cargo 1.97.0` |
 | Host shape | Linux 7.0.10 x86_64, ext4, 12 CPUs |
@@ -18,25 +18,15 @@ backend-only result remains unchanged.
 | Cache bound | 4,194,304 bytes |
 | Metric | GNU `time -v` whole-process `Maximum resident set size (kbytes)` |
 | Baseline subtraction | None |
-| Harness owner at measurement | `packages/d2b-resource-store-redb/tests/production_watch_rss.rs` |
-| Harness owner now | `packages/d2b-bus/tests/production_watch_rss.rs` (relocated by `ef4f5455`, after this measurement) |
+| Harness owner | `packages/d2b-bus/tests/production_watch_rss.rs` |
 
-### Harness relocation, and what it does not change
+### Harness ownership
 
 `ef4f5455` moved this fixture from the redb crate's integration-test target to
 the bus crate's, so the redb crate no longer depends on `d2b-resource-api` and
-the sealed mutation policy holds again. The move is a rename with no content
-change to the fixture.
-
-**The numbers below were measured before that move and have not been
-re-measured.** They are recorded against Source SHA `728d2124`, where the
-fixture still lived under `d2b-resource-store-redb`. Nothing in this artifact is
-a claim that the relocated target has been run: the measured path through redb,
-the Resource API, the bounded named stream, and the controller queue is
-unchanged by a target rename, but the reading is provenance-bound to the SHA
-above and not to the current tree. A converged heavy rerun will restamp this
-provenance; until it does, treat the SHA, not the file path, as what these
-values attach to.
+the sealed mutation policy holds again. The readings below come from the
+bus-owned target after that move and cover the complete redb, Resource API,
+named-stream, and controller-queue path.
 
 The sibling backend-only artifact,
 [`RESULTS-production-2026-08-03.md`](./RESULTS-production-2026-08-03.md), is
@@ -47,18 +37,11 @@ owner would have been wrong.
 
 ## Command
 
-The hard fixture ran through the public heavy-gate semaphore. **As run**, at
-Source SHA `728d2124`, against the then-current redb target:
+The hard fixture ran through the public heavy-gate semaphore at the Source SHA
+above:
 
 ```text
-cargo run --quiet --manifest-path packages/Cargo.toml -p xtask -- heavy-gate -- cargo test --release --manifest-path packages/Cargo.toml -p d2b-resource-store-redb --test production_watch_rss production_backend_hard_fixture_rss -- --ignored --nocapture --test-threads=1
-```
-
-The equivalent invocation **on the current tree**, after `ef4f5455`, differs
-only in the package selector. It has not been run for this artifact:
-
-```text
-cargo run --quiet --manifest-path packages/Cargo.toml -p xtask -- heavy-gate -- cargo test --release --manifest-path packages/Cargo.toml -p d2b-bus --test production_watch_rss production_backend_hard_fixture_rss -- --ignored --nocapture --test-threads=1
+cargo run --quiet --manifest-path packages/Cargo.toml -p xtask -- heavy-gate -- cargo test --release --manifest-path packages/Cargo.toml -p d2b-bus --features production-rss-fixture --test production_watch_rss production_backend_hard_fixture_rss -- --ignored --nocapture --test-threads=1
 ```
 
 The parent created a fresh provisioned redb image for each run. GNU `time`
@@ -72,14 +55,14 @@ complete lifetime without subtracting a baseline.
 
 | Run | Raw maximum RSS |
 | ---: | ---: |
-| 1 | 20,228 KiB |
-| 2 | 20,248 KiB |
-| 3 | 20,096 KiB |
-| **Median** | **20,228 KiB** |
+| 1 | 20,188 KiB |
+| 2 | 20,308 KiB |
+| 3 | 20,456 KiB |
+| **Median** | **20,308 KiB** |
 
 | Threshold | Result | Headroom |
 | --- | --- | ---: |
-| Whole-process maximum RSS <= 24,576 KiB | **MEASURED-PASS** | 4,348 KiB |
+| Whole-process maximum RSS <= 24,576 KiB | **MEASURED-PASS** | 4,268 KiB |
 
 ## Production signal checks
 
