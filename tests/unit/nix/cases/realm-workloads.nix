@@ -24,8 +24,8 @@
 { mkEval, lib, ... }:
 
 let
-  # ── shared base ────────────────────────────────────────────────────────────
-  hostBase = {
+  # ── shared schema base ─────────────────────────────────────────────────────
+  workloadSchemaBase = {
     boot.loader.grub.enable = false;
     boot.loader.systemd-boot.enable = false;
     boot.initrd.includeDefaultModules = false;
@@ -39,32 +39,19 @@ let
       waylandUser = "alice";
       launcherUsers = [ "alice" ];
     };
+  };
 
+  # ── focused integration bases ──────────────────────────────────────────────
+  workloadBase = lib.recursiveUpdate workloadSchemaBase {
     d2b.envs.home = {
       lanSubnet = "10.10.0.0/24";
       uplinkSubnet = "192.0.2.0/30";
-    };
-    d2b.envs.dev = {
-      lanSubnet = "10.20.0.0/24";
-      uplinkSubnet = "198.51.100.0/30";
     };
     d2b.envs.work = {
       lanSubnet = "10.30.0.0/24";
       uplinkSubnet = "203.0.113.0/30";
     };
 
-    d2b.vms.homebox = {
-      env = "home";
-      index = 10;
-      ssh.user = "alice";
-      config.users.users.alice = { isNormalUser = true; uid = 1000; };
-    };
-    d2b.vms.devbox = {
-      env = "dev";
-      index = 10;
-      ssh.user = "alice";
-      config.users.users.alice = { isNormalUser = true; uid = 1000; };
-    };
     d2b.vms.corpbox = {
       env = "work";
       index = 10;
@@ -73,9 +60,29 @@ let
     };
   };
 
+  homeVmBase = lib.recursiveUpdate workloadSchemaBase {
+    d2b.envs.home = {
+      lanSubnet = "10.10.0.0/24";
+      uplinkSubnet = "192.0.2.0/30";
+    };
+    d2b.vms.homebox = {
+      env = "home";
+      index = 10;
+      ssh.user = "alice";
+      config.users.users.alice = { isNormalUser = true; uid = 1000; };
+    };
+  };
+
+  workEnvBase = lib.recursiveUpdate workloadSchemaBase {
+    d2b.envs.work = {
+      lanSubnet = "10.30.0.0/24";
+      uplinkSubnet = "203.0.113.0/30";
+    };
+  };
+
   # ── workload fixture ────────────────────────────────────────────────────────
   # One realm ("work.home") with two workloads: one with a legacyVmName, one without.
-  workloadFixture = lib.recursiveUpdate hostBase {
+  workloadFixture = lib.recursiveUpdate workloadBase {
     d2b.realms.home = {
       name = "Home";
       env = "home";
@@ -204,7 +211,7 @@ let
     ];
   }).config.d2b._bundle.unsafeLocalWorkloadsJson.data;
 
-  unsafeLocalFixture = lib.recursiveUpdate hostBase {
+  unsafeLocalFixture = lib.recursiveUpdate workloadSchemaBase {
     users.users.bob = { isNormalUser = true; uid = 1001; };
     d2b.daemonExperimental.enable = true;
     d2b.realms.host = {
@@ -246,7 +253,7 @@ let
 
   workloadNames = prefix: count:
     map (n: "${prefix}-${toString n}") (lib.range 1 count);
-  unsafeBoundFixture = lib.recursiveUpdate hostBase {
+  unsafeBoundFixture = lib.recursiveUpdate workloadSchemaBase {
     d2b.daemonExperimental.enable = true;
     d2b.realms.host = {
       allowedUsers = [ "alice" ];
@@ -260,7 +267,7 @@ let
       });
     };
   };
-  localVmBoundFixture = lib.recursiveUpdate hostBase {
+  localVmBoundFixture = lib.recursiveUpdate workloadSchemaBase {
     d2b.realms.work = {
       allowedUsers = [ "alice" ];
       workloads = lib.genAttrs (workloadNames "local" 257) (_: {
@@ -281,6 +288,10 @@ let
     map (a: a.message)
       (lib.filter (a: !a.assertion) (mkEval modules).config.assertions);
 
+  failureMessagesFromConfig = cfg:
+    map (a: a.message)
+      (lib.filter (a: !a.assertion) cfg.assertions);
+
   hasMessage = needles: messages:
     lib.any
       (message: lib.all (needle: lib.hasInfix needle message) needles)
@@ -290,7 +301,7 @@ let
   # Use two envless VMs whose MD5-based CID formula produces the same value.
   # svc2532 and svc4319 both hash to md5-prefix 0x69b166 → CID 6930790.
   # Envless VMs use the hash-based CID formula (index is irrelevant).
-  cidCollisionFixture = lib.recursiveUpdate hostBase {
+  cidCollisionFixture = lib.recursiveUpdate workloadSchemaBase {
     d2b.vms.svc2532 = {
       # no env → hash-based CID derivation
       ssh.user = "alice";
@@ -321,7 +332,7 @@ let
   cidCollisionMessages = failureMessages [ cidCollisionFixture ];
 
   # ── same-VM cross-realm (no collision) fixture ──────────────────────────────
-  sameVmTwoRealmsFixture = lib.recursiveUpdate hostBase {
+  sameVmTwoRealmsFixture = lib.recursiveUpdate homeVmBase {
     d2b.realms.realm-a = {
       path = "realm-a";
       env = "home";
@@ -343,12 +354,12 @@ let
   };
 
   sameVmCfg = (mkEval [ sameVmTwoRealmsFixture ]).config;
-  sameVmMessages = failureMessages [ sameVmTwoRealmsFixture ];
+  sameVmMessages = failureMessagesFromConfig sameVmCfg;
 
   # ── external-network attachment conflict fixture ─────────────────────────────
   # Two realms both associate with the "work" env which has attachment enabled.
   # Only attachment is needed for conflict detection; no egress required.
-  extNetConflictFixture = lib.recursiveUpdate hostBase {
+  extNetConflictFixture = lib.recursiveUpdate workEnvBase {
     d2b.envs.work.externalNetwork.attachment = {
       enable = true;
       interface = "eth0";
@@ -366,7 +377,26 @@ let
   };
 
   extNetCfg = (mkEval [ extNetConflictFixture ]).config;
-  extNetMessages = failureMessages [ extNetConflictFixture ];
+  extNetMessages = failureMessagesFromConfig extNetCfg;
+
+  duplicateIconFixture = lib.recursiveUpdate workloadSchemaBase {
+    d2b.realms.realm-a = {
+      path = "realm-a";
+      workloads.browser = {
+        launcher.label = "Web Browser";
+        launcher.icon.id = "web-browser";
+      };
+    };
+    d2b.realms.realm-b = {
+      path = "realm-b";
+      workloads.browser = {
+        launcher.label = "Web Browser";
+        launcher.icon.id = "web-browser";
+      };
+    };
+  };
+  duplicateIconLauncherData =
+    (mkEval [ duplicateIconFixture ]).config.d2b._bundle.realmWorkloadsLauncherJson.data;
 in
 {
   "realm-workloads/first-class-local-vm-private-launcher" = {
@@ -901,11 +931,10 @@ in
   "realm-workloads/launcher-json-icon-group-key-prefers-id-over-name" = {
     expr =
       let
-        bothIconFixture = lib.recursiveUpdate hostBase {
+        bothIconFixture = lib.recursiveUpdate workloadSchemaBase {
           d2b.realms.home = {
             name = "Home";
             path = "home";
-            network.envs = [ "home" ];
             workloads.notes = {
               launcher.label = "Notes";
               launcher.icon.id = "notes-app";
@@ -936,11 +965,10 @@ in
   "realm-workloads/launcher-json-icon-group-key-falls-back-to-name" = {
     expr =
       let
-        nameOnlyFixture = lib.recursiveUpdate hostBase {
+        nameOnlyFixture = lib.recursiveUpdate workloadSchemaBase {
           d2b.realms.home = {
             name = "Home";
             path = "home";
-            network.envs = [ "home" ];
             workloads.legacy-app = {
               launcher.label = "Legacy App";
               launcher.icon.name = "application-x-generic";
@@ -972,28 +1000,9 @@ in
   "realm-workloads/launcher-json-duplicate-icon-group-key-matches" = {
     expr =
       let
-        dupFixture = lib.recursiveUpdate hostBase {
-          d2b.realms.realm-a = {
-            path = "realm-a";
-            env = "home";
-            network.envs = [ "home" ];
-            workloads.browser = {
-              launcher.label = "Web Browser";
-              launcher.icon.id = "web-browser";
-            };
-          };
-          d2b.realms.realm-b = {
-            path = "realm-b";
-            env = "dev";
-            network.envs = [ "dev" ];
-            workloads.browser = {
-              launcher.label = "Web Browser";
-              launcher.icon.id = "web-browser";
-            };
-          };
-        };
-        data = (mkEval [ dupFixture ]).config.d2b._bundle.realmWorkloadsLauncherJson.data;
-        browserRows = lib.filter (w: w.workloadName == "browser") data.workloads;
+        browserRows = lib.filter
+          (w: w.workloadName == "browser")
+          duplicateIconLauncherData.workloads;
         groupKeys = lib.unique (map (w: w.iconGroupKey) browserRows);
       in {
         bothPresent = builtins.length browserRows == 2;
@@ -1018,28 +1027,9 @@ in
   "realm-workloads/launcher-json-no-implicit-dedup" = {
     expr =
       let
-        dupFixture = lib.recursiveUpdate hostBase {
-          d2b.realms.realm-a = {
-            path = "realm-a";
-            env = "home";
-            network.envs = [ "home" ];
-            workloads.browser = {
-              launcher.label = "Web Browser";
-              launcher.icon.id = "web-browser";
-            };
-          };
-          d2b.realms.realm-b = {
-            path = "realm-b";
-            env = "dev";
-            network.envs = [ "dev" ];
-            workloads.browser = {
-              launcher.label = "Web Browser";
-              launcher.icon.id = "web-browser";
-            };
-          };
-        };
-        data = (mkEval [ dupFixture ]).config.d2b._bundle.realmWorkloadsLauncherJson.data;
-        browserRows = lib.filter (w: w.workloadName == "browser") data.workloads;
+        browserRows = lib.filter
+          (w: w.workloadName == "browser")
+          duplicateIconLauncherData.workloads;
       in {
         bothPresent = builtins.length browserRows == 2;
         distinctRealms = lib.sort lib.lessThan
