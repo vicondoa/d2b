@@ -1,3 +1,3 @@
 ### Fixed
 
-- Update daemon restart checks and reference documentation for the typed v3 `d2b list <RESOURCE_TYPE>` command.
+- Use the v3 auth-status readiness probe in daemon restart checks and document the typed `d2b list <RESOURCE_TYPE>` command.
