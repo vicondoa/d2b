@@ -1382,6 +1382,60 @@ printf '%s\n' "$sanitized_line"
         self.assertIn("run_private_census &", api_driver)
         self.assertIn('if [ "$api_jobs" -ge 2 ]', api_driver)
 
+    def test_fixture_contracts_exclude_policy_binaries_owned_by_test_policy(self) -> None:
+        library = (ROOT / "tests" / "lib.sh").read_text(encoding="utf-8")
+        policy_driver = (ROOT / "tests" / "test-policy.sh").read_text(
+            encoding="utf-8"
+        )
+        rust_driver = RUST_DRIVER.read_text(encoding="utf-8")
+        binaries = [
+            "policy_dash_gate",
+            "policy_adr046_work_items",
+            "policy_changelog_gate",
+            "policy_adr046_spec_literals",
+            "policy_adr046_envelopes",
+            "policy_provider_crates",
+            "policy_resource_mutation_seal",
+            "policy_docs",
+        ]
+
+        self.assertIn(
+            "readonly -a D2B_FIXTURE_INDEPENDENT_POLICY_BINARIES=(",
+            library,
+        )
+        for binary in binaries:
+            self.assertEqual(
+                library.count(f"  {binary}\n"),
+                1,
+                f"{binary} must appear exactly once in the shared policy-binary list",
+            )
+        self.assertIn(
+            "run_policy_cargo_binaries()",
+            policy_driver,
+        )
+        self.assertIn(
+            'cargo_args+=(--test "$testname")',
+            policy_driver,
+        )
+        self.assertIn(
+            'cargo test -p d2b-contract-tests "${cargo_args[@]}"',
+            policy_driver,
+        )
+        self.assertIn(
+            'target="Running tests/$testname.rs "',
+            policy_driver,
+        )
+        self.assertEqual(policy_driver.count("run_policy_cargo_binaries\n"), 1)
+        self.assertIn(
+            'for testname in "${D2B_FIXTURE_INDEPENDENT_POLICY_BINARIES[@]}"; do',
+            rust_driver,
+        )
+        self.assertIn(
+            'fixture_contract_filter+=" and not binary($testname)"',
+            rust_driver,
+        )
+        self.assertIn('-E "$fixture_contract_filter"', rust_driver)
+
     def test_api_surface_scratch_creation_works_without_existing_parent(self) -> None:
         with tempfile.TemporaryDirectory(prefix="api-scratch-parent.") as raw_dir:
             root = pathlib.Path(raw_dir) / "repo"

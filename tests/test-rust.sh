@@ -735,8 +735,12 @@ guest_shell_runner_gate() {
 }
 
 run_fixture_contract_tests() {
-  local eval_root system flake_ref eval_rc
+  local eval_root system flake_ref eval_rc testname
+  local fixture_contract_filter='not binary(video_binary_contract)'
   rust_surface_start rust-contract-tests
+  for testname in "${D2B_FIXTURE_INDEPENDENT_POLICY_BINARIES[@]}"; do
+    fixture_contract_filter+=" and not binary($testname)"
+  done
   eval_root=$(d2b_mktemp ".d2b-eval-fixtures.XXXXXX")
   # The feature-rich full fixture is graphics-gated to x86_64-linux, so
   # eval-fixtures.sh exits 3 elsewhere. Leave D2B_FIXTURES_FULL empty there so
@@ -761,7 +765,7 @@ run_fixture_contract_tests() {
   D2B_FIXTURES="$contract_fixtures" D2B_FIXTURES_FULL="$contract_fixtures_full" \
   CARGO_TARGET_DIR="$fixture_target_dir" \
     cargo nextest run --test-threads "$D2B_RUST_NEXTEST_THREADS" --manifest-path "$manifest" -p d2b-contract-tests \
-      -E 'not binary(video_binary_contract)'
+      -E "$fixture_contract_filter"
   D2B_FIXTURES="$contract_fixtures" D2B_FIXTURES_FULL="$contract_fixtures_full" \
   CARGO_TARGET_DIR="$fixture_target_dir" \
     run_nextest_companions "contract crate" "$manifest" -p d2b-contract-tests
