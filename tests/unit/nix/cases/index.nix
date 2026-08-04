@@ -4,7 +4,7 @@ let
   x86 = system == "x86_64-linux";
   resourceContracts = import ../../../../nixos-modules/resources.nix { inherit lib; };
 
-  fixture = { lib, ... }: {
+  resourceBase = {
     boot.loader.grub.enable = false;
     boot.loader.systemd-boot.enable = false;
     boot.initrd.includeDefaultModules = false;
@@ -16,6 +16,12 @@ let
     d2b.site = {
       waylandUser = "alice";
       launcherUsers = [ "alice" ];
+    };
+  };
+
+  fixture = { lib, ... }: {
+    imports = [ resourceBase ];
+    d2b.site = {
       yubikey.enable = true;
       allowUnsafeEastWest = true;
     };
@@ -176,13 +182,13 @@ let
       };
     };
   };
-  resourceCfg = (mkEval [ fixture resourceFixture ]).config;
+  resourceCfg = (mkEval [ resourceBase resourceFixture ]).config;
   resourceIndex = resourceCfg.d2b._index.zones;
   failureMessages = module:
     map (assertion: assertion.message)
       (lib.filter (assertion: lib.hasPrefix "d2b.zones." assertion.message)
         (lib.filter (assertion: !assertion.assertion)
-          (mkEval [ fixture module ]).config.assertions));
+          (mkEval [ resourceBase module ]).config.assertions));
   resourceContractEvidence = {
     zoneNames = resourceIndex.names;
     work = resourceIndex.byName.work;
@@ -279,22 +285,22 @@ let
       };
     };
     malformed = {
-      badType = (builtins.tryEval ((mkEval [ fixture {
+      badType = (builtins.tryEval ((mkEval [ resourceBase {
         d2b.zones.work.resources.app.type = "Unknown";
       } ]).config.system.build.toplevel)).success;
-      badRef = (builtins.tryEval ((mkEval [ fixture {
+      badRef = (builtins.tryEval ((mkEval [ resourceBase {
         d2b.zones.work.resources.app = {
           type = "Provider";
           metadata.ownerRef = "user/alice";
         };
       } ]).config.system.build.toplevel)).success;
-      excessiveCpu = (builtins.tryEval ((mkEval [ fixture {
+      excessiveCpu = (builtins.tryEval ((mkEval [ resourceBase {
         d2b.zones.work.resources.app = {
           type = "Provider";
           spec.budget.cpu.limit = "1024001m";
         };
       } ]).config.system.build.toplevel)).success;
-      excessiveMemory = (builtins.tryEval ((mkEval [ fixture {
+      excessiveMemory = (builtins.tryEval ((mkEval [ resourceBase {
         d2b.zones.work.resources.app = {
           type = "Provider";
           spec.budget.memory.limit = "4097GiB";
