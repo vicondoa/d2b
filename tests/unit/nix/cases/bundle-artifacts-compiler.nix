@@ -10,14 +10,14 @@ let
       "/tests/unit/nix/cases/bundle-artifacts-envelope.nix"
     ];
   forbiddenRealizationFragments = [
-    "builtins.fromJSON (builtins.readFile " + "digestBundle.path"
-    "builtins.readFile " + "hostileCompilerBuild"
-    "builtins.readFile " + "acceptedShimBuild"
-    "builtins.readFile " + "compilerBuild"
-    "toString " + "firstBundle.path"
-    "toString " + "secondBundle.path"
-    "pkgs." + "runCommand"
-    "nativeBuildInputs = [ " + "compilerPackage ]"
+      ("builtins.fromJSON (builtins.readFile " + "digestBundle.path")
+      ("builtins.readFile " + "hostileCompilerBuild")
+      ("builtins.readFile " + "acceptedShimBuild")
+      ("builtins.readFile " + "compilerBuild")
+      ("toString " + "firstBundle.path")
+      ("toString " + "secondBundle.path")
+      ("pkgs." + "runCommand")
+      ("nativeBuildInputs = [ " + "compilerPackage ]")
   ];
   noRealCompilerDerivationReads = lib.all
     (source:
