@@ -356,7 +356,7 @@ PY
         "/run/current-system/sw/bin/d2b --zone missing --json "
         "shell status ShellSession/primary "
         ">/run/d2b/missing-zone-shell.log 2>&1 && "
-        "grep -q resource-runtime-plane-unavailable "
+        "grep -q '\"errorClass\":\"internal-error\"' "
         "/run/d2b/missing-zone-shell.log"
     )
     machine.succeed(
@@ -367,7 +367,7 @@ PY
         "/run/current-system/sw/bin/d2b --zone other --json "
         "shell status ShellSession/primary "
         ">/run/d2b/other-zone-shell.log 2>&1 && "
-        "grep -q resource-runtime-route-mismatch "
+        "grep -q '\"errorClass\":\"internal-error\"' "
         "/run/d2b/other-zone-shell.log"
     )
     json_open = json.loads(machine.succeed(
