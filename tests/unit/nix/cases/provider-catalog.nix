@@ -78,7 +78,7 @@ let
   catalogOverride = { ... }: {
     d2b._artifactCatalogV3 = lib.mkForce catalogFixtureProjection;
     d2b._bundle.extraArtifacts.artifactCatalog =
-      lib.mkForce catalogFixtureArtifact;
+      lib.mkOverride 0 catalogFixtureArtifact;
   };
   mkEvalProvider = modules: mkEval (modules ++ [ catalogOverride ]);
 
