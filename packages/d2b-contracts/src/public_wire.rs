@@ -106,10 +106,6 @@ pub enum PublicRequest {
     /// it never crosses SSH.
     #[serde(rename = "exec")]
     Exec(ExecOp),
-    /// Persistent named guest-shell operation. The staged contract DTOs fail
-    /// closed until guestd and d2bd runtime implementations are available.
-    #[serde(rename = "shell")]
-    Shell(ShellOp),
     /// Console streaming operation (ADR 0041).
     #[serde(rename = "console")]
     Console(ConsoleOp),
@@ -169,8 +165,6 @@ pub enum PublicResponse {
     ReadGuestConfig(ReadGuestConfigResponse),
     #[serde(rename = "exec")]
     Exec(ExecOpResponse),
-    #[serde(rename = "shell")]
-    Shell(ShellOpResponse),
     #[serde(rename = "console")]
     Console(ConsoleOpResponse),
     #[serde(rename = "audio")]
@@ -1394,21 +1388,6 @@ impl fmt::Debug for ShellCloseAttachArgs {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(tag = "op", content = "args", rename_all = "camelCase")]
-pub enum ShellOp {
-    Attach(ShellAttachArgs),
-    WriteStdin(crate::terminal_wire::TerminalWriteStdin),
-    ReadOutput(crate::terminal_wire::TerminalReadOutput),
-    Resize(crate::terminal_wire::TerminalResize),
-    Wait(crate::terminal_wire::TerminalWait),
-    CloseStdin(crate::terminal_wire::TerminalClose),
-    CloseAttach(ShellCloseAttachArgs),
-    List(ShellListArgs),
-    Detach(ShellDetachArgs),
-    Kill(ShellKillArgs),
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "kebab-case")]
 pub enum ShellSessionState {
@@ -1525,21 +1504,6 @@ impl fmt::Debug for ShellKillResult {
             .field("state", &self.state)
             .finish()
     }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(tag = "op", content = "result", rename_all = "camelCase")]
-pub enum ShellOpResponse {
-    Attach(ShellAttachResult),
-    WriteStdin(crate::terminal_wire::TerminalWriteStdinResult),
-    ReadOutput(crate::terminal_wire::TerminalReadOutputChunk),
-    Resize(crate::terminal_wire::TerminalControlResult),
-    Wait(crate::terminal_wire::TerminalWaitResult),
-    CloseStdin(crate::terminal_wire::TerminalCloseResult),
-    CloseAttach(ShellDetachResult),
-    List(ShellListResult),
-    Detach(ShellDetachResult),
-    Kill(ShellKillResult),
 }
 
 // ---- Console operation (ADR 0041) -------------------------------------------
@@ -3352,74 +3316,6 @@ mod tests {
             state: ShellSessionState::Killed,
         };
         assert_clean(&format!("{killed:?}"), "ShellKillResult");
-    }
-
-    #[test]
-    fn shell_public_wire_json_shape_is_stable() {
-        use super::{
-            PublicResponse, ShellAttachArgs, ShellAttachResult, ShellListEntry, ShellListResult,
-            ShellName, ShellOp, ShellOpResponse, ShellSessionState,
-        };
-
-        let attach = PublicRequest::Shell(ShellOp::Attach(ShellAttachArgs {
-            vm: "corp-vm".to_owned(),
-            name: Some(ShellName::new("ops_1").expect("valid name")),
-            force: true,
-            initial_terminal_size: crate::terminal_wire::TerminalSize { rows: 24, cols: 80 },
-        }));
-        let value = serde_json::to_value(&attach).expect("shell attach serializes");
-        assert_eq!(value["kind"], "shell");
-        assert_eq!(value["payload"]["op"], "attach");
-        assert_eq!(value["payload"]["args"]["vm"], "corp-vm");
-        assert_eq!(value["payload"]["args"]["name"], "ops_1");
-        assert_eq!(value["payload"]["args"]["force"], true);
-        assert_eq!(value["payload"]["args"]["initialTerminalSize"]["rows"], 24);
-
-        let decoded: PublicRequest =
-            serde_json::from_value(value.clone()).expect("shell attach decodes");
-        assert_eq!(decoded, attach);
-        let mut policy_injection = value;
-        policy_injection["payload"]["args"]["policy"] =
-            serde_json::json!({"defaultName": "attacker", "maxSessions": 64});
-        serde_json::from_value::<PublicRequest>(policy_injection)
-            .expect_err("public shell requests cannot inject helper policy");
-
-        let kill_without_name = serde_json::json!({
-            "kind": "shell",
-            "payload": {
-                "op": "kill",
-                "args": { "vm": "corp-vm" }
-            }
-        });
-        serde_json::from_value::<PublicRequest>(kill_without_name)
-            .expect_err("kill requires an explicit shell name");
-
-        let list = PublicResponse::Shell(ShellOpResponse::List(ShellListResult {
-            default_name: ShellName::new("default").expect("valid default"),
-            sessions: vec![ShellListEntry {
-                name: ShellName::new("default").expect("valid entry"),
-                state: ShellSessionState::Detached,
-                attached: false,
-                is_default: true,
-            }],
-        }));
-        let value = serde_json::to_value(&list).expect("shell list response serializes");
-        assert_eq!(value["kind"], "shell");
-        assert_eq!(value["payload"]["op"], "list");
-        assert_eq!(value["payload"]["result"]["defaultName"], "default");
-        assert_eq!(value["payload"]["result"]["sessions"][0]["name"], "default");
-        assert_eq!(value["payload"]["result"]["sessions"][0]["isDefault"], true);
-
-        let attach_response = PublicResponse::Shell(ShellOpResponse::Attach(ShellAttachResult {
-            session: "opaque-session".to_owned(),
-            resolved_name: ShellName::new("default").expect("valid result"),
-            state: ShellSessionState::Attached,
-            force_evicted: false,
-        }));
-        let value =
-            serde_json::to_value(&attach_response).expect("shell attach response serializes");
-        assert_eq!(value["payload"]["result"]["resolvedName"], "default");
-        assert_eq!(value["payload"]["result"]["state"], "attached");
     }
 
     #[test]

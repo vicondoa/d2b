@@ -15,11 +15,10 @@ use d2b_contracts::{
     WireProtocolSchema,
     cli_output::{
         AuditOutputV2, AuthStatusOutputV2, HostCheckOutputV2, LaunchOutputV1, ListOutputV2,
-        OpInspectOutputV1, RealmInspectOutputV1, RealmListOutputV1, ShellDetachOutputV1,
-        ShellKillOutputV1, ShellListOutputV1, StatusOutputV2, StoreVerifyOutputV2,
-        UsbProbeOutputV1, VmAudioSetOutputV1, VmAudioStatusOutputV1, VmDisplayCloseOutputV1,
-        VmDisplayListOutputV1, VmExecCreateOutputV1, VmExecKillOutputV1, VmExecListOutputV1,
-        VmExecLogsOutputV1, VmExecStatusOutputV1,
+        OpInspectOutputV1, RealmInspectOutputV1, RealmListOutputV1, StatusOutputV2,
+        StoreVerifyOutputV2, UsbProbeOutputV1, VmAudioSetOutputV1, VmAudioStatusOutputV1,
+        VmDisplayCloseOutputV1, VmDisplayListOutputV1, VmExecCreateOutputV1, VmExecKillOutputV1,
+        VmExecListOutputV1, VmExecLogsOutputV1, VmExecStatusOutputV1,
     },
     v3::storage::ZoneStoreStorageRow,
 };
@@ -863,7 +862,7 @@ fn gen_cli_schemas() -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {
     let out_dir = repo_root.join("docs/reference/cli-output");
     fs::create_dir_all(&out_dir)?;
 
-    let schemas: [(&str, RootSchema); 23] = [
+    let schemas: [(&str, RootSchema); 20] = [
         ("list.schema.json", schemars::schema_for!(ListOutputV2)),
         ("status.schema.json", schemars::schema_for!(StatusOutputV2)),
         ("launch.schema.json", schemars::schema_for!(LaunchOutputV1)),
@@ -912,18 +911,6 @@ fn gen_cli_schemas() -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {
             schemars::schema_for!(VmExecKillOutputV1),
         ),
         ("audit.schema.json", schemars::schema_for!(AuditOutputV2)),
-        (
-            "shell-list.schema.json",
-            schemars::schema_for!(ShellListOutputV1),
-        ),
-        (
-            "shell-detach.schema.json",
-            schemars::schema_for!(ShellDetachOutputV1),
-        ),
-        (
-            "shell-kill.schema.json",
-            schemars::schema_for!(ShellKillOutputV1),
-        ),
         (
             "host-check.schema.json",
             schemars::schema_for!(HostCheckOutputV2),

@@ -90,12 +90,12 @@ The closed unsafe-local posture is:
 | `executionIdentity` | `authenticated-requester-uid` |
 | `sessionPersistence` | `user-manager-lifetime` |
 
-`configured-launch-v1`, `unsafe-local-provider-v1`, and
-`unsafe-local-shell-v1` are additive protocol-v3 feature flags. `d2bd`
-advertises the shell flag only with the complete helper-management and terminal
-path enabled. Clients must hide or refuse unsupported operations and recommend
-updating `d2b`, `d2bd`, and the helper together; they must never fall back to a
-host shell, SSH, or a different provider.
+`configured-launch-v1` and `unsafe-local-provider-v1` remain additive
+public-socket feature flags. Persistent shells do not negotiate a parallel
+unsafe-local feature: qualified ShellSession lifecycle and named-stream attach
+fail through the Resource error taxonomy when the helper or user manager is
+unavailable. Clients must never fall back to a host shell, SSH, or a different
+provider.
 
 Availability values are directly actionable: `helper-unavailable` and
 `helper-stale` require restarting the caller's user helper;

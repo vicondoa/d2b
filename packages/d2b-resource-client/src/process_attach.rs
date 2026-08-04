@@ -34,7 +34,7 @@ const STREAM_CLOSING: u8 = 1;
 const STREAM_CLOSED: u8 = 2;
 const SHELL_SESSION_TYPE: &str = "shell-terminal.d2bus.org.ShellSession";
 
-/// The two resource classes that may be named by an attach request.
+/// Resource classes that may be named by an attach request.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProcessAttachKind {
     /// A caller-created or controller-created one-shot process.
@@ -1112,6 +1112,36 @@ mod tests {
             &CancellationToken::default(),
         ));
         assert_eq!(result.unwrap_err(), ClientError::RouteUnavailable);
+    }
+
+    #[test]
+    fn shell_session_target_requires_qualified_type_and_host_or_guest_execution() {
+        let shell = process_ref(SHELL_SESSION_TYPE, "primary");
+        let host = process_ref("Host", "tools");
+        let target =
+            ProcessAttachTarget::shell_session(zone("dev"), shell.clone(), Some(host), false)
+                .expect("qualified shell target");
+        assert_eq!(target.kind(), ProcessAttachKind::ShellSession);
+        assert_eq!(target.resource_ref(), &shell);
+
+        assert_eq!(
+            ProcessAttachTarget::shell_session(
+                zone("dev"),
+                process_ref("Process", "primary"),
+                None,
+                false,
+            ),
+            Err(ClientError::InvalidTarget)
+        );
+        assert_eq!(
+            ProcessAttachTarget::shell_session(
+                zone("dev"),
+                process_ref(SHELL_SESSION_TYPE, "primary"),
+                Some(process_ref("Process", "wrong")),
+                false,
+            ),
+            Err(ClientError::InvalidTarget)
+        );
     }
 
     #[test]

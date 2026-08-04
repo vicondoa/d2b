@@ -1164,12 +1164,11 @@ impl std::fmt::Debug for CliConnectedSession {
     }
 }
 
-/// Establishment-only stream adapter for the current CLI command contract.
+/// Local transport adapter for an authenticated process attachment stream.
 ///
-/// The public CLI currently reports an accepted attachment and does not proxy
-/// byte I/O. It therefore refuses stream data operations instead of creating
-/// a second transport. The authenticated session remains responsible for the
-/// attach admission; `close` releases the client-side named-stream lease.
+/// Process attachments need only establishment, while ShellSession attachments
+/// retain the socket for bounded stdin, output, resize, cancellation, and
+/// close messages on the admitted named stream.
 struct CliAttachStream {
     closed: AtomicBool,
     socket: Option<Arc<Mutex<SeqpacketUnixSocket>>>,
@@ -1269,10 +1268,7 @@ impl CliAttachStream {
         let value: Value =
             serde_json::from_slice(&response).map_err(|_| ClientError::ContractViolation)?;
         if value.get("type").and_then(Value::as_str) == Some("error") {
-            return Err(ClientError::Remote {
-                kind: ResourceErrorKind::InternalIntegrityFailure,
-                retry: RetryClass::Never,
-            });
+            return Err(remote_client_error(&value));
         }
         Ok(value)
     }

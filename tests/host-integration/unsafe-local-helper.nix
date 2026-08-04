@@ -227,6 +227,22 @@ while expected not in output and time.monotonic() < deadline:
 if expected not in output:
     print(bytes(output).decode(errors="replace"), file=sys.stderr)
     raise SystemExit(f"typed shell attach missed canary: {bytes(output)!r}")
+if os.environ.get("CHECK_RESIZE") == "1":
+    output.clear()
+    fcntl.ioctl(master, termios.TIOCSWINSZ, struct.pack("HHHH", 37, 101, 0, 0))
+    os.kill(pid, signal.SIGWINCH)
+    deadline = time.monotonic() + 30
+    while b"37 101" not in output and time.monotonic() < deadline:
+        os.write(master, b"stty size\\n")
+        if select.select([master], [], [], 1)[0]:
+            try:
+                output.extend(os.read(master, 65536))
+            except OSError as error:
+                if error.errno == errno.EIO:
+                    break
+                raise
+    if b"37 101" not in output:
+        raise SystemExit(f"typed shell resize missed geometry: {bytes(output)!r}")
 if os.environ.get("HOLD") == "1":
     open("/run/user/1000/d2b-shell-hold.ready", "w").close()
     while True:
@@ -284,7 +300,38 @@ PY
         for session in shell_list["sessions"]
     )
     machine.succeed(
+        shell_client + " status ShellSession/primary | jq -e "
+        "'.name == \"primary\" and .attached == false'"
+    )
+    machine.succeed(
+        "CHECK_RESIZE=1 SHELL_COMMAND='printf resize-canary' "
+        + cli_shell
+    )
+    machine.succeed(
         "SHELL_COMMAND='printf reattach-continuity-canary' "
+        + cli_shell
+    )
+
+    machine.succeed("rm -f /run/user/1000/d2b-shell-hold.ready")
+    machine.succeed(
+        "SHELL_COMMAND='printf detach-hold-canary' HOLD=1 "
+        + cli_shell + " >/run/user/1000/d2b-shell-hold.log 2>&1 & "
+        "echo $! > /run/user/1000/d2b-shell-hold.pid"
+    )
+    machine.wait_for_file("/run/user/1000/d2b-shell-hold.ready", timeout=60)
+    machine.succeed(
+        shell_client + " status ShellSession/primary | jq -e "
+        "'.name == \"primary\" and .attached == true'"
+    )
+    machine.succeed(
+        shell_client + " detach ShellSession/primary | jq -e "
+        "'.resolvedName == \"primary\" and .detached == true'"
+    )
+    machine.wait_until_fails(
+        "kill -0 $(cat /run/user/1000/d2b-shell-hold.pid)", timeout=60
+    )
+    machine.succeed(
+        "SHELL_COMMAND='printf post-detach-canary' "
         + cli_shell
     )
 

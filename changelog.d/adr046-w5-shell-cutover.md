@@ -1,5 +1,6 @@
 ### Changed
 
-- Cut the typed `d2b shell open` and `d2b shell attach` commands over the
-  authenticated named-stream terminal path, including PTY input/output,
-  resize forwarding, signal-safe detachment, and persistent-shell reconnects.
+- Cut `d2b shell open`, `attach`, `list`, `status`, `detach`, and `kill` over
+  qualified ShellSession Resource requests and authenticated named streams,
+  including PTY I/O, resize forwarding, signal-safe detachment, restart
+  recovery, and removal of the retired public shell socket protocol.

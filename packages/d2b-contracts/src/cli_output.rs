@@ -162,46 +162,6 @@ pub struct VmExecKillOutputV1 {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct ShellListOutputV1 {
-    pub command: String,
-    pub vm: String,
-    #[serde(rename = "default_name")]
-    pub default_name: String,
-    pub sessions: Vec<ShellListSessionOutputV1>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct ShellListSessionOutputV1 {
-    pub name: String,
-    pub state: String,
-    pub attached: bool,
-    #[serde(rename = "is_default")]
-    pub is_default: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct ShellDetachOutputV1 {
-    pub command: String,
-    pub vm: String,
-    pub name: String,
-    pub result: String,
-    pub cause: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct ShellKillOutputV1 {
-    pub command: String,
-    pub vm: String,
-    pub name: String,
-    pub result: String,
-    pub state: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct VmDisplayListOutputV1 {
     pub command: String,
     pub target: Option<String>,

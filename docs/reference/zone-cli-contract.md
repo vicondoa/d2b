@@ -79,7 +79,6 @@ The feature names currently used by the public daemon are:
 - `export-broker-audit`
 - `configured-launch-v1`
 - `unsafe-local-provider-v1`
-- `unsafe-local-shell-v1`
 
 Only advertise a feature the client implements. Workload operations require
 the relevant negotiated feature set; an unsupported request returns a typed
@@ -90,11 +89,12 @@ name and its arguments are closed, camel-case JSON DTOs:
 
 ```json
 {
-  "type": "shell",
-  "op": "list",
-  "args": {
-    "vm": "corp-vm"
-  }
+  "type": "resourceRequest",
+  "service": "d2b.zone.v3",
+  "method": "List",
+  "zoneRef": "Zone/local-root",
+  "resourceType": "shell-terminal.d2bus.org.ShellSession",
+  "executionRef": "Guest/corp-vm"
 }
 ```
 
@@ -107,22 +107,20 @@ legacy shape.
 
 The shell client must:
 
-1. check `runtime.operationCapabilities.guest.shell` before offering a shell
-   action;
-2. use the `ShellOp` operations listed in the inventory, with
-   `initialTerminalSize` on `Attach`;
-3. treat the returned session handle as opaque;
-4. use the shell name grammar
-   `^[A-Za-z0-9_][A-Za-z0-9._-]{0,63}$`; and
+1. address a `Host/<name>` or `Guest/<name>` execution reference when opening;
+2. address a qualified `shell-terminal.d2bus.org.ShellSession/<name>` for
+   attach, status, detach, and kill;
+3. open terminal I/O through the authenticated ProcessAttachClient named
+   stream;
+4. use the shell name grammar `^[a-z][a-z0-9-]{0,62}$`; and
 5. render `Attached`, `Detached`, `Killed`, `PoolUnavailable`,
    `FeatureDisabled`, and `OutputGap` as distinct states.
 
-`Attach` owns a long-lived connection. Subsequent stdin, output, resize,
-wait, close, detach, and kill frames use the same `type: "shell"` envelope.
-An envelope-level `opId` may correlate a request and response; it is not part
-of the closed operation arguments. Output chunks carry bounded base64 data and
-an offset, so a client must advance from the returned cursor rather than
-replaying an unknown range.
+`Create` and `Attach` own a long-lived named stream. Subsequent stdin, output,
+resize, and close messages remain on that stream. Management requests are
+ordinary Resource requests and never reuse the retired `type: "shell"`
+envelope. Output chunks carry bounded base64 data and an offset, so a client
+must advance from the returned cursor rather than replaying an unknown range.
 
 Persistent shell operations are admin-only. There is no SSH, host-shell,
 per-VM service, or broker-operation fallback for a refused shell request.

@@ -146,7 +146,7 @@ Run these checks from the consumer host flake:
 ```bash
 nix flake check
 home-manager build --flake .#alice
-d2b shell work list
+d2b --json shell list Guest/work
 d2b-wlterm list work
 d2b guest status shellbox
 ```

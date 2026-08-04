@@ -2,18 +2,18 @@
 
 > Diataxis: explanation. Conceptual model for `d2b shell`.
 
-`d2b shell` attaches an admin's terminal to a named shell session for a
-target workload. The user-facing surface is:
+`d2b shell` attaches an admin's terminal to a named ShellSession resource. The
+user-facing surface is:
 
 ```text
-d2b shell <target> [ACTION]
+d2b shell open <Host|Guest>/<name> [--name NAME]
+d2b shell attach ShellSession/<name>
+d2b shell list [<Host|Guest>/<name>]
+d2b shell status|detach|kill ShellSession/<name>
 ```
 
-where `ACTION` is `attach`, `list`, `detach`, or `kill`. Omitting `ACTION`
-attaches to the target's configured default session. Local VM names stay on the
-local daemon fast path. Gateway-backed management actions route through the
-configured realm gateway; interactive gateway attach remains fail-closed until
-semantic ADR 0039 attach support lands.
+`open` binds a session to one Host or Guest execution reference. Subsequent
+operations address the qualified session resource directly.
 
 ## Persistence boundary
 
@@ -34,7 +34,7 @@ It is not expected to survive:
 - VM reboot or target workload recreation;
 - shell-pool daemon restart or loss;
 - logout/termination of the non-lingering user manager for unsafe-local;
-- explicit `d2b shell <target> kill --name <name>`;
+- explicit `d2b shell kill ShellSession/<name>`;
 - `exit` or `Ctrl-D` inside the shell.
 
 This is intentionally different from `d2b exec run Guest/<name>`, whose command is
@@ -42,13 +42,11 @@ connection-owned and exits with the command's status.
 
 ## Local dispatch and network surface
 
-The host CLI connects to the local `d2bd` public socket for local targets.
-For gateway-backed `list`, `detach`, and `kill`, it enters the realm trust
-boundary by running the same `d2b shell <target> ...` command inside the
-gateway VM over the typed guest-control exec path. The host still does not load
-realm credentials or provider transports. Gateway-backed interactive attach
-fails closed on the host facade; operators can enter the realm gateway and run
-`d2b shell <target>` there until the semantic ADR 0039 attach stream lands.
+The host CLI connects to the nearest authenticated Zone runtime. Lifecycle
+uses qualified ShellSession Resource requests and terminal I/O uses the
+ProcessAttachClient named stream. A remote or relayed execution reference fails
+closed until its authoritative Zone route supplies that service. The host does
+not load realm credentials or provider transports.
 
 Persistent shells do not add TCP or UDP listeners, network ports, or
 network-bound debug/metrics surfaces. The host-to-guest path reuses the existing
@@ -58,9 +56,9 @@ Unsafe-local uses only same-UID Unix sockets. Its per-shell listener lives
 beneath the validated user runtime directory and is not a root service, broker
 operation, or per-VM unit. `d2bd` resolves the target and bundle-owned shell
 policy, asks the exact requester-UID helper to create or reconnect, validates the
-single connected terminal fd, and multiplexes it behind a fresh opaque public
-attachment handle. Closing that public connection detaches the helper-owned
-terminal stream; it does not kill the user-scope shell.
+single connected terminal fd, and multiplexes it behind the authenticated named
+stream. Closing that stream detaches the helper-owned terminal stream; it does
+not kill the user-scope shell.
 
 Daemon and helper restarts are reconnect events. The daemon intentionally keeps
 no persisted fd authority, while the helper snapshot revalidates the
