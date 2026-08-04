@@ -164,8 +164,10 @@ def read_until(marker, timeout):
 
 read_until(b"alice@machine:~]", 30)
 output.clear()
-os.write(master, b"printf cli-shell-executed-canary\\n")
-read_until(b"cli-shell-executed-canary", 30)
+expected = b"cli-shell-executed-canary"
+escaped = "".join(f"\\x{byte:02x}" for byte in expected)
+os.write(master, f"printf '{escaped}'\n".encode())
+read_until(expected, 30)
 
 os.close(master)
 deadline = time.monotonic() + 15
@@ -211,30 +213,42 @@ attributes = termios.tcgetattr(master)
 attributes[3] &= ~termios.ECHO
 termios.tcsetattr(master, termios.TCSANOW, attributes)
 output = bytearray()
-command = os.environ.get("SHELL_COMMAND", "printf cli-shell-attach-canary")
-expected = command.split()[-1].encode()
-deadline = time.monotonic() + 30
-while expected not in output and time.monotonic() < deadline:
-    if select.select([master], [], [], 1)[0]:
+expected = os.environ.get("SHELL_MARKER", "cli-shell-attach-canary").encode()
+escaped = "".join(f"\\x{byte:02x}" for byte in expected)
+command = f"printf '{escaped}'"
+
+def read_until(marker, timeout):
+    deadline = time.monotonic() + timeout
+    while marker not in output and time.monotonic() < deadline:
+        readable, _, _ = select.select([master], [], [], 1)
+        if not readable:
+            continue
         try:
             output.extend(os.read(master, 65536))
         except OSError as error:
             if error.errno == errno.EIO:
                 break
             raise
-    if time.monotonic() + 1 < deadline:
-        os.write(master, (command + "\\n").encode())
-if expected not in output:
-    print(bytes(output).decode(errors="replace"), file=sys.stderr)
-    raise SystemExit(f"typed shell attach missed canary: {bytes(output)!r}")
+    if marker not in output:
+        print(bytes(output).decode(errors="replace"), file=sys.stderr)
+        raise SystemExit(f"typed shell attach missed {marker!r}: {bytes(output)!r}")
+
+read_until(b"alice@machine:~]", 30)
+output.clear()
+os.write(master, (command + "\n").encode())
+read_until(expected, 30)
 if os.environ.get("CHECK_RESIZE") == "1":
     output.clear()
     fcntl.ioctl(master, termios.TIOCSWINSZ, struct.pack("HHHH", 37, 101, 0, 0))
     os.kill(pid, signal.SIGWINCH)
     deadline = time.monotonic() + 30
+    next_probe = 0.0
     while b"37 101" not in output and time.monotonic() < deadline:
-        os.write(master, b"stty size\\n")
-        if select.select([master], [], [], 1)[0]:
+        now = time.monotonic()
+        if now >= next_probe:
+            os.write(master, b"stty size\n")
+            next_probe = now + 0.5
+        if select.select([master], [], [], 0.5)[0]:
             try:
                 output.extend(os.read(master, 65536))
             except OSError as error:
@@ -289,7 +303,7 @@ PY
     ).strip()
 
     machine.succeed(
-        "SHELL_COMMAND='printf shell-roundtrip-canary' "
+        "SHELL_MARKER=shell-roundtrip-canary "
         + cli_shell
     )
     shell_list = json.loads(machine.succeed(shell_client + " list"))
@@ -304,17 +318,17 @@ PY
         "'.name == \"primary\" and .attached == false'"
     )
     machine.succeed(
-        "CHECK_RESIZE=1 SHELL_COMMAND='printf resize-canary' "
+        "CHECK_RESIZE=1 SHELL_MARKER=resize-canary "
         + cli_shell
     )
     machine.succeed(
-        "SHELL_COMMAND='printf reattach-continuity-canary' "
+        "SHELL_MARKER=reattach-continuity-canary "
         + cli_shell
     )
 
     machine.succeed("rm -f /run/user/1000/d2b-shell-hold.ready")
     machine.succeed(
-        "SHELL_COMMAND='printf detach-hold-canary' HOLD=1 "
+        "SHELL_MARKER=detach-hold-canary HOLD=1 "
         + cli_shell + " >/run/user/1000/d2b-shell-hold.log 2>&1 & "
         "echo $! > /run/user/1000/d2b-shell-hold.pid"
     )
@@ -331,13 +345,13 @@ PY
         "kill -0 $(cat /run/user/1000/d2b-shell-hold.pid)", timeout=60
     )
     machine.succeed(
-        "SHELL_COMMAND='printf post-detach-canary' "
+        "SHELL_MARKER=post-detach-canary "
         + cli_shell
     )
 
     machine.succeed("rm -f /run/user/1000/d2b-shell-hold.ready")
     machine.succeed(
-        "SHELL_COMMAND='printf hold-canary' HOLD=1 "
+        "SHELL_MARKER=hold-canary HOLD=1 "
         + cli_shell + " >/run/user/1000/d2b-shell-hold.log 2>&1 & "
         "echo $! > /run/user/1000/d2b-shell-hold.pid"
     )
@@ -355,7 +369,7 @@ PY
         timeout=60,
     )
     machine.succeed(
-        "SHELL_COMMAND='printf daemon-restart-canary' "
+        "SHELL_MARKER=daemon-restart-canary "
         + cli_shell
     )
 
@@ -368,7 +382,7 @@ PY
         timeout=60,
     )
     machine.succeed(
-        "SHELL_COMMAND='printf helper-adoption-canary' "
+        "SHELL_MARKER=helper-adoption-canary "
         + cli_shell
     )
     machine.succeed(shell_client + " kill ShellSession/primary | jq -e '.killed == true'")
@@ -376,7 +390,7 @@ PY
     machine.succeed(shell_client + " list | jq -e '.sessions | length == 0'")
 
     machine.succeed(
-        "SHELL_COMMAND='printf logout-canary' "
+        "SHELL_MARKER=logout-canary "
         + cli_shell + " >/run/user/1000/logout-shell.log"
     )
     shell_scope = machine.succeed(
@@ -404,7 +418,7 @@ PY
         "</dev/null >/run/d2b/no-manager-helper.log 2>&1"
     )
     machine.wait_until_succeeds(
-        "! SHELL_COMMAND='printf no-manager-canary' " + cli_shell
+        "! SHELL_MARKER=no-manager-canary " + cli_shell
         + " >/run/d2b/no-manager-client.log 2>&1 && "
         "grep -q provider-unavailable "
         "/run/d2b/no-manager-client.log",
