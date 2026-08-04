@@ -54,8 +54,9 @@ Layer-1 orchestration so the separate enforcing
 the contract and CLI surfaces. The fixture target materializes `D2B_FIXTURES`
 from evaluated Nix artifact data and invoking it without the enable variable
 fails rather than skipping. Selected hermetic policy files may also have
-explicit enforcing entrypoints under `test-policy`; check its driver before
-citing one.
+explicit enforcing entrypoints under `test-policy`; those binaries are excluded
+from `test-fixture-contracts` so the Layer-1 graph runs their repository scans
+once. Check the shared list in `tests/lib.sh` before citing one.
 
 `test-policy` also runs `guest-workspace-drift`. It fails when the guest crates
 copied by `mkGuestRustPackagesSrc` diverge from

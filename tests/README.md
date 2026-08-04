@@ -171,8 +171,9 @@ runs the fixture-dependent contract and CLI tests. The default `test-rust` and
 focused `test-rust-main` include those surfaces once when Nix is available;
 `D2B_SKIP_FIXTURE_BUILD=1` omits them for the Layer-1 graph so this separate
 lane does not duplicate work. Selected hermetic policy files may have separate
-enforcing entrypoints under `test-policy`; inspect that target before citing
-one.
+enforcing entrypoints under `test-policy`; the shared list in `tests/lib.sh` is
+excluded from the fixture lane so those repository scans execute once. Inspect
+that target before citing one.
 
 ### Rust DAG budget and execution evidence
 

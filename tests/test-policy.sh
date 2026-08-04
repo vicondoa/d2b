@@ -159,17 +159,11 @@ run_policy_gate "ci-coverage"               tests/unit/meta/ci-coverage.sh
 # Fixture-independent contract-test policy binaries. These prove the dash ban,
 # the ADR 0046 manifest-drift bijection, the changelog gate, and the ADR 0046
 # spec-literal drift lints (datetime precision, ResourceType grammar, retry
-# scalar shape) actually work. They are excluded from `make test-rust`'s
-# `cargo test --workspace` run and skipped there under D2B_SKIP_FIXTURE_BUILD,
-# so this mandatory target is their only guaranteed execution point.
-run_policy_cargo_binary "policy-dash-gate"        policy_dash_gate
-run_policy_cargo_binary "policy-adr046-work-items" policy_adr046_work_items
-run_policy_cargo_binary "policy-changelog-gate"   policy_changelog_gate
-run_policy_cargo_binary "policy-adr046-spec-literals" policy_adr046_spec_literals
-run_policy_cargo_binary "policy-adr046-envelopes"     policy_adr046_envelopes
-run_policy_cargo_binary "policy-provider-crates"     policy_provider_crates
-run_policy_cargo_binary "policy-resource-mutation-seal" policy_resource_mutation_seal
-run_policy_cargo_binary "policy-docs" policy_docs
+# scalar shape) actually work. The shared list is excluded from the fixture
+# lane, so this mandatory target is their one Layer-1 execution point.
+for testname in "${D2B_FIXTURE_INDEPENDENT_POLICY_BINARIES[@]}"; do
+  run_policy_cargo_binary "${testname//_/-}" "$testname"
+done
 run_guest_workspace_guard
 
 [ "$rc" -eq 0 ] || exit 1
