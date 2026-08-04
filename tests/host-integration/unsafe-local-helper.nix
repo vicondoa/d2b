@@ -467,6 +467,7 @@ PY
         shell_client
         + " list | jq -e '.sessions | any(.name == \"exit-session\" and .state == \"killed\") and all(.name != \"primary\")'"
     )
+    machine.succeed(shell_client + " open Host/tools --name primary >/dev/null")
 
     machine.succeed(
         "SHELL_MARKER=logout-canary "
