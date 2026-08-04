@@ -3496,6 +3496,9 @@ fn dispatch_resource_request(
             resource_runtime::ResourceRuntimeError::RouteMismatch,
         ));
     };
+    if typed_shell_resource_request(&request.value()) {
+        return dispatch_typed_shell_resource_request(state, peer, &request.value());
+    }
     let plane = state
         .resource_plane
         .lock()
@@ -3513,6 +3516,65 @@ fn dispatch_resource_request(
     match block_on_future(runtime.dispatch_cli_request(&request.value())) {
         Ok(value) => Ok(value),
         Err(error) => Ok(resource_runtime_error_frame(error)),
+    }
+
+    fn typed_shell_resource_request(request: &Value) -> bool {
+        let shell_ref = request
+            .get("resourceRef")
+            .and_then(Value::as_str)
+            .is_some_and(|value| value.starts_with("ShellSession/"));
+        let shell_list =
+            request.get("resourceType").and_then(Value::as_str) == Some("ShellSession");
+        (shell_ref || shell_list)
+            && matches!(
+                request.get("method").and_then(Value::as_str),
+                Some("List" | "Status" | "Detach" | "Kill")
+            )
+    }
+
+    fn dispatch_typed_shell_resource_request(
+        state: &ServerState,
+        peer: &PeerIdentity,
+        request: &Value,
+    ) -> Result<Value, TypedError> {
+        let resource = request
+            .get("resourceRef")
+            .and_then(Value::as_str)
+            .map(str::to_owned)
+            .or_else(|| {
+                typed_shell_sessions()
+                    .lock()
+                    .ok()
+                    .and_then(|sessions| sessions.keys().next().cloned())
+            })
+            .ok_or_else(shell_protocol_failed)?;
+        let target = typed_shell_sessions()
+            .lock()
+            .ok()
+            .and_then(|sessions| sessions.get(&resource).cloned())
+            .ok_or_else(shell_protocol_failed)?;
+        let name = resource
+            .strip_prefix("ShellSession/")
+            .and_then(|value| public_wire::ShellName::new(value).ok())
+            .ok_or_else(shell_protocol_failed)?;
+        let op = match request.get("method").and_then(Value::as_str) {
+            Some("List" | "Status") => {
+                public_wire::ShellOp::List(public_wire::ShellListArgs { vm: target })
+            }
+            Some("Detach") => public_wire::ShellOp::Detach(public_wire::ShellDetachArgs {
+                vm: target,
+                name: Some(name),
+            }),
+            Some("Kill") => {
+                public_wire::ShellOp::Kill(public_wire::ShellKillArgs { vm: target, name })
+            }
+            _ => return Err(shell_protocol_failed()),
+        };
+        let response = dispatch_shell_management(state, peer, op)?;
+        response
+            .get("result")
+            .cloned()
+            .ok_or_else(shell_protocol_failed)
     }
 }
 

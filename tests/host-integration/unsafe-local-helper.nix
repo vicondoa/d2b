@@ -115,141 +115,6 @@ if True:
     machine.fail(bob_user + " is-active d2b-unsafe-local-helper.service")
 
     machine.succeed(r"""
-      cat > /run/d2b/shell-client.py <<'PY'
-import base64
-import json
-import os
-import socket
-import struct
-import sys
-import time
-
-SOCKET = "/run/d2b/public.sock"
-TARGET = "tools.host.d2b"
-
-def send_frame(conn, value):
-    body = json.dumps(value, separators=(",", ":")).encode()
-    conn.sendall(struct.pack("<I", len(body)) + body)
-
-def recv_frame(conn):
-    packet = conn.recv(1048580)
-    if len(packet) < 4:
-        raise RuntimeError("short public frame")
-    size = struct.unpack("<I", packet[:4])[0]
-    if size != len(packet) - 4:
-        raise RuntimeError("invalid public frame length")
-    return json.loads(packet[4:])
-
-def connect():
-    conn = socket.socket(socket.AF_UNIX, socket.SOCK_SEQPACKET)
-    conn.connect(SOCKET)
-    send_frame(conn, {
-        "type": "hello",
-        "clientVersion": ">=0.4.0, <0.5.0",
-        "supportedFeatures": [
-            "typed-errors",
-            "configured-launch-v1",
-            "unsafe-local-provider-v1",
-            "unsafe-local-shell-v1"
-        ]
-    })
-    hello = recv_frame(conn)
-    if hello.get("type") != "helloOk":
-        raise RuntimeError("hello rejected")
-    if "unsafe-local-shell-v1" not in hello.get("capabilities", []):
-        raise RuntimeError("unsafe-local shell feature missing")
-    return conn
-
-def shell(conn, op, args, op_id):
-    send_frame(conn, {"type": "shell", "op": op, "args": args, "opId": op_id})
-    response = recv_frame(conn)
-    if response.get("type") == "error":
-        print(json.dumps(response), file=sys.stderr)
-        raise RuntimeError(response["error"]["kind"])
-    if response.get("type") != "shellResponse":
-        raise RuntimeError("unexpected shell response")
-    return response["result"]
-
-def attach(mode):
-    conn = connect()
-    attached = shell(conn, "attach", {
-        "vm": TARGET,
-        "name": "primary",
-        "force": False,
-        "initialTerminalSize": {"rows": 24, "cols": 80}
-    }, 1)
-    session = attached["session"]
-    shell(conn, "resize", {
-        "session": session, "rows": 33, "cols": 101, "opId": 1
-    }, 2)
-    if mode == "hold":
-        open("/run/user/1000/d2b-shell-hold.ready", "w").close()
-        cursor = 0
-        op_id = 3
-        while True:
-            result = shell(conn, "readOutput", {
-                "session": session,
-                "stream": "stdout",
-                "offset": cursor,
-                "maxLen": 65536,
-                "wait": True,
-                "timeoutMs": 250
-            }, op_id)
-            cursor = result["nextOffset"]
-            op_id += 1
-    command = os.environ.get("SHELL_COMMAND", "printf shell-roundtrip-canary")
-    expected = command.split()[-1].encode()
-    data = (command + "\n").encode()
-    shell(conn, "writeStdin", {
-        "session": session,
-        "offset": 0,
-        "chunkBase64": base64.b64encode(data).decode(),
-        "eof": False
-    }, 3)
-    cursor = 0
-    output = bytearray()
-    deadline = time.monotonic() + 15
-    op_id = 4
-    while time.monotonic() < deadline:
-        chunk = shell(conn, "readOutput", {
-            "session": session,
-            "stream": "stdout",
-            "offset": cursor,
-            "maxLen": 65536,
-            "wait": True,
-            "timeoutMs": 250
-        }, op_id)
-        output.extend(base64.b64decode(chunk["dataBase64"]))
-        cursor = chunk["nextOffset"]
-        op_id += 1
-        if expected in output:
-            break
-    else:
-        raise RuntimeError("command output timeout")
-    print(output.decode(errors="replace"))
-    shell(conn, "closeAttach", {"session": session}, op_id)
-
-def management(op):
-    conn = connect()
-    args = {"vm": TARGET}
-    if op in ("detach", "kill"):
-        args["name"] = "primary"
-    print(json.dumps(shell(conn, op, args, 1), sort_keys=True))
-
-if sys.argv[1] in ("attach", "hold"):
-    attach(sys.argv[1])
-else:
-    management(sys.argv[1])
-PY
-      chmod 0755 /run/d2b/shell-client.py
-    """)
-
-    shell_client = (
-        "runuser -u alice -- env XDG_RUNTIME_DIR=/run/user/1000 "
-        "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus "
-        "python3 /run/d2b/shell-client.py"
-    )
-    machine.succeed(r"""
       cat > /run/d2b/cli-shell-e2e.py <<'PY'
 import errno
 import os
@@ -345,8 +210,10 @@ while select.select([master], [], [], 0)[0]:
             break
         raise
 output.clear()
+command = os.environ.get("SHELL_COMMAND", "printf cli-shell-attach-canary")
+expected = command.split()[-1].encode()
 deadline = time.monotonic() + 30
-while b"cli-shell-attach-canary" not in output and time.monotonic() < deadline:
+while expected not in output and time.monotonic() < deadline:
     if select.select([master], [], [], 1)[0]:
         try:
             output.extend(os.read(master, 65536))
@@ -355,14 +222,29 @@ while b"cli-shell-attach-canary" not in output and time.monotonic() < deadline:
                 break
             raise
     if time.monotonic() + 1 < deadline:
-        os.write(master, b"printf cli-shell-attach-canary\\n")
-if b"cli-shell-attach-canary" not in output:
+        os.write(master, (command + "\\n").encode())
+if expected not in output:
+    print(bytes(output).decode(errors="replace"), file=sys.stderr)
     raise SystemExit(f"typed shell attach missed canary: {bytes(output)!r}")
+if os.environ.get("HOLD") == "1":
+    open("/run/user/1000/d2b-shell-hold.ready", "w").close()
+    while True:
+        time.sleep(1)
 os.kill(pid, signal.SIGTERM)
 os.waitpid(pid, 0)
 PY
       chmod 0755 /run/d2b/cli-shell-attach-e2e.py
     """)
+    shell_client = (
+        "runuser -u alice -- env XDG_RUNTIME_DIR=/run/user/1000 "
+        "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus "
+        "/run/current-system/sw/bin/d2b --json shell"
+    )
+    cli_shell = (
+        "runuser -u alice -- env XDG_RUNTIME_DIR=/run/user/1000 "
+        "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus "
+        "python3 /run/d2b/cli-shell-attach-e2e.py"
+    )
     machine.succeed(
         "runuser -u alice -- env XDG_RUNTIME_DIR=/run/user/1000 "
         "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus "
@@ -378,7 +260,7 @@ PY
 
     machine.succeed(
         "SHELL_COMMAND='printf shell-roundtrip-canary' "
-        + shell_client + " attach | grep -q shell-roundtrip-canary"
+        + cli_shell
     )
     machine.succeed(
         shell_client + " list | jq -e "
@@ -387,12 +269,13 @@ PY
     )
     machine.succeed(
         "SHELL_COMMAND='printf reattach-continuity-canary' "
-        + shell_client + " attach | grep -q reattach-continuity-canary"
+        + cli_shell
     )
 
     machine.succeed("rm -f /run/user/1000/d2b-shell-hold.ready")
     machine.succeed(
-        shell_client + " hold >/run/user/1000/d2b-shell-hold.log 2>&1 & "
+        "SHELL_COMMAND='printf hold-canary' HOLD=1 "
+        + cli_shell + " >/run/user/1000/d2b-shell-hold.log 2>&1 & "
         "echo $! > /run/user/1000/d2b-shell-hold.pid"
     )
     machine.wait_for_file("/run/user/1000/d2b-shell-hold.ready", timeout=60)
@@ -410,7 +293,7 @@ PY
     )
     machine.succeed(
         "SHELL_COMMAND='printf daemon-restart-canary' "
-        + shell_client + " attach | grep -q daemon-restart-canary"
+        + cli_shell
     )
 
     machine.succeed(alice_user + " restart d2b-unsafe-local-helper.service")
@@ -423,15 +306,15 @@ PY
     )
     machine.succeed(
         "SHELL_COMMAND='printf helper-adoption-canary' "
-        + shell_client + " attach | grep -q helper-adoption-canary"
+        + cli_shell
     )
-    machine.succeed(shell_client + " kill | jq -e '.killed == true'")
+    machine.succeed(shell_client + " kill ShellSession/primary | jq -e '.killed == true'")
     machine.succeed(f"kill -0 {unrelated_pid}")
     machine.succeed(shell_client + " list | jq -e '.sessions | length == 0'")
 
     machine.succeed(
         "SHELL_COMMAND='printf logout-canary' "
-        + shell_client + " attach >/run/user/1000/logout-shell.log"
+        + cli_shell + " >/run/user/1000/logout-shell.log"
     )
     shell_scope = machine.succeed(
         alice_user
@@ -458,7 +341,8 @@ PY
         "</dev/null >/run/d2b/no-manager-helper.log 2>&1"
     )
     machine.wait_until_succeeds(
-        "! " + shell_client + " attach >/run/d2b/no-manager-client.log 2>&1 && "
+        "! SHELL_COMMAND='printf no-manager-canary' " + cli_shell
+        + " >/run/d2b/no-manager-client.log 2>&1 && "
         "grep -q unsafe-local-shell-user-manager-unavailable "
         "/run/d2b/no-manager-client.log",
         timeout=60,
