@@ -1,3 +1,3 @@
 {
-  "feature_directory": "specs/002-optimize-test-orchestration"
+  "feature_directory": "specs/003-adr052-bazel-rust"
 }

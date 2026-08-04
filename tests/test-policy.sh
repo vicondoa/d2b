@@ -169,6 +169,7 @@ run_policy_cargo_binary "policy-adr046-spec-literals" policy_adr046_spec_literal
 run_policy_cargo_binary "policy-adr046-envelopes"     policy_adr046_envelopes
 run_policy_cargo_binary "policy-provider-crates"     policy_provider_crates
 run_policy_cargo_binary "policy-resource-mutation-seal" policy_resource_mutation_seal
+run_policy_cargo_binary "policy-docs" policy_docs
 run_guest_workspace_guard
 
 [ "$rc" -eq 0 ] || exit 1
