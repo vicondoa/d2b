@@ -53,7 +53,6 @@ let
 
   zoneStorageCfg = (mkEvalStub [ base ({ ... }: {
     d2b.daemonExperimental.enable = true;
-    d2b.zones.local-root = { };
   }) ]).config;
   zoneStorageArtifact =
     zoneStorageCfg.d2b._bundle.extraArtifacts."zoneStorage-local-root";
