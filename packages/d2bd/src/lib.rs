@@ -9347,14 +9347,17 @@ fn find_typed_shell_session_target(
         let result = list_typed_shell_target(state, peer, target.clone())?;
         if result.sessions.iter().any(|session| session.name == *name) {
             if matched.is_some() {
+                forget_typed_shell_session_target(state, peer.uid, name);
                 return Err(TypedError::WorkloadAliasConflict {
                     workload_id: name.as_str().to_owned(),
                     detail: "ShellSession name exists on more than one execution target".to_owned(),
                 });
             }
-            remember_typed_shell_session_target(state, peer.uid, name, &target);
             matched = Some(target);
         }
+    }
+    if let Some(target) = matched.as_deref() {
+        remember_typed_shell_session_target(state, peer.uid, name, target);
     }
     Ok(matched)
 }
@@ -9365,13 +9368,14 @@ fn resolve_typed_shell_session_target(
     resource: &str,
 ) -> Result<String, TypedError> {
     let name = typed_shell_resource_name(resource)?;
+    if let Some(target) = find_typed_shell_session_target(state, peer, &name)? {
+        return Ok(target);
+    }
     if let Some(target) = cached_typed_shell_session_target(state, peer.uid, &name) {
         return Ok(target);
     }
-    find_typed_shell_session_target(state, peer, &name)?.ok_or_else(|| {
-        TypedError::WorkloadTargetNotFound {
-            target: resource.to_owned(),
-        }
+    Err(TypedError::WorkloadTargetNotFound {
+        target: resource.to_owned(),
     })
 }
 
