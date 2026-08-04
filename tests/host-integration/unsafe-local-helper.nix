@@ -275,7 +275,7 @@ PY
         + cli_shell
     )
     machine.succeed(
-        shell_client + " list | jq -e "
+        shell_client + " list | tee /dev/stderr | jq -e "
         "'.defaultName == \"primary\" and "
         "(.sessions | any(.name == \"primary\" and .attached == false))'"
     )
