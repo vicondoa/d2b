@@ -19,7 +19,7 @@
 lib.optionalAttrs (system == "x86_64-linux") (
 
 let
-  base = { lib, ... }: {
+  hostBase = { ... }: {
     boot.loader.grub.enable = false;
     boot.loader.systemd-boot.enable = false;
     boot.initrd.includeDefaultModules = false;
@@ -35,6 +35,9 @@ let
       lanSubnet = "10.20.0.0/24";
       uplinkSubnet = "192.0.2.0/30";
     };
+  };
+
+  workVm = { lib, ... }: {
     d2b.vms.work = {
       enable = true;
       env = "work";
@@ -47,6 +50,9 @@ let
         users.users.alice = { isNormalUser = true; uid = 1000; };
       };
     };
+  };
+
+  headlessVm = { lib, ... }: {
     d2b.vms.headless = {
       enable = true;
       env = "work";
@@ -57,6 +63,9 @@ let
         users.users.alice = { isNormalUser = true; uid = 1000; };
       };
     };
+  };
+
+  workAadVm = { lib, ... }: {
     d2b.vms."work-aad" = {
       enable = true;
       env = "work";
@@ -68,6 +77,9 @@ let
         users.users.alice = { isNormalUser = true; uid = 1000; };
       };
     };
+  };
+
+  mediaVm = { ... }: {
     d2b.vms.media = {
       runtime.kind = "qemu-media";
       env = "work";
@@ -75,8 +87,12 @@ let
     };
   };
 
-  etcOf = overrides: (mkEval ([ base ] ++ overrides)).config.environment.etc;
-  cfgOf = overrides: (mkEval ([ base ] ++ overrides)).config;
+  evalWith = vmLayers: overrides: mkEval ([ hostBase ] ++ vmLayers ++ overrides);
+  etcWith = vmLayers: overrides: (evalWith vmLayers overrides).config.environment.etc;
+  cfgWith = vmLayers: overrides: (evalWith vmLayers overrides).config;
+  hostEtcOf = overrides: etcWith [ ] overrides;
+  etcOf = overrides: etcWith [ workVm ] overrides;
+  cfgOf = overrides: cfgWith [ workVm ] overrides;
   kdlKey = "d2b/niri-vm-borders.kdl";
   jsonKey = "d2b/ui-colors.json";
   cssKey = "d2b/ui-colors.css";
@@ -94,8 +110,8 @@ let
     in
     if positions == [ ] then null else builtins.elemAt argv ((builtins.head positions) + 1);
 
-  disabledEtc = etcOf [ ];
-  uiEtc = etcOf [ ({ ... }: { d2b.site.ui.enable = true; }) ];
+  disabledEtc = hostEtcOf [ ];
+  uiEtc = etcWith [ workVm workAadVm ] [ ({ ... }: { d2b.site.ui.enable = true; }) ];
   uiJson = builtins.fromJSON (jsonText uiEtc);
   uiCss = cssText uiEtc;
   newNiriEtc = etcOf [ ({ ... }: { d2b.site.ui.compositors.niri.enable = true; }) ];
@@ -106,7 +122,9 @@ let
       d2b.vms.work.graphics.waylandProxy.border.enable = false;
     })
   ]);
-  enabledEtc = etcOf [ ({ ... }: { d2b.site.niriVmBorders.enable = true; }) ];
+  enabledEtc = etcWith [ workVm headlessVm mediaVm ] [
+    ({ ... }: { d2b.site.niriVmBorders.enable = true; })
+  ];
   enabledKdl = kdlText enabledEtc;
   colorKdl = kdlText (etcOf [
     ({ ... }: {
@@ -124,14 +142,14 @@ let
       d2b.vms.work.graphics.waylandProxy.border.enable = false;
     })
   ]);
-  qemuMediaColorKdl = kdlText (etcOf [
+  qemuMediaColorKdl = kdlText (etcWith [ mediaVm ] [
     ({ ... }: {
       d2b.site.niriVmBorders.enable = true;
       d2b.vms.media.graphics.waylandProxy.border.enable = false;
       d2b.vms.media.qemuMedia.window.niriBorderColor = "#800080";
     })
   ]);
-  customEtc = etcOf [
+  customEtc = hostEtcOf [
     ({ ... }: {
       d2b.site.niriVmBorders.enable = true;
       d2b.site.niriVmBorders.outputPath = "/etc/d2b/custom-borders.kdl";
