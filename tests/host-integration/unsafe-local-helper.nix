@@ -260,11 +260,20 @@ PY
         "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus "
         "python3 /run/d2b/cli-shell-attach-e2e.py"
     )
-    machine.succeed(
+    attach_status, attach_output = machine.execute(
         "runuser -u alice -- env XDG_RUNTIME_DIR=/run/user/1000 "
         "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus "
         "python3 /run/d2b/cli-shell-attach-e2e.py"
     )
+    if attach_status != 0:
+        print(attach_output)
+        print(machine.succeed("journalctl -u d2bd.service --no-pager -n 100"))
+        print(machine.succeed(
+            "runuser -u alice -- env XDG_RUNTIME_DIR=/run/user/1000 "
+            "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus "
+            "journalctl --user -u d2b-unsafe-local-helper.service --no-pager -n 100"
+        ))
+        raise Exception("typed shell attach probe failed")
     machine.succeed(
         "runuser -u alice -- sh -c 'setsid sleep 300 >/dev/null 2>&1 & "
         "echo $! > /run/user/1000/unrelated-same-uid.pid'"
