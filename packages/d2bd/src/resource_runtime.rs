@@ -1,7 +1,8 @@
 //! Production Zone resource-plane ownership for `d2bd`.
 //!
 //! A Zone runtime is opened only from the broker's opaque
-//! [`OpenZoneStoreRequest`]. The broker owns path resolution and returns one
+//! [`d2b_contracts::broker_wire::OpenZoneStoreRequest`]. The broker owns path
+//! resolution and returns one
 //! close-on-exec database descriptor; this module consumes that descriptor
 //! into the production redb backend and never opens a caller-supplied path.
 //! The runtime owns the API, core-process readiness, and restart lifecycle as
