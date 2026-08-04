@@ -69,6 +69,14 @@ let
       d2b.observability.enable = true;
       d2b.vms.corp-vm.observability.enable = true;
     };
+    observability-enabled-corp-audit = { ... }: {
+      d2b.observability.enable = true;
+      d2b.vms.corp-vm.observability = {
+        enable = true;
+        scrapeJournal = false;
+      };
+      d2b.vms.corp-vm.audit.enable = true;
+    };
   };
 
   evalCase = caseSpec:
@@ -479,14 +487,7 @@ let
     };
 
     obs-audit-surface = {
-      override = { ... }: {
-        d2b.observability.enable = true;
-        d2b.vms.corp-vm.observability = {
-          enable = true;
-          scrapeJournal = false;
-        };
-        d2b.vms.corp-vm.audit.enable = true;
-      };
+      scenario = "observability-enabled-corp-audit";
       extract = nixos:
         let workGuest = nixos.config.d2b._computed.corp-vm.config;
         in
