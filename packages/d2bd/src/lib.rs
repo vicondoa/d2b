@@ -3233,7 +3233,7 @@ fn handle_connection_authorized(
                 let _ = write_json_frame(&stream, &typed_shell_resource_error_frame(&error));
                 continue;
             }
-            if let Err(error) = resolve_typed_shell_runtime(&state, &resource.value()) {
+            if let Err(error) = resolve_typed_shell_runtime(state, &resource.value()) {
                 let _ = write_json_frame(&stream, &resource_runtime_error_frame(error));
                 continue;
             }
