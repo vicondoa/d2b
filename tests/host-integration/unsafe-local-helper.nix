@@ -290,7 +290,12 @@ def read_until(marker, timeout):
 os.write(master, b"stty -echo\\n")
 time.sleep(0.5)
 while select.select([master], [], [], 0)[0]:
-    output.extend(os.read(master, 65536))
+    try:
+        output.extend(os.read(master, 65536))
+    except OSError as error:
+        if error.errno == errno.EIO:
+            break
+        raise
 output.clear()
 os.write(master, b"printf cli-shell-executed-canary\\n")
 read_until(b"cli-shell-executed-canary", 30)
@@ -337,7 +342,12 @@ output = bytearray()
 os.write(master, b"stty -echo\\n")
 time.sleep(0.5)
 while select.select([master], [], [], 0)[0]:
-    output.extend(os.read(master, 65536))
+    try:
+        output.extend(os.read(master, 65536))
+    except OSError as error:
+        if error.errno == errno.EIO:
+            break
+        raise
 output.clear()
 deadline = time.monotonic() + 30
 while b"cli-shell-attach-canary" not in output and time.monotonic() < deadline:
