@@ -1053,9 +1053,9 @@ impl MeasurementDocuments {
     }
 
     fn normalized_iter(&self) -> impl Iterator<Item = (&str, &str)> {
-        self.documents.iter().map(|(path, document)| {
-            (path.as_str(), document.normalized.as_str())
-        })
+        self.documents
+            .iter()
+            .map(|(path, document)| (path.as_str(), document.normalized.as_str()))
     }
 }
 
