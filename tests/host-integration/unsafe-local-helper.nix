@@ -359,7 +359,7 @@ PY
     machine.wait_until_succeeds(
         "! SHELL_COMMAND='printf no-manager-canary' " + cli_shell
         + " >/run/d2b/no-manager-client.log 2>&1 && "
-        "grep -q unsafe-local-shell-user-manager-unavailable "
+        "grep -q provider-unavailable "
         "/run/d2b/no-manager-client.log",
         timeout=60,
     )

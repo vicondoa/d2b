@@ -3163,7 +3163,7 @@ fn handle_connection_authorized(
                 let error = TypedError::AuthzNotAdmin {
                     verb: "shell".to_owned(),
                 };
-                let _ = write_json_frame(&stream, &wire::error_frame(&error));
+                let _ = write_json_frame(&stream, &typed_shell_resource_error_frame(&error));
                 continue;
             }
             set_frame_read_deadline(&stream, None);
@@ -3497,7 +3497,10 @@ fn dispatch_resource_request(
         ));
     };
     if typed_shell_resource_request(&request.value()) {
-        return dispatch_typed_shell_resource_request(state, peer, &request.value());
+        return Ok(
+            dispatch_typed_shell_resource_request(state, peer, &request.value())
+                .unwrap_or_else(|error| typed_shell_resource_error_frame(&error)),
+        );
     }
     let plane = state
         .resource_plane
@@ -3609,6 +3612,76 @@ fn resource_runtime_error_frame(error: resource_runtime::ResourceRuntimeError) -
             "retryClass": "never",
             "message": error.code(),
             "remediation": "inspect the Zone runtime readiness and retry after the authoritative resource plane is ready",
+        }
+    })
+}
+
+fn typed_shell_resource_error_frame(error: &TypedError) -> Value {
+    use crate::typed_error::{
+        GuestControlShellErrorKind as Guest, UnsafeLocalShellErrorKind as Host,
+    };
+    use d2b_contracts::v3::ResourceErrorKind;
+
+    let kind = match error {
+        TypedError::AuthzNotAdmin { .. } => ResourceErrorKind::AuthorizationDenied,
+        TypedError::WorkloadTargetNotFound { .. }
+        | TypedError::GuestControlShellFailed {
+            kind: Guest::NotFound | Guest::StaleSession,
+        }
+        | TypedError::UnsafeLocalShellFailed {
+            kind: Host::NotFound | Host::StaleSession,
+        } => ResourceErrorKind::ResourceNotFound,
+        TypedError::GuestControlShellFailed {
+            kind: Guest::Capability,
+        }
+        | TypedError::UnsafeLocalShellFailed {
+            kind: Host::FeatureUnavailable | Host::ShellUnavailable,
+        } => ResourceErrorKind::UnsupportedCapability,
+        TypedError::GuestControlShellFailed {
+            kind: Guest::Transport,
+        }
+        | TypedError::UnsafeLocalShellFailed {
+            kind:
+                Host::HelperUnavailable
+                | Host::HelperStale
+                | Host::UserManagerUnavailable
+                | Host::EnvironmentInvalid
+                | Host::ExecutableUnavailable
+                | Host::ScopeCreateFailed
+                | Host::ScopeIdentityMismatch
+                | Host::GraphicalSessionInactive
+                | Host::WaylandUnavailable
+                | Host::ProxyUnavailable
+                | Host::FirstClientTimeout,
+        } => ResourceErrorKind::ResourceProviderUnavailable,
+        TypedError::GuestControlShellFailed {
+            kind: Guest::Timeout,
+        }
+        | TypedError::UnsafeLocalShellFailed {
+            kind: Host::Timeout,
+        } => ResourceErrorKind::Timeout,
+        TypedError::GuestControlShellFailed {
+            kind: Guest::Capacity,
+        }
+        | TypedError::UnsafeLocalShellFailed {
+            kind: Host::QueueFull,
+        } => ResourceErrorKind::Backpressure,
+        TypedError::GuestControlShellFailed {
+            kind: Guest::AlreadyAttached,
+        }
+        | TypedError::UnsafeLocalShellFailed {
+            kind: Host::AlreadyAttached | Host::OperationConflict,
+        } => ResourceErrorKind::ResourceConflict,
+        _ => ResourceErrorKind::InternalIntegrityFailure,
+    };
+    json!({
+        "type": "error",
+        "error": {
+            "kind": kind.as_str(),
+            "errorClass": kind.as_str(),
+            "retryClass": "never",
+            "message": kind.as_str(),
+            "remediation": "inspect the ShellSession Provider state and retry after its authoritative runtime is ready",
         }
     })
 }
@@ -9245,7 +9318,10 @@ fn run_typed_shell_owner(stream: Socket, state: ServerState, peer: PeerIdentity,
     {
         Ok(rt) => rt,
         Err(_) => {
-            let _ = write_json_frame(&stream, &wire::error_frame(&shell_transport_failed()));
+            let _ = write_json_frame(
+                &stream,
+                &typed_shell_resource_error_frame(&shell_transport_failed()),
+            );
             return;
         }
     };
@@ -9261,19 +9337,25 @@ fn run_typed_shell_owner(stream: Socket, state: ServerState, peer: PeerIdentity,
                 .map(|name| format!("shell-terminal.d2bus.org.ShellSession/{name}"))
         })
     else {
-        let _ = write_json_frame(&stream, &wire::error_frame(&shell_protocol_failed()));
+        let _ = write_json_frame(
+            &stream,
+            &typed_shell_resource_error_frame(&shell_protocol_failed()),
+        );
         return;
     };
     let creating = method == "Create";
     let target = if creating {
         let Some(execution_ref) = request.get("executionRef").and_then(Value::as_str) else {
-            let _ = write_json_frame(&stream, &wire::error_frame(&shell_protocol_failed()));
+            let _ = write_json_frame(
+                &stream,
+                &typed_shell_resource_error_frame(&shell_protocol_failed()),
+            );
             return;
         };
         let target = match typed_shell_execution_target(execution_ref) {
             Ok(target) => target,
             Err(error) => {
-                let _ = write_json_frame(&stream, &wire::error_frame(&error));
+                let _ = write_json_frame(&stream, &typed_shell_resource_error_frame(&error));
                 return;
             }
         };
@@ -9284,7 +9366,10 @@ fn run_typed_shell_owner(stream: Socket, state: ServerState, peer: PeerIdentity,
                     .and_then(Value::as_bool)
                     .unwrap_or(false)
             {
-                let _ = write_json_frame(&stream, &wire::error_frame(&shell_protocol_failed()));
+                let _ = write_json_frame(
+                    &stream,
+                    &typed_shell_resource_error_frame(&shell_protocol_failed()),
+                );
                 return;
             }
         }
@@ -9293,7 +9378,7 @@ fn run_typed_shell_owner(stream: Socket, state: ServerState, peer: PeerIdentity,
         match resolve_typed_shell_session_target(&state, &resource) {
             Ok(target) => target,
             Err(error) => {
-                let _ = write_json_frame(&stream, &wire::error_frame(&error));
+                let _ = write_json_frame(&stream, &typed_shell_resource_error_frame(&error));
                 return;
             }
         }
@@ -9304,7 +9389,10 @@ fn run_typed_shell_owner(stream: Socket, state: ServerState, peer: PeerIdentity,
     {
         Some(name) => name,
         None => {
-            let _ = write_json_frame(&stream, &wire::error_frame(&shell_protocol_failed()));
+            let _ = write_json_frame(
+                &stream,
+                &typed_shell_resource_error_frame(&shell_protocol_failed()),
+            );
             return;
         }
     };
@@ -9330,7 +9418,7 @@ fn run_typed_shell_owner(stream: Socket, state: ServerState, peer: PeerIdentity,
                 error_kind = error.kind(),
                 "typed shell attachment refused"
             );
-            let _ = write_json_frame(&stream, &wire::error_frame(&error));
+            let _ = write_json_frame(&stream, &typed_shell_resource_error_frame(&error));
             return;
         }
     };
@@ -9396,7 +9484,10 @@ fn run_typed_shell_owner(stream: Socket, state: ServerState, peer: PeerIdentity,
                 })
             }
             _ => {
-                let _ = write_json_frame(&stream, &wire::error_frame(&shell_protocol_failed()));
+                let _ = write_json_frame(
+                    &stream,
+                    &typed_shell_resource_error_frame(&shell_protocol_failed()),
+                );
                 continue;
             }
         };
@@ -9421,7 +9512,7 @@ fn run_typed_shell_owner(stream: Socket, state: ServerState, peer: PeerIdentity,
             }
             Ok(None) => break,
             Err(error) => {
-                let _ = write_json_frame(&stream, &wire::error_frame(&error));
+                let _ = write_json_frame(&stream, &typed_shell_resource_error_frame(&error));
             }
         }
     }
