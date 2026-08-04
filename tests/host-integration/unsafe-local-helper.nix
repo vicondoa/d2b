@@ -463,7 +463,10 @@ PY
     )
     machine.succeed(shell_client + " kill ShellSession/primary | jq -e '.killed == true'")
     machine.succeed(f"kill -0 {unrelated_pid}")
-    machine.succeed(shell_client + " list | jq -e '.sessions | length == 0'")
+    machine.succeed(
+        shell_client
+        + " list | jq -e '.sessions | any(.name == \"exit-session\" and .state == \"killed\") and all(.name != \"primary\")'"
+    )
 
     machine.succeed(
         "SHELL_MARKER=logout-canary "
