@@ -9138,6 +9138,16 @@ fn is_typed_shell_resource_ref(value: &str) -> bool {
     value.starts_with("shell-terminal.d2bus.org.ShellSession/")
 }
 
+fn typed_shell_execution_target(value: &str) -> Result<String, TypedError> {
+    let execution_ref =
+        d2b_contracts::v3::ResourceRef::parse(value).map_err(|_| shell_protocol_failed())?;
+    match execution_ref.resource_type().as_str() {
+        "Host" => Ok(format!("{}.host.d2b", execution_ref.name().as_str())),
+        "Guest" => Ok(execution_ref.name().as_str().to_owned()),
+        _ => Err(shell_protocol_failed()),
+    }
+}
+
 fn run_typed_shell_owner(stream: Socket, state: ServerState, peer: PeerIdentity, request: Value) {
     let rt = match tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -9165,9 +9175,16 @@ fn run_typed_shell_owner(stream: Socket, state: ServerState, peer: PeerIdentity,
         return;
     };
     let target = if method == "Create" {
-        let Some(target) = request.get("executionRef").and_then(Value::as_str) else {
+        let Some(execution_ref) = request.get("executionRef").and_then(Value::as_str) else {
             let _ = write_json_frame(&stream, &wire::error_frame(&shell_protocol_failed()));
             return;
+        };
+        let target = match typed_shell_execution_target(execution_ref) {
+            Ok(target) => target,
+            Err(error) => {
+                let _ = write_json_frame(&stream, &wire::error_frame(&error));
+                return;
+            }
         };
         if let Ok(mut sessions) = typed_shell_sessions().lock() {
             if sessions.contains_key(&resource)
@@ -9179,9 +9196,9 @@ fn run_typed_shell_owner(stream: Socket, state: ServerState, peer: PeerIdentity,
                 let _ = write_json_frame(&stream, &wire::error_frame(&shell_protocol_failed()));
                 return;
             }
-            sessions.insert(resource.clone(), target.to_owned());
+            sessions.insert(resource.clone(), target.clone());
         }
-        target.to_owned()
+        target
     } else {
         let Some(target) = typed_shell_sessions()
             .lock()

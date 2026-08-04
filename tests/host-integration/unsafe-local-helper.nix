@@ -131,9 +131,12 @@ pid, master = pty.fork()
 if pid == 0:
     os.execv(
         "/run/current-system/sw/bin/d2b",
-        ["d2b", "shell", "open", "Host/tools", "--name", "cli-e2e"],
+        ["d2b", "shell", "open", "Host/tools", "--name", "primary"],
     )
 fcntl.ioctl(master, termios.TIOCSWINSZ, struct.pack("HHHH", 24, 80, 0, 0))
+attributes = termios.tcgetattr(master)
+attributes[3] &= ~termios.ECHO
+termios.tcsetattr(master, termios.TCSANOW, attributes)
 
 output = bytearray()
 
@@ -157,16 +160,6 @@ def read_until(marker, timeout):
             f"real d2b shell CLI missed {marker!r}: {bytes(output)!r}"
         )
 
-os.write(master, b"stty -echo\\n")
-time.sleep(0.5)
-while select.select([master], [], [], 0)[0]:
-    try:
-        output.extend(os.read(master, 65536))
-    except OSError as error:
-        if error.errno == errno.EIO:
-            break
-        raise
-output.clear()
 os.write(master, b"printf cli-shell-executed-canary\\n")
 read_until(b"cli-shell-executed-canary", 30)
 
@@ -207,24 +200,13 @@ pid, master = pty.fork()
 if pid == 0:
     os.execv(
         "/run/current-system/sw/bin/d2b",
-        ["d2b", "shell", "attach", "ShellSession/cli-e2e"],
+        ["d2b", "shell", "attach", "ShellSession/primary"],
     )
 fcntl.ioctl(master, termios.TIOCSWINSZ, struct.pack("HHHH", 24, 80, 0, 0))
+attributes = termios.tcgetattr(master)
+attributes[3] &= ~termios.ECHO
+termios.tcsetattr(master, termios.TCSANOW, attributes)
 output = bytearray()
-os.write(master, b"stty -echo\\n")
-time.sleep(0.5)
-while select.select([master], [], [], 0)[0]:
-    try:
-        output.extend(os.read(master, 65536))
-    except OSError as error:
-        if error.errno == errno.EIO:
-            waited, status = os.waitpid(pid, os.WNOHANG)
-            print(
-                f"typed shell attach child closed: waited={waited} status={status}",
-                file=sys.stderr,
-            )
-            break
-        raise
 command = os.environ.get("SHELL_COMMAND", "printf cli-shell-attach-canary")
 expected = command.split()[-1].encode()
 deadline = time.monotonic() + 30
