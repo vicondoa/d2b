@@ -300,7 +300,7 @@ output.clear()
 os.write(master, b"printf cli-shell-executed-canary\\n")
 read_until(b"cli-shell-executed-canary", 30)
 
-os.kill(pid, signal.SIGTERM)
+os.close(master)
 deadline = time.monotonic() + 15
 while time.monotonic() < deadline:
     waited, status = os.waitpid(pid, os.WNOHANG)
