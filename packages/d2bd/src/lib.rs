@@ -593,6 +593,10 @@ struct ServerState {
     /// trusted bundle/storage admission is incomplete; public resource
     /// requests fail closed rather than falling back to the legacy path.
     resource_plane: Arc<Mutex<Option<Arc<resource_runtime::ResourcePlane>>>>,
+    /// Execution-target bindings for qualified ShellSession resources. The
+    /// provider may remove a killed session before a retry arrives, so the
+    /// daemon keeps the exact target binding independently of provider lists.
+    typed_shell_session_targets: Arc<Mutex<BTreeMap<String, String>>>,
     /// Authoritative Zone index for daemon-side coordination state. USBIP
     /// reconciliation, force-stop generations, and activation staging all
     /// resolve through this index; no process-global lock carries that state.
@@ -608,6 +612,10 @@ struct ServerState {
 
 fn new_zone_coordinator() -> Arc<Mutex<ZoneCoordinator>> {
     Arc::new(Mutex::new(ZoneCoordinator::new()))
+}
+
+fn new_typed_shell_session_targets() -> Arc<Mutex<BTreeMap<String, String>>> {
+    Arc::new(Mutex::new(BTreeMap::new()))
 }
 
 /// Populate the daemon's Zone authority index from the trusted host bundle.
@@ -1571,6 +1579,7 @@ pub async fn serve(options: ServeOptions) -> Result<(), TypedError> {
         public_status_read_model: Arc::new(crate::PublicStatusReadModel::new()),
         provider_runtime: Arc::new(crate::provider_registry::ProviderRuntime::new()),
         resource_plane: Arc::new(Mutex::new(None)),
+        typed_shell_session_targets: new_typed_shell_session_targets(),
         zone_coordinator: new_zone_coordinator(),
         security_key_sessions: Arc::new(parking_lot::Mutex::new(
             crate::security_key::SkSessionTable::default(),
@@ -4362,6 +4371,7 @@ mod workload_observability_tests {
             public_status_read_model: Arc::new(PublicStatusReadModel::new()),
             provider_runtime: Arc::new(crate::provider_registry::ProviderRuntime::new()),
             resource_plane: Arc::new(Mutex::new(None)),
+            typed_shell_session_targets: new_typed_shell_session_targets(),
             zone_coordinator: new_zone_coordinator(),
             console_sessions: Arc::new(Mutex::new(console_session::ConsoleSessionTable::default())),
             security_key_sessions: Arc::new(parking_lot::Mutex::new(
@@ -9266,6 +9276,27 @@ fn list_typed_shell_target(
     serde_json::from_value(value).map_err(|_| shell_protocol_failed())
 }
 
+fn remember_typed_shell_session_target(
+    state: &ServerState,
+    name: &public_wire::ShellName,
+    target: &str,
+) {
+    if let Ok(mut sessions) = state.typed_shell_session_targets.lock() {
+        sessions.insert(name.as_str().to_owned(), target.to_owned());
+    }
+}
+
+fn cached_typed_shell_session_target(
+    state: &ServerState,
+    name: &public_wire::ShellName,
+) -> Option<String> {
+    state
+        .typed_shell_session_targets
+        .lock()
+        .ok()
+        .and_then(|sessions| sessions.get(name.as_str()).cloned())
+}
+
 fn find_typed_shell_session_target(
     state: &ServerState,
     peer: &PeerIdentity,
@@ -9281,6 +9312,7 @@ fn find_typed_shell_session_target(
                     detail: "ShellSession name exists on more than one execution target".to_owned(),
                 });
             }
+            remember_typed_shell_session_target(state, name, &target);
             matched = Some(target);
         }
     }
@@ -9293,6 +9325,9 @@ fn resolve_typed_shell_session_target(
     resource: &str,
 ) -> Result<String, TypedError> {
     let name = typed_shell_resource_name(resource)?;
+    if let Some(target) = cached_typed_shell_session_target(state, &name) {
+        return Ok(target);
+    }
     find_typed_shell_session_target(state, peer, &name)?.ok_or_else(|| {
         TypedError::WorkloadTargetNotFound {
             target: resource.to_owned(),
@@ -9442,6 +9477,7 @@ fn run_typed_shell_owner(
             return;
         }
     };
+    remember_typed_shell_session_target(&state, &name, &target);
     let session = established.attach.session.clone();
     let owner_shell_ref_digest = shell_ref_digest(&[
         &established.target,
@@ -20619,6 +20655,7 @@ mod public_status_tests {
             public_status_read_model: Arc::new(crate::PublicStatusReadModel::new()),
             provider_runtime: Arc::new(crate::provider_registry::ProviderRuntime::new()),
             resource_plane: Arc::new(Mutex::new(None)),
+            typed_shell_session_targets: new_typed_shell_session_targets(),
             zone_coordinator: new_zone_coordinator(),
             security_key_sessions: Arc::new(parking_lot::Mutex::new(
                 crate::security_key::SkSessionTable::default(),
@@ -23531,6 +23568,7 @@ mod detached_exec_routing_tests {
             public_status_read_model: Arc::new(crate::PublicStatusReadModel::new()),
             provider_runtime: Arc::new(crate::provider_registry::ProviderRuntime::new()),
             resource_plane: Arc::new(Mutex::new(None)),
+            typed_shell_session_targets: new_typed_shell_session_targets(),
             zone_coordinator: new_zone_coordinator(),
             security_key_sessions: Arc::new(parking_lot::Mutex::new(
                 crate::security_key::SkSessionTable::default(),
@@ -24248,6 +24286,7 @@ mod accept_loop_concurrency_tests {
             public_status_read_model: Arc::new(crate::PublicStatusReadModel::new()),
             provider_runtime: Arc::new(crate::provider_registry::ProviderRuntime::new()),
             resource_plane: Arc::new(Mutex::new(None)),
+            typed_shell_session_targets: new_typed_shell_session_targets(),
             zone_coordinator: new_zone_coordinator(),
             security_key_sessions: Arc::new(parking_lot::Mutex::new(
                 crate::security_key::SkSessionTable::default(),
@@ -24901,6 +24940,7 @@ mod broker_dispatch_tests {
             public_status_read_model: Arc::new(crate::PublicStatusReadModel::new()),
             provider_runtime: Arc::new(crate::provider_registry::ProviderRuntime::new()),
             resource_plane: Arc::new(Mutex::new(None)),
+            typed_shell_session_targets: new_typed_shell_session_targets(),
             zone_coordinator: new_zone_coordinator(),
             security_key_sessions: Arc::new(parking_lot::Mutex::new(
                 crate::security_key::SkSessionTable::default(),
@@ -24942,6 +24982,7 @@ mod broker_dispatch_tests {
             public_status_read_model: Arc::new(crate::PublicStatusReadModel::new()),
             provider_runtime: Arc::new(crate::provider_registry::ProviderRuntime::new()),
             resource_plane: Arc::new(Mutex::new(None)),
+            typed_shell_session_targets: new_typed_shell_session_targets(),
             zone_coordinator: new_zone_coordinator(),
             security_key_sessions: Arc::new(parking_lot::Mutex::new(
                 crate::security_key::SkSessionTable::default(),
@@ -27041,6 +27082,7 @@ mod broker_dispatch_tests {
             public_status_read_model: Arc::new(crate::PublicStatusReadModel::new()),
             provider_runtime: Arc::new(crate::provider_registry::ProviderRuntime::new()),
             resource_plane: Arc::new(Mutex::new(None)),
+            typed_shell_session_targets: new_typed_shell_session_targets(),
             zone_coordinator: new_zone_coordinator(),
             security_key_sessions: Arc::new(parking_lot::Mutex::new(
                 crate::security_key::SkSessionTable::default(),
@@ -27269,6 +27311,7 @@ mod broker_dispatch_tests {
             public_status_read_model: Arc::new(crate::PublicStatusReadModel::new()),
             provider_runtime: Arc::new(crate::provider_registry::ProviderRuntime::new()),
             resource_plane: Arc::new(Mutex::new(None)),
+            typed_shell_session_targets: new_typed_shell_session_targets(),
             zone_coordinator: new_zone_coordinator(),
             security_key_sessions: Arc::new(parking_lot::Mutex::new(
                 crate::security_key::SkSessionTable::default(),
@@ -27530,6 +27573,7 @@ mod broker_dispatch_tests {
             public_status_read_model: Arc::new(crate::PublicStatusReadModel::new()),
             provider_runtime: Arc::new(crate::provider_registry::ProviderRuntime::new()),
             resource_plane: Arc::new(Mutex::new(None)),
+            typed_shell_session_targets: new_typed_shell_session_targets(),
             zone_coordinator: new_zone_coordinator(),
             security_key_sessions: Arc::new(parking_lot::Mutex::new(
                 crate::security_key::SkSessionTable::default(),
@@ -29429,6 +29473,7 @@ mod broker_dispatch_tests {
             public_status_read_model: Arc::new(crate::PublicStatusReadModel::new()),
             provider_runtime: Arc::new(crate::provider_registry::ProviderRuntime::new()),
             resource_plane: Arc::new(Mutex::new(None)),
+            typed_shell_session_targets: new_typed_shell_session_targets(),
             zone_coordinator: new_zone_coordinator(),
             security_key_sessions: Arc::new(parking_lot::Mutex::new(
                 crate::security_key::SkSessionTable::default(),
@@ -30356,6 +30401,7 @@ mod broker_dispatch_tests {
             public_status_read_model: Arc::new(crate::PublicStatusReadModel::new()),
             provider_runtime: Arc::new(crate::provider_registry::ProviderRuntime::new()),
             resource_plane: Arc::new(Mutex::new(None)),
+            typed_shell_session_targets: new_typed_shell_session_targets(),
             zone_coordinator: new_zone_coordinator(),
             security_key_sessions: Arc::new(parking_lot::Mutex::new(
                 crate::security_key::SkSessionTable::default(),
@@ -30484,6 +30530,7 @@ mod broker_dispatch_tests {
             public_status_read_model: Arc::new(crate::PublicStatusReadModel::new()),
             provider_runtime: Arc::new(crate::provider_registry::ProviderRuntime::new()),
             resource_plane: Arc::new(Mutex::new(None)),
+            typed_shell_session_targets: new_typed_shell_session_targets(),
             zone_coordinator: new_zone_coordinator(),
             security_key_sessions: Arc::new(parking_lot::Mutex::new(
                 crate::security_key::SkSessionTable::default(),

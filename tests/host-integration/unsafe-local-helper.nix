@@ -462,6 +462,16 @@ PY
         + cli_shell
     )
     machine.succeed(shell_client + " kill ShellSession/primary | jq -e '.killed == true'")
+    machine.succeed(
+        shell_client
+        + " kill ShellSession/primary | jq -e "
+        "'.name == \"primary\" and .killed == false and .state == \"killed\"'"
+    )
+    machine.succeed(
+        shell_client
+        + " detach ShellSession/primary | jq -e "
+        "'.resolvedName == \"primary\" and .detached == false'"
+    )
     machine.succeed(f"kill -0 {unrelated_pid}")
     machine.succeed(
         shell_client

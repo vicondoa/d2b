@@ -500,7 +500,32 @@ fn detach<M: UserScopeManager>(
     name: ShellName,
     reservation: LaunchReservation,
 ) -> Result<ShellDispatch, RuntimeError> {
-    let scope = persisted_shell(runtime, &workload, &name)?;
+    let scope = match persisted_shell(runtime, &workload, &name) {
+        Ok(scope) => scope,
+        Err(RuntimeError::ShellNotFound) => {
+            let response = HelperShellResponse::Detach(HelperShellDetachResponse {
+                request_id,
+                operation_id: operation_id.clone(),
+                result: ShellDetachResult {
+                    resolved_name: name,
+                    detached: false,
+                    cause: None,
+                },
+            });
+            runtime
+                .ledger
+                .lock()
+                .map_err(|_| RuntimeError::Internal)?
+                .complete_shell_operation(
+                    &operation_id,
+                    reservation,
+                    None,
+                    Some(response.clone()),
+                )?;
+            return Ok(ShellDispatch::shell(response));
+        }
+        Err(error) => return Err(error),
+    };
     verify_scope(runtime, &scope)?;
     let result = supervisor_action(runtime, &scope, SupervisorAction::Detach)?;
     let detached = match result.result {
@@ -533,7 +558,32 @@ fn kill<M: UserScopeManager>(
     name: ShellName,
     reservation: LaunchReservation,
 ) -> Result<ShellDispatch, RuntimeError> {
-    let scope = persisted_shell(runtime, &workload, &name)?;
+    let scope = match persisted_shell(runtime, &workload, &name) {
+        Ok(scope) => scope,
+        Err(RuntimeError::ShellNotFound) => {
+            let response = HelperShellResponse::Kill(HelperShellKillResponse {
+                request_id,
+                operation_id: operation_id.clone(),
+                result: ShellKillResult {
+                    name,
+                    killed: false,
+                    state: ShellSessionState::Killed,
+                },
+            });
+            runtime
+                .ledger
+                .lock()
+                .map_err(|_| RuntimeError::Internal)?
+                .complete_shell_operation(
+                    &operation_id,
+                    reservation,
+                    None,
+                    Some(response.clone()),
+                )?;
+            return Ok(ShellDispatch::shell(response));
+        }
+        Err(error) => return Err(error),
+    };
     let verified = scope.verified();
     let inspection = runtime.manager.inspect_scope(&verified)?;
     if !inspection.identity_matches {
