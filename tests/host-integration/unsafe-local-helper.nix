@@ -210,6 +210,11 @@ while select.select([master], [], [], 0)[0]:
         output.extend(os.read(master, 65536))
     except OSError as error:
         if error.errno == errno.EIO:
+            waited, status = os.waitpid(pid, os.WNOHANG)
+            print(
+                f"typed shell attach child closed: waited={waited} status={status}",
+                file=sys.stderr,
+            )
             break
         raise
 output.clear()
