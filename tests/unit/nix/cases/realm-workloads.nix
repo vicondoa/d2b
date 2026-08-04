@@ -369,7 +369,11 @@ let
     (mkEval [
       limitProbeBase
       ({ ... }: {
-        d2b._index.realms.workloads.enabled = lib.mkForce rows;
+        d2b._index = lib.mkForce (
+          lib.recursiveUpdate limitProbeBaseCfg.d2b._index {
+            realms.workloads.enabled = rows;
+          }
+        );
       })
     ]).config;
   limitProbeUnsafeCfg =
