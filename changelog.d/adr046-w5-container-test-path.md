@@ -1,3 +1,3 @@
 ### Fixed
 
-- Keep controller-owned child cleanup protection in native Rust coverage instead of rerunning a Nix-linked test binary in a foreign container.
+- Keep controller cleanup and audit invariants in native Rust coverage instead of rerunning Nix-linked test binaries in a foreign container.
