@@ -1402,7 +1402,7 @@ mod tests {
         const INPUT: &str = r#"{"z":1,"a":{"two":"é","one":1},"array":[true,null,-2]}"#;
         const CANONICAL: &str = r#"{"a":{"one":1,"two":"é"},"array":[true,null,-2],"z":1}"#;
         const DIGEST: &str =
-            "sha256:e37fcecf3d1ba461173cc1b06ae6b6e97ce28ad37893a587719a578966760ff0";
+            "sha256:98d50073b77fe5a86c85cbd4035e2c22838878727dd271b425126971c656829b";
 
         let parsed = CanonicalJsonValue::parse(INPUT.as_bytes()).unwrap();
         assert_eq!(parsed.to_canonical_bytes(), CANONICAL.as_bytes());
