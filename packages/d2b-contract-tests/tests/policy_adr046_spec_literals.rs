@@ -1009,6 +1009,56 @@ fn normalized_whitespace(content: &str) -> String {
     content.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
+#[derive(Clone)]
+struct MeasurementDocument {
+    content: String,
+    normalized: String,
+}
+
+impl MeasurementDocument {
+    fn new(content: String) -> Self {
+        let normalized = normalized_whitespace(&content);
+        Self {
+            content,
+            normalized,
+        }
+    }
+}
+
+#[derive(Clone, Default)]
+struct MeasurementDocuments {
+    documents: BTreeMap<String, MeasurementDocument>,
+}
+
+impl MeasurementDocuments {
+    fn insert(&mut self, path: String, content: String) {
+        self.documents
+            .insert(path, MeasurementDocument::new(content));
+    }
+
+    fn contains_key(&self, path: &str) -> bool {
+        self.documents.contains_key(path)
+    }
+
+    fn content(&self, path: &str) -> Option<&str> {
+        self.documents
+            .get(path)
+            .map(|document| document.content.as_str())
+    }
+
+    fn normalized(&self, path: &str) -> Option<&str> {
+        self.documents
+            .get(path)
+            .map(|document| document.normalized.as_str())
+    }
+
+    fn normalized_iter(&self) -> impl Iterator<Item = (&str, &str)> {
+        self.documents
+            .iter()
+            .map(|(path, document)| (path.as_str(), document.normalized.as_str()))
+    }
+}
+
 #[derive(Debug)]
 struct CanonicalMeasurement {
     outcome: String,
@@ -1106,20 +1156,19 @@ fn collect_measurement_documents(dir: &Path, out: &mut Vec<PathBuf>) {
     }
 }
 
-fn measurement_documents() -> BTreeMap<String, String> {
+fn measurement_documents() -> MeasurementDocuments {
     let root = repo_root();
     let mut paths = vec![root.join("CHANGELOG.md")];
     collect_measurement_documents(&root.join("docs"), &mut paths);
     paths.sort();
-    paths
-        .into_iter()
-        .map(|path| {
-            let relative = rel_display(&path);
-            let content = std::fs::read_to_string(&path)
-                .unwrap_or_else(|err| panic!("cannot read {relative}: {err}"));
-            (relative, content)
-        })
-        .collect()
+    let mut documents = MeasurementDocuments::default();
+    for path in paths {
+        let relative = rel_display(&path);
+        let content = std::fs::read_to_string(&path)
+            .unwrap_or_else(|err| panic!("cannot read {relative}: {err}"));
+        documents.insert(relative, content);
+    }
+    documents
 }
 
 fn spike_measurement_specs() -> Vec<MeasurementSpec> {
@@ -1664,7 +1713,7 @@ fn spike_measurement_specs() -> Vec<MeasurementSpec> {
 fn validate_spike_measurement(
     spec: &MeasurementSpec,
     canonical: &CanonicalMeasurement,
-    documents: &BTreeMap<String, String>,
+    documents: &MeasurementDocuments,
 ) -> Vec<String> {
     let mut errors = Vec::new();
     if canonical.outcome != spec.expected_outcome {
@@ -1681,7 +1730,7 @@ fn validate_spike_measurement(
     }
 
     for site in &spec.sites {
-        let Some(content) = documents.get(site.path) else {
+        let Some(content) = documents.normalized(site.path) else {
             errors.push(format!("{}: missing derived site {}", spec.name, site.path));
             continue;
         };
@@ -1698,9 +1747,8 @@ fn validate_spike_measurement(
             }
             DerivedExpectation::OutcomeSummary(summary) => summary,
         };
-        let actual = normalized_whitespace(content)
-            .matches(&normalized_whitespace(needle))
-            .count();
+        let normalized_needle = normalized_whitespace(needle);
+        let actual = content.matches(&normalized_needle).count();
         if actual != site.copies {
             errors.push(format!(
                 "{}: {} must contain {:?} exactly {} time(s), found {actual}",
@@ -1712,9 +1760,9 @@ fn validate_spike_measurement(
     for pattern in &spec.inventory_patterns {
         let regex = Regex::new(pattern.regex).expect("valid measurement inventory regex");
         let occurrences = documents
-            .iter()
+            .normalized_iter()
             .filter_map(|(path, content)| {
-                let count = regex.find_iter(&normalized_whitespace(content)).count();
+                let count = regex.find_iter(content).count();
                 (count > 0).then_some((path, count))
             })
             .collect::<Vec<_>>();
@@ -1739,7 +1787,7 @@ fn validate_spike_measurement(
     errors
 }
 
-fn validate_spike_measurements(results: &str, documents: &BTreeMap<String, String>) -> Vec<String> {
+fn validate_spike_measurements(results: &str, documents: &MeasurementDocuments) -> Vec<String> {
     let specs = spike_measurement_specs();
     let canonical_row_count = results
         .lines()
@@ -2385,7 +2433,7 @@ fn spike_measurement_contracts_match_and_reject_mutations() {
         let canonical = canonical_measurement(&results, spec.threshold)
             .unwrap_or_else(|error| panic!("{}: {error}", spec.name));
         let original = documents
-            .get(spec.mutation_path)
+            .content(spec.mutation_path)
             .unwrap_or_else(|| panic!("missing mutation site {}", spec.mutation_path));
         assert!(
             original.contains(spec.mutation_needle),

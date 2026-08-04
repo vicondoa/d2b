@@ -76,48 +76,67 @@ run_policy_gate() {
   fi
 }
 
-# Run one fixture-independent contract-test policy binary and fail closed unless
-# it actually executed at least one test. This is the orchestration assertion:
-# a binary that is skipped, filtered to nothing, or reports zero tests would
-# make the policy gate a silent no-op, which is exactly the fail-open hole this
-# target closes. D2B_SKIP_FIXTURE_BUILD is deliberately NOT honored here - these
-# binaries read committed repository artifacts, not D2B_FIXTURES.
-run_policy_cargo_binary() {
-  local label="$1" testname="$2"
-  local out status result_line passed failed
-  log "--> $label"
+# Run every fixture-independent contract-test policy binary through one Cargo
+# invocation, then fail closed unless each binary actually executed at least
+# one test. One `cargo test` builds the selected targets together and avoids
+# repeating Cargo startup and target discovery for every binary; Cargo still
+# runs the libtest binaries sequentially.
+#
+# D2B_SKIP_FIXTURE_BUILD is deliberately NOT honored here - these binaries read
+# committed repository artifacts, not D2B_FIXTURES.
+run_policy_cargo_binaries() {
+  local out status testname label result_line passed failed
+  local -a cargo_args=()
+  for testname in "${D2B_FIXTURE_INDEPENDENT_POLICY_BINARIES[@]}"; do
+    cargo_args+=(--test "$testname")
+  done
+  log "--> fixture-independent policy binaries"
   set +e
   out=$(
     cd "$ROOT/packages" \
-      && CARGO_TERM_COLOR=never cargo test -p d2b-contract-tests --test "$testname" 2>&1
+      && CARGO_TERM_COLOR=never cargo test -p d2b-contract-tests "${cargo_args[@]}" 2>&1
   )
   status=$?
   set -e
   printf '%s\n' "$out" | sed 's/^/    /' >&2
   if [ "$status" -ne 0 ]; then
-    fail "$label (cargo exit $status)"
+    fail "fixture-independent policy binaries (cargo exit $status)"
     rc=1
     return
   fi
-  result_line=$(printf '%s\n' "$out" | grep -E '^test result:' | tail -1)
-  if [ -z "$result_line" ]; then
-    fail "$label produced no test-result line; the binary did not run"
-    rc=1
-    return
-  fi
-  passed=$(printf '%s\n' "$result_line" | grep -oE '[0-9]+ passed' | grep -oE '[0-9]+' | head -1)
-  failed=$(printf '%s\n' "$result_line" | grep -oE '[0-9]+ failed' | grep -oE '[0-9]+' | head -1)
-  if [ -z "$passed" ] || [ "$passed" -lt 1 ]; then
-    fail "$label ran 0 tests (skipped or filtered); the policy gate would be a no-op"
-    rc=1
-    return
-  fi
-  if [ -n "$failed" ] && [ "$failed" -ne 0 ]; then
-    fail "$label reported $failed failing test(s)"
-    rc=1
-    return
-  fi
-  ok "$label ($passed passed)"
+  for testname in "${D2B_FIXTURE_INDEPENDENT_POLICY_BINARIES[@]}"; do
+    label=${testname//_/-}
+    result_line=$(
+      printf '%s\n' "$out" | awk -v target="Running tests/$testname.rs " '
+        index($0, target) {
+          found = 1
+          next
+        }
+        found && /^test result:/ {
+          print
+          exit
+        }
+      '
+    )
+    if [ -z "$result_line" ]; then
+      fail "$label produced no test-result line; the binary did not run"
+      rc=1
+      continue
+    fi
+    passed=$(printf '%s\n' "$result_line" | grep -oE '[0-9]+ passed' | grep -oE '[0-9]+' | head -1)
+    failed=$(printf '%s\n' "$result_line" | grep -oE '[0-9]+ failed' | grep -oE '[0-9]+' | head -1)
+    if [ -z "$passed" ] || [ "$passed" -lt 1 ]; then
+      fail "$label ran 0 tests (skipped or filtered); the policy gate would be a no-op"
+      rc=1
+      continue
+    fi
+    if [ -n "$failed" ] && [ "$failed" -ne 0 ]; then
+      fail "$label reported $failed failing test(s)"
+      rc=1
+      continue
+    fi
+    ok "$label ($passed passed)"
+  done
 }
 
 run_guest_workspace_guard() {
@@ -161,9 +180,7 @@ run_policy_gate "ci-coverage"               tests/unit/meta/ci-coverage.sh
 # spec-literal drift lints (datetime precision, ResourceType grammar, retry
 # scalar shape) actually work. The shared list is excluded from the fixture
 # lane, so this mandatory target is their one Layer-1 execution point.
-for testname in "${D2B_FIXTURE_INDEPENDENT_POLICY_BINARIES[@]}"; do
-  run_policy_cargo_binary "${testname//_/-}" "$testname"
-done
+run_policy_cargo_binaries
 run_guest_workspace_guard
 
 [ "$rc" -eq 0 ] || exit 1
