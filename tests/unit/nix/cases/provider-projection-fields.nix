@@ -51,6 +51,7 @@ let
   matchingFactories = lib.listToAttrs (map
     (serviceType: lib.nameValuePair serviceType (matchingFactory serviceType))
     serviceTypes);
+  matchingCfg = (mkEval [ base ]).config;
 
   base = { ... }: {
     boot.loader.grub.enable = false;
@@ -98,11 +99,16 @@ in
 {
   "provider-projection-fields/all-eight-published-fields-match" = {
     expr = {
-      descriptorCount = lib.length (records { });
-      allPass = lib.all (record: record.assertion) (records { });
-      publishedFields =
-        (mkEval [ base ]).config
-          .d2b._resourceCompiler.providerProjectionValidation.publishedFieldNames;
+      # These projections are observations of one matching host. Reusing the
+      # evaluated scenario keeps the inventory assertion from constructing an
+      # equivalent NixOS system a second time.
+      descriptorCount = lib.length
+        matchingCfg.d2b._resourceCompiler.providerProjectionValidation.assertions;
+      allPass = lib.all
+        (record: record.assertion)
+        matchingCfg.d2b._resourceCompiler.providerProjectionValidation.assertions;
+      publishedFields = matchingCfg.d2b._resourceCompiler
+        .providerProjectionValidation.publishedFieldNames;
     };
     expected = {
       descriptorCount = 4;

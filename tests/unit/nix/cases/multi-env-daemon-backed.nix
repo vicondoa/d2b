@@ -59,7 +59,7 @@ let
   demoCfg = (mkEval [ configMod ]).config;
   daemonCfg = (mkEval [ configMod daemonExtra ]).config;
 
-  hostJson = builtins.fromJSON daemonCfg.d2b._bundle.hostJson.jsonText;
+  hostJson = daemonCfg.d2b._bundle.hostJson.data;
   envOf = name: builtins.head (builtins.filter (e: e.env == name) hostJson.environments);
   work = envOf "work";
   personal = envOf "personal";

@@ -12,6 +12,59 @@ let
     let s = lib.toHexString i;
     in if lib.stringLength s == 1 then "0${s}" else s;
 
+  privateConfiguredWorkloadLimits = {
+    unsafeLocal = 256;
+    localVmConfigured = 256;
+    total = 512;
+  };
+
+  hasConfiguredLocalVmLaunch = { realms }: row:
+    let
+      declared = realms.${row.realmName}.workloads.${row.workloadName};
+    in
+    row.kind == "local-vm"
+    && row.launcherEnabled
+    && (declared.launcher.items != { }
+      || declared.launcher.defaultItem != null
+      || declared.shell.enable);
+
+  privateConfiguredWorkloadCounts = { rows, realms }:
+    {
+      unsafeLocalCount = builtins.length
+        (lib.filter (row: row.kind == "unsafe-local") rows);
+      localVmConfiguredCount = builtins.length
+        (lib.filter (hasConfiguredLocalVmLaunch { inherit realms; }) rows);
+    };
+
+  privateConfiguredWorkloadCountAssertions =
+    { unsafeLocalCount
+    , localVmConfiguredCount
+    , limits ? privateConfiguredWorkloadLimits
+    }:
+    [
+      {
+        assertion = unsafeLocalCount <= limits.unsafeLocal;
+        message = ''
+          d2b declares more than the supported maximum of ${toString limits.unsafeLocal} enabled
+          unsafe-local workloads.
+        '';
+      }
+      {
+        assertion = localVmConfiguredCount <= limits.localVmConfigured;
+        message = ''
+          d2b declares more than the supported maximum of ${toString limits.localVmConfigured} enabled local-vm
+          workloads with configured launch.
+        '';
+      }
+      {
+        assertion = unsafeLocalCount + localVmConfiguredCount <= limits.total;
+        message = ''
+          d2b declares more than the supported maximum of ${toString limits.total} private configured
+          workloads.
+        '';
+      }
+    ];
+
   # d2b_read_audio_state <vm>
   # ------------------------------------------------------------
   # Fail-closed reader for /var/lib/d2b/<vm>/audio-state.json.
@@ -76,6 +129,8 @@ in
 rec {
   inherit hex2;
   inherit d2bReadAudioState;
+  inherit hasConfiguredLocalVmLaunch privateConfiguredWorkloadCounts;
+  inherit privateConfiguredWorkloadLimits privateConfiguredWorkloadCountAssertions;
 
   cleanRustPackagesSource = packagesPath:
     lib.cleanSourceWith {

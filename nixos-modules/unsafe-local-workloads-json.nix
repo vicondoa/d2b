@@ -3,21 +3,12 @@
 
 let
   cfg = config.d2b;
+  d2bLib = import ./lib.nix { inherit lib; };
   unsafeLocalWorkloads = lib.filter
     (workload: workload.kind == "unsafe-local")
     cfg._index.realms.workloads.enabled;
-  hasConfiguredLocalVmLaunch = workload:
-    let
-      declared =
-        cfg.realms.${workload.realmName}.workloads.${workload.workloadName};
-    in
-    workload.kind == "local-vm"
-    && workload.launcherEnabled
-    && (declared.launcher.items != { }
-      || declared.launcher.defaultItem != null
-      || declared.shell.enable);
   localVmWorkloads = lib.filter
-    hasConfiguredLocalVmLaunch
+    (d2bLib.hasConfiguredLocalVmLaunch { realms = cfg.realms; })
     cfg._index.realms.workloads.enabled;
 
   privateItem = item:
