@@ -55,6 +55,20 @@ export SCCACHE_DIR="${SCCACHE_DIR:-$HOME/.cache/d2b-sccache}"
 # for the host's free-space envelope.
 export SCCACHE_CACHE_SIZE="${SCCACHE_CACHE_SIZE:-10G}"
 
+# Hermetic d2b-contract-tests policy binaries owned by `make test-policy`.
+# The fixture-contract lane excludes these exact binaries so the Layer-1 graph
+# does not run their repository-wide source and documentation scans twice.
+readonly -a D2B_FIXTURE_INDEPENDENT_POLICY_BINARIES=(
+  policy_dash_gate
+  policy_adr046_work_items
+  policy_changelog_gate
+  policy_adr046_spec_literals
+  policy_adr046_envelopes
+  policy_provider_crates
+  policy_resource_mutation_seal
+  policy_docs
+)
+
 d2b_repo_root() {
   printf '%s\n' "${ROOT:-${FLAKE:-$(dirname "$_LIB_HERE")}}"
 }

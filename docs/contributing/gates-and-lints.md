@@ -106,9 +106,10 @@ The default `test-rust` includes the fixture-dependent contract and CLI
 surfaces once when Nix is available. The Layer-1 graph sets
 `D2B_SKIP_FIXTURE_BUILD=1`, leaving those surfaces to the separate enforcing
 `D2B_ENABLE_FIXTURE_BUILD=1 make test-fixture-contracts` lane; selected
-hermetic policy files may still have separate enforcing entrypoints such as
-`test-policy`. The focused `test-rust-main` target retains the same
-conditional fixture behavior.
+hermetic policy files have separate enforcing entrypoints under `test-policy`
+and are excluded from the fixture lane through the shared list in
+`tests/lib.sh`. The focused `test-rust-main` target retains the same conditional
+fixture behavior.
 
 ### The API census shard
 
