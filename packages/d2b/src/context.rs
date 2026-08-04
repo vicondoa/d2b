@@ -649,13 +649,25 @@ impl ZoneContext {
 
     fn client_failure(&self, error: ClientError, mode: OutputMode) -> CliFailure {
         let (class, message, exit_code) = match error {
-            ClientError::InvalidTarget
-            | ClientError::InvalidService
-            | ClientError::InvalidMethod
-            | ClientError::InvalidMetadata
-            | ClientError::IdempotencyRequired => {
-                ("resource-schema-invalid", "resource request was invalid", 2)
+            ClientError::InvalidTarget => {
+                ("resource-schema-invalid", "resource target was invalid", 2)
             }
+            ClientError::InvalidService => {
+                ("resource-schema-invalid", "resource service was invalid", 2)
+            }
+            ClientError::InvalidMethod => {
+                ("resource-schema-invalid", "resource method was invalid", 2)
+            }
+            ClientError::InvalidMetadata => (
+                "resource-schema-invalid",
+                "resource metadata was invalid",
+                2,
+            ),
+            ClientError::IdempotencyRequired => (
+                "resource-schema-invalid",
+                "resource idempotency was invalid",
+                2,
+            ),
             ClientError::RouteUnavailable | ClientError::SessionLost => {
                 ("zone-unavailable", "Zone runtime is unavailable", 1)
             }
