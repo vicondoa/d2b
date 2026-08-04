@@ -11,6 +11,76 @@
 let
   digestHelpers = import ../../../../nixos-modules/resources-bundle.nix { inherit lib; };
   shape = import ../../../../nixos-modules/generated/provider-catalog-shape.nix;
+  # Nix-unit supplies a fixed catalog projection so bundle consumers never
+  # demand artifact-catalog.nix's realised closure/JSON path.
+  catalogFixtureArtifactRows = [
+    {
+      artifactId = "provider-catalog-eval";
+      type = "provider";
+      storePath = "/nix/store/d2b-provider-catalog-eval";
+      packageDigest = "sha256:${builtins.hashString
+        "sha256" "d2b:provider-catalog-eval:package"}";
+      closureDigest = "sha256:${builtins.hashString
+        "sha256" "d2b:provider-catalog-eval:closure"}";
+      closureSize = 0;
+    }
+  ];
+  catalogFixtureData = {
+    schemaVersion = 3;
+    entries = map
+      (entry: {
+        id = entry.artifactId;
+        inherit (entry) type storePath packageDigest;
+        closureMetadata = {
+          executableDigest = null;
+          manifestDigest = null;
+          componentDigest = null;
+          descriptorDigest = null;
+          configDigest = null;
+          systems = [ ];
+          platform = null;
+        };
+      })
+      catalogFixtureArtifactRows;
+  };
+  catalogFixturePreimageJson = builtins.toJSON catalogFixtureData;
+  catalogFixtureDigest = "sha256:${digestHelpers.framedDigest
+    "d2b:v3:artifact-catalog"
+    catalogFixturePreimageJson}";
+  catalogFixtureDocument = catalogFixtureData // {
+    catalogDigest = catalogFixtureDigest;
+  };
+  catalogFixtureJson = builtins.toJSON catalogFixtureDocument;
+  catalogFixturePath = pkgs.writeText
+    "d2b-artifact-catalog-eval-fixture.json"
+    "${catalogFixtureJson}\n";
+  catalogFixtureProjection = {
+    ids = map (entry: entry.artifactId) catalogFixtureArtifactRows;
+    artifactRows = catalogFixtureArtifactRows;
+    preimage = catalogFixtureData;
+    preimageJson = catalogFixturePreimageJson;
+    catalogDigest = catalogFixtureDigest;
+    catalogData = catalogFixtureDocument;
+    catalogJson = catalogFixtureJson;
+    path = catalogFixturePath;
+    publicEntries = map
+      (entry: builtins.removeAttrs entry [ "storePath" ])
+      catalogFixtureArtifactRows;
+  };
+  catalogFixtureArtifact = {
+    data = catalogFixtureData;
+    jsonText = catalogFixtureJson;
+    path = catalogFixturePath;
+    installFileName = "artifact-catalog.json";
+    classification = "contractPrivateNonSecret";
+    sensitivity = "nonSecret";
+  };
+  catalogOverride = { ... }: {
+    d2b._artifactCatalogV3 = lib.mkForce catalogFixtureProjection;
+    d2b._bundle.extraArtifacts.artifactCatalog =
+      lib.mkForce catalogFixtureArtifact;
+  };
+  mkEvalProvider = modules: mkEval (modules ++ [ catalogOverride ]);
 
   base = { ... }: {
     boot.loader.grub.enable = false;
@@ -72,7 +142,7 @@ let
     };
   };
 
-  cfg = (mkEval [ base authored ]).config;
+  cfg = (mkEvalProvider [ base authored ]).config;
   catalog = cfg.d2b._providerCatalog;
 
   # The same three artifacts, authored in a different order and built from a
@@ -83,16 +153,19 @@ let
       (map (name: lib.nameValuePair name (artifactFor name))
         [ "provider-storage" "provider-wayland" "provider-audio" ]);
   };
-  cfgReAuthored = (mkEval [ base reAuthored ]).config;
+  cfgReAuthored = (mkEvalProvider [ base reAuthored ]).config;
 
   evalArtifacts = artifacts:
-    (mkEval [ base ({ ... }: { d2b.artifacts = artifacts; }) ]).config
+    (mkEvalProvider [ base ({ ... }: { d2b.artifacts = artifacts; }) ]).config
       .d2b._providerCatalog.ids;
 
   # Force the assertion list of a configuration that must fail eval.
   failing = artifacts:
     let
-      evaluated = (mkEval [ base ({ ... }: { d2b.artifacts = artifacts; }) ]).config;
+      evaluated = (mkEvalProvider [
+        base
+        ({ ... }: { d2b.artifacts = artifacts; })
+      ]).config;
       broken = lib.filter (a: !a.assertion) evaluated.assertions;
     in
     if broken == [ ] then "no assertion fired" else (lib.head broken).message;
@@ -143,15 +216,37 @@ let
     };
   };
 
-  zoneCfg = (mkEval [ base zoneResourceFixture ]).config;
+  zoneCfg = (mkEvalProvider [ base zoneResourceFixture ]).config;
   zoneBundle = zoneCfg.d2b._bundle.zoneResourceBundles.local-root.data;
+  catalogFixtureWasSelected =
+    let
+      projection = zoneCfg.d2b._artifactCatalogV3;
+      artifact = zoneCfg.d2b._bundle.extraArtifacts.artifactCatalog;
+      projectionPath =
+        builtins.unsafeDiscardStringContext (toString projection.path);
+      fixturePath =
+        builtins.unsafeDiscardStringContext (toString catalogFixturePath);
+      artifactPath =
+        builtins.unsafeDiscardStringContext (toString artifact.path);
+    in
+    projection.catalogDigest == catalogFixtureDigest
+    && projectionPath == fixturePath
+    && artifact.data == catalogFixtureData
+    && artifact.jsonText == catalogFixtureJson
+    && artifactPath == fixturePath;
+  providerCaseSource =
+    builtins.readFile (flakeRoot + "/tests/unit/nix/cases/provider-catalog.nix");
+  artifactCatalogSource =
+    builtins.readFile (flakeRoot + "/nixos-modules/artifact-catalog.nix");
+  caseAvoidsCatalogPathRead =
+    !(lib.hasInfix ("builtins.readFile " + "catalogPath") providerCaseSource);
   digestRendererSource =
     builtins.readFile (flakeRoot + "/nixos-modules/zone-resources-json.nix");
 
   zoneFailureMessages = module:
     map (assertion: assertion.message)
       (lib.filter (assertion: !assertion.assertion)
-        (mkEval [ base zoneResourceFixture module ]).config.assertions);
+        (mkEvalProvider [ base zoneResourceFixture module ]).config.assertions);
 
   zoneRejects = needle: module:
     lib.any (message: lib.hasInfix needle message) (zoneFailureMessages module);
@@ -360,7 +455,7 @@ let
     };
   };
 
-  projectionCfg = (mkEval [ base projectionFixture ]).config;
+  projectionCfg = (mkEvalProvider [ base projectionFixture ]).config;
   projectionBundle = projectionCfg.d2b._bundle.zoneResourceBundles.local-root.data;
   projectionResource = type: name:
     lib.findFirst
@@ -372,7 +467,7 @@ let
   projectionFailureMessages = module:
     map (assertion: assertion.message)
       (lib.filter (assertion: !assertion.assertion)
-        (mkEval [ base projectionFixture module ]).config.assertions);
+        (mkEvalProvider [ base projectionFixture module ]).config.assertions);
 
   projectionRejects = needle: module:
     lib.any (message: lib.hasInfix needle message)
@@ -382,7 +477,7 @@ in
   # An empty catalog is the default: no artifact exists unless it is authored.
   # This is the "no PATH scan, no directory discovery" rule stated as a value.
   "provider-catalog/empty-by-default" = {
-    expr = (mkEval [ base ]).config.d2b._providerCatalog.ids;
+    expr = (mkEvalProvider [ base ]).config.d2b._providerCatalog.ids;
     expected = [ ];
   };
 
@@ -572,6 +667,8 @@ in
 
   "provider-catalog/zone-resource-bundle-credential-envelope-and-digest" = {
     expr = {
+      catalogFixtureSelected = catalogFixtureWasSelected;
+      noCatalogPathRead = caseAvoidsCatalogPathRead;
       envelope = lib.head zoneBundle.resources;
       order = map (resource: resource.type) zoneBundle.resources;
       evalBundleFields = lib.attrNames zoneBundle;
@@ -596,11 +693,16 @@ in
         artifactCatalogGolden = lib.hasInfix
           "2fa7348cd18ac4f54d28aeb87ef0be5da1fd772c3d173d830ef25e67b7adc63e"
           digestRendererSource;
+        productionCatalogReadsPath = lib.hasInfix
+          ("builtins.readFile " + "catalogPath")
+          artifactCatalogSource;
       };
       role = zoneCfg.d2b._resourceCompiler.zones.local-root.role;
       retention = zoneCfg.d2b._resourceCompiler.zones.local-root.retainedGenerations;
     };
     expected = {
+      catalogFixtureSelected = true;
+      noCatalogPathRead = true;
       envelope = {
         apiVersion = "resources.d2bus.org/v3";
         type = "Credential";
@@ -647,6 +749,7 @@ in
         resourceBundleGolden = true;
         artifactCatalogDomain = true;
         artifactCatalogGolden = true;
+        productionCatalogReadsPath = true;
       };
       role = {
         type = "Role";
