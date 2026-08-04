@@ -928,4 +928,6 @@ volume-mounts/v3-valid-resource-reaches-topical-compiler
 volume-mounts/v3-valid-volume-assertions-pass
 volume-mounts/v3-virtiofs-attachment-emits-vfd-user-and-provider
 volume-mounts/v3-volume-bundle-digest-covers-all-resources
+zone-storage-contract/env-storage-row-and-etc-wiring
+zone-storage-contract/principal-is-installed
 zone-storage-contract/rendered-artifact-and-etc-wiring
