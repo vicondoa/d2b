@@ -9458,7 +9458,7 @@ fn run_typed_shell_owner(
         .unwrap_or(d2b_contracts::terminal_wire::TerminalSize { rows: 24, cols: 80 });
     let attach = public_wire::ShellAttachArgs {
         vm: target.clone(),
-        name: Some(name),
+        name: Some(name.clone()),
         force: request
             .get("force")
             .and_then(Value::as_bool)
@@ -24855,10 +24855,10 @@ mod broker_dispatch_tests {
         dispatch_broker_vm_start, dispatch_broker_vm_stop, dispatch_broker_vm_stop_with_timeout,
         dispatch_request, dispatch_status, force_shutdown_generation, map_shell_attach_response,
         map_shell_detach_response, map_shell_kill_response, map_shell_list_response,
-        new_zone_coordinator, note_force_shutdown_request, prove_role_cgroup_empty_or_escalate,
-        provider_shutdown, read_activation_marker, redact_broker_dispatch_failure_for_launcher,
-        redact_broker_error_for_launcher, resolve_store_view_intent_for_vm,
-        rollback_failed_vm_start, run_provider_graceful_shutdown,
+        new_typed_shell_session_targets, new_zone_coordinator, note_force_shutdown_request,
+        prove_role_cgroup_empty_or_escalate, provider_shutdown, read_activation_marker,
+        redact_broker_dispatch_failure_for_launcher, redact_broker_error_for_launcher,
+        resolve_store_view_intent_for_vm, rollback_failed_vm_start, run_provider_graceful_shutdown,
         same_vm_declared_usbip_start_claims_with_reader,
         same_vm_persisted_usbip_stop_claims_with_reader,
         stale_qemu_media_dependency_roles_from_entries, try_acquire_activation_lock,
