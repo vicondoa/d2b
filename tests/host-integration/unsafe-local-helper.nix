@@ -17,6 +17,10 @@ pkgs.testers.runNixOSTest {
       };
       d2b.site.adminUsers = [ "alice" ];
       systemd.services.d2bd.environment.D2B_SKIP_KERNEL_MODULE_CHECK = "1";
+      d2b.zones = {
+        local-root = { };
+        other.parentZone = "local-root";
+      };
       d2b.realms.host = {
         allowedUsers = [ "alice" ];
         policy.allowUnsafeLocal = true;
@@ -282,10 +286,12 @@ if os.environ.get("EXIT_REMOTE") == "1":
 if os.environ.get("HOLD") == "1":
     open("/run/user/1000/d2b-shell-hold.ready", "w").close()
     while True:
-        waited, _status = os.waitpid(pid, os.WNOHANG)
+        waited, status = os.waitpid(pid, os.WNOHANG)
         if waited == pid:
             break
         time.sleep(1)
+    if os.environ.get("EXPECT_CLI_FAILURE") == "1" and status == 0:
+        raise SystemExit("typed shell transport loss returned success")
     raise SystemExit(0)
 os.kill(pid, signal.SIGTERM)
 os.waitpid(pid, 0)
@@ -346,6 +352,17 @@ PY
         "grep -q resource-runtime-plane-unavailable "
         "/run/d2b/missing-zone-shell.log"
     )
+    machine.succeed(
+        "! runuser -u alice -- env "
+        "D2B_PUBLIC_SOCKET=/run/d2b/public.sock "
+        "XDG_RUNTIME_DIR=/run/user/1000 "
+        "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus "
+        "/run/current-system/sw/bin/d2b --zone other --json "
+        "shell status ShellSession/primary "
+        ">/run/d2b/other-zone-shell.log 2>&1 && "
+        "grep -q resource-runtime-route-mismatch "
+        "/run/d2b/other-zone-shell.log"
+    )
     json_open = json.loads(machine.succeed(
         shell_client + " open Host/tools --name exit-session"
     ))
@@ -403,7 +420,7 @@ PY
 
     machine.succeed("rm -f /run/user/1000/d2b-shell-hold.ready")
     machine.succeed(
-        "SHELL_MARKER=hold-canary HOLD=1 "
+        "SHELL_MARKER=hold-canary HOLD=1 EXPECT_CLI_FAILURE=1 "
         + cli_shell + " >/run/user/1000/d2b-shell-hold.log 2>&1 & "
         "echo $! > /run/user/1000/d2b-shell-hold.pid"
     )

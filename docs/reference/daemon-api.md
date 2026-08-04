@@ -109,8 +109,10 @@ same Resource request envelope. A JSON `Create` with `attach: false` returns
 the new or reopened resource and its detached status without retaining a named
 stream. Every shell request first resolves the selected Zone from the
 daemon-owned resource-plane index; an absent or mismatched Zone fails closed
-before execution-target lookup. The retired `type: "shell"` request and
-`shellResponse` reply are unsupported.
+before execution-target lookup. The current Host and Guest shell backends are
+admitted only through `Zone/local-root`; another existing Zone receives a route
+mismatch rather than searching local-root targets. The retired `type: "shell"`
+request and `shellResponse` reply are unsupported.
 
 All shell operations require the local admin role before target resolution or
 helper/guest contact. Unsafe-local policy comes only from the hash-verified

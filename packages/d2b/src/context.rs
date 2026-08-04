@@ -65,6 +65,13 @@ impl RequestDeadline {
     pub(crate) const fn duration(self) -> Duration {
         self.0
     }
+
+    pub(crate) fn remaining(self, elapsed: Duration) -> Option<Self> {
+        self.0
+            .checked_sub(elapsed)
+            .filter(|value| !value.is_zero())
+            .map(Self)
+    }
 }
 
 /// Errors raised by the test-only injected transport.
@@ -408,16 +415,13 @@ impl ZoneContext {
                 match signal {
                     crate::exec_client::ExecSignal::Winch => {
                         if let Some((rows, cols)) = host.window_size() {
-                            let _ = block_on(
-                                stream.send(
-                                    &serde_json::to_vec(&json!({
-                                        "type": "namedStreamResize",
-                                        "rows": rows,
-                                        "cols": cols,
-                                    }))
-                                    .unwrap_or_default(),
-                                ),
-                            );
+                            let size = u16::try_from(rows)
+                                .ok()
+                                .zip(u16::try_from(cols).ok())
+                                .and_then(|(rows, cols)| TerminalSize::new(rows, cols).ok());
+                            if let Some(size) = size {
+                                let _ = block_on(stream.resize(size));
+                            }
                         }
                     }
                     crate::exec_client::ExecSignal::Hangup
@@ -454,7 +458,7 @@ impl ZoneContext {
             }
             let output = match block_on(stream.receive()) {
                 Ok(output) => output,
-                Err(ClientError::SessionLost) => {
+                Err(ClientError::Cancelled) => {
                     guard.restore();
                     return Ok(());
                 }
@@ -1197,19 +1201,23 @@ impl CliAttachStream {
 
 impl NamedStreamTransport for CliAttachStream {
     fn send(&self, bytes: Vec<u8>) -> impl Future<Output = Result<(), ClientError>> + Send {
-        let resize = serde_json::from_slice::<Value>(&bytes)
-            .ok()
-            .filter(|value| value.get("type").and_then(Value::as_str) == Some("namedStreamResize"));
-        let result = match resize {
-            Some(request) => self.stream_round_trip(request).map(|_| ()),
-            None => self.send_stdin(&bytes),
-        };
-        ready(result)
+        ready(self.send_stdin(&bytes))
+    }
+
+    fn resize(&self, size: TerminalSize) -> impl Future<Output = Result<(), ClientError>> + Send {
+        ready(
+            self.stream_round_trip(json!({
+                "type": "namedStreamResize",
+                "rows": size.rows(),
+                "cols": size.cols(),
+            }))
+            .map(|_| ()),
+        )
     }
 
     fn receive(&self) -> impl Future<Output = Result<Vec<u8>, ClientError>> + Send {
         if self.eof.load(Ordering::Acquire) {
-            return ready(Err(ClientError::SessionLost));
+            return ready(Err(ClientError::Cancelled));
         }
         let result = self
             .stream_round_trip(json!({
@@ -1232,7 +1240,7 @@ impl NamedStreamTransport for CliAttachStream {
                 if value.get("eof").and_then(Value::as_bool) == Some(true) {
                     self.eof.store(true, Ordering::Release);
                     if data.is_empty() {
-                        return Err(ClientError::SessionLost);
+                        return Err(ClientError::Cancelled);
                     }
                 }
                 Ok(data)
@@ -2310,8 +2318,45 @@ mod tests {
         assert_eq!(block_on(stream.receive()).unwrap(), b"done");
         assert_eq!(
             block_on(stream.receive()).unwrap_err(),
-            ClientError::SessionLost
+            ClientError::Cancelled
         );
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn cli_attach_stream_never_interprets_stdin_as_resize_control() {
+        let (client, server) = socketpair(
+            AddressFamily::Unix,
+            SockType::SeqPacket,
+            None,
+            SockFlag::SOCK_CLOEXEC,
+        )
+        .unwrap();
+        let stdin = br#"{"type":"namedStreamResize","rows":1,"cols":1}"#.to_vec();
+        let expected = stdin.clone();
+        let server = std::thread::spawn(move || {
+            let mut server = SeqpacketUnixSocket::from_owned_fd(server);
+            let request: Value = serde_json::from_slice(&server.recv_frame().unwrap()).unwrap();
+            assert_eq!(request["type"], "namedStreamSend");
+            let data =
+                d2b_core::base64_codec::decode(request["dataBase64"].as_str().unwrap()).unwrap();
+            assert_eq!(data, expected);
+            server
+                .send_frame(
+                    &serde_json::to_vec(&json!({
+                        "acceptedLen": data.len(),
+                        "nextOffset": data.len(),
+                        "backpressured": false,
+                        "stdinClosed": false,
+                    }))
+                    .unwrap(),
+                )
+                .unwrap();
+        });
+        let stream = CliAttachStream::new(Some(Arc::new(Mutex::new(
+            SeqpacketUnixSocket::from_owned_fd(client),
+        ))));
+        block_on(stream.send(stdin)).unwrap();
         server.join().unwrap();
     }
 

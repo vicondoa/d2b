@@ -227,21 +227,65 @@ fn status(
     deadline: RequestDeadline,
 ) -> Result<i32, CliFailure> {
     let resource_ref = validate_session_ref(context, &args.resource_ref, mode)?;
+    if args.watch && !mode.is_json() {
+        return Err(context.failure(
+            "ref-invalid",
+            "shell status --watch requires --json",
+            mode,
+            2,
+        ));
+    }
+    if args.watch {
+        let started = std::time::Instant::now();
+        let mut previous = None;
+        loop {
+            let Some(call_deadline) = deadline.remaining(started.elapsed()) else {
+                return Ok(0);
+            };
+            let value = context.invoke(
+                "Status",
+                json!({
+                    "resourceRef": resource_ref.to_canonical_string(),
+                    "watch": false,
+                }),
+                call_deadline,
+                mode,
+            )?;
+            if previous.as_ref() != Some(&value) {
+                context.emit_stream(&value, mode)?;
+            }
+            if terminal_shell_status(&value) {
+                return Ok(0);
+            }
+            previous = Some(value);
+            let Some(remaining) = deadline.remaining(started.elapsed()) else {
+                return Ok(0);
+            };
+            std::thread::sleep(
+                remaining
+                    .duration()
+                    .min(std::time::Duration::from_millis(250)),
+            );
+        }
+    }
     let value = context.invoke(
         "Status",
         json!({
             "resourceRef": resource_ref.to_canonical_string(),
-            "watch": args.watch,
+            "watch": false,
         }),
         deadline,
         mode,
     )?;
-    if args.watch {
-        context.emit_stream(&value, mode)?;
-    } else {
-        context.emit(&value, mode)?;
-    }
+    context.emit(&value, mode)?;
     Ok(0)
+}
+
+fn terminal_shell_status(value: &serde_json::Value) -> bool {
+    matches!(
+        value.get("state").and_then(serde_json::Value::as_str),
+        Some("killed" | "pool-unavailable" | "feature-disabled" | "output-gap")
+    )
 }
 
 fn validate_session_ref(
@@ -344,5 +388,19 @@ mod tests {
             request["resourceRef"],
             "shell-terminal.d2bus.org.ShellSession/primary"
         );
+    }
+
+    #[test]
+    fn watch_stops_only_for_terminal_shell_states() {
+        assert!(!terminal_shell_status(&json!({"state": "attached"})));
+        assert!(!terminal_shell_status(&json!({"state": "detached"})));
+        for state in [
+            "killed",
+            "pool-unavailable",
+            "feature-disabled",
+            "output-gap",
+        ] {
+            assert!(terminal_shell_status(&json!({"state": state})));
+        }
     }
 }

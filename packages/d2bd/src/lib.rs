@@ -3165,7 +3165,7 @@ fn handle_connection_authorized(
                 let _ = write_json_frame(&stream, &typed_shell_resource_error_frame(&error));
                 continue;
             }
-            if let Err(error) = resolve_resource_runtime(&state, &resource.value()) {
+            if let Err(error) = resolve_typed_shell_runtime(&state, &resource.value()) {
                 let _ = write_json_frame(&stream, &resource_runtime_error_frame(error));
                 continue;
             }
@@ -3437,11 +3437,16 @@ fn dispatch_resource_request(
             resource_runtime::ResourceRuntimeError::RouteMismatch,
         ));
     }
-    let runtime = match resolve_resource_runtime(state, &request.value()) {
+    let typed_shell = typed_shell_resource_request(&request.value());
+    let runtime = match if typed_shell {
+        resolve_typed_shell_runtime(state, &request.value())
+    } else {
+        resolve_resource_runtime(state, &request.value())
+    } {
         Ok(runtime) => runtime,
         Err(error) => return Ok(resource_runtime_error_frame(error)),
     };
-    if typed_shell_resource_request(&request.value()) {
+    if typed_shell {
         return Ok(
             dispatch_typed_shell_resource_request(state, peer, &request.value())
                 .unwrap_or_else(|error| typed_shell_resource_error_frame(&error)),
@@ -3470,6 +3475,17 @@ fn resolve_resource_runtime(
         .and_then(|plane| plane.clone())
         .ok_or(resource_runtime::ResourceRuntimeError::PlaneUnavailable)?;
     plane.zone(&zone)
+}
+
+fn resolve_typed_shell_runtime(
+    state: &ServerState,
+    request: &Value,
+) -> Result<Arc<resource_runtime::ZoneResourceRuntime>, resource_runtime::ResourceRuntimeError> {
+    let runtime = resolve_resource_runtime(state, request)?;
+    if runtime.zone().as_str() != "local-root" {
+        return Err(resource_runtime::ResourceRuntimeError::RouteMismatch);
+    }
+    Ok(runtime)
 }
 
 fn typed_shell_resource_request(request: &Value) -> bool {

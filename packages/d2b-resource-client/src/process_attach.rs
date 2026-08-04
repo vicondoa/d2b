@@ -338,6 +338,11 @@ pub trait NamedStreamTransport: Send + Sync {
     /// Send one bounded logical stream message.
     fn send(&self, bytes: Vec<u8>) -> impl Future<Output = Result<(), ClientError>> + Send;
 
+    /// Deliver one terminal-size control update outside the stdin byte stream.
+    fn resize(&self, _size: TerminalSize) -> impl Future<Output = Result<(), ClientError>> + Send {
+        core::future::ready(Err(ClientError::InvalidMethod))
+    }
+
     /// Receive one logical stream message.
     fn receive(&self) -> impl Future<Output = Result<Vec<u8>, ClientError>> + Send;
 
@@ -433,6 +438,12 @@ where
         }
         self.require_open()?;
         self.transport.send(bytes.to_vec()).await
+    }
+
+    /// Deliver a terminal-size control update without interpreting stdin.
+    pub async fn resize(&self, size: TerminalSize) -> Result<(), ClientError> {
+        self.require_open()?;
+        self.transport.resize(size).await
     }
 
     /// Receive one logical message from the workload-user process stream.
