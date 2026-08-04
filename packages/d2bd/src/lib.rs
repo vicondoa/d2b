@@ -596,7 +596,7 @@ struct ServerState {
     /// Execution-target bindings for qualified ShellSession resources. The
     /// provider may remove a killed session before a retry arrives, so the
     /// daemon keeps the exact target binding independently of provider lists.
-    typed_shell_session_targets: Arc<Mutex<BTreeMap<String, String>>>,
+    typed_shell_session_targets: Arc<Mutex<BTreeMap<(u32, String), String>>>,
     /// Authoritative Zone index for daemon-side coordination state. USBIP
     /// reconciliation, force-stop generations, and activation staging all
     /// resolve through this index; no process-global lock carries that state.
@@ -614,7 +614,7 @@ fn new_zone_coordinator() -> Arc<Mutex<ZoneCoordinator>> {
     Arc::new(Mutex::new(ZoneCoordinator::new()))
 }
 
-fn new_typed_shell_session_targets() -> Arc<Mutex<BTreeMap<String, String>>> {
+fn new_typed_shell_session_targets() -> Arc<Mutex<BTreeMap<(u32, String), String>>> {
     Arc::new(Mutex::new(BTreeMap::new()))
 }
 
@@ -9278,23 +9278,25 @@ fn list_typed_shell_target(
 
 fn remember_typed_shell_session_target(
     state: &ServerState,
+    peer_uid: u32,
     name: &public_wire::ShellName,
     target: &str,
 ) {
     if let Ok(mut sessions) = state.typed_shell_session_targets.lock() {
-        sessions.insert(name.as_str().to_owned(), target.to_owned());
+        sessions.insert((peer_uid, name.as_str().to_owned()), target.to_owned());
     }
 }
 
 fn cached_typed_shell_session_target(
     state: &ServerState,
+    peer_uid: u32,
     name: &public_wire::ShellName,
 ) -> Option<String> {
     state
         .typed_shell_session_targets
         .lock()
         .ok()
-        .and_then(|sessions| sessions.get(name.as_str()).cloned())
+        .and_then(|sessions| sessions.get(&(peer_uid, name.as_str().to_owned())).cloned())
 }
 
 fn find_typed_shell_session_target(
@@ -9312,7 +9314,7 @@ fn find_typed_shell_session_target(
                     detail: "ShellSession name exists on more than one execution target".to_owned(),
                 });
             }
-            remember_typed_shell_session_target(state, name, &target);
+            remember_typed_shell_session_target(state, peer.uid, name, &target);
             matched = Some(target);
         }
     }
@@ -9325,7 +9327,7 @@ fn resolve_typed_shell_session_target(
     resource: &str,
 ) -> Result<String, TypedError> {
     let name = typed_shell_resource_name(resource)?;
-    if let Some(target) = cached_typed_shell_session_target(state, &name) {
+    if let Some(target) = cached_typed_shell_session_target(state, peer.uid, &name) {
         return Ok(target);
     }
     find_typed_shell_session_target(state, peer, &name)?.ok_or_else(|| {
@@ -9477,7 +9479,7 @@ fn run_typed_shell_owner(
             return;
         }
     };
-    remember_typed_shell_session_target(&state, &name, &target);
+    remember_typed_shell_session_target(&state, peer.uid, &name, &target);
     let session = established.attach.session.clone();
     let owner_shell_ref_digest = shell_ref_digest(&[
         &established.target,
