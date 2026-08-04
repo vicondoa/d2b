@@ -318,12 +318,24 @@ let
       { unsafe = 256; localVm = 257; expected = false; }
     ];
 
-  limitProbeBase = lib.recursiveUpdate workloadBase {
+  wiringProbeFixture = lib.recursiveUpdate workloadBase {
     d2b.daemonExperimental.enable = true;
     d2b.realms.host = {
       allowedUsers = [ "alice" ];
       policy.allowUnsafeLocal = true;
       workloads.tools = {
+        enable = true;
+        kind = "unsafe-local";
+        launcher = {
+          enable = true;
+          items.run = {
+            type = "exec";
+            argv = [ "true" ];
+          };
+        };
+      };
+      workloads.scripts = {
+        enable = true;
         kind = "unsafe-local";
         launcher = {
           enable = true;
@@ -340,6 +352,7 @@ let
       network.envs = [ "work" ];
       allowedUsers = [ "alice" ];
       workloads.laptop = {
+        enable = true;
         kind = "local-vm";
         legacyVmName = "corpbox";
         launcher = {
@@ -350,71 +363,72 @@ let
           };
         };
       };
+      workloads.desktop = {
+        enable = true;
+        kind = "local-vm";
+        launcher = {
+          enable = true;
+          items.run = {
+            type = "exec";
+            argv = [ "true" ];
+          };
+        };
+      };
     };
   };
-  limitProbeBaseCfg = (mkEval [ limitProbeBase ]).config;
-  limitProbeRows = limitProbeBaseCfg.d2b._index.realms.workloads.enabled;
-  limitProbeUnsafeRow = lib.findFirst
-    (row: row.kind == "unsafe-local")
-    null
-    limitProbeRows;
-  limitProbeLocalVmRow = lib.findFirst
-    (row: row.kind == "local-vm")
-    null
-    limitProbeRows;
-
-  # Force compact copies of one real index row so the production assertion
-  # path sees boundary counts without expanding hundreds of workload modules.
-  limitProbeCfgWithRows = rows:
-    (mkEval [
-      limitProbeBase
-      ({ ... }: {
-        d2b._index = lib.mkForce (
-          lib.recursiveUpdate limitProbeBaseCfg.d2b._index {
-            realms.workloads.enabled = rows;
-          }
-        );
+  wiringProbeCfg = (mkEval [ wiringProbeFixture ]).config;
+  wiringProbeRows = wiringProbeCfg.d2b._index.realms.workloads.enabled;
+  wiringProbeDeclaredRows = realmName:
+    lib.mapAttrsToList
+      (workloadName: workload: {
+        realmName = realmName;
+        name = workloadName;
+        kind = workload.kind;
       })
-    ]).config;
-  limitProbeUnsafeCfg =
-    limitProbeCfgWithRows (lib.replicate 257 limitProbeUnsafeRow);
-  limitProbeLocalVmCfg =
-    limitProbeCfgWithRows (lib.replicate 257 limitProbeLocalVmRow);
-  limitProbeTotalCfg =
-    limitProbeCfgWithRows (
-      (lib.replicate 257 limitProbeUnsafeRow)
-      ++ (lib.replicate 256 limitProbeLocalVmRow)
+      (lib.filterAttrs
+        (_: workload: workload.enable)
+        wiringProbeCfg.d2b.realms.${realmName}.workloads);
+  wiringProbeIndexRows = map
+    (row: {
+      realmName = row.realmName;
+      name = row.workloadName;
+      kind = row.kind;
+    })
+    wiringProbeRows;
+  wiringProbeRowsMatch =
+    lib.sortOn (row: "${row.realmName}/${row.name}") wiringProbeIndexRows
+    == lib.sortOn (row: "${row.realmName}/${row.name}") (
+      wiringProbeDeclaredRows "host"
+      ++ wiringProbeDeclaredRows "work"
     );
-  productionAssertionMatches = cfg: needles: expectedMessage:
+  wiringProbeUnsafeLocalCount = builtins.length
+    (lib.filter (row: row.kind == "unsafe-local") wiringProbeRows);
+  wiringProbeLocalVmConfiguredCount = builtins.length
+    (lib.filter
+      (row: row.kind == "local-vm" && row.launcherItems != [ ])
+      wiringProbeRows);
+  wiringProbeCountsMatch = {
+    unsafeLocal = wiringProbeUnsafeLocalCount;
+    localVmConfigured = wiringProbeLocalVmConfiguredCount;
+  } == {
+    unsafeLocal = 2;
+    localVmConfigured = 2;
+  };
+  wiringProbeAssertionMatches = expectedMessage:
     let
       record = lib.findFirst
-        (assertion:
-          assertion.assertion == false
-          && lib.all
-            (needle: lib.hasInfix needle assertion.message)
-            needles)
+        (assertion: assertion.message == expectedMessage)
         null
-        cfg.assertions;
+        wiringProbeCfg.assertions;
     in
     record != null
-    && record.assertion == false
-    && record.message == expectedMessage;
-  productionUnsafeOverflow = productionAssertionMatches
-    limitProbeUnsafeCfg
-    [ "maximum of 256" "unsafe-local workloads" ]
-    expectedUnsafeLimitMessage;
-  productionLocalVmOverflow = productionAssertionMatches
-    limitProbeLocalVmCfg
-    [ "maximum of 256" "local-vm" "configured launch" ]
-    expectedLocalVmLimitMessage;
-  productionTotalUnsafeOverflow = productionAssertionMatches
-    limitProbeTotalCfg
-    [ "maximum of 256" "unsafe-local workloads" ]
-    expectedUnsafeLimitMessage;
-  productionTotalOverflow = productionAssertionMatches
-    limitProbeTotalCfg
-    [ "maximum of 512" "private configured" "workloads" ]
-    expectedTotalLimitMessage;
+    && record.assertion == true;
+  wiringProbeProductionAssertions =
+    lib.all wiringProbeAssertionMatches [
+      expectedUnsafeLimitMessage
+      expectedLocalVmLimitMessage
+      expectedTotalLimitMessage
+    ];
 
   # ── helpers ─────────────────────────────────────────────────────────────────
   failureMessages = modules:
@@ -628,15 +642,16 @@ in
         privateLimitsExact
         && privateUnsafeBoundaryChecks
         && privateTotalBoundaryChecks
-        && productionUnsafeOverflow
-        && productionTotalUnsafeOverflow
-        && productionTotalOverflow;
+        && wiringProbeRowsMatch
+        && wiringProbeCountsMatch
+        && wiringProbeProductionAssertions;
       localVmOverflow =
         privateLimitsExact
         && privateLocalVmBoundaryChecks
         && privateTotalBoundaryChecks
-        && productionLocalVmOverflow
-        && productionTotalOverflow;
+        && wiringProbeRowsMatch
+        && wiringProbeCountsMatch
+        && wiringProbeProductionAssertions;
     };
     expected = {
       unsafeOverflow = true;
