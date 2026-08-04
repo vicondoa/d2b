@@ -232,7 +232,7 @@ exercise the real status and action paths.
 
 ## Graceful stop semantics
 
-When a client offers a stop action, normal `d2b vm stop --apply` asks a
+When a client offers a stop action, normal `d2b vm stop --apply` (legacy form) asks a
 supported local provider to shut the guest down and then performs the bounded
 host cleanup. `--force` skips only that provider-aware graceful wait and uses
 the standard cleanup path; it is not an immediate SIGKILL shortcut. Clients
