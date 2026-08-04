@@ -576,6 +576,15 @@ impl Default for TypedShellSessionTargetCache {
     }
 }
 
+impl std::fmt::Debug for TypedShellSessionTargetCache {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("TypedShellSessionTargetCache")
+            .field("entry_count", &self.entries.len())
+            .finish()
+    }
+}
+
 impl TypedShellSessionTargetCache {
     fn next_generation(&mut self) -> u64 {
         let generation = self.next_generation;
@@ -30182,7 +30191,7 @@ mod broker_dispatch_tests {
 
     #[test]
     fn listed_typed_shell_bindings_are_cached_after_an_unambiguous_scan() {
-        let (state, _dir) =
+        let state =
             test_state_with_broker_socket(unreachable_broker_socket_path("listed-shell-bindings"));
         let name = d2b_contracts::public_wire::ShellName::new("primary").unwrap();
         let other_name = d2b_contracts::public_wire::ShellName::new("other").unwrap();
@@ -30228,7 +30237,7 @@ mod broker_dispatch_tests {
 
     #[test]
     fn typed_shell_target_cache_is_bounded_and_preserves_recent_exact_retries() {
-        let (state, _dir) =
+        let state =
             test_state_with_broker_socket(unreachable_broker_socket_path("bounded-shell-bindings"));
         let retained = d2b_contracts::public_wire::ShellName::new("retained").unwrap();
         super::remember_typed_shell_session_target(&state, 1000, &retained, "tools.host.d2b");
