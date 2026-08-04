@@ -78,6 +78,57 @@ let
     "auditMode": "errors"
   },
   {
+    "operation": "activation",
+    "subject": "VM/activation",
+    "scope": "global-or-scoped",
+    "allowedGroups": [
+      "d2b-admin"
+    ],
+    "destructive": true,
+    "secretAccess": "metadata-only",
+    "brokerRequired": "conditional",
+    "auditMode": "yes"
+  },
+  {
+    "operation": "device",
+    "subject": "device",
+    "scope": "global-or-scoped",
+    "allowedGroups": [
+      "d2b-launcher",
+      "d2b-admin"
+    ],
+    "destructive": true,
+    "secretAccess": "none",
+    "brokerRequired": "conditional",
+    "auditMode": "yes"
+  },
+  {
+    "operation": "display",
+    "subject": "VM/display",
+    "scope": "per-VM/per-realm",
+    "allowedGroups": [
+      "d2b-launcher",
+      "d2b-admin"
+    ],
+    "destructive": true,
+    "secretAccess": "metadata-only",
+    "brokerRequired": "no",
+    "auditMode": "yes"
+  },
+  {
+    "operation": "guest",
+    "subject": "Guest",
+    "scope": "global-or-scoped",
+    "allowedGroups": [
+      "d2b-launcher",
+      "d2b-admin"
+    ],
+    "destructive": true,
+    "secretAccess": "none",
+    "brokerRequired": "conditional",
+    "auditMode": "yes"
+  },
+  {
     "operation": "vm display",
     "subject": "VM/display",
     "scope": "per-VM/per-realm",
