@@ -228,7 +228,11 @@ if expected not in output:
 if os.environ.get("HOLD") == "1":
     open("/run/user/1000/d2b-shell-hold.ready", "w").close()
     while True:
+        waited, _status = os.waitpid(pid, os.WNOHANG)
+        if waited == pid:
+            break
         time.sleep(1)
+    raise SystemExit(0)
 os.kill(pid, signal.SIGTERM)
 os.waitpid(pid, 0)
 PY
