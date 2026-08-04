@@ -3550,6 +3550,7 @@ fn dispatch_typed_shell_resource_request(
         .as_deref()
         .map(typed_shell_resource_name)
         .transpose()?;
+    let list_target = target.clone();
     let op = match method {
         "List" | "Status" => ShellManagementOp::List { target },
         "Detach" => ShellManagementOp::Detach {
@@ -3563,6 +3564,16 @@ fn dispatch_typed_shell_resource_request(
         _ => return Err(shell_protocol_failed()),
     };
     let result = dispatch_shell_management(state, peer, op)?;
+    if method == "List" {
+        let listed: public_wire::ShellListResult =
+            serde_json::from_value(result.clone()).map_err(|_| shell_protocol_failed())?;
+        let bindings = listed
+            .sessions
+            .iter()
+            .map(|session| (session.name.clone(), list_target.clone()))
+            .collect::<Vec<_>>();
+        cache_unambiguous_typed_shell_session_targets(state, peer.uid, &bindings)?;
+    }
     if method == "Status" {
         let name = name.ok_or_else(shell_protocol_failed)?;
         return result
@@ -3588,22 +3599,18 @@ fn list_all_typed_shell_sessions(
     let mut default_name =
         public_wire::ShellName::new("primary").map_err(|_| shell_protocol_failed())?;
     let mut sessions = Vec::new();
-    let mut names = std::collections::BTreeSet::new();
+    let mut bindings = Vec::new();
     for (index, target) in configured_shell_targets(state)?.into_iter().enumerate() {
-        let result = list_typed_shell_target(state, peer, target)?;
+        let result = list_typed_shell_target(state, peer, target.clone())?;
         if index == 0 {
             default_name = result.default_name;
         }
         for session in result.sessions {
-            if !names.insert(session.name.as_str().to_owned()) {
-                return Err(TypedError::WorkloadAliasConflict {
-                    workload_id: session.name.as_str().to_owned(),
-                    detail: "ShellSession name exists on more than one execution target".to_owned(),
-                });
-            }
+            bindings.push((session.name.clone(), target.clone()));
             sessions.push(session);
         }
     }
+    cache_unambiguous_typed_shell_session_targets(state, peer.uid, &bindings)?;
     serde_json::to_value(public_wire::ShellListResult {
         default_name,
         sessions,
@@ -9285,6 +9292,37 @@ fn remember_typed_shell_session_target(
     if let Ok(mut sessions) = state.typed_shell_session_targets.lock() {
         sessions.insert((peer_uid, name.as_str().to_owned()), target.to_owned());
     }
+}
+
+fn forget_typed_shell_session_target(
+    state: &ServerState,
+    peer_uid: u32,
+    name: &public_wire::ShellName,
+) {
+    if let Ok(mut sessions) = state.typed_shell_session_targets.lock() {
+        sessions.remove(&(peer_uid, name.as_str().to_owned()));
+    }
+}
+
+fn cache_unambiguous_typed_shell_session_targets(
+    state: &ServerState,
+    peer_uid: u32,
+    bindings: &[(public_wire::ShellName, String)],
+) -> Result<(), TypedError> {
+    let mut names = BTreeSet::new();
+    for (name, _) in bindings {
+        if !names.insert(name.as_str().to_owned()) {
+            forget_typed_shell_session_target(state, peer_uid, name);
+            return Err(TypedError::WorkloadAliasConflict {
+                workload_id: name.as_str().to_owned(),
+                detail: "ShellSession name exists on more than one execution target".to_owned(),
+            });
+        }
+    }
+    for (name, target) in bindings {
+        remember_typed_shell_session_target(state, peer_uid, name, target);
+    }
+    Ok(())
 }
 
 fn cached_typed_shell_session_target(
@@ -30060,6 +30098,53 @@ mod broker_dispatch_tests {
             "work"
         );
         assert!(super::typed_shell_execution_target("Process/command").is_err());
+    }
+
+    #[test]
+    fn listed_typed_shell_bindings_are_cached_after_an_unambiguous_scan() {
+        let (state, _dir) = test_state_with_broker_socket(unreachable_broker_socket_path(
+            "listed-shell-bindings",
+        ));
+        let name = d2b_contracts::public_wire::ShellName::new("primary").unwrap();
+        let other_name = d2b_contracts::public_wire::ShellName::new("other").unwrap();
+        super::cache_unambiguous_typed_shell_session_targets(
+            &state,
+            1000,
+            &[
+                (name.clone(), "tools.host.d2b".to_owned()),
+                (other_name, "work".to_owned()),
+            ],
+        )
+        .expect("unambiguous list must seed exact targets");
+        assert_eq!(
+            super::cached_typed_shell_session_target(&state, 1000, &name).as_deref(),
+            Some("tools.host.d2b")
+        );
+        assert_eq!(
+            super::cached_typed_shell_session_target(&state, 1001, &name),
+            None,
+            "a binding for one uid must never route another uid"
+        );
+
+        super::remember_typed_shell_session_target(&state, 1000, &name, "stale.target");
+        let error = super::cache_unambiguous_typed_shell_session_targets(
+            &state,
+            1000,
+            &[
+                (name.clone(), "tools.host.d2b".to_owned()),
+                (name.clone(), "work".to_owned()),
+            ],
+        )
+        .expect_err("ambiguous names must fail closed");
+        assert!(matches!(
+            error,
+            super::typed_error::TypedError::WorkloadAliasConflict { .. }
+        ));
+        assert_eq!(
+            super::cached_typed_shell_session_target(&state, 1000, &name),
+            None,
+            "an ambiguous list must invalidate any stale cached target"
+        );
     }
 
     #[test]
