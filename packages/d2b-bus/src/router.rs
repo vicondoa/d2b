@@ -10,9 +10,8 @@ use std::{
 };
 
 use d2b_contracts::v3::{
-    AuthenticatedSubjectContext, ControllerGeneration, EvidenceClass, Locality,
-    ResourceGeneration, ResourceName, ResourceRef, ResourceTypeName, ResourceUid, ServiceName,
-    SessionBinding, ZoneId,
+    AuthenticatedSubjectContext, ControllerGeneration, EvidenceClass, Locality, ResourceGeneration,
+    ResourceName, ResourceRef, ResourceTypeName, ResourceUid, ServiceName, SessionBinding, ZoneId,
 };
 use d2b_resource_api::authz::{
     ApiMethod, AuthorizationRequest, AuthorizationState, AuthorizationTarget, PolicySet,
