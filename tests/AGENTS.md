@@ -267,6 +267,16 @@ aggregate has no real FAIL line, one final fallback diagnostic remains
 attributable to that result attribute.
 Command progress uses the fixed path-free `d2b` flake label.
 
+Nix-unit fixtures must not inherit environments, VMs, components, or rendered
+artifact surfaces that the case does not assert. Keep a schema-only base for
+option/assertion cases and add focused env/VM layers only where the contract
+needs them. Retain at least one full positive and one full negative
+`nixosSystem` integration path per affected module family. Identical scenario
+configurations share one evaluated thunk while preserving one case per
+contract. Cardinality boundaries use a pure production assertion helper plus
+an actual negative module-wiring probe; do not materialize hundreds of typed
+submodules solely to test a fixed count.
+
 `D2B_NIX_UNIT_CHECK` remains the manual single-shard selector. When
 set, it exits through the selected Nix check before eval-jobs bootstrap or
 resource accounting. Hosted CI retains the pre-change discovery and
