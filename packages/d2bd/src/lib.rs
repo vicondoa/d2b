@@ -3538,42 +3538,66 @@ fn dispatch_typed_shell_resource_request(
     peer: &PeerIdentity,
     request: &Value,
 ) -> Result<Value, TypedError> {
+    let method = request
+        .get("method")
+        .and_then(Value::as_str)
+        .ok_or_else(shell_protocol_failed)?;
     let resource = request
         .get("resourceRef")
         .and_then(Value::as_str)
-        .map(str::to_owned)
-        .or_else(|| {
-            typed_shell_sessions()
-                .lock()
-                .ok()
-                .and_then(|sessions| sessions.keys().next().cloned())
-        })
-        .ok_or_else(shell_protocol_failed)?;
-    let target = typed_shell_sessions()
-        .lock()
-        .ok()
-        .and_then(|sessions| sessions.get(&resource).cloned())
-        .ok_or_else(shell_protocol_failed)?;
-    let name = resource
-        .strip_prefix("shell-terminal.d2bus.org.ShellSession/")
-        .and_then(|value| public_wire::ShellName::new(value).ok())
-        .ok_or_else(shell_protocol_failed)?;
-    let op = match request.get("method").and_then(Value::as_str) {
-        Some("List" | "Status") => {
-            public_wire::ShellOp::List(public_wire::ShellListArgs { vm: target })
+        .map(str::to_owned);
+    let target = if method == "List" {
+        match request.get("executionRef").and_then(Value::as_str) {
+            Some(execution_ref) => typed_shell_execution_target(execution_ref)?,
+            None => unique_configured_shell_target(state)?,
         }
-        Some("Detach") => public_wire::ShellOp::Detach(public_wire::ShellDetachArgs {
+    } else {
+        resolve_typed_shell_session_target(
+            state,
+            resource.as_deref().ok_or_else(shell_protocol_failed)?,
+        )?
+    };
+    let name = resource
+        .as_deref()
+        .and_then(|value| value.strip_prefix("shell-terminal.d2bus.org.ShellSession/"))
+        .and_then(|value| public_wire::ShellName::new(value).ok());
+    let op = match method {
+        "List" | "Status" => public_wire::ShellOp::List(public_wire::ShellListArgs { vm: target }),
+        "Detach" => public_wire::ShellOp::Detach(public_wire::ShellDetachArgs {
             vm: target,
-            name: Some(name),
+            name: name.clone(),
         }),
-        Some("Kill") => public_wire::ShellOp::Kill(public_wire::ShellKillArgs { vm: target, name }),
+        "Kill" => public_wire::ShellOp::Kill(public_wire::ShellKillArgs {
+            vm: target,
+            name: name.clone().ok_or_else(shell_protocol_failed)?,
+        }),
         _ => return Err(shell_protocol_failed()),
     };
     let response = dispatch_shell_management(state, peer, op)?;
-    response
+    let result = response
         .get("result")
         .cloned()
-        .ok_or_else(shell_protocol_failed)
+        .ok_or_else(shell_protocol_failed)?;
+    if method == "Status" {
+        let name = name.ok_or_else(shell_protocol_failed)?;
+        return result
+            .get("sessions")
+            .and_then(Value::as_array)
+            .and_then(|sessions| {
+                sessions.iter().find(|session| {
+                    session.get("name").and_then(Value::as_str) == Some(name.as_str())
+                })
+            })
+            .cloned()
+            .ok_or_else(shell_protocol_failed);
+    }
+    if method == "Kill"
+        && let Some(resource) = resource
+        && let Ok(mut sessions) = typed_shell_sessions().lock()
+    {
+        sessions.remove(&resource);
+    }
+    Ok(result)
 }
 
 fn resource_runtime_error_frame(error: resource_runtime::ResourceRuntimeError) -> Value {
@@ -9148,6 +9172,50 @@ fn typed_shell_execution_target(value: &str) -> Result<String, TypedError> {
     }
 }
 
+fn configured_shell_targets(state: &ServerState) -> Result<Vec<String>, TypedError> {
+    let resolver = load_bundle_resolver(state)?;
+    let catalog = workload_dispatch::WorkloadCatalog::from_resolver(&resolver)
+        .map_err(|_| shell_protocol_failed())?;
+    Ok(catalog
+        .entries()
+        .filter(|entry| {
+            entry
+                .metadata
+                .capabilities
+                .has(d2b_realm_core::Capability::PersistentShell)
+        })
+        .map(|entry| entry.metadata.identity.canonical_target.to_canonical())
+        .collect())
+}
+
+fn unique_configured_shell_target(state: &ServerState) -> Result<String, TypedError> {
+    match configured_shell_targets(state)?.as_slice() {
+        [target] => Ok(target.clone()),
+        _ => Err(shell_protocol_failed()),
+    }
+}
+
+fn resolve_typed_shell_session_target(
+    state: &ServerState,
+    resource: &str,
+) -> Result<String, TypedError> {
+    if !is_typed_shell_resource_ref(resource) {
+        return Err(shell_protocol_failed());
+    }
+    if let Some(target) = typed_shell_sessions()
+        .lock()
+        .ok()
+        .and_then(|sessions| sessions.get(resource).cloned())
+    {
+        return Ok(target);
+    }
+    let target = unique_configured_shell_target(state)?;
+    if let Ok(mut sessions) = typed_shell_sessions().lock() {
+        sessions.insert(resource.to_owned(), target.clone());
+    }
+    Ok(target)
+}
+
 fn run_typed_shell_owner(stream: Socket, state: ServerState, peer: PeerIdentity, request: Value) {
     let rt = match tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -9174,7 +9242,8 @@ fn run_typed_shell_owner(stream: Socket, state: ServerState, peer: PeerIdentity,
         let _ = write_json_frame(&stream, &wire::error_frame(&shell_protocol_failed()));
         return;
     };
-    let target = if method == "Create" {
+    let creating = method == "Create";
+    let target = if creating {
         let Some(execution_ref) = request.get("executionRef").and_then(Value::as_str) else {
             let _ = write_json_frame(&stream, &wire::error_frame(&shell_protocol_failed()));
             return;
@@ -9186,7 +9255,7 @@ fn run_typed_shell_owner(stream: Socket, state: ServerState, peer: PeerIdentity,
                 return;
             }
         };
-        if let Ok(mut sessions) = typed_shell_sessions().lock() {
+        if let Ok(sessions) = typed_shell_sessions().lock() {
             if sessions.contains_key(&resource)
                 && !request
                     .get("force")
@@ -9196,19 +9265,16 @@ fn run_typed_shell_owner(stream: Socket, state: ServerState, peer: PeerIdentity,
                 let _ = write_json_frame(&stream, &wire::error_frame(&shell_protocol_failed()));
                 return;
             }
-            sessions.insert(resource.clone(), target.clone());
         }
         target
     } else {
-        let Some(target) = typed_shell_sessions()
-            .lock()
-            .ok()
-            .and_then(|sessions| sessions.get(&resource).cloned())
-        else {
-            let _ = write_json_frame(&stream, &wire::error_frame(&shell_protocol_failed()));
-            return;
-        };
-        target
+        match resolve_typed_shell_session_target(&state, &resource) {
+            Ok(target) => target,
+            Err(error) => {
+                let _ = write_json_frame(&stream, &wire::error_frame(&error));
+                return;
+            }
+        }
     };
     let name = match resource
         .strip_prefix("shell-terminal.d2bus.org.ShellSession/")
@@ -9226,7 +9292,7 @@ fn run_typed_shell_owner(stream: Socket, state: ServerState, peer: PeerIdentity,
         .and_then(|value| serde_json::from_value(value).ok())
         .unwrap_or(d2b_contracts::terminal_wire::TerminalSize { rows: 24, cols: 80 });
     let attach = public_wire::ShellAttachArgs {
-        vm: target,
+        vm: target.clone(),
         name: Some(name),
         force: request
             .get("force")
@@ -9246,6 +9312,9 @@ fn run_typed_shell_owner(stream: Socket, state: ServerState, peer: PeerIdentity,
             return;
         }
     };
+    if creating && let Ok(mut sessions) = typed_shell_sessions().lock() {
+        sessions.insert(resource.clone(), target);
+    }
     let session = established.attach.session.clone();
     if write_json_frame(
         &stream,
