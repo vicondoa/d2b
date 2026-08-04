@@ -121,6 +121,7 @@ import os
 import pty
 import select
 import signal
+import sys
 import time
 
 pid, master = pty.fork()
