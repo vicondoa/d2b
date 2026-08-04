@@ -1402,17 +1402,16 @@ impl CliConnectedSession {
             force,
             ..
         } = request.target()
+            && let Some(object) = request_payload.as_object_mut()
         {
-            if let Some(object) = request_payload.as_object_mut() {
-                object.insert(
-                    "executionRef".to_owned(),
-                    execution_ref
-                        .as_ref()
-                        .map(|reference| Value::String(reference.to_canonical_string()))
-                        .unwrap_or(Value::Null),
-                );
-                object.insert("force".to_owned(), Value::Bool(*force));
-            }
+            object.insert(
+                "executionRef".to_owned(),
+                execution_ref
+                    .as_ref()
+                    .map(|reference| Value::String(reference.to_canonical_string()))
+                    .unwrap_or(Value::Null),
+            );
+            object.insert("force".to_owned(), Value::Bool(*force));
         }
         let payload =
             serde_json::to_vec(&request_payload).map_err(|_| ClientError::ContractViolation)?;
