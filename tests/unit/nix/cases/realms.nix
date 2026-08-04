@@ -2,7 +2,7 @@
 { mkEval, lib, flakeRoot, ... }:
 
 let
-  hostBase = {
+  realmSchemaBase = {
     boot.loader.grub.enable = false;
     boot.loader.systemd-boot.enable = false;
     boot.initrd.includeDefaultModules = false;
@@ -16,7 +16,9 @@ let
       waylandUser = "alice";
       launcherUsers = [ "alice" ];
     };
+  };
 
+  hostBase = lib.recursiveUpdate realmSchemaBase {
     d2b.envs.home = {
       lanSubnet = "10.10.0.0/24";
       uplinkSubnet = "192.0.2.0/30";
@@ -44,6 +46,22 @@ let
     };
     d2b.vms.corp = {
       env = "work";
+      index = 10;
+      ssh.user = "alice";
+      config.users.users.alice = { isNormalUser = true; uid = 1000; };
+    };
+  };
+
+  oneEnvBase = lib.recursiveUpdate realmSchemaBase {
+    d2b.envs.home = {
+      lanSubnet = "10.10.0.0/24";
+      uplinkSubnet = "192.0.2.0/30";
+    };
+  };
+
+  oneEnvOneVmBase = lib.recursiveUpdate oneEnvBase {
+    d2b.vms.homebox = {
+      env = "home";
       index = 10;
       ssh.user = "alice";
       config.users.users.alice = { isNormalUser = true; uid = 1000; };
@@ -129,7 +147,7 @@ let
       messages;
 
   missingParentMessages = failureMessages [
-    (lib.recursiveUpdate hostBase {
+    (lib.recursiveUpdate realmSchemaBase {
       d2b.realms.child = {
         parent = "missing";
         path = "child.missing";
@@ -138,7 +156,7 @@ let
   ];
 
   parentCycleMessages = failureMessages [
-    (lib.recursiveUpdate hostBase {
+    (lib.recursiveUpdate realmSchemaBase {
       d2b.realms.alpha = {
         path = "alpha";
         parent = "beta";
@@ -151,7 +169,7 @@ let
   ];
 
   duplicateIdPathMessages = failureMessages [
-    (lib.recursiveUpdate hostBase {
+    (lib.recursiveUpdate realmSchemaBase {
       d2b.realms.alpha = {
         id = "same";
         path = "same-path";
@@ -164,7 +182,7 @@ let
   ];
 
   duplicateRuntimePathMessages = failureMessages [
-    (lib.recursiveUpdate hostBase {
+    (lib.recursiveUpdate realmSchemaBase {
       d2b.realms.alpha = { };
       d2b.realms.beta.paths = {
         stateDir = "/var/lib/d2b/realms/alpha";
@@ -179,19 +197,19 @@ let
   longSocketPath = "/run/d2b/realms/${lib.concatStrings (lib.genList (_: "a") 96)}/public.sock";
 
   overlongPublicSocketMessages = failureMessages [
-    (lib.recursiveUpdate hostBase {
+    (lib.recursiveUpdate realmSchemaBase {
       d2b.realms.work.paths.publicSocket = longSocketPath;
     })
   ];
 
   overlongBrokerSocketMessages = failureMessages [
-    (lib.recursiveUpdate hostBase {
+    (lib.recursiveUpdate realmSchemaBase {
       d2b.realms.work.paths.brokerSocket = longSocketPath;
     })
   ];
 
   missingPlacementProviderMessages = failureMessages [
-    (lib.recursiveUpdate hostBase {
+    (lib.recursiveUpdate realmSchemaBase {
       d2b.realms.work = {
         placement = "provider-controller";
         providers.aca.kind = "aca";
@@ -200,7 +218,7 @@ let
   ];
 
   missingProviderSpecificPlacementProviderMessages = failureMessages [
-    (lib.recursiveUpdate hostBase {
+    (lib.recursiveUpdate realmSchemaBase {
       d2b.realms.work = {
         placement = "provider-specific";
         providerSpecificPlacement = "aca-managed-sandbox";
@@ -210,7 +228,7 @@ let
   ];
 
   unexpectedPlacementProviderMessages = failureMessages [
-    (lib.recursiveUpdate hostBase {
+    (lib.recursiveUpdate realmSchemaBase {
       d2b.realms.work = {
         placement = "gateway-vm";
         placementProvider = "aca";
@@ -220,7 +238,7 @@ let
   ];
 
   missingRealmAllowedUserMessages = failureMessages [
-    (lib.recursiveUpdate hostBase {
+    (lib.recursiveUpdate realmSchemaBase {
       d2b.realms.home = {
         allowedUsers = [ "missing-user" ];
       };
@@ -228,7 +246,7 @@ let
   ];
 
   secretIdentityRefMessages = failureMessages [
-    (lib.recursiveUpdate hostBase {
+    (lib.recursiveUpdate realmSchemaBase {
       d2b.realms.work.keys = {
         realmIdentityRef = "secret-identity";
         controllerKeyRef = "-----BEGIN PRIVATE KEY-----";
@@ -240,7 +258,7 @@ let
   ];
 
   validProviderPlacementCfg = (mkEval [
-    (lib.recursiveUpdate hostBase {
+    (lib.recursiveUpdate realmSchemaBase {
       d2b.realms.work = {
         placement = "provider-agent";
         placementProvider = "aca";
@@ -252,7 +270,7 @@ let
     builtins.head validProviderPlacementCfg.d2b._bundle.realmControllersJson.data.controllers;
 
   legacyGatewayMessages = failureMessages [
-    (lib.recursiveUpdate hostBase {
+    (lib.recursiveUpdate realmSchemaBase {
       d2b.gateways.work = {
         env = "work";
         aca.endpoint = "https://example.azurecontainerapps.invalid";
@@ -270,7 +288,7 @@ let
   # should emit an advisory "inheritEnvNudge" warning pointing at the
   # v1.2→v2 migration guide.
   inheritEnvNudgeWarnings = (mkEval [
-    (lib.recursiveUpdate hostBase {
+    (lib.recursiveUpdate oneEnvBase {
       d2b.realms.nudge-me = {
         env = "home";
         network.envs = [ "home" ];
@@ -283,7 +301,7 @@ let
   # Realm workload with legacyVmName pointing to a VM that does not exist in
   # d2b.vms should emit an advisory warning.
   orphanLegacyVmWarnings = (mkEval [
-    (lib.recursiveUpdate hostBase {
+    (lib.recursiveUpdate oneEnvBase {
       d2b.realms.migrating = {
         env = "home";
         network.envs = [ "home" ];
@@ -298,7 +316,7 @@ let
   # Realm with matching legacyVmName that DOES exist in d2b.vms should NOT
   # emit the orphan warning.
   legacyVmPresentWarnings = (mkEval [
-    (lib.recursiveUpdate hostBase {
+    (lib.recursiveUpdate oneEnvOneVmBase {
       d2b.realms.migrating = {
         env = "home";
         network.envs = [ "home" ];
@@ -313,7 +331,7 @@ let
   # Realm with workloads declared (even without env) does NOT emit the
   # inheritEnvNudge warning.
   withWorkloadsNoNudgeWarnings = (mkEval [
-    (lib.recursiveUpdate hostBase {
+    (lib.recursiveUpdate oneEnvBase {
       d2b.realms.with-workloads = {
         env = "home";
         network.envs = [ "home" ];
@@ -331,7 +349,7 @@ let
   # failures for each supported kind (local-vm, qemu-media, provider-placeholder)
   # and that per-workload defaults are correctly materialized.
   acceptedWorkloadCfg = (mkEval [
-    (lib.recursiveUpdate hostBase {
+    (lib.recursiveUpdate realmSchemaBase {
       d2b.realms.corp = {
         parent = "home";
         path = "corp.home";
