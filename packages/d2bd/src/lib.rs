@@ -9489,6 +9489,15 @@ fn find_typed_shell_session_target(
     name: &public_wire::ShellName,
 ) -> Result<Option<String>, TypedError> {
     let listings = list_configured_typed_shell_targets(state, peer)?;
+    find_typed_shell_session_target_in_listings(state, peer.uid, name, &listings)
+}
+
+fn find_typed_shell_session_target_in_listings(
+    state: &ServerState,
+    peer_uid: u32,
+    name: &public_wire::ShellName,
+    listings: &[(String, public_wire::ShellListResult)],
+) -> Result<Option<String>, TypedError> {
     let mut matched = None;
     for (target, result) in listings {
         if result.sessions.iter().any(|session| session.name == *name) {
@@ -9496,14 +9505,17 @@ fn find_typed_shell_session_target(
                 // The complete listing helper validates this before returning.
                 // Keep this guard local so a future caller cannot accidentally
                 // route an ambiguous name if that helper changes.
-                forget_typed_shell_session_target(state, peer.uid, name);
+                forget_typed_shell_session_target(state, peer_uid, name);
                 return Err(TypedError::WorkloadAliasConflict {
                     workload_id: name.as_str().to_owned(),
                     detail: "ShellSession name exists on more than one execution target".to_owned(),
                 });
             }
-            matched = Some(target);
+            matched = Some(target.clone());
         }
+    }
+    if let Some(target) = matched.as_deref() {
+        remember_typed_shell_session_target(state, peer_uid, name, target);
     }
     Ok(matched)
 }
@@ -30352,6 +30364,52 @@ mod broker_dispatch_tests {
         assert_eq!(
             super::cached_typed_shell_session_target(&state, 1000, &unique).as_deref(),
             Some("healthy")
+        );
+    }
+
+    #[test]
+    fn live_typed_shell_match_refreshes_bounded_binding_recency() {
+        let state =
+            test_state_with_broker_socket(unreachable_broker_socket_path("live-shell-recency"));
+        let matched = d2b_contracts::public_wire::ShellName::new("retained").unwrap();
+        super::remember_typed_shell_session_target(&state, 1000, &matched, "healthy");
+        for index in 0..(super::MAX_TYPED_SHELL_SESSION_TARGETS - 1) {
+            let name =
+                d2b_contracts::public_wire::ShellName::new(format!("churn-{index:03}")).unwrap();
+            super::remember_typed_shell_session_target(&state, 1000, &name, "work");
+        }
+
+        let listings = vec![(
+            "healthy".to_owned(),
+            d2b_contracts::public_wire::ShellListResult {
+                default_name: d2b_contracts::public_wire::ShellName::new("primary").unwrap(),
+                sessions: vec![d2b_contracts::public_wire::ShellListEntry {
+                    name: matched.clone(),
+                    state: ShellSessionState::Detached,
+                    attached: false,
+                    is_default: true,
+                }],
+            },
+        )];
+        assert_eq!(
+            super::find_typed_shell_session_target_in_listings(&state, 1000, &matched, &listings)
+                .expect("live match resolves"),
+            Some("healthy".to_owned())
+        );
+
+        let newest = d2b_contracts::public_wire::ShellName::new("newest").unwrap();
+        super::remember_typed_shell_session_target(&state, 1000, &newest, "other");
+        assert_eq!(
+            super::cached_typed_shell_session_target(&state, 1000, &matched).as_deref(),
+            Some("healthy"),
+            "a live match must refresh its exact binding before bounded eviction"
+        );
+        let oldest =
+            d2b_contracts::public_wire::ShellName::new("churn-000").expect("valid churn name");
+        assert_eq!(
+            super::cached_typed_shell_session_target(&state, 1000, &oldest),
+            None,
+            "the refreshed live match makes the oldest unrelated binding evict first"
         );
     }
 
