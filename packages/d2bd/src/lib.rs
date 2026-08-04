@@ -3608,27 +3608,26 @@ fn dispatch_typed_shell_resource_request(
     {
         return list_all_typed_shell_sessions(state, peer);
     }
-    let target = if method == "List" {
-        typed_shell_execution_target(
+    if method == "List" {
+        let target = typed_shell_execution_target(
             request
                 .get("executionRef")
                 .and_then(Value::as_str)
                 .ok_or_else(shell_protocol_failed)?,
-        )?
-    } else {
-        resolve_typed_shell_session_target(
-            state,
-            peer,
-            resource.as_deref().ok_or_else(shell_protocol_failed)?,
-        )?
-    };
+        )?;
+        return list_typed_shell_sessions_for_target(state, peer, &target);
+    }
+    let target = resolve_typed_shell_session_target(
+        state,
+        peer,
+        resource.as_deref().ok_or_else(shell_protocol_failed)?,
+    )?;
     let name = resource
         .as_deref()
         .map(typed_shell_resource_name)
         .transpose()?;
-    let list_target = target.clone();
     let op = match method {
-        "List" | "Status" => ShellManagementOp::List { target },
+        "Status" => ShellManagementOp::List { target },
         "Detach" => ShellManagementOp::Detach {
             target,
             name: name.clone(),
@@ -3640,16 +3639,6 @@ fn dispatch_typed_shell_resource_request(
         _ => return Err(shell_protocol_failed()),
     };
     let result = dispatch_shell_management(state, peer, op)?;
-    if method == "List" {
-        let listed: public_wire::ShellListResult =
-            serde_json::from_value(result.clone()).map_err(|_| shell_protocol_failed())?;
-        let bindings = listed
-            .sessions
-            .iter()
-            .map(|session| (session.name.clone(), list_target.clone()))
-            .collect::<Vec<_>>();
-        cache_unambiguous_typed_shell_session_targets(state, peer.uid, &bindings)?;
-    }
     if method == "Status" {
         let name = name.ok_or_else(shell_protocol_failed)?;
         return result
@@ -3672,21 +3661,15 @@ fn list_all_typed_shell_sessions(
     state: &ServerState,
     peer: &PeerIdentity,
 ) -> Result<Value, TypedError> {
-    let mut default_name =
-        public_wire::ShellName::new("primary").map_err(|_| shell_protocol_failed())?;
-    let mut sessions = Vec::new();
-    let mut bindings = Vec::new();
-    for (index, target) in configured_shell_targets(state)?.into_iter().enumerate() {
-        let result = list_typed_shell_target(state, peer, target.clone())?;
-        if index == 0 {
-            default_name = result.default_name;
-        }
-        for session in result.sessions {
-            bindings.push((session.name.clone(), target.clone()));
-            sessions.push(session);
-        }
-    }
-    cache_unambiguous_typed_shell_session_targets(state, peer.uid, &bindings)?;
+    let listings = list_configured_typed_shell_targets(state, peer)?;
+    let default_name = listings
+        .first()
+        .map(|(_, result)| result.default_name.clone())
+        .unwrap_or_else(|| public_wire::ShellName::new("primary").expect("valid shell name"));
+    let sessions = listings
+        .into_iter()
+        .flat_map(|(_, result)| result.sessions)
+        .collect();
     serde_json::to_value(public_wire::ShellListResult {
         default_name,
         sessions,
@@ -9359,6 +9342,52 @@ fn list_typed_shell_target(
     serde_json::from_value(value).map_err(|_| shell_protocol_failed())
 }
 
+fn list_configured_typed_shell_targets(
+    state: &ServerState,
+    peer: &PeerIdentity,
+) -> Result<Vec<(String, public_wire::ShellListResult)>, TypedError> {
+    let listings = configured_shell_targets(state)?
+        .into_iter()
+        .map(|target| {
+            let result = list_typed_shell_target(state, peer, target.clone())?;
+            Ok((target, result))
+        })
+        .collect::<Result<Vec<_>, TypedError>>()?;
+    let bindings = listings
+        .iter()
+        .flat_map(|(target, result)| {
+            result
+                .sessions
+                .iter()
+                .map(move |session| (session.name.clone(), target.clone()))
+        })
+        .collect::<Vec<_>>();
+    cache_unambiguous_typed_shell_session_targets(state, peer.uid, &bindings)?;
+    Ok(listings)
+}
+
+fn list_typed_shell_sessions_for_target(
+    state: &ServerState,
+    peer: &PeerIdentity,
+    target: &str,
+) -> Result<Value, TypedError> {
+    if !configured_shell_targets(state)?
+        .iter()
+        .any(|configured| configured == target)
+    {
+        let result = list_typed_shell_target(state, peer, target.to_owned())?;
+        return serde_json::to_value(result).map_err(|_| shell_protocol_failed());
+    }
+    let result = list_configured_typed_shell_targets(state, peer)?
+        .into_iter()
+        .find(|(configured, _)| configured == target)
+        .map(|(_, result)| result)
+        .ok_or_else(|| TypedError::WorkloadTargetNotFound {
+            target: target.to_owned(),
+        })?;
+    serde_json::to_value(result).map_err(|_| shell_protocol_failed())
+}
+
 fn remember_typed_shell_session_target(
     state: &ServerState,
     peer_uid: u32,
@@ -9427,11 +9456,14 @@ fn find_typed_shell_session_target(
     peer: &PeerIdentity,
     name: &public_wire::ShellName,
 ) -> Result<Option<String>, TypedError> {
+    let listings = list_configured_typed_shell_targets(state, peer)?;
     let mut matched = None;
-    for target in configured_shell_targets(state)? {
-        let result = list_typed_shell_target(state, peer, target.clone())?;
+    for (target, result) in listings {
         if result.sessions.iter().any(|session| session.name == *name) {
             if matched.is_some() {
+                // The complete listing helper validates this before returning.
+                // Keep this guard local so a future caller cannot accidentally
+                // route an ambiguous name if that helper changes.
                 forget_typed_shell_session_target(state, peer.uid, name);
                 return Err(TypedError::WorkloadAliasConflict {
                     workload_id: name.as_str().to_owned(),
@@ -9440,9 +9472,6 @@ fn find_typed_shell_session_target(
             }
             matched = Some(target);
         }
-    }
-    if let Some(target) = matched.as_deref() {
-        remember_typed_shell_session_target(state, peer.uid, name, target);
     }
     Ok(matched)
 }
