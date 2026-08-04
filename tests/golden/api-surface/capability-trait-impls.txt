@@ -45,6 +45,7 @@ d2b_bus::d2b_bus::router::ResourceCall	enum	core::core::cmp::Eq	trait	impl core:
 d2b_bus::d2b_bus::router::ResourceCall	enum	core::core::cmp::PartialEq	trait	impl core::cmp::PartialEq for d2b_bus::router::ResourceCall
 d2b_bus::d2b_bus::router::ResourceCall	enum	core::core::fmt::Debug	trait	impl core::fmt::Debug for d2b_bus::router::ResourceCall
 d2b_bus::d2b_bus::router::ResourceCall	enum	core::core::marker::StructuralPartialEq	trait	impl core::marker::StructuralPartialEq for d2b_bus::router::ResourceCall
+d2b_bus::d2b_bus::router::UnixSubjectRecord	struct	core::core::fmt::Debug	trait	private explicit impl core::fmt::Debug for d2b_bus::router::UnixSubjectRecord negative=false generic-params=0 where-predicates=0
 d2b_bus::d2b_bus::router::ZoneBus	struct	core::core::fmt::Debug	trait	impl core::fmt::Debug for d2b_bus::router::ZoneBus
 d2b_bus::d2b_bus::router::ZoneRegistrar	struct	core::core::fmt::Debug	trait	impl core::fmt::Debug for d2b_bus::router::ZoneRegistrar
 d2b_bus::d2b_bus::streams::IncomingStream	struct	core::core::fmt::Debug	trait	impl core::fmt::Debug for d2b_bus::streams::IncomingStream
@@ -1742,3 +1743,6 @@ d2bd::d2bd::provider_registry::ProviderBinding	struct	core::core::marker::Struct
 d2bd::d2bd::provider_registry::ProviderRuntime	struct	core::core::default::Default	trait	impl core::default::Default for d2bd::provider_registry::ProviderRuntime
 d2bd::d2bd::provider_registry::ProviderRuntime	struct	core::core::fmt::Debug	trait	impl core::fmt::Debug for d2bd::provider_registry::ProviderRuntime
 d2bd::d2bd::provider_registry::ProviderRuntimeState	enum	core::core::fmt::Debug	trait	private explicit impl core::fmt::Debug for d2bd::provider_registry::ProviderRuntimeState negative=false generic-params=0 where-predicates=0
+d2bd::d2bd::resource_runtime::ResourcePlane	struct	core::core::default::Default	trait	impl core::default::Default for d2bd::resource_runtime::ResourcePlane
+d2bd::d2bd::resource_runtime::ResourcePlane	struct	core::core::fmt::Debug	trait	impl core::fmt::Debug for d2bd::resource_runtime::ResourcePlane
+d2bd::d2bd::resource_runtime::ZoneResourceRuntime	struct	core::core::fmt::Debug	trait	impl core::fmt::Debug for d2bd::resource_runtime::ZoneResourceRuntime

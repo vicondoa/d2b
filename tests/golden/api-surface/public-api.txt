@@ -24,6 +24,18 @@ impl core::clone::Clone for d2b_bus::audit::RouteAuditContext
 impl core::clone::Clone for d2b_bus::audit::RouteAuditError
 impl core::clone::Clone for d2b_bus::authorization::AuthorizationError
 impl core::clone::Clone for d2b_bus::authorization::AuthorizationErrorClass
+impl core::clone::Clone for d2b_bus::metrics::BusBackpressureReason
+impl core::clone::Clone for d2b_bus::metrics::BusDirection
+impl core::clone::Clone for d2b_bus::metrics::BusDisconnectOutcome
+impl core::clone::Clone for d2b_bus::metrics::BusMetric
+impl core::clone::Clone for d2b_bus::metrics::BusMetrics
+impl core::clone::Clone for d2b_bus::metrics::BusRegistrationOutcome
+impl core::clone::Clone for d2b_bus::metrics::BusRejectionOutcome
+impl core::clone::Clone for d2b_bus::metrics::BusRouteOutcome
+impl core::clone::Clone for d2b_bus::metrics::BusStreamKind
+impl core::clone::Clone for d2b_bus::metrics::BusStreamOutcome
+impl core::clone::Clone for d2b_bus::metrics::BusTransport
+impl core::clone::Clone for d2b_bus::metrics::NoopBusTelemetry
 impl core::clone::Clone for d2b_bus::operations::Cancellation
 impl core::clone::Clone for d2b_bus::operations::OperationError
 impl core::clone::Clone for d2b_bus::operations::OperationId
@@ -99,6 +111,16 @@ impl core::cmp::Eq for d2b_bus::audit::BusErrorKind
 impl core::cmp::Eq for d2b_bus::audit::RouteAuditError
 impl core::cmp::Eq for d2b_bus::authorization::AuthorizationError
 impl core::cmp::Eq for d2b_bus::authorization::AuthorizationErrorClass
+impl core::cmp::Eq for d2b_bus::metrics::BusBackpressureReason
+impl core::cmp::Eq for d2b_bus::metrics::BusDirection
+impl core::cmp::Eq for d2b_bus::metrics::BusDisconnectOutcome
+impl core::cmp::Eq for d2b_bus::metrics::BusMetric
+impl core::cmp::Eq for d2b_bus::metrics::BusRegistrationOutcome
+impl core::cmp::Eq for d2b_bus::metrics::BusRejectionOutcome
+impl core::cmp::Eq for d2b_bus::metrics::BusRouteOutcome
+impl core::cmp::Eq for d2b_bus::metrics::BusStreamKind
+impl core::cmp::Eq for d2b_bus::metrics::BusStreamOutcome
+impl core::cmp::Eq for d2b_bus::metrics::BusTransport
 impl core::cmp::Eq for d2b_bus::operations::OperationError
 impl core::cmp::Eq for d2b_bus::operations::OperationId
 impl core::cmp::Eq for d2b_bus::operations::OperationSpec
@@ -169,6 +191,8 @@ impl core::cmp::Eq for d2b_bus::zone_route::ZoneLinkIdempotencyKey
 impl core::cmp::Eq for d2b_bus::zone_route::ZoneRouteError
 impl core::cmp::Eq for d2b_bus::zone_route::ZoneRouteOutcome
 impl core::cmp::Eq for d2b_bus::zone_route::ZoneRouteQuery
+impl core::cmp::Ord for d2b_bus::metrics::BusDirection
+impl core::cmp::Ord for d2b_bus::metrics::BusTransport
 impl core::cmp::Ord for d2b_bus::operations::OperationId
 impl core::cmp::Ord for d2b_bus::registry::RouteGenerations
 impl core::cmp::Ord for d2b_bus::registry::RouteKey
@@ -190,6 +214,16 @@ impl core::cmp::PartialEq for d2b_bus::audit::BusErrorKind
 impl core::cmp::PartialEq for d2b_bus::audit::RouteAuditError
 impl core::cmp::PartialEq for d2b_bus::authorization::AuthorizationError
 impl core::cmp::PartialEq for d2b_bus::authorization::AuthorizationErrorClass
+impl core::cmp::PartialEq for d2b_bus::metrics::BusBackpressureReason
+impl core::cmp::PartialEq for d2b_bus::metrics::BusDirection
+impl core::cmp::PartialEq for d2b_bus::metrics::BusDisconnectOutcome
+impl core::cmp::PartialEq for d2b_bus::metrics::BusMetric
+impl core::cmp::PartialEq for d2b_bus::metrics::BusRegistrationOutcome
+impl core::cmp::PartialEq for d2b_bus::metrics::BusRejectionOutcome
+impl core::cmp::PartialEq for d2b_bus::metrics::BusRouteOutcome
+impl core::cmp::PartialEq for d2b_bus::metrics::BusStreamKind
+impl core::cmp::PartialEq for d2b_bus::metrics::BusStreamOutcome
+impl core::cmp::PartialEq for d2b_bus::metrics::BusTransport
 impl core::cmp::PartialEq for d2b_bus::operations::OperationError
 impl core::cmp::PartialEq for d2b_bus::operations::OperationId
 impl core::cmp::PartialEq for d2b_bus::operations::OperationSpec
@@ -260,6 +294,8 @@ impl core::cmp::PartialEq for d2b_bus::zone_route::ZoneLinkIdempotencyKey
 impl core::cmp::PartialEq for d2b_bus::zone_route::ZoneRouteError
 impl core::cmp::PartialEq for d2b_bus::zone_route::ZoneRouteOutcome
 impl core::cmp::PartialEq for d2b_bus::zone_route::ZoneRouteQuery
+impl core::cmp::PartialOrd for d2b_bus::metrics::BusDirection
+impl core::cmp::PartialOrd for d2b_bus::metrics::BusTransport
 impl core::cmp::PartialOrd for d2b_bus::operations::OperationId
 impl core::cmp::PartialOrd for d2b_bus::registry::RouteGenerations
 impl core::cmp::PartialOrd for d2b_bus::registry::RouteKey
@@ -287,6 +323,7 @@ impl core::convert::From<d2b_bus::transport::credit::CreditError> for d2b_bus::t
 impl core::convert::From<d2b_resource_api::authz::AuthorizationDenial> for d2b_bus::authorization::AuthorizationError
 impl core::convert::From<d2b_resource_api::authz::AuthorizationPolicyError> for d2b_bus::authorization::AuthorizationError
 impl core::convert::From<d2b_session::error::SessionError> for d2b_bus::registry::EndpointError
+impl core::default::Default for d2b_bus::metrics::NoopBusTelemetry
 impl core::default::Default for d2b_bus::router::BusConfig
 impl core::default::Default for d2b_bus::router::NoopBusObserver
 impl core::default::Default for d2b_bus::routing::RouteTable
@@ -310,6 +347,18 @@ impl core::fmt::Debug for d2b_bus::audit::RouteAuditError
 impl core::fmt::Debug for d2b_bus::authorization::AuthorizationError
 impl core::fmt::Debug for d2b_bus::authorization::AuthorizationErrorClass
 impl core::fmt::Debug for d2b_bus::authorization::BusAuthorizer
+impl core::fmt::Debug for d2b_bus::metrics::BusBackpressureReason
+impl core::fmt::Debug for d2b_bus::metrics::BusDirection
+impl core::fmt::Debug for d2b_bus::metrics::BusDisconnectOutcome
+impl core::fmt::Debug for d2b_bus::metrics::BusMetric
+impl core::fmt::Debug for d2b_bus::metrics::BusMetrics
+impl core::fmt::Debug for d2b_bus::metrics::BusRegistrationOutcome
+impl core::fmt::Debug for d2b_bus::metrics::BusRejectionOutcome
+impl core::fmt::Debug for d2b_bus::metrics::BusRouteOutcome
+impl core::fmt::Debug for d2b_bus::metrics::BusStreamKind
+impl core::fmt::Debug for d2b_bus::metrics::BusStreamOutcome
+impl core::fmt::Debug for d2b_bus::metrics::BusTransport
+impl core::fmt::Debug for d2b_bus::metrics::NoopBusTelemetry
 impl core::fmt::Debug for d2b_bus::operations::Cancellation
 impl core::fmt::Debug for d2b_bus::operations::OperationError
 impl core::fmt::Debug for d2b_bus::operations::OperationId
@@ -410,6 +459,8 @@ impl core::fmt::Display for d2b_bus::session::zone_link::ZoneLinkSessionError
 impl core::fmt::Display for d2b_bus::streams::StreamError
 impl core::fmt::Display for d2b_bus::transport::credit::CreditError
 impl core::fmt::Display for d2b_bus::transport::unix::TransportAdmissionError
+impl core::hash::Hash for d2b_bus::metrics::BusDirection
+impl core::hash::Hash for d2b_bus::metrics::BusTransport
 impl core::hash::Hash for d2b_bus::operations::OperationId
 impl core::hash::Hash for d2b_bus::registry::RouteGenerations
 impl core::hash::Hash for d2b_bus::registry::RouteKey
@@ -431,6 +482,17 @@ impl core::marker::Copy for d2b_bus::audit::BusErrorKind
 impl core::marker::Copy for d2b_bus::audit::RouteAuditError
 impl core::marker::Copy for d2b_bus::authorization::AuthorizationError
 impl core::marker::Copy for d2b_bus::authorization::AuthorizationErrorClass
+impl core::marker::Copy for d2b_bus::metrics::BusBackpressureReason
+impl core::marker::Copy for d2b_bus::metrics::BusDirection
+impl core::marker::Copy for d2b_bus::metrics::BusDisconnectOutcome
+impl core::marker::Copy for d2b_bus::metrics::BusMetric
+impl core::marker::Copy for d2b_bus::metrics::BusRegistrationOutcome
+impl core::marker::Copy for d2b_bus::metrics::BusRejectionOutcome
+impl core::marker::Copy for d2b_bus::metrics::BusRouteOutcome
+impl core::marker::Copy for d2b_bus::metrics::BusStreamKind
+impl core::marker::Copy for d2b_bus::metrics::BusStreamOutcome
+impl core::marker::Copy for d2b_bus::metrics::BusTransport
+impl core::marker::Copy for d2b_bus::metrics::NoopBusTelemetry
 impl core::marker::Copy for d2b_bus::operations::OperationError
 impl core::marker::Copy for d2b_bus::registry::EndpointError
 impl core::marker::Copy for d2b_bus::registry::EndpointFailureClass
@@ -473,6 +535,18 @@ impl core::marker::Freeze for d2b_bus::audit::RouteAuditContext
 impl core::marker::Freeze for d2b_bus::audit::RouteAuditError
 impl core::marker::Freeze for d2b_bus::authorization::AuthorizationError
 impl core::marker::Freeze for d2b_bus::authorization::AuthorizationErrorClass
+impl core::marker::Freeze for d2b_bus::metrics::BusBackpressureReason
+impl core::marker::Freeze for d2b_bus::metrics::BusDirection
+impl core::marker::Freeze for d2b_bus::metrics::BusDisconnectOutcome
+impl core::marker::Freeze for d2b_bus::metrics::BusMetric
+impl core::marker::Freeze for d2b_bus::metrics::BusMetrics
+impl core::marker::Freeze for d2b_bus::metrics::BusRegistrationOutcome
+impl core::marker::Freeze for d2b_bus::metrics::BusRejectionOutcome
+impl core::marker::Freeze for d2b_bus::metrics::BusRouteOutcome
+impl core::marker::Freeze for d2b_bus::metrics::BusStreamKind
+impl core::marker::Freeze for d2b_bus::metrics::BusStreamOutcome
+impl core::marker::Freeze for d2b_bus::metrics::BusTransport
+impl core::marker::Freeze for d2b_bus::metrics::NoopBusTelemetry
 impl core::marker::Freeze for d2b_bus::operations::Cancellation
 impl core::marker::Freeze for d2b_bus::operations::OperationError
 impl core::marker::Freeze for d2b_bus::operations::OperationId
@@ -565,6 +639,18 @@ impl core::marker::Send for d2b_bus::audit::RouteAuditError
 impl core::marker::Send for d2b_bus::authorization::AuthorizationError
 impl core::marker::Send for d2b_bus::authorization::AuthorizationErrorClass
 impl core::marker::Send for d2b_bus::authorization::BusAuthorizer
+impl core::marker::Send for d2b_bus::metrics::BusBackpressureReason
+impl core::marker::Send for d2b_bus::metrics::BusDirection
+impl core::marker::Send for d2b_bus::metrics::BusDisconnectOutcome
+impl core::marker::Send for d2b_bus::metrics::BusMetric
+impl core::marker::Send for d2b_bus::metrics::BusMetrics
+impl core::marker::Send for d2b_bus::metrics::BusRegistrationOutcome
+impl core::marker::Send for d2b_bus::metrics::BusRejectionOutcome
+impl core::marker::Send for d2b_bus::metrics::BusRouteOutcome
+impl core::marker::Send for d2b_bus::metrics::BusStreamKind
+impl core::marker::Send for d2b_bus::metrics::BusStreamOutcome
+impl core::marker::Send for d2b_bus::metrics::BusTransport
+impl core::marker::Send for d2b_bus::metrics::NoopBusTelemetry
 impl core::marker::Send for d2b_bus::operations::Cancellation
 impl core::marker::Send for d2b_bus::operations::OperationError
 impl core::marker::Send for d2b_bus::operations::OperationId
@@ -657,6 +743,16 @@ impl core::marker::StructuralPartialEq for d2b_bus::audit::BusErrorKind
 impl core::marker::StructuralPartialEq for d2b_bus::audit::RouteAuditError
 impl core::marker::StructuralPartialEq for d2b_bus::authorization::AuthorizationError
 impl core::marker::StructuralPartialEq for d2b_bus::authorization::AuthorizationErrorClass
+impl core::marker::StructuralPartialEq for d2b_bus::metrics::BusBackpressureReason
+impl core::marker::StructuralPartialEq for d2b_bus::metrics::BusDirection
+impl core::marker::StructuralPartialEq for d2b_bus::metrics::BusDisconnectOutcome
+impl core::marker::StructuralPartialEq for d2b_bus::metrics::BusMetric
+impl core::marker::StructuralPartialEq for d2b_bus::metrics::BusRegistrationOutcome
+impl core::marker::StructuralPartialEq for d2b_bus::metrics::BusRejectionOutcome
+impl core::marker::StructuralPartialEq for d2b_bus::metrics::BusRouteOutcome
+impl core::marker::StructuralPartialEq for d2b_bus::metrics::BusStreamKind
+impl core::marker::StructuralPartialEq for d2b_bus::metrics::BusStreamOutcome
+impl core::marker::StructuralPartialEq for d2b_bus::metrics::BusTransport
 impl core::marker::StructuralPartialEq for d2b_bus::operations::OperationError
 impl core::marker::StructuralPartialEq for d2b_bus::operations::OperationId
 impl core::marker::StructuralPartialEq for d2b_bus::operations::OperationSpec
@@ -733,6 +829,18 @@ impl core::marker::Sync for d2b_bus::audit::RouteAuditError
 impl core::marker::Sync for d2b_bus::authorization::AuthorizationError
 impl core::marker::Sync for d2b_bus::authorization::AuthorizationErrorClass
 impl core::marker::Sync for d2b_bus::authorization::BusAuthorizer
+impl core::marker::Sync for d2b_bus::metrics::BusBackpressureReason
+impl core::marker::Sync for d2b_bus::metrics::BusDirection
+impl core::marker::Sync for d2b_bus::metrics::BusDisconnectOutcome
+impl core::marker::Sync for d2b_bus::metrics::BusMetric
+impl core::marker::Sync for d2b_bus::metrics::BusMetrics
+impl core::marker::Sync for d2b_bus::metrics::BusRegistrationOutcome
+impl core::marker::Sync for d2b_bus::metrics::BusRejectionOutcome
+impl core::marker::Sync for d2b_bus::metrics::BusRouteOutcome
+impl core::marker::Sync for d2b_bus::metrics::BusStreamKind
+impl core::marker::Sync for d2b_bus::metrics::BusStreamOutcome
+impl core::marker::Sync for d2b_bus::metrics::BusTransport
+impl core::marker::Sync for d2b_bus::metrics::NoopBusTelemetry
 impl core::marker::Sync for d2b_bus::operations::Cancellation
 impl core::marker::Sync for d2b_bus::operations::OperationError
 impl core::marker::Sync for d2b_bus::operations::OperationId
@@ -827,6 +935,18 @@ impl core::marker::Unpin for d2b_bus::audit::RouteAuditError
 impl core::marker::Unpin for d2b_bus::authorization::AuthorizationError
 impl core::marker::Unpin for d2b_bus::authorization::AuthorizationErrorClass
 impl core::marker::Unpin for d2b_bus::authorization::BusAuthorizer
+impl core::marker::Unpin for d2b_bus::metrics::BusBackpressureReason
+impl core::marker::Unpin for d2b_bus::metrics::BusDirection
+impl core::marker::Unpin for d2b_bus::metrics::BusDisconnectOutcome
+impl core::marker::Unpin for d2b_bus::metrics::BusMetric
+impl core::marker::Unpin for d2b_bus::metrics::BusMetrics
+impl core::marker::Unpin for d2b_bus::metrics::BusRegistrationOutcome
+impl core::marker::Unpin for d2b_bus::metrics::BusRejectionOutcome
+impl core::marker::Unpin for d2b_bus::metrics::BusRouteOutcome
+impl core::marker::Unpin for d2b_bus::metrics::BusStreamKind
+impl core::marker::Unpin for d2b_bus::metrics::BusStreamOutcome
+impl core::marker::Unpin for d2b_bus::metrics::BusTransport
+impl core::marker::Unpin for d2b_bus::metrics::NoopBusTelemetry
 impl core::marker::Unpin for d2b_bus::operations::Cancellation
 impl core::marker::Unpin for d2b_bus::operations::OperationError
 impl core::marker::Unpin for d2b_bus::operations::OperationId
@@ -921,6 +1041,18 @@ impl core::marker::UnsafeUnpin for d2b_bus::audit::RouteAuditError
 impl core::marker::UnsafeUnpin for d2b_bus::authorization::AuthorizationError
 impl core::marker::UnsafeUnpin for d2b_bus::authorization::AuthorizationErrorClass
 impl core::marker::UnsafeUnpin for d2b_bus::authorization::BusAuthorizer
+impl core::marker::UnsafeUnpin for d2b_bus::metrics::BusBackpressureReason
+impl core::marker::UnsafeUnpin for d2b_bus::metrics::BusDirection
+impl core::marker::UnsafeUnpin for d2b_bus::metrics::BusDisconnectOutcome
+impl core::marker::UnsafeUnpin for d2b_bus::metrics::BusMetric
+impl core::marker::UnsafeUnpin for d2b_bus::metrics::BusMetrics
+impl core::marker::UnsafeUnpin for d2b_bus::metrics::BusRegistrationOutcome
+impl core::marker::UnsafeUnpin for d2b_bus::metrics::BusRejectionOutcome
+impl core::marker::UnsafeUnpin for d2b_bus::metrics::BusRouteOutcome
+impl core::marker::UnsafeUnpin for d2b_bus::metrics::BusStreamKind
+impl core::marker::UnsafeUnpin for d2b_bus::metrics::BusStreamOutcome
+impl core::marker::UnsafeUnpin for d2b_bus::metrics::BusTransport
+impl core::marker::UnsafeUnpin for d2b_bus::metrics::NoopBusTelemetry
 impl core::marker::UnsafeUnpin for d2b_bus::operations::Cancellation
 impl core::marker::UnsafeUnpin for d2b_bus::operations::OperationError
 impl core::marker::UnsafeUnpin for d2b_bus::operations::OperationId
@@ -1018,6 +1150,18 @@ impl core::panic::unwind_safe::RefUnwindSafe for d2b_bus::audit::RouteAuditError
 impl core::panic::unwind_safe::RefUnwindSafe for d2b_bus::authorization::AuthorizationError
 impl core::panic::unwind_safe::RefUnwindSafe for d2b_bus::authorization::AuthorizationErrorClass
 impl core::panic::unwind_safe::RefUnwindSafe for d2b_bus::authorization::BusAuthorizer
+impl core::panic::unwind_safe::RefUnwindSafe for d2b_bus::metrics::BusBackpressureReason
+impl core::panic::unwind_safe::RefUnwindSafe for d2b_bus::metrics::BusDirection
+impl core::panic::unwind_safe::RefUnwindSafe for d2b_bus::metrics::BusDisconnectOutcome
+impl core::panic::unwind_safe::RefUnwindSafe for d2b_bus::metrics::BusMetric
+impl core::panic::unwind_safe::RefUnwindSafe for d2b_bus::metrics::BusMetrics
+impl core::panic::unwind_safe::RefUnwindSafe for d2b_bus::metrics::BusRegistrationOutcome
+impl core::panic::unwind_safe::RefUnwindSafe for d2b_bus::metrics::BusRejectionOutcome
+impl core::panic::unwind_safe::RefUnwindSafe for d2b_bus::metrics::BusRouteOutcome
+impl core::panic::unwind_safe::RefUnwindSafe for d2b_bus::metrics::BusStreamKind
+impl core::panic::unwind_safe::RefUnwindSafe for d2b_bus::metrics::BusStreamOutcome
+impl core::panic::unwind_safe::RefUnwindSafe for d2b_bus::metrics::BusTransport
+impl core::panic::unwind_safe::RefUnwindSafe for d2b_bus::metrics::NoopBusTelemetry
 impl core::panic::unwind_safe::RefUnwindSafe for d2b_bus::operations::Cancellation
 impl core::panic::unwind_safe::RefUnwindSafe for d2b_bus::operations::OperationError
 impl core::panic::unwind_safe::RefUnwindSafe for d2b_bus::operations::OperationId
@@ -1103,6 +1247,18 @@ impl core::panic::unwind_safe::UnwindSafe for d2b_bus::audit::RouteAuditError
 impl core::panic::unwind_safe::UnwindSafe for d2b_bus::authorization::AuthorizationError
 impl core::panic::unwind_safe::UnwindSafe for d2b_bus::authorization::AuthorizationErrorClass
 impl core::panic::unwind_safe::UnwindSafe for d2b_bus::authorization::BusAuthorizer
+impl core::panic::unwind_safe::UnwindSafe for d2b_bus::metrics::BusBackpressureReason
+impl core::panic::unwind_safe::UnwindSafe for d2b_bus::metrics::BusDirection
+impl core::panic::unwind_safe::UnwindSafe for d2b_bus::metrics::BusDisconnectOutcome
+impl core::panic::unwind_safe::UnwindSafe for d2b_bus::metrics::BusMetric
+impl core::panic::unwind_safe::UnwindSafe for d2b_bus::metrics::BusMetrics
+impl core::panic::unwind_safe::UnwindSafe for d2b_bus::metrics::BusRegistrationOutcome
+impl core::panic::unwind_safe::UnwindSafe for d2b_bus::metrics::BusRejectionOutcome
+impl core::panic::unwind_safe::UnwindSafe for d2b_bus::metrics::BusRouteOutcome
+impl core::panic::unwind_safe::UnwindSafe for d2b_bus::metrics::BusStreamKind
+impl core::panic::unwind_safe::UnwindSafe for d2b_bus::metrics::BusStreamOutcome
+impl core::panic::unwind_safe::UnwindSafe for d2b_bus::metrics::BusTransport
+impl core::panic::unwind_safe::UnwindSafe for d2b_bus::metrics::NoopBusTelemetry
 impl core::panic::unwind_safe::UnwindSafe for d2b_bus::operations::Cancellation
 impl core::panic::unwind_safe::UnwindSafe for d2b_bus::operations::OperationError
 impl core::panic::unwind_safe::UnwindSafe for d2b_bus::operations::OperationId
@@ -1187,6 +1343,19 @@ impl d2b_bus::audit::RouteAuditContext
 impl d2b_bus::authorization::AuthorizationError
 impl d2b_bus::authorization::AuthorizationErrorClass
 impl d2b_bus::authorization::BusAuthorizer
+impl d2b_bus::metrics::BusBackpressureReason
+impl d2b_bus::metrics::BusDirection
+impl d2b_bus::metrics::BusDisconnectOutcome
+impl d2b_bus::metrics::BusMetric
+impl d2b_bus::metrics::BusMetrics
+impl d2b_bus::metrics::BusRegistrationOutcome
+impl d2b_bus::metrics::BusRejectionOutcome
+impl d2b_bus::metrics::BusRouteOutcome
+impl d2b_bus::metrics::BusStreamKind
+impl d2b_bus::metrics::BusStreamOutcome
+impl d2b_bus::metrics::BusTelemetry for d2b_bus::metrics::BusMetrics
+impl d2b_bus::metrics::BusTelemetry for d2b_bus::metrics::NoopBusTelemetry
+impl d2b_bus::metrics::BusTransport
 impl d2b_bus::operations::Cancellation
 impl d2b_bus::operations::OperationId
 impl d2b_bus::operations::OperationSpec
@@ -1281,6 +1450,16 @@ impl<Q, K> indexmap::equivalent::Equivalent<K> for d2b_bus::audit::BusErrorKind 
 impl<Q, K> indexmap::equivalent::Equivalent<K> for d2b_bus::audit::RouteAuditError where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
 impl<Q, K> indexmap::equivalent::Equivalent<K> for d2b_bus::authorization::AuthorizationError where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
 impl<Q, K> indexmap::equivalent::Equivalent<K> for d2b_bus::authorization::AuthorizationErrorClass where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
+impl<Q, K> indexmap::equivalent::Equivalent<K> for d2b_bus::metrics::BusBackpressureReason where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
+impl<Q, K> indexmap::equivalent::Equivalent<K> for d2b_bus::metrics::BusDirection where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
+impl<Q, K> indexmap::equivalent::Equivalent<K> for d2b_bus::metrics::BusDisconnectOutcome where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
+impl<Q, K> indexmap::equivalent::Equivalent<K> for d2b_bus::metrics::BusMetric where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
+impl<Q, K> indexmap::equivalent::Equivalent<K> for d2b_bus::metrics::BusRegistrationOutcome where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
+impl<Q, K> indexmap::equivalent::Equivalent<K> for d2b_bus::metrics::BusRejectionOutcome where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
+impl<Q, K> indexmap::equivalent::Equivalent<K> for d2b_bus::metrics::BusRouteOutcome where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
+impl<Q, K> indexmap::equivalent::Equivalent<K> for d2b_bus::metrics::BusStreamKind where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
+impl<Q, K> indexmap::equivalent::Equivalent<K> for d2b_bus::metrics::BusStreamOutcome where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
+impl<Q, K> indexmap::equivalent::Equivalent<K> for d2b_bus::metrics::BusTransport where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
 impl<Q, K> indexmap::equivalent::Equivalent<K> for d2b_bus::operations::OperationError where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
 impl<Q, K> indexmap::equivalent::Equivalent<K> for d2b_bus::operations::OperationId where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
 impl<Q, K> indexmap::equivalent::Equivalent<K> for d2b_bus::operations::OperationSpec where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
@@ -1358,6 +1537,18 @@ impl<T, U> core::convert::Into<U> for d2b_bus::audit::RouteAuditError where U: c
 impl<T, U> core::convert::Into<U> for d2b_bus::authorization::AuthorizationError where U: core::convert::From<T>
 impl<T, U> core::convert::Into<U> for d2b_bus::authorization::AuthorizationErrorClass where U: core::convert::From<T>
 impl<T, U> core::convert::Into<U> for d2b_bus::authorization::BusAuthorizer where U: core::convert::From<T>
+impl<T, U> core::convert::Into<U> for d2b_bus::metrics::BusBackpressureReason where U: core::convert::From<T>
+impl<T, U> core::convert::Into<U> for d2b_bus::metrics::BusDirection where U: core::convert::From<T>
+impl<T, U> core::convert::Into<U> for d2b_bus::metrics::BusDisconnectOutcome where U: core::convert::From<T>
+impl<T, U> core::convert::Into<U> for d2b_bus::metrics::BusMetric where U: core::convert::From<T>
+impl<T, U> core::convert::Into<U> for d2b_bus::metrics::BusMetrics where U: core::convert::From<T>
+impl<T, U> core::convert::Into<U> for d2b_bus::metrics::BusRegistrationOutcome where U: core::convert::From<T>
+impl<T, U> core::convert::Into<U> for d2b_bus::metrics::BusRejectionOutcome where U: core::convert::From<T>
+impl<T, U> core::convert::Into<U> for d2b_bus::metrics::BusRouteOutcome where U: core::convert::From<T>
+impl<T, U> core::convert::Into<U> for d2b_bus::metrics::BusStreamKind where U: core::convert::From<T>
+impl<T, U> core::convert::Into<U> for d2b_bus::metrics::BusStreamOutcome where U: core::convert::From<T>
+impl<T, U> core::convert::Into<U> for d2b_bus::metrics::BusTransport where U: core::convert::From<T>
+impl<T, U> core::convert::Into<U> for d2b_bus::metrics::NoopBusTelemetry where U: core::convert::From<T>
 impl<T, U> core::convert::Into<U> for d2b_bus::operations::Cancellation where U: core::convert::From<T>
 impl<T, U> core::convert::Into<U> for d2b_bus::operations::OperationError where U: core::convert::From<T>
 impl<T, U> core::convert::Into<U> for d2b_bus::operations::OperationId where U: core::convert::From<T>
@@ -1455,6 +1646,18 @@ impl<T, U> core::convert::TryFrom<U> for d2b_bus::audit::RouteAuditError where U
 impl<T, U> core::convert::TryFrom<U> for d2b_bus::authorization::AuthorizationError where U: core::convert::Into<T>
 impl<T, U> core::convert::TryFrom<U> for d2b_bus::authorization::AuthorizationErrorClass where U: core::convert::Into<T>
 impl<T, U> core::convert::TryFrom<U> for d2b_bus::authorization::BusAuthorizer where U: core::convert::Into<T>
+impl<T, U> core::convert::TryFrom<U> for d2b_bus::metrics::BusBackpressureReason where U: core::convert::Into<T>
+impl<T, U> core::convert::TryFrom<U> for d2b_bus::metrics::BusDirection where U: core::convert::Into<T>
+impl<T, U> core::convert::TryFrom<U> for d2b_bus::metrics::BusDisconnectOutcome where U: core::convert::Into<T>
+impl<T, U> core::convert::TryFrom<U> for d2b_bus::metrics::BusMetric where U: core::convert::Into<T>
+impl<T, U> core::convert::TryFrom<U> for d2b_bus::metrics::BusMetrics where U: core::convert::Into<T>
+impl<T, U> core::convert::TryFrom<U> for d2b_bus::metrics::BusRegistrationOutcome where U: core::convert::Into<T>
+impl<T, U> core::convert::TryFrom<U> for d2b_bus::metrics::BusRejectionOutcome where U: core::convert::Into<T>
+impl<T, U> core::convert::TryFrom<U> for d2b_bus::metrics::BusRouteOutcome where U: core::convert::Into<T>
+impl<T, U> core::convert::TryFrom<U> for d2b_bus::metrics::BusStreamKind where U: core::convert::Into<T>
+impl<T, U> core::convert::TryFrom<U> for d2b_bus::metrics::BusStreamOutcome where U: core::convert::Into<T>
+impl<T, U> core::convert::TryFrom<U> for d2b_bus::metrics::BusTransport where U: core::convert::Into<T>
+impl<T, U> core::convert::TryFrom<U> for d2b_bus::metrics::NoopBusTelemetry where U: core::convert::Into<T>
 impl<T, U> core::convert::TryFrom<U> for d2b_bus::operations::Cancellation where U: core::convert::Into<T>
 impl<T, U> core::convert::TryFrom<U> for d2b_bus::operations::OperationError where U: core::convert::Into<T>
 impl<T, U> core::convert::TryFrom<U> for d2b_bus::operations::OperationId where U: core::convert::Into<T>
@@ -1552,6 +1755,18 @@ impl<T, U> core::convert::TryInto<U> for d2b_bus::audit::RouteAuditError where U
 impl<T, U> core::convert::TryInto<U> for d2b_bus::authorization::AuthorizationError where U: core::convert::TryFrom<T>
 impl<T, U> core::convert::TryInto<U> for d2b_bus::authorization::AuthorizationErrorClass where U: core::convert::TryFrom<T>
 impl<T, U> core::convert::TryInto<U> for d2b_bus::authorization::BusAuthorizer where U: core::convert::TryFrom<T>
+impl<T, U> core::convert::TryInto<U> for d2b_bus::metrics::BusBackpressureReason where U: core::convert::TryFrom<T>
+impl<T, U> core::convert::TryInto<U> for d2b_bus::metrics::BusDirection where U: core::convert::TryFrom<T>
+impl<T, U> core::convert::TryInto<U> for d2b_bus::metrics::BusDisconnectOutcome where U: core::convert::TryFrom<T>
+impl<T, U> core::convert::TryInto<U> for d2b_bus::metrics::BusMetric where U: core::convert::TryFrom<T>
+impl<T, U> core::convert::TryInto<U> for d2b_bus::metrics::BusMetrics where U: core::convert::TryFrom<T>
+impl<T, U> core::convert::TryInto<U> for d2b_bus::metrics::BusRegistrationOutcome where U: core::convert::TryFrom<T>
+impl<T, U> core::convert::TryInto<U> for d2b_bus::metrics::BusRejectionOutcome where U: core::convert::TryFrom<T>
+impl<T, U> core::convert::TryInto<U> for d2b_bus::metrics::BusRouteOutcome where U: core::convert::TryFrom<T>
+impl<T, U> core::convert::TryInto<U> for d2b_bus::metrics::BusStreamKind where U: core::convert::TryFrom<T>
+impl<T, U> core::convert::TryInto<U> for d2b_bus::metrics::BusStreamOutcome where U: core::convert::TryFrom<T>
+impl<T, U> core::convert::TryInto<U> for d2b_bus::metrics::BusTransport where U: core::convert::TryFrom<T>
+impl<T, U> core::convert::TryInto<U> for d2b_bus::metrics::NoopBusTelemetry where U: core::convert::TryFrom<T>
 impl<T, U> core::convert::TryInto<U> for d2b_bus::operations::Cancellation where U: core::convert::TryFrom<T>
 impl<T, U> core::convert::TryInto<U> for d2b_bus::operations::OperationError where U: core::convert::TryFrom<T>
 impl<T, U> core::convert::TryInto<U> for d2b_bus::operations::OperationId where U: core::convert::TryFrom<T>
@@ -1647,6 +1862,18 @@ impl<T> alloc::borrow::ToOwned for d2b_bus::audit::RouteAuditContext where T: co
 impl<T> alloc::borrow::ToOwned for d2b_bus::audit::RouteAuditError where T: core::clone::Clone
 impl<T> alloc::borrow::ToOwned for d2b_bus::authorization::AuthorizationError where T: core::clone::Clone
 impl<T> alloc::borrow::ToOwned for d2b_bus::authorization::AuthorizationErrorClass where T: core::clone::Clone
+impl<T> alloc::borrow::ToOwned for d2b_bus::metrics::BusBackpressureReason where T: core::clone::Clone
+impl<T> alloc::borrow::ToOwned for d2b_bus::metrics::BusDirection where T: core::clone::Clone
+impl<T> alloc::borrow::ToOwned for d2b_bus::metrics::BusDisconnectOutcome where T: core::clone::Clone
+impl<T> alloc::borrow::ToOwned for d2b_bus::metrics::BusMetric where T: core::clone::Clone
+impl<T> alloc::borrow::ToOwned for d2b_bus::metrics::BusMetrics where T: core::clone::Clone
+impl<T> alloc::borrow::ToOwned for d2b_bus::metrics::BusRegistrationOutcome where T: core::clone::Clone
+impl<T> alloc::borrow::ToOwned for d2b_bus::metrics::BusRejectionOutcome where T: core::clone::Clone
+impl<T> alloc::borrow::ToOwned for d2b_bus::metrics::BusRouteOutcome where T: core::clone::Clone
+impl<T> alloc::borrow::ToOwned for d2b_bus::metrics::BusStreamKind where T: core::clone::Clone
+impl<T> alloc::borrow::ToOwned for d2b_bus::metrics::BusStreamOutcome where T: core::clone::Clone
+impl<T> alloc::borrow::ToOwned for d2b_bus::metrics::BusTransport where T: core::clone::Clone
+impl<T> alloc::borrow::ToOwned for d2b_bus::metrics::NoopBusTelemetry where T: core::clone::Clone
 impl<T> alloc::borrow::ToOwned for d2b_bus::operations::Cancellation where T: core::clone::Clone
 impl<T> alloc::borrow::ToOwned for d2b_bus::operations::OperationError where T: core::clone::Clone
 impl<T> alloc::borrow::ToOwned for d2b_bus::operations::OperationId where T: core::clone::Clone
@@ -1737,6 +1964,18 @@ impl<T> core::any::Any for d2b_bus::audit::RouteAuditError where T: 'static + ?c
 impl<T> core::any::Any for d2b_bus::authorization::AuthorizationError where T: 'static + ?core::marker::Sized
 impl<T> core::any::Any for d2b_bus::authorization::AuthorizationErrorClass where T: 'static + ?core::marker::Sized
 impl<T> core::any::Any for d2b_bus::authorization::BusAuthorizer where T: 'static + ?core::marker::Sized
+impl<T> core::any::Any for d2b_bus::metrics::BusBackpressureReason where T: 'static + ?core::marker::Sized
+impl<T> core::any::Any for d2b_bus::metrics::BusDirection where T: 'static + ?core::marker::Sized
+impl<T> core::any::Any for d2b_bus::metrics::BusDisconnectOutcome where T: 'static + ?core::marker::Sized
+impl<T> core::any::Any for d2b_bus::metrics::BusMetric where T: 'static + ?core::marker::Sized
+impl<T> core::any::Any for d2b_bus::metrics::BusMetrics where T: 'static + ?core::marker::Sized
+impl<T> core::any::Any for d2b_bus::metrics::BusRegistrationOutcome where T: 'static + ?core::marker::Sized
+impl<T> core::any::Any for d2b_bus::metrics::BusRejectionOutcome where T: 'static + ?core::marker::Sized
+impl<T> core::any::Any for d2b_bus::metrics::BusRouteOutcome where T: 'static + ?core::marker::Sized
+impl<T> core::any::Any for d2b_bus::metrics::BusStreamKind where T: 'static + ?core::marker::Sized
+impl<T> core::any::Any for d2b_bus::metrics::BusStreamOutcome where T: 'static + ?core::marker::Sized
+impl<T> core::any::Any for d2b_bus::metrics::BusTransport where T: 'static + ?core::marker::Sized
+impl<T> core::any::Any for d2b_bus::metrics::NoopBusTelemetry where T: 'static + ?core::marker::Sized
 impl<T> core::any::Any for d2b_bus::operations::Cancellation where T: 'static + ?core::marker::Sized
 impl<T> core::any::Any for d2b_bus::operations::OperationError where T: 'static + ?core::marker::Sized
 impl<T> core::any::Any for d2b_bus::operations::OperationId where T: 'static + ?core::marker::Sized
@@ -1834,6 +2073,18 @@ impl<T> core::borrow::Borrow<T> for d2b_bus::audit::RouteAuditError where T: ?co
 impl<T> core::borrow::Borrow<T> for d2b_bus::authorization::AuthorizationError where T: ?core::marker::Sized
 impl<T> core::borrow::Borrow<T> for d2b_bus::authorization::AuthorizationErrorClass where T: ?core::marker::Sized
 impl<T> core::borrow::Borrow<T> for d2b_bus::authorization::BusAuthorizer where T: ?core::marker::Sized
+impl<T> core::borrow::Borrow<T> for d2b_bus::metrics::BusBackpressureReason where T: ?core::marker::Sized
+impl<T> core::borrow::Borrow<T> for d2b_bus::metrics::BusDirection where T: ?core::marker::Sized
+impl<T> core::borrow::Borrow<T> for d2b_bus::metrics::BusDisconnectOutcome where T: ?core::marker::Sized
+impl<T> core::borrow::Borrow<T> for d2b_bus::metrics::BusMetric where T: ?core::marker::Sized
+impl<T> core::borrow::Borrow<T> for d2b_bus::metrics::BusMetrics where T: ?core::marker::Sized
+impl<T> core::borrow::Borrow<T> for d2b_bus::metrics::BusRegistrationOutcome where T: ?core::marker::Sized
+impl<T> core::borrow::Borrow<T> for d2b_bus::metrics::BusRejectionOutcome where T: ?core::marker::Sized
+impl<T> core::borrow::Borrow<T> for d2b_bus::metrics::BusRouteOutcome where T: ?core::marker::Sized
+impl<T> core::borrow::Borrow<T> for d2b_bus::metrics::BusStreamKind where T: ?core::marker::Sized
+impl<T> core::borrow::Borrow<T> for d2b_bus::metrics::BusStreamOutcome where T: ?core::marker::Sized
+impl<T> core::borrow::Borrow<T> for d2b_bus::metrics::BusTransport where T: ?core::marker::Sized
+impl<T> core::borrow::Borrow<T> for d2b_bus::metrics::NoopBusTelemetry where T: ?core::marker::Sized
 impl<T> core::borrow::Borrow<T> for d2b_bus::operations::Cancellation where T: ?core::marker::Sized
 impl<T> core::borrow::Borrow<T> for d2b_bus::operations::OperationError where T: ?core::marker::Sized
 impl<T> core::borrow::Borrow<T> for d2b_bus::operations::OperationId where T: ?core::marker::Sized
@@ -1931,6 +2182,18 @@ impl<T> core::borrow::BorrowMut<T> for d2b_bus::audit::RouteAuditError where T: 
 impl<T> core::borrow::BorrowMut<T> for d2b_bus::authorization::AuthorizationError where T: ?core::marker::Sized
 impl<T> core::borrow::BorrowMut<T> for d2b_bus::authorization::AuthorizationErrorClass where T: ?core::marker::Sized
 impl<T> core::borrow::BorrowMut<T> for d2b_bus::authorization::BusAuthorizer where T: ?core::marker::Sized
+impl<T> core::borrow::BorrowMut<T> for d2b_bus::metrics::BusBackpressureReason where T: ?core::marker::Sized
+impl<T> core::borrow::BorrowMut<T> for d2b_bus::metrics::BusDirection where T: ?core::marker::Sized
+impl<T> core::borrow::BorrowMut<T> for d2b_bus::metrics::BusDisconnectOutcome where T: ?core::marker::Sized
+impl<T> core::borrow::BorrowMut<T> for d2b_bus::metrics::BusMetric where T: ?core::marker::Sized
+impl<T> core::borrow::BorrowMut<T> for d2b_bus::metrics::BusMetrics where T: ?core::marker::Sized
+impl<T> core::borrow::BorrowMut<T> for d2b_bus::metrics::BusRegistrationOutcome where T: ?core::marker::Sized
+impl<T> core::borrow::BorrowMut<T> for d2b_bus::metrics::BusRejectionOutcome where T: ?core::marker::Sized
+impl<T> core::borrow::BorrowMut<T> for d2b_bus::metrics::BusRouteOutcome where T: ?core::marker::Sized
+impl<T> core::borrow::BorrowMut<T> for d2b_bus::metrics::BusStreamKind where T: ?core::marker::Sized
+impl<T> core::borrow::BorrowMut<T> for d2b_bus::metrics::BusStreamOutcome where T: ?core::marker::Sized
+impl<T> core::borrow::BorrowMut<T> for d2b_bus::metrics::BusTransport where T: ?core::marker::Sized
+impl<T> core::borrow::BorrowMut<T> for d2b_bus::metrics::NoopBusTelemetry where T: ?core::marker::Sized
 impl<T> core::borrow::BorrowMut<T> for d2b_bus::operations::Cancellation where T: ?core::marker::Sized
 impl<T> core::borrow::BorrowMut<T> for d2b_bus::operations::OperationError where T: ?core::marker::Sized
 impl<T> core::borrow::BorrowMut<T> for d2b_bus::operations::OperationId where T: ?core::marker::Sized
@@ -2026,6 +2289,18 @@ impl<T> core::clone::CloneToUninit for d2b_bus::audit::RouteAuditContext where T
 impl<T> core::clone::CloneToUninit for d2b_bus::audit::RouteAuditError where T: core::clone::Clone
 impl<T> core::clone::CloneToUninit for d2b_bus::authorization::AuthorizationError where T: core::clone::Clone
 impl<T> core::clone::CloneToUninit for d2b_bus::authorization::AuthorizationErrorClass where T: core::clone::Clone
+impl<T> core::clone::CloneToUninit for d2b_bus::metrics::BusBackpressureReason where T: core::clone::Clone
+impl<T> core::clone::CloneToUninit for d2b_bus::metrics::BusDirection where T: core::clone::Clone
+impl<T> core::clone::CloneToUninit for d2b_bus::metrics::BusDisconnectOutcome where T: core::clone::Clone
+impl<T> core::clone::CloneToUninit for d2b_bus::metrics::BusMetric where T: core::clone::Clone
+impl<T> core::clone::CloneToUninit for d2b_bus::metrics::BusMetrics where T: core::clone::Clone
+impl<T> core::clone::CloneToUninit for d2b_bus::metrics::BusRegistrationOutcome where T: core::clone::Clone
+impl<T> core::clone::CloneToUninit for d2b_bus::metrics::BusRejectionOutcome where T: core::clone::Clone
+impl<T> core::clone::CloneToUninit for d2b_bus::metrics::BusRouteOutcome where T: core::clone::Clone
+impl<T> core::clone::CloneToUninit for d2b_bus::metrics::BusStreamKind where T: core::clone::Clone
+impl<T> core::clone::CloneToUninit for d2b_bus::metrics::BusStreamOutcome where T: core::clone::Clone
+impl<T> core::clone::CloneToUninit for d2b_bus::metrics::BusTransport where T: core::clone::Clone
+impl<T> core::clone::CloneToUninit for d2b_bus::metrics::NoopBusTelemetry where T: core::clone::Clone
 impl<T> core::clone::CloneToUninit for d2b_bus::operations::Cancellation where T: core::clone::Clone
 impl<T> core::clone::CloneToUninit for d2b_bus::operations::OperationError where T: core::clone::Clone
 impl<T> core::clone::CloneToUninit for d2b_bus::operations::OperationId where T: core::clone::Clone
@@ -2104,6 +2379,18 @@ impl<T> core::convert::From<T> for d2b_bus::audit::RouteAuditError
 impl<T> core::convert::From<T> for d2b_bus::authorization::AuthorizationError
 impl<T> core::convert::From<T> for d2b_bus::authorization::AuthorizationErrorClass
 impl<T> core::convert::From<T> for d2b_bus::authorization::BusAuthorizer
+impl<T> core::convert::From<T> for d2b_bus::metrics::BusBackpressureReason
+impl<T> core::convert::From<T> for d2b_bus::metrics::BusDirection
+impl<T> core::convert::From<T> for d2b_bus::metrics::BusDisconnectOutcome
+impl<T> core::convert::From<T> for d2b_bus::metrics::BusMetric
+impl<T> core::convert::From<T> for d2b_bus::metrics::BusMetrics
+impl<T> core::convert::From<T> for d2b_bus::metrics::BusRegistrationOutcome
+impl<T> core::convert::From<T> for d2b_bus::metrics::BusRejectionOutcome
+impl<T> core::convert::From<T> for d2b_bus::metrics::BusRouteOutcome
+impl<T> core::convert::From<T> for d2b_bus::metrics::BusStreamKind
+impl<T> core::convert::From<T> for d2b_bus::metrics::BusStreamOutcome
+impl<T> core::convert::From<T> for d2b_bus::metrics::BusTransport
+impl<T> core::convert::From<T> for d2b_bus::metrics::NoopBusTelemetry
 impl<T> core::convert::From<T> for d2b_bus::operations::Cancellation
 impl<T> core::convert::From<T> for d2b_bus::operations::OperationError
 impl<T> core::convert::From<T> for d2b_bus::operations::OperationId
@@ -2201,6 +2488,18 @@ impl<T> crossbeam_epoch::atomic::Pointable for d2b_bus::audit::RouteAuditError
 impl<T> crossbeam_epoch::atomic::Pointable for d2b_bus::authorization::AuthorizationError
 impl<T> crossbeam_epoch::atomic::Pointable for d2b_bus::authorization::AuthorizationErrorClass
 impl<T> crossbeam_epoch::atomic::Pointable for d2b_bus::authorization::BusAuthorizer
+impl<T> crossbeam_epoch::atomic::Pointable for d2b_bus::metrics::BusBackpressureReason
+impl<T> crossbeam_epoch::atomic::Pointable for d2b_bus::metrics::BusDirection
+impl<T> crossbeam_epoch::atomic::Pointable for d2b_bus::metrics::BusDisconnectOutcome
+impl<T> crossbeam_epoch::atomic::Pointable for d2b_bus::metrics::BusMetric
+impl<T> crossbeam_epoch::atomic::Pointable for d2b_bus::metrics::BusMetrics
+impl<T> crossbeam_epoch::atomic::Pointable for d2b_bus::metrics::BusRegistrationOutcome
+impl<T> crossbeam_epoch::atomic::Pointable for d2b_bus::metrics::BusRejectionOutcome
+impl<T> crossbeam_epoch::atomic::Pointable for d2b_bus::metrics::BusRouteOutcome
+impl<T> crossbeam_epoch::atomic::Pointable for d2b_bus::metrics::BusStreamKind
+impl<T> crossbeam_epoch::atomic::Pointable for d2b_bus::metrics::BusStreamOutcome
+impl<T> crossbeam_epoch::atomic::Pointable for d2b_bus::metrics::BusTransport
+impl<T> crossbeam_epoch::atomic::Pointable for d2b_bus::metrics::NoopBusTelemetry
 impl<T> crossbeam_epoch::atomic::Pointable for d2b_bus::operations::Cancellation
 impl<T> crossbeam_epoch::atomic::Pointable for d2b_bus::operations::OperationError
 impl<T> crossbeam_epoch::atomic::Pointable for d2b_bus::operations::OperationId
@@ -2296,6 +2595,18 @@ impl<T> dyn_clone::DynClone for d2b_bus::audit::RouteAuditContext where T: core:
 impl<T> dyn_clone::DynClone for d2b_bus::audit::RouteAuditError where T: core::clone::Clone
 impl<T> dyn_clone::DynClone for d2b_bus::authorization::AuthorizationError where T: core::clone::Clone
 impl<T> dyn_clone::DynClone for d2b_bus::authorization::AuthorizationErrorClass where T: core::clone::Clone
+impl<T> dyn_clone::DynClone for d2b_bus::metrics::BusBackpressureReason where T: core::clone::Clone
+impl<T> dyn_clone::DynClone for d2b_bus::metrics::BusDirection where T: core::clone::Clone
+impl<T> dyn_clone::DynClone for d2b_bus::metrics::BusDisconnectOutcome where T: core::clone::Clone
+impl<T> dyn_clone::DynClone for d2b_bus::metrics::BusMetric where T: core::clone::Clone
+impl<T> dyn_clone::DynClone for d2b_bus::metrics::BusMetrics where T: core::clone::Clone
+impl<T> dyn_clone::DynClone for d2b_bus::metrics::BusRegistrationOutcome where T: core::clone::Clone
+impl<T> dyn_clone::DynClone for d2b_bus::metrics::BusRejectionOutcome where T: core::clone::Clone
+impl<T> dyn_clone::DynClone for d2b_bus::metrics::BusRouteOutcome where T: core::clone::Clone
+impl<T> dyn_clone::DynClone for d2b_bus::metrics::BusStreamKind where T: core::clone::Clone
+impl<T> dyn_clone::DynClone for d2b_bus::metrics::BusStreamOutcome where T: core::clone::Clone
+impl<T> dyn_clone::DynClone for d2b_bus::metrics::BusTransport where T: core::clone::Clone
+impl<T> dyn_clone::DynClone for d2b_bus::metrics::NoopBusTelemetry where T: core::clone::Clone
 impl<T> dyn_clone::DynClone for d2b_bus::operations::Cancellation where T: core::clone::Clone
 impl<T> dyn_clone::DynClone for d2b_bus::operations::OperationError where T: core::clone::Clone
 impl<T> dyn_clone::DynClone for d2b_bus::operations::OperationId where T: core::clone::Clone
@@ -2374,6 +2685,18 @@ impl<T> typenum::type_operators::Same for d2b_bus::audit::RouteAuditError
 impl<T> typenum::type_operators::Same for d2b_bus::authorization::AuthorizationError
 impl<T> typenum::type_operators::Same for d2b_bus::authorization::AuthorizationErrorClass
 impl<T> typenum::type_operators::Same for d2b_bus::authorization::BusAuthorizer
+impl<T> typenum::type_operators::Same for d2b_bus::metrics::BusBackpressureReason
+impl<T> typenum::type_operators::Same for d2b_bus::metrics::BusDirection
+impl<T> typenum::type_operators::Same for d2b_bus::metrics::BusDisconnectOutcome
+impl<T> typenum::type_operators::Same for d2b_bus::metrics::BusMetric
+impl<T> typenum::type_operators::Same for d2b_bus::metrics::BusMetrics
+impl<T> typenum::type_operators::Same for d2b_bus::metrics::BusRegistrationOutcome
+impl<T> typenum::type_operators::Same for d2b_bus::metrics::BusRejectionOutcome
+impl<T> typenum::type_operators::Same for d2b_bus::metrics::BusRouteOutcome
+impl<T> typenum::type_operators::Same for d2b_bus::metrics::BusStreamKind
+impl<T> typenum::type_operators::Same for d2b_bus::metrics::BusStreamOutcome
+impl<T> typenum::type_operators::Same for d2b_bus::metrics::BusTransport
+impl<T> typenum::type_operators::Same for d2b_bus::metrics::NoopBusTelemetry
 impl<T> typenum::type_operators::Same for d2b_bus::operations::Cancellation
 impl<T> typenum::type_operators::Same for d2b_bus::operations::OperationError
 impl<T> typenum::type_operators::Same for d2b_bus::operations::OperationId
@@ -2494,6 +2817,22 @@ pub const d2b_bus::audit::RouteAuditError::ALIGN: usize
 pub const d2b_bus::authorization::AuthorizationError::ALIGN: usize
 pub const d2b_bus::authorization::AuthorizationErrorClass::ALIGN: usize
 pub const d2b_bus::authorization::BusAuthorizer::ALIGN: usize
+pub const d2b_bus::metrics::BusBackpressureReason::ALIGN: usize
+pub const d2b_bus::metrics::BusDirection::ALIGN: usize
+pub const d2b_bus::metrics::BusDirection::ALL: [Self; 4]
+pub const d2b_bus::metrics::BusDisconnectOutcome::ALIGN: usize
+pub const d2b_bus::metrics::BusMetric::ALIGN: usize
+pub const d2b_bus::metrics::BusMetrics::ALIGN: usize
+pub const d2b_bus::metrics::BusRegistrationOutcome::ALIGN: usize
+pub const d2b_bus::metrics::BusRejectionOutcome::ALIGN: usize
+pub const d2b_bus::metrics::BusRouteOutcome::ALIGN: usize
+pub const d2b_bus::metrics::BusStreamKind::ALIGN: usize
+pub const d2b_bus::metrics::BusStreamOutcome::ALIGN: usize
+pub const d2b_bus::metrics::BusTransport::ALIGN: usize
+pub const d2b_bus::metrics::BusTransport::ALL: [Self; 3]
+pub const d2b_bus::metrics::METRIC_INVENTORY: &[&str]
+pub const d2b_bus::metrics::NoopBusTelemetry::ALIGN: usize
+pub const d2b_bus::metrics::ROUTE_BUCKETS_SECONDS: &[f64]
 pub const d2b_bus::operations::Cancellation::ALIGN: usize
 pub const d2b_bus::operations::DEFAULT_MAX_OPERATIONS: usize
 pub const d2b_bus::operations::DEFAULT_MAX_OPERATIONS_PER_SESSION: usize
@@ -2624,6 +2963,17 @@ pub const fn d2b_bus::authorization::AuthorizationError::remediation(self) -> &'
 pub const fn d2b_bus::authorization::AuthorizationError::required_verb(self) -> core::option::Option<d2b_resource_api::authz::SessionVerb>
 pub const fn d2b_bus::authorization::AuthorizationErrorClass::as_str(self) -> &'static str
 pub const fn d2b_bus::authorization::session_verb_name(d2b_resource_api::authz::SessionVerb) -> &'static str
+pub const fn d2b_bus::metrics::BusBackpressureReason::as_str(self) -> &'static str
+pub const fn d2b_bus::metrics::BusDirection::as_str(self) -> &'static str
+pub const fn d2b_bus::metrics::BusDisconnectOutcome::as_str(self) -> &'static str
+pub const fn d2b_bus::metrics::BusMetric::name(self) -> &'static str
+pub const fn d2b_bus::metrics::BusMetrics::emitter(&self) -> &d2b_telemetry::emitter::BoundedEmitter
+pub const fn d2b_bus::metrics::BusRegistrationOutcome::as_str(self) -> &'static str
+pub const fn d2b_bus::metrics::BusRejectionOutcome::as_str(self) -> &'static str
+pub const fn d2b_bus::metrics::BusRouteOutcome::as_str(self) -> &'static str
+pub const fn d2b_bus::metrics::BusStreamKind::as_str(self) -> &'static str
+pub const fn d2b_bus::metrics::BusStreamOutcome::as_str(self) -> &'static str
+pub const fn d2b_bus::metrics::BusTransport::as_str(self) -> &'static str
 pub const fn d2b_bus::operations::OperationSpec::deadline_tick(&self) -> u64
 pub const fn d2b_bus::operations::OperationSpec::id(&self) -> &d2b_bus::operations::OperationId
 pub const fn d2b_bus::registry::EndpointFailureClass::as_str(self) -> &'static str
@@ -2863,6 +3213,45 @@ pub d2b_bus::authorization::AuthorizationErrorClass::PolicyUnavailable
 pub d2b_bus::authorization::AuthorizationErrorClass::RelayDenied
 pub d2b_bus::authorization::AuthorizationErrorClass::SessionBinding
 pub d2b_bus::authorization::AuthorizationErrorClass::UnknownResource
+pub d2b_bus::metrics::BusBackpressureReason::BufferFull
+pub d2b_bus::metrics::BusBackpressureReason::Capacity
+pub d2b_bus::metrics::BusBackpressureReason::Credit
+pub d2b_bus::metrics::BusDirection::Guest
+pub d2b_bus::metrics::BusDirection::Host
+pub d2b_bus::metrics::BusDirection::Local
+pub d2b_bus::metrics::BusDirection::ZoneLink
+pub d2b_bus::metrics::BusDisconnectOutcome::Abandoned
+pub d2b_bus::metrics::BusDisconnectOutcome::Cancel
+pub d2b_bus::metrics::BusDisconnectOutcome::Error
+pub d2b_bus::metrics::BusDisconnectOutcome::Revoked
+pub d2b_bus::metrics::BusMetric::BackpressureTotal
+pub d2b_bus::metrics::BusMetric::CreditBytes
+pub d2b_bus::metrics::BusMetric::DisconnectTotal
+pub d2b_bus::metrics::BusMetric::RegistrationTotal
+pub d2b_bus::metrics::BusMetric::RejectionTotal
+pub d2b_bus::metrics::BusMetric::RouteDuration
+pub d2b_bus::metrics::BusMetric::RouteTotal
+pub d2b_bus::metrics::BusMetric::SessionActive
+pub d2b_bus::metrics::BusMetric::StreamActive
+pub d2b_bus::metrics::BusMetric::StreamTotal
+pub d2b_bus::metrics::BusRegistrationOutcome::Accepted
+pub d2b_bus::metrics::BusRegistrationOutcome::Rejected
+pub d2b_bus::metrics::BusRejectionOutcome::Denied
+pub d2b_bus::metrics::BusRejectionOutcome::Error
+pub d2b_bus::metrics::BusRejectionOutcome::NotFound
+pub d2b_bus::metrics::BusRejectionOutcome::Quota
+pub d2b_bus::metrics::BusRouteOutcome::Denied
+pub d2b_bus::metrics::BusRouteOutcome::Error
+pub d2b_bus::metrics::BusRouteOutcome::NotFound
+pub d2b_bus::metrics::BusRouteOutcome::Ok
+pub d2b_bus::metrics::BusStreamKind::Control
+pub d2b_bus::metrics::BusStreamKind::Stream
+pub d2b_bus::metrics::BusStreamOutcome::Accepted
+pub d2b_bus::metrics::BusStreamOutcome::Closed
+pub d2b_bus::metrics::BusStreamOutcome::Rejected
+pub d2b_bus::metrics::BusTransport::Unix
+pub d2b_bus::metrics::BusTransport::Vsock
+pub d2b_bus::metrics::BusTransport::ZoneLink
 pub d2b_bus::operations::OperationError::Cancelled
 pub d2b_bus::operations::OperationError::CapacityExceeded
 pub d2b_bus::operations::OperationError::DeadlineExceeded
@@ -3178,6 +3567,16 @@ pub enum d2b_bus::audit::BusErrorKind
 pub enum d2b_bus::audit::RouteAuditError
 pub enum d2b_bus::authorization::AuthorizationError
 pub enum d2b_bus::authorization::AuthorizationErrorClass
+pub enum d2b_bus::metrics::BusBackpressureReason
+pub enum d2b_bus::metrics::BusDirection
+pub enum d2b_bus::metrics::BusDisconnectOutcome
+pub enum d2b_bus::metrics::BusMetric
+pub enum d2b_bus::metrics::BusRegistrationOutcome
+pub enum d2b_bus::metrics::BusRejectionOutcome
+pub enum d2b_bus::metrics::BusRouteOutcome
+pub enum d2b_bus::metrics::BusStreamKind
+pub enum d2b_bus::metrics::BusStreamOutcome
+pub enum d2b_bus::metrics::BusTransport
 pub enum d2b_bus::operations::OperationError
 pub enum d2b_bus::registry::EndpointError
 pub enum d2b_bus::registry::EndpointFailureClass
@@ -3317,6 +3716,208 @@ pub fn d2b_bus::authorization::BusAuthorizer::replace_policy(&self, d2b_resource
 pub fn d2b_bus::authorization::BusAuthorizer::try_from(U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
 pub fn d2b_bus::authorization::BusAuthorizer::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
 pub fn d2b_bus::authorization::BusAuthorizer::type_id(&self) -> core::any::TypeId
+pub fn d2b_bus::metrics::BusBackpressureReason::__clone_box(&self, dyn_clone::sealed::Private) -> *mut ()
+pub fn d2b_bus::metrics::BusBackpressureReason::borrow(&self) -> &T
+pub fn d2b_bus::metrics::BusBackpressureReason::borrow_mut(&mut self) -> &mut T
+pub fn d2b_bus::metrics::BusBackpressureReason::clone(&self) -> d2b_bus::metrics::BusBackpressureReason
+pub fn d2b_bus::metrics::BusBackpressureReason::clone_into(&self, &mut T)
+pub fn d2b_bus::metrics::BusBackpressureReason::eq(&self, &d2b_bus::metrics::BusBackpressureReason) -> bool
+pub fn d2b_bus::metrics::BusBackpressureReason::equivalent(&self, &K) -> bool
+pub fn d2b_bus::metrics::BusBackpressureReason::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub fn d2b_bus::metrics::BusBackpressureReason::from(T) -> T
+pub fn d2b_bus::metrics::BusBackpressureReason::into(self) -> U
+pub fn d2b_bus::metrics::BusBackpressureReason::to_owned(&self) -> T
+pub fn d2b_bus::metrics::BusBackpressureReason::try_from(U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+pub fn d2b_bus::metrics::BusBackpressureReason::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+pub fn d2b_bus::metrics::BusBackpressureReason::type_id(&self) -> core::any::TypeId
+pub fn d2b_bus::metrics::BusDirection::__clone_box(&self, dyn_clone::sealed::Private) -> *mut ()
+pub fn d2b_bus::metrics::BusDirection::borrow(&self) -> &T
+pub fn d2b_bus::metrics::BusDirection::borrow_mut(&mut self) -> &mut T
+pub fn d2b_bus::metrics::BusDirection::clone(&self) -> d2b_bus::metrics::BusDirection
+pub fn d2b_bus::metrics::BusDirection::clone_into(&self, &mut T)
+pub fn d2b_bus::metrics::BusDirection::cmp(&self, &d2b_bus::metrics::BusDirection) -> core::cmp::Ordering
+pub fn d2b_bus::metrics::BusDirection::eq(&self, &d2b_bus::metrics::BusDirection) -> bool
+pub fn d2b_bus::metrics::BusDirection::equivalent(&self, &K) -> bool
+pub fn d2b_bus::metrics::BusDirection::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub fn d2b_bus::metrics::BusDirection::from(T) -> T
+pub fn d2b_bus::metrics::BusDirection::from_context(core::option::Option<&d2b_contracts::v3::identity::AuthenticatedSubjectContext>) -> Self
+pub fn d2b_bus::metrics::BusDirection::hash<__H: core::hash::Hasher>(&self, &mut __H)
+pub fn d2b_bus::metrics::BusDirection::into(self) -> U
+pub fn d2b_bus::metrics::BusDirection::partial_cmp(&self, &d2b_bus::metrics::BusDirection) -> core::option::Option<core::cmp::Ordering>
+pub fn d2b_bus::metrics::BusDirection::to_owned(&self) -> T
+pub fn d2b_bus::metrics::BusDirection::try_from(U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+pub fn d2b_bus::metrics::BusDirection::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+pub fn d2b_bus::metrics::BusDirection::type_id(&self) -> core::any::TypeId
+pub fn d2b_bus::metrics::BusDisconnectOutcome::__clone_box(&self, dyn_clone::sealed::Private) -> *mut ()
+pub fn d2b_bus::metrics::BusDisconnectOutcome::borrow(&self) -> &T
+pub fn d2b_bus::metrics::BusDisconnectOutcome::borrow_mut(&mut self) -> &mut T
+pub fn d2b_bus::metrics::BusDisconnectOutcome::clone(&self) -> d2b_bus::metrics::BusDisconnectOutcome
+pub fn d2b_bus::metrics::BusDisconnectOutcome::clone_into(&self, &mut T)
+pub fn d2b_bus::metrics::BusDisconnectOutcome::eq(&self, &d2b_bus::metrics::BusDisconnectOutcome) -> bool
+pub fn d2b_bus::metrics::BusDisconnectOutcome::equivalent(&self, &K) -> bool
+pub fn d2b_bus::metrics::BusDisconnectOutcome::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub fn d2b_bus::metrics::BusDisconnectOutcome::from(T) -> T
+pub fn d2b_bus::metrics::BusDisconnectOutcome::into(self) -> U
+pub fn d2b_bus::metrics::BusDisconnectOutcome::to_owned(&self) -> T
+pub fn d2b_bus::metrics::BusDisconnectOutcome::try_from(U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+pub fn d2b_bus::metrics::BusDisconnectOutcome::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+pub fn d2b_bus::metrics::BusDisconnectOutcome::type_id(&self) -> core::any::TypeId
+pub fn d2b_bus::metrics::BusMetric::__clone_box(&self, dyn_clone::sealed::Private) -> *mut ()
+pub fn d2b_bus::metrics::BusMetric::borrow(&self) -> &T
+pub fn d2b_bus::metrics::BusMetric::borrow_mut(&mut self) -> &mut T
+pub fn d2b_bus::metrics::BusMetric::clone(&self) -> d2b_bus::metrics::BusMetric
+pub fn d2b_bus::metrics::BusMetric::clone_into(&self, &mut T)
+pub fn d2b_bus::metrics::BusMetric::descriptor(self) -> d2b_telemetry::metric_label_policy::MetricDescriptor
+pub fn d2b_bus::metrics::BusMetric::eq(&self, &d2b_bus::metrics::BusMetric) -> bool
+pub fn d2b_bus::metrics::BusMetric::equivalent(&self, &K) -> bool
+pub fn d2b_bus::metrics::BusMetric::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub fn d2b_bus::metrics::BusMetric::from(T) -> T
+pub fn d2b_bus::metrics::BusMetric::into(self) -> U
+pub fn d2b_bus::metrics::BusMetric::to_owned(&self) -> T
+pub fn d2b_bus::metrics::BusMetric::try_from(U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+pub fn d2b_bus::metrics::BusMetric::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+pub fn d2b_bus::metrics::BusMetric::type_id(&self) -> core::any::TypeId
+pub fn d2b_bus::metrics::BusMetrics::__clone_box(&self, dyn_clone::sealed::Private) -> *mut ()
+pub fn d2b_bus::metrics::BusMetrics::backpressure(&self, d2b_bus::metrics::BusDirection, d2b_bus::metrics::BusStreamKind, d2b_bus::metrics::BusBackpressureReason)
+pub fn d2b_bus::metrics::BusMetrics::borrow(&self) -> &T
+pub fn d2b_bus::metrics::BusMetrics::borrow_mut(&mut self) -> &mut T
+pub fn d2b_bus::metrics::BusMetrics::clone(&self) -> d2b_bus::metrics::BusMetrics
+pub fn d2b_bus::metrics::BusMetrics::clone_into(&self, &mut T)
+pub fn d2b_bus::metrics::BusMetrics::credits(&self, d2b_bus::metrics::BusDirection, u64)
+pub fn d2b_bus::metrics::BusMetrics::disconnect(&self, d2b_bus::metrics::BusDirection, d2b_bus::metrics::BusDisconnectOutcome)
+pub fn d2b_bus::metrics::BusMetrics::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub fn d2b_bus::metrics::BusMetrics::from(T) -> T
+pub fn d2b_bus::metrics::BusMetrics::into(self) -> U
+pub fn d2b_bus::metrics::BusMetrics::new(d2b_telemetry::emitter::BoundedEmitter) -> Self
+pub fn d2b_bus::metrics::BusMetrics::registration(&self, d2b_bus::metrics::BusDirection, d2b_bus::metrics::BusRegistrationOutcome)
+pub fn d2b_bus::metrics::BusMetrics::rejection(&self, d2b_bus::metrics::BusDirection, d2b_bus::metrics::BusRejectionOutcome)
+pub fn d2b_bus::metrics::BusMetrics::route(&self, &d2b_contracts::v3::identity::ServiceName, d2b_bus::metrics::BusDirection, d2b_bus::metrics::BusRouteOutcome, f64)
+pub fn d2b_bus::metrics::BusMetrics::session_active(&self, d2b_bus::metrics::BusTransport, u64)
+pub fn d2b_bus::metrics::BusMetrics::stream_active(&self, d2b_bus::metrics::BusDirection, u64)
+pub fn d2b_bus::metrics::BusMetrics::stream_result(&self, d2b_bus::metrics::BusDirection, d2b_bus::metrics::BusStreamOutcome)
+pub fn d2b_bus::metrics::BusMetrics::to_owned(&self) -> T
+pub fn d2b_bus::metrics::BusMetrics::try_from(U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+pub fn d2b_bus::metrics::BusMetrics::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+pub fn d2b_bus::metrics::BusMetrics::type_id(&self) -> core::any::TypeId
+pub fn d2b_bus::metrics::BusMetrics::validate_inventory() -> core::result::Result<(), d2b_telemetry::metric_label_policy::MetricPolicyError>
+pub fn d2b_bus::metrics::BusRegistrationOutcome::__clone_box(&self, dyn_clone::sealed::Private) -> *mut ()
+pub fn d2b_bus::metrics::BusRegistrationOutcome::borrow(&self) -> &T
+pub fn d2b_bus::metrics::BusRegistrationOutcome::borrow_mut(&mut self) -> &mut T
+pub fn d2b_bus::metrics::BusRegistrationOutcome::clone(&self) -> d2b_bus::metrics::BusRegistrationOutcome
+pub fn d2b_bus::metrics::BusRegistrationOutcome::clone_into(&self, &mut T)
+pub fn d2b_bus::metrics::BusRegistrationOutcome::eq(&self, &d2b_bus::metrics::BusRegistrationOutcome) -> bool
+pub fn d2b_bus::metrics::BusRegistrationOutcome::equivalent(&self, &K) -> bool
+pub fn d2b_bus::metrics::BusRegistrationOutcome::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub fn d2b_bus::metrics::BusRegistrationOutcome::from(T) -> T
+pub fn d2b_bus::metrics::BusRegistrationOutcome::into(self) -> U
+pub fn d2b_bus::metrics::BusRegistrationOutcome::to_owned(&self) -> T
+pub fn d2b_bus::metrics::BusRegistrationOutcome::try_from(U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+pub fn d2b_bus::metrics::BusRegistrationOutcome::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+pub fn d2b_bus::metrics::BusRegistrationOutcome::type_id(&self) -> core::any::TypeId
+pub fn d2b_bus::metrics::BusRejectionOutcome::__clone_box(&self, dyn_clone::sealed::Private) -> *mut ()
+pub fn d2b_bus::metrics::BusRejectionOutcome::borrow(&self) -> &T
+pub fn d2b_bus::metrics::BusRejectionOutcome::borrow_mut(&mut self) -> &mut T
+pub fn d2b_bus::metrics::BusRejectionOutcome::clone(&self) -> d2b_bus::metrics::BusRejectionOutcome
+pub fn d2b_bus::metrics::BusRejectionOutcome::clone_into(&self, &mut T)
+pub fn d2b_bus::metrics::BusRejectionOutcome::eq(&self, &d2b_bus::metrics::BusRejectionOutcome) -> bool
+pub fn d2b_bus::metrics::BusRejectionOutcome::equivalent(&self, &K) -> bool
+pub fn d2b_bus::metrics::BusRejectionOutcome::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub fn d2b_bus::metrics::BusRejectionOutcome::from(T) -> T
+pub fn d2b_bus::metrics::BusRejectionOutcome::into(self) -> U
+pub fn d2b_bus::metrics::BusRejectionOutcome::to_owned(&self) -> T
+pub fn d2b_bus::metrics::BusRejectionOutcome::try_from(U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+pub fn d2b_bus::metrics::BusRejectionOutcome::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+pub fn d2b_bus::metrics::BusRejectionOutcome::type_id(&self) -> core::any::TypeId
+pub fn d2b_bus::metrics::BusRouteOutcome::__clone_box(&self, dyn_clone::sealed::Private) -> *mut ()
+pub fn d2b_bus::metrics::BusRouteOutcome::borrow(&self) -> &T
+pub fn d2b_bus::metrics::BusRouteOutcome::borrow_mut(&mut self) -> &mut T
+pub fn d2b_bus::metrics::BusRouteOutcome::clone(&self) -> d2b_bus::metrics::BusRouteOutcome
+pub fn d2b_bus::metrics::BusRouteOutcome::clone_into(&self, &mut T)
+pub fn d2b_bus::metrics::BusRouteOutcome::eq(&self, &d2b_bus::metrics::BusRouteOutcome) -> bool
+pub fn d2b_bus::metrics::BusRouteOutcome::equivalent(&self, &K) -> bool
+pub fn d2b_bus::metrics::BusRouteOutcome::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub fn d2b_bus::metrics::BusRouteOutcome::from(T) -> T
+pub fn d2b_bus::metrics::BusRouteOutcome::into(self) -> U
+pub fn d2b_bus::metrics::BusRouteOutcome::to_owned(&self) -> T
+pub fn d2b_bus::metrics::BusRouteOutcome::try_from(U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+pub fn d2b_bus::metrics::BusRouteOutcome::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+pub fn d2b_bus::metrics::BusRouteOutcome::type_id(&self) -> core::any::TypeId
+pub fn d2b_bus::metrics::BusStreamKind::__clone_box(&self, dyn_clone::sealed::Private) -> *mut ()
+pub fn d2b_bus::metrics::BusStreamKind::borrow(&self) -> &T
+pub fn d2b_bus::metrics::BusStreamKind::borrow_mut(&mut self) -> &mut T
+pub fn d2b_bus::metrics::BusStreamKind::clone(&self) -> d2b_bus::metrics::BusStreamKind
+pub fn d2b_bus::metrics::BusStreamKind::clone_into(&self, &mut T)
+pub fn d2b_bus::metrics::BusStreamKind::eq(&self, &d2b_bus::metrics::BusStreamKind) -> bool
+pub fn d2b_bus::metrics::BusStreamKind::equivalent(&self, &K) -> bool
+pub fn d2b_bus::metrics::BusStreamKind::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub fn d2b_bus::metrics::BusStreamKind::from(T) -> T
+pub fn d2b_bus::metrics::BusStreamKind::into(self) -> U
+pub fn d2b_bus::metrics::BusStreamKind::to_owned(&self) -> T
+pub fn d2b_bus::metrics::BusStreamKind::try_from(U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+pub fn d2b_bus::metrics::BusStreamKind::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+pub fn d2b_bus::metrics::BusStreamKind::type_id(&self) -> core::any::TypeId
+pub fn d2b_bus::metrics::BusStreamOutcome::__clone_box(&self, dyn_clone::sealed::Private) -> *mut ()
+pub fn d2b_bus::metrics::BusStreamOutcome::borrow(&self) -> &T
+pub fn d2b_bus::metrics::BusStreamOutcome::borrow_mut(&mut self) -> &mut T
+pub fn d2b_bus::metrics::BusStreamOutcome::clone(&self) -> d2b_bus::metrics::BusStreamOutcome
+pub fn d2b_bus::metrics::BusStreamOutcome::clone_into(&self, &mut T)
+pub fn d2b_bus::metrics::BusStreamOutcome::eq(&self, &d2b_bus::metrics::BusStreamOutcome) -> bool
+pub fn d2b_bus::metrics::BusStreamOutcome::equivalent(&self, &K) -> bool
+pub fn d2b_bus::metrics::BusStreamOutcome::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub fn d2b_bus::metrics::BusStreamOutcome::from(T) -> T
+pub fn d2b_bus::metrics::BusStreamOutcome::into(self) -> U
+pub fn d2b_bus::metrics::BusStreamOutcome::to_owned(&self) -> T
+pub fn d2b_bus::metrics::BusStreamOutcome::try_from(U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+pub fn d2b_bus::metrics::BusStreamOutcome::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+pub fn d2b_bus::metrics::BusStreamOutcome::type_id(&self) -> core::any::TypeId
+pub fn d2b_bus::metrics::BusTelemetry::backpressure(&self, d2b_bus::metrics::BusDirection, d2b_bus::metrics::BusStreamKind, d2b_bus::metrics::BusBackpressureReason)
+pub fn d2b_bus::metrics::BusTelemetry::credits(&self, d2b_bus::metrics::BusDirection, u64)
+pub fn d2b_bus::metrics::BusTelemetry::disconnect(&self, d2b_bus::metrics::BusDirection, d2b_bus::metrics::BusDisconnectOutcome)
+pub fn d2b_bus::metrics::BusTelemetry::registration(&self, d2b_bus::metrics::BusDirection, d2b_bus::metrics::BusRegistrationOutcome)
+pub fn d2b_bus::metrics::BusTelemetry::rejection(&self, d2b_bus::metrics::BusDirection, d2b_bus::metrics::BusRejectionOutcome)
+pub fn d2b_bus::metrics::BusTelemetry::route(&self, &d2b_contracts::v3::identity::ServiceName, d2b_bus::metrics::BusDirection, d2b_bus::metrics::BusRouteOutcome, f64)
+pub fn d2b_bus::metrics::BusTelemetry::session_active(&self, d2b_bus::metrics::BusTransport, u64)
+pub fn d2b_bus::metrics::BusTelemetry::stream_active(&self, d2b_bus::metrics::BusDirection, u64)
+pub fn d2b_bus::metrics::BusTelemetry::stream_result(&self, d2b_bus::metrics::BusDirection, d2b_bus::metrics::BusStreamOutcome)
+pub fn d2b_bus::metrics::BusTransport::__clone_box(&self, dyn_clone::sealed::Private) -> *mut ()
+pub fn d2b_bus::metrics::BusTransport::borrow(&self) -> &T
+pub fn d2b_bus::metrics::BusTransport::borrow_mut(&mut self) -> &mut T
+pub fn d2b_bus::metrics::BusTransport::clone(&self) -> d2b_bus::metrics::BusTransport
+pub fn d2b_bus::metrics::BusTransport::clone_into(&self, &mut T)
+pub fn d2b_bus::metrics::BusTransport::cmp(&self, &d2b_bus::metrics::BusTransport) -> core::cmp::Ordering
+pub fn d2b_bus::metrics::BusTransport::eq(&self, &d2b_bus::metrics::BusTransport) -> bool
+pub fn d2b_bus::metrics::BusTransport::equivalent(&self, &K) -> bool
+pub fn d2b_bus::metrics::BusTransport::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub fn d2b_bus::metrics::BusTransport::from(T) -> T
+pub fn d2b_bus::metrics::BusTransport::hash<__H: core::hash::Hasher>(&self, &mut __H)
+pub fn d2b_bus::metrics::BusTransport::into(self) -> U
+pub fn d2b_bus::metrics::BusTransport::partial_cmp(&self, &d2b_bus::metrics::BusTransport) -> core::option::Option<core::cmp::Ordering>
+pub fn d2b_bus::metrics::BusTransport::to_owned(&self) -> T
+pub fn d2b_bus::metrics::BusTransport::try_from(U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+pub fn d2b_bus::metrics::BusTransport::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+pub fn d2b_bus::metrics::BusTransport::type_id(&self) -> core::any::TypeId
+pub fn d2b_bus::metrics::NoopBusTelemetry::__clone_box(&self, dyn_clone::sealed::Private) -> *mut ()
+pub fn d2b_bus::metrics::NoopBusTelemetry::backpressure(&self, d2b_bus::metrics::BusDirection, d2b_bus::metrics::BusStreamKind, d2b_bus::metrics::BusBackpressureReason)
+pub fn d2b_bus::metrics::NoopBusTelemetry::borrow(&self) -> &T
+pub fn d2b_bus::metrics::NoopBusTelemetry::borrow_mut(&mut self) -> &mut T
+pub fn d2b_bus::metrics::NoopBusTelemetry::clone(&self) -> d2b_bus::metrics::NoopBusTelemetry
+pub fn d2b_bus::metrics::NoopBusTelemetry::clone_into(&self, &mut T)
+pub fn d2b_bus::metrics::NoopBusTelemetry::credits(&self, d2b_bus::metrics::BusDirection, u64)
+pub fn d2b_bus::metrics::NoopBusTelemetry::default() -> d2b_bus::metrics::NoopBusTelemetry
+pub fn d2b_bus::metrics::NoopBusTelemetry::disconnect(&self, d2b_bus::metrics::BusDirection, d2b_bus::metrics::BusDisconnectOutcome)
+pub fn d2b_bus::metrics::NoopBusTelemetry::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub fn d2b_bus::metrics::NoopBusTelemetry::from(T) -> T
+pub fn d2b_bus::metrics::NoopBusTelemetry::into(self) -> U
+pub fn d2b_bus::metrics::NoopBusTelemetry::registration(&self, d2b_bus::metrics::BusDirection, d2b_bus::metrics::BusRegistrationOutcome)
+pub fn d2b_bus::metrics::NoopBusTelemetry::rejection(&self, d2b_bus::metrics::BusDirection, d2b_bus::metrics::BusRejectionOutcome)
+pub fn d2b_bus::metrics::NoopBusTelemetry::route(&self, &d2b_contracts::v3::identity::ServiceName, d2b_bus::metrics::BusDirection, d2b_bus::metrics::BusRouteOutcome, f64)
+pub fn d2b_bus::metrics::NoopBusTelemetry::session_active(&self, d2b_bus::metrics::BusTransport, u64)
+pub fn d2b_bus::metrics::NoopBusTelemetry::stream_active(&self, d2b_bus::metrics::BusDirection, u64)
+pub fn d2b_bus::metrics::NoopBusTelemetry::stream_result(&self, d2b_bus::metrics::BusDirection, d2b_bus::metrics::BusStreamOutcome)
+pub fn d2b_bus::metrics::NoopBusTelemetry::to_owned(&self) -> T
+pub fn d2b_bus::metrics::NoopBusTelemetry::try_from(U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+pub fn d2b_bus::metrics::NoopBusTelemetry::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+pub fn d2b_bus::metrics::NoopBusTelemetry::type_id(&self) -> core::any::TypeId
 pub fn d2b_bus::operations::Cancellation::__clone_box(&self, dyn_clone::sealed::Private) -> *mut ()
 pub fn d2b_bus::operations::Cancellation::borrow(&self) -> &T
 pub fn d2b_bus::operations::Cancellation::borrow_mut(&mut self) -> &mut T
@@ -3837,7 +4438,9 @@ pub fn d2b_bus::router::ZoneBus::try_into(self) -> core::result::Result<U, <U as
 pub fn d2b_bus::router::ZoneBus::type_id(&self) -> core::any::TypeId
 pub fn d2b_bus::router::ZoneBus::with_clock(d2b_contracts::v3::identity::ZoneId, d2b_bus::authorization::BusAuthorizer, d2b_bus::router::BusConfig, alloc::sync::Arc<dyn d2b_bus::router::BusClock>) -> core::result::Result<(Self, d2b_bus::router::ZoneRegistrar), d2b_bus::router::BusError>
 pub fn d2b_bus::router::ZoneBus::with_clock_and_observer(d2b_contracts::v3::identity::ZoneId, d2b_bus::authorization::BusAuthorizer, d2b_bus::router::BusConfig, alloc::sync::Arc<dyn d2b_bus::router::BusClock>, alloc::sync::Arc<dyn d2b_bus::router::BusObserver>) -> core::result::Result<(Self, d2b_bus::router::ZoneRegistrar), d2b_bus::router::BusError>
+pub fn d2b_bus::router::ZoneBus::with_clock_observer_and_metrics(d2b_contracts::v3::identity::ZoneId, d2b_bus::authorization::BusAuthorizer, d2b_bus::router::BusConfig, alloc::sync::Arc<dyn d2b_bus::router::BusClock>, alloc::sync::Arc<dyn d2b_bus::router::BusObserver>, alloc::sync::Arc<dyn d2b_bus::metrics::BusTelemetry>) -> core::result::Result<(Self, d2b_bus::router::ZoneRegistrar), d2b_bus::router::BusError>
 pub fn d2b_bus::router::ZoneBus::with_observer(d2b_contracts::v3::identity::ZoneId, d2b_bus::authorization::BusAuthorizer, d2b_bus::router::BusConfig, alloc::sync::Arc<dyn d2b_bus::router::BusObserver>) -> core::result::Result<(Self, d2b_bus::router::ZoneRegistrar), d2b_bus::router::BusError>
+pub fn d2b_bus::router::ZoneBus::with_observer_and_metrics(d2b_contracts::v3::identity::ZoneId, d2b_bus::authorization::BusAuthorizer, d2b_bus::router::BusConfig, alloc::sync::Arc<dyn d2b_bus::router::BusObserver>, alloc::sync::Arc<dyn d2b_bus::metrics::BusTelemetry>) -> core::result::Result<(Self, d2b_bus::router::ZoneRegistrar), d2b_bus::router::BusError>
 pub fn d2b_bus::router::ZoneRegistrar::borrow(&self) -> &T
 pub fn d2b_bus::router::ZoneRegistrar::borrow_mut(&mut self) -> &mut T
 pub fn d2b_bus::router::ZoneRegistrar::component_session_acceptor(&self, d2b_contracts::v3::component_session::EndpointPolicy, d2b_session_unix::subject::VerifiedUnixPeer) -> d2b_session::error::Result<d2b_session::admission::SessionAcceptor<d2b_bus::router::ComponentSessionAdmission>>
@@ -4669,6 +5272,7 @@ pub mod d2b_bus::driver
 pub mod d2b_bus::engine
 pub mod d2b_bus::error
 pub mod d2b_bus::lifecycle
+pub mod d2b_bus::metrics
 pub mod d2b_bus::operations
 pub mod d2b_bus::registry
 pub mod d2b_bus::relay
@@ -4714,6 +5318,8 @@ pub struct d2b_bus::ZoneRegistrar
 pub struct d2b_bus::audit::BusAuditWriter<'a>
 pub struct d2b_bus::audit::RouteAuditContext
 pub struct d2b_bus::authorization::BusAuthorizer
+pub struct d2b_bus::metrics::BusMetrics
+pub struct d2b_bus::metrics::NoopBusTelemetry
 pub struct d2b_bus::operations::Cancellation(_)
 pub struct d2b_bus::operations::OperationId(_)
 pub struct d2b_bus::operations::OperationSpec
@@ -4784,6 +5390,7 @@ pub struct d2b_bus::zone_route::ZoneRouteQuery
 pub trait d2b_bus::BusClock: core::marker::Send + core::marker::Sync + 'static
 pub trait d2b_bus::BusEndpoint: core::marker::Send + core::marker::Sync + 'static
 pub trait d2b_bus::BusObserver: core::marker::Send + core::marker::Sync
+pub trait d2b_bus::metrics::BusTelemetry: core::marker::Send + core::marker::Sync
 pub trait d2b_bus::registry::BusEndpoint: core::marker::Send + core::marker::Sync + 'static
 pub trait d2b_bus::relay::RelayHopOracle
 pub trait d2b_bus::router::BusClock: core::marker::Send + core::marker::Sync + 'static
@@ -4822,6 +5429,66 @@ pub type d2b_bus::authorization::BusAuthorizer::Error = <U as core::convert::Try
 pub type d2b_bus::authorization::BusAuthorizer::Error = core::convert::Infallible
 pub type d2b_bus::authorization::BusAuthorizer::Init = T
 pub type d2b_bus::authorization::BusAuthorizer::Output = T
+pub type d2b_bus::metrics::BusBackpressureReason::Error = <U as core::convert::TryFrom<T>>::Error
+pub type d2b_bus::metrics::BusBackpressureReason::Error = core::convert::Infallible
+pub type d2b_bus::metrics::BusBackpressureReason::Init = T
+pub type d2b_bus::metrics::BusBackpressureReason::Output = T
+pub type d2b_bus::metrics::BusBackpressureReason::Owned = T
+pub type d2b_bus::metrics::BusDirection::Error = <U as core::convert::TryFrom<T>>::Error
+pub type d2b_bus::metrics::BusDirection::Error = core::convert::Infallible
+pub type d2b_bus::metrics::BusDirection::Init = T
+pub type d2b_bus::metrics::BusDirection::Output = T
+pub type d2b_bus::metrics::BusDirection::Owned = T
+pub type d2b_bus::metrics::BusDisconnectOutcome::Error = <U as core::convert::TryFrom<T>>::Error
+pub type d2b_bus::metrics::BusDisconnectOutcome::Error = core::convert::Infallible
+pub type d2b_bus::metrics::BusDisconnectOutcome::Init = T
+pub type d2b_bus::metrics::BusDisconnectOutcome::Output = T
+pub type d2b_bus::metrics::BusDisconnectOutcome::Owned = T
+pub type d2b_bus::metrics::BusMetric::Error = <U as core::convert::TryFrom<T>>::Error
+pub type d2b_bus::metrics::BusMetric::Error = core::convert::Infallible
+pub type d2b_bus::metrics::BusMetric::Init = T
+pub type d2b_bus::metrics::BusMetric::Output = T
+pub type d2b_bus::metrics::BusMetric::Owned = T
+pub type d2b_bus::metrics::BusMetrics::Error = <U as core::convert::TryFrom<T>>::Error
+pub type d2b_bus::metrics::BusMetrics::Error = core::convert::Infallible
+pub type d2b_bus::metrics::BusMetrics::Init = T
+pub type d2b_bus::metrics::BusMetrics::Output = T
+pub type d2b_bus::metrics::BusMetrics::Owned = T
+pub type d2b_bus::metrics::BusRegistrationOutcome::Error = <U as core::convert::TryFrom<T>>::Error
+pub type d2b_bus::metrics::BusRegistrationOutcome::Error = core::convert::Infallible
+pub type d2b_bus::metrics::BusRegistrationOutcome::Init = T
+pub type d2b_bus::metrics::BusRegistrationOutcome::Output = T
+pub type d2b_bus::metrics::BusRegistrationOutcome::Owned = T
+pub type d2b_bus::metrics::BusRejectionOutcome::Error = <U as core::convert::TryFrom<T>>::Error
+pub type d2b_bus::metrics::BusRejectionOutcome::Error = core::convert::Infallible
+pub type d2b_bus::metrics::BusRejectionOutcome::Init = T
+pub type d2b_bus::metrics::BusRejectionOutcome::Output = T
+pub type d2b_bus::metrics::BusRejectionOutcome::Owned = T
+pub type d2b_bus::metrics::BusRouteOutcome::Error = <U as core::convert::TryFrom<T>>::Error
+pub type d2b_bus::metrics::BusRouteOutcome::Error = core::convert::Infallible
+pub type d2b_bus::metrics::BusRouteOutcome::Init = T
+pub type d2b_bus::metrics::BusRouteOutcome::Output = T
+pub type d2b_bus::metrics::BusRouteOutcome::Owned = T
+pub type d2b_bus::metrics::BusStreamKind::Error = <U as core::convert::TryFrom<T>>::Error
+pub type d2b_bus::metrics::BusStreamKind::Error = core::convert::Infallible
+pub type d2b_bus::metrics::BusStreamKind::Init = T
+pub type d2b_bus::metrics::BusStreamKind::Output = T
+pub type d2b_bus::metrics::BusStreamKind::Owned = T
+pub type d2b_bus::metrics::BusStreamOutcome::Error = <U as core::convert::TryFrom<T>>::Error
+pub type d2b_bus::metrics::BusStreamOutcome::Error = core::convert::Infallible
+pub type d2b_bus::metrics::BusStreamOutcome::Init = T
+pub type d2b_bus::metrics::BusStreamOutcome::Output = T
+pub type d2b_bus::metrics::BusStreamOutcome::Owned = T
+pub type d2b_bus::metrics::BusTransport::Error = <U as core::convert::TryFrom<T>>::Error
+pub type d2b_bus::metrics::BusTransport::Error = core::convert::Infallible
+pub type d2b_bus::metrics::BusTransport::Init = T
+pub type d2b_bus::metrics::BusTransport::Output = T
+pub type d2b_bus::metrics::BusTransport::Owned = T
+pub type d2b_bus::metrics::NoopBusTelemetry::Error = <U as core::convert::TryFrom<T>>::Error
+pub type d2b_bus::metrics::NoopBusTelemetry::Error = core::convert::Infallible
+pub type d2b_bus::metrics::NoopBusTelemetry::Init = T
+pub type d2b_bus::metrics::NoopBusTelemetry::Output = T
+pub type d2b_bus::metrics::NoopBusTelemetry::Owned = T
 pub type d2b_bus::operations::Cancellation::Error = <U as core::convert::TryFrom<T>>::Error
 pub type d2b_bus::operations::Cancellation::Error = core::convert::Infallible
 pub type d2b_bus::operations::Cancellation::Init = T
@@ -5286,6 +5953,66 @@ pub unsafe fn d2b_bus::authorization::BusAuthorizer::deref<'a>(usize) -> &'a T
 pub unsafe fn d2b_bus::authorization::BusAuthorizer::deref_mut<'a>(usize) -> &'a mut T
 pub unsafe fn d2b_bus::authorization::BusAuthorizer::drop(usize)
 pub unsafe fn d2b_bus::authorization::BusAuthorizer::init(<T as crossbeam_epoch::atomic::Pointable>::Init) -> usize
+pub unsafe fn d2b_bus::metrics::BusBackpressureReason::clone_to_uninit(&self, *mut u8)
+pub unsafe fn d2b_bus::metrics::BusBackpressureReason::deref<'a>(usize) -> &'a T
+pub unsafe fn d2b_bus::metrics::BusBackpressureReason::deref_mut<'a>(usize) -> &'a mut T
+pub unsafe fn d2b_bus::metrics::BusBackpressureReason::drop(usize)
+pub unsafe fn d2b_bus::metrics::BusBackpressureReason::init(<T as crossbeam_epoch::atomic::Pointable>::Init) -> usize
+pub unsafe fn d2b_bus::metrics::BusDirection::clone_to_uninit(&self, *mut u8)
+pub unsafe fn d2b_bus::metrics::BusDirection::deref<'a>(usize) -> &'a T
+pub unsafe fn d2b_bus::metrics::BusDirection::deref_mut<'a>(usize) -> &'a mut T
+pub unsafe fn d2b_bus::metrics::BusDirection::drop(usize)
+pub unsafe fn d2b_bus::metrics::BusDirection::init(<T as crossbeam_epoch::atomic::Pointable>::Init) -> usize
+pub unsafe fn d2b_bus::metrics::BusDisconnectOutcome::clone_to_uninit(&self, *mut u8)
+pub unsafe fn d2b_bus::metrics::BusDisconnectOutcome::deref<'a>(usize) -> &'a T
+pub unsafe fn d2b_bus::metrics::BusDisconnectOutcome::deref_mut<'a>(usize) -> &'a mut T
+pub unsafe fn d2b_bus::metrics::BusDisconnectOutcome::drop(usize)
+pub unsafe fn d2b_bus::metrics::BusDisconnectOutcome::init(<T as crossbeam_epoch::atomic::Pointable>::Init) -> usize
+pub unsafe fn d2b_bus::metrics::BusMetric::clone_to_uninit(&self, *mut u8)
+pub unsafe fn d2b_bus::metrics::BusMetric::deref<'a>(usize) -> &'a T
+pub unsafe fn d2b_bus::metrics::BusMetric::deref_mut<'a>(usize) -> &'a mut T
+pub unsafe fn d2b_bus::metrics::BusMetric::drop(usize)
+pub unsafe fn d2b_bus::metrics::BusMetric::init(<T as crossbeam_epoch::atomic::Pointable>::Init) -> usize
+pub unsafe fn d2b_bus::metrics::BusMetrics::clone_to_uninit(&self, *mut u8)
+pub unsafe fn d2b_bus::metrics::BusMetrics::deref<'a>(usize) -> &'a T
+pub unsafe fn d2b_bus::metrics::BusMetrics::deref_mut<'a>(usize) -> &'a mut T
+pub unsafe fn d2b_bus::metrics::BusMetrics::drop(usize)
+pub unsafe fn d2b_bus::metrics::BusMetrics::init(<T as crossbeam_epoch::atomic::Pointable>::Init) -> usize
+pub unsafe fn d2b_bus::metrics::BusRegistrationOutcome::clone_to_uninit(&self, *mut u8)
+pub unsafe fn d2b_bus::metrics::BusRegistrationOutcome::deref<'a>(usize) -> &'a T
+pub unsafe fn d2b_bus::metrics::BusRegistrationOutcome::deref_mut<'a>(usize) -> &'a mut T
+pub unsafe fn d2b_bus::metrics::BusRegistrationOutcome::drop(usize)
+pub unsafe fn d2b_bus::metrics::BusRegistrationOutcome::init(<T as crossbeam_epoch::atomic::Pointable>::Init) -> usize
+pub unsafe fn d2b_bus::metrics::BusRejectionOutcome::clone_to_uninit(&self, *mut u8)
+pub unsafe fn d2b_bus::metrics::BusRejectionOutcome::deref<'a>(usize) -> &'a T
+pub unsafe fn d2b_bus::metrics::BusRejectionOutcome::deref_mut<'a>(usize) -> &'a mut T
+pub unsafe fn d2b_bus::metrics::BusRejectionOutcome::drop(usize)
+pub unsafe fn d2b_bus::metrics::BusRejectionOutcome::init(<T as crossbeam_epoch::atomic::Pointable>::Init) -> usize
+pub unsafe fn d2b_bus::metrics::BusRouteOutcome::clone_to_uninit(&self, *mut u8)
+pub unsafe fn d2b_bus::metrics::BusRouteOutcome::deref<'a>(usize) -> &'a T
+pub unsafe fn d2b_bus::metrics::BusRouteOutcome::deref_mut<'a>(usize) -> &'a mut T
+pub unsafe fn d2b_bus::metrics::BusRouteOutcome::drop(usize)
+pub unsafe fn d2b_bus::metrics::BusRouteOutcome::init(<T as crossbeam_epoch::atomic::Pointable>::Init) -> usize
+pub unsafe fn d2b_bus::metrics::BusStreamKind::clone_to_uninit(&self, *mut u8)
+pub unsafe fn d2b_bus::metrics::BusStreamKind::deref<'a>(usize) -> &'a T
+pub unsafe fn d2b_bus::metrics::BusStreamKind::deref_mut<'a>(usize) -> &'a mut T
+pub unsafe fn d2b_bus::metrics::BusStreamKind::drop(usize)
+pub unsafe fn d2b_bus::metrics::BusStreamKind::init(<T as crossbeam_epoch::atomic::Pointable>::Init) -> usize
+pub unsafe fn d2b_bus::metrics::BusStreamOutcome::clone_to_uninit(&self, *mut u8)
+pub unsafe fn d2b_bus::metrics::BusStreamOutcome::deref<'a>(usize) -> &'a T
+pub unsafe fn d2b_bus::metrics::BusStreamOutcome::deref_mut<'a>(usize) -> &'a mut T
+pub unsafe fn d2b_bus::metrics::BusStreamOutcome::drop(usize)
+pub unsafe fn d2b_bus::metrics::BusStreamOutcome::init(<T as crossbeam_epoch::atomic::Pointable>::Init) -> usize
+pub unsafe fn d2b_bus::metrics::BusTransport::clone_to_uninit(&self, *mut u8)
+pub unsafe fn d2b_bus::metrics::BusTransport::deref<'a>(usize) -> &'a T
+pub unsafe fn d2b_bus::metrics::BusTransport::deref_mut<'a>(usize) -> &'a mut T
+pub unsafe fn d2b_bus::metrics::BusTransport::drop(usize)
+pub unsafe fn d2b_bus::metrics::BusTransport::init(<T as crossbeam_epoch::atomic::Pointable>::Init) -> usize
+pub unsafe fn d2b_bus::metrics::NoopBusTelemetry::clone_to_uninit(&self, *mut u8)
+pub unsafe fn d2b_bus::metrics::NoopBusTelemetry::deref<'a>(usize) -> &'a T
+pub unsafe fn d2b_bus::metrics::NoopBusTelemetry::deref_mut<'a>(usize) -> &'a mut T
+pub unsafe fn d2b_bus::metrics::NoopBusTelemetry::drop(usize)
+pub unsafe fn d2b_bus::metrics::NoopBusTelemetry::init(<T as crossbeam_epoch::atomic::Pointable>::Init) -> usize
 pub unsafe fn d2b_bus::operations::Cancellation::clone_to_uninit(&self, *mut u8)
 pub unsafe fn d2b_bus::operations::Cancellation::deref<'a>(usize) -> &'a T
 pub unsafe fn d2b_bus::operations::Cancellation::deref_mut<'a>(usize) -> &'a mut T

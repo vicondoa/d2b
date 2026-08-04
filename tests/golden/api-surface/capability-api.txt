@@ -376,6 +376,7 @@ d2b_bus	pub fn d2b_bus::BusEndpoint::open_stream<'life0, 'async_trait>(&'life0 s
 d2b_bus	pub fn d2b_bus::BusEndpoint::terminalize_cancel(&self, &d2b_bus::operations::OperationId, &d2b_bus::operations::Cancellation) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<(), d2b_bus::registry::EndpointError>> + core::marker::Send + 'static)>>
 d2b_bus	pub fn d2b_bus::authorization::BusAuthorizer::new(d2b_resource_api::authz::NativeAuthorizer, d2b_resource_api::authz::AuthorizationState) -> core::result::Result<Self, d2b_bus::authorization::AuthorizationError>
 d2b_bus	pub fn d2b_bus::authorization::BusAuthorizer::replace_policy(&self, d2b_resource_api::authz::PolicySet, d2b_resource_api::authz::AuthorizationState) -> core::result::Result<(), d2b_bus::authorization::AuthorizationError>
+d2b_bus	pub fn d2b_bus::metrics::BusDirection::from_context(core::option::Option<&d2b_contracts::v3::identity::AuthenticatedSubjectContext>) -> Self
 d2b_bus	pub fn d2b_bus::registry::BusEndpoint::authorize<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 d2b_bus::registry::RouteKey, d2b_resource_api::authz::SessionVerb, core::option::Option<&'life2 d2b_contracts::v3::resource_ref::ResourceRef>, u64) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<(), d2b_bus::registry::EndpointError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
 d2b_bus	pub fn d2b_bus::registry::BusEndpoint::invalidate_session(&self) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = ()> + core::marker::Send + 'static)>>
 d2b_bus	pub fn d2b_bus::registry::BusEndpoint::invoke<'life0, 'async_trait>(&'life0 self, d2b_bus::router::DeliveredInvocation) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<d2b_bus::registry::BusResponse, d2b_bus::registry::EndpointError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
@@ -401,7 +402,9 @@ d2b_bus	pub fn d2b_bus::router::ZoneBus::new(d2b_contracts::v3::identity::ZoneId
 d2b_bus	pub fn d2b_bus::router::ZoneBus::replace_policy(&self, d2b_resource_api::authz::PolicySet, d2b_resource_api::authz::AuthorizationState) -> core::result::Result<(), d2b_bus::router::BusError>
 d2b_bus	pub fn d2b_bus::router::ZoneBus::with_clock(d2b_contracts::v3::identity::ZoneId, d2b_bus::authorization::BusAuthorizer, d2b_bus::router::BusConfig, alloc::sync::Arc<dyn d2b_bus::router::BusClock>) -> core::result::Result<(Self, d2b_bus::router::ZoneRegistrar), d2b_bus::router::BusError>
 d2b_bus	pub fn d2b_bus::router::ZoneBus::with_clock_and_observer(d2b_contracts::v3::identity::ZoneId, d2b_bus::authorization::BusAuthorizer, d2b_bus::router::BusConfig, alloc::sync::Arc<dyn d2b_bus::router::BusClock>, alloc::sync::Arc<dyn d2b_bus::router::BusObserver>) -> core::result::Result<(Self, d2b_bus::router::ZoneRegistrar), d2b_bus::router::BusError>
+d2b_bus	pub fn d2b_bus::router::ZoneBus::with_clock_observer_and_metrics(d2b_contracts::v3::identity::ZoneId, d2b_bus::authorization::BusAuthorizer, d2b_bus::router::BusConfig, alloc::sync::Arc<dyn d2b_bus::router::BusClock>, alloc::sync::Arc<dyn d2b_bus::router::BusObserver>, alloc::sync::Arc<dyn d2b_bus::metrics::BusTelemetry>) -> core::result::Result<(Self, d2b_bus::router::ZoneRegistrar), d2b_bus::router::BusError>
 d2b_bus	pub fn d2b_bus::router::ZoneBus::with_observer(d2b_contracts::v3::identity::ZoneId, d2b_bus::authorization::BusAuthorizer, d2b_bus::router::BusConfig, alloc::sync::Arc<dyn d2b_bus::router::BusObserver>) -> core::result::Result<(Self, d2b_bus::router::ZoneRegistrar), d2b_bus::router::BusError>
+d2b_bus	pub fn d2b_bus::router::ZoneBus::with_observer_and_metrics(d2b_contracts::v3::identity::ZoneId, d2b_bus::authorization::BusAuthorizer, d2b_bus::router::BusConfig, alloc::sync::Arc<dyn d2b_bus::router::BusObserver>, alloc::sync::Arc<dyn d2b_bus::metrics::BusTelemetry>) -> core::result::Result<(Self, d2b_bus::router::ZoneRegistrar), d2b_bus::router::BusError>
 d2b_bus	pub fn d2b_bus::router::ZoneRegistrar::component_session_acceptor(&self, d2b_contracts::v3::component_session::EndpointPolicy, d2b_session_unix::subject::VerifiedUnixPeer) -> d2b_session::error::Result<d2b_session::admission::SessionAcceptor<d2b_bus::router::ComponentSessionAdmission>>
 d2b_bus	pub fn d2b_bus::session::prologue::SubjectContextDigest::of_subject(&d2b_contracts::v3::identity::AuthenticatedSubjectContext) -> Self
 d2b_bus	pub fn d2b_bus::streams::ReceivedFrame::clone(&self) -> d2b_bus::streams::ReceivedFrame
@@ -9480,7 +9483,6 @@ d2b_provider_volume_virtiofs	pub struct d2b_provider_volume_virtiofs::ExportSpec
 d2b_provider_volume_virtiofs	pub struct d2b_provider_volume_virtiofs::ExportStatusReport
 d2b_provider_volume_virtiofs	pub struct d2b_provider_volume_virtiofs::LaunchedWorker
 d2b_provider_volume_virtiofs	pub trait d2b_provider_volume_virtiofs::VirtiofsExportEffectPort: core::marker::Send + core::marker::Sync
-d2b_resource_api	impl !core::marker::Freeze for d2b_resource_api::RedbBackend
 d2b_resource_api	impl !core::marker::Freeze for d2b_resource_api::authz::NativeAuthorizer
 d2b_resource_api	impl !core::marker::Freeze for d2b_resource_api::watch::ResourceWatch
 d2b_resource_api	impl !core::panic::unwind_safe::RefUnwindSafe for d2b_resource_api::RedbBackend
@@ -9569,6 +9571,7 @@ d2b_resource_api	impl core::fmt::Debug for d2b_resource_api::watch::WatchService
 d2b_resource_api	impl core::fmt::Debug for d2b_resource_api::zone_service::ZoneCallContext
 d2b_resource_api	impl core::marker::Freeze for d2b_resource_api::AdmittedMutation
 d2b_resource_api	impl core::marker::Freeze for d2b_resource_api::AuthenticatedSubjectContext
+d2b_resource_api	impl core::marker::Freeze for d2b_resource_api::RedbBackend
 d2b_resource_api	impl core::marker::Freeze for d2b_resource_api::authz::AuthorizationGrant
 d2b_resource_api	impl core::marker::Freeze for d2b_resource_api::authz::AuthorizationRequest
 d2b_resource_api	impl core::marker::Freeze for d2b_resource_api::authz::AuthorizationState
@@ -9786,7 +9789,6 @@ d2b_resource_api	impl<S, U> d2b_resource_api::adapter::UnregisteredBusAdapter<S,
 d2b_resource_api	impl<S, U> d2b_resource_api::adapter::UnregisteredBusAdapter<S, U> where S: d2b_resource_api::ResourceStoreBackend, U: d2b_resource_api::service::UpgradeDispatcher
 d2b_resource_api	impl<S, U> d2b_resource_api::client::UnregisteredResourceClient<S, U> where S: d2b_resource_api::ResourceStoreBackend, U: d2b_resource_api::service::UpgradeDispatcher
 d2b_resource_api	impl<S, U> d2b_resource_api::generated::d2b_resource_v3_ttrpc::ResourceService for d2b_resource_api::adapter::UnregisteredBusAdapter<S, U> where S: d2b_resource_api::ResourceStoreBackend + 'static, U: d2b_resource_api::service::UpgradeDispatcher + 'static
-d2b_resource_api	impl<S, U> d2b_resource_api::service::ResourceService<S, U> where S: d2b_resource_api::ResourceStoreBackend
 d2b_resource_api	impl<S, U> d2b_resource_api::service::ResourceService<S, U> where S: d2b_resource_api::ResourceStoreBackend, U: d2b_resource_api::service::UpgradeDispatcher
 d2b_resource_api	impl<S> d2b_resource_api::service::ResourceService<S, d2b_resource_api::service::UnavailableUpgradeDispatcher> where S: d2b_resource_api::ResourceStoreBackend
 d2b_resource_api	impl<S> d2b_resource_api::zone_service::ZoneService<S> where S: d2b_resource_api::zone_service::ZoneServiceHandler
@@ -10114,8 +10116,10 @@ d2b_resource_api	pub async fn d2b_resource_api::service::ResourceService<S, U>::
 d2b_resource_api	pub async fn d2b_resource_api::service::ResourceService<S, U>::create(&self, d2b_resource_api::service::TrustedRequest<d2b_contracts::generated::d2b_resource_v3::CreateRequest>) -> d2b_contracts::generated::d2b_resource_v3::CreateResponse
 d2b_resource_api	pub async fn d2b_resource_api::service::ResourceService<S, U>::delete(&self, d2b_resource_api::service::TrustedRequest<d2b_contracts::generated::d2b_resource_v3::DeleteRequest>) -> d2b_contracts::generated::d2b_resource_v3::DeleteResponse
 d2b_resource_api	pub async fn d2b_resource_api::service::ResourceService<S, U>::get(&self, d2b_resource_api::service::TrustedRequest<d2b_contracts::generated::d2b_resource_v3::GetRequest>) -> d2b_contracts::generated::d2b_resource_v3::GetResponse
+d2b_resource_api	pub async fn d2b_resource_api::service::ResourceService<S, U>::get_runtime(&self, d2b_contracts::v3::identity::AuthenticatedSubjectContext, d2b_resource_api::authz::AuthorizationState, d2b_contracts::v3::resource_ref::ResourceRef, impl core::convert::Into<alloc::string::String>) -> core::result::Result<d2b_resource_store::StoredResource, d2b_contracts::v3::error::ResourceError>
 d2b_resource_api	pub async fn d2b_resource_api::service::ResourceService<S, U>::inspect_schema(&self, d2b_resource_api::service::TrustedRequest<d2b_contracts::generated::d2b_resource_v3::InspectSchemaRequest>) -> d2b_contracts::generated::d2b_resource_v3::InspectSchemaResponse
 d2b_resource_api	pub async fn d2b_resource_api::service::ResourceService<S, U>::list(&self, d2b_resource_api::service::TrustedRequest<d2b_contracts::generated::d2b_resource_v3::ListRequest>) -> d2b_contracts::generated::d2b_resource_v3::ListResponse
+d2b_resource_api	pub async fn d2b_resource_api::service::ResourceService<S, U>::list_runtime(&self, d2b_contracts::v3::identity::AuthenticatedSubjectContext, d2b_resource_api::authz::AuthorizationState, d2b_contracts::v3::identity::ResourceTypeName, impl core::convert::Into<alloc::string::String>) -> core::result::Result<d2b_resource_store::StoreListResult, d2b_contracts::v3::error::ResourceError>
 d2b_resource_api	pub async fn d2b_resource_api::service::ResourceService<S, U>::resolve_ref(&self, d2b_resource_api::service::TrustedRequest<d2b_contracts::generated::d2b_resource_v3::ResolveRefRequest>) -> d2b_contracts::generated::d2b_resource_v3::ResolveRefResponse
 d2b_resource_api	pub async fn d2b_resource_api::service::ResourceService<S, U>::update_finalizers(&self, d2b_resource_api::service::TrustedRequest<d2b_contracts::generated::d2b_resource_v3::UpdateFinalizersRequest>) -> d2b_contracts::generated::d2b_resource_v3::UpdateFinalizersResponse
 d2b_resource_api	pub async fn d2b_resource_api::service::ResourceService<S, U>::update_metadata(&self, d2b_resource_api::service::TrustedRequest<d2b_contracts::generated::d2b_resource_v3::UpdateMetadataRequest>) -> d2b_contracts::generated::d2b_resource_v3::UpdateMetadataResponse
@@ -10130,7 +10134,7 @@ d2b_resource_api	pub async fn d2b_resource_api::watch::ResourceWatch::recv_frame
 d2b_resource_api	pub async fn d2b_resource_api::watch::WatchService::open(&self, d2b_resource_store::StoreWatchRequest) -> core::result::Result<d2b_resource_api::watch::ResourceWatch, d2b_resource_store::error::StoreError>
 d2b_resource_api	pub async fn d2b_resource_api::zone_service::ZoneService<S>::call(&self, &d2b_resource_api::zone_service::ZoneCallContext, d2b_resource_api::zone_service::ZoneMethod, &[u8]) -> core::result::Result<alloc::vec::Vec<u8>, d2b_resource_api::zone_service::ZoneServiceError>
 d2b_resource_api	pub const fn d2b_resource_api::AdmittedMutation::authorization(&self) -> &d2b_resource_store::AdmittedAuthorization
-d2b_resource_api	pub const fn d2b_resource_api::RedbBackend::new(d2b_resource_store_redb::RedbResourceStore) -> Self
+d2b_resource_api	pub const fn d2b_resource_api::RedbBackend::from_arc(alloc::sync::Arc<d2b_resource_store_redb::RedbResourceStore>) -> Self
 d2b_resource_api	pub const fn d2b_resource_api::watch::WatchOwnerHint::child_ref(&self) -> &d2b_contracts::v3::resource_ref::ResourceRef
 d2b_resource_api	pub const fn d2b_resource_api::watch::WatchOwnerHint::child_uid(&self) -> &d2b_contracts::v3::identity::ResourceUid
 d2b_resource_api	pub const fn d2b_resource_api::watch::WatchOwnerHint::owner_ref(&self) -> core::option::Option<&d2b_contracts::v3::resource_ref::ResourceRef>
@@ -10185,6 +10189,7 @@ d2b_resource_api	pub d2b_resource_api::service::UpgradeResult::resource: d2b_res
 d2b_resource_api	pub d2b_resource_api::service::UpgradeResult::revision: d2b_contracts::v3::identity::ZoneRevision
 d2b_resource_api	pub enum d2b_resource_api::authz::BootstrapPhase
 d2b_resource_api	pub fn d2b_resource_api::AdmittedMutation::mutations(&self) -> &[d2b_resource_store::StoreMutation]
+d2b_resource_api	pub fn d2b_resource_api::RedbBackend::new(d2b_resource_store_redb::RedbResourceStore) -> Self
 d2b_resource_api	pub fn d2b_resource_api::ResourceStoreBackend::commit_verified(&self, d2b_resource_store::mutation_seal::SealedMutation) -> impl core::future::future::Future<Output = core::result::Result<d2b_resource_store::StoreCommitResult, d2b_resource_store::error::StoreError>> + core::marker::Send
 d2b_resource_api	pub fn d2b_resource_api::ResourceStoreBackend::get(&self, d2b_resource_store::StoreGetRequest) -> impl core::future::future::Future<Output = core::result::Result<d2b_resource_store::StoredResource, d2b_resource_store::error::StoreError>> + core::marker::Send
 d2b_resource_api	pub fn d2b_resource_api::ResourceStoreBackend::inspect_schema(&self, d2b_resource_store::StoreInspectSchemaRequest) -> impl core::future::future::Future<Output = core::result::Result<d2b_resource_store::StoredSchema, d2b_resource_store::error::StoreError>> + core::marker::Send
@@ -11310,6 +11315,9 @@ d2b_resource_store_redb	pub fn d2b_resource_store_redb::backup::LogicalBackup::f
 d2b_resource_store_redb	pub fn d2b_resource_store_redb::backup::LogicalBackup::restore_file(&self, std::fs::File, &d2b_resource_store_redb::StoreIdentity) -> core::result::Result<redb::db::Database, d2b_resource_store::error::StoreError>
 d2b_resource_store_redb	pub fn d2b_resource_store_redb::backup::LogicalBackup::restore_into(&self, &redb::db::Database, &d2b_resource_store_redb::StoreIdentity) -> core::result::Result<(), d2b_resource_store::error::StoreError>
 d2b_resource_store_redb	pub fn d2b_resource_store_redb::backup::LogicalBackup::validate_for_identity(&self, &d2b_resource_store_redb::StoreIdentity) -> core::result::Result<(), d2b_resource_store::error::StoreError>
+d2b_resource_store_redb	pub fn d2b_resource_store_redb::migration::recover_owned(&std::fs::File, &mut std::fs::File, &d2b_resource_store_redb::StoreIdentity) -> core::result::Result<d2b_resource_store_redb::migration::RecoveryOutcome, d2b_resource_store::error::StoreError>
+d2b_resource_store_redb	pub fn d2b_resource_store_redb::migration::restore_owned(&std::fs::File, &mut std::fs::File, &d2b_resource_store_redb::backup::LogicalBackup, &d2b_resource_store_redb::StoreIdentity) -> core::result::Result<d2b_resource_store_redb::migration::MigrationOutcome, d2b_resource_store::error::StoreError>
+d2b_resource_store_redb	pub fn d2b_resource_store_redb::migration::upgrade_owned(&std::fs::File, &mut std::fs::File, &d2b_resource_store_redb::StoreIdentity) -> core::result::Result<d2b_resource_store_redb::migration::MigrationOutcome, d2b_resource_store::error::StoreError>
 d2b_resource_store_redb	pub fn d2b_resource_store_redb::ownership::OwnerBinding::clone(&self) -> d2b_resource_store_redb::ownership::OwnerBinding
 d2b_resource_store_redb	pub fn d2b_resource_store_redb::ownership::OwnerBinding::eq(&self, &d2b_resource_store_redb::ownership::OwnerBinding) -> bool
 d2b_resource_store_redb	pub fn d2b_resource_store_redb::ownership::OwnerIndex::bind_owner(&mut self, &d2b_contracts::v3::identity::ResourceUid, d2b_contracts::v3::resource_ref::ResourceRef, d2b_contracts::v3::identity::ZoneRevision, d2b_controller_toolkit::owner_hints::OwnerChangeEvent) -> core::result::Result<d2b_resource_store_redb::ownership::OwnerIndexMutation, d2b_resource_store_redb::ownership::OwnershipError>
@@ -11331,12 +11339,15 @@ d2b_resource_store_redb	pub fn d2b_resource_store_redb::ownership::OwnerIndexMut
 d2b_resource_store_redb	pub fn d2b_resource_store_redb::ownership::OwnerIndexMutation::previous_owner(&self) -> core::option::Option<&d2b_resource_store_redb::ownership::OwnerBinding>
 d2b_resource_store_redb	pub fn d2b_resource_store_redb::ownership::ReverseOwnerEntry::clone(&self) -> d2b_resource_store_redb::ownership::ReverseOwnerEntry
 d2b_resource_store_redb	pub fn d2b_resource_store_redb::ownership::ReverseOwnerEntry::eq(&self, &d2b_resource_store_redb::ownership::ReverseOwnerEntry) -> bool
+d2b_resource_store_redb	pub fn d2b_resource_store_redb::recover_owned(&std::fs::File, &mut std::fs::File, &d2b_resource_store_redb::StoreIdentity) -> core::result::Result<d2b_resource_store_redb::migration::RecoveryOutcome, d2b_resource_store::error::StoreError>
+d2b_resource_store_redb	pub fn d2b_resource_store_redb::restore_owned(&std::fs::File, &mut std::fs::File, &d2b_resource_store_redb::backup::LogicalBackup, &d2b_resource_store_redb::StoreIdentity) -> core::result::Result<d2b_resource_store_redb::migration::MigrationOutcome, d2b_resource_store::error::StoreError>
 d2b_resource_store_redb	pub fn d2b_resource_store_redb::revision_log::WatchCoordinator::admit(&mut self, d2b_contracts::v3::identity::ZoneRevision, d2b_resource_store_redb::revision_log::WatchSelector, u32) -> core::result::Result<d2b_resource_store_redb::revision_log::WatchStream, d2b_resource_store::error::StoreError>
 d2b_resource_store_redb	pub fn d2b_resource_store_redb::revision_log::WatchCoordinator::default() -> d2b_resource_store_redb::revision_log::WatchCoordinator
 d2b_resource_store_redb	pub fn d2b_resource_store_redb::revision_log::WatchCoordinator::dispatch(&mut self, d2b_resource_store_redb::actor::SharedChangeBatch) -> u64
 d2b_resource_store_redb	pub fn d2b_resource_store_redb::revision_log::WatchCoordinator::enqueue_replay(&mut self, d2b_resource_store_redb::revision_log::WatchRegistrationId, d2b_resource_store_redb::actor::SharedChangeBatch) -> core::result::Result<(), d2b_resource_store::error::StoreError>
 d2b_resource_store_redb	pub fn d2b_resource_store_redb::revision_log::WatchCoordinator::register(&mut self, d2b_contracts::v3::identity::ZoneRevision, d2b_resource_store_redb::revision_log::WatchSelector, u32, tokio::sync::mpsc::unbounded::UnboundedSender<d2b_resource_store_redb::actor::SharedChangeBatch>) -> core::result::Result<d2b_resource_store_redb::revision_log::WatchRegistrationId, d2b_resource_store::error::StoreError>
 d2b_resource_store_redb	pub fn d2b_resource_store_redb::revision_log::WatchCoordinator::register_and_replay(&mut self, &redb::db::Database, d2b_contracts::v3::identity::ZoneRevision, d2b_resource_store_redb::revision_log::WatchSelector, u32) -> core::result::Result<(d2b_resource_store_redb::revision_log::WatchStream, d2b_contracts::v3::identity::ZoneRevision), d2b_resource_store::error::StoreError>
+d2b_resource_store_redb	pub fn d2b_resource_store_redb::upgrade_owned(&std::fs::File, &mut std::fs::File, &d2b_resource_store_redb::StoreIdentity) -> core::result::Result<d2b_resource_store_redb::migration::MigrationOutcome, d2b_resource_store::error::StoreError>
 d2b_resource_store_redb	pub fn d2b_resource_store_redb::write_provisioning_marker(&mut std::fs::File, &d2b_resource_store_redb::StoreIdentity) -> core::result::Result<(), d2b_resource_store::error::StoreError>
 d2b_resource_store_redb	pub struct d2b_resource_store_redb::ChangeBatch
 d2b_resource_store_redb	pub struct d2b_resource_store_redb::ChangeEntry
@@ -11777,6 +11788,11 @@ d2b_zone_routing	pub struct d2b_zone_routing::router::DurableExecTable
 d2b_zone_routing	pub struct d2b_zone_routing::router::ZoneOperationRouter
 d2bd	impl !core::marker::Freeze for d2bd::provider_effects::ProviderLifecycleDispatch
 d2bd	impl !core::marker::Freeze for d2bd::provider_registry::ProviderRuntime
+d2bd	impl !core::marker::Freeze for d2bd::resource_runtime::ZoneResourceRuntime
+d2bd	impl !core::panic::unwind_safe::RefUnwindSafe for d2bd::resource_runtime::ResourcePlane
+d2bd	impl !core::panic::unwind_safe::RefUnwindSafe for d2bd::resource_runtime::ZoneResourceRuntime
+d2bd	impl !core::panic::unwind_safe::UnwindSafe for d2bd::resource_runtime::ResourcePlane
+d2bd	impl !core::panic::unwind_safe::UnwindSafe for d2bd::resource_runtime::ZoneResourceRuntime
 d2bd	impl core::clone::Clone for d2bd::provider_effects::GuestLifecycleRequest
 d2bd	impl core::clone::Clone for d2bd::provider_registry::ProviderBinding
 d2bd	impl core::cmp::Eq for d2bd::provider_effects::GuestLifecycleRequest
@@ -11784,30 +11800,42 @@ d2bd	impl core::cmp::Eq for d2bd::provider_registry::ProviderBinding
 d2bd	impl core::cmp::PartialEq for d2bd::provider_effects::GuestLifecycleRequest
 d2bd	impl core::cmp::PartialEq for d2bd::provider_registry::ProviderBinding
 d2bd	impl core::default::Default for d2bd::provider_registry::ProviderRuntime
+d2bd	impl core::default::Default for d2bd::resource_runtime::ResourcePlane
 d2bd	impl core::fmt::Debug for d2bd::provider_effects::GuestLifecycleRequest
 d2bd	impl core::fmt::Debug for d2bd::provider_effects::ProviderLifecycleDispatch
 d2bd	impl core::fmt::Debug for d2bd::provider_registry::ProviderBinding
 d2bd	impl core::fmt::Debug for d2bd::provider_registry::ProviderRuntime
+d2bd	impl core::fmt::Debug for d2bd::resource_runtime::ResourcePlane
+d2bd	impl core::fmt::Debug for d2bd::resource_runtime::ZoneResourceRuntime
 d2bd	impl core::marker::Freeze for d2bd::provider_effects::GuestLifecycleRequest
 d2bd	impl core::marker::Freeze for d2bd::provider_registry::ProviderBinding
+d2bd	impl core::marker::Freeze for d2bd::resource_runtime::ResourcePlane
 d2bd	impl core::marker::Send for d2bd::provider_effects::GuestLifecycleRequest
 d2bd	impl core::marker::Send for d2bd::provider_effects::ProviderLifecycleDispatch
 d2bd	impl core::marker::Send for d2bd::provider_registry::ProviderBinding
 d2bd	impl core::marker::Send for d2bd::provider_registry::ProviderRuntime
+d2bd	impl core::marker::Send for d2bd::resource_runtime::ResourcePlane
+d2bd	impl core::marker::Send for d2bd::resource_runtime::ZoneResourceRuntime
 d2bd	impl core::marker::StructuralPartialEq for d2bd::provider_effects::GuestLifecycleRequest
 d2bd	impl core::marker::StructuralPartialEq for d2bd::provider_registry::ProviderBinding
 d2bd	impl core::marker::Sync for d2bd::provider_effects::GuestLifecycleRequest
 d2bd	impl core::marker::Sync for d2bd::provider_effects::ProviderLifecycleDispatch
 d2bd	impl core::marker::Sync for d2bd::provider_registry::ProviderBinding
 d2bd	impl core::marker::Sync for d2bd::provider_registry::ProviderRuntime
+d2bd	impl core::marker::Sync for d2bd::resource_runtime::ResourcePlane
+d2bd	impl core::marker::Sync for d2bd::resource_runtime::ZoneResourceRuntime
 d2bd	impl core::marker::Unpin for d2bd::provider_effects::GuestLifecycleRequest
 d2bd	impl core::marker::Unpin for d2bd::provider_effects::ProviderLifecycleDispatch
 d2bd	impl core::marker::Unpin for d2bd::provider_registry::ProviderBinding
 d2bd	impl core::marker::Unpin for d2bd::provider_registry::ProviderRuntime
+d2bd	impl core::marker::Unpin for d2bd::resource_runtime::ResourcePlane
+d2bd	impl core::marker::Unpin for d2bd::resource_runtime::ZoneResourceRuntime
 d2bd	impl core::marker::UnsafeUnpin for d2bd::provider_effects::GuestLifecycleRequest
 d2bd	impl core::marker::UnsafeUnpin for d2bd::provider_effects::ProviderLifecycleDispatch
 d2bd	impl core::marker::UnsafeUnpin for d2bd::provider_registry::ProviderBinding
 d2bd	impl core::marker::UnsafeUnpin for d2bd::provider_registry::ProviderRuntime
+d2bd	impl core::marker::UnsafeUnpin for d2bd::resource_runtime::ResourcePlane
+d2bd	impl core::marker::UnsafeUnpin for d2bd::resource_runtime::ZoneResourceRuntime
 d2bd	impl core::panic::unwind_safe::RefUnwindSafe for d2bd::provider_effects::GuestLifecycleRequest
 d2bd	impl core::panic::unwind_safe::RefUnwindSafe for d2bd::provider_effects::ProviderLifecycleDispatch
 d2bd	impl core::panic::unwind_safe::RefUnwindSafe for d2bd::provider_registry::ProviderBinding
@@ -11820,76 +11848,113 @@ d2bd	impl d2bd::provider_effects::GuestLifecycleRequest
 d2bd	impl d2bd::provider_effects::ProviderLifecycleDispatch
 d2bd	impl d2bd::provider_registry::ProviderBinding
 d2bd	impl d2bd::provider_registry::ProviderRuntime
+d2bd	impl d2bd::resource_runtime::ResourcePlane
+d2bd	impl d2bd::resource_runtime::ZoneResourceRuntime
+d2bd	impl<Q, K> indexmap::equivalent::Equivalent<K> for d2bd::provider_effects::GuestLifecycleRequest where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
+d2bd	impl<Q, K> indexmap::equivalent::Equivalent<K> for d2bd::provider_registry::ProviderBinding where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
 d2bd	impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Initialized, zerocopy::pointer::invariant::Initialized> for d2bd::provider_effects::GuestLifecycleRequest where ST: ?core::marker::Sized, DT: ?core::marker::Sized
 d2bd	impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Initialized, zerocopy::pointer::invariant::Initialized> for d2bd::provider_effects::ProviderLifecycleDispatch where ST: ?core::marker::Sized, DT: ?core::marker::Sized
 d2bd	impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Initialized, zerocopy::pointer::invariant::Initialized> for d2bd::provider_registry::ProviderBinding where ST: ?core::marker::Sized, DT: ?core::marker::Sized
 d2bd	impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Initialized, zerocopy::pointer::invariant::Initialized> for d2bd::provider_registry::ProviderRuntime where ST: ?core::marker::Sized, DT: ?core::marker::Sized
+d2bd	impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Initialized, zerocopy::pointer::invariant::Initialized> for d2bd::resource_runtime::ResourcePlane where ST: ?core::marker::Sized, DT: ?core::marker::Sized
+d2bd	impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Initialized, zerocopy::pointer::invariant::Initialized> for d2bd::resource_runtime::ZoneResourceRuntime where ST: ?core::marker::Sized, DT: ?core::marker::Sized
 d2bd	impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Uninit, zerocopy::pointer::invariant::Uninit> for d2bd::provider_effects::GuestLifecycleRequest where ST: ?core::marker::Sized, DT: ?core::marker::Sized
 d2bd	impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Uninit, zerocopy::pointer::invariant::Uninit> for d2bd::provider_effects::ProviderLifecycleDispatch where ST: ?core::marker::Sized, DT: ?core::marker::Sized
 d2bd	impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Uninit, zerocopy::pointer::invariant::Uninit> for d2bd::provider_registry::ProviderBinding where ST: ?core::marker::Sized, DT: ?core::marker::Sized
 d2bd	impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Uninit, zerocopy::pointer::invariant::Uninit> for d2bd::provider_registry::ProviderRuntime where ST: ?core::marker::Sized, DT: ?core::marker::Sized
+d2bd	impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Uninit, zerocopy::pointer::invariant::Uninit> for d2bd::resource_runtime::ResourcePlane where ST: ?core::marker::Sized, DT: ?core::marker::Sized
+d2bd	impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Uninit, zerocopy::pointer::invariant::Uninit> for d2bd::resource_runtime::ZoneResourceRuntime where ST: ?core::marker::Sized, DT: ?core::marker::Sized
 d2bd	impl<T, U> core::convert::Into<U> for d2bd::provider_effects::GuestLifecycleRequest where U: core::convert::From<T>
 d2bd	impl<T, U> core::convert::Into<U> for d2bd::provider_effects::ProviderLifecycleDispatch where U: core::convert::From<T>
 d2bd	impl<T, U> core::convert::Into<U> for d2bd::provider_registry::ProviderBinding where U: core::convert::From<T>
 d2bd	impl<T, U> core::convert::Into<U> for d2bd::provider_registry::ProviderRuntime where U: core::convert::From<T>
+d2bd	impl<T, U> core::convert::Into<U> for d2bd::resource_runtime::ResourcePlane where U: core::convert::From<T>
+d2bd	impl<T, U> core::convert::Into<U> for d2bd::resource_runtime::ZoneResourceRuntime where U: core::convert::From<T>
 d2bd	impl<T, U> core::convert::TryFrom<U> for d2bd::provider_effects::GuestLifecycleRequest where U: core::convert::Into<T>
 d2bd	impl<T, U> core::convert::TryFrom<U> for d2bd::provider_effects::ProviderLifecycleDispatch where U: core::convert::Into<T>
 d2bd	impl<T, U> core::convert::TryFrom<U> for d2bd::provider_registry::ProviderBinding where U: core::convert::Into<T>
 d2bd	impl<T, U> core::convert::TryFrom<U> for d2bd::provider_registry::ProviderRuntime where U: core::convert::Into<T>
+d2bd	impl<T, U> core::convert::TryFrom<U> for d2bd::resource_runtime::ResourcePlane where U: core::convert::Into<T>
+d2bd	impl<T, U> core::convert::TryFrom<U> for d2bd::resource_runtime::ZoneResourceRuntime where U: core::convert::Into<T>
 d2bd	impl<T, U> core::convert::TryInto<U> for d2bd::provider_effects::GuestLifecycleRequest where U: core::convert::TryFrom<T>
 d2bd	impl<T, U> core::convert::TryInto<U> for d2bd::provider_effects::ProviderLifecycleDispatch where U: core::convert::TryFrom<T>
 d2bd	impl<T, U> core::convert::TryInto<U> for d2bd::provider_registry::ProviderBinding where U: core::convert::TryFrom<T>
 d2bd	impl<T, U> core::convert::TryInto<U> for d2bd::provider_registry::ProviderRuntime where U: core::convert::TryFrom<T>
+d2bd	impl<T, U> core::convert::TryInto<U> for d2bd::resource_runtime::ResourcePlane where U: core::convert::TryFrom<T>
+d2bd	impl<T, U> core::convert::TryInto<U> for d2bd::resource_runtime::ZoneResourceRuntime where U: core::convert::TryFrom<T>
 d2bd	impl<T> alloc::borrow::ToOwned for d2bd::provider_effects::GuestLifecycleRequest where T: core::clone::Clone
 d2bd	impl<T> alloc::borrow::ToOwned for d2bd::provider_registry::ProviderBinding where T: core::clone::Clone
 d2bd	impl<T> core::any::Any for d2bd::provider_effects::GuestLifecycleRequest where T: 'static + ?core::marker::Sized
 d2bd	impl<T> core::any::Any for d2bd::provider_effects::ProviderLifecycleDispatch where T: 'static + ?core::marker::Sized
 d2bd	impl<T> core::any::Any for d2bd::provider_registry::ProviderBinding where T: 'static + ?core::marker::Sized
 d2bd	impl<T> core::any::Any for d2bd::provider_registry::ProviderRuntime where T: 'static + ?core::marker::Sized
+d2bd	impl<T> core::any::Any for d2bd::resource_runtime::ResourcePlane where T: 'static + ?core::marker::Sized
+d2bd	impl<T> core::any::Any for d2bd::resource_runtime::ZoneResourceRuntime where T: 'static + ?core::marker::Sized
 d2bd	impl<T> core::borrow::Borrow<T> for d2bd::provider_effects::GuestLifecycleRequest where T: ?core::marker::Sized
 d2bd	impl<T> core::borrow::Borrow<T> for d2bd::provider_effects::ProviderLifecycleDispatch where T: ?core::marker::Sized
 d2bd	impl<T> core::borrow::Borrow<T> for d2bd::provider_registry::ProviderBinding where T: ?core::marker::Sized
 d2bd	impl<T> core::borrow::Borrow<T> for d2bd::provider_registry::ProviderRuntime where T: ?core::marker::Sized
+d2bd	impl<T> core::borrow::Borrow<T> for d2bd::resource_runtime::ResourcePlane where T: ?core::marker::Sized
+d2bd	impl<T> core::borrow::Borrow<T> for d2bd::resource_runtime::ZoneResourceRuntime where T: ?core::marker::Sized
 d2bd	impl<T> core::borrow::BorrowMut<T> for d2bd::provider_effects::GuestLifecycleRequest where T: ?core::marker::Sized
 d2bd	impl<T> core::borrow::BorrowMut<T> for d2bd::provider_effects::ProviderLifecycleDispatch where T: ?core::marker::Sized
 d2bd	impl<T> core::borrow::BorrowMut<T> for d2bd::provider_registry::ProviderBinding where T: ?core::marker::Sized
 d2bd	impl<T> core::borrow::BorrowMut<T> for d2bd::provider_registry::ProviderRuntime where T: ?core::marker::Sized
+d2bd	impl<T> core::borrow::BorrowMut<T> for d2bd::resource_runtime::ResourcePlane where T: ?core::marker::Sized
+d2bd	impl<T> core::borrow::BorrowMut<T> for d2bd::resource_runtime::ZoneResourceRuntime where T: ?core::marker::Sized
 d2bd	impl<T> core::clone::CloneToUninit for d2bd::provider_effects::GuestLifecycleRequest where T: core::clone::Clone
 d2bd	impl<T> core::clone::CloneToUninit for d2bd::provider_registry::ProviderBinding where T: core::clone::Clone
 d2bd	impl<T> core::convert::From<T> for d2bd::provider_effects::GuestLifecycleRequest
 d2bd	impl<T> core::convert::From<T> for d2bd::provider_effects::ProviderLifecycleDispatch
 d2bd	impl<T> core::convert::From<T> for d2bd::provider_registry::ProviderBinding
 d2bd	impl<T> core::convert::From<T> for d2bd::provider_registry::ProviderRuntime
+d2bd	impl<T> core::convert::From<T> for d2bd::resource_runtime::ResourcePlane
+d2bd	impl<T> core::convert::From<T> for d2bd::resource_runtime::ZoneResourceRuntime
 d2bd	impl<T> crossbeam_epoch::atomic::Pointable for d2bd::provider_effects::GuestLifecycleRequest
 d2bd	impl<T> crossbeam_epoch::atomic::Pointable for d2bd::provider_effects::ProviderLifecycleDispatch
 d2bd	impl<T> crossbeam_epoch::atomic::Pointable for d2bd::provider_registry::ProviderBinding
 d2bd	impl<T> crossbeam_epoch::atomic::Pointable for d2bd::provider_registry::ProviderRuntime
+d2bd	impl<T> crossbeam_epoch::atomic::Pointable for d2bd::resource_runtime::ResourcePlane
+d2bd	impl<T> crossbeam_epoch::atomic::Pointable for d2bd::resource_runtime::ZoneResourceRuntime
 d2bd	impl<T> dyn_clone::DynClone for d2bd::provider_effects::GuestLifecycleRequest where T: core::clone::Clone
 d2bd	impl<T> dyn_clone::DynClone for d2bd::provider_registry::ProviderBinding where T: core::clone::Clone
 d2bd	impl<T> tower_http::follow_redirect::policy::PolicyExt for d2bd::provider_effects::GuestLifecycleRequest where T: ?core::marker::Sized
 d2bd	impl<T> tower_http::follow_redirect::policy::PolicyExt for d2bd::provider_effects::ProviderLifecycleDispatch where T: ?core::marker::Sized
 d2bd	impl<T> tower_http::follow_redirect::policy::PolicyExt for d2bd::provider_registry::ProviderBinding where T: ?core::marker::Sized
 d2bd	impl<T> tower_http::follow_redirect::policy::PolicyExt for d2bd::provider_registry::ProviderRuntime where T: ?core::marker::Sized
+d2bd	impl<T> tower_http::follow_redirect::policy::PolicyExt for d2bd::resource_runtime::ResourcePlane where T: ?core::marker::Sized
+d2bd	impl<T> tower_http::follow_redirect::policy::PolicyExt for d2bd::resource_runtime::ZoneResourceRuntime where T: ?core::marker::Sized
 d2bd	impl<T> tracing::instrument::Instrument for d2bd::provider_effects::GuestLifecycleRequest
 d2bd	impl<T> tracing::instrument::Instrument for d2bd::provider_effects::ProviderLifecycleDispatch
 d2bd	impl<T> tracing::instrument::Instrument for d2bd::provider_registry::ProviderBinding
 d2bd	impl<T> tracing::instrument::Instrument for d2bd::provider_registry::ProviderRuntime
+d2bd	impl<T> tracing::instrument::Instrument for d2bd::resource_runtime::ResourcePlane
+d2bd	impl<T> tracing::instrument::Instrument for d2bd::resource_runtime::ZoneResourceRuntime
 d2bd	impl<T> tracing::instrument::WithSubscriber for d2bd::provider_effects::GuestLifecycleRequest
 d2bd	impl<T> tracing::instrument::WithSubscriber for d2bd::provider_effects::ProviderLifecycleDispatch
 d2bd	impl<T> tracing::instrument::WithSubscriber for d2bd::provider_registry::ProviderBinding
 d2bd	impl<T> tracing::instrument::WithSubscriber for d2bd::provider_registry::ProviderRuntime
+d2bd	impl<T> tracing::instrument::WithSubscriber for d2bd::resource_runtime::ResourcePlane
+d2bd	impl<T> tracing::instrument::WithSubscriber for d2bd::resource_runtime::ZoneResourceRuntime
 d2bd	impl<T> typenum::type_operators::Same for d2bd::provider_effects::GuestLifecycleRequest
 d2bd	impl<T> typenum::type_operators::Same for d2bd::provider_effects::ProviderLifecycleDispatch
 d2bd	impl<T> typenum::type_operators::Same for d2bd::provider_registry::ProviderBinding
 d2bd	impl<T> typenum::type_operators::Same for d2bd::provider_registry::ProviderRuntime
+d2bd	impl<T> typenum::type_operators::Same for d2bd::resource_runtime::ResourcePlane
+d2bd	impl<T> typenum::type_operators::Same for d2bd::resource_runtime::ZoneResourceRuntime
 d2bd	impl<T> zerocopy::pointer::invariant::Read<zerocopy::pointer::invariant::Exclusive, zerocopy::pointer::invariant::BecauseExclusive> for d2bd::provider_effects::GuestLifecycleRequest where T: ?core::marker::Sized
 d2bd	impl<T> zerocopy::pointer::invariant::Read<zerocopy::pointer::invariant::Exclusive, zerocopy::pointer::invariant::BecauseExclusive> for d2bd::provider_effects::ProviderLifecycleDispatch where T: ?core::marker::Sized
 d2bd	impl<T> zerocopy::pointer::invariant::Read<zerocopy::pointer::invariant::Exclusive, zerocopy::pointer::invariant::BecauseExclusive> for d2bd::provider_registry::ProviderBinding where T: ?core::marker::Sized
 d2bd	impl<T> zerocopy::pointer::invariant::Read<zerocopy::pointer::invariant::Exclusive, zerocopy::pointer::invariant::BecauseExclusive> for d2bd::provider_registry::ProviderRuntime where T: ?core::marker::Sized
+d2bd	impl<T> zerocopy::pointer::invariant::Read<zerocopy::pointer::invariant::Exclusive, zerocopy::pointer::invariant::BecauseExclusive> for d2bd::resource_runtime::ResourcePlane where T: ?core::marker::Sized
+d2bd	impl<T> zerocopy::pointer::invariant::Read<zerocopy::pointer::invariant::Exclusive, zerocopy::pointer::invariant::BecauseExclusive> for d2bd::resource_runtime::ZoneResourceRuntime where T: ?core::marker::Sized
 d2bd	impl<V, T> ppv_lite86::types::VZip<V> for d2bd::provider_effects::GuestLifecycleRequest where V: ppv_lite86::types::MultiLane<T>
 d2bd	impl<V, T> ppv_lite86::types::VZip<V> for d2bd::provider_effects::ProviderLifecycleDispatch where V: ppv_lite86::types::MultiLane<T>
 d2bd	impl<V, T> ppv_lite86::types::VZip<V> for d2bd::provider_registry::ProviderBinding where V: ppv_lite86::types::MultiLane<T>
 d2bd	impl<V, T> ppv_lite86::types::VZip<V> for d2bd::provider_registry::ProviderRuntime where V: ppv_lite86::types::MultiLane<T>
+d2bd	impl<V, T> ppv_lite86::types::VZip<V> for d2bd::resource_runtime::ResourcePlane where V: ppv_lite86::types::MultiLane<T>
+d2bd	impl<V, T> ppv_lite86::types::VZip<V> for d2bd::resource_runtime::ZoneResourceRuntime where V: ppv_lite86::types::MultiLane<T>
+d2bd	pub async fn d2bd::resource_runtime::ZoneResourceRuntime::get(&self, d2b_contracts::v3::resource_ref::ResourceRef, &str) -> core::result::Result<serde_json::value::Value, d2bd::resource_runtime::ResourceRuntimeError>
 d2bd	pub const fn d2bd::provider_effects::GuestLifecycleRequest::guest(&self) -> &d2b_contracts::v3::resource_ref::ResourceRef
 d2bd	pub const fn d2bd::provider_registry::ProviderBinding::resource(&self) -> &d2b_contracts::v3::resource_ref::ResourceRef
 d2bd	pub fn d2bd::provider_effects::GuestLifecycleRequest::clone(&self) -> d2bd::provider_effects::GuestLifecycleRequest
@@ -11904,10 +11969,15 @@ d2bd	pub fn d2bd::provider_registry::ProviderBinding::new(d2b_contracts::v3::ide
 d2bd	pub fn d2bd::provider_registry::ProviderRuntime::dispatch_lifecycle<P: d2bd::provider_effects::ProviderLifecycleEffectPort>(&self, &d2b_contracts::broker_wire::BrokerCallerRole, &str, d2bd::provider_effects::GuestLifecycleOperation, impl core::convert::Into<alloc::string::String>, &P) -> core::result::Result<d2bd::provider_registry::ProviderRuntimeDispatch<<P as d2bd::provider_effects::ProviderLifecycleEffectPort>::Output>, d2bd::provider_effects::ProviderEffectError>
 d2bd	pub fn d2bd::provider_registry::ProviderRuntime::from_bindings(d2b_contracts::v3::identity::ZoneId, u64, impl core::iter::traits::collect::IntoIterator<Item = d2bd::provider_registry::ProviderBinding>, impl core::iter::traits::collect::IntoIterator<Item = (alloc::string::String, d2b_contracts::v3::resource_ref::ResourceRef)>) -> core::result::Result<Self, d2bd::provider_registry::ProviderCompositionError>
 d2bd	pub fn d2bd::provider_registry::compose_provider_registry(d2b_contracts::v3::identity::ZoneId, u64, impl core::iter::traits::collect::IntoIterator<Item = d2bd::provider_registry::ProviderBinding>) -> core::result::Result<d2b_provider::registry::ProviderRegistry<d2b_provider::instance::ProviderInstance>, d2bd::provider_registry::ProviderCompositionError>
+d2bd	pub fn d2bd::resource_runtime::ResourcePlane::default() -> d2bd::resource_runtime::ResourcePlane
+d2bd	pub fn d2bd::resource_runtime::ResourcePlane::insert(&mut self, d2bd::resource_runtime::ZoneResourceRuntime) -> core::result::Result<alloc::sync::Arc<d2bd::resource_runtime::ZoneResourceRuntime>, d2bd::resource_runtime::ResourceRuntimeError>
+d2bd	pub fn d2bd::resource_runtime::ResourcePlane::zone(&self, &d2b_contracts::v3::identity::ZoneId) -> core::result::Result<alloc::sync::Arc<d2bd::resource_runtime::ZoneResourceRuntime>, d2bd::resource_runtime::ResourceRuntimeError>
 d2bd	pub struct d2bd::provider_effects::GuestLifecycleRequest
 d2bd	pub struct d2bd::provider_effects::ProviderLifecycleDispatch
 d2bd	pub struct d2bd::provider_registry::ProviderBinding
 d2bd	pub struct d2bd::provider_registry::ProviderRuntime
+d2bd	pub struct d2bd::resource_runtime::ResourcePlane
+d2bd	pub struct d2bd::resource_runtime::ZoneResourceRuntime
 d2bd	pub trait d2bd::provider_effects::ProviderLifecycleEffectPort
 d2bd	pub type d2bd::provider_effects::ProviderLifecycleEffectPort::Output
 d2bd	pub use d2bd::provider_registry::ProviderRegistrySnapshot
