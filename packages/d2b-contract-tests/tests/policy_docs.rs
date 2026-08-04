@@ -14,6 +14,8 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
     fmt,
+    path::Path,
+    sync::OnceLock,
 };
 
 use d2b_contract_tests::{read_repo_file, repo_path_exists};
@@ -529,6 +531,202 @@ fn activation_docs_do_not_describe_host_side_guest_activation() {
     assert!(
         design.contains("The broker never runs the guest's activation program"),
         "design overview must document the host-systemd isolation boundary"
+    );
+}
+
+const CLI_DOC_ROOTS: &[&str] = &[
+    "README.md",
+    "templates/default",
+    "examples",
+    "docs/how-to",
+    "docs/reference",
+    "docs/explanation",
+    "tests/integration/live/live-vm-smoke.sh",
+];
+
+/// `docs/reference/cli-output/` and `docs/reference/error-codes.md` are
+/// drift-governed artifact sets. Their committed compatibility prose/schemas
+/// are emitted from legacy DTOs; the current typed command contract lives in
+/// `docs/reference/cli-contract.md`. Do not broaden this exemption to other
+/// reference docs.
+fn generated_cli_compatibility_artifact(rel: &str) -> bool {
+    rel.starts_with("docs/reference/cli-output/") || rel == "docs/reference/error-codes.md"
+}
+
+/// Explicitly historical how-tos retain the old command as migration input.
+/// Keep this list narrow: current how-tos under the same directory remain
+/// governed by the scan below.
+fn historical_cli_document(rel: &str) -> bool {
+    matches!(
+        rel,
+        "docs/how-to/migrate-d2b-v0-to-v1.md"
+            | "docs/how-to/migrate-d2b-v1-0-to-v1-1.md"
+            | "docs/how-to/migrate-d2b-v1-1-to-v1-2.md"
+            | "docs/how-to/migrate-d2b-v1-2-to-v1-3.md"
+            | "docs/how-to/migrate-d2b-v1-2-to-v2.md"
+            | "docs/how-to/migrate-nixos-to-daemon.md"
+            | "docs/how-to/migrate-usbip-yubikey-to-security-key.md"
+    )
+}
+
+fn cli_doc_path_is_governed(rel: &str) -> bool {
+    if rel.starts_with("docs/reference/schemas/") {
+        return false;
+    }
+    if generated_cli_compatibility_artifact(rel) {
+        return false;
+    }
+    if historical_cli_document(rel) {
+        return false;
+    }
+    matches!(
+        std::path::Path::new(rel)
+            .extension()
+            .and_then(|ext| ext.to_str()),
+        Some("md" | "nix" | "sh")
+    )
+}
+
+fn collect_cli_doc_paths(repo_root: &Path, rel: &str, paths: &mut Vec<String>) {
+    let root = repo_root.join(rel);
+    let metadata = std::fs::metadata(&root)
+        .unwrap_or_else(|err| panic!("CLI policy path is unreadable: {rel}: {err}"));
+    if metadata.is_file() {
+        if cli_doc_path_is_governed(rel) {
+            paths.push(rel.to_owned());
+        }
+        return;
+    }
+    let entries = std::fs::read_dir(&root)
+        .unwrap_or_else(|err| panic!("CLI policy directory is unreadable: {rel}: {err}"));
+    for entry in entries {
+        let entry = entry
+            .unwrap_or_else(|err| panic!("CLI policy directory entry is unreadable: {rel}: {err}"));
+        let child = entry.path();
+        let child_rel = child
+            .strip_prefix(repo_root)
+            .expect("CLI policy child stays under repo root")
+            .to_string_lossy()
+            .into_owned();
+        if child.is_dir() {
+            collect_cli_doc_paths(repo_root, &child_rel, paths);
+        } else if cli_doc_path_is_governed(&child_rel) {
+            paths.push(child_rel);
+        }
+    }
+}
+
+fn historical_cli_line(line: &str) -> bool {
+    static MARKER: OnceLock<Regex> = OnceLock::new();
+    MARKER
+        .get_or_init(|| {
+            Regex::new(
+                r"(?i)\bhistorical\b|\blegacy\b|\bretired\b|\bremoved\b|\bdeleted\b|\bsuccessor\b|\bmigrat(?:e|ion)\b|\barchived\b|\bdeprecated\b|\bno longer\b|\bpredates\b|\bsupersedes\b",
+            )
+            .expect("valid CLI history marker regex")
+        })
+        .is_match(line)
+}
+
+/// Return the untyped `d2b list` occurrences on one line. A positional
+/// ResourceType keeps the generic command valid; flags, prose, and an omitted
+/// positional are the retired inventory form.
+fn has_untyped_list_occurrence(line: &str) -> bool {
+    let mut offset = 0;
+    while let Some(relative) = line[offset..].find("d2b list") {
+        let start = offset + relative;
+        if start > 0
+            && (line.as_bytes()[start - 1].is_ascii_alphanumeric()
+                || matches!(line.as_bytes()[start - 1], b'.' | b'-' | b'_'))
+        {
+            offset = start + "d2b list".len();
+            continue;
+        }
+        let after = &line[start + "d2b list".len()..];
+        let token = after.split_whitespace().next().unwrap_or("");
+        let token = token.trim_matches(|ch: char| matches!(ch, '`' | '\'' | '"' | ')' | ']' | ','));
+        let generic_type = token == "<RESOURCE_TYPE>"
+            || token
+                .chars()
+                .next()
+                .is_some_and(|ch| ch.is_ascii_uppercase())
+            || token.contains(".d2bus.org/");
+        if !generic_type {
+            return true;
+        }
+        offset = start + "d2b list".len();
+    }
+    false
+}
+
+#[test]
+fn governed_cli_docs_use_typed_guest_inventory_and_lifecycle_commands() {
+    let vm_re = Regex::new(r"\bd2b\s+vm\s+(?:start|stop|restart|list|status|exec)\b")
+        .expect("valid retired VM command regex");
+    let status_re =
+        Regex::new(r"\bd2b\s+status(?:\s|`|$)").expect("valid retired status command regex");
+    let mut paths = Vec::new();
+    let repo_root = d2b_contract_tests::repo_root();
+    for root in CLI_DOC_ROOTS {
+        collect_cli_doc_paths(&repo_root, root, &mut paths);
+    }
+    paths.sort();
+    paths.dedup();
+    assert!(
+        !paths.is_empty(),
+        "CLI policy scan found no governed documentation or live script paths"
+    );
+
+    let mut violations = Vec::new();
+    for rel in paths {
+        let content = std::fs::read_to_string(repo_root.join(&rel))
+            .unwrap_or_else(|err| panic!("CLI policy file is unreadable: {rel}: {err}"));
+        for (line_number, line) in content.lines().enumerate() {
+            if historical_cli_line(line) {
+                continue;
+            }
+            if has_untyped_list_occurrence(line) {
+                violations.push(format!(
+                    "{rel}:{} uses untyped `d2b list`; use `d2b guest list` or `d2b list <RESOURCE_TYPE>`",
+                    line_number + 1
+                ));
+            }
+            if vm_re.is_match(line) {
+                violations.push(format!(
+                    "{rel}:{} uses a retired `d2b vm` lifecycle/exec form",
+                    line_number + 1
+                ));
+            }
+            if status_re.is_match(line) {
+                violations.push(format!(
+                    "{rel}:{} uses retired untyped `d2b status`",
+                    line_number + 1
+                ));
+            }
+        }
+    }
+
+    assert!(
+        violations.is_empty(),
+        "current governed docs or live scripts reintroduced retired CLI forms:\n{}",
+        violations.join("\n")
+    );
+
+    let readme = read_repo_file("README.md");
+    let smoke = read_repo_file("tests/integration/live/live-vm-smoke.sh");
+    assert!(
+        readme.contains("d2b guest list"),
+        "README must document typed Guest inventory"
+    );
+    assert!(
+        smoke.contains("d2b exec run \"Guest/$vm\""),
+        "live VM smoke must use typed Guest exec ResourceRefs"
+    );
+    assert!(
+        smoke.contains("resources.d2bus.org/v3")
+            && smoke.contains(".status.phase")
+            && smoke.contains(".status.conditions"),
+        "live VM smoke must parse v3 Guest status and readiness fields"
     );
 }
 
