@@ -4,7 +4,7 @@
 // in plan.md §D-typed-error-boxing. Suppressed until that refactor lands.
 #![allow(clippy::result_large_err)]
 
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, hash_map::Entry};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque, hash_map::Entry};
 use std::ffi::OsStr;
 use std::fs::{self, File, OpenOptions};
 use std::future::Future;
@@ -559,19 +559,18 @@ const MAX_TYPED_SHELL_SESSION_TARGETS: usize = 256;
 
 struct CachedTypedShellSessionTarget {
     target: String,
-    generation: u64,
 }
 
 struct TypedShellSessionTargetCache {
     entries: BTreeMap<(u32, String), CachedTypedShellSessionTarget>,
-    next_generation: u64,
+    recency: VecDeque<(u32, String)>,
 }
 
 impl Default for TypedShellSessionTargetCache {
     fn default() -> Self {
         Self {
             entries: BTreeMap::new(),
-            next_generation: 0,
+            recency: VecDeque::new(),
         }
     }
 }
@@ -586,47 +585,42 @@ impl std::fmt::Debug for TypedShellSessionTargetCache {
 }
 
 impl TypedShellSessionTargetCache {
-    fn next_generation(&mut self) -> u64 {
-        let generation = self.next_generation;
-        self.next_generation = self.next_generation.saturating_add(1);
-        generation
+    fn touch(&mut self, key: &(u32, String)) {
+        self.recency.retain(|candidate| candidate != key);
+        self.recency.push_back(key.clone());
     }
 
     fn remember(&mut self, key: (u32, String), target: String) {
-        let generation = self.next_generation();
-        if let Some(entry) = self.entries.get_mut(&key) {
-            entry.target = target;
-            entry.generation = generation;
+        if self.entries.contains_key(&key) {
+            self.entries
+                .insert(key.clone(), CachedTypedShellSessionTarget { target });
+            self.touch(&key);
             return;
         }
-        if self.entries.len() >= MAX_TYPED_SHELL_SESSION_TARGETS {
+        while self.entries.len() >= MAX_TYPED_SHELL_SESSION_TARGETS {
             let oldest = self
-                .entries
-                .iter()
-                .min_by(|(left_key, left), (right_key, right)| {
-                    left.generation
-                        .cmp(&right.generation)
-                        .then_with(|| left_key.cmp(right_key))
-                })
-                .map(|(key, _)| key.clone());
-            if let Some(oldest) = oldest {
-                self.entries.remove(&oldest);
-            }
+                .recency
+                .pop_front()
+                .or_else(|| self.entries.keys().next().cloned());
+            let Some(oldest) = oldest else {
+                break;
+            };
+            self.entries.remove(&oldest);
         }
         self.entries
-            .insert(key, CachedTypedShellSessionTarget { target, generation });
+            .insert(key.clone(), CachedTypedShellSessionTarget { target });
+        self.touch(&key);
     }
 
     fn cached(&mut self, key: &(u32, String)) -> Option<String> {
-        let generation = self.next_generation();
-        self.entries.get_mut(key).map(|entry| {
-            entry.generation = generation;
-            entry.target.clone()
-        })
+        let target = self.entries.get(key)?.target.clone();
+        self.touch(key);
+        Some(target)
     }
 
     fn forget(&mut self, key: &(u32, String)) {
         self.entries.remove(key);
+        self.recency.retain(|candidate| candidate != key);
     }
 }
 
@@ -9461,6 +9455,15 @@ fn typed_shell_session_target_cache_len(state: &ServerState) -> usize {
         .typed_shell_session_targets
         .lock()
         .map(|sessions| sessions.entries.len())
+        .unwrap_or(0)
+}
+
+#[cfg(test)]
+fn typed_shell_session_target_cache_recency_len(state: &ServerState) -> usize {
+    state
+        .typed_shell_session_targets
+        .lock()
+        .map(|sessions| sessions.recency.len())
         .unwrap_or(0)
 }
 
@@ -30306,6 +30309,11 @@ mod broker_dispatch_tests {
         assert_eq!(
             super::typed_shell_session_target_cache_len(&state),
             super::MAX_TYPED_SHELL_SESSION_TARGETS
+        );
+        assert_eq!(
+            super::typed_shell_session_target_cache_recency_len(&state),
+            super::MAX_TYPED_SHELL_SESSION_TARGETS,
+            "recency metadata must stay one-for-one with bounded entries"
         );
         assert_eq!(
             super::cached_typed_shell_session_target(&state, 1000, &retained).as_deref(),
