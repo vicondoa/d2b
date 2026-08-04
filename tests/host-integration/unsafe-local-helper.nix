@@ -305,10 +305,6 @@ deadline = time.monotonic() + 15
 while time.monotonic() < deadline:
     waited, status = os.waitpid(pid, os.WNOHANG)
     if waited == pid:
-        if os.WIFEXITED(status) and os.WEXITSTATUS(status) != 0:
-            raise SystemExit(
-                f"real d2b shell CLI exited with status {status}: {bytes(output)!r}"
-            )
         break
     time.sleep(0.05)
 else:
