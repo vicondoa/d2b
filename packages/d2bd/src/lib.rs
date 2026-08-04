@@ -9414,18 +9414,31 @@ fn cache_unambiguous_typed_shell_session_targets(
     peer_uid: u32,
     bindings: &[(public_wire::ShellName, String)],
 ) -> Result<(), TypedError> {
-    let mut names = BTreeSet::new();
-    for (name, _) in bindings {
-        if !names.insert(name.as_str().to_owned()) {
-            forget_typed_shell_session_target(state, peer_uid, name);
-            return Err(TypedError::WorkloadAliasConflict {
-                workload_id: name.as_str().to_owned(),
-                detail: "ShellSession name exists on more than one execution target".to_owned(),
-            });
+    let mut unique = BTreeMap::new();
+    let mut conflicts = BTreeSet::new();
+    for (name, target) in bindings {
+        let name = name.as_str().to_owned();
+        if conflicts.contains(&name) {
+            continue;
+        }
+        if unique.insert(name.clone(), target.clone()).is_some() {
+            unique.remove(&name);
+            conflicts.insert(name);
         }
     }
-    for (name, target) in bindings {
-        remember_typed_shell_session_target(state, peer_uid, name, target);
+    if let Ok(mut sessions) = state.typed_shell_session_targets.lock() {
+        for name in &conflicts {
+            sessions.forget(&(peer_uid, name.clone()));
+        }
+        for (name, target) in unique {
+            sessions.remember((peer_uid, name), target);
+        }
+    }
+    if let Some(workload_id) = conflicts.into_iter().next() {
+        return Err(TypedError::WorkloadAliasConflict {
+            workload_id,
+            detail: "ShellSession name exists on more than one execution target".to_owned(),
+        });
     }
     Ok(())
 }
@@ -30244,11 +30257,14 @@ mod broker_dispatch_tests {
         );
 
         super::remember_typed_shell_session_target(&state, 1000, &name, "stale.target");
+        let unaffected = d2b_contracts::public_wire::ShellName::new("unaffected").unwrap();
+        super::remember_typed_shell_session_target(&state, 1000, &unaffected, "old.target");
         let error = super::cache_unambiguous_typed_shell_session_targets(
             &state,
             1000,
             &[
                 (name.clone(), "tools.host.d2b".to_owned()),
+                (unaffected.clone(), "new.target".to_owned()),
                 (name.clone(), "work".to_owned()),
             ],
         )
@@ -30261,6 +30277,11 @@ mod broker_dispatch_tests {
             super::cached_typed_shell_session_target(&state, 1000, &name),
             None,
             "an ambiguous list must invalidate any stale cached target"
+        );
+        assert_eq!(
+            super::cached_typed_shell_session_target(&state, 1000, &unaffected).as_deref(),
+            Some("new.target"),
+            "unrelated unambiguous bindings remain cacheable after a conflict"
         );
     }
 
