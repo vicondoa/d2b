@@ -160,6 +160,8 @@ def read_until(marker, timeout):
             f"real d2b shell CLI missed {marker!r}: {bytes(output)!r}"
         )
 
+read_until(b"alice@machine:~]", 30)
+output.clear()
 os.write(master, b"printf cli-shell-executed-canary\\n")
 read_until(b"cli-shell-executed-canary", 30)
 
