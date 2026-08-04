@@ -9174,21 +9174,43 @@ fn typed_shell_execution_target(value: &str) -> Result<String, TypedError> {
 
 fn configured_shell_targets(state: &ServerState) -> Result<Vec<String>, TypedError> {
     let resolver = load_bundle_resolver(state)?;
-    let catalog = workload_dispatch::WorkloadCatalog::from_resolver(&resolver)
-        .map_err(|_| shell_protocol_failed())?;
-    Ok(catalog
-        .entries()
-        .filter(|entry| {
-            entry
-                .metadata
-                .capabilities
-                .has(d2b_realm_core::Capability::PersistentShell)
-        })
-        .map(|entry| entry.metadata.identity.canonical_target.to_canonical())
-        .collect())
+    let mut targets = std::collections::BTreeSet::new();
+    if let Some(private) = resolver.unsafe_local_workloads.as_ref() {
+        targets.extend(
+            private
+                .workloads
+                .iter()
+                .filter(|workload| workload.shell.is_some())
+                .map(|workload| workload.identity.canonical_target.to_canonical()),
+        );
+    }
+    targets.extend(
+        resolver
+            .manifest
+            .vms
+            .iter()
+            .filter(|(_, vm)| vm.shell.as_ref().is_some_and(|shell| shell.enabled))
+            .map(|(name, _)| name.clone()),
+    );
+    Ok(targets.into_iter().collect())
 }
 
 fn unique_configured_shell_target(state: &ServerState) -> Result<String, TypedError> {
+    let cached = typed_shell_sessions()
+        .lock()
+        .ok()
+        .map(|sessions| {
+            sessions
+                .values()
+                .cloned()
+                .collect::<std::collections::BTreeSet<_>>()
+        })
+        .unwrap_or_default();
+    if let Some(target) = cached.iter().next()
+        && cached.len() == 1
+    {
+        return Ok(target.clone());
+    }
     match configured_shell_targets(state)?.as_slice() {
         [target] => Ok(target.clone()),
         _ => Err(shell_protocol_failed()),
