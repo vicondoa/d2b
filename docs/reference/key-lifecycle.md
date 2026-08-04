@@ -32,11 +32,11 @@ managed key under `d2b.site.keysDir` on every activation. In other words:
   present over SSH.
 
 That distinction is intentional: consumer-supplied keys are operator-owned and
-must not be rotated or replaced by `d2b keys rotate`.
+must not be rotated or replaced by `d2b activation keys rotate`.
 
 ### Current read-only CLI note
 
-The rust-native `keys list` / `keys show` surfaces intentionally return
+The rust-native `activation keys list` / `activation keys show` surfaces intentionally return
 `managedKeyPath: null` today. The public manifest does not expose raw
 private-key paths, so the CLI cannot safely reconstruct the resolved path from
 public data alone. Use host configuration as the source of truth.
@@ -57,7 +57,7 @@ it to `ssh`, because OpenSSH refuses group-readable identity files directly.
 
 ## Rotation flow
 
-`d2b keys rotate <vm>` is the managed-key rollover for the framework-owned
+`d2b activation keys rotate Guest/<name>` is the managed-key rollover for the framework-owned
 `${keysDir}/<vm>_ed25519` keypair.
 
 1. Resolve the managed key path from `d2b.site.keysDir`.
@@ -74,13 +74,13 @@ it to `ssh`, because OpenSSH refuses group-readable identity files directly.
     `host.pub` share with the new public key.
 
 If you use a per-VM `ssh.keyPath` override, rotate that external key with its
-own owner/tooling. `d2b keys rotate` is for the framework-managed key only.
+own owner/tooling. `d2b activation keys rotate` is for the framework-managed key only.
 
 ## Trust operations
 
 d2b tracks guest SSH host keys separately from operator private keys.
 
-### `d2b trust <vm>`
+### `d2b activation trust <name>`
 
 - requires a VM `staticIp`;
 - scans the guest with `ssh-keyscan -t ed25519`;
@@ -89,7 +89,7 @@ d2b tracks guest SSH host keys separately from operator private keys.
 
 Use this on first boot or after an intentional host-key reset.
 
-### `d2b rotate-known-host <vm>`
+### `d2b activation rotate-known-host <name>`
 
 - removes the recorded entry for the VM from `known_hosts.d2b`;
 - does **not** generate a new host key by itself;
@@ -106,10 +106,7 @@ emits a daily JSONL audit record under
 - `RunHostKeyTrust`
 - `RunRotateKnownHost`
 
-Use `d2b audit` / `d2b audit --json` to inspect those records. If the
-CLI had to fall back to the legacy bash path, rely on shell history, sudo/journal
-logs, and your config history instead - only broker-handled requests land in the
-broker audit log.
+Use `d2b audit` / `d2b audit --json` to inspect those records. Only broker-handled requests land in the broker audit log.
 
 ## Upgrading from bash d2b
 
@@ -125,13 +122,12 @@ not.
 
 ### Transition steps
 
-1. Rebuild the host so `d2b keys *`, `trust`, and
-   `rotate-known-host` land from the Rust CLI.
-2. Start with read-only checks: `d2b keys list` and
-   `d2b keys show <vm>`.
-3. Use `--dry-run` first on `keys rotate`, `trust`, or
-   `rotate-known-host`; add `D2B_NATIVE_ONLY=1` only when you
-   want to validate the daemon path without bash fallback.
+1. Rebuild the host so `d2b activation keys *`, `activation trust`, and
+   `activation rotate-known-host` land from the Rust CLI.
+2. Start with read-only checks: `d2b activation keys list` and
+   `d2b activation keys show <name>`.
+3. Use `--dry-run` first on `activation keys rotate`, `activation trust`, or
+   `activation rotate-known-host`.
 4. Existing guest host keys and authorized-keys entries remain valid
    until you intentionally rotate them.
 

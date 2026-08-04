@@ -148,7 +148,7 @@ nix flake check
 home-manager build --flake .#alice
 d2b shell work list
 d2b-wlterm list work
-d2b vm status shellbox.work.d2b
+d2b guest status shellbox
 ```
 
 If `d2b-wlterm list` reports a typed shell capability error, confirm that the

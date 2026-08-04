@@ -91,7 +91,7 @@ them, so `--apply` returns `daemon-down` (exit 1) until that ships.
 ## Step 4 - Inspect the DAG
 
 ```bash
-d2b vm start corp-vm --dry-run --json
+d2b guest start corp-vm --dry-run --json
 ```
 
 Output: the 5-node DAG the supervisor models today. The DAG shape
@@ -100,7 +100,7 @@ is stable; `--apply` routes through the daemon-native dispatch
 
 ```jsonc
 {
-  "command": "vm start",
+  "command": "guest start",
   "mode":    "dry-run",
   "vm":      "corp-vm",
   "dag": {
@@ -126,7 +126,7 @@ is stable; `--apply` routes through the daemon-native dispatch
 
 ```bash
 sudo systemctl start d2bd.service
-d2b vm start corp-vm --apply
+d2b guest start corp-vm --apply
 ```
 
 The native DAG is still the same 5-node sequence, but the behavior
@@ -148,7 +148,7 @@ is different from the original draft:
    surface only, so the legacy raw TCP-22 `ssh-ready` /
    `guest-ssh-readiness` node was removed and is no longer emitted.
 
-The operator-facing routing changed: `d2b vm start corp-vm --apply`
+The operator-facing routing changed: `d2b guest start corp-vm --apply`
 no longer stops at the old `daemon-down` placeholder by default.
 Instead:
 
@@ -162,24 +162,24 @@ env vars are no-ops; the bash CLI itself was retired in v1.0.
 ## Step 6 - Observe runtime state
 
 ```bash
-d2b vm list --json
-d2b status corp-vm
+d2b guest list --json
+d2b guest status corp-vm
 d2b audit
 ```
 
-`vm list` returns the daemon's runtime view. If `vm start --apply`
+`guest list` returns the Guest resource view. If `guest start --apply`
 the daemon path is unavailable (returns exit-78 per ADR 0015), that view can still be empty today even though the
 VM is up; once the native-only path owns the lifecycle end-to-end,
-`vm list` will populate from daemon state. `status corp-vm` returns
-the per-VM manifest + service view including any `[pending restart]`
+`guest list` will populate from the resource plane. `guest status corp-vm` returns
+the Guest envelope including `status.update`
 annotation. `audit` streams the broker's append-only audit log
 (`/var/lib/d2b/audit/broker-<utc-date>.jsonl`).
 
 ## Step 7 - Stop / restart (v1.0 daemon-only routing)
 
 ```bash
-d2b vm stop corp-vm --apply
-d2b vm restart corp-vm --apply
+d2b guest stop corp-vm --apply
+d2b guest restart corp-vm --apply
 ```
 
 The same v1.0 daemon-only routing applies here (ADR 0015): `stop`
@@ -202,8 +202,8 @@ are no-ops in v1.0; the bash CLI itself was retired in v1.0.
 | Broker `OpenPidfd` op     | ✅                  | ✅ (non-bootstrap dispatch) | broader operator surfacing |
 | Broker `SpawnRunner` op   | ✅                  | ✅ (non-bootstrap dispatch) | full native-only CLI rollout |
 | Daemon state persistence  | ✅                  | ✅ (pure)  | native-only end-to-end ownership |
-| Daemon `[pending restart]`| ✅                  | ✅         | - |
-| `d2b vm` CLI verbs    | ✅                  | ✅ (`--dry-run`; `--apply` uses daemon-only routing) | native-only lifecycle rollout |
+| Daemon `status.update`  | ✅                  | ✅         | - |
+| `d2b guest` / `d2b exec` CLI verbs | ✅ | ✅ (typed ResourceRef parsing; lifecycle UpdateSpec is a later-wave blocker) | native-only lifecycle rollout |
 | Ubuntu Tier-1 smoke       | ✅ (docs)           | -          | repeated live-host green runs |
 
 The wire-stable column means the JSON/argv shape and the typed

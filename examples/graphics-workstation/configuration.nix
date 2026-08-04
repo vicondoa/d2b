@@ -81,13 +81,13 @@
     waylandUser = "alice";
 
     # Members of `d2b` can call the daemon public socket for
-    # lifecycle operations such as `d2b vm start`.
+    # lifecycle operations such as `d2b guest start`.
     launcherUsers = [ "alice" ];
 
     # Install host-side YubiKey support (Yubico udev rules; the
     # `usbip-host` kernel module is loaded only when an enabled VM
     # also sets `usbip.yubikey = true`). Required for any VM that
-    # uses `d2b usb <vm>`. Flip to `false` on hosts without one.
+    # uses `d2b device usb attach`. Flip to `false` on hosts without one.
     yubikey.enable = true;
   };
 
@@ -121,7 +121,7 @@
   #
   # `autostart` is intentionally left at the default `false` -
   # graphics VMs cannot autostart because there is no Wayland
-  # session at multi-user.target. Use `d2b vm start corp-desktop --apply`
+  # session at multi-user.target. Use `d2b guest start corp-desktop --apply`
   # from a Plasma terminal once you're logged in.
   # ---------------------------------------------------------------
   d2b.vms.corp-desktop = {
@@ -140,7 +140,7 @@
     # Do not enable this for VMs that run privileged Docker/container workloads.
     graphics.crossDomainTrusted = true;
     audio.enable    = true;         # vhost-user-sound → host PipeWire
-    usbip.yubikey   = true;         # `d2b usb attach corp-desktop <busid> --apply`
+    usbip.yubikey   = true;         # `d2b device usb attach corp-desktop <busid> --apply`
     guest.control.enable = true;    # guestd owns guest-side USBIP import
 
     # Audio grants are OFF by default. The host-side audio sidecar

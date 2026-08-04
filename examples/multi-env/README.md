@@ -101,8 +101,8 @@ d2b.envs.personal = { lanSubnet = "10.30.0.0/24"; uplinkSubnet = "192.0.2.4/30";
 | Net VM state dir                   | `/var/lib/d2b/sys/work-net/`        | `/var/lib/d2b/sys/personal-net/`    |
 
 The two `sys-*-net` VMs are real microVMs, just declared by the
-framework instead of the user. They show up in `d2b list` like
-any other VM and can be inspected with `d2b console sys-work-net`.
+framework instead of the user. They show up in `d2b guest list` like
+any other Guest and can be inspected with `d2b guest console sys-work-net`.
 They are autostarted at host boot - see `d2b.vms.<name>.autostart`,
 defaulted to `true` for net VMs by `network.nix`.
 
@@ -240,7 +240,7 @@ Each env's USBIP path is fully isolated:
    VM's default route goes via the host's `192.0.2.1` and the host
    has no route from `work-lan` to the `personal-up` bridge.
 
-`d2b usb <vm>` reads the VM's env from the manifest and
+`d2b device usb attach` reads the Guest's env from the resource plane and
 addresses the correct uplink IP automatically.
 
 ## Try it
@@ -263,34 +263,17 @@ construction in `network.nix`), and both workload VMs **down**.
 Concretely:
 
 ```bash
-d2b list
-# NAME               ENV       GRAPHICS  TPM   USBIP   STATIC_IP       STATUS
-# personal-app       personal  false     false false   10.30.0.10      stopped
-# sys-personal-net   personal  false     false false   192.0.2.6       running (net-vm)
-# sys-work-net       work      false     false false   192.0.2.2       running (net-vm)
-# work-app           work      false     false false   10.20.0.10      stopped
-
-d2b status
-# NAME               ENV       GRAPHICS  TPM   USBIP   STATIC_IP       STATUS
-# personal-app       personal  false     false false   10.30.0.10      stopped
-# sys-personal-net   personal  false     false false   192.0.2.6       running (net-vm)
-# sys-work-net       work      false     false false   192.0.2.2       running (net-vm)
-# work-app           work      false     false false   10.20.0.10      stopped
-#
-# === Bridge health ===
-# BRIDGE               STATE      ADMIN   EXPECTED     RESULT
-# br-personal-up       UP         up      UP           ok
-# br-personal-lan      NO-CARRIER up      NO-CARRIER   no-carrier (no workloads up)
-# br-work-up           UP         up      UP           ok
-# br-work-lan          NO-CARRIER up      NO-CARRIER   no-carrier (no workloads up)
+d2b guest list
+d2b host doctor --read-only
 
 # Net VMs (`sys-<env>-net`) show STATUS=`running (net-vm)` after
 # activation. They are framework-managed and `autostart = true` by
-# construction in `nixos-modules/network.nix`. Workload VMs default to `stopped`
-# until you `d2b vm start <vm> --apply` (or set `autostart = true` per-VM).
+# construction in `nixos-modules/network.nix`. Workload Guests default to
+# `Pending` until you `d2b guest start <name> --apply` (or set
+# `autostart = true` per Guest).
 
-d2b vm start work-app --apply
-d2b vm start personal-app --apply
+d2b guest start work-app --apply
+d2b guest start personal-app --apply
 ssh -i /var/lib/d2b/keys/work-app_ed25519     alice@10.20.0.10 hostname
 ssh -i /var/lib/d2b/keys/personal-app_ed25519 alice@10.30.0.10 hostname
 
@@ -358,9 +341,8 @@ expected `br-<env>-up` uplink bridge), common causes are:
 `nixos-rebuild switch` updates the declared d2b bundle and may
 restart `d2bd`, but daemon restarts are continuation events:
 running VM runners are re-adopted rather than cycled. After rebuilding,
-`d2b list` flags any VM whose declared closure has drifted from the
-running one as `[pending restart]`; apply with `d2b vm restart
-<vm> --apply`. See
+`d2b guest list` exposes update currency in each Guest resource; apply with
+`d2b guest restart <name> --apply`. See
 [`templates/default/README.md` - After every subsequent rebuild](../../templates/default/README.md#after-every-subsequent-rebuild)
 for the recommended workflow and
 [`docs/reference/cli-contract.md`](../../docs/reference/cli-contract.md#pending-restart-signal-v015)

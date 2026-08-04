@@ -884,19 +884,18 @@ payload bytes, or guest free-form error text.
 > **Scope note.** The guest-control exec *RPC/service* surface
 > (`ExecCreate`/`WriteStdin`/`CloseStdin`/`ReadOutput`/`TtyWinResize`/
 > `ExecSignal`/`ExecInspect`/`ExecWait`/`ExecCancel`) is the shipped
-> contract. The `d2b vm exec` **CLI** described below - including the
-> `--interactive` / `-i`, `--tty` / `-t`, and the interactive `exec -it`
-> flow - is shipped and drives that RPC surface (admin-only). Detached
-> non-interactive exec is also shipped: `d2b vm exec -d <vm> --
-> <cmd>` creates a workload-user detached exec, and `d2b vm exec <vm>
-> list|logs|status|kill <id>` manages retained records. Detached exec uses
+> contract. The typed `d2b exec` CLI described below provides
+> `run`, `attach`, `wait`, `status`, `list`, `logs`, and `kill`
+> commands. A run targets a Guest ResourceRef,
+> and management targets use EphemeralProcess ResourceRefs. Detached exec
+> uses
 > the same never-root workload-user model as attached exec, remains inside
 > guestd (no broker op), and is advertised only when guestd has reconciled
 > a usable detached registry.
 
 ### Attached exec
 
-`d2b vm exec <vm> -- <argv...>` creates a non-TTY exec with stdin
+`d2b exec run Guest/<name> -- <argv...>` creates a non-TTY exec with stdin
 closed. The CLI reads stdout/stderr through offsets until both streams
 EOF and `ExecWait` returns terminal. The CLI exits with the remote exit
 code for normal command exit. Remote signal termination is reported as the
@@ -920,7 +919,7 @@ return path.
 
 ### Detached exec
 
-`d2b vm exec -d <vm> -- <argv...>` creates a non-TTY detached exec and
+`d2b exec run Guest/<name> -- <argv...>` creates a non-TTY exec and
 returns an opaque `exec_id` plus the initial state. The command runs as the
 VM's workload user inside a PAM login session, never as root, and
 continues after the host CLI disconnects. `-d` is mutually exclusive with
@@ -930,11 +929,11 @@ names are resolved by the workload user's login `PATH` through the same
 
 Detached management is VM-first so management words remain valid VM names:
 
-- `d2b vm exec <vm> list` lists retained detached records;
-- `d2b vm exec <vm> logs <exec_id>` returns retained stdout/stderr;
-- `d2b vm exec <vm> status <exec_id>` returns state and terminal
+- `d2b exec list Guest/<name>` lists retained process records;
+- `d2b exec logs EphemeralProcess/<name>` returns retained stdout/stderr;
+- `d2b exec status EphemeralProcess/<name>` returns state and terminal
   disposition;
-- `d2b vm exec <vm> kill <exec_id>` maps to `ExecCancel`.
+- `d2b exec kill EphemeralProcess/<name>` maps to `ExecCancel`.
 
 `kill` is a two-phase cancel: guestd requests graceful termination, waits a
 bounded grace window, then force-kills the workload if needed. It is
@@ -1037,7 +1036,7 @@ material, or guest free-form errors.
 Health responses and CLI JSON use the same rule except for fields that are
 the explicit user-facing API result. The interactive `-i`/`-t` exec forms
 are human-only and reject `--json` with a usage envelope, while the
-non-TTY `d2b vm exec <vm> --json -- <argv...>` returns a single
+non-TTY `d2b exec run Guest/<name> --json -- <argv...>` returns a single
 terminal envelope (exit code + source/reason + bounded captured output).
 On the service surface, `ExecInspect`/`ExecLogs` may return the
 `execId`/cursor state or the requested log payload when the caller asked

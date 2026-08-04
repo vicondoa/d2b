@@ -2,7 +2,7 @@
 
 **Diataxis category:** how-to.
 
-> **Status:** The `d2b console` and `d2b audio` CLI verbs are
+> **Status:** The `d2b guest console` and `d2b audio` CLI verbs are
 > daemon-native surfaces. This guide documents the operator workflow.
 
 ---
@@ -12,14 +12,14 @@
 - You must be a member of the `d2b` group on the host.
 - For `d2b audio` commands, the target VM must have
   `d2b.vms.<vm>.audio.enable = true` in its NixOS configuration.
-  Confirm with `d2b vm status <vm>` - the audio field appears in the
+  Confirm with `d2b guest status <name>` - the audio field appears in the
   capability summary for audio-enabled VMs.
-- For `d2b console` on an ACA sandbox, the sandbox must be running a
+- For `d2b guest console` on an ACA sandbox, the sandbox must be running a
   guestd-compatible in-sandbox agent. If it is absent, the daemon
   returns a typed `provider-misconfigured` error with remediation
   text; there is no console fallback.
 - Graphics VMs do not have a serial console surface. Use
-  `d2b vm start <vm> --apply` to launch graphics VMs.
+  `d2b guest start <name> --apply` to launch graphics VMs.
 
 ---
 
@@ -28,7 +28,7 @@
 1. Run:
 
    ```text
-   d2b console <vm>
+   d2b guest console <name>
    ```
 
    The daemon resolves the target's runtime provider, then attaches
@@ -39,7 +39,7 @@
 
 3. If the command exits with code `2`, verify that `<vm>` is a
    declared VM name and that it is not a graphics VM. Run
-   `d2b vm list` to confirm the VM name and provider.
+   `d2b guest list` to confirm the Guest name and provider.
 
 **Expected exit codes:**
 

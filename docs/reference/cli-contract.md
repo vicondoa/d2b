@@ -24,10 +24,8 @@ than literal byte-for-byte goldens unless the corresponding
 > envelopes (`not-yet-implemented` exit 78, `daemon-down` exit 1) -
 > see [`error-codes.md` § "Remediation rendering conventions"](./error-codes.md#remediation-rendering-conventions)
 > for the multi-line block format used on those envelopes. `d2b
-> up/down/restart/list` are first-class top-level aliases for `vm
-> start/stop/restart/list` and route through the same daemon path.
-> Stop-like aliases accept the same `--force` / `-f` flag as the
-> corresponding `vm` command.
+> v2 lifecycle aliases were removed at the 3.0 clean break. Use the typed
+> `guest start/stop/restart/list/status` commands and `exec run` ResourceRefs.
 
 - Command headings use the dispatched **leaf** form (`keys list`,
   `audio mic`, `status --check-bridges`) because disposition is
@@ -176,51 +174,43 @@ launched tools.host.d2b item browser (committed)
 | `0` | Success. | - |
 | `1` | Zone transport, authorization, or Resource API failure. | Typed Resource API error. |
 | `2` | Invalid ResourceType, selector, page bound, or invocation shape. | [`usage`](./error-codes.md#usage) |
-corp-vm            work      false     false false   10.20.0.10      running
-sys-work-net       work      false     false false   192.0.2.1       running (net-vm)
-```
 
-**`--json` example** - schema: [`list.schema.json`](./cli-output/list.schema.json); prose companion: [`list.md`](./cli-output/list.md).
+For Guest inventory, prefer the typed noun:
+`d2b guest list [--zone <ZONE>] [--human|--json]`.
+
+**`--json` example**
 
 ```json
-[
-  {
-    "name": "corp-vm",
-    "env": "work",
-    "graphics": false,
-    "tpm": false,
-    "usbip": false,
-    "staticIp": "10.20.0.10",
-    "status": "running",
-    "isNetVm": false,
-    "guestClosureOutPath": "/nix/store/eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee-nixos-system-corp-vm"
-  },
-  {
-    "name": "sys-work-net",
-    "env": "work",
-    "graphics": false,
-    "tpm": false,
-    "usbip": false,
-    "staticIp": "192.0.2.1",
-    "status": "running",
-    "isNetVm": true,
-    "guestClosureOutPath": "/nix/store/ffffffffffffffffffffffffffffffff-nixos-system-sys-work-net"
-  }
-]
+{
+  "ok": true,
+  "zoneRef": "Zone/work",
+  "schemaVersion": 1,
+  "resources": [
+    {
+      "apiVersion": "resources.d2bus.org/v3",
+      "type": "Guest",
+      "metadata": {
+        "name": "corp-vm",
+        "zone": "work"
+      },
+      "spec": {},
+      "status": {
+        "phase": "Ready",
+        "conditions": [],
+        "update": {}
+      }
+    }
+  ],
+  "snapshotRevision": 42,
+  "truncated": false
+}
 ```
 
 **Status**
 
-`list` is a daemon-native, read-only inventory query. When d2bd is
-reachable, the CLI queries the public socket and reports declared VM
-metadata, daemon-derived lifecycle state, and the VM guest closure out
-path when closure metadata is available. For a running VM with
-`status = "pending-restart"`, `guestClosureOutPath` points at the
-booted closure so scanners inspect the running guest generation. If the
-public socket is unavailable or does not support the request, the CLI
-falls back to the static manifest/local status path and may still
-populate `guestClosureOutPath` when the caller can read local closure
-metadata.
+`list` is a daemon-native, read-only Resource API query. Each entry is a
+complete v3 Resource envelope. There is no static-manifest or legacy VM-array
+fallback.
 
 **Native**
 
@@ -231,7 +221,9 @@ metadata.
 
 - There is no live bash fallback for this verb; the bash disposition is retained only as coverage taxonomy / the retired path.
 
-Rows are ordered by VM name because the historical bash implementation iterated `jq keys[]`; the current daemon-native path keeps that ordering contract.
+Resource ordering and pagination are part of the Resource API response; clients
+must use `metadata.name` and the returned cursor fields rather than legacy
+VM-array columns.
 
 ### `clipboard arm`
 
@@ -331,7 +323,7 @@ credentials, or generic tunnels.
 Runs a one-shot command inside the local gateway VM for a
 gateway-backed realm. This is the low-level escape hatch for scripts that
 need to issue an exact command in the realm trust boundary. Daily
-workload operations should continue to use `d2b vm ...`; realm
+workload operations should continue to use `d2b guest ...`; realm
 targets route through the configured gateway entrypoint when supported.
 
 ### Realm target routing
@@ -343,7 +335,7 @@ realm targets must resolve through the realm access layer; missing entrypoints
 fail closed with an actionable `missing-realm-entrypoint` error rather than
 falling back to SSH or a generic tunnel.
 
-`d2b vm list --realm <realm>` runs `d2b vm list` inside the
+`d2b guest list --zone <zone>` runs `d2b guest list` against the
 realm gateway through the same local guest-control exec path. It does not
 make the host persist a remote node/workload registry.
 
@@ -351,8 +343,8 @@ make the host persist a remote node/workload registry.
 
 **Synopsis:**
 
-- `d2b vm display list [--target <workload>.<realm>.d2b] [--human | --json]`
-- `d2b vm display close <session-id> [--human | --json]`
+- `d2b display list [--target <workload>.<realm>.d2b] [--human | --json]`
+- `d2b display close <session-id> [--human | --json]`
 
 `vm display` manages active gateway display sessions. It requires the
 gateway daemon's public socket and does not fall back to SSH or host-side
@@ -389,22 +381,20 @@ process output. See
 [display and virtual I/O capabilities](./display-io-capabilities.md) for the
 capability boundary.
 
-### `vm start`
+### `guest start`
 
-**Synopsis:** `d2b vm start <vm> [--dry-run | --apply] [--human | --json]`
+**Synopsis:** `d2b guest start <name> [--dry-run | --apply] [--human | --json]`
 
 **Status**
 
-`vm start` is a daemon-native headless-lifecycle verb. If neither
-mutation flag is set, stderr emits `d2b: NOTICE: defaulting to
---dry-run` and the CLI defaults to `--dry-run`; `--apply` routes
-through the daemon.
+`guest start` is a typed Guest lifecycle request. One of `--dry-run` or
+`--apply` is required; the current CLI does not infer a mutation mode.
 
 **Flags**
 
 | Flag | Type | Default | Semantics |
 | --- | --- | --- | --- |
-| `--dry-run` | boolean | implicit if neither mutation flag is set | Plan the 5-node per-VM DAG without spawning any role. |
+| `--dry-run` | boolean | `false` | Request a non-mutating lifecycle preview. |
 | `--apply` | boolean | `false` | Perform the lifecycle mutation. |
 | `--json` | boolean | `false` | Emit the dry-run DAG or typed mutating-verb envelope as JSON. |
 | `--human` | boolean | `false` | Force the human summary on stdout. |
@@ -413,57 +403,55 @@ through the daemon.
 
 | Argument | Semantics |
 | --- | --- |
-| `vm` | Required VM name as declared in `d2b.vms.<name>`. |
+| `name` | Required Guest name in the selected Zone. |
 
 **Exit codes**
 
 | Code | Meaning | Typed error / reference |
 | --- | --- | --- |
 | `0` | Dry-run plan rendered or `--apply` completed successfully. | - |
-| `2` | Unknown flag or unsupported invocation shape. | [`usage`](./error-codes.md#usage) |
-| `70` | The named VM is not declared in the active manifest. | [`not-found`](./error-codes.md#not-found) |
-| `78` | Typed `broker-error` or `not-yet-implemented`. | [`broker-error`](./error-codes.md#broker-error), [`not-yet-implemented`](./error-codes.md#not-yet-implemented) |
+| `1` | Zone transport or Resource API failure. | Typed Resource API error. |
+| `2` | Neither mutation flag, or an invalid lifecycle invocation. | [`usage`](./error-codes.md#usage) |
 
-There is no bash fallback. Daemon-unreachable returns `daemon-down`
-(exit 1), and the old `d2b up` exit table is preserved in this
-file as history.
+There is no fallback transport. Zone-unavailable responses are typed
+Resource API failures.
 
 **Human example**
 
 ```text
-$ d2b vm start corp-vm --apply
-vm start corp-vm: spawned pid=4242 start_time_ticks=123456789
+$ d2b guest start corp-vm --apply
+Guest/corp-vm: phase=Ready
 ```
 
 **Native**
 
-- `--apply`: routes through `d2bd` → broker. Daemon-unreachable
-  surfaces `daemon-down` exit 1; native-handler-deferred surfaces
-  `not-yet-implemented` exit 78; `broker-error` exit 78.
+- `--apply`: routes through the Zone Resource API. The current production
+  runtime exposes read-only Guest Get/List/Status/Watch; lifecycle
+  UpdateSpec dispatch remains a later-wave implementation and returns a
+  typed refusal until it is wired.
 - `D2B_NATIVE_ONLY=1` / `D2B_LEGACY_BASH_OPT_IN=1` are
   unrecognised. Broker failures surface on stderr with the redacted
   public-safe remediation and exit `78`.
-- Live path: `d2bd` → broker `SpawnRunner`.
+- `--no-wait-ready` exits after the request is accepted instead of waiting
+  for the Guest to reach `Ready`.
 
 **Bash**
 
 - There is no bash execution path for this verb.
-### `vm stop`
+### `guest stop`
 
-**Synopsis:** `d2b vm stop <vm> [--force | -f] [--dry-run | --apply] [--human | --json]`
+**Synopsis:** `d2b guest stop <name> [--force | -f] [--dry-run | --apply] [--human | --json]`
 
 **Status**
 
-`vm stop` is a daemon-native headless-lifecycle verb. If neither
-mutation flag is set, stderr emits `d2b: NOTICE: defaulting to
---dry-run` and the CLI defaults to `--dry-run`; `--apply` routes
-through the daemon.
+`guest stop` is a typed Guest lifecycle request. One of `--dry-run` or
+`--apply` is required; the current CLI does not infer a mutation mode.
 
 **Flags**
 
 | Flag | Type | Default | Semantics |
 | --- | --- | --- | --- |
-| `--dry-run` | boolean | implicit if neither mutation flag is set | Plan the 5-node per-VM DAG without spawning any role. |
+| `--dry-run` | boolean | `false` | Request a non-mutating lifecycle preview. |
 | `--apply` | boolean | `false` | Perform the lifecycle mutation. |
 | `--force`, `-f` | boolean | `false` | Skip provider-aware graceful guest shutdown and begin the standard SIGTERM/SIGKILL VMM cleanup path. This is not an immediate SIGKILL shortcut. |
 | `--json` | boolean | `false` | Emit the dry-run DAG or typed mutating-verb envelope as JSON. |
@@ -473,22 +461,20 @@ through the daemon.
 
 | Argument | Semantics |
 | --- | --- |
-| `vm` | Required VM name as declared in `d2b.vms.<name>`. |
+| `name` | Required Guest name in the selected Zone. |
 
 **Exit codes**
 
 | Code | Meaning | Typed error / reference |
 | --- | --- | --- |
 | `0` | Dry-run plan rendered or `--apply` completed successfully. | - |
-| `2` | Unknown flag or unsupported invocation shape. | [`usage`](./error-codes.md#usage) |
-| `70` | The named VM is not declared in the active manifest. | [`not-found`](./error-codes.md#not-found) |
-| `78` | Typed `broker-error` or `not-yet-implemented`. | [`broker-error`](./error-codes.md#broker-error), [`not-yet-implemented`](./error-codes.md#not-yet-implemented) |
+| `1` | Zone transport or Resource API failure. | Typed Resource API error. |
+| `2` | Neither mutation flag, or an invalid lifecycle invocation. | [`usage`](./error-codes.md#usage) |
 
-There is no bash fallback. Daemon-unreachable returns `daemon-down`
-(exit 1), and the old `d2b down` exit table is preserved in this
-file as history.
+There is no fallback transport. Zone-unavailable responses are typed
+Resource API failures.
 
-Normal `vm stop --apply` asks supported local providers to shut the guest
+Normal `guest stop --apply` asks supported local providers to shut the guest
 down before host-side VMM cleanup: Cloud Hypervisor receives
 `PUT /api/v1/vm.shutdown`, and qemu-media receives broker-mediated QMP
 `system_powerdown`. The wait is bounded by
@@ -501,27 +487,24 @@ that graceful timeout plus the standard forced-cleanup signal windows.
 Pidfd `EPERM` while stopping a per-VM-UID runner used to surface as
 typed `broker-error` exit 78. Current `--apply` recovers that specific
 case by asking the broker to run `SignalRunner`; if the broker reports
-`signaled=true`, `vm stop` exits 0. True broker failures - unreachable
+`signaled=true`, `guest stop` exits 0. True broker failures - unreachable
 broker, dispatch errors, unexpected responses, or `signaled=false` -
 still surface as `broker-error` / exit 78.
 
 **Human example**
 
 ```text
-$ d2b vm stop corp-vm --apply
+$ d2b guest stop corp-vm --apply
 Waiting for guest to shut down (up to 90s)...
-vm stop corp-vm: clean guest shutdown
+guest stop corp-vm: clean guest shutdown
 ```
 
 **Native**
 
-- `--apply`: routes through `d2bd` → provider graceful shutdown
-  (when enabled) → broker cleanup as needed. Daemon-unreachable
-  surfaces `daemon-down` exit 1; native-handler-deferred surfaces
-  `not-yet-implemented` exit 78; `broker-error` exit 78.
-- `--force` / `-f`: available on both `vm stop` and the top-level
-  `down` alias. It is an explicit stop override, not a shortcut around
-  the existing forced cleanup policy.
+- `--apply`: routes through the Zone Resource API. The current production
+  runtime does not yet dispatch lifecycle UpdateSpec mutations.
+- `--force` / `-f`: is explicit stop intent, not a shortcut around the
+  provider's cleanup policy.
 - `D2B_NATIVE_ONLY=1` / `D2B_LEGACY_BASH_OPT_IN=1` are
   unrecognised. Broker failures surface on stderr with the redacted
   public-safe remediation and exit `78`.
@@ -531,22 +514,20 @@ vm stop corp-vm: clean guest shutdown
 **Bash**
 
 - There is no bash execution path for this verb.
-### `vm restart`
+### `guest restart`
 
-**Synopsis:** `d2b vm restart <vm> [--force | -f] [--dry-run | --apply] [--human | --json]`
+**Synopsis:** `d2b guest restart <name> [--force | -f] [--dry-run | --apply] [--human | --json]`
 
 **Status**
 
-`vm restart` is a daemon-native headless-lifecycle verb. If neither
-mutation flag is set, stderr emits `d2b: NOTICE: defaulting to
---dry-run` and the CLI defaults to `--dry-run`; `--apply` routes
-through the daemon.
+`guest restart` is a typed Guest lifecycle request. One of `--dry-run` or
+`--apply` is required; the current CLI does not infer a mutation mode.
 
 **Flags**
 
 | Flag | Type | Default | Semantics |
 | --- | --- | --- | --- |
-| `--dry-run` | boolean | implicit if neither mutation flag is set | Plan the 5-node per-VM DAG without spawning any role. |
+| `--dry-run` | boolean | `false` | Request a non-mutating lifecycle preview. |
 | `--apply` | boolean | `false` | Perform the lifecycle mutation. |
 | `--force`, `-f` | boolean | `false` | Apply force only to the stop phase: skip graceful guest shutdown, then run the usual cleanup before the unchanged start phase. |
 | `--json` | boolean | `false` | Emit the dry-run DAG or typed mutating-verb envelope as JSON. |
@@ -556,137 +537,105 @@ through the daemon.
 
 | Argument | Semantics |
 | --- | --- |
-| `vm` | Required VM name as declared in `d2b.vms.<name>`. |
+| `name` | Required Guest name in the selected Zone. |
 
 **Exit codes**
 
 | Code | Meaning | Typed error / reference |
 | --- | --- | --- |
 | `0` | Dry-run plan rendered or `--apply` completed successfully. | - |
-| `2` | Unknown flag or unsupported invocation shape. | [`usage`](./error-codes.md#usage) |
-| `70` | The named VM is not declared in the active manifest. | [`not-found`](./error-codes.md#not-found) |
-| `78` | Typed `broker-error` or `not-yet-implemented`. | [`broker-error`](./error-codes.md#broker-error), [`not-yet-implemented`](./error-codes.md#not-yet-implemented) |
+| `1` | Zone transport or Resource API failure. | Typed Resource API error. |
+| `2` | Neither mutation flag, or an invalid lifecycle invocation. | [`usage`](./error-codes.md#usage) |
 
-There is no bash fallback. Daemon-unreachable returns `daemon-down`
-(exit 1), and the old `d2b restart` exit table is preserved in
-this file as history.
+There is no fallback transport. Zone-unavailable responses are typed
+Resource API failures.
 
 **Human example**
 
 ```text
-$ d2b vm restart corp-vm --apply
-vm restart corp-vm: vm stop corp-vm: clean guest shutdown; vm start corp-vm: spawned pid=4242 start_time_ticks=123456789
+$ d2b guest restart corp-vm --apply
+Guest/corp-vm: phase=Ready
 ```
 
 **Native**
 
-- `--apply`: routes through `d2bd` → broker. Daemon-unreachable
-  surfaces `daemon-down` exit 1; native-handler-deferred surfaces
-  `not-yet-implemented` exit 78; `broker-error` exit 78.
-- `--force` / `-f`: available on both `vm restart` and the top-level
-  `restart` alias. It affects only the stop phase.
+- `--apply`: routes through the Zone Resource API. The current production
+  runtime does not yet dispatch lifecycle UpdateSpec mutations.
+- `--force` / `-f`: affects only the stop phase.
 - `D2B_NATIVE_ONLY=1` / `D2B_LEGACY_BASH_OPT_IN=1` are
   unrecognised. Broker failures surface on stderr with the redacted
   public-safe remediation and exit `78`.
-- Live path: same as `vm stop` for the stop phase, then broker
-  `SpawnRunner` for the start phase.
+- Live path: the Guest Provider owns the stop/start reconciliation once the
+  production lifecycle dispatch is wired.
 
 **Bash**
 
 - There is no bash execution path for this verb.
 
-### `vm list`
+### `guest list`
 
-**Synopsis:** `d2b vm list [--human] [--json]`
+**Synopsis:** `d2b guest list [--human] [--json]`
 
-**Status:** `vm list` is the daemon-side runtime inventory surface. It
-queries d2bd's public socket and returns the same live lifecycle/runtime
-entries the daemon exposes to desktop clients. If the public socket is not
-available, the command exits successfully with an empty `entries` array plus
-a note explaining that d2bd must be started or restarted.
+**Status:** `guest list` is the v3 Guest Resource inventory surface. It
+returns complete Resource envelopes in `resources`. If the Zone Resource API
+is unavailable, it returns a typed failure rather than an empty legacy array.
 
 **Flags**
 
 | Flag | Type | Default | Semantics |
 | --- | --- | --- | --- |
-| `--json` | boolean | `false` | Emit the daemon runtime inventory document on stdout. |
-| `--human` | boolean | `false` | Force the human runtime inventory table on stdout. |
+| `--json` | boolean | `false` | Emit the v3 Resource list envelope on stdout. |
+| `--human` | boolean | `false` | Force the human Guest summary on stdout. |
 
 **Arguments**
 
 | Argument | Semantics |
 | --- | --- |
-| _(none)_ | Inventory is global. |
+| _(none)_ | Inventory is scoped to the selected Zone. |
 
 **Exit codes**
 
 | Code | Meaning | Typed error / reference |
 | --- | --- | --- |
 | `0` | Success. | - |
-| `1` | Unexpected local JSON serialization failure. | [`generic`](./error-codes.md#generic) |
+| `1` | Zone transport, authorization, or Resource API failure. | Typed Resource API error. |
 | `2` | Unknown flag or unsupported invocation shape. | [`usage`](./error-codes.md#usage) |
 
 **Human example**
 
 ```text
-$ d2b vm list
-VM        STATE    RUNTIME
-corp-vm   running  running
+$ d2b guest list
+RESOURCE       PHASE
+Guest/corp-vm  Ready
 ```
 
 **`--json` example**
 
 ```json
 {
-  "command": "vm list",
-  "entries": [
+  "ok": true,
+  "zoneRef": "Zone/work",
+  "schemaVersion": 1,
+  "resources": [
     {
-      "vm": "corp-vm",
-      "name": "corp-vm",
-      "env": "work",
-      "graphics": false,
-      "isNetVm": false,
-      "lifecycle": {
-        "pendingRestart": false,
-        "state": "Running"
-      },
-      "runtime": {
-        "detail": "running"
-      },
-      "services": {
-        "gpu": null,
-        "microvm": "running",
-        "d2b": "active",
-        "snd": null,
-        "swtpm": null,
-        "video": null,
-        "virtiofsd": "running"
-      },
-      "sshUser": "alice",
-      "staticIp": "10.20.0.10",
-      "tpm": false,
-      "usbip": false
+      "apiVersion": "resources.d2bus.org/v3",
+      "type": "Guest",
+      "metadata": { "name": "corp-vm", "zone": "work" },
+      "spec": {},
+      "status": { "phase": "Ready", "conditions": [], "update": {} }
     }
-  ]
-}
-```
-
-When d2bd's public socket is unavailable, `--json` returns:
-
-```json
-{
-  "command": "vm list",
-  "entries": [],
-  "notes": "vm list requires d2bd's public socket; start or restart d2bd and retry."
+  ],
+  "snapshotRevision": 42,
+  "truncated": false
 }
 ```
 
 **Current disposition:** `rust-native` - the Rust CLI owns the stable
-daemon-side runtime-view contract and reads it from d2bd's public socket.
+v3 Resource inventory contract and reads it from the selected Zone.
 
-### `status`
+### `guest status`
 
-**Synopsis:** `d2b status [<vm>] [--json]`
+**Synopsis:** `d2b guest status <name> [--watch] [--json]`
 
 **Flags**
 
@@ -694,13 +643,13 @@ daemon-side runtime-view contract and reads it from d2bd's public socket.
 | --- | --- | --- | --- |
 | `--json` | boolean | `false` | Emit the structured status document on stdout. |
 | `--human` | boolean | `false` | Force the human status view on stdout. |
-| `--vm` | string | `null` | Long-form VM selector equivalent to passing `<vm>` positionally. |
+| `--watch` | boolean | `false` | Stream status envelopes as JSON lines. |
 
 **Arguments**
 
 | Argument | Semantics |
 | --- | --- |
-| `vm` | Optional VM name. When omitted the human command falls back to the global inventory view and appends the bridge-health table. |
+| `name` | Required Guest name in the selected Zone. |
 
 **Exit codes**
 
@@ -713,54 +662,35 @@ daemon-side runtime-view contract and reads it from d2bd's public socket.
 **Human example**
 
 ```text
-$ d2b status corp-vm
-=== corp-vm ===
-daemon: inactive
-backend-runner: inactive
-virtiofsd: inactive
-gpu-runner: stopped
-sshd@10.20.0.10: unreachable
-pending-restart: no
-
-=== Bridge health ===
-BRIDGE               STATE      ADMIN   EXPECTED     RESULT
-br-work-lan          DOWN       up      NO-CARRIER   no-carrier (no workloads up)
-br-work-up           DOWN       up      NO-CARRIER   no-carrier (net VM stopped)
+$ d2b guest status corp-vm
+Guest/corp-vm    Ready
 ```
 
-**`--json` example** - schema: [`status.schema.json`](./cli-output/status.schema.json); prose companion: [`status.md`](./cli-output/status.md).
+**`--json` example** - prose companion: [`status.md`](./cli-output/status.md).
 
 ```json
 {
-  "name": "corp-vm",
-  "env": "work",
-  "services": {
-    "d2b": "inactive",
-    "microvm": "inactive",
-    "virtiofsd": "inactive",
-    "gpu": null,
-    "video": null,
-    "snd": null,
-    "swtpm": null
-  },
-  "current": null,
-  "booted": null,
-  "pendingRestart": false,
-  "runtime": "unknown",
-  "declaredRoles": [
-    "host-reconcile",
-    "store-virtiofs-preflight"
-  ],
-  "readiness": []
+  "ok": true,
+  "zoneRef": "Zone/work",
+  "schemaVersion": 1,
+  "apiVersion": "resources.d2bus.org/v3",
+  "type": "Guest",
+  "metadata": { "name": "corp-vm", "zone": "work" },
+  "spec": {},
+  "status": {
+    "phase": "Ready",
+    "conditions": [],
+    "update": {},
+    "resource": {}
+  }
 }
 ```
 
 **Status**
 
-`status` is a read-only daemon RPC, including the frozen per-VM JSON
-shape. A negotiated guest-control state field is reserved for a future
-release and is not present in the current frozen shape; it must never
-appear as an ad hoc unversioned key.
+`guest status` is a read-only Resource API request. `status.phase`,
+`status.conditions`, and the Provider-specific `status.resource` or
+`status.provider` layers are the current status and readiness surfaces.
 
 **Native**
 
@@ -770,21 +700,21 @@ appear as an ad hoc unversioned key.
 
 - There is no live bash fallback for this verb; the bash disposition is retained only as coverage taxonomy / the retired path.
 
-### `status --check-bridges`
+### `host doctor`
 
-**Synopsis:** `d2b status --check-bridges`
+**Synopsis:** `d2b host doctor --read-only [--human | --json]`
 
 **Flags**
 
 | Flag | Type | Default | Semantics |
 | --- | --- | --- | --- |
-| `--check-bridges` | boolean | `false` | Switch `status` into bridge-only mode. This form rejects `--json` and does not accept a VM argument. |
+| `--read-only` | boolean | `false` | Run host and bridge diagnostics without mutation. |
 
 **Arguments**
 
 | Argument | Semantics |
 | --- | --- |
-| _(none)_ | Bridge-only mode is always global. |
+| _(none)_ | Host diagnostics are scoped to the selected Zone. |
 
 **Exit codes**
 
@@ -797,7 +727,7 @@ appear as an ad hoc unversioned key.
 **Human example**
 
 ```text
-$ d2b status --check-bridges
+$ d2b host doctor --read-only
 === Bridge health ===
 BRIDGE               STATE      ADMIN   EXPECTED     RESULT
 br-work-lan          DOWN       up      NO-CARRIER   no-carrier (no workloads up)
@@ -806,7 +736,7 @@ br-work-up           DOWN       up      NO-CARRIER   no-carrier (net VM stopped)
 
 **Status**
 
-The bridge-health probe is part of the read-only status surface, even though reconcile remains deferred.
+Host and bridge diagnostics are a host surface, not a Guest Resource status.
 
 **Native**
 
@@ -816,9 +746,9 @@ The bridge-health probe is part of the read-only status surface, even though rec
 
 - There is no live bash fallback for this verb; the bash disposition is retained only as coverage taxonomy / the retired path.
 
-### `usb attach`
+### `device usb attach`
 
-**Synopsis:** `d2b usb attach <vm> <busid> [--dry-run | --apply] [--human] [--json]`
+**Synopsis:** `d2b device usb attach <vm> <busid> [--dry-run | --apply] [--human] [--json]`
 
 **Flags**
 
@@ -849,13 +779,13 @@ The bridge-health probe is part of the read-only status surface, even though rec
 **Human example**
 
 ```text
-$ d2b usb attach corp-vm 1-2 --dry-run
-d2b usb attach --dry-run: would bind and lock, apply the USBIP firewall carve-out, ensure the per-env backend/proxy for busid '1-2' for vm 'corp-vm', reconcile the USBIP proxy, and ask guestd to import the device
+$ d2b device usb attach corp-vm 1-2 --dry-run
+d2b device usb attach --dry-run: would bind and lock, apply the USBIP firewall carve-out, ensure the per-env backend/proxy for busid '1-2' for vm 'corp-vm', reconcile the USBIP proxy, and ask guestd to import the device
 ```
 
 **Explicit attach (present-busid, no static allowlist required)**
 
-`d2b usb attach` accepts any USB device that is physically present in sysfs
+`d2b device usb attach` accepts any USB device that is physically present in sysfs
 without requiring a static busid or vendor allowlist in the NixOS configuration.
 The daemon selects the **explicit path** when no declared bundle intent exists for
 the requested busid. Three fail-closed checks run before any broker call:
@@ -882,13 +812,13 @@ unaffected.
 The native CLI sends one intent to `d2bd`; the daemon drives broker host
 USBIP state and authenticated guestd import cleanup/attach over guest-control.
 If the target VM is stopped, `--apply` fails before host mutation with an
-actionable usage error: start the VM with
-`d2b vm start <vm> --apply`, wait until it is running, then retry
-`d2b usb attach <vm> <busid> --apply`. This preflight does not create a
+actionable usage error: start the Guest with
+`d2b guest start <name> --apply`, wait until it is Ready, then retry
+`d2b device usb attach <vm> <busid> --apply`. This preflight does not create a
 degraded USB state. If an earlier failed apply left a stale or bound USBIP
 session claim, start the VM and rerun the attach or run
-`d2b usb detach <vm> <busid> --apply`; the attach/detach paths and
-`d2b usb probe` all run the USBIP proxy reconcile pass, and `usb probe`
+`d2b device usb detach <vm> <busid> --apply`; the attach/detach paths and
+`d2b device usb probe` all run the USBIP proxy reconcile pass, and `device usb probe`
 shows the session claim as cleared once the lock/proxy state is consistent.
 
 Prerequisites for `--apply` are: the target VM is running and guest-control
@@ -896,7 +826,7 @@ advertises USBIP status/import, the bundle declares a USBIP bind/firewall intent
 for the VM/busid, policy/topology checks allow the physical device, the
 `usbip-host` module and per-env backend/proxy carrier can be prepared, and no
 other owner holds the busid session claim. Failing prerequisites surface as
-typed errors or as `d2b usb probe` degraded reasons with exact remediation
+typed errors or as `d2b device usb probe` degraded reasons with exact remediation
 commands.
 
 **Native**
@@ -907,9 +837,9 @@ commands.
 
 - There is no live bash fallback for this verb; the bash disposition is retained only as coverage taxonomy / the retired path.
 
-### `usb detach`
+### `device usb detach`
 
-**Synopsis:** `d2b usb detach <vm> <busid> [--dry-run | --apply] [--human] [--json]`
+**Synopsis:** `d2b device usb detach <vm> <busid> [--dry-run | --apply] [--human] [--json]`
 
 **Flags**
 
@@ -939,8 +869,8 @@ commands.
 **Human example**
 
 ```text
-$ d2b usb detach corp-vm 1-2 --dry-run
-d2b usb detach --dry-run: would ask guestd to detach busid '1-2' for vm 'corp-vm', unbind it on the host, and reconcile the USBIP proxy
+$ d2b device usb detach corp-vm 1-2 --dry-run
+d2b device usb detach --dry-run: would ask guestd to detach busid '1-2' for vm 'corp-vm', unbind it on the host, and reconcile the USBIP proxy
 ```
 
 **Status**
@@ -956,7 +886,7 @@ prove firewall-withdrawal-before-flow-kill ordering plus an exact VM/proxy
 cleanup tuple, `--apply` fails closed with `usbip-revocation-not-isolated` and
 preserves the session claim for manual drain/recovery. The public error names the
 target busid. The safe next step is to stop the VM so the stream drains, then
-rerun `d2b usb detach <vm> <busid> --apply`.
+rerun `d2b device usb detach <vm> <busid> --apply`.
 
 **Native**
 
@@ -966,9 +896,9 @@ rerun `d2b usb detach <vm> <busid> --apply`.
 
 - There is no live bash fallback for this verb; the bash disposition is retained only as coverage taxonomy / the retired path.
 
-### `usb probe`
+### `device usb probe`
 
-**Synopsis:** `d2b usb probe [--human] [--json]`
+**Synopsis:** `d2b device usb probe [--human] [--json]`
 
 **Flags**
 
@@ -995,12 +925,12 @@ rerun `d2b usb detach <vm> <busid> --apply`.
 **Human example**
 
 ```text
-$ d2b usb probe
+$ d2b device usb probe
 VM                       ENV          BUSID        STATUS     SESSION-CLAIM          HOST-BIND                CARRIER        PROXY        GUEST      POLICY
 corp-vm                  work         1-2          degraded   held-by-desired-owner  unknown                  unknown        unknown      detached   allowed
   degraded guest-import-unavailable: the guest USBIP import has not converged
-  remediation: Run `d2b usb attach corp-vm 1-2 --apply` after the VM is running.
-  command: d2b usb attach corp-vm 1-2 --apply
+  remediation: Run `d2b device usb attach corp-vm 1-2 --apply` after the VM is running.
+  command: d2b device usb attach corp-vm 1-2 --apply
 ```
 
 **`--json` example** - schema: [`usb-probe.schema.json`](./cli-output/usb-probe.schema.json); prose companion: [`usb-probe.md`](./cli-output/usb-probe.md).
@@ -1036,11 +966,11 @@ corp-vm                  work         1-2          degraded   held-by-desired-ow
         {
           "code": "guest-import-unavailable",
           "summary": "the guest USBIP import has not converged",
-          "remediation": "Run `d2b usb attach corp-vm 1-2 --apply` after the VM is running."
+          "remediation": "Run `d2b device usb attach corp-vm 1-2 --apply` after the VM is running."
         }
       ],
       "remediationCommands": [
-        "d2b usb attach corp-vm 1-2 --apply"
+        "d2b device usb attach corp-vm 1-2 --apply"
       ]
     }
   ]
@@ -1061,8 +991,8 @@ Probe is a read-only daemon RPC backed by the broker's
   topology/policy state;
 - closed degraded reasons with human remediation; and
 - copy-paste lifecycle commands such as
-  `d2b usb attach corp-vm 1-2 --apply` or
-  `d2b usb detach <owner> 1-2 --apply` when the daemon can name a safe
+  `d2b device usb attach corp-vm 1-2 --apply` or
+  `d2b device usb detach <owner> 1-2 --apply` when the daemon can name a safe
   next command.
 
 A persisted lock by itself is not reported as healthy `bound`; stale or
@@ -1087,9 +1017,9 @@ command.
 
 - There is no live bash fallback for this verb; the bash disposition is retained only as coverage taxonomy / the retired path.
 
-### `usb security-key status`
+### `device usb security-key status`
 
-**Synopsis:** `d2b usb security-key status [--human] [--json]`
+**Synopsis:** `d2b device usb security-key status [--human] [--json]`
 
 **Flags**
 
@@ -1114,7 +1044,7 @@ command.
 **Human example**
 
 ```text
-$ d2b usb security-key status
+$ d2b device usb security-key status
 # not yet available - exits 78 with not-yet-implemented envelope
 ```
 
@@ -1122,15 +1052,15 @@ $ d2b usb security-key status
 
 This command is defined and CLI-stable. The live (non-dry-run) path exits 78
 with a `not-yet-implemented` envelope until the security-key proxy daemon
-handler ships. Use `d2b usb security-key test <vm> --dry-run` to preview
+handler ships. Use `d2b device usb security-key test <vm> --dry-run` to preview
 the planned checks.
 
 Use the user-facing term "security key" in user-visible text; FIDO/CTAP
 terminology is reserved for diagnostics and technical documentation.
 
-### `usb security-key sessions`
+### `device usb security-key sessions`
 
-**Synopsis:** `d2b usb security-key sessions [--human] [--json]`
+**Synopsis:** `d2b device usb security-key sessions [--human] [--json]`
 
 **Flags**
 
@@ -1155,7 +1085,7 @@ terminology is reserved for diagnostics and technical documentation.
 **Human example**
 
 ```text
-$ d2b usb security-key sessions
+$ d2b device usb security-key sessions
 # not yet available - exits 78 with not-yet-implemented envelope
 ```
 
@@ -1164,9 +1094,9 @@ $ d2b usb security-key sessions
 CLI-stable. Exits 78 with a `not-yet-implemented` envelope until the
 security-key proxy daemon handler ships.
 
-### `usb security-key cancel`
+### `device usb security-key cancel`
 
-**Synopsis:** `d2b usb security-key cancel {<session-id> | --current} [--dry-run | --apply] [--human] [--json]`
+**Synopsis:** `d2b device usb security-key cancel {<session-id> | --current} [--dry-run | --apply] [--human] [--json]`
 
 **Flags**
 
@@ -1195,8 +1125,8 @@ security-key proxy daemon handler ships.
 **Human example**
 
 ```text
-$ d2b usb security-key cancel --current --dry-run
-d2b usb security-key cancel --dry-run: would send CancelSession(current) to the security-key proxy broker
+$ d2b device usb security-key cancel --current --dry-run
+d2b device usb security-key cancel --dry-run: would send CancelSession(current) to the security-key proxy broker
 ```
 
 **`--json` example**
@@ -1218,9 +1148,9 @@ d2b usb security-key cancel --dry-run: would send CancelSession(current) to the 
 `--dry-run` is fully implemented and golden-stable. `--apply` exits 78 until
 the daemon handler ships.
 
-### `usb security-key test`
+### `device usb security-key test`
 
-**Synopsis:** `d2b usb security-key test <vm> [--dry-run] [--human] [--json]`
+**Synopsis:** `d2b device usb security-key test <vm> [--dry-run] [--human] [--json]`
 
 **Flags**
 
@@ -1246,8 +1176,8 @@ the daemon handler ships.
 **Human example**
 
 ```text
-$ d2b usb security-key test corp-vm --dry-run
-d2b usb security-key test --dry-run: would check virtual HID device presence in 'corp-vm' and confirm host broker sees the physical security key
+$ d2b device usb security-key test corp-vm --dry-run
+d2b device usb security-key test --dry-run: would check virtual HID device presence in 'corp-vm' and confirm host broker sees the physical security key
 ```
 
 **`--json` example**
@@ -1270,9 +1200,9 @@ d2b usb security-key test --dry-run: would check virtual HID device presence in 
 `--dry-run` is fully implemented and golden-stable. The live path exits 78
 until the daemon handler ships.
 
-### `console`
+### `guest console`
 
-**Synopsis:** `d2b console <vm>`
+**Synopsis:** `d2b guest console <name>`
 
 **Flags**
 
@@ -1284,7 +1214,7 @@ until the daemon handler ships.
 
 | Argument | Semantics |
 | --- | --- |
-| `vm` | Required headless VM name. Graphics VMs are rejected and must be launched with `d2b vm start <vm> --apply`. |
+| `name` | Required headless Guest name. Graphics Guests are rejected and must be launched with `d2b guest start <name> --apply`. |
 
 **Exit codes**
 
@@ -1298,12 +1228,12 @@ until the daemon handler ships.
 **Human example**
 
 ```text
-$ d2b console corp-vm
-Connected to console for VM 'corp-vm' (LocalHypervisor). Press Ctrl-] to detach.
+$ d2b guest console corp-vm
+Connected to console for Guest 'corp-vm' (LocalHypervisor). Press Ctrl-] to detach.
 ```
 
 Console control messages are emitted on stderr. Stdout is reserved for the raw
-guest UART byte stream so `d2b console <vm> > console.log` captures only guest
+guest UART byte stream so `d2b guest console <name> > console.log` captures only guest
 output.
 
 **Status**
@@ -1562,13 +1492,13 @@ Build is a native non-destructive planner that renders the eval/build preview wi
 **Bash**
 
 - There is no live bash fallback for this verb; the bash disposition is retained only as coverage taxonomy / the retired path.
-### `switch`
+### `activation switch`
 
-**Synopsis:** `d2b switch <vm> [--dry-run | --apply] [--human | --json]`
+**Synopsis:** `d2b activation switch Guest/<name> [--dry-run | --apply] [--human | --json]`
 
 **Status**
 
-`switch` is a daemon-native live guest activation verb. If neither
+`activation switch` is a daemon-native live Guest activation verb. If neither
 mutation flag is set, the CLI prints the parity notice and defaults to
 `--dry-run`; `--apply` requires the VM to be running and reachable over
 guest-control.
@@ -1586,7 +1516,7 @@ guest-control.
 
 | Argument | Semantics |
 | --- | --- |
-| `vm` | Required VM name as declared in `d2b.vms.<name>`. |
+| `guest-ref` | Required `Guest/<name>` ResourceRef. |
 
 **Exit codes**
 
@@ -1598,11 +1528,11 @@ guest-control.
 | `70` | The named VM is not declared in the active manifest. | [`not-found`](./error-codes.md#not-found) |
 | `78` | Host store publication, broker commit, guest activation capability, or guest activation status failed closed. | [`broker-error`](./error-codes.md#broker-error), [`not-yet-implemented`](./error-codes.md#not-yet-implemented) |
 
-Stopped/offline VMs fail closed: `switch --apply` never asks the host
+Stopped/offline Guests fail closed: `activation switch --apply` never asks the host
 broker to execute the guest activation program, never mutates host
 systemd for the VM, and never falls back to SSH or a host shell. Start
-the VM first with `d2b vm start <vm> --apply`, wait for guest-control
-readiness, then rerun `d2b switch <vm> --apply`.
+the Guest first with `d2b guest start <name> --apply`, wait for Guest
+readiness, then rerun `d2b activation switch Guest/<name> --apply`.
 
 The live guest activation wait is bounded by
 `d2b.daemon.lifecycle.liveActivation.timeoutSeconds` or the per-VM
@@ -1616,8 +1546,8 @@ expected to block.
 **Human example**
 
 ```text
-$ d2b switch corp-vm --apply
-d2b switch --apply activated in guest via guest-control (vm=corp-vm, mode=switch, summary=activated, generationNumber=42)
+$ d2b activation switch Guest/corp-vm --apply
+Guest/corp-vm: activation=applied
 ```
 
 **Native**
@@ -1976,9 +1906,9 @@ store verify corp-vm: status=ok checked=42 drifted=0 repaired=0
 
 - There is no bash execution path for this verb.
 
-### `trust`
+### `activation trust`
 
-**Synopsis:** `d2b trust <vm> [--dry-run | --apply] [--human | --json]`
+**Synopsis:** `d2b activation trust <name> [--dry-run | --apply] [--human | --json]`
 
 **Status**
 
@@ -2013,8 +1943,8 @@ The historical bash fallback was retired in v1.0 (ADR 0015); v1.0 daemon-unreach
 **Human example**
 
 ```text
-$ d2b trust corp-vm --apply
-d2b trust --apply executed via the native daemon → broker path (vm=corp-vm, staticIp=10.20.0.10, knownHostsPath=/var/lib/d2b/known_hosts.d2b, updated=true)
+$ d2b activation trust corp-vm --apply
+d2b activation trust --apply executed via the native daemon → broker path (name=corp-vm, updated=true)
 ```
 
 **Native**
@@ -2026,9 +1956,9 @@ d2b trust --apply executed via the native daemon → broker path (vm=corp-vm, st
 **Bash**
 
 - In v1.0 daemon-only, `exec_legacy_passthrough` always returns the typed `not-yet-implemented` envelope (exit 78 per ADR 0015); the historical bash-fallback shim was retired in v1.0.
-### `rotate-known-host`
+### `activation rotate-known-host`
 
-**Synopsis:** `d2b rotate-known-host <vm> [--dry-run | --apply] [--human | --json]`
+**Synopsis:** `d2b activation rotate-known-host <name> [--dry-run | --apply] [--human | --json]`
 
 **Status**
 
@@ -2063,8 +1993,8 @@ In v1.0 daemon-only (per ADR 0015) the historical bash fallback was retired in v
 **Human example**
 
 ```text
-$ d2b rotate-known-host corp-vm --apply
-d2b rotate-known-host --apply executed via the native daemon → broker path (vm=corp-vm, staticIp=10.20.0.10, knownHostsPath=/var/lib/d2b/known_hosts.d2b, removed=true)
+$ d2b activation rotate-known-host corp-vm --apply
+d2b activation rotate-known-host --apply executed via the native daemon → broker path (name=corp-vm, removed=true)
 ```
 
 **Native**
@@ -2078,9 +2008,9 @@ d2b rotate-known-host --apply executed via the native daemon → broker path (vm
 - In v1.0 daemon-only, `exec_legacy_passthrough` always returns the typed `not-yet-implemented` envelope (exit 78 per ADR 0015); the historical bash-fallback shim was retired in v1.0.
 
 
-### `keys list`
+### `activation keys list`
 
-**Synopsis:** `d2b keys list [--human] [--json]`
+**Synopsis:** `d2b activation keys list [--human] [--json]`
 
 **Flags**
 
@@ -2106,7 +2036,7 @@ d2b rotate-known-host --apply executed via the native daemon → broker path (vm
 **Human example**
 
 ```text
-$ d2b keys list
+$ d2b activation keys list
 VM                       ENV          FINGERPRINT                                                      MANAGED KEY
 corp-vm                  work         SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA              /var/lib/d2b/keys/corp-vm_ed25519
 ```
@@ -2140,9 +2070,9 @@ Keys list is a native inventory preview that reports the managed-key resolution 
 
 - There is no live bash fallback for this verb; the bash disposition is retained only as coverage taxonomy / the retired path.
 
-### `keys show`
+### `activation keys show`
 
-**Synopsis:** `d2b keys show <vm> [--human] [--json]`
+**Synopsis:** `d2b activation keys show <name> [--human] [--json]`
 
 **Flags**
 
@@ -2168,7 +2098,7 @@ Keys list is a native inventory preview that reports the managed-key resolution 
 **Human example**
 
 ```text
-$ d2b keys show corp-vm
+$ d2b activation keys show corp-vm
 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIMockedExampleKeyForDocsOnly corp-vm_ed25519.pub
 ```
 
@@ -2183,9 +2113,9 @@ Keys show is a native preview that reports daemon-resolved key metadata placehol
 **Bash**
 
 - There is no live bash fallback for this verb; the bash disposition is retained only as coverage taxonomy / the retired path.
-### `keys rotate`
+### `activation keys rotate`
 
-**Synopsis:** `d2b keys rotate <vm> [--dry-run | --apply] [--human | --json]`
+**Synopsis:** `d2b activation keys rotate Guest/<name> [--dry-run | --apply] [--human | --json]`
 
 **Status**
 
@@ -2220,8 +2150,8 @@ In v1.0 daemon-only (per ADR 0015) the historical bash fallback was retired in v
 **Human example**
 
 ```text
-$ d2b keys rotate corp-vm --apply
-d2b keys rotate --apply executed via the native daemon → broker path (vm=corp-vm, fingerprint=SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA, keyPath=/var/lib/d2b/keys/corp-vm_ed25519)
+$ d2b activation keys rotate Guest/corp-vm --apply
+d2b activation keys rotate --apply executed via the native daemon → broker path (resourceRef=Guest/corp-vm, fingerprint=SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA)
 ```
 
 **Native**
@@ -2781,7 +2711,7 @@ fallback was retired in v1.0).
 deployment-shape tier plus the stable migration checklist. Per-VM
 supervisor classification is still unavailable on the public manifest, so
 the planner keeps that limitation explicit and points operators at
-`d2b status <vm>` for per-VM truth. `--apply` uses the daemon-first
+`d2b guest status <name>` for per-Guest truth. `--apply` uses the daemon-first
 bridge and broker `RunMigrate` path.
 
 **Flags**
@@ -2815,7 +2745,7 @@ In v1.0 daemon-only (per ADR 0015) the historical bash fallback was retired in v
 $ d2b migrate --dry-run
 d2b migrate --dry-run: deployment shape = tier-0-mixed, 2 VM(s) in manifest.
 Per-VM supervisor classification is not available on the public manifest today.
-Use `d2b status <vm>` to inspect each VM directly; `d2b migrate --apply`
+Use `d2b guest status <name>` to inspect each Guest directly; `d2b activation migrate --apply`
 is the live mutation path when you are ready.
 ```
 
@@ -2914,7 +2844,7 @@ Auth status is a read-only daemon query that reports caller mapping, socket reac
 
 ### `config sync`
 
-**Synopsis:** `d2b config sync <vm> [--guest-path <path>] [--host <h>] [--user <u>] [--key <path>] [--known-hosts <path>] [--dry-run] [--json]`
+**Synopsis:** `d2b activation config sync <vm> [--guest-path <path>] [--host <h>] [--user <u>] [--key <path>] [--known-hosts <path>] [--dry-run] [--json]`
 
 <a id="config-sync-guest-control-transport"></a>
 On a guest-control-capable VM, `config sync` reads the VM's canonical
@@ -2976,7 +2906,7 @@ surface.
 
 ### `config diff`
 
-**Synopsis:** `d2b config diff <vm> --against <guestConfigFile> [--json]`
+**Synopsis:** `d2b activation config diff <vm> --against <guestConfigFile> [--json]`
 
 Shows a unified diff between the staged guest config and the live
 host-side file the operator names with `--against` (typically their
@@ -2987,7 +2917,7 @@ reports `differs` + the diff text.
 
 ### `config approve`
 
-**Synopsis:** `d2b config approve <vm> --to <target-file> [--json]`
+**Synopsis:** `d2b activation config approve <vm> --to <target-file> [--json]`
 
 Validates the staged guest config (non-empty, valid UTF-8) and
 atomically writes it onto the operator-chosen `--to` target (unique
@@ -2995,13 +2925,13 @@ atomically writes it onto the operator-chosen `--to` target (unique
 staging file. The CLI never auto-locates the operator's config tree -
 the operator names the target explicitly. The authoritative containment
 + eval gate is the per-VM `guestConfigFile` assertion that runs on the
-subsequent `d2b switch`.
+subsequent `d2b activation switch`.
 
 **Disposition:** `rust-native` - host-operator-only; atomic publish.
 
 ### `config reject`
 
-**Synopsis:** `d2b config reject <vm> [--json]`
+**Synopsis:** `d2b activation config reject <vm> [--json]`
 
 Discards the staged guest config for a VM.
 
@@ -3009,7 +2939,7 @@ Discards the staged guest config for a VM.
 
 ### `config status`
 
-**Synopsis:** `d2b config status [<vm>] [--all] [--json]`
+**Synopsis:** `d2b activation config status [<vm>] [--all] [--json]`
 
 Reports whether a VM (or, with `--all`, every VM) has a pending
 (un-approved) staged guest config.
@@ -3038,7 +2968,7 @@ With `--json` each verb emits a single stdout object:
 - `config status` → `{ "command": "config status", "pending": [ <vm>… ] }`
   (the single-VM form reports a list with 0 or 1 entry).
 
-Pending-staging notes (`d2b status`, `d2b vm start`, and the mutating
+Pending-staging notes (`d2b guest status`, `d2b guest start`, and the mutating
 verbs) are emitted on **stderr** for human output only, so they never perturb a
 `--json` stdout envelope.
 
@@ -3062,7 +2992,7 @@ unsafe-local targets stay canonical rather than being coerced to VM names.
 A local VM named `list`, `attach`, `detach`, or `kill` attaches by default; use
 `d2b shell <target> <ACTION>` for management. Command-like trailing words such as
 `d2b shell work htop` are rejected with a hint to use
-`d2b vm exec <target> -- <cmd>` for one-off commands.
+`d2b exec run Guest/<name> -- <cmd>` for one-off commands.
 
 `shell` keeps declared local VM names on the local daemon public socket and the
 authenticated guest-control terminal transport. Unsafe-local targets use the
@@ -3191,36 +3121,32 @@ labels are closed provider/component/operation/outcome/error enums. Neither
 surface carries shell names, terminal session handles, helper diagnostics,
 supervisor metadata, paths, argv, env, cwd, transcripts, or terminal bytes.
 
-### `vm exec`
+### `exec`
 
-**Synopsis:** `d2b vm exec [-i] [-t] [-d|--detach] [--env KEY=VALUE]… [--cwd DIR] [--json|--human] <vm> -- <cmd> [args…]`
+**Synopsis:** `d2b exec run [--env KEY=VALUE]… [--cwd DIR] [--json|--human] Guest/<name> -- <cmd> [args…]`
 
 **Detached management synopsis:**
 
-- `d2b vm exec [--json] <vm> list`
-- `d2b vm exec [--json] <vm> logs <exec-id>`
-- `d2b vm exec [--json] <vm> status <exec-id>`
-- `d2b vm exec [--json] <vm> kill <exec-id>`
+- `d2b exec list [--json] Guest/<name>`
+- `d2b exec logs [--json] EphemeralProcess/<id>`
+- `d2b exec status [--json] EphemeralProcess/<id>`
+- `d2b exec kill [--json] EphemeralProcess/<id>`
 
-Runs or manages commands inside a running VM over the authenticated
-**guest-control transport**: the CLI opens an owner connection to the
-daemon public socket, the daemon reaches the VM's `guestd` over the
-authenticated guest-control vsock channel, and the endpoints exchange
-typed `exec` operations. There is **no SSH** and **no host PTY** - the
-guest owns the PTY. Exec is admin-only (the same `SO_PEERCRED` admin
-gate as other privileged verbs); a launcher-role caller is rejected with
-the typed `authz-not-admin` error (exit `77`, AUTH) before any guest
-session or detached create is attempted.
+`exec run` creates an `EphemeralProcess` Resource for a Host or Guest
+execution target. `exec attach` attaches to an existing
+`EphemeralProcess` Resource, while `wait`, `status`, `list`, `logs`, and
+`kill` operate on typed ResourceRefs. The current CLI does not accept a
+VM-first compatibility form.
 
 **Status**
 
-`vm exec` is a rust-native, daemon-backed guest command surface. It
-supports attached, interactive, detached, and detached-management forms.
+`exec` is a typed, daemon-backed Resource command surface. `run` returns a
+v3 Resource envelope; management commands use `EphemeralProcess/<name>`.
 
 **Native**
 
-- The Rust CLI owns parsing, terminal safety, detached-management
-  rendering, and the single terminal JSON envelope contract.
+- The Rust CLI owns ResourceRef parsing, target validation, and the
+  v3 envelope.
 
 **Bash**
 
@@ -3231,9 +3157,10 @@ supports attached, interactive, detached, and detached-management forms.
 
 | Flag | Type | Default | Semantics |
 | --- | --- | --- | --- |
-| `-d`, `--detach` | boolean | `false` | Start a non-interactive detached exec and print its `exec_id`. Incompatible with `-i`/`-t`. |
-| `-i`, `--interactive` | boolean | `false` | Forward host stdin. Must be paired with `-t`; `-t` implies stdin forwarding. |
-| `-t`, `--tty` | boolean | `false` | Allocate a guest PTY and put the host terminal in raw mode. Human-only. |
+| `--name` | string | unset | Optional EphemeralProcess name. |
+| `--domain` | `system` or `user` | unset | Requested execution domain. |
+| `--user` | `User/<name>` | unset | Requested User ResourceRef. |
+| `--provider` | `Provider/<name>` | unset | Provider ResourceRef. |
 | `--env` | `KEY=VALUE` | repeatable | Add one environment variable to the guest command after policy filtering. |
 | `--cwd` | path | unset | Working directory for the guest command. |
 | `--json` | boolean | `false` | Emit a single terminal JSON envelope. Human-only interactive modes reject this flag. |
@@ -3257,8 +3184,8 @@ Exec command forms **always require `--`** before `<cmd>`. Tokens after
 `<vm>` without `--` are management verbs; an unknown verb is a usage
 error that tells the operator to use `--` to run a command. This means
 `list`, `logs`, `status`, and `kill` remain valid VM names:
-`d2b vm exec list -- bash` runs `bash` in a VM named `list`, while
-`d2b vm exec list status <id>` asks that VM for a detached exec's
+`d2b exec run Guest/list -- bash` runs `bash` in a VM named `list`, while
+`d2b exec status EphemeralProcess/<id>` asks that VM for a detached exec's
 status.
 
 **Execution identity and command resolution.** Every attached and
@@ -3273,7 +3200,7 @@ wire `user` field is host-fixed by `guestd` and ignored; operators
 elevate with `sudo` inside the session. The console replacement is:
 
 ```console
-$ d2b vm exec -it corp-vm -- bash
+$ d2b exec run Guest/corp-vm -- bash
 ```
 
 Modes:
@@ -3314,10 +3241,10 @@ foreground process group.
 
 Detached management:
 
-- **create** - `d2b vm exec -d <vm> -- <cmd> [args…]`: human output
+- **create** - `d2b exec run Guest/<name> -- <cmd> [args…]`: human output
   is one copy-pasteable `exec_id` line. JSON emits
   `{ "command": "vm exec", "vm": "<vm>", "execId": "<id>", "state": "<state>" }`.
-- **list** - `d2b vm exec <vm> list`: human output is a table with
+- **list** - `d2b exec list Guest/<name>`: human output is a table with
   `execId`, state, start time, terminal status when available, aggregate
   and per-stream retained offset windows, and aggregate/per-stream
   dropped/truncated metadata. JSON
@@ -3326,12 +3253,12 @@ Detached management:
   "endOffset", "droppedBytes", "truncated" } ] }`; implementations also
   expose per-stream stdout/stderr offsets and dropped/truncated flags for
   resume-capable clients.
-- **status** - `d2b vm exec <vm> status <exec-id>`: human output is
+- **status** - `d2b exec status EphemeralProcess/<id>`: human output is
   the state plus terminal disposition. JSON emits
   `{ "command": "vm exec status", "vm": "<vm>", "execId": "<id>",
   "state", "reason"?, "exitCode"?, "signal"?, "startOffset",
   "endOffset", "droppedBytes", "truncated" }`.
-- **logs** - `d2b vm exec <vm> logs <exec-id>`: human output writes
+- **logs** - `d2b exec logs EphemeralProcess/<id>`: human output writes
   retained stdout/stderr bytes to the corresponding host streams and
   prints only bounded metadata warnings to stderr when bytes were
   dropped or truncated. An expired detached record is a typed failure
@@ -3344,7 +3271,7 @@ Detached management:
   `stderrEof` fields for offset resume. Logs are bounded ring buffers;
   dropped and truncated
   accounting is metadata, not log content.
-- **kill** - `d2b vm exec <vm> kill <exec-id>`: public name for
+- **kill** - `d2b exec kill EphemeralProcess/<id>`: public name for
   `ExecCancel`. Guestd requests graceful termination, waits a bounded
   grace window, then force-kills the workload if needed. The operation is
   idempotent: human output confirms the result, and JSON emits
@@ -3375,12 +3302,12 @@ runs a periodic reaper for terminal records and retained-log slots.
 **Human example**
 
 ```text
-$ d2b vm exec work -- id
+$ d2b exec run Guest/work -- id
 uid=1000(alice) gid=100(users)
-$ d2b vm exec work list
+$ d2b exec list Guest/work
 EXEC ID                  STATE                  STARTED AT                EXIT/SIGNAL    OFFSETS                                    DROPPED/TRUNCATED
 exec-1                   exited                 2026-06-15T00:00:00Z      exit=0         all=4..18 stdout=4..8 stderr=9..18         all=5/truncated stdout=2/truncated stderr=3/complete
-$ d2b vm exec work logs exec-1 --stdout-offset=4 --stderr-offset=9 --max-len=4096
+$ d2b exec logs EphemeralProcess/exec-1 --stdout-offset=4 --stderr-offset=9 --max-len=4096
 OUT
 ERR
 d2b: vm exec logs: retained output incomplete (startOffset=4 endOffset=18 droppedBytes=5 truncated=true stdoutStartOffset=4 stdoutEndOffset=8 stdoutNextOffset=10 stdoutEof=false stdoutDroppedBytes=2 stdoutTruncated=true stderrStartOffset=9 stderrEndOffset=18 stderrNextOffset=21 stderrEof=true stderrDroppedBytes=3 stderrTruncated=false)
@@ -3450,34 +3377,31 @@ detached state lives in guestd's detached registry).
 
 | Command | Current disposition | Rationale |
 | --- | --- | --- |
-| `list` | `rust-native` | Pure read-only inventory query; the daemon answers it without mutating host or guest state. |
-| `vm start` | `rust-native` | The Rust CLI owns parsing and dry-run DAG output; `--apply` routes through the daemon-backed `SpawnRunner` path. Daemon-unreachable / native-handler-deferred conditions surface typed envelopes (exit `1` / exit `78` per ADR 0015); the historical bash fallback was retired in v1.0. |
-| `vm stop` | `rust-native` | The Rust CLI owns parsing and dry-run DAG output, including explicit `--force` / `-f` stop intent; `--apply` routes through the daemon-backed `SignalRunner` path. Daemon-unreachable / native-handler-deferred conditions surface typed envelopes (exit `1` / exit `78` per ADR 0015); the historical bash fallback was retired in v1.0. |
-| `vm restart` | `rust-native` | The Rust CLI owns parsing and dry-run DAG output, including explicit `--force` / `-f` stop-phase intent; `--apply` routes through the daemon-backed stop+start sequence. Daemon-unreachable / native-handler-deferred conditions surface typed envelopes (exit `1` / exit `78` per ADR 0015); the historical bash fallback was retired in v1.0. |
-| `vm list` | `rust-native` | Daemon-side runtime inventory from d2bd's public socket; daemon-unavailable returns an explicit empty inventory with remediation text. |
-| `status` | `rust-native` | Status is a read-only daemon RPC, including the frozen per-VM JSON shape. |
-| `status --check-bridges` | `rust-native` | The bridge-health probe is part of the read-only status surface, even though reconcile remains deferred. |
-| `usb attach` | `rust-native` | USBIP attach parses and dispatches one intent to `d2bd`; the daemon coordinates broker host bind/firewall/proxy state and authenticated guestd import over guest-control. |
-| `usb detach` | `rust-native` | USBIP detach parses and dispatches one intent to `d2bd`; the daemon asks guestd to detach matching imports, then runs broker `UsbipUnbind` / `UsbipProxyReconcile`. |
-| `usb probe` | `rust-native` | USBIP probe is a read-only daemon query backed by the broker's `UsbipProxyReconcile` validation pass. |
-| `console` | `rust-native` | The Rust CLI owns help / argument validation and attaches to the daemon-native foreground console handoff via `ConsoleOp`, with provider-capability-aware streaming across Cloud Hypervisor, qemu-media, and ACA targets; see [provider capability matrix](./provider-capability-matrix.md). |
+| `list <RESOURCE_TYPE>` | `rust-native` | Generic read-only Resource API inventory. |
+| `guest list` | `rust-native` | Typed Guest inventory returning complete v3 Resource envelopes. |
+| `guest status` | `rust-native` | Typed Guest status and readiness query, with JSON-lines watch support. |
+| `guest start` | `rust-native` | Typed Guest lifecycle request; production UpdateSpec dispatch is a later-wave blocker. |
+| `guest stop` | `rust-native` | Typed Guest lifecycle request; production UpdateSpec dispatch is a later-wave blocker. |
+| `guest restart` | `rust-native` | Typed Guest lifecycle request; production UpdateSpec dispatch is a later-wave blocker. |
+| `device usb attach` | `rust-native` | USBIP attach parses and dispatches one intent to `d2bd`; the daemon coordinates broker host bind/firewall/proxy state and authenticated guestd import over guest-control. |
+| `device usb detach` | `rust-native` | USBIP detach parses and dispatches one intent to `d2bd`; the daemon asks guestd to detach matching imports, then runs broker `UsbipUnbind` / `UsbipProxyReconcile`. |
+| `device usb probe` | `rust-native` | USBIP probe is a read-only daemon query backed by the broker's `UsbipProxyReconcile` validation pass. |
+| `guest console` | `rust-native` | The Rust CLI owns help / argument validation and attaches to the daemon-native foreground console handoff via `ConsoleOp`, with provider-capability-aware streaming across Cloud Hypervisor, qemu-media, and ACA targets; see [provider capability matrix](./provider-capability-matrix.md). |
 | `audio status` | `rust-native` | The Rust CLI dispatches `AudioOp::Status` and renders provider-capability-aware per-target audio state/errors across Cloud Hypervisor, qemu-media, and ACA; see [provider capability matrix](./provider-capability-matrix.md). |
 | `audio mic` | `rust-native` | The Rust CLI dispatches microphone grant/revoke through `AudioOp::Mute`, persisting policy and applying host/guest enforcement according to provider capability. |
 | `audio speaker` | `rust-native` | The Rust CLI dispatches speaker grant/revoke or level changes through `AudioOp`, persisting policy and applying host/guest enforcement according to provider capability. |
 | `audio off` | `rust-native` | The Rust CLI dispatches the `off` shorthand as audio mute operations for both directions, sealing supported host boundaries and reporting any degraded guest/provider enforcement. |
 | `build` | `rust-native` | Build is a native non-destructive planner that renders the eval/build preview without falling back to bash. |
-| `switch` | `rust-native` | The Rust CLI owns dry-run output; `--apply` routes through the daemon-backed `RunActivation` path. Daemon-unreachable / native-handler-deferred conditions surface typed envelopes (exit `1` / exit `78` per ADR 0015); the historical bash fallback was retired in v1.0. |
+| `activation switch` | `rust-native` | The Rust CLI owns typed Guest activation arguments; `--apply` routes through the Zone activation Provider. |
 | `boot` | `rust-native` | The Rust CLI owns dry-run output; `--apply` routes through the daemon-backed `RunActivation` path. Daemon-unreachable / native-handler-deferred conditions surface typed envelopes (exit `1` / exit `78` per ADR 0015); the historical bash fallback was retired in v1.0. |
 | `test` | `rust-native` | The Rust CLI owns dry-run output; `--apply` routes through the daemon-backed `RunActivation` path. Daemon-unreachable / native-handler-deferred conditions surface typed envelopes (exit `1` / exit `78` per ADR 0015); the historical bash fallback was retired in v1.0. |
 | `rollback` | `rust-native` | The Rust CLI owns dry-run output; `--apply` routes through the daemon-backed `RunActivation` path. Daemon-unreachable / native-handler-deferred conditions surface typed envelopes (exit `1` / exit `78` per ADR 0015); the historical bash fallback was retired in v1.0. |
 | `generations` | `rust-native` | Generations is a native introspection surface that reports current/booted symlink targets without falling back to bash. |
 | `gc` | `rust-native` | The Rust CLI owns dry-run output; `--apply` routes through the daemon-backed `RunGc` path. Daemon-unreachable / native-handler-deferred conditions surface typed envelopes (exit `1` / exit `78` per ADR 0015); the historical bash fallback was retired in v1.0. |
 | `store verify` | `rust-native` | Routes through `d2bd` → broker `StoreVerify`; the CLI never reads the store-view directly. |
-| `trust` | `rust-native` | The Rust CLI owns dry-run output; `--apply` routes through the daemon-backed `RunHostKeyTrust` path. Daemon-unreachable / native-handler-deferred conditions surface typed envelopes (exit `1` / exit `78` per ADR 0015); the historical bash fallback was retired in v1.0. |
-| `rotate-known-host` | `rust-native` | The Rust CLI owns dry-run output; `--apply` routes through the daemon-backed `RunRotateKnownHost` path. Daemon-unreachable / native-handler-deferred conditions surface typed envelopes (exit `1` / exit `78` per ADR 0015); the historical bash fallback was retired in v1.0. |
-| `keys list` | `rust-native` | Keys list is a native inventory preview that reports the managed-key resolution placeholders without falling back to bash. |
-| `keys show` | `rust-native` | Keys show is a native preview that reports daemon-resolved key metadata placeholders without falling back to bash. |
-| `keys rotate` | `rust-native` | The Rust CLI owns dry-run output; `--apply` routes through the daemon-backed `RunKeysRotate` path. Daemon-unreachable / native-handler-deferred conditions surface typed envelopes (exit `1` / exit `78` per ADR 0015); the historical bash fallback was retired in v1.0. |
+| `activation trust` | `rust-native` | Typed activation Provider trust operation. |
+| `activation rotate-known-host` | `rust-native` | Typed activation Provider known-host rotation. |
+| `activation keys list/show/rotate` | `rust-native` | Typed activation Provider key operations. |
 | `audit` | `rust-native` | Audit is part of the daemon surface and keeps both human and JSON output contracts. |
 | `host check` | `rust-native` | Host check is a read-only daemon RPC by design. |
 | `host prepare` | `rust-native` | The Rust CLI owns dry-run output (wired live); `--apply` is **not yet wired** - it returns the typed `daemon-down` envelope (exit `1`) today (use `--dry-run` for now). When the daemon-side dispatch ships, `--apply` will route through the daemon-backed `ApplyNftables` / `ApplyRoute` / `ApplySysctl` / `UpdateHostsFile` / `ApplyNmUnmanaged` sequence, with broker failures surfacing `broker-error` (exit `78`); a Tier-0 host is refused today (exit `78`). The historical bash fallback was retired in v1.0. |
@@ -3487,5 +3411,5 @@ detached state lives in guestd's detached registry).
 | `host install` | `rust-native` | Host install owns its dry-run preview in Rust and routes `--apply` through the daemon → broker `RunHostInstall` path without broker-error fallback to bash. |
 | `migrate` | `rust-native` | Dry-run analysis is native; `--apply` routes through `d2bd` → broker `RunMigrate`. Daemon-unreachable / native-handler-deferred conditions surface typed envelopes (exit `1` / exit `78` per ADR 0015); the historical bash fallback was retired in v1.0. |
 | `auth status` | `rust-native` | Auth status is a read-only daemon query that reports caller mapping, socket reachability, and authorization hints. |
-| `vm exec` | `rust-native` | Daemon public socket → authenticated guest-control session → `guestd` exec RPCs. Admin-only; no SSH, no host PTY, no new privileged broker op. Attached exec uses the in-process `d2bd` session table; detached exec uses guestd's detached registry and VM-first management verbs. |
+| `exec run/attach/wait/status/list/logs/kill` | `rust-native` | Typed EphemeralProcess Resource operations over the Zone session; no SSH or VM lifecycle alias. |
 | `shell` | `rust-native` | Admin-only provider-neutral `ShellOp`: local VMs use authenticated guest-control; unsafe-local uses the exact requester-UID helper and a multiplexed terminal fd. No SSH, host-shell fallback, root unit, per-VM service, or broker op. |

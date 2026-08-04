@@ -90,24 +90,24 @@ examples or issue text.
 Skip this section for `image-file` sources.
 
 ```bash
-d2b usb probe
+d2b device usb probe
 ```
 
 Probe output is redacted: it shows the transient busid selector without
 by-id names, serials, block paths, or registry paths. If the boot-drive
 slot shows `enrollable` rather than `enrolled`, verify that the
 qemu-media source has the intended `usbSelector.byIdName` and re-run
-`d2b usb probe`; `d2b status <vm>` shows the registry state when
+`d2b device usb probe`; `d2b guest status <name>` shows the registry state when
 you need to distinguish `missing`, `present`, and `stale`. There is no
 public enrollment verb.
 
 ## 3. Start and inspect
 
 ```bash
-d2b vm start dark-live --dry-run
-d2b vm start dark-live --apply
-d2b list
-d2b status dark-live
+d2b guest start dark-live --dry-run
+d2b guest start dark-live --apply
+d2b guest list
+d2b guest status dark-live
 ```
 
 The dry-run should show `host-reconcile → qemu-media`. After start,
@@ -123,9 +123,9 @@ the generated niri rule can match the proxy-rewritten app-id prefix
 For physical USB removable slots:
 
 ```bash
-d2b usb attach dark-live 1-2.3 --dry-run
-d2b usb attach dark-live 1-2.3 --apply
-d2b usb detach dark-live 1-2.3 --apply
+d2b device usb attach dark-live 1-2.3 --dry-run
+d2b device usb attach dark-live 1-2.3 --apply
+d2b device usb detach dark-live 1-2.3 --apply
 ```
 
 For qemu-media VMs these commands do not start USBIP runners and do not
@@ -136,10 +136,10 @@ redact the runtime selector from success output.
 
 Record:
 
-- `d2b vm start dark-live --dry-run`
-- `d2b vm start dark-live --apply`
-- `d2b status dark-live`
-- `d2b usb probe`
+- `d2b guest start dark-live --dry-run`
+- `d2b guest start dark-live --apply`
+- `d2b guest status dark-live`
+- `d2b device usb probe`
 - any `usb attach` and `usb detach` dry-run/apply output
 - broker audit rows for `QemuMediaBoot`, `QemuMediaAttach`, and
   `QemuMediaDetach`
@@ -150,7 +150,7 @@ Use the redacted CLI summaries and audit fields.
 ## 6. Stop
 
 ```bash
-d2b vm stop dark-live --apply
+d2b guest stop dark-live --apply
 ```
 
 See [the qemu-media reference](../reference/qemu-media.md) for the full

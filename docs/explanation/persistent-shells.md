@@ -37,7 +37,7 @@ It is not expected to survive:
 - explicit `d2b shell <target> kill --name <name>`;
 - `exit` or `Ctrl-D` inside the shell.
 
-This is intentionally different from `d2b vm exec -it`, whose command is
+This is intentionally different from `d2b exec run Guest/<name>`, whose command is
 connection-owned and exits with the command's status.
 
 ## Local dispatch and network surface

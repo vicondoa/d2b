@@ -86,7 +86,7 @@ flowchart TB
 
 ```bash
 # after switching the host config from examples/personal-dev
-sudo d2b vm start personal-dev --apply
+sudo d2b guest start personal-dev --apply
 ```
 
 Other entry points: see [Where to start](#where-to-start) below for a
@@ -186,12 +186,12 @@ d2b into an existing host config.
 
 The Rust CLI is now the primary documented operator surface. If you
 want the exact names used throughout the migration docs, start from
-one of these checked example layouts and use the native `vm start`
+one of these checked example layouts and use the native `guest start`
 path:
 
 ```bash
 # headless personal workspace (examples/personal-dev → examples/minimal)
-sudo d2b vm start personal-dev --apply
+sudo d2b guest start personal-dev --apply
 ```
 
 The alias directory exists so the README, examples index, and migration
@@ -212,12 +212,9 @@ nix flake init -t github:vicondoa/d2b
 # see templates/default/README.md for the full table.
 sudo nixos-rebuild build  --flake .#desktop
 sudo nixos-rebuild switch --flake .#desktop
-d2b list                          # corp-vm + sys-work-net
-# NAME               ENV       GRAPHICS  TPM   USBIP   STATIC_IP       STATUS
-# corp-vm            work      false     false false   10.20.0.10      stopped
-# sys-work-net       work      false     false false   192.0.2.2       running (net-vm)
-d2b status                        # same table + bridge-health footer
-d2b vm start corp-vm --apply
+d2b guest list                     # typed Guest resource inventory
+d2b host doctor --read-only        # host and bridge readiness
+d2b guest start corp-vm --apply
 ```
 
 For v2-ready configs, add `d2b.realms.<realm>.workloads.<workload>` metadata
@@ -273,7 +270,7 @@ net VM) is materialised by the framework.
   # Tell d2b about Alice + add her to the d2b
   # system group. The broker uses SO_PEERCRED at accept time to
   # classify peers; nothing else (no polkit, no setuid).
-  # 'd2b vm start <vm> --apply' works without sudo for
+  # 'd2b guest start <name> --apply' works without sudo for
   # users in the d2b group.
   d2b.site = {
     waylandUser = "alice";
@@ -341,14 +338,11 @@ Stopped VMs do not run live activation from the host: use `d2b boot
 **4. Verify and use.**
 
 ```bash
-d2b list                          # expect 'corp-vm' + 'sys-work-net'
-# NAME               ENV       GRAPHICS  TPM   USBIP   STATIC_IP       STATUS
-# corp-vm            work      false     false false   10.20.0.10      stopped
-# sys-work-net       work      false     false false   192.0.2.2       running (net-vm)
-d2b status                        # same table + "=== Bridge health ===" footer
-d2b vm start corp-vm --apply      # preferred Rust CLI path
+d2b guest list                     # typed Guest resource inventory
+d2b host doctor --read-only        # host and bridge readiness
+d2b guest start corp-vm --apply    # preferred Rust CLI path
 ssh -i /var/lib/d2b/keys/corp-vm_ed25519 alice@10.20.0.10 hostname
-d2b vm stop corp-vm --apply       # clean shutdown
+d2b guest stop corp-vm --apply     # clean shutdown
 ```
 
 That's it. Add a second env or a second VM by repeating the
@@ -371,7 +365,7 @@ A handful of things consistently bite first-time users.
 - **`ssh.keyPath` default.** Leave it null and the framework-
   managed key under `${cfg.site.keysDir}/<vm>_ed25519` is used.
   Override only if you supply your own per-VM key. The CLI's
-  `d2b keys rotate <vm>` only rotates the framework-managed
+  `d2b activation keys rotate Guest/<name>` only rotates the framework-managed
   key; consumer-supplied keys are untouched.
 - **CIDR overlap is detected.** Two envs whose `lanSubnet` or
   `uplinkSubnet` overlap (including containment like
@@ -380,7 +374,7 @@ A handful of things consistently bite first-time users.
 - **No autostart for graphics VMs.** `autostart = true` on a
   graphics VM is rejected - there is no Wayland session
   available at multi-user.target. Use `autostart = false` (the
-  default) and `d2b vm start <vm> --apply` from a Plasma
+  default) and `d2b guest start <name> --apply` from a Plasma
   terminal.
 - **D2b state is secret material.** `/var/lib/d2b/`
   contains per-VM SSH private keys and (for TPM-enabled VMs)
@@ -409,8 +403,7 @@ The Rust `d2b` CLI is the only operator surface. Run
   ships. Argument parsing and shell completions still work.
 - **Guest control** (admin-only): `vm exec` runs a command inside a
   VM over the authenticated guest-control vsock - no SSH -
-  (`d2b vm exec <vm> -- <cmd…>`, or `d2b vm exec -it <vm> --
-  bash -l` for an interactive PTY). It is restricted
+  (`d2b exec run Guest/<name> -- <cmd…>`). It is restricted
   to callers in `d2b.site.adminUsers`, the role gate enforced via
   `SO_PEERCRED` at the daemon socket.
 

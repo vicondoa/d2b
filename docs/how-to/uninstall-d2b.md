@@ -3,7 +3,7 @@
 Use the smallest rollback that solves the problem:
 
 - **bad VM generation only** -> use `d2b rollback <vm>`;
-- **daemon-owned lifecycle issue** -> stop the VM (`d2b vm stop <vm>`),
+- **daemon-owned lifecycle issue** -> stop the Guest (`d2b guest stop <name> --apply`),
   or stop/disable `d2bd`, or remove the VM from your host config;
 - **full framework removal** -> remove d2b from host config / host-install
   artifacts and then delete state only after backup.
@@ -27,7 +27,7 @@ If the framework itself is fine and only one VM's current generation is bad:
 
 ```bash
 sudo d2b rollback <vm> --apply
-d2b status <vm>
+d2b guest status <name>
 ```
 
 That keeps d2b installed and only moves the VM back to its prior retained
@@ -44,7 +44,7 @@ uninstalling:
 1. stop the running VMs:
 
    ```bash
-   sudo d2b vm stop work --apply
+   sudo d2b guest stop work --apply
    ```
 
 2. stop (and, if desired, mask) the daemon so it does not re-reconcile:

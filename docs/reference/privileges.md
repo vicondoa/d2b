@@ -451,7 +451,7 @@ completeness, not because they are broker ops.
 | `DnsmasqLeaseHashPreflight` (net VMs only) | `${dnsmasq_dir}/<env>.conf` (default `/var/lib/d2b/dnsmasq/<env>.conf`) vs bundle `hosts_intent` + `route_intent[env:<env>:*]` + `nft_intent[env:<env>]` | - (pure `read()` + SHA-256; the daemon already has read access to its state dir) | refuses net-VM start with typed `daemon.bundle-dnsmasq-drift` envelope (exit code `63`); covers `EnvMissing`, `ConfigMissing`, `ConfigReadFailed`, `HashMismatch`. **Remediation**: re-render `dnsmasq.conf` and retry, or run `nixos-rebuild switch` (the standalone `d2b host prepare --apply` recovery path is not yet wired - it returns `daemon-down` (exit 1) today). See [`docs/reference/net-vm-bundle-gate.md`](./net-vm-bundle-gate.md). | Compares the rendered dnsmasq config to the bundle's host, route, and nft intents. |
 | `HostModuleMatrixPreflight` | trusted host kernel modules: `kvm_intel`/`kvm_amd`, `vhost`, `vhost_vsock`, `vhost_net`, `tun`, `bridge`, `nf_tables`, `nf_conntrack`, plus per-env `usbip-host` | - (reads `/proc/modules`) | refuses VM start with `daemon.host-module-missing` envelope; remediation suggests `ModprobeIfAllowed` (broker op, separate path) | Reads `/proc/modules` and checks the trusted host module set before start. `virtio_media` is a guest driver for video-enabled VMs and is validated in the guest closure, not in host `/proc/modules`. |
 
-The four preflights run in fixed order on every `d2b vm start
+The four preflights run in fixed order on every `d2b guest start
 <vm> --apply`; `OwnershipMatrixCheck` runs first so a partially-
 migrated host surfaces drift before any other check touches the VM
 state.
@@ -488,7 +488,7 @@ enforces fail-closed before fork/exec.
 | Runner role | Legacy unit replaced | Caps (steady-state) | Per-env scope | Broker-dispatch contract |
 | --- | --- | --- | --- | --- |
 | `OtelHostBridge` | `d2b-otel-host-bridge.service`; replaced by broker `SpawnRunner{role: OtelHostBridge, …}` | empty | host-scoped (singleton - exactly one runner per host) | Broker refuses `SpawnRunner{role: OtelHostBridge, …}` fail-closed via `Broker.OtelHostBridgeIntentInvalid` unless the bundle's `OtelHostBridge` runner intent points at a VM whose `vm_name` equals `manifest._observability.vmName`. Readiness gate: `/run/d2b/otel` exists with expected ownership, stale `host-egress.sock` is removed, and the obs VM base `vsock.sock` exists; exponential backoff applies on host-OTLP unreachable. Broker waits for the readiness gate before exec; `supervisor::pidfd` respawns on relay exit. Pre-opened vsock fds only; `socket(AF_VSOCK)` is denied by `w1-otel-host-bridge` seccomp. |
-| `Usbip` | per-env singletons `d2b-sys-<env>-usbipd-{proxy,backend}.{service,socket}`; replaced by broker `SpawnRunner{role: Usbip, vm_id: sys-<env>-usbipd, …}` | backend: scoped host-root carve-out with `CAP_NET_RAW`; proxy: empty | **per env** - two runners per USBIP-enabled env (`vm_id` = `sys-<env>-usbipd`, roles `backend` and `proxy`) | `d2b usb attach --apply` dispatches `UsbipBind` with a bundle-resolved bind intent first so broker allowlist validation and the per-busid lock succeed before any listener is exposed, then applies `UsbipBindFirewallRule`, ensures the per-env backend (`usbipd -4 --tcp-port <backendPort>`) and bounded proxy (`socat TCP-LISTEN:3240,bind=<env.hostUplinkIp>,fork,max-children=4,reuseaddr ...`) are spawned and TCP-ready, then runs `UsbipProxyReconcile`. Host kernel module is `usbip-host` (not `vhci_hcd`, which is the guest module). |
+| `Usbip` | per-env singletons `d2b-sys-<env>-usbipd-{proxy,backend}.{service,socket}`; replaced by broker `SpawnRunner{role: Usbip, vm_id: sys-<env>-usbipd, …}` | backend: scoped host-root carve-out with `CAP_NET_RAW`; proxy: empty | **per env** - two runners per USBIP-enabled env (`vm_id` = `sys-<env>-usbipd`, roles `backend` and `proxy`) | `d2b device usb attach --apply` dispatches `UsbipBind` with a bundle-resolved bind intent first so broker allowlist validation and the per-busid lock succeed before any listener is exposed, then applies `UsbipBindFirewallRule`, ensures the per-env backend (`usbipd -4 --tcp-port <backendPort>`) and bounded proxy (`socat TCP-LISTEN:3240,bind=<env.hostUplinkIp>,fork,max-children=4,reuseaddr ...`) are spawned and TCP-ready, then runs `UsbipProxyReconcile`. Host kernel module is `usbip-host` (not `vhci_hcd`, which is the guest module). |
 | `CloudHypervisor` (guest-control VM) | `d2b@<vm>.service` runner; replaced by broker `SpawnRunner{role: CloudHypervisor, vm_id: <vm>, …}` | empty | per VM | On a guest-control-enabled VM the broker, as a SpawnRunner **side-effect**, grants the unprivileged `d2bd` daemon uid a minimal ACL on the per-VM vsock transport so the daemon can run the authenticated readiness/config-read bridge: traversal `--x` on every non-public component of the per-VM state dir and `rw` on `vsock.sock`. The grant is scoped to the **current** socket inode/dev (the broker re-fstats after the fd-based setfacl and aborts+retries if the path is replaced mid-grant), grants **only** that single daemon uid (no `g:`, no default, no blanket entry), and retries until bound while cloud-hypervisor finishes creating the socket. It runs as a revoke-then-grant at each cloud-hypervisor (re-)spawn - any stale daemon grant on a replaced/disabled socket inode is revoked first - so a disabled or replaced socket cannot retain a stale daemon grant; a dedicated stop-time teardown revoke hook is future work (`SignalRunner` carries no socket path). The shared traversal `--x` grants on non-public ancestors are retained, since the daemon also needs them for the per-VM api-socket and sibling VMs depend on them. Both grant and revoke emit hash-only audit records (`target_class` ∈ {`state-dir`, `ancestor`, `vsock-socket`}, `daemon_principal`, `acl_diff_hash`, `result`); raw socket / state-dir paths are never recorded. A **second** SpawnRunner side-effect grants the cloud-hypervisor **runner** uid connect access to the cross-principal `d2b-gctl` token fs-share socket (served by the narrower `gctlfs` principal, ADR 0021, so cloud-hypervisor does not own it as it owns its other fs-share sockets): `--x` traversal on the per-VM `guest-control` dir and `rw` with an explicit `m::rw` mask on the `gctlfs`-owned `d2b-gctl` socket inode. The explicit mask lifts the 0700 socket's `mask::---`, which otherwise masks out the inherited `default:u:<ch_uid>` grant and EACCESes cloud-hypervisor's vhost-user connect (hanging device-init at api-ready timeout). It is `(dev, ino)`-scoped (re-fstat after the fd-based setfacl), grants **only** the runner uid (no execute in the mask, no group/other broadening), and retries until the socket is bound. It emits its own hash-only audit record (`target_class` ∈ {`gctlfs-dir`, `gctlfs-socket`}, `consumer_principal` = `cloud-hypervisor-runner`, `acl_diff_hash`, `result`); raw paths and uids-by-value are never recorded. |
 
 ### Metrics endpoint
@@ -584,7 +584,7 @@ is advisory until the fixture-contract lane is enabled and promoted.
 | Hook | Replacement | Status |
 | --- | --- | --- |
 | `d2b-store-sync` activation hook (store.nix) | `d2b host install --apply` invoking broker `StoreSync` dispatch through the daemon. | not emitted |
-| Per-VM `desktopItems` generation (cli.nix `d2b-launch-<vm>`) | Daemon-native launcher module emitting `.desktop` wrappers calling `d2b vm start <vm> --apply`. | not emitted |
+| Per-VM `desktopItems` generation (cli.nix `d2b-launch-<vm>`) | Daemon-native launcher module emitting `.desktop` wrappers calling `d2b guest start <name> --apply`. | not emitted |
 
 The root-visible `systemd.services.*` declarations the framework owns
 under `nixos-modules/` are `d2bd`, `d2b-priv-broker`,
@@ -604,7 +604,7 @@ singleton, is gone.
 
 ## Public `config` operation (daemon-handled, no broker dispatch)
 
-The `d2b config` verb group (`sync` / `diff` / `approve` /
+The `d2b activation config` verb group (`sync` / `diff` / `approve` /
 `reject` / `status`) is a **public** operation handled entirely by the
 unprivileged daemon and CLI. It dispatches **no** broker request
 (`brokerRequired: false`), so it is not in the broker catalog above; it
@@ -642,7 +642,7 @@ Notes:
 
 ## Public `exec` operation (daemon-handled, no broker dispatch)
 
-The `d2b vm exec` verb is a
+The `d2b exec run` verb is a
 **public** operation handled entirely by the unprivileged daemon and
 CLI. It dispatches **no** broker request (`brokerRequired: false`): the
 daemon holds an in-process exec **session table** and proxies typed exec

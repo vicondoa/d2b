@@ -51,7 +51,7 @@ it is a graphics VM (graphics VMs are barred from autostart by
 session at boot).
 
 VMs with `autostart = false` remain in the plan (so a future
-`d2b status --plan` can surface the full picture) but
+`d2b guest status <name>` can surface the full picture) but
 `execute_autostart` skips them with `Outcome::NotAutostart`. A
 non-autostart net VM does **not** propagate as a degraded gate for
 its env's workloads - opting out is an explicit operator choice,

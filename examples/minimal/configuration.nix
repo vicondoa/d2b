@@ -77,7 +77,8 @@
     env   = "personal";
     index = 10;
 
-    # `d2b switch personal-dev --apply` will SSH in as this user
+    # `d2b activation switch Guest/personal-dev --apply` activates through
+    # the Guest resource and guest control
     # using the framework-managed Ed25519 key generated under
     # /var/lib/d2b/keys/ on every activation.
     ssh.user = "alice";

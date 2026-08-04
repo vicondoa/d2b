@@ -11,7 +11,7 @@ daemon-first` / `D2B_NATIVE_ONLY=1` /
 `d2b.daemonExperimental.enable` is therefore a **legacy toggle** that
 v1.0 leaves as the default-on shape required for the daemon, broker
 socket, and bundle-artifact files to exist. Disabling it on v1.0 leaves
-the host without an operator path; `d2b vm start --apply` will fail
+the host without an operator path; `d2b guest start <name> --apply` will fail
 with `daemon-down` (exit 1).
 
 Enabling it adds the v1.0 daemon surface to the host:

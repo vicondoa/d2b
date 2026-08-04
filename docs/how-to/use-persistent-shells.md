@@ -4,7 +4,7 @@
 
 Persistent shells let you reconnect to a named interactive shell in a local VM
 or an explicitly unsafe-local workload. Use them for long-lived interactive work. Use
-`d2b vm exec <target> -- <cmd>` for one-off commands.
+`d2b exec run Guest/<name> -- <cmd>` for one-off commands.
 
 For the persistence model, local IPC boundary, and same-UID trust model,
 see [Persistent shell sessions](../explanation/persistent-shells.md).

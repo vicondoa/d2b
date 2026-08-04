@@ -209,9 +209,9 @@ direct access to PipeWire or guest state.
 
 The public security-key operations are:
 
-- `d2b usb security-key status`;
-- `d2b usb security-key sessions`; and
-- `d2b usb security-key cancel`.
+- `d2b device security-key status`;
+- `d2b device security-key sessions`; and
+- `d2b device security-key cancel`.
 
 The status response is a bounded list of configured device reachability,
 current lease, per-VM virtual-device state, and session state. Desktop
@@ -234,7 +234,7 @@ exercise the real status and action paths.
 
 ## Graceful stop semantics
 
-When a client offers a stop action, normal `d2b vm stop --apply` asks a
+When a client offers a stop action, normal `d2b guest stop <name> --apply` asks a
 supported local provider to shut the guest down and then performs the bounded
 host cleanup. `--force` skips only that provider-aware graceful wait and uses
 the standard cleanup path; it is not an immediate SIGKILL shortcut. Clients

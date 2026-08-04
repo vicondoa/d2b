@@ -3,7 +3,7 @@
 {
   # Safe, eval-only qemu-media example for the requested `dark` env and
   # `dark-live` VM. Physical USB devices are referenced only by opaque
-  # media refs; discover live hardware at runtime with `d2b usb probe`,
+  # media refs; discover live hardware at runtime with `d2b device usb probe`,
   # keeping the transient probe selector on the CLI and never in this file.
   boot.loader.grub.enable = false;
   boot.loader.systemd-boot.enable = false;

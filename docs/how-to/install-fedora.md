@@ -75,15 +75,15 @@ source of truth for the bundle artifact set.
 ## 7. Plan and start the first VM
 
 ```bash
-d2b vm start work-vm --dry-run --json
-sudo d2b vm start work-vm --apply
+d2b guest start work-vm --dry-run --json
+sudo d2b guest start work-vm --apply
 ```
 
 If the guest comes up, finish the SSH trust handshake:
 
 ```bash
-d2b trust work-vm
-d2b status work-vm
+d2b activation trust work-vm
+d2b guest status work-vm
 ```
 
 ## 8. Fedora-specific notes

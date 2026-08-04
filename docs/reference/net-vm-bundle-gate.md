@@ -123,7 +123,7 @@ refresh:
 ```bash
 ls -l /var/lib/d2b/dnsmasq/<env>.conf
 sha256sum /var/lib/d2b/dnsmasq/<env>.conf
-d2b vm start sys-<env>-net --apply
+d2b guest start sys-<env>-net --apply
 ```
 
 If the file is merely missing on a fresh host, the current start path

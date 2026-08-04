@@ -79,7 +79,7 @@ in
     waylandUser = user;
 
     # Users who get the `d2b` lifecycle group for commands such as
-    # `d2b vm start <vm> --apply` without `sudo`.
+    # `d2b guest start <name> --apply` without `sudo`.
     launcherUsers = [ user ];
 
     # SSH public keys to inject into every d2b VM's
@@ -88,7 +88,7 @@ in
     # the bottom of this file requires at least one.
     userAuthorizedKeys = [ ];
 
-    # Flip to `true` if you plan to use `d2b usb <vm>` for
+    # Flip to `true` if you plan to use `d2b device usb attach` for
     # Yubikey USBIP passthrough. Default `true` keeps the Yubico
     # udev rules enabled; `usbip-host` loads only once an enabled VM
     # also opts into `usbip.yubikey`. Set `false` to skip them.

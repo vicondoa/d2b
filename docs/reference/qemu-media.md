@@ -16,11 +16,11 @@ not selected as a full VM runtime, see
 | Surface | Contract |
 | --- | --- |
 | Provider | `local-qemu-media` with QEMU as the runner. |
-| Autostart | Manual-only. Start with `d2b vm start <vm> --apply`; daemon startup skips it. |
+| Autostart | Manual-only. Start with `d2b guest start <name> --apply`; daemon startup skips it. |
 | Process DAG | `host-reconcile` → `qemu-media`. The runner starts paused with a QMP socket under `/run/d2b/vms/<vm>/qmp.sock`. |
 | Boot media | After the runner is alive, `d2bd` asks the broker to run `QemuMediaBoot`; the broker opens the declared boot source, sends the fd to QEMU over QMP, attaches USB storage, waits for QMP success responses, then continues QEMU. |
-| Hotplug | `d2b usb attach` / `detach` route to `QemuMediaAttach` / `QemuMediaDetach`, not USBIP. |
-| Shutdown | `d2b vm stop <vm> --apply` sends broker-mediated QMP `system_powerdown`, waits for `query-status` to report a stopped guest or the VMM pidfd to exit, then uses QMP `quit` / forced pidfd cleanup only as needed. |
+| Hotplug | `d2b device usb attach` / `detach` route to `QemuMediaAttach` / `QemuMediaDetach`, not USBIP. |
+| Shutdown | `d2b guest stop <name> --apply` sends broker-mediated QMP `system_powerdown`, waits for `query-status` to report a stopped guest or the VMM pidfd to exit, then uses QMP `quit` / forced pidfd cleanup only as needed. |
 | Unsupported capabilities | guest-control, exec, config-sync, SSH, store-sync, keys, and in-guest observability. |
 
 ## Options
@@ -127,13 +127,13 @@ d2b.vms.dark-live.qemuMedia = {
 `/dev/disk/by-id/*` symlink for the physical USB block device. It is
 configured only as a selector; public status, CLI success output, and
 broker audit summaries must not echo it. Use a local shell such as
-`ls /dev/disk/by-id/` to choose the basename, and use `d2b usb probe`
+`ls /dev/disk/by-id/` to choose the basename, and use `d2b device usb probe`
 to verify the currently attached transient busid. Running qemu-media VMs
 can hotplug that busid selector through QMP:
 
 ```bash
-d2b usb probe
-d2b usb attach dark-live 1-2.3 --apply
+d2b device usb probe
+d2b device usb attach dark-live 1-2.3 --apply
 ```
 
 The busid is a transient selector only. It is not stored in Nix-backed
@@ -143,15 +143,15 @@ artifacts and is not echoed by successful attach/detach output.
 
 | Command | qemu-media behavior |
 | --- | --- |
-| `d2b vm start <vm> --dry-run` | Reports the 2-node qemu-media DAG. |
-| `d2b vm start <vm> --apply` | Spawns the QEMU runner, waits for QMP readiness, runs `QemuMediaBoot`, and continues QEMU after boot media is attached. |
-| `d2b vm stop <vm> --apply` | Sends QMP `system_powerdown`, waits up to the configured graceful shutdown timeout, polls `query-status`, and cleans up an empty QEMU process with QMP `quit` before falling back to pidfd/broker cleanup. |
-| `d2b vm stop <vm> --force --apply` | Skips the QMP guest-powerdown wait and immediately enters the standard SIGTERM/SIGKILL cleanup path. |
-| `d2b list` / `d2b vm list` | Marks qemu-media rows as `manual-only` and includes QMP readiness when available. JSON may include `runtimeKind`, `autostart`, `runtimeCapabilities`, `serviceCapabilities`, `unsupportedCapabilities`, and `qemuMedia`. |
-| `d2b status <vm>` | Shows qemu-media runner state, QMP readiness, source refs, source kind, format, read-only policy, and registry state. |
-| `d2b usb attach <vm> <busid> --apply` | Resolves the current USB identity against configured physical refs, preflights that the block device is unused, opens the fd in the broker, sends it to QEMU over QMP, and returns only after QMP accepts the fd/block/device commands. |
-| `d2b usb detach <vm> <busid> --apply` | Resolves the configured source, with a fail-closed same-device fallback for a uniquely attached same-vendor/product ref when the runtime selector moved, then removes or reconciles the QMP device/block/fd nodes idempotently. |
-| `d2b usb probe` | Shows qemu-media slots as `unbound`, `enrollable`, `enrolled`, `stale`, or `direct-config`; follow-up text points to config/probe or QMP hotplug, never to a public enrollment verb. |
+| `d2b guest start <name> --dry-run` | Reports the qemu-media lifecycle plan. |
+| `d2b guest start <name> --apply` | Spawns the QEMU runner, waits for QMP readiness, runs `QemuMediaBoot`, and continues QEMU after boot media is attached. |
+| `d2b guest stop <name> --apply` | Sends QMP `system_powerdown`, waits up to the configured graceful shutdown timeout, polls `query-status`, and cleans up an empty QEMU process with QMP `quit` before falling back to pidfd/broker cleanup. |
+| `d2b guest stop <name> --force --apply` | Skips the QMP guest-powerdown wait and immediately enters the standard SIGTERM/SIGKILL cleanup path. |
+| `d2b guest list` | Lists qemu-media Guests as `manual-only` and includes QMP readiness in the Guest status extension when available. |
+| `d2b guest status <name>` | Shows qemu-media runner state, QMP readiness, source refs, source kind, format, read-only policy, and registry state in the Guest status envelope. |
+| `d2b device usb attach <name> <busid> --apply` | Resolves the current USB identity against configured physical refs, preflights that the block device is unused, opens the fd in the broker, sends it to QEMU over QMP, and returns only after QMP accepts the fd/block/device commands. |
+| `d2b device usb detach <name> <busid> --apply` | Resolves the configured source, with a fail-closed same-device fallback for a uniquely attached same-vendor/product ref when the runtime selector moved, then removes or reconciles the QMP device/block/fd nodes idempotently. |
+| `d2b device usb probe` | Shows qemu-media slots as `unbound`, `enrollable`, `enrolled`, `stale`, or `direct-config`; follow-up text points to config/probe or QMP hotplug, never to a public enrollment verb. |
 
 Dry-run JSON for hotplug includes `busIdProvided: true`, but not the
 busid value. Successful broker audit records include VM/ref, slot,

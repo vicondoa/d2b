@@ -132,7 +132,7 @@ and guest-side enforcement via `guestd`:
   process: closing an unrelated fd to the same inode does not drop the
   lock, and the lock survives intentional fd inheritance across fork.
 - Lock files are persistent coordination inodes. They must never be
-  unlinked during VM cleanup or `d2b vm stop`: unlinking the inode
+  unlinked during Guest cleanup or `d2b guest stop`: unlinking the inode
   would silently create a fresh inode on next open, breaking
   coordination with any process that still holds the old fd. The kernel
   releases the OFD lock when all fds to the open file description close;
@@ -242,7 +242,7 @@ span ID; per-chunk or per-byte labelling is forbidden.
 - [Audio component reference](./components-audio.md) - Cloud Hypervisor
   audio component options, lifecycle, and hardening details.
 - [qemu-media reference](./qemu-media.md) - qemu-media runtime details.
-- [CLI contract - `console`](./cli-contract.md#console) - `d2b console`
+- [CLI contract - `console`](./cli-contract.md#console) - `d2b guest console`
   argument and exit-code contract.
 - [CLI contract - `audio`](./cli-contract.md#audio-status) - `d2b audio`
   subcommands and exit-code contract.

@@ -96,11 +96,11 @@ old labels in saved SigNoz queries.
 
 ## Step 3: Rebuild and restart affected VMs
 
-On hosts where `d2b switch <vm> --apply` is unreliable, restart VMs with:
+On hosts where `d2b activation switch Guest/<name> --apply` is unreliable, restart Guests with:
 
 ```bash
-d2b vm stop <vm> --apply
-d2b vm start <vm> --apply
+d2b guest stop <name> --apply
+d2b guest start <name> --apply
 ```
 
 When changing the d2b checkout or bundle contract, restart the daemon

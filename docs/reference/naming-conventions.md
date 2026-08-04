@@ -215,7 +215,7 @@ operators in two CLI outputs:
   per-role mapping under `.host.ifnameMapping[]`. Use this to look
   up a `d2b-*`/`d2bv-*` name observed in `ip link`, `nft list ruleset`,
   or a broker audit record back to `(env, vm, role)`.
-- `d2b status <vm> --json` - emits the same mapping scoped to one
+- `d2b guest status <name> --json` - emits the same mapping scoped to one
   VM under `.vm.ifnames[]`.
 
 The mapping is keyed on `(kind, env, vm, role)` so the human-visible

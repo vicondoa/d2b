@@ -3,7 +3,7 @@
 > Reference for the `usbip` component module (YubiKey passthrough).
 > Source: [`nixos-modules/components/usbip.nix`](../../nixos-modules/components/usbip.nix)
 > Host-side wiring: [`nixos-modules/network.nix`](../../nixos-modules/network.nix), [`nixos-modules/host.nix`](../../nixos-modules/host.nix)
-> CLI integration: [`packages/d2b/src/lib.rs`](../../packages/d2b/src/lib.rs) (`d2b usb attach|detach|probe`). There is no bash helper for this surface.
+> CLI integration: [`packages/d2b/src/device`](../../packages/d2b/src) (`d2b device usb attach|detach|probe`). There is no bash helper for this surface.
 
 ## What this component does
 
@@ -42,7 +42,7 @@ owners and remediation:
   to expose the physical device for the current host boot/session. The claim
   survives VM stop/restart and daemon restart, but not host reboot because the
   backing path is under `/run`. Only explicit
-  `d2b usb detach <vm> <busid> --apply` releases a healthy claim during
+  `d2b device usb detach <name> <busid> --apply` releases a healthy claim during
   that host session.
 - **Active carrier** - transient host/guest state that can disappear across
   unplug, VM stop, daemon restart, or guest-control restart: the
@@ -59,7 +59,7 @@ the same-VM session claim for manual recovery. VM start reconciles same-VM
 session claims from the current host session after guest-control readiness by
 replaying host bind/proxy state and re-importing in the guest. Runtime absence,
 proxy/backend unavailability, or guest import unavailability degrades
-`d2b usb probe` / `d2b status` without pretending the row is healthy.
+`d2b device usb probe` / `d2b guest status <name>` without pretending the row is healthy.
 Required policy/topology failures remain fail-closed.
 
 ## Options (host-side)
@@ -198,7 +198,7 @@ Per host (in [`host.nix`](../../nixos-modules/host.nix)):
 
 ## Runtime prerequisite contract
 
-For `d2b usb attach <vm> <busid> --apply` to expose a device, all of
+For `d2b device usb attach <name> <busid> --apply` to expose a device, all of
 these must be true:
 
 1. the target VM is running and guest-control advertises USBIP status/import;
@@ -214,7 +214,7 @@ Stable operator remediation uses lifecycle verbs rather than direct lock or
 sysfs mutation. Keep procedural recovery in the how-to runbook:
 [Troubleshoot USBIP passthrough](../how-to/troubleshoot-usbip.md).
 
-CLI contract (`d2b usb attach|detach|probe` in the Rust CLI):
+CLI contract (`d2b device usb attach|detach|probe` in the Rust CLI):
 
 - Sends one apply/dry-run intent to `d2bd`.
 - `attach --apply`: guestd first detaches any stale matching import, the
@@ -311,7 +311,7 @@ The entire `components/usbip.nix` is two lines of payload:
 
 ## Failure-mode reference
 
-`d2b usb probe` is the stable read-only diagnostic surface. It reports
+`d2b device usb probe` is the stable read-only diagnostic surface. It reports
 session claim state, active host carrier/bind/proxy state, guest import state,
 topology/policy state, degraded reasons, and copy-paste remediation commands.
 See [`cli-output/usb-probe.md`](./cli-output/usb-probe.md) for the JSON field
@@ -326,7 +326,7 @@ for operator procedures.
 - [Design / threat model](../explanation/design.md)
 - [Manifest schema](./manifest-schema.md) - `units.usbipBackend` /
   `units.usbipProxy` (per-env, not per-VM).
-- [CLI contract](./cli-contract.md) - `d2b usb attach|detach|probe` subcommands.
+- [CLI contract](./cli-contract.md) - `d2b device usb attach|detach|probe` subcommands.
 - [Troubleshoot USBIP passthrough](../how-to/troubleshoot-usbip.md) -
   operator recovery workflow.
 - [`examples/graphics-workstation`](../../examples/graphics-workstation/) -

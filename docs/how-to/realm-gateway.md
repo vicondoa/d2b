@@ -45,7 +45,7 @@ gateway VM names, and d2b env/L2 segments.
 Start the gateway like any other VM:
 
 ```bash
-d2b vm start sys-work-gateway --apply
+d2b guest start sys-work-gateway --apply
 ```
 
 Then enter the realm trust boundary:
@@ -57,7 +57,7 @@ d2b realm enter work
 For scripts, run a one-shot command inside the gateway:
 
 ```bash
-d2b realm run work -- d2b vm list
+d2b realm run work -- d2b guest list
 ```
 
 ## Route a realm target
@@ -65,13 +65,13 @@ d2b realm run work -- d2b vm list
 Local VM names still use the host fast path:
 
 ```bash
-d2b vm start personal-dev --apply
+d2b guest start personal-dev --apply
 ```
 
 Gateway-backed targets use DNS-shaped names:
 
 ```bash
-d2b vm exec demo.aca.work.d2b -- foot
+d2b exec run Guest/demo -- foot
 ```
 
 If the gateway is missing, stopped, or not reported by the daemon, the

@@ -257,17 +257,17 @@ This creates `/var/lib/d2b/keys/work-entra_ed25519`, spawns
 CLI on `$PATH`. The work VM itself is **not** started - graphics
 VMs and Entra VMs both expect interactive launch.
 
-After activation, `d2b list` / `d2b status` should look
+After activation, `d2b guest list` / `d2b guest status work-entra` should show
 like this (the work VM has `tpm.enable = true`, the rest is
 default):
 
 ```text
-d2b list
+d2b guest list
 # NAME               ENV       GRAPHICS  TPM   USBIP   STATIC_IP       STATUS
 # sys-work-net       work      false     false false   192.0.2.2       running (net-vm)
 # work-entra            work      false     true  false   10.20.0.10      stopped
 
-d2b status
+d2b guest status work-entra
 # NAME               ENV       GRAPHICS  TPM   USBIP   STATIC_IP       STATUS
 # sys-work-net       work      false     false false   192.0.2.2       running (net-vm)
 # work-entra            work      false     true  false   10.20.0.10      stopped
@@ -278,7 +278,7 @@ d2b status
 # br-work-lan          NO-CARRIER up      NO-CARRIER   no-carrier (no workloads up)
 ```
 
-`work-entra` shows `STATUS=stopped` until you `d2b vm start
+`work-entra` stays in `Pending` until you `d2b guest start
 work-entra --apply`; after that it transitions to `running` under
 `d2bd` supervision. The `TPM=true` column reflects the swtpm
 sidecar wired up by `d2b.vms.work-entra.tpm.enable = true`.
@@ -289,7 +289,7 @@ From a Plasma / Wayland terminal (not over SSH - see
 [d2b's README, "Common gotchas"][d2b-readme] for why):
 
 ```bash
-d2b vm start work-entra --apply
+d2b guest start work-entra --apply
 ```
 
 ### 5. Trigger enrolment
@@ -336,8 +336,8 @@ sudo sha256sum \
 sudo tpm2_readpublic -c 0x81000001 | grep -E '^(name:|qualified name:)'
 ```
 
-After `d2b vm stop work-entra --apply` followed by
-`d2b vm start work-entra --apply`, those values should remain stable
+After `d2b guest stop work-entra --apply` followed by
+`d2b guest start work-entra --apply`, those values should remain stable
 except for normal Himmelblau cache DB churn. If the VM asks to re-enroll
 after every restart, check `findmnt /var` first: TPM loss and `/var`
 persistence loss look similar from Entra's point of view, but the fix is
@@ -362,7 +362,7 @@ journalctl -b -u var.mount -u local-fs.target --no-pager
   to be non-null on the host - already set in this example.
 - **Add YubiKey passthrough** - set
   `d2b.vms.work-entra.usbip.yubikey = true` and run
-  `d2b usb attach work-entra <busid> --apply` to redirect a plugged YubiKey from the
+  `d2b device usb attach work-entra <busid> --apply` to redirect a plugged YubiKey from the
   host's USB controller to the VM via USBIP. Useful for the MFA
   prompt during `aad-tool auth-test` and any downstream FIDO2
   flow.
@@ -408,7 +408,7 @@ back into sync.
   crosvm GPU sidecar) and TPM emulation paths are platform-gated
   to `x86_64-linux`. aarch64 hosts will fail eval with an
   actionable message.
-- **`d2b vm start work-entra --apply` before SSH/enrollment.** The Himmelblau
+- **`d2b guest start work-entra --apply` before SSH/enrollment.** The Himmelblau
   service inside the VM doesn't start until the VM is up;
   attempting to enrol against a stopped VM hangs at the first
   device-code prompt.
@@ -423,9 +423,8 @@ back into sync.
 `nixos-rebuild switch` updates the declared d2b bundle and may
 restart `d2bd`, but daemon restarts are continuation events:
 running VM runners are re-adopted rather than cycled. After rebuilding,
-`d2b list` flags any VM whose declared closure has drifted from the
-running one as `[pending restart]`; apply with `d2b vm restart
-<vm> --apply`. See
+`d2b guest list` exposes update currency in each Guest resource; apply with
+`d2b guest restart <name> --apply`. See
 [`templates/default/README.md` - After every subsequent rebuild](../../templates/default/README.md#after-every-subsequent-rebuild)
 for the recommended workflow and
 [`docs/reference/cli-contract.md`](../../docs/reference/cli-contract.md#pending-restart-signal-v015)

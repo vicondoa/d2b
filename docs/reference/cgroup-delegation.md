@@ -28,7 +28,7 @@ split into two categories:
   pidfds cannot read cgroup files like `cgroup.events`). The
   read-only cgroup files the daemon may need (e.g., `cgroup.events`
   `populated` field for liveness queries, per-leaf state for the
-  `d2b status` verb) are accessed via dedicated cgroup-dir
+  `d2b guest status <name>` verb) are accessed via dedicated cgroup-dir
   fds returned by `OpenCgroupDir`. The daemon does NOT perform
   process placement, leaf mkdir, leaf
   rmdir, kill, or any other mutation - all mutations are

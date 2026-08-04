@@ -112,7 +112,8 @@ Verify:
   is not colliding with another inherited fd in the sidecar's
   argv (check `processes-json.nix` for the fd-passing argv).
 - For swtpm: the per-VM state directory exists with the right
-  ownership (a fresh `d2b vm reset <vm>` re-provisions it).
+  ownership (rebuild the bundle and retry `d2b guest restart <name> --apply`
+  after the state owner has repaired it).
 
 ## After remediation
 
@@ -121,7 +122,7 @@ VM start:
 
 ```bash
 sudo systemctl restart d2b-priv-broker
-d2b vm start <vm> --apply
+d2b guest start <name> --apply
 ```
 
 If you disabled `brokerPreNs` for any role, please re-enable it
