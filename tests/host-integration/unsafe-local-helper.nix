@@ -117,11 +117,14 @@ if True:
     machine.succeed(r"""
       cat > /run/d2b/cli-shell-e2e.py <<'PY'
 import errno
+import fcntl
 import os
 import pty
 import select
 import signal
+import struct
 import sys
+import termios
 import time
 
 pid, master = pty.fork()
@@ -130,6 +133,7 @@ if pid == 0:
         "/run/current-system/sw/bin/d2b",
         ["d2b", "shell", "open", "Host/tools", "--name", "cli-e2e"],
     )
+fcntl.ioctl(master, termios.TIOCSWINSZ, struct.pack("HHHH", 24, 80, 0, 0))
 
 output = bytearray()
 
@@ -189,11 +193,14 @@ PY
     machine.succeed(r"""
       cat > /run/d2b/cli-shell-attach-e2e.py <<'PY'
 import errno
+import fcntl
 import os
 import pty
 import select
 import signal
+import struct
 import sys
+import termios
 import time
 
 pid, master = pty.fork()
@@ -202,6 +209,7 @@ if pid == 0:
         "/run/current-system/sw/bin/d2b",
         ["d2b", "shell", "attach", "ShellSession/cli-e2e"],
     )
+fcntl.ioctl(master, termios.TIOCSWINSZ, struct.pack("HHHH", 24, 80, 0, 0))
 output = bytearray()
 os.write(master, b"stty -echo\\n")
 time.sleep(0.5)
