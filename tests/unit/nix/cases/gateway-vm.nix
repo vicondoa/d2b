@@ -2,14 +2,23 @@
 { lib, mkEval, flakeRoot, ... }:
 
 let
-  hostBase = {
+  hostSchemaBase = {
     boot.loader.grub.enable = false;
     boot.loader.systemd-boot.enable = false;
     boot.initrd.includeDefaultModules = false;
     fileSystems."/" = { device = "tmpfs"; fsType = "tmpfs"; };
     environment.etc."machine-id".text = "00000000000000000000000000000000";
     system.stateVersion = "25.11";
+    users.users.alice = { isNormalUser = true; uid = 1000; };
 
+    d2b.site = {
+      stateDir = "/var/lib/d2b";
+      waylandUser = "alice";
+      launcherUsers = [ "alice" ];
+    };
+  };
+
+  hostBase = lib.recursiveUpdate hostSchemaBase {
     d2b.envs.work = {
       lanSubnet = "10.44.0.0/24";
       uplinkSubnet = "192.0.2.0/30";
@@ -37,6 +46,16 @@ let
     };
   };
 
+  gatewayAssertionBase = {
+    d2b.gateways.work = {
+      env = "work";
+      index = 20;
+    };
+  };
+  assertionFixture = changes:
+    lib.recursiveUpdate
+      (lib.recursiveUpdate hostSchemaBase gatewayAssertionBase)
+      changes;
   goodCfg = (mkEval [ base ]).config;
   noGatewayCfg = (mkEval [ hostBase ]).config;
   noRelayGatewayCfg = (mkEval [
@@ -62,21 +81,38 @@ let
     else if builtins.isPath value then toString value
     else if builtins.isAttrs value && value ? outPath then toString value
     else "";
-  hostActivationText = lib.concatStringsSep "\n"
-    (map (script: renderText (script.text or "")) (builtins.attrValues goodCfg.system.activationScripts));
-  hostServiceText = lib.concatStringsSep "\n" (lib.mapAttrsToList
-    (name: service:
-      let serviceConfig = service.serviceConfig or { };
-      in lib.concatStringsSep "\n" [
-        name
-        (renderText (serviceConfig.ExecStart or ""))
-        (renderText (serviceConfig.Environment or ""))
-      ])
-    goodCfg.systemd.services);
-  hostPackageRefs = map (pkg: {
-    name = pkg.pname or (pkg.name or (lib.getName pkg));
-    path = toString pkg;
-  }) goodCfg.environment.systemPackages;
+  textContainsAny = needles: value:
+    let text = renderText value;
+    in lib.any (needle: lib.hasInfix needle text) needles;
+  activationScriptContainsForbiddenRealmMaterial = name:
+    let script = builtins.getAttr name goodCfg.system.activationScripts;
+    in textContainsAny forbiddenHostRealmMaterial (script.text or "");
+  activationCarriesForbiddenRealmMaterial = lib.any
+    activationScriptContainsForbiddenRealmMaterial
+    (builtins.attrNames goodCfg.system.activationScripts);
+  serviceContainsForbiddenRealmMaterial = name:
+    let
+      service = builtins.getAttr name goodCfg.systemd.services;
+      serviceConfig = service.serviceConfig or { };
+    in textContainsAny forbiddenHostRealmMaterial name
+      || textContainsAny forbiddenHostRealmMaterial (serviceConfig.ExecStart or "")
+      || textContainsAny forbiddenHostRealmMaterial (serviceConfig.Environment or "");
+  servicesCarryForbiddenRealmMaterial = lib.any
+    serviceContainsForbiddenRealmMaterial
+    (builtins.attrNames goodCfg.systemd.services);
+  serviceContainsGatewayRuntime = name:
+    let
+      service = builtins.getAttr name goodCfg.systemd.services;
+      serviceConfig = service.serviceConfig or { };
+    in lib.hasInfix "d2b-gateway-relay" (renderText name)
+      || lib.hasInfix "d2b-gateway-enroll" (renderText name)
+      || lib.hasInfix "d2b-gateway-relay" (renderText (serviceConfig.ExecStart or ""))
+      || lib.hasInfix "d2b-gateway-enroll" (renderText (serviceConfig.ExecStart or ""))
+      || lib.hasInfix "d2b-gateway-relay" (renderText (serviceConfig.Environment or ""))
+      || lib.hasInfix "d2b-gateway-enroll" (renderText (serviceConfig.Environment or ""));
+  servicesCarryGatewayRuntime = lib.any
+    serviceContainsGatewayRuntime
+    (builtins.attrNames goodCfg.systemd.services);
   forbiddenHostRealmMaterial = [
     "SharedAccessKey"
     "Endpoint=sb://"
@@ -114,6 +150,24 @@ let
     lib.any (needle: lib.hasInfix needle (builtins.toJSON value)) needles;
   containsForbiddenRealmMaterial = jsonContainsAny forbiddenHostRealmMaterial;
   containsRemoteRegistryMarker = jsonContainsAny forbiddenRemoteRegistryMarkers;
+  hostPackageName = pkg: pkg.pname or (pkg.name or (lib.getName pkg));
+  hostPackageRef = pkg: {
+    name = hostPackageName pkg;
+    path = toString pkg;
+  };
+  hostPackagesCarryForbiddenRealmMaterial = lib.any
+    (pkg: containsForbiddenRealmMaterial (hostPackageRef pkg))
+    goodCfg.environment.systemPackages;
+  hostPackagesCarryRemoteRegistryMarker = lib.any
+    (pkg: containsRemoteRegistryMarker (hostPackageRef pkg))
+    goodCfg.environment.systemPackages;
+  hostHasPackageNameContaining = needle:
+    lib.any (pkg: lib.hasInfix needle (hostPackageName pkg))
+      goodCfg.environment.systemPackages;
+  guestPackageName = pkg: pkg.pname or (lib.getName pkg);
+  gatewayGuestHasPackage = wanted:
+    lib.any (pkg: guestPackageName pkg == wanted)
+      gatewayGuestCfg.environment.systemPackages;
   localFastPathSnapshot = cfg:
     let daemonJson = builtins.fromJSON cfg.environment.etc."d2b/daemon-config.json".text;
     in {
@@ -138,14 +192,14 @@ let
   legacyGatewayMigrationMessages = failureMessages goodCfg;
   noGatewayMessages = failureMessages noGatewayCfg;
   badCfg = (mkEval [
-    (lib.recursiveUpdate base {
+    (assertionFixture {
       d2b.gateways.work.credentialPath = "SharedAccessKey=bad";
     })
   ]).config;
   failureMessages = cfg: map (a: a.message) (lib.filter (a: !a.assertion) cfg.assertions);
   badMessages = failureMessages badCfg;
   badStateOutsideMessages = failureMessages ((mkEval [
-    (lib.recursiveUpdate base {
+    (assertionFixture {
       d2b.gateways.work = {
         stateDir = "/var/lib/other/work";
         credentialPath = "/var/lib/other/work/credential.json";
@@ -153,17 +207,17 @@ let
     })
   ]).config);
   badCredentialOutsideStateMessages = failureMessages ((mkEval [
-    (lib.recursiveUpdate base {
+    (assertionFixture {
       d2b.gateways.work.credentialPath = "/var/lib/d2b/other/credential.json";
     })
   ]).config);
   badSealKeyOutsideStateMessages = failureMessages ((mkEval [
-    (lib.recursiveUpdate base {
+    (assertionFixture {
       d2b.gateways.work.sealKeyPath = "/var/lib/d2b/other/seal.key";
     })
   ]).config);
   badTraversalMessages = failureMessages ((mkEval [
-    (lib.recursiveUpdate base {
+    (assertionFixture {
       d2b.gateways.work = {
         stateDir = "/var/lib/d2b/gateways/../work";
         credentialPath = "/var/lib/d2b/gateways/../work/credential.json";
@@ -171,7 +225,7 @@ let
     })
   ]).config);
   badPerVmStateMessages = failureMessages ((mkEval [
-    (lib.recursiveUpdate base {
+    (assertionFixture {
       d2b.gateways.work = {
         stateDir = "/var/lib/d2b/vms/sys-work-gateway";
         credentialPath = "/var/lib/d2b/vms/sys-work-gateway/credential.json";
@@ -179,7 +233,7 @@ let
     })
   ]).config);
   badDaemonDisabledMessages = failureMessages ((mkEval [
-    (lib.recursiveUpdate base {
+    (assertionFixture {
       d2b.daemonExperimental.enable = false;
     })
   ]).config);
@@ -232,12 +286,12 @@ let
     })
   ]).config);
   localRealmGatewayMessages = failureMessages ((mkEval [
-    (lib.recursiveUpdate base {
+    (assertionFixture {
       d2b.gateways.work.realm = "local";
     })
   ]).config);
   retiredHostRelayCredentialMessages = failureMessages ((mkEval [
-    (lib.recursiveUpdate base {
+    (assertionFixture {
       d2b.gateways.work.allowHostRelayCredentials = true;
     })
   ]).config);
@@ -248,7 +302,6 @@ let
   ]).config;
   sourceGatewayGuestCfg = sourceToolsCfg.d2b._computed."sys-work-gateway".config;
   gatewayModuleSource = builtins.readFile (flakeRoot + "/nixos-modules/gateway-vm.nix");
-  packageNames = map (pkg: pkg.pname or (lib.getName pkg)) gatewayGuestCfg.environment.systemPackages;
 in
 {
   "gateway-vm/auto-declared-name" = {
@@ -377,7 +430,7 @@ in
       hasWaypipeSocket = gatewayJson.display ? waypipeSocket;
       sealKeyPath = gatewayJson.sealKeyPath;
       credentialPath = gatewayJson.credentialPath;
-      hasEnrollmentHelper = builtins.elem "d2b-gateway-runtime" packageNames;
+      hasEnrollmentHelper = gatewayGuestHasPackage "d2b-gateway-runtime";
       hasWaypipeClient = builtins.hasAttr "d2b-gateway-waypipe-client" gatewayGuestCfg.systemd.services;
       hasWaypipeServer = builtins.hasAttr "d2b-gateway-waypipe-server" gatewayGuestCfg.systemd.services;
     };
@@ -463,10 +516,9 @@ in
 
   "gateway-vm/host-activation-and-services-exclude-realm-provider-material" = {
     expr = {
-      activationCarriesRelayOrAcaMaterial = containsForbiddenRealmMaterial hostActivationText;
-      servicesCarryRelayOrAcaMaterial = containsForbiddenRealmMaterial hostServiceText;
-      servicesCarryGatewayRuntime = lib.hasInfix "d2b-gateway-relay" hostServiceText
-        || lib.hasInfix "d2b-gateway-enroll" hostServiceText;
+      activationCarriesRelayOrAcaMaterial = activationCarriesForbiddenRealmMaterial;
+      servicesCarryRelayOrAcaMaterial = servicesCarryForbiddenRealmMaterial;
+      inherit servicesCarryGatewayRuntime;
     };
     expected = {
       activationCarriesRelayOrAcaMaterial = false;
@@ -503,14 +555,10 @@ in
 
   "gateway-vm/host-system-packages-exclude-realm-provider-material" = {
     expr = {
-      carriesRelayOrAcaMaterial = containsForbiddenRealmMaterial hostPackageRefs;
-      carriesRemoteNodeRegistry = containsRemoteRegistryMarker hostPackageRefs;
-      hasGatewayRelayPackage = lib.any
-        (pkg: lib.hasInfix "d2b-gateway-relay" pkg.name || lib.hasInfix "d2b-gateway-relay" pkg.path)
-        hostPackageRefs;
-      hasGatewayRuntimePackage = lib.any
-        (pkg: lib.hasInfix "d2b-gateway-runtime" pkg.name || lib.hasInfix "d2b-gateway-runtime" pkg.path)
-        hostPackageRefs;
+      carriesRelayOrAcaMaterial = hostPackagesCarryForbiddenRealmMaterial;
+      carriesRemoteNodeRegistry = hostPackagesCarryRemoteRegistryMarker;
+      hasGatewayRelayPackage = hostHasPackageNameContaining "d2b-gateway-relay";
+      hasGatewayRuntimePackage = hostHasPackageNameContaining "d2b-gateway-runtime";
     };
     expected = {
       carriesRelayOrAcaMaterial = false;
@@ -765,9 +813,9 @@ in
       noInlineBuildRustPackage = !(lib.hasInfix "buildRustPackage" gatewayModuleSource);
       noInlineBuildRustBin = !(lib.hasInfix "buildRustBin" gatewayModuleSource);
       noSystemPackagesScan = !(lib.hasInfix "config.environment.systemPackages" gatewayModuleSource);
-      hasD2b = builtins.elem "d2b" packageNames;
-      hasD2bd = builtins.elem "d2bd" packageNames;
-      hasGatewayRuntime = builtins.elem "d2b-gateway-runtime" packageNames;
+      hasD2b = gatewayGuestHasPackage "d2b";
+      hasD2bd = gatewayGuestHasPackage "d2bd";
+      hasGatewayRuntime = gatewayGuestHasPackage "d2b-gateway-runtime";
     };
     expected = {
       noInlineBuildRustPackage = true;
