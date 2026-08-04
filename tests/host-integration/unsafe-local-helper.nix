@@ -185,6 +185,7 @@ PY
         "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus "
         "python3 /run/d2b/cli-shell-e2e.py"
     )
+    machine.sleep(3)
     machine.succeed(r"""
       cat > /run/d2b/cli-shell-attach-e2e.py <<'PY'
 import errno
