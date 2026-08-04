@@ -17,7 +17,7 @@ use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::{
-    Arc, Mutex, OnceLock,
+    Arc, Mutex,
     atomic::{AtomicU64, Ordering},
     mpsc,
 };
@@ -3165,6 +3165,10 @@ fn handle_connection_authorized(
                 let _ = write_json_frame(&stream, &typed_shell_resource_error_frame(&error));
                 continue;
             }
+            if let Err(error) = resolve_resource_runtime(&state, &resource.value()) {
+                let _ = write_json_frame(&stream, &resource_runtime_error_frame(error));
+                continue;
+            }
             set_frame_read_deadline(&stream, None);
             let owner_state = state.clone();
             let owner_peer = peer.clone();
@@ -3433,16 +3437,9 @@ fn dispatch_resource_request(
             resource_runtime::ResourceRuntimeError::RouteMismatch,
         ));
     }
-    let zone = request
-        .fields
-        .get("zoneRef")
-        .and_then(Value::as_str)
-        .and_then(|value| value.strip_prefix("Zone/"))
-        .and_then(|value| ZoneId::parse(value.to_owned()).ok());
-    let Some(zone) = zone else {
-        return Ok(resource_runtime_error_frame(
-            resource_runtime::ResourceRuntimeError::RouteMismatch,
-        ));
+    let runtime = match resolve_resource_runtime(state, &request.value()) {
+        Ok(runtime) => runtime,
+        Err(error) => return Ok(resource_runtime_error_frame(error)),
     };
     if typed_shell_resource_request(&request.value()) {
         return Ok(
@@ -3450,24 +3447,29 @@ fn dispatch_resource_request(
                 .unwrap_or_else(|error| typed_shell_resource_error_frame(&error)),
         );
     }
-    let plane = state
-        .resource_plane
-        .lock()
-        .ok()
-        .and_then(|plane| plane.clone());
-    let Some(plane) = plane else {
-        return Ok(resource_runtime_error_frame(
-            resource_runtime::ResourceRuntimeError::PlaneUnavailable,
-        ));
-    };
-    let runtime = match plane.zone(&zone) {
-        Ok(runtime) => runtime,
-        Err(error) => return Ok(resource_runtime_error_frame(error)),
-    };
     match block_on_future(runtime.dispatch_cli_request(&request.value())) {
         Ok(value) => Ok(value),
         Err(error) => Ok(resource_runtime_error_frame(error)),
     }
+}
+
+fn resolve_resource_runtime(
+    state: &ServerState,
+    request: &Value,
+) -> Result<Arc<resource_runtime::ZoneResourceRuntime>, resource_runtime::ResourceRuntimeError> {
+    let zone = request
+        .get("zoneRef")
+        .and_then(Value::as_str)
+        .and_then(|value| value.strip_prefix("Zone/"))
+        .and_then(|value| ZoneId::parse(value.to_owned()).ok())
+        .ok_or(resource_runtime::ResourceRuntimeError::RouteMismatch)?;
+    let plane = state
+        .resource_plane
+        .lock()
+        .ok()
+        .and_then(|plane| plane.clone())
+        .ok_or(resource_runtime::ResourceRuntimeError::PlaneUnavailable)?;
+    plane.zone(&zone)
 }
 
 fn typed_shell_resource_request(request: &Value) -> bool {
@@ -3497,21 +3499,32 @@ fn dispatch_typed_shell_resource_request(
         .get("resourceRef")
         .and_then(Value::as_str)
         .map(str::to_owned);
+    if method == "List"
+        && request
+            .get("executionRef")
+            .and_then(Value::as_str)
+            .is_none()
+    {
+        return list_all_typed_shell_sessions(state, peer);
+    }
     let target = if method == "List" {
-        match request.get("executionRef").and_then(Value::as_str) {
-            Some(execution_ref) => typed_shell_execution_target(execution_ref)?,
-            None => unique_configured_shell_target(state)?,
-        }
+        typed_shell_execution_target(
+            request
+                .get("executionRef")
+                .and_then(Value::as_str)
+                .ok_or_else(shell_protocol_failed)?,
+        )?
     } else {
         resolve_typed_shell_session_target(
             state,
+            peer,
             resource.as_deref().ok_or_else(shell_protocol_failed)?,
         )?
     };
     let name = resource
         .as_deref()
-        .and_then(|value| value.strip_prefix("shell-terminal.d2bus.org.ShellSession/"))
-        .and_then(|value| public_wire::ShellName::new(value).ok());
+        .map(typed_shell_resource_name)
+        .transpose()?;
     let op = match method {
         "List" | "Status" => ShellManagementOp::List { target },
         "Detach" => ShellManagementOp::Detach {
@@ -3536,15 +3549,41 @@ fn dispatch_typed_shell_resource_request(
                 })
             })
             .cloned()
-            .ok_or_else(shell_protocol_failed);
-    }
-    if method == "Kill"
-        && let Some(resource) = resource
-        && let Ok(mut sessions) = typed_shell_sessions().lock()
-    {
-        sessions.remove(&resource);
+            .ok_or_else(|| TypedError::WorkloadTargetNotFound {
+                target: resource.unwrap_or_default(),
+            });
     }
     Ok(result)
+}
+
+fn list_all_typed_shell_sessions(
+    state: &ServerState,
+    peer: &PeerIdentity,
+) -> Result<Value, TypedError> {
+    let mut default_name =
+        public_wire::ShellName::new("primary").map_err(|_| shell_protocol_failed())?;
+    let mut sessions = Vec::new();
+    let mut names = std::collections::BTreeSet::new();
+    for (index, target) in configured_shell_targets(state)?.into_iter().enumerate() {
+        let result = list_typed_shell_target(state, peer, target)?;
+        if index == 0 {
+            default_name = result.default_name;
+        }
+        for session in result.sessions {
+            if !names.insert(session.name.as_str().to_owned()) {
+                return Err(TypedError::WorkloadAliasConflict {
+                    workload_id: session.name.as_str().to_owned(),
+                    detail: "ShellSession name exists on more than one execution target".to_owned(),
+                });
+            }
+            sessions.push(session);
+        }
+    }
+    serde_json::to_value(public_wire::ShellListResult {
+        default_name,
+        sessions,
+    })
+    .map_err(|_| shell_protocol_failed())
 }
 
 fn resource_runtime_error_frame(error: resource_runtime::ResourceRuntimeError) -> Value {
@@ -9146,11 +9185,6 @@ fn unresolved_shell_audit_target() -> &'static str {
     "unresolved"
 }
 
-fn typed_shell_sessions() -> &'static Mutex<HashMap<String, String>> {
-    static SESSIONS: OnceLock<Mutex<HashMap<String, String>>> = OnceLock::new();
-    SESSIONS.get_or_init(|| Mutex::new(HashMap::new()))
-}
-
 fn typed_shell_request(request: &Value) -> bool {
     matches!(
         request.get("method").and_then(Value::as_str),
@@ -9165,6 +9199,13 @@ fn typed_shell_request(request: &Value) -> bool {
 
 fn is_typed_shell_resource_ref(value: &str) -> bool {
     value.starts_with("shell-terminal.d2bus.org.ShellSession/")
+}
+
+fn typed_shell_resource_name(resource: &str) -> Result<public_wire::ShellName, TypedError> {
+    resource
+        .strip_prefix("shell-terminal.d2bus.org.ShellSession/")
+        .and_then(|name| public_wire::ShellName::new(name).ok())
+        .ok_or_else(shell_protocol_failed)
 }
 
 fn typed_shell_execution_target(value: &str) -> Result<String, TypedError> {
@@ -9200,47 +9241,47 @@ fn configured_shell_targets(state: &ServerState) -> Result<Vec<String>, TypedErr
     Ok(targets.into_iter().collect())
 }
 
-fn unique_configured_shell_target(state: &ServerState) -> Result<String, TypedError> {
-    let cached = typed_shell_sessions()
-        .lock()
-        .ok()
-        .map(|sessions| {
-            sessions
-                .values()
-                .cloned()
-                .collect::<std::collections::BTreeSet<_>>()
-        })
-        .unwrap_or_default();
-    if let Some(target) = cached.iter().next()
-        && cached.len() == 1
-    {
-        return Ok(target.clone());
+fn list_typed_shell_target(
+    state: &ServerState,
+    peer: &PeerIdentity,
+    target: String,
+) -> Result<public_wire::ShellListResult, TypedError> {
+    let value = dispatch_shell_management(state, peer, ShellManagementOp::List { target })?;
+    serde_json::from_value(value).map_err(|_| shell_protocol_failed())
+}
+
+fn find_typed_shell_session_target(
+    state: &ServerState,
+    peer: &PeerIdentity,
+    name: &public_wire::ShellName,
+) -> Result<Option<String>, TypedError> {
+    let mut matched = None;
+    for target in configured_shell_targets(state)? {
+        let result = list_typed_shell_target(state, peer, target.clone())?;
+        if result.sessions.iter().any(|session| session.name == *name) {
+            if matched.is_some() {
+                return Err(TypedError::WorkloadAliasConflict {
+                    workload_id: name.as_str().to_owned(),
+                    detail: "ShellSession name exists on more than one execution target".to_owned(),
+                });
+            }
+            matched = Some(target);
+        }
     }
-    match configured_shell_targets(state)?.as_slice() {
-        [target] => Ok(target.clone()),
-        _ => Err(shell_protocol_failed()),
-    }
+    Ok(matched)
 }
 
 fn resolve_typed_shell_session_target(
     state: &ServerState,
+    peer: &PeerIdentity,
     resource: &str,
 ) -> Result<String, TypedError> {
-    if !is_typed_shell_resource_ref(resource) {
-        return Err(shell_protocol_failed());
-    }
-    if let Some(target) = typed_shell_sessions()
-        .lock()
-        .ok()
-        .and_then(|sessions| sessions.get(resource).cloned())
-    {
-        return Ok(target);
-    }
-    let target = unique_configured_shell_target(state)?;
-    if let Ok(mut sessions) = typed_shell_sessions().lock() {
-        sessions.insert(resource.to_owned(), target.clone());
-    }
-    Ok(target)
+    let name = typed_shell_resource_name(resource)?;
+    find_typed_shell_session_target(state, peer, &name)?.ok_or_else(|| {
+        TypedError::WorkloadTargetNotFound {
+            target: resource.to_owned(),
+        }
+    })
 }
 
 fn run_typed_shell_owner(stream: Socket, state: ServerState, peer: PeerIdentity, request: Value) {
@@ -9275,6 +9316,13 @@ fn run_typed_shell_owner(stream: Socket, state: ServerState, peer: PeerIdentity,
         );
         return;
     };
+    let name = match typed_shell_resource_name(&resource) {
+        Ok(name) => name,
+        Err(error) => {
+            let _ = write_json_frame(&stream, &typed_shell_resource_error_frame(&error));
+            return;
+        }
+    };
     let creating = method == "Create";
     let target = if creating {
         let Some(execution_ref) = request.get("executionRef").and_then(Value::as_str) else {
@@ -9291,23 +9339,26 @@ fn run_typed_shell_owner(stream: Socket, state: ServerState, peer: PeerIdentity,
                 return;
             }
         };
-        if let Ok(sessions) = typed_shell_sessions().lock() {
-            if sessions.contains_key(&resource)
-                && !request
-                    .get("force")
-                    .and_then(Value::as_bool)
-                    .unwrap_or(false)
-            {
+        match find_typed_shell_session_target(&state, &peer, &name) {
+            Ok(Some(existing_target)) if existing_target != target => {
                 let _ = write_json_frame(
                     &stream,
-                    &typed_shell_resource_error_frame(&shell_protocol_failed()),
+                    &typed_shell_resource_error_frame(&TypedError::WorkloadAliasConflict {
+                        workload_id: name.as_str().to_owned(),
+                        detail: "ShellSession name belongs to another execution target".to_owned(),
+                    }),
                 );
+                return;
+            }
+            Ok(_) => {}
+            Err(error) => {
+                let _ = write_json_frame(&stream, &typed_shell_resource_error_frame(&error));
                 return;
             }
         }
         target
     } else {
-        match resolve_typed_shell_session_target(&state, &resource) {
+        match resolve_typed_shell_session_target(&state, &peer, &resource) {
             Ok(target) => target,
             Err(error) => {
                 let _ = write_json_frame(&stream, &typed_shell_resource_error_frame(&error));
@@ -9315,19 +9366,10 @@ fn run_typed_shell_owner(stream: Socket, state: ServerState, peer: PeerIdentity,
             }
         }
     };
-    let name = match resource
-        .strip_prefix("shell-terminal.d2bus.org.ShellSession/")
-        .and_then(|name| public_wire::ShellName::new(name).ok())
-    {
-        Some(name) => name,
-        None => {
-            let _ = write_json_frame(
-                &stream,
-                &typed_shell_resource_error_frame(&shell_protocol_failed()),
-            );
-            return;
-        }
-    };
+    let attach_stream = request
+        .get("attach")
+        .and_then(Value::as_bool)
+        .unwrap_or(true);
     let size = request
         .get("initialSize")
         .cloned()
@@ -9354,17 +9396,78 @@ fn run_typed_shell_owner(stream: Socket, state: ServerState, peer: PeerIdentity,
             return;
         }
     };
-    if creating && let Ok(mut sessions) = typed_shell_sessions().lock() {
-        sessions.insert(resource.clone(), target);
-    }
     let session = established.attach.session.clone();
     let owner_shell_ref_digest = shell_ref_digest(&[
         &established.target,
         established.attach.resolved_name.as_str(),
     ]);
+    let resolved_name = established.attach.resolved_name.clone();
+    let is_default = resolved_name.as_str() == "primary";
+    let force_evicted = established.attach.force_evicted;
+    let attached_state = established.attach.state;
+    if !attach_stream {
+        emit_shell_attach_audit(
+            &state,
+            peer.uid,
+            &established,
+            &owner_shell_ref_digest,
+            attach.force,
+        );
+        shell_metric_for_provider(
+            &state,
+            established.provider,
+            "attach",
+            "established",
+            "none",
+        );
+        let mut control_sequence = established.initial_control_sequence;
+        let close_result = match established
+            .backend
+            .close_attachment(rt.handle(), &mut control_sequence)
+        {
+            Ok(_) => daemon_audit::ShellAuditResult::Closed,
+            Err(error) => {
+                let _ = write_json_frame(&stream, &typed_shell_resource_error_frame(&error));
+                return;
+            }
+        };
+        emit_shell_close_audit(
+            &state,
+            peer.uid,
+            &established,
+            close_result,
+            &owner_shell_ref_digest,
+        );
+        shell_metric_for_provider(&state, established.provider, "close", "closed", "none");
+        let _ = write_json_frame(
+            &stream,
+            &json!({
+                "attached": false,
+                "resourceRef": resource,
+                "status": {
+                    "name": resolved_name,
+                    "state": public_wire::ShellSessionState::Detached,
+                    "attached": false,
+                    "isDefault": is_default,
+                    "forceEvicted": force_evicted,
+                },
+            }),
+        );
+        return;
+    }
     if write_json_frame(
         &stream,
-        &json!({"attached": true, "resourceRef": resource, "session": session}),
+        &json!({
+            "attached": true,
+            "resourceRef": resource,
+            "status": {
+                "name": resolved_name,
+                "state": attached_state,
+                "attached": true,
+                "isDefault": is_default,
+                "forceEvicted": force_evicted,
+            },
+        }),
     )
     .is_err()
     {

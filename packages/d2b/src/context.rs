@@ -12,7 +12,7 @@ use std::{
     },
     task::{Context as TaskContext, Poll, Wake, Waker},
     thread,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use d2b_contracts::v3::{
@@ -452,8 +452,14 @@ impl ZoneContext {
                     return Err(CliFailure::new(69, "shell input failed"));
                 }
             }
-            let output = block_on(stream.receive())
-                .map_err(|_| CliFailure::new(69, "shell output transport failed"))?;
+            let output = match block_on(stream.receive()) {
+                Ok(output) => output,
+                Err(ClientError::SessionLost) => {
+                    guard.restore();
+                    return Ok(());
+                }
+                Err(_) => return Err(CliFailure::new(69, "shell output transport failed")),
+            };
             if !output.is_empty() {
                 host.write_stdout(&output)
                     .map_err(|_| CliFailure::new(69, "shell output failed"))?;
@@ -1171,8 +1177,9 @@ impl std::fmt::Debug for CliConnectedSession {
 /// close messages on the admitted named stream.
 struct CliAttachStream {
     closed: AtomicBool,
+    eof: AtomicBool,
     socket: Option<Arc<Mutex<SeqpacketUnixSocket>>>,
-    stdin_offset: AtomicU64,
+    stdin_offset: Mutex<u64>,
     stdout_offset: AtomicU64,
 }
 
@@ -1180,8 +1187,9 @@ impl CliAttachStream {
     fn new(socket: Option<Arc<Mutex<SeqpacketUnixSocket>>>) -> Self {
         Self {
             closed: AtomicBool::new(false),
+            eof: AtomicBool::new(false),
             socket,
-            stdin_offset: AtomicU64::new(0),
+            stdin_offset: Mutex::new(0),
             stdout_offset: AtomicU64::new(0),
         }
     }
@@ -1189,27 +1197,20 @@ impl CliAttachStream {
 
 impl NamedStreamTransport for CliAttachStream {
     fn send(&self, bytes: Vec<u8>) -> impl Future<Output = Result<(), ClientError>> + Send {
-        let request = serde_json::from_slice::<Value>(&bytes)
+        let resize = serde_json::from_slice::<Value>(&bytes)
             .ok()
-            .filter(|value| value.get("type").and_then(Value::as_str) == Some("namedStreamResize"))
-            .unwrap_or_else(|| {
-                json!({
-                    "type": "namedStreamSend",
-                    "offset": self.stdin_offset.load(Ordering::Acquire),
-                    "dataBase64": d2b_core::base64_codec::encode(&bytes),
-                })
-            });
-        let result = self.stream_round_trip(request).map(|value| {
-            let accepted = value
-                .get("acceptedLen")
-                .and_then(Value::as_u64)
-                .unwrap_or(0);
-            self.stdin_offset.fetch_add(accepted, Ordering::AcqRel);
-        });
+            .filter(|value| value.get("type").and_then(Value::as_str) == Some("namedStreamResize"));
+        let result = match resize {
+            Some(request) => self.stream_round_trip(request).map(|_| ()),
+            None => self.send_stdin(&bytes),
+        };
         ready(result)
     }
 
     fn receive(&self) -> impl Future<Output = Result<Vec<u8>, ClientError>> + Send {
+        if self.eof.load(Ordering::Acquire) {
+            return ready(Err(ClientError::SessionLost));
+        }
         let result = self
             .stream_round_trip(json!({
                 "type": "namedStreamReceive",
@@ -1227,6 +1228,12 @@ impl NamedStreamTransport for CliAttachStream {
                     })?;
                 if let Some(offset) = value.get("nextOffset").and_then(Value::as_u64) {
                     self.stdout_offset.store(offset, Ordering::Release);
+                }
+                if value.get("eof").and_then(Value::as_bool) == Some(true) {
+                    self.eof.store(true, Ordering::Release);
+                    if data.is_empty() {
+                        return Err(ClientError::SessionLost);
+                    }
                 }
                 Ok(data)
             });
@@ -1257,6 +1264,55 @@ impl NamedStreamTransport for CliAttachStream {
 }
 
 impl CliAttachStream {
+    fn send_stdin(&self, bytes: &[u8]) -> Result<(), ClientError> {
+        let mut offset = self
+            .stdin_offset
+            .lock()
+            .map_err(|_| ClientError::SessionLost)?;
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let mut consumed = 0;
+        while consumed < bytes.len() {
+            let value = self.stream_round_trip(json!({
+                "type": "namedStreamSend",
+                "offset": *offset,
+                "dataBase64": d2b_core::base64_codec::encode(&bytes[consumed..]),
+            }))?;
+            let accepted = value
+                .get("acceptedLen")
+                .and_then(Value::as_u64)
+                .and_then(|value| usize::try_from(value).ok())
+                .ok_or(ClientError::ContractViolation)?;
+            let next_offset = value
+                .get("nextOffset")
+                .and_then(Value::as_u64)
+                .ok_or(ClientError::ContractViolation)?;
+            if accepted > bytes.len() - consumed
+                || next_offset != (*offset).saturating_add(accepted as u64)
+            {
+                return Err(ClientError::ContractViolation);
+            }
+            if accepted == 0 {
+                if value.get("stdinClosed").and_then(Value::as_bool) == Some(true) {
+                    return Err(ClientError::SessionLost);
+                }
+                if value.get("backpressured").and_then(Value::as_bool) != Some(true) {
+                    return Err(ClientError::ContractViolation);
+                }
+                if Instant::now() >= deadline {
+                    return Err(ClientError::Remote {
+                        kind: ResourceErrorKind::Backpressure,
+                        retry: RetryClass::AfterDelay,
+                    });
+                }
+                thread::sleep(Duration::from_millis(5));
+                continue;
+            }
+            *offset = next_offset;
+            consumed += accepted;
+        }
+        Ok(())
+    }
+
     fn stream_round_trip(&self, request: Value) -> Result<Value, ClientError> {
         let socket = self.socket.as_ref().ok_or(ClientError::ContractViolation)?;
         let bytes = serde_json::to_vec(&request).map_err(|_| ClientError::ContractViolation)?;
@@ -2013,6 +2069,7 @@ fn human_summary(value: &Value) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use nix::sys::socket::{AddressFamily, SockFlag, SockType, socketpair};
     use std::sync::Mutex;
 
     #[derive(Debug)]
@@ -2169,6 +2226,93 @@ mod tests {
         block_on(stream.close()).unwrap();
         block_on(stream.close()).unwrap();
         assert!(stream.closed.load(Ordering::Acquire));
+    }
+
+    #[test]
+    fn cli_attach_stream_retries_partial_stdin_writes() {
+        let (client, server) = socketpair(
+            AddressFamily::Unix,
+            SockType::SeqPacket,
+            None,
+            SockFlag::SOCK_CLOEXEC,
+        )
+        .unwrap();
+        let server = std::thread::spawn(move || {
+            let mut server = SeqpacketUnixSocket::from_owned_fd(server);
+            let first: Value = serde_json::from_slice(&server.recv_frame().unwrap()).unwrap();
+            assert_eq!(first["type"], "namedStreamSend");
+            assert_eq!(first["offset"], 0);
+            server
+                .send_frame(
+                    &serde_json::to_vec(&json!({
+                        "acceptedLen": 1,
+                        "nextOffset": 1,
+                        "backpressured": true,
+                        "stdinClosed": false,
+                    }))
+                    .unwrap(),
+                )
+                .unwrap();
+            let second: Value = serde_json::from_slice(&server.recv_frame().unwrap()).unwrap();
+            assert_eq!(second["type"], "namedStreamSend");
+            assert_eq!(second["offset"], 1);
+            assert_eq!(
+                d2b_core::base64_codec::decode(second["dataBase64"].as_str().unwrap()).unwrap(),
+                b"bc"
+            );
+            server
+                .send_frame(
+                    &serde_json::to_vec(&json!({
+                        "acceptedLen": 2,
+                        "nextOffset": 3,
+                        "backpressured": false,
+                        "stdinClosed": false,
+                    }))
+                    .unwrap(),
+                )
+                .unwrap();
+        });
+        let stream = CliAttachStream::new(Some(Arc::new(Mutex::new(
+            SeqpacketUnixSocket::from_owned_fd(client),
+        ))));
+        block_on(stream.send(b"abc".to_vec())).unwrap();
+        assert_eq!(*stream.stdin_offset.lock().unwrap(), 3);
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn cli_attach_stream_delivers_final_bytes_then_reports_eof() {
+        let (client, server) = socketpair(
+            AddressFamily::Unix,
+            SockType::SeqPacket,
+            None,
+            SockFlag::SOCK_CLOEXEC,
+        )
+        .unwrap();
+        let server = std::thread::spawn(move || {
+            let mut server = SeqpacketUnixSocket::from_owned_fd(server);
+            let request: Value = serde_json::from_slice(&server.recv_frame().unwrap()).unwrap();
+            assert_eq!(request["type"], "namedStreamReceive");
+            server
+                .send_frame(
+                    &serde_json::to_vec(&json!({
+                        "dataBase64": d2b_core::base64_codec::encode(b"done"),
+                        "nextOffset": 4,
+                        "eof": true,
+                    }))
+                    .unwrap(),
+                )
+                .unwrap();
+        });
+        let stream = CliAttachStream::new(Some(Arc::new(Mutex::new(
+            SeqpacketUnixSocket::from_owned_fd(client),
+        ))));
+        assert_eq!(block_on(stream.receive()).unwrap(), b"done");
+        assert_eq!(
+            block_on(stream.receive()).unwrap_err(),
+            ClientError::SessionLost
+        );
+        server.join().unwrap();
     }
 
     #[test]

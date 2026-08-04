@@ -113,6 +113,26 @@ fn open(
     let session_ref =
         d2b_contracts::v3::ResourceRef::parse(&format!("{SHELL_SESSION_TYPE}/{name}"))
             .map_err(|_| context.failure("ref-invalid", "invalid shell session name", mode, 2))?;
+    if mode.is_json() {
+        let value = context.invoke(
+            "Create",
+            json!({
+                "resourceType": SHELL_SESSION_TYPE,
+                "resourceRef": session_ref.to_canonical_string(),
+                "executionRef": execution_ref.to_canonical_string(),
+                "force": args.force,
+                "attach": false,
+                "initialSize": {
+                    "rows": 24,
+                    "cols": 80,
+                },
+            }),
+            deadline,
+            mode,
+        )?;
+        context.emit(&with_unsafe_posture(value, &execution_ref), mode)?;
+        return Ok(0);
+    }
     context.attach_shell(session_ref, Some(execution_ref), args.force, true, deadline)?;
     Ok(0)
 }
@@ -266,4 +286,63 @@ fn with_unsafe_posture(
         );
     }
     value
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::context::{SessionClient, TransportError};
+    use std::sync::{Arc, Mutex};
+
+    struct RecordingClient {
+        requests: Mutex<Vec<Vec<u8>>>,
+    }
+
+    impl SessionClient for RecordingClient {
+        fn invoke(
+            &self,
+            request: &[u8],
+            _deadline: RequestDeadline,
+        ) -> Result<Vec<u8>, TransportError> {
+            self.requests.lock().unwrap().push(request.to_vec());
+            Ok(
+                br#"{"attached":false,"resourceRef":"shell-terminal.d2bus.org.ShellSession/primary","status":{"name":"primary","state":"detached","attached":false}}"#
+                    .to_vec(),
+            )
+        }
+    }
+
+    #[test]
+    fn json_open_creates_without_opening_a_terminal_stream() {
+        let client = Arc::new(RecordingClient {
+            requests: Mutex::new(Vec::new()),
+        });
+        let context =
+            ZoneContext::with_client("dev", "/run/d2b/zones/dev/public.sock", client.clone())
+                .unwrap();
+        assert_eq!(
+            open(
+                &context,
+                &ShellOpenArgs {
+                    execution_ref: "Host/tools".to_owned(),
+                    name: Some("primary".to_owned()),
+                    force: false,
+                },
+                OutputMode::Json,
+                ZoneContext::deadline(None).unwrap(),
+            )
+            .unwrap(),
+            0
+        );
+        let requests = client.requests.lock().unwrap();
+        assert_eq!(requests.len(), 1);
+        let request: serde_json::Value = serde_json::from_slice(&requests[0]).unwrap();
+        assert_eq!(request["method"], "Create");
+        assert_eq!(request["attach"], false);
+        assert_eq!(request["executionRef"], "Host/tools");
+        assert_eq!(
+            request["resourceRef"],
+            "shell-terminal.d2bus.org.ShellSession/primary"
+        );
+    }
 }

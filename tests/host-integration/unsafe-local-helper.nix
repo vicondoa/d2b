@@ -37,6 +37,14 @@ pkgs.testers.runNixOSTest {
             maxSessions = 4;
           };
         };
+        workloads.extra = {
+          kind = "unsafe-local";
+          shell = {
+            enable = true;
+            defaultName = "primary";
+            maxSessions = 4;
+          };
+        };
       };
       environment.systemPackages = [ pkgs.jq pkgs.python3 ];
     };
@@ -204,9 +212,10 @@ import time
 
 pid, master = pty.fork()
 if pid == 0:
+    shell_name = os.environ.get("SHELL_NAME", "primary")
     os.execv(
         "/run/current-system/sw/bin/d2b",
-        ["d2b", "shell", "attach", "ShellSession/primary"],
+        ["d2b", "shell", "attach", f"ShellSession/{shell_name}"],
     )
 fcntl.ioctl(master, termios.TIOCSWINSZ, struct.pack("HHHH", 24, 80, 0, 0))
 attributes = termios.tcgetattr(master)
@@ -257,6 +266,19 @@ if os.environ.get("CHECK_RESIZE") == "1":
                 raise
     if b"37 101" not in output:
         raise SystemExit(f"typed shell resize missed geometry: {bytes(output)!r}")
+if os.environ.get("EXIT_REMOTE") == "1":
+    os.write(master, b"exit\n")
+    deadline = time.monotonic() + 15
+    while time.monotonic() < deadline:
+        waited, status = os.waitpid(pid, os.WNOHANG)
+        if waited == pid:
+            if status != 0:
+                raise SystemExit(f"typed shell CLI failed after remote exit: {status}")
+            raise SystemExit(0)
+        time.sleep(0.05)
+    os.kill(pid, 9)
+    os.waitpid(pid, 0)
+    raise SystemExit("typed shell CLI did not exit after remote shell EOF")
 if os.environ.get("HOLD") == "1":
     open("/run/user/1000/d2b-shell-hold.ready", "w").close()
     while True:
@@ -313,6 +335,36 @@ PY
         session["name"] == "primary" and not session["attached"]
         for session in shell_list["sessions"]
     )
+    machine.succeed(
+        "! runuser -u alice -- env "
+        "D2B_PUBLIC_SOCKET=/run/d2b/public.sock "
+        "XDG_RUNTIME_DIR=/run/user/1000 "
+        "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus "
+        "/run/current-system/sw/bin/d2b --zone missing --json "
+        "shell status ShellSession/primary "
+        ">/run/d2b/missing-zone-shell.log 2>&1 && "
+        "grep -q resource-runtime-plane-unavailable "
+        "/run/d2b/missing-zone-shell.log"
+    )
+    json_open = json.loads(machine.succeed(
+        shell_client + " open Host/tools --name exit-session"
+    ))
+    assert json_open["resourceRef"] == (
+        "shell-terminal.d2bus.org.ShellSession/exit-session"
+    )
+    assert json_open["attached"] is False
+    assert json_open["status"]["state"] == "detached"
+    machine.succeed(
+        "SHELL_NAME=exit-session SHELL_MARKER=remote-exit-canary EXIT_REMOTE=1 "
+        + cli_shell
+    )
+    json_reopen = json.loads(machine.succeed(
+        shell_client + " open Host/tools --name primary"
+    ))
+    assert json_reopen["resourceRef"] == (
+        "shell-terminal.d2bus.org.ShellSession/primary"
+    )
+    assert json_reopen["attached"] is False
     machine.succeed(
         shell_client + " status ShellSession/primary | jq -e "
         "'.name == \"primary\" and .attached == false'"

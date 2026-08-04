@@ -10797,6 +10797,11 @@ pub(crate) struct SeqpacketUnixSocket {
 }
 
 impl SeqpacketUnixSocket {
+    #[cfg(test)]
+    pub(crate) fn from_owned_fd(fd: OwnedFd) -> Self {
+        Self { fd }
+    }
+
     pub(crate) fn connect(path: &Path) -> io::Result<Self> {
         let fd = socket(
             AddressFamily::Unix,

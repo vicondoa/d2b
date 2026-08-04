@@ -3014,7 +3014,7 @@ authoritative Zone route provides the ShellSession service.
 | `--name NAME` | open | ShellSession resource name; defaults to `primary`. |
 | `--force` | open, attach | Detach an already-attached client for the same resource before attaching. |
 | `--watch` | status | Continue emitting status updates. |
-| `--json` | list, status, detach, kill | Emit the stable JSON envelope. Interactive open and attach require a terminal. |
+| `--json` | open, list, status, detach, kill | Emit the stable JSON envelope. JSON open creates or reopens the session, returns its initial detached status, and does not attach a terminal. Interactive open and attach require a terminal. |
 
 **Shell name rule**
 
@@ -3037,6 +3037,21 @@ $ d2b shell attach ShellSession/build
 ```
 
 **`--json` examples**
+
+```json
+{
+  "attached": false,
+  "ok": true,
+  "resourceRef": "shell-terminal.d2bus.org.ShellSession/build",
+  "schemaVersion": 1,
+  "status": {
+    "attached": false,
+    "name": "build",
+    "state": "detached"
+  },
+  "zoneRef": "Zone/local-root"
+}
+```
 
 ```json
 {

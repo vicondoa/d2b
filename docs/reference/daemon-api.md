@@ -105,7 +105,11 @@ Shell lifecycle uses `type: "resourceRequest"` with qualified
 `shell-terminal.d2bus.org.ShellSession` references. `Create` carries a trusted
 `Host/<name>` or `Guest/<name>` execution reference, `Attach` opens the
 authenticated named stream, and `List`, `Status`, `Detach`, and `Kill` use the
-same Resource request envelope. The retired `type: "shell"` request and
+same Resource request envelope. A JSON `Create` with `attach: false` returns
+the new or reopened resource and its detached status without retaining a named
+stream. Every shell request first resolves the selected Zone from the
+daemon-owned resource-plane index; an absent or mismatched Zone fails closed
+before execution-target lookup. The retired `type: "shell"` request and
 `shellResponse` reply are unsupported.
 
 All shell operations require the local admin role before target resolution or
