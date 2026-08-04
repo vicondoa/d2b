@@ -9146,10 +9146,14 @@ fn run_typed_shell_owner(stream: Socket, state: ServerState, peer: PeerIdentity,
     let attach = public_wire::ShellAttachArgs {
         vm: target,
         name: Some(name),
+        // A reconnect is an owner handoff: the prior typed owner may have
+        // disappeared without completing its close exchange. The helper's
+        // force path evicts only that attachment, never the persistent shell.
         force: request
             .get("force")
             .and_then(Value::as_bool)
-            .unwrap_or(false),
+            .unwrap_or(false)
+            || method == "Attach",
         initial_terminal_size: size,
     };
     let established = match rt.block_on(establish_shell_backend(&state, peer.uid, &attach)) {
