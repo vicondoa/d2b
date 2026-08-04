@@ -30,6 +30,7 @@ use d2b_resource_client::{
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
+use crate::terminal_client::TerminalHostIo;
 use crate::{CliFailure, MAX_FRAME_BYTES, SeqpacketUnixSocket, print_stdout};
 
 /// The frozen JSON envelope version emitted by the CLI.
@@ -337,12 +338,9 @@ impl ZoneContext {
         self.decorate_response(value)
     }
 
-    /// Open and close one typed Process attachment through the Zone session.
-    ///
-    /// The current CLI command reports establishment rather than proxying
-    /// stream bytes. The resource client still owns target validation,
-    /// session pinning, attach authorization, cancellation, and named-stream
-    /// close; this facade does not fall back to the old OpenTerminal request.
+    /// Proxy one typed Process or ShellSession attachment through the Zone
+    /// session. Shells retain the same authenticated session pin while their
+    /// named stream is driven by the terminal adapter below.
     pub(crate) fn attach_process(
         &self,
         resource_ref: ResourceRef,
@@ -371,6 +369,96 @@ impl ZoneContext {
             "resourceRef": resource_ref.to_canonical_string(),
             "tty": tty,
         }))
+    }
+
+    pub(crate) fn attach_shell(
+        &self,
+        session_ref: ResourceRef,
+        execution_ref: Option<ResourceRef>,
+        force: bool,
+        create: bool,
+        deadline: RequestDeadline,
+    ) -> Result<(), CliFailure> {
+        let target = ProcessAttachTarget::shell_session(
+            self.zone_path.clone(),
+            session_ref,
+            execution_ref,
+            force,
+        )
+        .map_err(|_| CliFailure::new(2, "ref-invalid: invalid ShellSession target"))?;
+        let stream = self
+            .backend
+            .canonical
+            .open_attach_stream(
+                target,
+                if create { "Create" } else { "Attach" },
+                true,
+                true,
+                deadline,
+            )
+            .map_err(|error| self.client_failure(error, OutputMode::Human))?;
+        let mut guard = crate::exec_client::FdStateGuard::enter(true, true)
+            .map_err(|_| CliFailure::new(69, "shell terminal setup failed"))?;
+        let mut host = crate::exec_client::RealHostIo;
+        let mut signals = crate::exec_client::install_signals()
+            .map_err(|_| CliFailure::new(69, "shell signal setup failed"))?;
+        let mut input = [0_u8; d2b_contracts::public_wire::EXEC_MAX_CHUNK_BYTES as usize];
+        loop {
+            for signal in crate::terminal_client::TerminalSignalSource::drain(&mut signals) {
+                match signal {
+                    crate::exec_client::ExecSignal::Winch => {
+                        if let Some((rows, cols)) = host.window_size() {
+                            let _ = block_on(
+                                stream.send(
+                                    &serde_json::to_vec(&json!({
+                                        "type": "namedStreamResize",
+                                        "rows": rows,
+                                        "cols": cols,
+                                    }))
+                                    .unwrap_or_default(),
+                                ),
+                            );
+                        }
+                    }
+                    crate::exec_client::ExecSignal::Hangup
+                    | crate::exec_client::ExecSignal::Terminate
+                    | crate::exec_client::ExecSignal::Stop
+                    | crate::exec_client::ExecSignal::Interrupt
+                    | crate::exec_client::ExecSignal::Quit => {
+                        let _ = block_on(stream.cancel());
+                        guard.restore();
+                        return Ok(());
+                    }
+                }
+            }
+            match host.read_stdin(&mut input) {
+                Ok(0) => {
+                    let _ = block_on(stream.close());
+                    guard.restore();
+                    return Ok(());
+                }
+                Ok(read) => {
+                    block_on(stream.send(&input[..read]))
+                        .map_err(|_| CliFailure::new(69, "shell input transport failed"))?;
+                }
+                Err(error)
+                    if matches!(
+                        error.kind(),
+                        std::io::ErrorKind::WouldBlock | std::io::ErrorKind::Interrupted
+                    ) => {}
+                Err(_) => {
+                    let _ = block_on(stream.cancel());
+                    guard.restore();
+                    return Err(CliFailure::new(69, "shell input failed"));
+                }
+            }
+            let output = block_on(stream.receive())
+                .map_err(|_| CliFailure::new(69, "shell output transport failed"))?;
+            if !output.is_empty() {
+                host.write_stdout(&output)
+                    .map_err(|_| CliFailure::new(69, "shell output failed"))?;
+            }
+        }
     }
 
     #[cfg(test)]
@@ -704,6 +792,48 @@ fn canonical_backend(zone_name: &str, socket_path: &Path) -> Result<ContextBacke
 }
 
 impl CanonicalZoneBackend {
+    fn open_attach_stream(
+        &self,
+        target: ProcessAttachTarget,
+        operation: &str,
+        interactive: bool,
+        tty: bool,
+        deadline: RequestDeadline,
+    ) -> Result<d2b_resource_client::ProcessAttachStream<CliAttachStream>, ClientError> {
+        let connector = CliZoneConnector::new(
+            self.zone_name.clone(),
+            self.zone_path.clone(),
+            self.socket_path.clone(),
+            ZoneServiceKind::Zone,
+            operation.to_owned(),
+            Some("attach".to_owned()),
+            deadline.duration(),
+        );
+        let initial_size = if tty {
+            let (rows, cols) =
+                crate::exec_client::current_window_size().ok_or(ClientError::InvalidMetadata)?;
+            Some(TerminalSize::new(
+                u16::try_from(rows).map_err(|_| ClientError::InvalidMetadata)?,
+                u16::try_from(cols).map_err(|_| ClientError::InvalidMetadata)?,
+            )?)
+        } else {
+            None
+        };
+        let attach_options = ProcessAttachOptions::new(interactive, tty, initial_size)?;
+        let owner = owner_for_zone(&self.zone_path);
+        let resolver = RouteTable::new(vec![RouteRecord::new(owner, TransportKind::LocalUnix)]);
+        let client = ProcessAttachClient::new(resolver, connector);
+        let call_options = call_options(deadline, ResourceVerb::Get)?;
+        let cancellation = CancellationToken::default();
+        block_on(client.attach(
+            target,
+            attach_options,
+            call_options,
+            TransportSelection::exact(TransportKind::LocalUnix),
+            &cancellation,
+        ))
+    }
+
     fn invoke(
         &self,
         method: &str,
@@ -1030,33 +1160,109 @@ impl std::fmt::Debug for CliConnectedSession {
 /// attach admission; `close` releases the client-side named-stream lease.
 struct CliAttachStream {
     closed: AtomicBool,
+    socket: Option<Arc<Mutex<SeqpacketUnixSocket>>>,
+    stdin_offset: AtomicU64,
+    stdout_offset: AtomicU64,
 }
 
 impl CliAttachStream {
-    fn new() -> Self {
+    fn new(socket: Option<Arc<Mutex<SeqpacketUnixSocket>>>) -> Self {
         Self {
             closed: AtomicBool::new(false),
+            socket,
+            stdin_offset: AtomicU64::new(0),
+            stdout_offset: AtomicU64::new(0),
         }
     }
 }
 
 impl NamedStreamTransport for CliAttachStream {
-    fn send(&self, _bytes: Vec<u8>) -> impl Future<Output = Result<(), ClientError>> + Send {
-        ready(Err(ClientError::ContractViolation))
+    fn send(&self, bytes: Vec<u8>) -> impl Future<Output = Result<(), ClientError>> + Send {
+        let request = serde_json::from_slice::<Value>(&bytes)
+            .ok()
+            .filter(|value| value.get("type").and_then(Value::as_str) == Some("namedStreamResize"))
+            .unwrap_or_else(|| {
+                json!({
+                    "type": "namedStreamSend",
+                    "offset": self.stdin_offset.load(Ordering::Acquire),
+                    "dataBase64": d2b_core::base64_codec::encode(&bytes),
+                })
+            });
+        let result = self.stream_round_trip(request).map(|value| {
+            let accepted = value
+                .get("acceptedLen")
+                .and_then(Value::as_u64)
+                .unwrap_or(0);
+            self.stdin_offset.fetch_add(accepted, Ordering::AcqRel);
+        });
+        ready(result)
     }
 
     fn receive(&self) -> impl Future<Output = Result<Vec<u8>, ClientError>> + Send {
-        ready(Err(ClientError::ContractViolation))
+        let result = self
+            .stream_round_trip(json!({
+                "type": "namedStreamReceive",
+                "offset": self.stdout_offset.load(Ordering::Acquire),
+                "maxLen": d2b_contracts::public_wire::EXEC_MAX_CHUNK_BYTES,
+            }))
+            .and_then(|value| {
+                let data = value
+                    .get("dataBase64")
+                    .and_then(Value::as_str)
+                    .ok_or(ClientError::ContractViolation)
+                    .and_then(|data| {
+                        d2b_core::base64_codec::decode(data)
+                            .map_err(|_| ClientError::ContractViolation)
+                    })?;
+                if let Some(offset) = value.get("nextOffset").and_then(Value::as_u64) {
+                    self.stdout_offset.store(offset, Ordering::Release);
+                }
+                Ok(data)
+            });
+        ready(result)
     }
 
     fn close(&self) -> impl Future<Output = Result<(), ClientError>> + Send {
         self.closed.store(true, Ordering::Release);
-        ready(Ok(()))
+        let result = if self.socket.is_some() {
+            self.stream_round_trip(json!({"type": "namedStreamClose"}))
+                .map(|_| ())
+        } else {
+            Ok(())
+        };
+        ready(result)
     }
 
     fn cancel(&self) -> impl Future<Output = Result<(), ClientError>> + Send {
         self.closed.store(true, Ordering::Release);
-        ready(Ok(()))
+        let result = if self.socket.is_some() {
+            self.stream_round_trip(json!({"type": "namedStreamCancel"}))
+                .map(|_| ())
+        } else {
+            Ok(())
+        };
+        ready(result)
+    }
+}
+
+impl CliAttachStream {
+    fn stream_round_trip(&self, request: Value) -> Result<Value, ClientError> {
+        let socket = self.socket.as_ref().ok_or(ClientError::ContractViolation)?;
+        let bytes = serde_json::to_vec(&request).map_err(|_| ClientError::ContractViolation)?;
+        let mut socket = socket.lock().map_err(|_| ClientError::SessionLost)?;
+        socket
+            .send_frame(&bytes)
+            .map_err(|_| ClientError::TransportFailed)?;
+        let response = socket.recv_frame().map_err(|_| ClientError::SessionLost)?;
+        let value: Value =
+            serde_json::from_slice(&response).map_err(|_| ClientError::ContractViolation)?;
+        if value.get("type").and_then(Value::as_str) == Some("error") {
+            return Err(ClientError::Remote {
+                kind: ResourceErrorKind::InternalIntegrityFailure,
+                retry: RetryClass::Never,
+            });
+        }
+        Ok(value)
     }
 }
 
@@ -1102,7 +1308,7 @@ impl CliConnectedSession {
         relative_timeout_nanos: u64,
     ) -> Result<CliAttachStream, ClientError> {
         if self.service != ZoneServiceKind::Zone
-            || self.operation != "Attach"
+            || !matches!(self.operation.as_str(), "Attach" | "Create")
             || self.session_verb.as_deref() != Some("attach")
         {
             return Err(ClientError::TransportPolicyMismatch);
@@ -1114,12 +1320,30 @@ impl CliConnectedSession {
                 "rows": size.rows(),
             })
         });
-        let payload = serde_json::to_vec(&json!({
+        let mut request_payload = json!({
             "interactive": options.interactive(),
             "initialSize": initial_size,
             "tty": options.tty(),
-        }))
-        .map_err(|_| ClientError::ContractViolation)?;
+        });
+        if let ProcessAttachTarget::ShellSession {
+            execution_ref,
+            force,
+            ..
+        } = request.target()
+        {
+            if let Some(object) = request_payload.as_object_mut() {
+                object.insert(
+                    "executionRef".to_owned(),
+                    execution_ref
+                        .as_ref()
+                        .map(|reference| Value::String(reference.to_canonical_string()))
+                        .unwrap_or(Value::Null),
+                );
+                object.insert("force".to_owned(), Value::Bool(*force));
+            }
+        }
+        let payload =
+            serde_json::to_vec(&request_payload).map_err(|_| ClientError::ContractViolation)?;
         let payload =
             CanonicalJsonObject::parse(&payload).map_err(|_| ClientError::ContractViolation)?;
         self.invoke(
@@ -1127,7 +1351,9 @@ impl CliConnectedSession {
             payload,
             relative_timeout_nanos,
         )?;
-        Ok(CliAttachStream::new())
+        let socket = self.socket.clone();
+        let is_shell = matches!(request.target(), ProcessAttachTarget::ShellSession { .. });
+        Ok(CliAttachStream::new(is_shell.then_some(socket).flatten()))
     }
 
     fn invoke(
@@ -1251,7 +1477,7 @@ fn validate_operation(
         | (ZoneServiceKind::Support, "SupportService/GenerateBundle", Some("support-bundle")) => {
             Ok(operation.to_owned())
         }
-        (ZoneServiceKind::Zone, "Attach", Some("attach")) => Ok(operation.to_owned()),
+        (ZoneServiceKind::Zone, "Attach" | "Create", Some("attach")) => Ok(operation.to_owned()),
         (ZoneServiceKind::Audit | ZoneServiceKind::Support, ..) => Err(ClientError::InvalidMethod),
         (_, _, Some(_)) => Err(ClientError::InvalidMethod),
         (_, operation, None)
@@ -1923,7 +2149,7 @@ mod tests {
 
     #[test]
     fn cli_attach_stream_closes_idempotently_and_refuses_unowned_bytes() {
-        let stream = CliAttachStream::new();
+        let stream = CliAttachStream::new(None);
         assert_eq!(
             block_on(stream.send(vec![1])).unwrap_err(),
             ClientError::ContractViolation

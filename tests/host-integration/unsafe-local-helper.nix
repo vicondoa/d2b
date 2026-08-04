@@ -262,7 +262,7 @@ pid, master = pty.fork()
 if pid == 0:
     os.execv(
         "/run/current-system/sw/bin/d2b",
-        ["d2b", "shell", "tools.host.d2b", "--name", "cli-e2e"],
+        ["d2b", "shell", "open", "Host/tools", "--name", "cli-e2e"],
     )
 
 output = bytearray()
@@ -287,12 +287,6 @@ def read_until(marker, timeout):
             f"real d2b shell CLI missed {marker!r}: {bytes(output)!r}"
         )
 
-read_until(b"attached to shell", 30)
-os.write(master, b"stty -echo\\n")
-time.sleep(0.5)
-while select.select([master], [], [], 0)[0]:
-    output.extend(os.read(master, 65536))
-output.clear()
 os.write(master, b"printf cli-shell-executed-canary\\n")
 read_until(b"cli-shell-executed-canary", 30)
 
@@ -319,11 +313,44 @@ PY
         "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus "
         "python3 /run/d2b/cli-shell-e2e.py"
     )
+    machine.succeed(r"""
+      cat > /run/d2b/cli-shell-attach-e2e.py <<'PY'
+import errno
+import os
+import pty
+import select
+import signal
+import time
+
+pid, master = pty.fork()
+if pid == 0:
+    os.execv(
+        "/run/current-system/sw/bin/d2b",
+        ["d2b", "shell", "attach", "ShellSession/cli-e2e"],
+    )
+output = bytearray()
+deadline = time.monotonic() + 30
+while b"cli-shell-attach-canary" not in output and time.monotonic() < deadline:
+    if select.select([master], [], [], 1)[0]:
+        try:
+            output.extend(os.read(master, 65536))
+        except OSError as error:
+            if error.errno == errno.EIO:
+                break
+            raise
+    if time.monotonic() + 1 < deadline:
+        os.write(master, b"printf cli-shell-attach-canary\\n")
+if b"cli-shell-attach-canary" not in output:
+    raise SystemExit(f"typed shell attach missed canary: {bytes(output)!r}")
+os.kill(pid, signal.SIGTERM)
+os.waitpid(pid, 0)
+PY
+      chmod 0755 /run/d2b/cli-shell-attach-e2e.py
+    """)
     machine.succeed(
         "runuser -u alice -- env XDG_RUNTIME_DIR=/run/user/1000 "
         "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus "
-        "d2b shell tools.host.d2b kill --name cli-e2e --json "
-        "| jq -e '.result == \"killed\"'"
+        "python3 /run/d2b/cli-shell-attach-e2e.py"
     )
     machine.succeed(
         "runuser -u alice -- sh -c 'setsid sleep 300 >/dev/null 2>&1 & "

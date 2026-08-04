@@ -107,20 +107,10 @@ fn open(
         ));
     }
     warn_unsafe_local(&execution_ref, mode);
-    let value = context.invoke(
-        "Create",
-        json!({
-            "resourceType": "ShellSession",
-            "executionRef": execution_ref.to_canonical_string(),
-            "name": args.name,
-            "force": args.force,
-            "attach": !mode.is_json(),
-            "detachOnHangup": true,
-        }),
-        deadline,
-        mode,
-    )?;
-    context.emit(&with_unsafe_posture(value, &execution_ref), mode)?;
+    let name = args.name.as_deref().unwrap_or("primary");
+    let session_ref = d2b_contracts::v3::ResourceRef::parse(&format!("ShellSession/{name}"))
+        .map_err(|_| context.failure("ref-invalid", "invalid shell session name", mode, 2))?;
+    context.attach_shell(session_ref, Some(execution_ref), args.force, true, deadline)?;
     Ok(0)
 }
 
@@ -139,18 +129,7 @@ fn attach(
         ));
     }
     let resource_ref = validate_session_ref(context, &args.resource_ref, mode)?;
-    let value = context.invoke(
-        "OpenTerminal",
-        json!({
-            "kind": "shell",
-            "resourceRef": resource_ref.to_canonical_string(),
-            "force": args.force,
-            "detachOnHangup": true,
-        }),
-        deadline,
-        mode,
-    )?;
-    context.emit(&value, mode)?;
+    context.attach_shell(resource_ref, None, args.force, false, deadline)?;
     Ok(0)
 }
 

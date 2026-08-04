@@ -17,7 +17,7 @@ use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::{
-    Arc, Mutex,
+    Arc, Mutex, OnceLock,
     atomic::{AtomicU64, Ordering},
     mpsc,
 };
@@ -3155,6 +3155,34 @@ fn handle_connection_authorized(
             };
             let _ = write_json_frame(&stream, &wire::error_frame(&error));
             continue;
+        }
+        if let wire::Request::Resource(resource) = &request
+            && typed_shell_request(&resource.value())
+        {
+            if !matches!(peer.role, PeerRole::Admin) {
+                let error = TypedError::AuthzNotAdmin {
+                    verb: "shell".to_owned(),
+                };
+                let _ = write_json_frame(&stream, &wire::error_frame(&error));
+                continue;
+            }
+            set_frame_read_deadline(&stream, None);
+            let owner_state = state.clone();
+            let owner_peer = peer.clone();
+            let owner_request = resource.value();
+            match std::thread::Builder::new()
+                .name("d2b-typed-shell-owner".to_owned())
+                .spawn(move || {
+                    run_typed_shell_owner(stream, owner_state, owner_peer, owner_request);
+                }) {
+                Ok(_) => return Ok(()),
+                Err(err) => {
+                    return Err(TypedError::InternalIo {
+                        context: "spawn typed shell owner handler".to_owned(),
+                        detail: err.to_string(),
+                    });
+                }
+            }
         }
         // Exec takes over the connection as the long-lived owner connection.
         // Admin (SO_PEERCRED) is verified here, BEFORE any session work; then
@@ -9027,6 +9055,198 @@ fn emit_shell_failure_audit(
 
 fn unresolved_shell_audit_target() -> &'static str {
     "unresolved"
+}
+
+fn typed_shell_sessions() -> &'static Mutex<HashMap<String, String>> {
+    static SESSIONS: OnceLock<Mutex<HashMap<String, String>>> = OnceLock::new();
+    SESSIONS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn typed_shell_request(request: &Value) -> bool {
+    matches!(
+        request.get("method").and_then(Value::as_str),
+        Some("Create" | "Attach")
+    ) && (request.get("resourceType").and_then(Value::as_str) == Some("ShellSession")
+        || request
+            .get("resourceRef")
+            .and_then(Value::as_str)
+            .is_some_and(|value| value.starts_with("ShellSession/")))
+}
+
+fn run_typed_shell_owner(stream: Socket, state: ServerState, peer: PeerIdentity, request: Value) {
+    let rt = match tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+    {
+        Ok(rt) => rt,
+        Err(_) => {
+            let _ = write_json_frame(&stream, &wire::error_frame(&shell_transport_failed()));
+            return;
+        }
+    };
+    let method = request.get("method").and_then(Value::as_str).unwrap_or("");
+    let Some(resource) = request
+        .get("resourceRef")
+        .and_then(Value::as_str)
+        .map(str::to_owned)
+        .or_else(|| {
+            request
+                .get("name")
+                .and_then(Value::as_str)
+                .map(|name| format!("ShellSession/{name}"))
+        })
+    else {
+        let _ = write_json_frame(&stream, &wire::error_frame(&shell_protocol_failed()));
+        return;
+    };
+    let target = if method == "Create" {
+        let Some(target) = request.get("executionRef").and_then(Value::as_str) else {
+            let _ = write_json_frame(&stream, &wire::error_frame(&shell_protocol_failed()));
+            return;
+        };
+        if let Ok(mut sessions) = typed_shell_sessions().lock() {
+            if sessions.contains_key(&resource)
+                && !request
+                    .get("force")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false)
+            {
+                let _ = write_json_frame(&stream, &wire::error_frame(&shell_protocol_failed()));
+                return;
+            }
+            sessions.insert(resource.clone(), target.to_owned());
+        }
+        target.to_owned()
+    } else {
+        let Some(target) = typed_shell_sessions()
+            .lock()
+            .ok()
+            .and_then(|sessions| sessions.get(&resource).cloned())
+        else {
+            let _ = write_json_frame(&stream, &wire::error_frame(&shell_protocol_failed()));
+            return;
+        };
+        target
+    };
+    let name = match resource
+        .strip_prefix("ShellSession/")
+        .and_then(|name| public_wire::ShellName::new(name).ok())
+    {
+        Some(name) => name,
+        None => {
+            let _ = write_json_frame(&stream, &wire::error_frame(&shell_protocol_failed()));
+            return;
+        }
+    };
+    let size = request
+        .get("initialSize")
+        .cloned()
+        .and_then(|value| serde_json::from_value(value).ok())
+        .unwrap_or(d2b_contracts::terminal_wire::TerminalSize { rows: 24, cols: 80 });
+    let attach = public_wire::ShellAttachArgs {
+        vm: target,
+        name: Some(name),
+        force: request
+            .get("force")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+        initial_terminal_size: size,
+    };
+    let established = match rt.block_on(establish_shell_backend(&state, peer.uid, &attach)) {
+        Ok(value) => value,
+        Err(error) => {
+            let _ = write_json_frame(&stream, &wire::error_frame(&error));
+            return;
+        }
+    };
+    let session = established.attach.session.clone();
+    if write_json_frame(
+        &stream,
+        &json!({"attached": true, "resourceRef": resource, "session": session}),
+    )
+    .is_err()
+    {
+        return;
+    }
+    let mut control_sequence = established.initial_control_sequence;
+    while let Ok(frame) = read_frame(&stream) {
+        let value: Value = match serde_json::from_slice(&frame) {
+            Ok(value) => value,
+            Err(_) => break,
+        };
+        let kind = value.get("type").and_then(Value::as_str).unwrap_or("");
+        if matches!(kind, "namedStreamClose" | "namedStreamCancel") {
+            let op = public_wire::ShellOp::CloseAttach(public_wire::ShellCloseAttachArgs {
+                session: session.clone(),
+            });
+            let _ = established
+                .backend
+                .handle_op(rt.handle(), &mut control_sequence, op);
+            let _ = write_json_frame(&stream, &json!({"closed": true}));
+            break;
+        }
+        let op = match kind {
+            "namedStreamSend" => {
+                let data = value
+                    .get("dataBase64")
+                    .and_then(Value::as_str)
+                    .and_then(|data| d2b_core::base64_codec::decode(data).ok())
+                    .unwrap_or_default();
+                public_wire::ShellOp::WriteStdin(d2b_contracts::terminal_wire::TerminalWriteStdin {
+                    session: session.clone(),
+                    offset: value.get("offset").and_then(Value::as_u64).unwrap_or(0),
+                    chunk_base64: d2b_core::base64_codec::encode(&data),
+                    eof: false,
+                })
+            }
+            "namedStreamReceive" => {
+                public_wire::ShellOp::ReadOutput(d2b_contracts::terminal_wire::TerminalReadOutput {
+                    session: session.clone(),
+                    stream: d2b_contracts::terminal_wire::TerminalStream::Stdout,
+                    offset: value.get("offset").and_then(Value::as_u64).unwrap_or(0),
+                    max_len: value.get("maxLen").and_then(Value::as_u64).unwrap_or(65536),
+                    wait: true,
+                    timeout_ms: 50,
+                })
+            }
+            "namedStreamResize" => {
+                public_wire::ShellOp::Resize(d2b_contracts::terminal_wire::TerminalResize {
+                    session: session.clone(),
+                    op_id: control_sequence.saturating_add(1),
+                    rows: value.get("rows").and_then(Value::as_u64).unwrap_or(24) as u32,
+                    cols: value.get("cols").and_then(Value::as_u64).unwrap_or(80) as u32,
+                })
+            }
+            _ => {
+                let _ = write_json_frame(&stream, &wire::error_frame(&shell_protocol_failed()));
+                continue;
+            }
+        };
+        match established
+            .backend
+            .handle_op(rt.handle(), &mut control_sequence, op)
+        {
+            Ok(Some(public_wire::ShellOpResponse::WriteStdin(result))) => {
+                let _ = write_json_frame(
+                    &stream,
+                    &serde_json::to_value(result).unwrap_or_else(|_| json!({})),
+                );
+            }
+            Ok(Some(public_wire::ShellOpResponse::ReadOutput(result))) => {
+                let _ = write_json_frame(
+                    &stream,
+                    &serde_json::to_value(result).unwrap_or_else(|_| json!({})),
+                );
+            }
+            Ok(Some(_)) => {
+                let _ = write_json_frame(&stream, &json!({"delivered": true}));
+            }
+            Ok(None) => break,
+            Err(error) => {
+                let _ = write_json_frame(&stream, &wire::error_frame(&error));
+            }
+        }
+    }
 }
 
 fn run_shell_owner(

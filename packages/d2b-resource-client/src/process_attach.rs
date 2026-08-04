@@ -41,6 +41,8 @@ pub enum ProcessAttachKind {
     /// A configured launcher Process whose command is resolved by trusted
     /// configuration rather than by the caller.
     ConfiguredLauncher,
+    /// A persistent unsafe-local or guest shell session.
+    ShellSession,
 }
 
 /// An attach target scoped to one exact Zone and one allowed process resource.
@@ -60,6 +62,13 @@ pub enum ProcessAttachTarget {
         zone: ZonePath,
         resource: ResourceRef,
     },
+    /// Attach to a persistent `ShellSession/<name>`.
+    ShellSession {
+        zone: ZonePath,
+        resource: ResourceRef,
+        execution_ref: Option<ResourceRef>,
+        force: bool,
+    },
 }
 
 impl ProcessAttachTarget {
@@ -77,6 +86,30 @@ impl ProcessAttachTarget {
             return Err(ClientError::InvalidTarget);
         }
         Ok(Self::ConfiguredLauncher { zone, resource })
+    }
+
+    /// Construct a persistent shell-session target.  Creation carries the
+    /// trusted execution reference; reconnects intentionally omit it and let
+    /// the daemon resolve the already-created session.
+    pub fn shell_session(
+        zone: ZonePath,
+        resource: ResourceRef,
+        execution_ref: Option<ResourceRef>,
+        force: bool,
+    ) -> Result<Self, ClientError> {
+        if resource.resource_type().as_str() != "ShellSession"
+            || execution_ref.as_ref().is_some_and(|reference| {
+                !matches!(reference.resource_type().as_str(), "Host" | "Guest")
+            })
+        {
+            return Err(ClientError::InvalidTarget);
+        }
+        Ok(Self::ShellSession {
+            zone,
+            resource,
+            execution_ref,
+            force,
+        })
     }
 
     /// Interpret a resource-shaped target as an EphemeralProcess target.
@@ -98,22 +131,25 @@ impl ProcessAttachTarget {
         match self {
             Self::EphemeralProcess { .. } => ProcessAttachKind::EphemeralProcess,
             Self::ConfiguredLauncher { .. } => ProcessAttachKind::ConfiguredLauncher,
+            Self::ShellSession { .. } => ProcessAttachKind::ShellSession,
         }
     }
 
     /// Borrow the exact Zone route.
     pub const fn zone(&self) -> &ZonePath {
         match self {
-            Self::EphemeralProcess { zone, .. } | Self::ConfiguredLauncher { zone, .. } => zone,
+            Self::EphemeralProcess { zone, .. }
+            | Self::ConfiguredLauncher { zone, .. }
+            | Self::ShellSession { zone, .. } => zone,
         }
     }
 
     /// Borrow the exact process ResourceRef.
     pub const fn resource_ref(&self) -> &ResourceRef {
         match self {
-            Self::EphemeralProcess { resource, .. } | Self::ConfiguredLauncher { resource, .. } => {
-                resource
-            }
+            Self::EphemeralProcess { resource, .. }
+            | Self::ConfiguredLauncher { resource, .. }
+            | Self::ShellSession { resource, .. } => resource,
         }
     }
 
