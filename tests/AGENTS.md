@@ -184,7 +184,8 @@ back into a single invocation:
   are bench targets; all carry real assertions. The set is derived from
   `nextest list` zero-case test suites plus Cargo metadata bench targets rather
   than pinned, and each target is run once with its matching `--test` or
-  `--bench` selector, so a new one cannot silently drop out of the gate.
+  optimized `--release --bench` selector, so a new one cannot silently drop
+  out of the gate or turn a performance contract into a debug-build timing.
 
 The privileged broker workspace stays on `cargo test`. Its tests are not
 process-per-test safe, and it runs 528 tests in about 1.4 s, so nextest has

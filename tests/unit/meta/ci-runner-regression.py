@@ -1692,14 +1692,19 @@ esac
 
     def test_harness_free_binaries_receive_no_libtest_arguments(self) -> None:
         driver = RUST_DRIVER.read_text(encoding="utf-8")
-        command = next(
-            line
-            for line in driver.splitlines()
-            if 'cargo test --jobs "$D2B_RUST_CARGO_JOBS"' in line
-            and '"$cargo_selector" "$target"' in line
+        command_match = re.search(
+            r'cargo test --jobs "\$D2B_RUST_CARGO_JOBS" '
+            r'"\$\{cargo_profile\[@\]\}" \\\n'
+            r'\s+--manifest-path "\$manifest_path" "\$@" -p "\$pkg" '
+            r'"\$cargo_selector" "\$target"',
+            driver,
         )
+        self.assertIsNotNone(command_match)
+        command = command_match.group(0)
         self.assertIn("cargo_selector=--test", driver)
         self.assertIn("cargo_selector=--bench", driver)
+        self.assertIn("cargo_profile=(--release)", driver)
+        self.assertIn('"${cargo_profile[@]}"', command)
         self.assertNotIn("--test-threads", command)
         self.assertFalse(command.rstrip().endswith(" --"))
 

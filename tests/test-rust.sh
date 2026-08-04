@@ -637,15 +637,18 @@ run_nextest_companions() {
     exit 1
   }
   local kind pkg target cargo_selector ran=0 test_targets=0 bench_targets=0
+  local -a cargo_profile=()
   while IFS=$'\t' read -r kind pkg target; do
     [ -n "$kind" ] || continue
     case "$kind" in
       test)
         cargo_selector=--test
+        cargo_profile=()
         test_targets=$((test_targets + 1))
         ;;
       bench)
         cargo_selector=--bench
+        cargo_profile=(--release)
         bench_targets=$((bench_targets + 1))
         ;;
       *)
@@ -660,7 +663,8 @@ run_nextest_companions() {
     log "  --> cargo test -p $pkg $cargo_selector $target ($label; $kind, not a nextest surface)"
     # Forward the same selectors the listing used, so the companion runs the
     # configuration that produced it rather than a default-feature rebuild.
-    cargo test --jobs "$D2B_RUST_CARGO_JOBS" --manifest-path "$manifest_path" "$@" -p "$pkg" "$cargo_selector" "$target"
+    cargo test --jobs "$D2B_RUST_CARGO_JOBS" "${cargo_profile[@]}" \
+      --manifest-path "$manifest_path" "$@" -p "$pkg" "$cargo_selector" "$target"
     ran=$((ran + 1))
   done <<<"$targets"
   if [ "$ran" -eq 0 ] && [ "$label" = "main workspace" ]; then
