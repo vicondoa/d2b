@@ -1,3 +1,3 @@
 ### Fixed
 
-- Mount the protected-resource controller test binary into its container by absolute host path.
+- Keep controller-owned child cleanup protection in native Rust coverage instead of rerunning a Nix-linked test binary in a foreign container.
