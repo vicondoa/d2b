@@ -592,6 +592,18 @@ mod tests {
     }
 
     #[test]
+    fn modern_list_requires_a_resource_type() {
+        let cli = ModernCli::try_parse_from(["d2b", "list", "Zone", "--json"])
+            .expect("typed resource list parses");
+        assert!(cli.json);
+        let ModernCommand::List(args) = cli.command else {
+            panic!("expected typed list command");
+        };
+        assert_eq!(args.resource_type, "Zone");
+        assert!(ModernCli::try_parse_from(["d2b", "list", "--json"]).is_err());
+    }
+
+    #[test]
     fn modern_parser_has_no_v2_alias_or_realm_dispatch() {
         assert!(ModernCli::try_parse_from(["d2b", "up", "work"]).is_err());
         assert!(ModernCli::try_parse_from(["d2b", "vm", "start", "work"]).is_err());

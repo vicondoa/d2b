@@ -150,34 +150,32 @@ launched tools.host.d2b item browser (committed)
 
 ### `list`
 
-**Synopsis:** `d2b list [--human] [--json]`
+**Synopsis:** `d2b list <RESOURCE_TYPE> [--zone <ZONE>] [--human|--json]`
 
 **Flags**
 
 | Flag | Type | Default | Semantics |
 | --- | --- | --- | --- |
-| `--json` | boolean | `false` | Emit the stable machine-readable inventory document on stdout instead of the human table. |
-| `--human` | boolean | `false` | Force the human inventory table on stdout. |
+| `--zone` | Zone name | nearest local runtime | Address one declared Zone. |
+| `--json` | boolean | `false` | Emit the stable Resource API response envelope. |
+| `--human` | boolean | `false` | Force human-readable rendering. |
+| `--label-selector` | `key=value` | unset | Filter by one bounded label selector. |
+| `--limit` | integer 1-500 | unset | Bound the response page. |
+| `--page-token` | opaque string | unset | Continue a prior page. |
 
 **Arguments**
 
 | Argument | Semantics |
 | --- | --- |
-| _(none)_ | The inventory query is always global; it does not accept a VM selector. |
+| `RESOURCE_TYPE` | Required standard or qualified ResourceType. For example, `Zone`, `Guest`, or `audio.d2bus.org/AudioService`. |
 
 **Exit codes**
 
 | Code | Meaning | Typed error / reference |
 | --- | --- | --- |
 | `0` | Success. | - |
-| `1` | Unexpected daemon reply, local probe, or manifest-read failure. | [`generic`](./error-codes.md#generic) |
-| `2` | Unknown flag or unsupported invocation shape. | [`usage`](./error-codes.md#usage) |
-
-**Human example**
-
-```text
-$ d2b list
-NAME               ENV       GRAPHICS  TPM   USBIP   STATIC_IP       STATUS
+| `1` | Zone transport, authorization, or Resource API failure. | Typed Resource API error. |
+| `2` | Invalid ResourceType, selector, page bound, or invocation shape. | [`usage`](./error-codes.md#usage) |
 corp-vm            work      false     false false   10.20.0.10      running
 sys-work-net       work      false     false false   192.0.2.1       running (net-vm)
 ```

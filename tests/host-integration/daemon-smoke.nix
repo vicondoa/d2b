@@ -60,7 +60,7 @@ pkgs.testers.runNixOSTest {
     )
     machine.wait_for_unit("d2bd.service")
     machine.succeed("test -S /run/d2b/public.sock")
-    machine.succeed("runuser -u alice -- d2b list --json >/dev/null")
+    machine.succeed("runuser -u alice -- d2b list Zone --json >/dev/null")
 
     # 3b. Service restart readiness + cgroup survival. The synthetic process is
     # moved into d2bd.service's cgroup so this verifies systemd KillMode
@@ -84,7 +84,7 @@ pkgs.testers.runNixOSTest {
     machine.succeed("systemctl restart d2bd.service")
     machine.wait_for_unit("d2bd.service")
     machine.succeed("test -S /run/d2b/public.sock")
-    machine.succeed("runuser -u alice -- d2b list --json >/dev/null")
+    machine.succeed("runuser -u alice -- d2b list Zone --json >/dev/null")
     machine.succeed(f"test -d /proc/{survivor_pid}")
     machine.succeed(f"kill {survivor_pid}")
 

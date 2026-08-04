@@ -50,7 +50,7 @@ pkgs.testers.runNixOSTest {
         )
         machine.succeed("systemctl restart d2bd.service")
         machine.wait_for_unit("d2bd.service")
-        machine.succeed("runuser -u alice -- d2b list --json >/dev/null")
+        machine.succeed("runuser -u alice -- d2b list Zone --json >/dev/null")
     else:
         machine.succeed("runuser -u alice -- d2b vm start corp-vm --apply --no-wait-api --json")
         machine.wait_until_succeeds(
