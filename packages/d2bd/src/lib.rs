@@ -3686,7 +3686,7 @@ fn resource_runtime_error_frame(error: resource_runtime::ResourceRuntimeError) -
 
 fn typed_shell_resource_error_frame(error: &TypedError) -> Value {
     use crate::typed_error::{
-        GuestControlShellErrorKind as Guest, UnsafeLocalShellErrorKind as Host,
+        GuestControlShellErrorKind as Guest, UnsafeLocalShellErrorKind as UnsafeHost,
     };
     use d2b_contracts::v3::ResourceErrorKind;
 
@@ -3697,48 +3697,48 @@ fn typed_shell_resource_error_frame(error: &TypedError) -> Value {
             kind: Guest::NotFound | Guest::StaleSession,
         }
         | TypedError::UnsafeLocalShellFailed {
-            kind: Host::NotFound | Host::StaleSession,
+            kind: UnsafeHost::NotFound | UnsafeHost::StaleSession,
         } => ResourceErrorKind::ResourceNotFound,
         TypedError::GuestControlShellFailed {
             kind: Guest::Capability,
         }
         | TypedError::UnsafeLocalShellFailed {
-            kind: Host::ShellUnavailable,
+            kind: UnsafeHost::ShellUnavailable,
         } => ResourceErrorKind::UnsupportedCapability,
         TypedError::GuestControlShellFailed {
             kind: Guest::Transport,
         }
         | TypedError::UnsafeLocalShellFailed {
             kind:
-                Host::HelperUnavailable
-                | Host::HelperStale
-                | Host::UserManagerUnavailable
-                | Host::EnvironmentInvalid
-                | Host::ExecutableUnavailable
-                | Host::ScopeCreateFailed
-                | Host::ScopeIdentityMismatch
-                | Host::GraphicalSessionInactive
-                | Host::WaylandUnavailable
-                | Host::ProxyUnavailable
-                | Host::FirstClientTimeout,
+                UnsafeHost::HelperUnavailable
+                | UnsafeHost::HelperStale
+                | UnsafeHost::UserManagerUnavailable
+                | UnsafeHost::EnvironmentInvalid
+                | UnsafeHost::ExecutableUnavailable
+                | UnsafeHost::ScopeCreateFailed
+                | UnsafeHost::ScopeIdentityMismatch
+                | UnsafeHost::GraphicalSessionInactive
+                | UnsafeHost::WaylandUnavailable
+                | UnsafeHost::ProxyUnavailable
+                | UnsafeHost::FirstClientTimeout,
         } => ResourceErrorKind::ResourceProviderUnavailable,
         TypedError::GuestControlShellFailed {
             kind: Guest::Timeout,
         }
         | TypedError::UnsafeLocalShellFailed {
-            kind: Host::Timeout,
+            kind: UnsafeHost::Timeout,
         } => ResourceErrorKind::Timeout,
         TypedError::GuestControlShellFailed {
             kind: Guest::Capacity,
         }
         | TypedError::UnsafeLocalShellFailed {
-            kind: Host::QueueFull,
+            kind: UnsafeHost::QueueFull,
         } => ResourceErrorKind::Backpressure,
         TypedError::GuestControlShellFailed {
             kind: Guest::AlreadyAttached,
         }
         | TypedError::UnsafeLocalShellFailed {
-            kind: Host::AlreadyAttached | Host::OperationConflict,
+            kind: UnsafeHost::AlreadyAttached | UnsafeHost::OperationConflict,
         } => ResourceErrorKind::ResourceConflict,
         _ => ResourceErrorKind::InternalIntegrityFailure,
     };
