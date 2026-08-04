@@ -3008,16 +3008,13 @@ fn days_to_ymd(days_since_epoch: i64) -> (i32, u32, u32) {
     (year, m, d)
 }
 
-/// Test-only seam letting an accept-loop test substitute the exec owner body so
-/// it can HOLD the owner session open. Without it, `run_exec_owner` fails fast
-/// at `load_bundle_resolver` under default test state and returns immediately,
-/// so a test could not distinguish an off-loop spawn from an inline call. The
-/// hook is consulted at the top of `run_exec_owner` (the owner body itself), so
-/// an inline `handle_connection` would block in it on the accept-loop thread; it
-/// is `None` in every build except a test that installs it, and production
-/// builds compile it out entirely.
+/// Test-only seam letting accept-loop tests substitute a long-lived owner body.
+/// The hook is consulted at the top of the owner body itself, so an inline
+/// `handle_connection` would block in it on the accept-loop thread. It is
+/// `None` in every build except a test that installs it, and production builds
+/// compile it out entirely.
 #[cfg(test)]
-mod exec_owner_test_hook {
+mod owner_connection_test_hook {
     use std::sync::{Arc, Mutex, OnceLock};
 
     pub(crate) type Hook = Arc<dyn Fn() + Send + Sync>;
@@ -3028,15 +3025,15 @@ mod exec_owner_test_hook {
     }
 
     pub(crate) fn set(hook: Hook) {
-        *slot().lock().expect("exec owner hook lock") = Some(hook);
+        *slot().lock().expect("owner connection hook lock") = Some(hook);
     }
 
     pub(crate) fn clear() {
-        *slot().lock().expect("exec owner hook lock") = None;
+        *slot().lock().expect("owner connection hook lock") = None;
     }
 
     pub(crate) fn active() -> Option<Hook> {
-        slot().lock().expect("exec owner hook lock").clone()
+        slot().lock().expect("owner connection hook lock").clone()
     }
 }
 
@@ -3065,10 +3062,10 @@ fn handle_connection(
 
 /// Connection body for an already-authorized peer. Reads the hello frame
 /// (deadlined), negotiates the wire version, then serves requests on a
-/// deadlined per-frame read loop. An attached `Exec::Start` takes over
-/// the connection on a spawned owner thread, moving the admission
-/// `permit` with it so the in-flight slot is held until the exec session
-/// (owner) terminates.
+/// deadlined per-frame read loop. An attached `Exec::Start` or typed-shell
+/// request takes over the connection on a spawned owner thread, moving the
+/// admission `permit` with it so the in-flight slot is held until the owner
+/// session terminates.
 fn handle_connection_authorized(
     stream: Socket,
     state: &ServerState,
@@ -3173,11 +3170,14 @@ fn handle_connection_authorized(
             let owner_state = state.clone();
             let owner_peer = peer.clone();
             let owner_request = resource.value();
-            match std::thread::Builder::new()
-                .name("d2b-typed-shell-owner".to_owned())
-                .spawn(move || {
-                    run_typed_shell_owner(stream, owner_state, owner_peer, owner_request);
-                }) {
+            let owner_permit = permit;
+            match spawn_typed_shell_owner(
+                stream,
+                owner_state,
+                owner_peer,
+                owner_request,
+                owner_permit,
+            ) {
                 Ok(_) => return Ok(()),
                 Err(err) => {
                     return Err(TypedError::InternalIo {
@@ -9300,7 +9300,37 @@ fn resolve_typed_shell_session_target(
     })
 }
 
-fn run_typed_shell_owner(stream: Socket, state: ServerState, peer: PeerIdentity, request: Value) {
+fn spawn_typed_shell_owner(
+    stream: Socket,
+    state: ServerState,
+    peer: PeerIdentity,
+    request: Value,
+    permit: Option<concurrency::ConnPermit>,
+) -> io::Result<thread::JoinHandle<()>> {
+    thread::Builder::new()
+        .name("d2b-typed-shell-owner".to_owned())
+        .spawn(move || {
+            run_typed_shell_owner(stream, state, peer, request, permit);
+        })
+}
+
+fn run_typed_shell_owner(
+    stream: Socket,
+    state: ServerState,
+    peer: PeerIdentity,
+    request: Value,
+    // Admission permit held for the lifetime of the typed-shell owner
+    // connection so the in-flight slot is released only on owner exit.
+    _conn_permit: Option<concurrency::ConnPermit>,
+) {
+    #[cfg(test)]
+    {
+        if let Some(hook) = owner_connection_test_hook::active() {
+            hook();
+            drop(stream);
+            return;
+        }
+    }
     let rt = match tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -10611,7 +10641,7 @@ fn run_exec_owner(
     // accept-loop thread, so its caller would never observe a prompt return.
     #[cfg(test)]
     {
-        if let Some(hook) = exec_owner_test_hook::active() {
+        if let Some(hook) = owner_connection_test_hook::active() {
             hook();
             drop(stream);
             return;
@@ -24381,13 +24411,13 @@ mod accept_loop_concurrency_tests {
         struct HookGuard;
         impl Drop for HookGuard {
             fn drop(&mut self) {
-                exec_owner_test_hook::clear();
+                owner_connection_test_hook::clear();
             }
         }
         let _hook_guard = HookGuard;
 
         let hook_shared = Arc::clone(&shared);
-        let hook: exec_owner_test_hook::Hook = Arc::new(move || {
+        let hook: owner_connection_test_hook::Hook = Arc::new(move || {
             let (lock, cv) = &*hook_shared;
             {
                 let mut s = lock.lock().expect("hook state lock");
@@ -24402,7 +24432,7 @@ mod accept_loop_concurrency_tests {
             s.running = false;
             cv.notify_all();
         });
-        exec_owner_test_hook::set(hook);
+        owner_connection_test_hook::set(hook);
 
         // --- Connection A: opens a long-lived exec owner session. ---
         let (server_a, client_a) = seqpacket_pair();
@@ -24508,6 +24538,74 @@ mod accept_loop_concurrency_tests {
 
         // Connection A's owner session is torn down with its client end.
         drop(client_a);
+    }
+
+    #[test]
+    fn typed_shell_owner_keeps_admission_permit_until_owner_exits() {
+        use std::sync::Mutex;
+
+        // Serialize this process-global owner hook with the exec handoff test.
+        let _env = PeerOverrideEnv::admin();
+        let (mut state, _state_dir) = admin_exec_state();
+        state.conn_semaphore = crate::concurrency::ConnSemaphore::new(1);
+        let semaphore = state.conn_semaphore.clone();
+        let permit = semaphore.try_acquire().expect("cap admits owner permit");
+        let (entered_tx, entered_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let release_rx = Arc::new(Mutex::new(release_rx));
+
+        struct HookGuard;
+        impl Drop for HookGuard {
+            fn drop(&mut self) {
+                owner_connection_test_hook::clear();
+            }
+        }
+        let _hook_guard = HookGuard;
+
+        let hook_release_rx = Arc::clone(&release_rx);
+        let hook: owner_connection_test_hook::Hook = Arc::new(move || {
+            entered_tx
+                .send(())
+                .expect("typed shell owner entered receiver");
+            hook_release_rx
+                .lock()
+                .expect("typed shell owner release lock")
+                .recv()
+                .expect("typed shell owner release signal");
+        });
+        owner_connection_test_hook::set(hook);
+
+        let (server, _client) = seqpacket_pair();
+        let owner = spawn_typed_shell_owner(
+            server,
+            state,
+            admin_peer_identity(),
+            json!({}),
+            Some(permit),
+        )
+        .expect("spawn typed shell owner");
+
+        entered_rx
+            .recv_timeout(Duration::from_secs(10))
+            .expect("typed shell owner was not entered");
+
+        assert_eq!(
+            semaphore.in_flight(),
+            1,
+            "owner retains the connection permit while it is alive"
+        );
+        assert!(
+            semaphore.try_acquire().is_none(),
+            "the held owner permit keeps the connection cap saturated"
+        );
+
+        release_tx.send(()).expect("release typed shell owner");
+        owner.join().expect("typed shell owner joins");
+        assert_eq!(
+            semaphore.in_flight(),
+            0,
+            "owner permit releases when the owner exits"
+        );
     }
 
     /// fix2b: SO_PEERCRED authorization runs in `handle_connection` BEFORE the
