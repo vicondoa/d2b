@@ -14,6 +14,7 @@ import signal
 import shlex
 import shutil
 import subprocess
+import sys
 import tempfile
 import time
 import types
@@ -591,7 +592,7 @@ set -euo pipefail
         self.assertIn("nix-unit-shards", rollup_job)
         self.assertIn("Every discovered Nix-unit shard passed.", rollup_job)
 
-    def test_nix_unit_driver_uses_one_full_corpus_eval_jobs_path(self) -> None:
+    def test_nix_unit_driver_uses_bounded_topical_eval_jobs_paths(self) -> None:
         driver = executable_shell_source(source_text(NIX_UNIT_DRIVER))
         flake = (ROOT / "flake.nix").read_text(encoding="utf-8")
         eval_jobs = (ROOT / "tests" / "unit" / "nix" / "eval-jobs.nix").read_text(
@@ -599,7 +600,10 @@ set -euo pipefail
         )
 
         runner_calls = list(
-            re.finditer(r"(?m)^\s*(?:if\s+)?nix-eval-jobs\b", driver)
+            re.finditer(
+                r"(?m)^\s*(?:if\s+)?(?:setsid\s+)?nix-eval-jobs\b",
+                driver,
+            )
         )
         self.assertEqual(
             len(runner_calls),
@@ -614,8 +618,8 @@ set -euo pipefail
         self.assertIn("--no-instantiate", invocation)
         self.assertRegex(
             invocation,
-            r"--flake\s+[^\n]*nixUnitJobs[^\n]*"
-            r"--workers\s+[\"']?\$[A-Za-z_][A-Za-z0-9_]*[\"']?[^\n]*"
+            r"--flake\s+[^\n]*nixUnitJobShards[^\n]*"
+            r"--workers\s+1[^\n]*"
             r"--max-memory-size\s+[\"']?\$[A-Za-z_][A-Za-z0-9_]*[\"']?",
         )
 
@@ -634,11 +638,12 @@ set -euo pipefail
         jobs_block = flake[jobs_match.start() : inventory_match.start()]
         self.assertIn("fileJobs", jobs_block)
         self.assertIn("nixUnitCorpus.fileJobs", jobs_block)
+        self.assertIn("nixUnitJobShards", jobs_block)
+        self.assertIn("jobsFor", jobs_block)
         self.assertIn("nix-unit = self.checks.${system}.nix-unit", jobs_block)
-        self.assertEqual(jobs_block.count("self.checks"), 1)
+        self.assertGreaterEqual(jobs_block.count("self.checks"), 1)
         self.assertNotIn("nixUnitCorpus.jobs", jobs_block)
         self.assertNotIn("__nix_unit_integrity", jobs_block)
-        self.assertNotIn("jobsFor", flake)
 
         inventory_block = flake[inventory_match.start() :]
         self.assertIn("nixUnitInventory = forAllSystems", inventory_block)
@@ -726,7 +731,7 @@ set -euo pipefail
             driver,
             "successful full runs must not dump the raw JSONL result file",
         )
-        self.assertIn('2>"$tool_stderr"', driver)
+        self.assertIn('2>"$shard_stderr"', driver)
         self.assertIn("emit_sanitized_tool_stderr()", driver)
         self.assertIn(
             'while IFS= read -r line || [ -n "$line" ]; do',
@@ -1094,7 +1099,11 @@ printf '%s\n' "$sanitized_line"
             }
             env.update(overrides)
             result = subprocess.run(
-                ["bash", str(NIX_UNIT_DRIVER)],
+                [
+                    "bash",
+                    str(NIX_UNIT_DRIVER),
+                    "--internal-peak-rss-guarded",
+                ],
                 cwd=ROOT,
                 env=env,
                 stdout=subprocess.PIPE,
@@ -1106,27 +1115,15 @@ printf '%s\n' "$sanitized_line"
             self.assertEqual(result.stdout, "")
             self.assertEqual(result.stderr, expected_stderr)
 
-    def test_nix_unit_does_not_add_a_repository_specific_scheduler(self) -> None:
+    def test_nix_unit_uses_a_bounded_process_group_scheduler(self) -> None:
         driver = executable_shell_source(source_text(NIX_UNIT_DRIVER))
-        for marker in (
-            "declare -a pids",
-            "launch_check()",
-            "reap_next()",
-            "next_to_wait",
-            'while [ "$running"',
-            'kill "$pid"',
-            'pids+=("$!")',
-        ):
-            self.assertNotIn(
-                marker,
-                driver,
-                msg=f"repository-specific Nix scheduler marker remains: {marker}",
-            )
-        self.assertNotRegex(
-            driver,
-            r"(?m)^\s*(?:[A-Za-z_][A-Za-z0-9_]*\s*=\s*)?[^#\n]*&\s*$",
-            "the Nix-unit driver must not launch a shell worker pool",
-        )
+        self.assertIn("shard_pids=()", driver)
+        self.assertIn("shard_statuses=()", driver)
+        self.assertIn("shard_workers", driver)
+        self.assertIn("harvest_nix_unit_shard()", driver)
+        self.assertIn("settle_nix_unit_process_group()", driver)
+        self.assertIn("setsid nix-eval-jobs", driver)
+        self.assertIn('kill -TERM -- "-$pid"', driver)
         self.assertRegex(
             driver,
             r"(?i)(?:nix-unit|lix-unit|nix-eval-jobs|"
@@ -1156,6 +1153,200 @@ printf '%s\n' "$sanitized_line"
         self.assertNotIn("checks.${contract_system}.fixture-smoke", driver)
         self.assertIn("nix eval", fixture_driver)
         self.assertNotIn("nix build", fixture_driver)
+
+    def test_eval_fixture_keeps_full_contracts_off_vm_closure_and_ifd_paths(self) -> None:
+        flake = (ROOT / "flake.nix").read_text(encoding="utf-8")
+        fixture_driver = (ROOT / "tests" / "tools" / "eval-fixtures.sh").read_text(
+            encoding="utf-8"
+        )
+
+        # The full fixture validates feature-specific process and minijail
+        # records, not closure JSON. Keep the eval-only projection from
+        # traversing the legacy VM closure table.
+        self.assertRegex(
+            flake,
+            r"full\s*=\s*renderEvalFixture\s*\{\s*"
+            r"evaluated\s*=\s*fullEvalFixture;\s*"
+            r"includeClosures\s*=\s*false;\s*"
+            r"processData\s*=\s*fullProcessFixtureData;\s*\};",
+        )
+        full_fixture = re.search(
+            r"fullFixture\s*=.*?(?=\n\s*# Rust tests reach)",
+            flake,
+            flags=re.DOTALL,
+        )
+        self.assertIsNotNone(full_fixture)
+        assert full_fixture is not None
+        self.assertNotIn("config.d2b._bundle.closures", full_fixture.group(0))
+
+        # The production catalog remains IFD-backed, but empty eval fixtures
+        # must replace it at the fixture boundary with deterministic data.
+        self.assertIn("fixtureArtifactCatalogOverride", flake)
+        self.assertIn(
+            "d2b._bundle.extraArtifacts.artifactCatalog =\n"
+            "            lib.mkOverride 0 fixtureArtifactCatalogArtifact",
+            flake,
+        )
+        self.assertIn("fullProcessFixtureData", flake)
+        self.assertIn('"corp-full" "sys-work-usbipd" "sys-obs"', flake)
+        self.assertIn('node.id == "otel-host-bridge"', flake)
+        self.assertIn("processData = fullProcessFixtureData", flake)
+        self.assertIn("d2b_flake_ref", fixture_driver)
+        self.assertNotIn("fixture-smoke-full", fixture_driver)
+
+    def test_peak_rss_guards_fail_and_pass_for_both_eval_lanes(self) -> None:
+        helper = ROOT / "tests" / "tools" / "peak-rss.py"
+        self.assertTrue(helper.is_file(), "peak RSS helper is missing")
+
+        common_cause = (
+            "full NixOS/VM system.build.toplevel",
+            "pkgs.closureInfo",
+            "derivation realization/IFD",
+            "narrow attr-local fixture",
+            "shared evaluated scenario",
+            "stubbed evaluation boundary",
+        )
+        for lane in ("nix-unit", "flake"):
+            failed = subprocess.run(
+                [
+                    sys.executable,
+                    str(helper),
+                    "--lane",
+                    lane,
+                    "--max-kib",
+                    "1",
+                    "--",
+                    sys.executable,
+                    "-c",
+                    "import time; x = [0] * 1000000; time.sleep(1)",
+                ],
+                cwd=ROOT,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(
+                failed.returncode,
+                125,
+                msg=f"{lane} low-threshold guard unexpectedly passed:\n{failed.stderr}",
+            )
+            self.assertIn(f"{lane} peak RSS guard failed", failed.stderr)
+            self.assertIn("observed", failed.stderr)
+            self.assertIn("maximum", failed.stderr)
+            for phrase in common_cause:
+                self.assertIn(phrase, failed.stderr)
+
+            active_code = (
+                "import os, signal, time; "
+                "signal.signal(signal.SIGTERM, signal.SIG_IGN); "
+                "child = os.fork(); "
+                "signal.signal(signal.SIGTERM, signal.SIG_IGN); "
+                "print(child, flush=True); time.sleep(30)"
+            )
+            started = time.monotonic()
+            active = subprocess.run(
+                [
+                    sys.executable,
+                    str(helper),
+                    "--lane",
+                    lane,
+                    "--max-kib",
+                    "1",
+                    "--",
+                    sys.executable,
+                    "-c",
+                    active_code,
+                ],
+                cwd=ROOT,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(
+                active.returncode,
+                125,
+                msg=f"{lane} active-termination guard unexpectedly passed:\n"
+                f"{active.stderr}",
+            )
+            self.assertLess(
+                time.monotonic() - started,
+                5,
+                msg=f"{lane} guard did not actively terminate promptly:\n"
+                f"{active.stderr}",
+            )
+            self.assertIn(f"{lane} peak RSS guard failed", active.stderr)
+
+            passed = subprocess.run(
+                [
+                    sys.executable,
+                    str(helper),
+                    "--lane",
+                    lane,
+                    "--max-kib",
+                    "100000",
+                    "--",
+                    sys.executable,
+                    "-c",
+                    "import time; print('rss-self-test'); time.sleep(1)",
+                ],
+                cwd=ROOT,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(
+                passed.returncode,
+                0,
+                msg=f"{lane} normal-threshold guard failed:\n{passed.stderr}",
+            )
+            self.assertIn(f"{lane} peak RSS:", passed.stderr)
+
+            unmeasured_code = (
+                "import importlib.util, sys; "
+                f"s = importlib.util.spec_from_file_location('peak_rss_test', "
+                f"{str(helper)!r}); "
+                "m = importlib.util.module_from_spec(s); s.loader.exec_module(m); "
+                "m.process_rss_kib = lambda root: None; "
+                "m.cgroup_current_kib = lambda pid: None; "
+                f"sys.argv = ['peak-rss.py', '--lane', {lane!r}, "
+                "'--max-kib', '100000', '--', sys.executable, '-c', "
+                "'import time; time.sleep(1)']; "
+                "raise SystemExit(m.main())"
+            )
+            unmeasured = subprocess.run(
+                [sys.executable, "-c", unmeasured_code],
+                cwd=ROOT,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(
+                unmeasured.returncode,
+                125,
+                msg=f"{lane} unmeasured guard unexpectedly passed:\n"
+                f"{unmeasured.stderr}",
+            )
+            self.assertIn(
+                "could not obtain process-tree or cgroup resident memory",
+                unmeasured.stderr,
+            )
+
+        nix_runner = (ROOT / "tests" / "test-nix-unit.sh").read_text(
+            encoding="utf-8"
+        )
+        flake_runner = (ROOT / "tests" / "test-flake.sh").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("NIX_UNIT_RSS_MAX_KIB=10683720", nix_runner)
+        self.assertIn("FLAKE_RSS_MAX_KIB=14665373", flake_runner)
+        self.assertIn("tests/tools/peak-rss.py", nix_runner)
+        self.assertIn("tests/tools/peak-rss.py", flake_runner)
+        self.assertIn("--lane nix-unit", nix_runner)
+        self.assertIn("--lane flake", flake_runner)
 
     def test_realized_flake_check_gets_its_own_unblocked_lane(self) -> None:
         manifest = load_layer1_jobs().load_manifest()

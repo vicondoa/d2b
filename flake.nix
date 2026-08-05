@@ -41,6 +41,59 @@
           cp ${./tests/fixtures/guest-rust-workspace/Cargo.toml} \
             $out/packages/Cargo.toml
         '';
+      # Eval-only Nix-unit configurations do not need the production
+      # artifact-catalog IFD. Keep an explicit escape for the catalog contract
+      # case, which supplies its own non-empty fixture and source assertions.
+      nixUnitCatalogFixtureFor = pkgs:
+        { config, lib, ... }:
+        let
+          data = {
+            schemaVersion = 3;
+            entries = [ ];
+          };
+          preimageJson = builtins.toJSON data;
+          digest = "sha256:${builtins.hashString
+            "sha256"
+            (builtins.toJSON {
+              domain = "d2b:v3:artifact-catalog";
+              framing = "d2b-digest/v1";
+              payload = preimageJson;
+            })}";
+          document = data // { catalogDigest = digest; };
+          json = builtins.toJSON document;
+          path = pkgs.writeText "d2b-artifact-catalog-nix-unit-fixture"
+            "${json}\n";
+        in
+        {
+          options.d2b._nixUnitCatalogFixture = lib.mkOption {
+            type = lib.types.bool;
+            default = true;
+            internal = true;
+            visible = false;
+          };
+          config = lib.mkIf config.d2b._nixUnitCatalogFixture {
+            d2b._artifactCatalogV3 = lib.mkForce {
+              ids = [ ];
+              artifactRows = [ ];
+              preimage = data;
+              inherit preimageJson;
+              catalogDigest = digest;
+              catalogData = document;
+              catalogJson = json;
+              inherit path;
+              publicEntries = [ ];
+            };
+            d2b._bundle.extraArtifacts.artifactCatalog =
+              lib.mkOverride 0 {
+                inherit data path;
+                jsonText = json;
+                installFileName = "artifact-catalog.json";
+                classification = "contractPrivateNonSecret";
+                sensitivity = "nonSecret";
+              };
+          };
+        };
+
       # The Nix-unit corpus is shared by the topical flake checks, the
       # per-file nix-eval-jobs surface, and the locked inventory. Keep the
       # evaluator context in one constructor so those surfaces cannot drift.
@@ -56,6 +109,7 @@
                 d2b.site.usePrebuiltHostTools =
                   lib.mkDefault (system == "x86_64-linux");
               })
+              (nixUnitCatalogFixtureFor pkgs)
             ] ++ modules;
           };
         in
@@ -68,6 +122,102 @@
           nixpkgsFlake = nixpkgs;
           inherit d2bModule;
         };
+      nixUnitShardCaseFiles = {
+        nix-unit-daemon = [
+          "activation-runtime-tmpfiles.nix"
+          "broker-bundle-path.nix"
+          "broker-caps.nix"
+          "broker-service-posture.nix"
+          "broker-socket-activation.nix"
+          "bundle-artifacts-compiler.nix"
+          "bundle-artifacts-digest.nix"
+          "bundle-artifacts-envelope.nix"
+          "daemon-autostart.nix"
+          "daemon-default-compat.nix"
+          "gateway-vm.nix"
+          "gateway-vm-1.nix"
+          "gateway-vm-2.nix"
+          "gateway-vm-3.nix"
+          "gateway-vm-guest.nix"
+          "d2bd-startup-smoke.nix"
+        ];
+        nix-unit-guest = [
+          "guest-config-containment.nix"
+          "guest-control-auth.nix"
+          "guest-control-vsock.nix"
+          "guest-control-vsock-extra-equals.nix"
+          "guest-control-vsock-extra-split.nix"
+          "guest-control-vsock-long-socket.nix"
+          "guest-control-vsock-user-cid.nix"
+          "guest-control-vsock-user-socket.nix"
+          "guest-exec-policy.nix"
+          "guest-shell-policy.nix"
+        ];
+        nix-unit-misc = [
+          "assertions.nix"
+          "assertions-1.nix"
+          "assertions-2.nix"
+          "assertions-3.nix"
+          "autostart-wiring.nix"
+          "examples-with-observability.nix"
+          "ifname-nix-rust-parity.nix"
+          "observability.nix"
+          "observability-guest.nix"
+          "observability-host-collector.nix"
+          "observability-host-collector-extra.nix"
+          "observability-host-collector-otlp.nix"
+          "observability-host-collector-processor-split.nix"
+          "observability-host-collector-identity.nix"
+          "observability-host-collector-umask.nix"
+          "observability-host-collector-flags.nix"
+          "provider-catalog.nix"
+          "provider-elf-shim.nix"
+          "provider-projection-exportability.nix"
+          "provider-projection-fields.nix"
+          "readiness-waves.nix"
+          "resource-sharing.nix"
+          "resources-bundle-telemetry.nix"
+          "restart-policy.nix"
+          "test-infrastructure.nix"
+          "usb-security-key.nix"
+          "vm-eval-overlays.nix"
+        ];
+        nix-unit-network = [
+          "bridge-ipv6-boot-sysctl.nix"
+          "generation-cleanup-absent-network.nix"
+          "index.nix"
+          "multi-env-daemon-backed.nix"
+          "net-vm-network.nix"
+          "realm-workloads.nix"
+          "realms.nix"
+          "realms-artifacts.nix"
+          "realms-controller.nix"
+          "realms-examples.nix"
+          "realms-host-local.nix"
+          "realms-identity.nix"
+          "realms-rejections.nix"
+          "realms-workloads.nix"
+          "realms-zone-control.nix"
+          "usbip-gating.nix"
+        ];
+        nix-unit-runtime = [
+          "clipboard.nix"
+          "external-vm-kind.nix"
+          "external-vm-kind-rejections.nix"
+          "external-vm-kind-runtime.nix"
+          "niri-vm-borders.nix"
+          "requested-vm-config.nix"
+          "security-key-gating.nix"
+          "video-contract.nix"
+        ];
+        nix-unit-state = [
+          "per-vm-state-ownership.nix"
+          "principal-uid-collision.nix"
+          "store-overlay-emit.nix"
+          "umask-roundtrip.nix"
+          "volume-mounts.nix"
+        ];
+      };
     in
     {
       # The public surface area - populated incrementally by the
@@ -495,6 +645,58 @@
             };
           };
         };
+        # The eval-only fixtures contain no authored v3 artifacts. Keep their
+        # catalog projection deterministic instead of forcing the production
+        # artifact-catalog IFD (`runCommand` + `builtins.readFile`) while
+        # rendering an otherwise unrelated VM fixture. The production module
+        # remains the authority for real configurations with authored
+        # artifacts; this is only the fixture boundary for the empty case.
+        fixtureArtifactCatalogData = {
+          schemaVersion = 3;
+          entries = [ ];
+        };
+        fixtureArtifactCatalogPreimageJson =
+          builtins.toJSON fixtureArtifactCatalogData;
+        fixtureArtifactCatalogDigest = "sha256:${builtins.hashString
+          "sha256"
+          (builtins.toJSON {
+            domain = "d2b:v3:artifact-catalog";
+            framing = "d2b-digest/v1";
+            payload = fixtureArtifactCatalogPreimageJson;
+          })}";
+        fixtureArtifactCatalogDocument = fixtureArtifactCatalogData // {
+          catalogDigest = fixtureArtifactCatalogDigest;
+        };
+        fixtureArtifactCatalogJson =
+          builtins.toJSON fixtureArtifactCatalogDocument;
+        fixtureArtifactCatalogPath = pkgs.writeText
+          "d2b-artifact-catalog-eval-fixture.json"
+          "${fixtureArtifactCatalogJson}\n";
+        fixtureArtifactCatalogProjection = {
+          ids = [ ];
+          artifactRows = [ ];
+          preimage = fixtureArtifactCatalogData;
+          preimageJson = fixtureArtifactCatalogPreimageJson;
+          catalogDigest = fixtureArtifactCatalogDigest;
+          catalogData = fixtureArtifactCatalogDocument;
+          catalogJson = fixtureArtifactCatalogJson;
+          path = fixtureArtifactCatalogPath;
+          publicEntries = [ ];
+        };
+        fixtureArtifactCatalogArtifact = {
+          data = fixtureArtifactCatalogData;
+          jsonText = fixtureArtifactCatalogJson;
+          path = fixtureArtifactCatalogPath;
+          installFileName = "artifact-catalog.json";
+          classification = "contractPrivateNonSecret";
+          sensitivity = "nonSecret";
+        };
+        fixtureArtifactCatalogOverride = { lib, ... }: {
+          d2b._artifactCatalogV3 = lib.mkForce
+            fixtureArtifactCatalogProjection;
+          d2b._bundle.extraArtifacts.artifactCatalog =
+            lib.mkOverride 0 fixtureArtifactCatalogArtifact;
+        };
         smokeEval = mkEval [
           smokeConfigModule
           ({ lib, ... }: {
@@ -504,15 +706,21 @@
             # and helper paths from the rendered artifact tests.
             d2b.site.usePrebuiltHostTools = lib.mkForce false;
           })
+          fixtureArtifactCatalogOverride
         ];
-        renderEvalFixture = evaluated: let
+        renderEvalFixture = {
+          evaluated
+        , includeClosures ? true
+        , processData ? null
+        }: let
           bundle = evaluated.config.d2b._bundle;
           top = name: bundle.${name}.fixtureData;
         in {
           files = {
             "privileges.json" = top "privilegesJson";
             "host.json" = top "hostJson";
-            "processes.json" = top "processesJson";
+            "processes.json" =
+              if processData == null then top "processesJson" else processData;
             "storage.json" = top "storageJson";
             "sync.json" = top "syncJson";
             "allocator.json" = top "allocatorJson";
@@ -524,7 +732,9 @@
             "bundle.json" = top "bundle";
             "manifest.json" = evaluated.config.d2b._manifestData;
           };
-          closures = pkgs.lib.mapAttrs (_: closure: closure.data) bundle.closures;
+          closures = if includeClosures
+            then pkgs.lib.mapAttrs (_: closure: closure.data) bundle.closures
+            else { };
         };
         smokeFixture = let
           bundle = smokeEval.config.d2b._bundle;
@@ -611,16 +821,82 @@
         fullEval = mkEval [
           fullConfigModule
           ({ lib, ... }: {
-            # See smokeEval above: fixture-smoke-full is a rendered-contract
-            # oracle, so it must consume source-built host tools.
+            # See smokeEval above: the feature-rich fixture is a rendered
+            # contract oracle, so it must consume source-built host tools.
             d2b.site.usePrebuiltHostTools = lib.mkForce false;
           })
+          fixtureArtifactCatalogOverride
         ];
+        # The eval-rendered full fixture validates the serialized runner and
+        # minijail contracts, not the guest kernel or hypervisor binaries.
+        # Keep those package edges deterministic and narrow in this fixture
+        # only. The real `fullEval` remains the source for the realized video
+        # command-surface check and the explicit full fixture derivation.
+        fixtureKernel = {
+          dev = pkgs.runCommand "linux-6.18.33-dev" { } ''
+            mkdir -p "$out"
+            touch "$out/vmlinux"
+          '';
+          out = pkgs.runCommand "linux-6.18.33" { } ''
+            mkdir -p "$out"
+          '';
+        };
+        fixtureInitrd = pkgs.runCommand "initrd-linux-6.18.33" { } ''
+          mkdir -p "$out"
+          touch "$out/initrd"
+        '';
+        fixtureVmPackage = name:
+          pkgs.writeShellScriptBin name "exit 0";
+        fullFixtureVmTools = { lib, ... }: {
+          d2b.vms.corp-full.config.microvm = {
+            kernel = lib.mkForce fixtureKernel;
+            initrdPath = lib.mkForce "${fixtureInitrd}/initrd";
+            cloud-hypervisor.package = lib.mkForce
+              (fixtureVmPackage "cloud-hypervisor");
+            virtiofsd.package = lib.mkForce
+              (fixtureVmPackage "virtiofsd");
+            graphics.crosvmPackage = lib.mkForce
+              (fixtureVmPackage "crosvm");
+          };
+        };
+        fullEvalFixture = mkEval [
+          fullConfigModule
+          fullFixtureVmTools
+          ({ lib, ... }: {
+            d2b.site.usePrebuiltHostTools = lib.mkForce false;
+          })
+          fixtureArtifactCatalogOverride
+        ];
+        fullProcessFixtureData =
+          let
+            data = fullEvalFixture.config.d2b._bundle.processesJson.fixtureData;
+          in
+          data // {
+            # Full contract consumers need the feature VM, the env's usbipd
+            # backend/proxy, and the observability host bridge. They do not
+            # consume the auto-declared net DAG, so do not force that
+            # unrelated runner subgraph through the eval-only projection.
+            vms = pkgs.lib.map
+              (dag:
+                if dag.vm == "sys-obs" then
+                  dag // {
+                    nodes = pkgs.lib.filter
+                      (node: node.id == "otel-host-bridge")
+                      dag.nodes;
+                  }
+                else
+                  dag)
+              (pkgs.lib.filter
+                (dag:
+                  builtins.elem dag.vm
+                    [ "corp-full" "sys-work-usbipd" "sys-obs" ])
+                data.vms);
+          };
         fullFixture = let
           bundle = fullEval.config.d2b._bundle;
           manifestPkg = fullEval.config.d2b._manifestPkg;
         in pkgs.runCommand "d2b-fixture-smoke-full" { } ''
-          mkdir -p $out $out/closures
+          mkdir -p $out
           cp ${bundle.privilegesJson.path} $out/privileges.json
           cp ${bundle.hostJson.path} $out/host.json
           cp ${bundle.processesJson.path} $out/processes.json
@@ -631,13 +907,19 @@
           cp ${bundle.realmIdentityJson.path} $out/realm-identity.json
           cp ${bundle.bundle.path} $out/bundle.json
           cp ${manifestPkg}/share/d2b/vms.json $out/manifest.json
-          ${nixpkgs.lib.concatStringsSep "\n" (nixpkgs.lib.mapAttrsToList
-            (vm: c: "cp ${c.path} $out/closures/${vm}.json")
-            fullEval.config.d2b._bundle.closures)}
         '';
         evalFixtureData = {
-          minimal = renderEvalFixture smokeEval;
-          full = renderEvalFixture fullEval;
+          minimal = renderEvalFixture {
+            evaluated = smokeEval;
+          };
+          # Full fixture consumers validate feature-specific bundle/process
+          # contracts only. They do not consume closure JSON, so do not force
+          # the VM closure graph back through this eval-only surface.
+          full = renderEvalFixture {
+            evaluated = fullEvalFixture;
+            includeClosures = false;
+            processData = fullProcessFixtureData;
+          };
         };
         fullProcessDags = fullEval.config.d2b._bundle.processesJson.data.vms;
         fullCorpDag = pkgs.lib.findFirst (dag: dag.vm == "corp-full")
@@ -738,78 +1020,6 @@
             commit -q -m 'advisory-db snapshot'
         '';
 
-        # --- W2 nix-unit layer -------------------------------------------
-        # Hermetic pure-eval comparison runner over the tests/unit/nix
-        # corpus ({ expr; expected; } / { expr; expectedError; } cases).
-        # NO recursive-nix / IFD: each case is compared at flake-eval time
-        # and the verdict baked into a tiny runCommand. The same corpus is
-        # CLI-compatible with upstream `nix-unit` for local iteration.
-        nixUnitShardCaseFiles = {
-          nix-unit-daemon = [
-            "activation-runtime-tmpfiles.nix"
-            "broker-bundle-path.nix"
-            "broker-caps.nix"
-            "broker-service-posture.nix"
-            "broker-socket-activation.nix"
-            "bundle-artifacts-compiler.nix"
-            "bundle-artifacts-digest.nix"
-            "bundle-artifacts-envelope.nix"
-            "daemon-autostart.nix"
-            "daemon-default-compat.nix"
-            "gateway-vm.nix"
-            "d2bd-startup-smoke.nix"
-          ];
-          nix-unit-guest = [
-            "guest-config-containment.nix"
-            "guest-control-auth.nix"
-            "guest-control-vsock.nix"
-            "guest-exec-policy.nix"
-            "guest-shell-policy.nix"
-          ];
-          nix-unit-misc = [
-            "assertions.nix"
-            "autostart-wiring.nix"
-            "examples-with-observability.nix"
-            "ifname-nix-rust-parity.nix"
-            "observability.nix"
-            "provider-catalog.nix"
-            "provider-elf-shim.nix"
-            "provider-projection-exportability.nix"
-            "provider-projection-fields.nix"
-            "readiness-waves.nix"
-            "resource-sharing.nix"
-            "resources-bundle-telemetry.nix"
-            "restart-policy.nix"
-            "test-infrastructure.nix"
-            "usb-security-key.nix"
-            "vm-eval-overlays.nix"
-          ];
-          nix-unit-network = [
-            "bridge-ipv6-boot-sysctl.nix"
-            "generation-cleanup-absent-network.nix"
-            "index.nix"
-            "multi-env-daemon-backed.nix"
-            "net-vm-network.nix"
-            "realm-workloads.nix"
-            "realms.nix"
-            "usbip-gating.nix"
-          ];
-          nix-unit-runtime = [
-            "clipboard.nix"
-            "external-vm-kind.nix"
-            "niri-vm-borders.nix"
-            "requested-vm-config.nix"
-            "security-key-gating.nix"
-            "video-contract.nix"
-          ];
-          nix-unit-state = [
-            "per-vm-state-ownership.nix"
-            "principal-uid-collision.nix"
-            "store-overlay-emit.nix"
-            "umask-roundtrip.nix"
-            "volume-mounts.nix"
-          ];
-        };
         nixUnitCaseFileNames = nixUnitCorpus.caseFileNames;
         nixUnitShardFiles = pkgs.lib.concatLists (pkgs.lib.attrValues nixUnitShardCaseFiles);
         nixUnitShardMissingFiles =
@@ -1331,6 +1541,35 @@
         in
         nixUnitCorpus.fileJobs // {
           nix-unit = self.checks.${system}.nix-unit;
+        }
+      );
+
+      # Evaluate file jobs in existing topical shard processes. This keeps
+      # coverage and the locked file-job inventory unchanged while preventing
+      # one nix-eval-jobs worker from retaining every large scenario graph for
+      # the entire corpus.
+      nixUnitJobShards = forAllSystems (system:
+        let
+          pkgs = nixpkgsFor.${system};
+          nixUnitCorpus = nixUnitCorpusFor system;
+          jobsFor = files:
+            pkgs.lib.filterAttrs
+              (jobName: _:
+                builtins.elem
+                  "${pkgs.lib.removePrefix "case-" jobName}.nix"
+                  files)
+              nixUnitCorpus.fileJobs;
+          fileGroups = pkgs.lib.listToAttrs (map
+            (file: {
+              name = "case-${pkgs.lib.removeSuffix ".nix" file}";
+              value = jobsFor [ file ];
+            })
+            nixUnitCorpus.caseFileNames);
+        in
+        fileGroups // {
+          integrity = {
+            nix-unit = self.checks.${system}.nix-unit;
+          };
         }
       );
 

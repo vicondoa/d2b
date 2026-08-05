@@ -322,6 +322,38 @@ status. This evidence supplements source discovery and does not replace
 `make test-policy` or
 `D2B_ENABLE_FIXTURE_BUILD=1 make test-fixture-contracts`.
 
+The complete `test-nix-unit` and `test-flake` runners are protected by
+`tests/tools/peak-rss.py`. The helper samples aggregate process-tree resident
+memory (and uses a baseline-adjusted cgroup reading only when the cgroup is
+dedicated), fails closed when no measurement is available, and reports the
+lane, observed peak, configured maximum, and the likely full-system/closure
+cause. The Nix-unit ceiling is 10,683,720 KiB (8,546,976 KiB post-refresh
+baseline plus 25% deterministic headroom); the flake ceiling is 14,665,373
+KiB (11,732,298 KiB post-refresh local-shard baseline plus 25%). These are fixed
+lane contracts, not operator overrides. Full flake evaluation uses the
+existing local-shard topology with one resident shard by default; this
+isolates evaluated scenarios rather than deleting checks, and the guard
+remains authoritative if a caller requests more concurrency. A regression
+usually means that an eval-only test or module path deep-forced
+`system.build.toplevel`, `pkgs.closureInfo`, derivation realization/IFD, an
+equivalent VM closure, or an overly broad deep evaluation; narrow the
+attr-local fixture, share an evaluated scenario, or stub the evaluation
+boundary instead.
+
+The refreshed `origin/v3` comparison was measured on the same host and
+resident-memory harness. With one Nix-unit worker, v3 completed 46 attributes
+at 18,181,990 KiB in 777 seconds; its default four-worker run crossed a
+30,000,000 KiB protective cap and was terminated. That exceeds the supported
+16 GiB CI envelope and is a mechanical v3 baseline blocker, not acceptable
+growth to normalize. v3's complete monolithic flake run measured 14,583,722
+KiB in 605 seconds. The refreshed Wave 5 run evaluates 83 attributes and 32
+flake checks plus outputs: its Nix-unit peak is 8,563,111 KiB and its flake
+peak is 11,775,682 KiB. Thus the final flake ceiling is only 0.56% above the
+measured v3 flake baseline despite the added checks, while the Nix-unit
+ceiling remains well below the 16 GiB envelope because the repaired graph is
+smaller than the v3 baseline. Added case count is not permission to force VM
+closures.
+
 Tests that shell out to `cargo` cache their scratch trees between runs under
 `.scratch/rust-test-cache/`, keyed on `rustc -vV`, because compiled artifacts
 are not portable across compiler versions. CI restores that directory as one

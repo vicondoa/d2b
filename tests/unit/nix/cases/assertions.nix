@@ -19,12 +19,20 @@
 #     (`evalSucceeded == false`). The expected message is retained in
 #     tests/unit/nix/eval-cases/assertions.nix for traceability. These three cases
 #     also constitute the aarch64 platform-rejection coverage.
-{ lib, nixpkgsFlake, d2bModule, ... }:
+{ lib
+, nixpkgsFlake
+, d2bModule
+, caseBucket ? 0
+, caseBucketCount ? 4
+, ...
+}:
 
 let
   batch = import ../eval-cases/assertions.nix {
     nixpkgs = nixpkgsFlake;
     inherit d2bModule;
+    bucket = caseBucket;
+    bucketCount = caseBucketCount;
   };
 
   # The cases that throw before config.assertions is computable. Listed

@@ -1,8 +1,10 @@
 # nix-unit coverage for realm option/schema foundations and Zone-control
 # compiler constraints.
-{ mkEval, lib, flakeRoot, pkgs, ... }:
+{ mkEval, lib, flakeRoot, pkgs, casePartition ? "index", ... }:
 
 let
+  digestHelpers =
+    import ../../../../nixos-modules/resources-bundle.nix { inherit lib; };
   realmSchemaBase = {
     boot.loader.grub.enable = false;
     boot.loader.systemd-boot.enable = false;
@@ -301,12 +303,61 @@ let
       };
     };
   };
+  zoneCatalogData = {
+    schemaVersion = 3;
+    entries = [ ];
+  };
+  zoneCatalogPreimageJson = builtins.toJSON zoneCatalogData;
+  zoneCatalogDigest = "sha256:${digestHelpers.framedDigest
+    "d2b:v3:artifact-catalog"
+    zoneCatalogPreimageJson}";
+  zoneCatalogDocument = zoneCatalogData // {
+    catalogDigest = zoneCatalogDigest;
+  };
+  zoneCatalogJson = builtins.toJSON zoneCatalogDocument;
+  zoneCatalogPath = pkgs.writeText
+    "d2b-zone-control-artifact-catalog-fixture"
+    "${zoneCatalogJson}\n";
+  zoneCatalogOverride = { lib, ... }: {
+    d2b._artifactCatalogV3 = lib.mkForce {
+      ids = [ ];
+      artifactRows = [ ];
+      preimage = zoneCatalogData;
+      preimageJson = zoneCatalogPreimageJson;
+      catalogDigest = zoneCatalogDigest;
+      catalogData = zoneCatalogDocument;
+      catalogJson = zoneCatalogJson;
+      path = zoneCatalogPath;
+      publicEntries = [ ];
+    };
+    d2b._bundle.extraArtifacts.artifactCatalog =
+      lib.mkOverride 0 {
+        data = zoneCatalogData;
+        jsonText = zoneCatalogJson;
+        path = zoneCatalogPath;
+        installFileName = "artifact-catalog.json";
+        classification = "contractPrivateNonSecret";
+        sensitivity = "nonSecret";
+      };
+  };
 
-  zoneControlCfg = (mkEval [ hostBase zoneControlBase ]).config;
+  # Zone-control compiler coverage is independent of the legacy env/VM
+  # topology. Keep the positive and negative vectors on the schema-only
+  # fixture so each assertion does not instantiate unrelated guest systems.
+  zoneControlCfg = (mkEval [
+    realmSchemaBase
+    zoneControlBase
+    zoneCatalogOverride
+  ]).config;
   zoneControlFailures = override:
     map (assertion: assertion.message)
       (lib.filter (assertion: !assertion.assertion)
-        (mkEval [ hostBase zoneControlBase override ]).config.assertions);
+        (mkEval [
+          realmSchemaBase
+          zoneControlBase
+          zoneCatalogOverride
+          override
+        ]).config.assertions);
   hasZoneControlFailure = needle: override:
     lib.any (message: lib.hasInfix needle message)
       (zoneControlFailures override);
@@ -513,7 +564,8 @@ let
     })
   ]).config;
 in
-{
+let
+  allCases = {
   "realms/valid-home-dev-work-keeps-env-substrate-active" = {
     expr = {
       assertionsPass = lib.all (a: a.assertion) cfg.assertions;
@@ -1885,4 +1937,21 @@ in
       depth = true;
     };
   };
-}
+};
+  partitionFor = name:
+    if lib.hasInfix "zone-control-" name then "zone-control"
+    else if lib.hasInfix "accepted-" name
+      || lib.hasInfix "tombstone-" name then "workloads"
+    else if lib.hasInfix "rejects-" name
+      || lib.hasInfix "requires-" name then "rejections"
+    else if lib.hasInfix "allocator-artifact" name then "allocator"
+    else if lib.hasInfix "controller-config" name then "controller"
+    else if lib.hasInfix "identity-config" name
+      || lib.hasInfix "identity-key" name then "identity"
+    else if lib.hasInfix "host-local-" name then "host-local"
+    else if lib.hasInfix "examples-" name then "examples"
+    else "index";
+in
+lib.filterAttrs
+  (name: _: partitionFor name == casePartition)
+  allCases

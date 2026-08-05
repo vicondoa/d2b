@@ -3,6 +3,8 @@
 
 let
   schemaRoot = ../../../../docs/reference/schemas/v3;
+  projectionModule =
+    import ../../../../nixos-modules/provider-projection-validate.nix;
 
   readSchema = file:
     builtins.fromJSON (builtins.readFile (schemaRoot + "/${file}"));
@@ -52,6 +54,27 @@ let
     (serviceType: lib.nameValuePair serviceType (matchingFactory serviceType))
     serviceTypes);
   matchingCfg = (mkEval [ base ]).config;
+  narrowRecords = override:
+    (lib.evalModules {
+      modules = [
+        projectionModule
+        {
+          options.assertions = lib.mkOption {
+            type = lib.types.listOf lib.types.anything;
+            default = [ ];
+          };
+          options.d2b._resourceCompiler = lib.mkOption {
+            type = lib.types.attrsOf lib.types.anything;
+            default = { };
+          };
+          config.d2b._providerProjectionValidation = {
+            enable = true;
+            factories = matchingFactories;
+          };
+        }
+        override
+      ];
+    }).config.d2b._resourceCompiler.providerProjectionValidation.assertions;
 
   base = { ... }: {
     boot.loader.grub.enable = false;
@@ -71,8 +94,7 @@ let
   };
 
   records = override:
-    (mkEval [ base override ]).config
-      .d2b._resourceCompiler.providerProjectionValidation.assertions;
+    narrowRecords override;
 
   failures = override:
     lib.filter (record: !record.assertion) (records override);

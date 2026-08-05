@@ -233,10 +233,15 @@ let
       obsCid = manifest.sys-obs.observability.vsockCid;
       legacyCid = manifest.legacy-vm.observability.vsockCid;
     };
+  failedAssertion =
+    lib.findFirst
+      (assertion: !(assertion.assertion))
+      null
+      nixos.config.assertions;
 in
 if scenario == "base" then
   positive
 else
-  builtins.seq
-    (builtins.unsafeDiscardStringContext nixos.config.system.build.toplevel.drvPath)
-    (builtins.unsafeDiscardStringContext nixos.config.d2b._bundle.processesJson.path)
+  if failedAssertion == null
+  then throw "guest-control-vsock scenario unexpectedly passed"
+  else throw failedAssertion.message
