@@ -983,31 +983,30 @@ let
     "obs-stability"
     "obs-graphics-runner-wiring"
   ];
-  hostCollectorCases = [
-    "obs-host-collector-default-off"
-    "obs-host-collector-journal"
-    "obs-host-collector-otlp"
-  ];
-  hostCollectorExtraCases = [
-    "obs-host-collector-both-processor-split"
-    "obs-host-identity-override"
-    "obs-host-otlp-client-group-umask"
-    "obs-host-flags-require-enable"
-  ];
+  partitionCases = {
+    "host-collector" = [ "obs-host-collector-default-off" ];
+    "host-collector-journal" = [ "obs-host-collector-journal" ];
+    "host-collector-otlp" = [ "obs-host-collector-otlp" ];
+    "host-collector-processor-split" = [
+      "obs-host-collector-both-processor-split"
+    ];
+    "host-collector-identity" = [ "obs-host-identity-override" ];
+    "host-collector-umask" = [ "obs-host-otlp-client-group-umask" ];
+    "host-collector-flags" = [ "obs-host-flags-require-enable" ];
+  };
   renderedCases = lib.mapAttrs'
     (name: result: lib.nameValuePair "observability/${name}" (mkCase name result))
     evaluated;
   partitionMatches = name:
     if casePartition == "all" then true
     else if casePartition == "guest" then builtins.elem name guestCases
-    else if casePartition == "host-collector" then
-      builtins.elem name hostCollectorCases
-    else if casePartition == "host-collector-extra" then
-      builtins.elem name hostCollectorExtraCases
+    else if builtins.hasAttr casePartition partitionCases then
+      builtins.elem name partitionCases.${casePartition}
     else
       !(builtins.elem name guestCases
-        || builtins.elem name hostCollectorCases
-        || builtins.elem name hostCollectorExtraCases);
+        || lib.any
+          (partition: builtins.elem name partition)
+          (builtins.attrValues partitionCases));
 in
 lib.filterAttrs
   (name: _: partitionMatches (lib.removePrefix "observability/" name))
