@@ -495,6 +495,58 @@
             };
           };
         };
+        # The eval-only fixtures contain no authored v3 artifacts. Keep their
+        # catalog projection deterministic instead of forcing the production
+        # artifact-catalog IFD (`runCommand` + `builtins.readFile`) while
+        # rendering an otherwise unrelated VM fixture. The production module
+        # remains the authority for real configurations with authored
+        # artifacts; this is only the fixture boundary for the empty case.
+        fixtureArtifactCatalogData = {
+          schemaVersion = 3;
+          entries = [ ];
+        };
+        fixtureArtifactCatalogPreimageJson =
+          builtins.toJSON fixtureArtifactCatalogData;
+        fixtureArtifactCatalogDigest = "sha256:${builtins.hashString
+          "sha256"
+          (builtins.toJSON {
+            domain = "d2b:v3:artifact-catalog";
+            framing = "d2b-digest/v1";
+            payload = fixtureArtifactCatalogPreimageJson;
+          })}";
+        fixtureArtifactCatalogDocument = fixtureArtifactCatalogData // {
+          catalogDigest = fixtureArtifactCatalogDigest;
+        };
+        fixtureArtifactCatalogJson =
+          builtins.toJSON fixtureArtifactCatalogDocument;
+        fixtureArtifactCatalogPath = pkgs.writeText
+          "d2b-artifact-catalog-eval-fixture.json"
+          "${fixtureArtifactCatalogJson}\n";
+        fixtureArtifactCatalogProjection = {
+          ids = [ ];
+          artifactRows = [ ];
+          preimage = fixtureArtifactCatalogData;
+          preimageJson = fixtureArtifactCatalogPreimageJson;
+          catalogDigest = fixtureArtifactCatalogDigest;
+          catalogData = fixtureArtifactCatalogDocument;
+          catalogJson = fixtureArtifactCatalogJson;
+          path = fixtureArtifactCatalogPath;
+          publicEntries = [ ];
+        };
+        fixtureArtifactCatalogArtifact = {
+          data = fixtureArtifactCatalogData;
+          jsonText = fixtureArtifactCatalogJson;
+          path = fixtureArtifactCatalogPath;
+          installFileName = "artifact-catalog.json";
+          classification = "contractPrivateNonSecret";
+          sensitivity = "nonSecret";
+        };
+        fixtureArtifactCatalogOverride = { lib, ... }: {
+          d2b._artifactCatalogV3 = lib.mkForce
+            fixtureArtifactCatalogProjection;
+          d2b._bundle.extraArtifacts.artifactCatalog =
+            lib.mkOverride 0 fixtureArtifactCatalogArtifact;
+        };
         smokeEval = mkEval [
           smokeConfigModule
           ({ lib, ... }: {
@@ -504,15 +556,21 @@
             # and helper paths from the rendered artifact tests.
             d2b.site.usePrebuiltHostTools = lib.mkForce false;
           })
+          fixtureArtifactCatalogOverride
         ];
-        renderEvalFixture = evaluated: let
+        renderEvalFixture = {
+          evaluated
+        , includeClosures ? true
+        , processData ? null
+        }: let
           bundle = evaluated.config.d2b._bundle;
           top = name: bundle.${name}.fixtureData;
         in {
           files = {
             "privileges.json" = top "privilegesJson";
             "host.json" = top "hostJson";
-            "processes.json" = top "processesJson";
+            "processes.json" =
+              if processData == null then top "processesJson" else processData;
             "storage.json" = top "storageJson";
             "sync.json" = top "syncJson";
             "allocator.json" = top "allocatorJson";
@@ -524,7 +582,9 @@
             "bundle.json" = top "bundle";
             "manifest.json" = evaluated.config.d2b._manifestData;
           };
-          closures = pkgs.lib.mapAttrs (_: closure: closure.data) bundle.closures;
+          closures = if includeClosures
+            then pkgs.lib.mapAttrs (_: closure: closure.data) bundle.closures
+            else { };
         };
         smokeFixture = let
           bundle = smokeEval.config.d2b._bundle;
@@ -611,16 +671,82 @@
         fullEval = mkEval [
           fullConfigModule
           ({ lib, ... }: {
-            # See smokeEval above: fixture-smoke-full is a rendered-contract
-            # oracle, so it must consume source-built host tools.
+            # See smokeEval above: the feature-rich fixture is a rendered
+            # contract oracle, so it must consume source-built host tools.
             d2b.site.usePrebuiltHostTools = lib.mkForce false;
           })
+          fixtureArtifactCatalogOverride
         ];
+        # The eval-rendered full fixture validates the serialized runner and
+        # minijail contracts, not the guest kernel or hypervisor binaries.
+        # Keep those package edges deterministic and narrow in this fixture
+        # only. The real `fullEval` remains the source for the realized video
+        # command-surface check and the explicit full fixture derivation.
+        fixtureKernel = {
+          dev = pkgs.runCommand "linux-6.18.33-dev" { } ''
+            mkdir -p "$out"
+            touch "$out/vmlinux"
+          '';
+          out = pkgs.runCommand "linux-6.18.33" { } ''
+            mkdir -p "$out"
+          '';
+        };
+        fixtureInitrd = pkgs.runCommand "initrd-linux-6.18.33" { } ''
+          mkdir -p "$out"
+          touch "$out/initrd"
+        '';
+        fixtureVmPackage = name:
+          pkgs.writeShellScriptBin name "exit 0";
+        fullFixtureVmTools = { lib, ... }: {
+          d2b.vms.corp-full.config.microvm = {
+            kernel = lib.mkForce fixtureKernel;
+            initrdPath = lib.mkForce "${fixtureInitrd}/initrd";
+            cloud-hypervisor.package = lib.mkForce
+              (fixtureVmPackage "cloud-hypervisor");
+            virtiofsd.package = lib.mkForce
+              (fixtureVmPackage "virtiofsd");
+            graphics.crosvmPackage = lib.mkForce
+              (fixtureVmPackage "crosvm");
+          };
+        };
+        fullEvalFixture = mkEval [
+          fullConfigModule
+          fullFixtureVmTools
+          ({ lib, ... }: {
+            d2b.site.usePrebuiltHostTools = lib.mkForce false;
+          })
+          fixtureArtifactCatalogOverride
+        ];
+        fullProcessFixtureData =
+          let
+            data = fullEvalFixture.config.d2b._bundle.processesJson.fixtureData;
+          in
+          data // {
+            # Full contract consumers need the feature VM, the env's usbipd
+            # backend/proxy, and the observability host bridge. They do not
+            # consume the auto-declared net DAG, so do not force that
+            # unrelated runner subgraph through the eval-only projection.
+            vms = pkgs.lib.map
+              (dag:
+                if dag.vm == "sys-obs" then
+                  dag // {
+                    nodes = pkgs.lib.filter
+                      (node: node.id == "otel-host-bridge")
+                      dag.nodes;
+                  }
+                else
+                  dag)
+              (pkgs.lib.filter
+                (dag:
+                  builtins.elem dag.vm
+                    [ "corp-full" "sys-work-usbipd" "sys-obs" ])
+                data.vms);
+          };
         fullFixture = let
           bundle = fullEval.config.d2b._bundle;
           manifestPkg = fullEval.config.d2b._manifestPkg;
         in pkgs.runCommand "d2b-fixture-smoke-full" { } ''
-          mkdir -p $out $out/closures
+          mkdir -p $out
           cp ${bundle.privilegesJson.path} $out/privileges.json
           cp ${bundle.hostJson.path} $out/host.json
           cp ${bundle.processesJson.path} $out/processes.json
@@ -631,13 +757,19 @@
           cp ${bundle.realmIdentityJson.path} $out/realm-identity.json
           cp ${bundle.bundle.path} $out/bundle.json
           cp ${manifestPkg}/share/d2b/vms.json $out/manifest.json
-          ${nixpkgs.lib.concatStringsSep "\n" (nixpkgs.lib.mapAttrsToList
-            (vm: c: "cp ${c.path} $out/closures/${vm}.json")
-            fullEval.config.d2b._bundle.closures)}
         '';
         evalFixtureData = {
-          minimal = renderEvalFixture smokeEval;
-          full = renderEvalFixture fullEval;
+          minimal = renderEvalFixture {
+            evaluated = smokeEval;
+          };
+          # Full fixture consumers validate feature-specific bundle/process
+          # contracts only. They do not consume closure JSON, so do not force
+          # the VM closure graph back through this eval-only surface.
+          full = renderEvalFixture {
+            evaluated = fullEvalFixture;
+            includeClosures = false;
+            processData = fullProcessFixtureData;
+          };
         };
         fullProcessDags = fullEval.config.d2b._bundle.processesJson.data.vms;
         fullCorpDag = pkgs.lib.findFirst (dag: dag.vm == "corp-full")

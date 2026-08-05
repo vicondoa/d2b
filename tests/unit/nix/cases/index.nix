@@ -189,6 +189,20 @@ let
   };
   resourceCfg = (mkEval [ resourceBase resourceFixture ]).config;
   resourceIndex = resourceCfg.d2b._index.zones;
+  malformedResource = resource:
+    let
+      evaluated = lib.evalModules {
+        modules = [{
+          options.resources = lib.mkOption {
+            type = lib.types.attrsOf
+              (lib.types.submodule resourceContracts.resourceModule);
+            default = { };
+          };
+          config.resources.app = resource;
+        }];
+      };
+    in
+    builtins.tryEval (builtins.deepSeq evaluated.config.resources true);
   failureMessages = module:
     map (assertion: assertion.message)
       (lib.filter (assertion: lib.hasPrefix "d2b.zones." assertion.message)
@@ -276,27 +290,21 @@ let
       };
     };
     malformed = {
-      badType = (builtins.tryEval ((mkEval [ resourceBase {
-        d2b.zones.work.resources.app.type = "Unknown";
-      } ]).config.system.build.toplevel)).success;
-      badRef = (builtins.tryEval ((mkEval [ resourceBase {
-        d2b.zones.work.resources.app = {
-          type = "Provider";
-          metadata.ownerRef = "user/alice";
-        };
-      } ]).config.system.build.toplevel)).success;
-      excessiveCpu = (builtins.tryEval ((mkEval [ resourceBase {
-        d2b.zones.work.resources.app = {
-          type = "Provider";
-          spec.budget.cpu.limit = "1024001m";
-        };
-      } ]).config.system.build.toplevel)).success;
-      excessiveMemory = (builtins.tryEval ((mkEval [ resourceBase {
-        d2b.zones.work.resources.app = {
-          type = "Provider";
-          spec.budget.memory.limit = "4097GiB";
-        };
-      } ]).config.system.build.toplevel)).success;
+      badType = (malformedResource {
+        type = "Unknown";
+      }).success;
+      badRef = (malformedResource {
+        type = "Provider";
+        metadata.ownerRef = "user/alice";
+      }).success;
+      excessiveCpu = (malformedResource {
+        type = "Provider";
+        spec.budget.cpu.limit = "1024001m";
+      }).success;
+      excessiveMemory = (malformedResource {
+        type = "Provider";
+        spec.budget.memory.limit = "4097GiB";
+      }).success;
     };
     vectors = {
       types = map resourceContracts.validResourceType [

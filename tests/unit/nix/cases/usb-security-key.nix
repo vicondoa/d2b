@@ -204,7 +204,10 @@ let
   };
 
   deviceEvalWith = overrides:
-    mkEval ([ base deviceBase ] ++ overrides);
+    # Device ResourceType checks do not need a legacy VM or host network
+    # fixture. Keeping this scenario attr-local avoids instantiating the
+    # per-VM evaluator for every projection/validation vector.
+    mkEval ([ deviceBase ] ++ overrides);
   deviceValid = deviceEvalWith [ ];
   deviceAssertionsOf = sys: sys.config.d2b._resourceCompiler.deviceValidation;
   deviceFailures = sys:

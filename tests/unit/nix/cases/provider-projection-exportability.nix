@@ -1,7 +1,9 @@
 # Nix admission coverage for the unhashed exportability field.
-{ mkEval, lib, ... }:
+{ lib, ... }:
 
 let
+  projectionModule =
+    import ../../../../nixos-modules/provider-projection-validate.nix;
   schemaPath =
     ../../../../docs/reference/schemas/v3/audio.d2bus.org_projection_spec.schema.json;
   schema = builtins.fromJSON (builtins.readFile schemaPath);
@@ -21,33 +23,32 @@ let
     factoryFingerprint = schema."x-d2b-factory-fingerprint";
   };
 
-  base = { ... }: {
-    boot.loader.grub.enable = false;
-    boot.loader.systemd-boot.enable = false;
-    boot.initrd.includeDefaultModules = false;
-    fileSystems."/" = {
-      device = "tmpfs";
-      fsType = "tmpfs";
-    };
-    environment.etc."machine-id".text =
-      "00000000000000000000000000000000";
-    system.stateVersion = "25.11";
-    d2b._providerProjectionValidation = {
-      enable = true;
-      factories = {
-        ${serviceType} = matchingFactory;
-      };
-    };
-  };
-
   evaluated = factory:
-    (mkEval [
-      base
-      ({ ... }: {
-        d2b._providerProjectionValidation.factories =
-          lib.mkForce { ${serviceType} = factory; };
-      })
-    ]).config.d2b._resourceCompiler.providerProjectionValidation.assertions;
+    (lib.evalModules {
+      modules = [
+        projectionModule
+        {
+          options.assertions = lib.mkOption {
+            type = lib.types.listOf lib.types.anything;
+            default = [ ];
+          };
+          options.d2b._resourceCompiler = lib.mkOption {
+            type = lib.types.attrsOf lib.types.anything;
+            default = { };
+          };
+          config.d2b._providerProjectionValidation = {
+            enable = true;
+            factories = {
+              ${serviceType} = matchingFactory;
+            };
+          };
+        }
+        ({ ... }: {
+          d2b._providerProjectionValidation.factories =
+            lib.mkForce { ${serviceType} = factory; };
+        })
+      ];
+    }).config.d2b._resourceCompiler.providerProjectionValidation.assertions;
 
   wrongExportability = matchingFactory // {
     exportability = "policy-gated";

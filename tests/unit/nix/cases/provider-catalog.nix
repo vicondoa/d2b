@@ -10,6 +10,8 @@
 
 let
   digestHelpers = import ../../../../nixos-modules/resources-bundle.nix { inherit lib; };
+  providerCatalogModule =
+    import ../../../../nixos-modules/provider-catalog.nix;
   shape = import ../../../../nixos-modules/generated/provider-catalog-shape.nix;
   # Nix-unit supplies a fixed catalog projection so bundle consumers never
   # demand artifact-catalog.nix's realised closure/JSON path.
@@ -80,6 +82,24 @@ let
     d2b._bundle.extraArtifacts.artifactCatalog =
       lib.mkOverride 0 catalogFixtureArtifact;
   };
+  mkEvalCatalog = modules:
+    lib.evalModules {
+      modules = [
+        providerCatalogModule
+        {
+          options.assertions = lib.mkOption {
+            type = lib.types.listOf lib.types.anything;
+            default = [ ];
+          };
+          options.d2b._bundle.extraArtifacts.providerCatalog =
+            lib.mkOption {
+              type = lib.types.anything;
+              default = { };
+            };
+        }
+      ] ++ modules;
+      specialArgs = { inherit pkgs; };
+    };
   mkEvalProvider = modules: mkEval (modules ++ [ catalogOverride ]);
 
   base = { ... }: {
@@ -142,7 +162,7 @@ let
     };
   };
 
-  cfg = (mkEvalProvider [ base authored ]).config;
+  cfg = (mkEvalCatalog [ authored ]).config;
   catalog = cfg.d2b._providerCatalog;
 
   # The same three artifacts, authored in a different order and built from a
@@ -153,17 +173,16 @@ let
       (map (name: lib.nameValuePair name (artifactFor name))
         [ "provider-storage" "provider-wayland" "provider-audio" ]);
   };
-  cfgReAuthored = (mkEvalProvider [ base reAuthored ]).config;
+  cfgReAuthored = (mkEvalCatalog [ reAuthored ]).config;
 
   evalArtifacts = artifacts:
-    (mkEvalProvider [ base ({ ... }: { d2b.artifacts = artifacts; }) ]).config
+    (mkEvalCatalog [ ({ ... }: { d2b.artifacts = artifacts; }) ]).config
       .d2b._providerCatalog.ids;
 
   # Force the assertion list of a configuration that must fail eval.
   failing = artifacts:
     let
-      evaluated = (mkEvalProvider [
-        base
+      evaluated = (mkEvalCatalog [
         ({ ... }: { d2b.artifacts = artifacts; })
       ]).config;
       broken = lib.filter (a: !a.assertion) evaluated.assertions;
@@ -248,8 +267,38 @@ let
       (lib.filter (assertion: !assertion.assertion)
         (mkEvalProvider [ base zoneResourceFixture module ]).config.assertions);
 
+  mkNarrowZoneEval = modules:
+    lib.evalModules {
+      modules = [
+        ../../../../nixos-modules/options-zones.nix
+        ../../../../nixos-modules/options-resources.nix
+        {
+          options.assertions = lib.mkOption {
+            type = lib.types.listOf lib.types.anything;
+            default = [ ];
+          };
+          options.d2b.site.stateDir = lib.mkOption {
+            type = lib.types.str;
+            default = "/var/lib/d2b";
+          };
+          options.d2b.artifacts = lib.mkOption {
+            type = lib.types.attrsOf lib.types.anything;
+            default = { };
+          };
+          options.d2b.providerCatalog = lib.mkOption {
+            type = lib.types.attrsOf lib.types.anything;
+            default = { };
+          };
+        }
+      ] ++ modules;
+    };
+  zoneValidationMessages = module:
+    map (assertion: assertion.message)
+      (lib.filter (assertion: !assertion.assertion)
+        (mkNarrowZoneEval [ zoneResourceFixture module ]).config.assertions);
   zoneRejects = needle: module:
-    lib.any (message: lib.hasInfix needle message) (zoneFailureMessages module);
+    lib.any (message: lib.hasInfix needle message)
+      (zoneValidationMessages module);
 
   secretShapedCredential = { ... }: {
     d2b.zones.local-root.resources.work-access.spec.audience =
@@ -477,7 +526,7 @@ in
   # An empty catalog is the default: no artifact exists unless it is authored.
   # This is the "no PATH scan, no directory discovery" rule stated as a value.
   "provider-catalog/empty-by-default" = {
-    expr = (mkEvalProvider [ base ]).config.d2b._providerCatalog.ids;
+    expr = (mkEvalCatalog [ ]).config.d2b._providerCatalog.ids;
     expected = [ ];
   };
 

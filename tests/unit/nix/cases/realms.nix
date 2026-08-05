@@ -302,11 +302,14 @@ let
     };
   };
 
-  zoneControlCfg = (mkEval [ hostBase zoneControlBase ]).config;
+  # Zone-control compiler coverage is independent of the legacy env/VM
+  # topology. Keep the positive and negative vectors on the schema-only
+  # fixture so each assertion does not instantiate unrelated guest systems.
+  zoneControlCfg = (mkEval [ realmSchemaBase zoneControlBase ]).config;
   zoneControlFailures = override:
     map (assertion: assertion.message)
       (lib.filter (assertion: !assertion.assertion)
-        (mkEval [ hostBase zoneControlBase override ]).config.assertions);
+        (mkEval [ realmSchemaBase zoneControlBase override ]).config.assertions);
   hasZoneControlFailure = needle: override:
     lib.any (message: lib.hasInfix needle message)
       (zoneControlFailures override);

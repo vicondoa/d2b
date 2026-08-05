@@ -1157,6 +1157,46 @@ printf '%s\n' "$sanitized_line"
         self.assertIn("nix eval", fixture_driver)
         self.assertNotIn("nix build", fixture_driver)
 
+    def test_eval_fixture_keeps_full_contracts_off_vm_closure_and_ifd_paths(self) -> None:
+        flake = (ROOT / "flake.nix").read_text(encoding="utf-8")
+        fixture_driver = (ROOT / "tests" / "tools" / "eval-fixtures.sh").read_text(
+            encoding="utf-8"
+        )
+
+        # The full fixture validates feature-specific process and minijail
+        # records, not closure JSON. Keep the eval-only projection from
+        # traversing the legacy VM closure table.
+        self.assertRegex(
+            flake,
+            r"full\s*=\s*renderEvalFixture\s*\{\s*"
+            r"evaluated\s*=\s*fullEvalFixture;\s*"
+            r"includeClosures\s*=\s*false;\s*"
+            r"processData\s*=\s*fullProcessFixtureData;\s*\};",
+        )
+        full_fixture = re.search(
+            r"fullFixture\s*=.*?(?=\n\s*# Rust tests reach)",
+            flake,
+            flags=re.DOTALL,
+        )
+        self.assertIsNotNone(full_fixture)
+        assert full_fixture is not None
+        self.assertNotIn("config.d2b._bundle.closures", full_fixture.group(0))
+
+        # The production catalog remains IFD-backed, but empty eval fixtures
+        # must replace it at the fixture boundary with deterministic data.
+        self.assertIn("fixtureArtifactCatalogOverride", flake)
+        self.assertIn(
+            "d2b._bundle.extraArtifacts.artifactCatalog =\n"
+            "            lib.mkOverride 0 fixtureArtifactCatalogArtifact",
+            flake,
+        )
+        self.assertIn("fullProcessFixtureData", flake)
+        self.assertIn('"corp-full" "sys-work-usbipd" "sys-obs"', flake)
+        self.assertIn('node.id == "otel-host-bridge"', flake)
+        self.assertIn("processData = fullProcessFixtureData", flake)
+        self.assertIn("d2b_flake_ref", fixture_driver)
+        self.assertNotIn("fixture-smoke-full", fixture_driver)
+
     def test_realized_flake_check_gets_its_own_unblocked_lane(self) -> None:
         manifest = load_layer1_jobs().load_manifest()
         workflow = load_layer1_jobs().render_workflow(manifest)
