@@ -17,9 +17,11 @@
   three-workspace and four-hub lock inventory with one product Cargo workspace
   and hub plus one separate walker workspace and hub. It leaves distinct
   broker, guest, and test-context execution surfaces unchanged, accepts the
-  shared product lock's dependency union, and makes package-selected builds,
-  native first-party target edges, and package-scoped selected-closure policy
-  the broker and guest dependency authorities. If accepted, Spec 003 must be
+  repository-owner-approved shared product external repository's feature and
+  package union without requiring per-context third-party feature parity, and
+  makes package-selected builds, native first-party target edges, production
+  closure inventories, and dev-inclusive package deny and audit inputs the
+  broker and guest dependency authorities. If accepted, Spec 003 must be
   amended and re-panelled before implementation resumes.
 - Related: [ADR 0009](0009-rust-toolchain-msrv-and-supply-chain.md) (Rust
   toolchain, MSRV, and supply-chain policy), which keeps its authority
