@@ -286,9 +286,22 @@ The mechanics the prompt must state exactly:
 - Coverage is exact: every identifier given, once each, no others. An
   incomplete set is refused as `held-seat-unreleased` with the missing
   identifiers named, so a seat that answers three of four is told which one it
-  skipped rather than silently releasing. Judging the same identifier twice,
-  or judging it once while a recommendation also supersedes it, is refused as
+  skipped rather than silently releasing. Duplication means twice on **one**
+  channel: two `prior_resolutions` entries for one identifier, or two
+  recommendations superseding one identifier. Either is refused as
   `prior-resolution-invalid` with reason `duplicate-identifier`.
+- **An entry and a superseding recommendation are two channels, not two
+  judgements, and an unresolved finding must use both.** One
+  `prior_resolutions` entry with `state: not_resolved`, plus exactly one
+  recommendation whose `supersedes` names that same identifier, is the required
+  shape and is admitted. It is not a duplicate, and the prompt says so in these
+  words, because a seat that dropped either half to avoid a suspected duplicate
+  would produce a record refused for incomplete coverage or for
+  `not-resolved-without-superseding-recommendation` instead. An earlier
+  revision of this document told the seat to judge each identifier "either as a
+  `prior_resolutions` entry or as one recommendation's `supersedes`, never
+  both", which forbade the only legal unresolved shape; that was wrong and the
+  correction is recorded rather than quietly applied.
 - **Coverage does not read `relevant`.** The claim is always accepted and
   always normalized; the coverage rule is evaluated against the identifier set
   the controller issued, whatever the record claims. So `relevant: false` with
@@ -302,7 +315,8 @@ The mechanics the prompt must state exactly:
   identifier as its `supersedes` value, and `resolved` forbids one; the two
   mismatches are refused as `prior-resolution-invalid` with reasons
   `not-resolved-without-superseding-recommendation` and
-  `resolved-with-superseding-recommendation`. That is what
+  `resolved-with-superseding-recommendation`. Only the `resolved` case is a
+  contradiction; the `not_resolved` case is the required pair. That is what
   keeps `signoff` true if and only if `recommendations` is empty: any
   `not_resolved` produces a recommendation and therefore a false sign-off.
 - **A seat leaves the held set only on a true sign-off plus a complete
@@ -326,8 +340,9 @@ Two corollaries:
   round settled unless the new bytes reopened it. The delta ranges it is given
   are the scope. It has no open identifiers and carries an empty
   `prior_resolutions`.
-- "Not resolved" is a finding and goes in `recommendations`, linked to the
-  identifier it supersedes. "Resolved" is an entry plus a sentence in the
+- "Not resolved" is **both positions at once**: a `prior_resolutions` entry
+  with `state: not_resolved`, and the recommendation in `recommendations`
+  linked to it by `supersedes`. "Resolved" is an entry plus a sentence in the
   summary. There is no third state, because the enum has two members.
 
 ### 1.5 Source hygiene
@@ -1693,6 +1708,7 @@ version assumptions, and Linux API edge cases.
 | Kernel ABI stability documentation | N | T1 | <https://docs.kernel.org/admin-guide/abi.html> |
 | ADR 0008 and ADR 0011, the platform floor and the cgroup and pidfd contract | N | T1 | repository-local, and binding |
 | ADR 0034's `O_CLOEXEC` and OFD-lock requirement, restated in `AGENTS.md` | N | T1 | repository-local, and binding |
+| ADR 0027 and `packages/d2b-host/src/hardlink_farm.rs`, the hardlink-farm `EXDEV` and `EMLINK` policy | N | T1 | repository-local; the code is canon where the two differ |
 
 **Premade prompt assets: none exist, and this is a verified enumeration
 result.** No kernel, syscall, cgroup, namespace or seccomp review asset exists
@@ -1752,12 +1768,14 @@ primitives serve; the split is restated in section 1.2 and in 3.1.
   the right one. Where the two differ is what a caller may do next. A `rename`
   that fails `EXDEV` has a fallback, copy then unlink, and whether losing
   atomicity for it is acceptable is `reliability`'s durability question rather
-  than this seat's. A `link` that fails `EXDEV` has **none**: `link(2)` states
-  that hard links cannot span filesystems and points at `symlink(2)` where that
-  is required, so the remedy is a layout change and never a retry. That matters
-  here because the hardlink farm needs `/var/lib/d2b` and `/nix/store`
-  reachable under **one mount**, and a delta that bind-mounts the store
-  elsewhere satisfies same-filesystem while breaking every `link` call. An
+  than this seat's. A `link` that fails `EXDEV` has **no copy fallback**:
+  `link(2)` states that hard links cannot span filesystems and points at
+  `symlink(2)` where that is required, so the remedy is a change to what the
+  two paths see, never a copy and never a re-issue of the same call against the
+  same view. That matters here because the hardlink farm needs `/var/lib/d2b`
+  and `/nix/store` reachable under **one mount**, and a delta that bind-mounts
+  the store elsewhere satisfies same-filesystem while breaking every `link`
+  call. An
   earlier revision of this document attributed `EXDEV` to `rename` alone while
   citing the hardlink case, and stated the requirement as same-filesystem; both
   were wrong and the correction is recorded rather than quietly applied.
@@ -1773,6 +1791,60 @@ primitives serve; the split is restated in section 1.2 and in 3.1.
   calls disagree on `EEXIST` as well: for `rename(2)` it is the non-empty
   destination directory case, and plain `rename` replaces an existing file
   rather than refusing it.
+
+  **What d2b already does with this error set is decided, and the seat enforces
+  it rather than redesigning it.** The committed policy belongs in front of the
+  reviewer, because the plausible-sounding remedies are the wrong ones here:
+
+  - **`EXDEV` splits on `st_dev`, and the split is committed code.**
+    `classify_link_failure` in
+    `packages/d2b-host/src/hardlink_farm.rs:1326-1333` routes `EXDEV` with
+    matching `st_dev` to `CrossMount` and `EXDEV` with differing `st_dev` to
+    `DifferentFilesystem`; the unit test at lines 1707-1733 of the same file
+    pins both arms. A finding that treats the two as one case is wrong.
+  - **The same-`st_dev` case is a cross-vfsmount refusal on one filesystem, and
+    its remedy is a mount-topology change performed once.** That is the NixOS
+    `/nix/store` self-bind-mount described in `nixos-modules/store.nix:34-45`.
+    `build_farm_cross_mount_safe` in
+    `packages/d2b-priv-broker/src/ops/store_view_farm.rs:68-89` re-runs the
+    build in a private mount namespace where `/nix/store` is lazily detached,
+    on that one typed error and no other. It is a single conditional rebuild
+    under a changed mount view: there is no attempt counter, no budget and no
+    backoff anywhere on this path, and none is wanted.
+  - **The distinct-`st_dev` case is fatal and unsupported.** The committed code
+    is the authority and ADR 0027 records the same policy in those words -
+    `store-view/live` and realized `/nix/store` must share `st_dev`,
+    cross-filesystem is fatal, and copy fallback applies only to `EMLINK`
+    link-count saturation, in
+    `docs/adr/0027-store-view-hardlink-live-pool.md` at lines 344-348 and
+    restated at lines 278-281. `assert_same_filesystem`
+    (`packages/d2b-host/src/hardlink_farm.rs:430`) fails closed with the typed
+    `DifferentFilesystem` before any `link(2)` is issued;
+    `build_farm_cross_mount_safe` propagates it rather than retrying, on the
+    recorded grounds that unmounting `/nix/store` there would expose the
+    covered mount directory and could hardlink the wrong inodes
+    (`packages/d2b-priv-broker/src/ops/store_view_farm.rs:82-87`); and the
+    `AGENTS.md` critical-subsystem row requires the closure-only farm with
+    `/var/lib/d2b` and `/nix/store` on one filesystem.
+  - **`EMLINK` already has a copy fallback and it is deliberately narrow.**
+    `packages/d2b-host/src/hardlink_farm.rs:1243-1259` copies the file, mirrors
+    mode and ownership, and `fsync`s the copy, scoped to link-count saturation
+    alone. The seat neither asks for it nor asks for it to be removed; it
+    checks that a delta has not widened it.
+
+  So three findings are wrong by construction on this path, and the prompt
+  names them so a reviewer does not reach for one: demanding a copy fallback
+  for `EXDEV` in either of its forms, which the committed classifier and
+  ADR 0027 both refuse; demanding that `EMLINK` become a typed failure, which
+  would regress committed behaviour; and demanding a retry budget, backoff or
+  bounded retry loop, when no such loop exists on this path, none is proposed,
+  and the one recoverable case is already closed by a single conditional
+  namespace rebuild. A delta that *adds* any of the three is a finding for the
+  mirror-image reason, and that finding cites this policy. An earlier revision
+  of this document gave the `link` `EXDEV` remedy as "a layout change and never
+  a retry", which is right for the distinct-`st_dev` case and wrong for the
+  same-`st_dev` one that d2b recovers in a mount namespace; the correction is
+  recorded rather than quietly applied.
 
   **`EINTR`**, per the signals rule above; **`EAGAIN`**, which is not an error
   on a non-blocking descriptor and is frequently treated as one; and
@@ -1798,10 +1870,12 @@ primitives serve; the split is restated in section 1.2 and in 3.1.
 
 **Anti-patterns and non-goals.** Citing distribution blog posts or
 administration guides for kernel semantics; asserting behaviour with no version
-floor; reviewing userspace design as if it were kernel code; taking
-cross-component resource lifetime, which is `reliability`'s, or the durability
-ordering of a write, which is also `reliability`'s even where this seat owns
-the errno set of the same call.
+floor; reviewing userspace design as if it were kernel code; proposing a copy
+fallback, a retry budget or a bounded retry loop on the hardlink-farm path,
+which the committed classifier and ADR 0027 already settle in the opposite
+direction; taking cross-component resource lifetime, which is `reliability`'s,
+or the durability ordering of a write, which is also `reliability`'s even where
+this seat owns the errno set of the same call.
 
 ## 4. Honest coverage statement
 

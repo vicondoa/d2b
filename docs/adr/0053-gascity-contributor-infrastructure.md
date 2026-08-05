@@ -2165,9 +2165,18 @@ Record-local rules, now four, all rejections:
   a not-relevant record therefore always carries `signoff: true`. A
   not-relevant record with a recommendation is invalid.
 - `prior_resolutions` covers the seat's open prior finding identifiers
-  **exactly**: one entry per open identifier, no duplicates, and no identifier
-  the controller did not issue to this seat. Under-coverage, over-coverage and
-  an unknown identifier are each invalid. A seat with no open prior findings
+  **exactly**: one entry per open identifier, no identifier the controller did
+  not issue to this seat, and no identifier carried twice on the **same**
+  channel - not two entries in `prior_resolutions`, and not the `supersedes`
+  value of two recommendations. Under-coverage, over-coverage and an unknown
+  identifier are each invalid. **An entry and a superseding recommendation are
+  two channels, not two judgements**, and the DTO requires an unresolved prior
+  finding to occupy both at once: one `prior_resolutions` entry with
+  `state: not_resolved`, and exactly one recommendation whose `supersedes`
+  names that same identifier. That pair is the identifier's single judgement
+  and is never a duplicate; a rule that rejected it would leave a seat no legal
+  way to report an unresolved finding, because dropping either half is
+  incomplete coverage. A seat with no open prior findings
   carries an empty list; that is the ordinary first-round case. **This rule
   does not read `relevant`.** Coverage is checked against the identifier set
   the controller issued, before any relevance normalization runs, so a later
@@ -2214,7 +2223,11 @@ has nowhere to put an unresolved finding, so a `Pass` that leaves one open is
 not a value that exists.
 
 The constructor is fallible, takes the seat's open-identifier set as its other
-input, and is the only way to obtain the internal type. It verifies an **exact
+input, and is the only way to obtain the internal type. It **consumes the DTO
+pair**: a `not_resolved` entry and the one recommendation whose `supersedes`
+names that identifier arrive as two wire positions and leave as that single
+recommendation, so no `not_resolved` value survives the boundary and the rules
+below count identifiers rather than wire positions. It verifies an **exact
 partition** of that set:
 
 - every identifier in `resolved`, and every `supersedes` value, is a member of
@@ -2561,7 +2574,7 @@ with a wider hammer, or a suggestion to ask somebody.
 | `profile-binding-mismatch` | The dispatch record's bound profile set differs from `profiles(change_surface)` recomputed from the bound artifact, or a seat's review payload disagrees with the dispatch record | Names the bound set, the recomputed set and the seat; re-run controller dispatch against the current change-surface artifact. A stale binding is never accepted as the narrower of the two |
 | `review-payload-digest-mismatch` | A submitted review payload does not match the digest the dispatch record bound for that seat | Names the seat and both digests; re-dispatch that seat from the controller. The payload is controller-owned, so the remedy is never to re-submit an edited payload |
 | `held-seat-unreleased` | A held seat's record leaves an open finding identifier unjudged, whatever it claims for `relevant`, or a record set is unanimous while a seat remains held | Names the seat and each open finding identifier left unjudged; re-run that seat with the full resolution obligation set and judge each identifier `resolved` or `not_resolved`. A `relevant: false` claim does not reduce the obligation: the claim is accepted and normalized, and the record is refused until the coverage is exact |
-| `prior-resolution-invalid` | A record's prior-finding judgement is malformed against the obligation set the controller issued: a closed `reason` names which class, and the message names every offending identifier | One row rather than four, because the operator action differs only by the `reason` the message carries. `unknown-identifier`: names the offending identifiers and the set actually issued to this seat; drop them, or re-run the seat against the review payload it was issued, since a producer cannot mint an identifier. `duplicate-identifier`: names each identifier judged more than once; judge each open identifier exactly once, either as a `prior_resolutions` entry or as one recommendation's `supersedes`, never both and never twice. `resolved-with-superseding-recommendation`: names the identifier and the recommendation; drop that recommendation if the finding is closed, or change the entry to `not_resolved` if it is not. `not-resolved-without-superseding-recommendation`: names the identifier; add the recommendation that supersedes it, or change the entry to `resolved` |
+| `prior-resolution-invalid` | A record's prior-finding judgement is malformed against the obligation set the controller issued: a closed `reason` names which class, and the message names every offending identifier | One row rather than four, because the operator action differs only by the `reason` the message carries. `unknown-identifier`: names the offending identifiers and the set actually issued to this seat; drop them, or re-run the seat against the review payload it was issued, since a producer cannot mint an identifier. `duplicate-identifier`: names each identifier carried twice on **one** channel - two `prior_resolutions` entries for it, or two recommendations superseding it; carry it at most once per channel. A `not_resolved` entry beside the single recommendation that supersedes it is the required shape for an unresolved prior finding, is admitted, and is never this reason; dropping either half of that pair is incomplete coverage, not a fix. `resolved-with-superseding-recommendation`: names the identifier and the recommendation; drop that recommendation if the finding is closed, or change the entry to `not_resolved` if it is not. `not-resolved-without-superseding-recommendation`: names the identifier; add the recommendation that supersedes it, or change the entry to `resolved` |
 | `held-seat-identity-substituted` | A held seat's pinned identity differs from the one that raised the open finding | Names the seat, the pinned binding and the submitted one; re-dispatch that seat under its pinned provider, model, effort and prompt digest |
 | `agent-file-mismatch` | `check-bindings.mjs` finds a pool member with no `panel-<role>.agent.md`, or a `panel-*` agent file with no pool member | Names both directions and the offending names; add the missing agent file, or delete the orphaned one, in the same commit as the pool change |
 | `generated-path-drift` | The versioned table's generated-path list differs from `drift_paths` in `tests/unit/gates/drift-check.sh` | Names the paths present on one side only; copy the current `drift_paths` array into the table and bump the table version, since the gate script owns the list and the table only mirrors it |
@@ -2578,7 +2591,7 @@ full obligation set, and no edit of the submitted record is a legitimate
 remedy. Folding them together would produce one error whose message has to
 tell an operator to do one of two incompatible things.
 
-
+**Retention for the artifacts D21 adds is D17's contract, not a second one.**
 Four persistent artifacts are new: the change-surface artifact, the roster
 artifact, the per-seat review payload, and the continuity ledger. They are
 classified into the two retention classes D17 already defines, rather than
@@ -3720,13 +3733,32 @@ The eight items below are added by the 2026-08-04 amendment and belong to D21.
   as `prior-resolution-invalid` with reason
   `not-resolved-without-superseding-recommendation`; one carrying `resolved`
   **and** a superseding recommendation for the same identifier is refused with
-  reason `resolved-with-superseding-recommendation`; one judging the same
-  identifier twice, and one judging it once while a recommendation also
-  supersedes it, are each refused with reason `duplicate-identifier`; and one
+  reason `resolved-with-superseding-recommendation`; one carrying **two**
+  `prior_resolutions` entries for the same identifier, and one carrying **two**
+  recommendations superseding the same identifier, are each refused with reason
+  `duplicate-identifier`; and one
   naming an identifier the controller never issued to that seat is refused
   with reason `unknown-identifier`. Every refusal asserts the reason value and
   the exact offending identifiers in the rendered message, not merely that
   admission failed.
+
+  **The required pair is asserted admitted, not merely not-listed as a
+  refusal.** A record carrying one `not_resolved` entry and exactly one
+  recommendation whose `supersedes` names that same identifier is **admitted**,
+  and the test asserts it explicitly against `duplicate-identifier`, because
+  that pair is the only legal way for a seat to report an unresolved prior
+  finding and a duplicate rule that counted the two channels as two judgements
+  would make every honest unresolved report unfileable. The same test asserts
+  the constructor's consumption: the admitted internal value is `Blocking`
+  whose `resolved` set omits that identifier and whose recommendation carries
+  it as `supersedes`, so no `not_resolved` value exists past admission. A
+  planted implementation that rejects the pair as a duplicate fails this item,
+  and so does one that admits the pair while retaining a `not_resolved` value
+  internally. An earlier revision of this amendment stated the duplicate rule
+  as "either an entry or a `supersedes` value, never both", which forbade the
+  shape the DTO requires and whose only remedy was a record the coverage rule
+  then refused; that was wrong and the correction is recorded here rather than
+  quietly applied.
 
   The pivotal control is the pair that proves the coverage rule and the
   relevance rule are different rules. A round-two record from that seat
