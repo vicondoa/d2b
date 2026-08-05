@@ -2161,10 +2161,32 @@ carry `supersedes`, a single `finding_id`, which is how a `not_resolved` entry
 is tied to the finding that replaces it. That is a link, not a third field with
 semantics of its own, and it is named here so the count is honest.
 
-Record-local rules, now four, all rejections:
+Record-local rules, now four, all rejections. **They are ordered**, and the
+order is part of the contract rather than an implementation detail: the first
+is evaluated on the record alone, before the controller's obligation set is
+read, before the prior-finding partition is built, and before any internal
+value exists.
 
 - The existing predicate is unchanged and applies to **every** record:
-  `signoff` is true if and only if `recommendations` is empty.
+  `signoff` is true if and only if `recommendations` is empty. Admission
+  **checks that equality explicitly**, and refuses both mismatch directions as
+  `signoff-recommendation-mismatch`: `signoff: true` beside a non-empty
+  `recommendations`, and `signoff: false` beside an empty one. Neither is
+  repaired. In particular a `signoff: false` record carrying no recommendation
+  is **not** admitted as a pass, which is the direction that costs something
+  when it is missed, because it turns a malformed blocking intent into a
+  sign-off the unanimity predicate counts. Committed code already enforces
+  exactly this, re-measured on the amendment date:
+  `PanelRecord::validate` compares `signoff` against
+  `recommendations.is_empty()` and refuses when they differ, and the committed
+  test `an_inconsistent_signoff_is_rejected_in_both_directions` plants both
+  directions, the empty-recommendation `signoff: false` case included. D21
+  changes none of that behaviour. What it adds is the check's stated position
+  in the admission order and a name for the refusal, because an earlier
+  revision of this amendment left the equality implicit inside a constructor
+  whose variant derivation reads `recommendations` alone. That was a gap in
+  the prose rather than in the behaviour, and it is closed here rather than
+  left for an implementer to infer.
 - `relevant: false` requires `recommendations` empty. Combined with the above,
   a not-relevant record therefore always carries `signoff: true`. A
   not-relevant record with a recommendation is invalid.
@@ -2251,7 +2273,12 @@ exactly one key, and its value says which way it went.
   exhaustive over the blocking space, so `signoff` is the discriminant between
   `Pass` and `Blocking` rather than a field, and a blocking verdict with no
   recommendation anywhere is excluded by `NewOnly`'s `NonEmpty` and by the one
-  refinement named below. `Blocking` carries no
+  refinement named below. **That exclusion is backed by a refusal on the wire
+  and not by a silent re-labelling.** A record claiming `signoff: false` with
+  nothing to block on is refused as `signoff-recommendation-mismatch` before
+  any variant is chosen, so it yields no internal value at all. The absence of
+  a blocking variant able to hold it is a statement about what the type may
+  contain, never a licence to admit it as `Pass`. `Blocking` carries no
   `declared` member, because `relevant: false` forces an empty recommendation
   set, so a blocking verdict is relevant by construction rather than by a field
   that could disagree with itself.
@@ -2295,8 +2322,23 @@ pair**: a `not_resolved` entry and the one recommendation whose `supersedes`
 names that identifier arrive as two wire positions and leave as that
 identifier's single `Superseded` value, so neither a `not_resolved` value nor a
 `supersedes` field survives the boundary and the rules below count identifiers
-rather than wire positions. It verifies an **exact partition** of that set
-before it builds the map:
+rather than wire positions.
+
+**Its first step reads one record and no context.** Before it touches the
+open-identifier set, before it builds the partition, and before it chooses a
+variant, the constructor compares `signoff` against
+`recommendations.is_empty()` and returns `signoff-recommendation-mismatch`
+when they differ, in either direction. The step is stated separately, and
+stated first, for two reasons. It needs no controller input, so nothing about
+the obligation set can reorder it. And the derivation below reads
+`recommendations` alone: a constructor that folded the equality into that
+derivation would read a `signoff: false` record with an empty recommendation
+list as `Pass`, and hand a malformed blocking intent to the unanimity
+predicate as a valid sign-off. Ordering it ahead of the coverage rules also
+means the operator's first message is the one they can act on without holding
+the controller's obligation set.
+
+It then verifies an **exact partition** of that set before it builds the map:
 
 - every identifier in `prior_resolutions`, and every `supersedes` value, is a
   member of the seat's open set, so an unknown identifier cannot become a key;
@@ -2315,14 +2357,26 @@ before it builds the map:
   and none is dropped;
 - the variant then follows from the result rather than from the record: no
   recommendation anywhere is `Pass`, an all-`Resolved` map beside a non-empty
-  new set is `NewOnly`, and any `Superseded` is `Superseding`.
+  new set is `NewOnly`, and any `Superseded` is `Superseding`. **`signoff` is
+  absent from that derivation because it has already been proven equal to
+  `recommendations.is_empty()`, not because it is ignored.** Every record
+  reaching this step carries a `signoff` its recommendation set agrees with,
+  so deriving from the recommendations and deriving from `signoff` are the
+  same derivation; keeping the boolean as well would only add a second place a
+  reader has to check and a second place a later edit can make disagree.
 
 So `relevant: false` beside a recommendation, `signoff: true` beside a
-recommendation, an unresolved prior finding with no superseding recommendation,
+recommendation, `signoff: false` beside no recommendation at all, an
+unresolved prior finding with no superseding recommendation,
 an identifier that is both resolved and superseded, a recommendation linked to
 a prior identifier it is not the disposition of, and a partial or unknown
 coverage of the open set are all **unrepresentable after admission** rather
-than merely rejected during it. `EffectiveRelevance` is a separate
+than merely rejected during it. The two sign-off mismatches are **also**
+rejected during it, and the overlap is not redundancy: unrepresentability
+alone would leave the second of them a coercion rather than a refusal, since
+the type has no way to hold it and a `Pass` is sitting right there.
+
+`EffectiveRelevance` is a separate
 controller-owned type that no producer record can construct, which is what
 stops the derived value from being confused with the claimed one three call
 sites later.
@@ -2661,6 +2715,7 @@ with a wider hammer, or a suggestion to ask somebody.
 | `surface-class-disagreement` | The request's surface class differs from the trusted dispatch record's | Names both classes; the dispatch record is authoritative, so discard the request and re-request dispatch from the controller. A candidate whose class is in dispute has no defined floor and none is guessed |
 | `profile-binding-mismatch` | The dispatch record's bound profile set differs from `profiles(change_surface)` recomputed from the bound artifact, or a seat's review payload disagrees with the dispatch record | Names the bound set, the recomputed set and the seat; re-run controller dispatch against the current change-surface artifact. A stale binding is never accepted as the narrower of the two |
 | `review-payload-digest-mismatch` | A submitted review payload does not match the digest the dispatch record bound for that seat | Names the seat and both digests; re-dispatch that seat from the controller. The payload is controller-owned, so the remedy is never to re-submit an edited payload |
+| `signoff-recommendation-mismatch` | A record's `signoff` differs from `recommendations.is_empty()` in either direction, checked on the record alone before the obligation set is read, before the prior-finding partition is built and before any internal verdict exists | Names the seat, the submitted sign-off value and the recommendation count, and never the recommendation text; re-run that seat under its pinned identity so it emits one intent. The message states that neither half is to be hand-edited: keeping the recommendations and keeping the sign-off are opposite verdicts, so choosing which half survives is choosing the verdict on the reviewer's behalf. A `signoff: false` record with an empty recommendation set is a blocking intent naming nothing for the next round to fix, so it is re-run rather than read as a pass |
 | `held-seat-unreleased` | A held seat's record leaves an open finding identifier unjudged, whatever it claims for `relevant`, or a record set is unanimous while a seat remains held | Names the seat and each open finding identifier left unjudged; re-run that seat with the full resolution obligation set and judge each identifier `resolved` or `not_resolved`. A `relevant: false` claim does not reduce the obligation: the claim is accepted and normalized, and the record is refused until the coverage is exact |
 | `prior-resolution-invalid` | A record's prior-finding judgement is malformed against the obligation set the controller issued: a closed `reason` names which class, and the message names every offending identifier | One row rather than four, because the operator action differs only by the `reason` the message carries. `unknown-identifier`: names the offending identifiers and the set actually issued to this seat; drop them, or re-run the seat against the review payload it was issued, since a producer cannot mint an identifier. `duplicate-identifier`: names each identifier carried twice on **one** channel - two `prior_resolutions` entries for it, or two recommendations superseding it; carry it at most once per channel. A `not_resolved` entry beside the single recommendation that supersedes it is the required shape for an unresolved prior finding, is admitted, and is never this reason; dropping either half of that pair is incomplete coverage, not a fix. `resolved-with-superseding-recommendation`: names the identifier and the recommendation; drop that recommendation if the finding is closed, or change the entry to `not_resolved` if it is not. `not-resolved-without-superseding-recommendation`: names the identifier; add the recommendation that supersedes it, or change the entry to `resolved` |
 | `held-seat-identity-substituted` | A held seat's pinned identity differs from the one that raised the open finding | Names the seat, the pinned binding and the submitted one; re-dispatch that seat under its pinned provider, model, effort and prompt digest |
@@ -3807,6 +3862,32 @@ The eight items below are added by the 2026-08-04 amendment and belong to D21.
   and a `relevant: false` from a seat that has never been relevant is
   **accepted** as a pass, after which that seat is observed to be rotatable out
   of a later roster while the composition invariants still hold.
+
+  **Neither sign-off mismatch yields an internal value.** Two planted records
+  are required, one per direction, and both are asserted **refused** as
+  `signoff-recommendation-mismatch` rather than repaired: one carrying
+  `signoff: true` with a non-empty `recommendations`, and one carrying
+  `signoff: false` with an **empty** `recommendations`. The second is the one
+  that matters, because it is the only malformed record whose quiet repair is a
+  valid-looking pass. Each asserts that the constructor returns the error and
+  **no** internal verdict, and, since a fixture cannot inspect a value that was
+  never returned, each also asserts the observable consequences: the record
+  does not join the round, the seat is not counted as a sign-off, and no `Pass`
+  exists for that seat anywhere in the round's state. Both fixtures are
+  otherwise valid records carrying an exact `prior_resolutions` partition, so
+  the refusal is attributable to the equality check alone and not to coverage.
+  A planted implementation that derives the variant from `recommendations`
+  before comparing it against `signoff` admits the second fixture as `Pass` and
+  fails this item; that coercion is the whole reason the fixture exists.
+
+  **The order of the two checks is asserted, not assumed.** A third planted
+  record violates the equality **and** carries a short `prior_resolutions` set,
+  and is asserted refused as `signoff-recommendation-mismatch` rather than as
+  `held-seat-unreleased`. That pins the record-local check ahead of the
+  obligation check, so a malformed record is named by the error an operator can
+  act on without the controller's obligation set in hand, and a reordering that
+  makes the equality reachable only after a partition is built is caught here
+  rather than by a reviewer reading the code.
 
   **The release condition is the item's centre, because a held reviewer that
   can release itself makes every other control decorative.** Over a lineage in
