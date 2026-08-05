@@ -3747,6 +3747,7 @@ fn typed_shell_resource_error_frame(error: &TypedError) -> Value {
         | TypedError::UnsafeLocalShellFailed {
             kind: UnsafeHost::AlreadyAttached | UnsafeHost::OperationConflict,
         } => ResourceErrorKind::ResourceConflict,
+        TypedError::WorkloadAliasConflict { .. } => ResourceErrorKind::ResourceConflict,
         _ => ResourceErrorKind::InternalIntegrityFailure,
     };
     json!({
@@ -30306,6 +30307,29 @@ mod broker_dispatch_tests {
                     "errorClass": "unsupported-capability",
                     "retryClass": "never",
                     "message": "unsupported-capability",
+                    "remediation": "inspect the ShellSession Provider state and retry after its authoritative runtime is ready",
+                }
+            })
+        );
+    }
+
+    #[test]
+    fn typed_shell_alias_conflict_maps_to_closed_resource_conflict() {
+        let frame = super::typed_shell_resource_error_frame(
+            &crate::typed_error::TypedError::WorkloadAliasConflict {
+                workload_id: "private/workload".to_owned(),
+                detail: "matches workloads [/private/one, /private/two]".to_owned(),
+            },
+        );
+        assert_eq!(
+            frame,
+            json!({
+                "type": "error",
+                "error": {
+                    "kind": "resource-conflict",
+                    "errorClass": "resource-conflict",
+                    "retryClass": "never",
+                    "message": "resource-conflict",
                     "remediation": "inspect the ShellSession Provider state and retry after its authoritative runtime is ready",
                 }
             })
