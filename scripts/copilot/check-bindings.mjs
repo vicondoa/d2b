@@ -29,8 +29,8 @@ const agentsDir = join(root, ".github", "agents");
 const skillsDir = join(root, ".github", "skills");
 const modelRs = join(root, "packages", "xtask", "src", "delivery", "model.rs");
 
-// Measured from the CLI's own model catalog. `gemini-3.1-pro-preview` has no
-// `xhigh`; requesting it is invalid rather than merely unusual.
+// Measured from the CLI's own model catalog. The legacy Gemini panel binding
+// has no `xhigh`; requesting it is invalid rather than merely unusual.
 const CAPABILITIES = {
   "claude-opus-5": { efforts: ["low", "medium", "high", "xhigh", "max"], tiers: ["default", "long_context"] },
   "claude-opus-4.8": { efforts: ["low", "medium", "high", "xhigh", "max"], tiers: ["default", "long_context"] },
@@ -97,6 +97,8 @@ function readPolicy() {
     provider: pick("PANEL_PROVIDER_POLICY"),
     model: pick("PANEL_MODEL_POLICY"),
     effort: pick("PANEL_REASONING_EFFORT_POLICY"),
+    legacyModel: pick("PANEL_LEGACY_MODEL_POLICY"),
+    legacyEffort: pick("PANEL_LEGACY_REASONING_EFFORT_POLICY"),
     roles,
   };
 }
@@ -707,6 +709,8 @@ if (!existsSync(initOptionsJson)) {
         ["PROVIDER_POLICY", str("PROVIDER_POLICY"), policy.provider],
         ["MODEL_POLICY", str("MODEL_POLICY"), policy.model],
         ["EFFORT_POLICY", str("EFFORT_POLICY"), policy.effort],
+        ["LEGACY_MODEL_POLICY", str("LEGACY_MODEL_POLICY"), policy.legacyModel],
+        ["LEGACY_EFFORT_POLICY", str("LEGACY_EFFORT_POLICY"), policy.legacyEffort],
       ];
       for (const [name, mine, canonical] of policyMirrors) {
         if (mine === null || canonical == null) continue;

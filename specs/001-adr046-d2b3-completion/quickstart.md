@@ -96,7 +96,7 @@ lane. Bind each lane explicitly to
 both the wave diff plus `spec.md`, `plan.md`, `tasks.md`, and the constitution,
 and require read-only findings. Then run the actual Copilot panel skill,
 `/d2b-panel-round work`, whose ten read-only seats are bound in its table to
-`gemini-3.1-pro-preview` at reasoning effort `high` and context tier `default`.
+`gpt-5.6-sol` at reasoning effort `xhigh` and context tier `default`.
 There is no separate dotted verification or review command.
 
 Clear every verification CRITICAL, including constitution conflicts, before the panel.
@@ -111,7 +111,7 @@ X="cargo run --manifest-path packages/Cargo.toml -p xtask -- delivery wave"
 $X snapshot --program ADR046 --wave W2 --repo d2b=$PWD \
     --base d2b=<base-oid> --pull-request d2b=<number>:<head-ref>
 $X validate-import   # import local/host validator results for this exact snapshot
-$X panel-request     # writes the candidate-bound 10-role request (gemini-3.1-pro-preview)
+$X panel-request     # writes the candidate-bound 10-role request (gpt-5.6-sol/xhigh)
 $X panel-attest      # validates exactly one 14-field record per role; rejects any record
                      # whose model does not match the pinned policy
 $X seal              # requires all 10 unanimous + every wave item Merged
@@ -121,9 +121,10 @@ $X merge-eligibility
 
 `history-proof` is **not** a separate subcommand; it runs inside `merge-eligibility`.
 
-Panel lanes are 10 read-only subagents on `gemini-3.1-pro-preview`, dispatched together in
-one message. They take no heavy-gate slot, so all 10 run concurrently. They must not run
-tests or builds unless you explicitly ask a specific lane to.
+Panel lanes are 10 read-only subagents on `gpt-5.6-sol` at `xhigh`, dispatched
+together in one message. They take no heavy-gate slot, so all 10 run
+concurrently. They must not run tests or builds unless you explicitly ask a
+specific lane to.
 
 Three lanes run **concurrently** against the snapshot and never gate each other: required CI,
 local/host validators, and the panel.

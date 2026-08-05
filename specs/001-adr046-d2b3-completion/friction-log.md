@@ -54,8 +54,9 @@ attestation payload.** Describe the friction, not the review text that surfaced 
 
 Tracked here so it is not lost between waves:
 
-- **Panel model migration is blocking.** Until T581-T584 land, `panel-attest` rejects every
-  record produced on `gemini-3.1-pro-preview` and no wave can seal.
+- **Panel model migration was resolved.** T581-T584 landed the prior Gemini
+  binding; current panel requests use `gpt-5.6-sol` at `xhigh`, while the
+  Gemini/high pair remains readable for compatibility.
 - **Pipelined dispatch is not executable.** Until T585-T587 land, §4 and the `wave snapshot`
   entry check still enforce the stricter serial rule.
 - **FR-043 is unenforced by any gate.** It is tracked program-local by decision, so a green
