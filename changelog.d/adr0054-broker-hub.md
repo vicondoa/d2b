@@ -45,7 +45,9 @@
   byte. It never asks anyone to delete a path recursively.
 - Recorded how that command replaces the generated directory: it writes the
   validated files into a staging area beside the target, on the same
-  filesystem by construction, makes them durable, and swaps them into place in
+  filesystem by construction, makes them durable, reads each one back through
+  the same handle it wrote it through so that what is verified is what reached
+  the device, and swaps them into place in
   a single step, so the directory is never absent, never half written, and
   never assembled from a path that was checked once and resolved again to be
   written. A filesystem that cannot perform that swap is refused before
@@ -53,7 +55,11 @@
   recovered by comparing what is on disk rather than by trusting a flag it
   could not have written reliably, the previous copy is deleted only when every
   file in it is one the command itself measured, and two regeneration commands
-  cannot run over each other. The token that keeps them apart is held only
+  cannot run over each other. Anything an interrupted run left behind before it
+  had any recovery record to its name is cleared at the start of the next run,
+  from a fixed list of the names it could have created, leaving the command's
+  own bookkeeping files alone and refusing an unfamiliar name rather than
+  guessing what it is. The token that keeps them apart is held only
   while a regeneration is actually running: it is closed automatically when the
   command starts the build tool, so the build tool's long-lived background
   server cannot end up holding it and locking the contributor out of their own
@@ -63,7 +69,14 @@
   it starts the build tool. If the build tool fails, that copy is put back, so
   the lock is exactly what it was even if the tool had already begun rewriting
   it, while the stand-in workspace stays current; the command reports both and
-  re-running it is the recovery. The command no longer demands that the
+  re-running it is the recovery. A run that is killed outright rather than
+  failing is picked up where it stopped: the record it leaves says whether the
+  build tool ever finished, which is the one thing the files on disk cannot
+  say, so a run interrupted after the generated directory was swapped in but
+  before the build tool succeeded goes on to run it rather than reporting
+  success on a build-side lock nothing regenerated, and a run whose success
+  was recorded is not made to do that work twice. The command no longer demands
+  that the
   build-side lock match the last commit before it will run, which had made a
   successful run refuse the next one and had left no way to regenerate a lock
   that came out of a merge conflict. Build and gate entry points still generate

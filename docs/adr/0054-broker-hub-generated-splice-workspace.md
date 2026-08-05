@@ -552,8 +552,21 @@ transaction state rather than general scratch: nothing generates into it,
 nothing reads it as a build input, and between transactions it holds two files,
 `lock` and `published`. During a transaction it also holds `staged/`, the copy
 of the validated tree that will be exchanged in; `journal`, the durable record
-recovery reads; and `hub-lock.pre`, the exact prior bytes of
-`bazel/cargo/broker.lock`. `published` is the receipt of the last successful
+recovery reads; `hub-lock.pre`, the exact prior bytes of
+`bazel/cargo/broker.lock`; `journal.tmp` and `hub-lock.restore`, the
+materialization names those two pass through before their rename; and
+`probe.a` and `probe.b`, the two throwaway directories step 3 exchanges. Those
+nine names are the whole of what either writer may create inside this
+directory, and the set is closed on purpose: it is what lets step 2 remove the
+residue a killed run left behind under a bound it can state, and it is what
+makes a tenth name a refusal rather than a guess. The three names a run
+rewrites in place, `journal.tmp`, `hub-lock.pre` and `hub-lock.restore`, are
+created truncating rather than exclusively, so a stale one a crash left behind
+is replaced rather than turned into an `EEXIST` during a recovery; `staged`
+and every file under it are created exclusively, because there the
+exclusivity is the check that step 2's sweep left nothing behind.
+`published` is the receipt
+of the last successful
 publication, the same digest set the journal carried, installed by renaming
 `journal` over it at teardown so one atomic operation both clears the recovery
 trigger and records what was published. A committed `.gitignore` entry keeps
@@ -598,7 +611,8 @@ directory. Step 10 is the only step that writes the generated subtree, and
    repository plus a content hash for every path it names. Step 14 retakes the
    same snapshot and subtracts, so the command's own change set is separable
    from whatever the contributor already had in flight.
-2. **Anchor and lock.** Open the worktree root once with an ordinary
+2. **Anchor, lock, and clear residue no journal owns.** Open the worktree root
+   once with an ordinary
    `open(O_RDONLY | O_DIRECTORY | O_CLOEXEC)`, because an absolute path whose
    ancestors are outside the repository may legitimately contain symlinks
    (constraint 17). Resolve `bazel/cargo` beneath it with `openat2` under
@@ -623,8 +637,54 @@ directory. Step 10 is the only step that writes the generated subtree, and
    process's lifetime. The lock descriptor is opened in exactly one place and
    is never duplicated, since `dup`, `dup2` and `fcntl(F_DUPFD)` each hand back
    a descriptor with the flag cleared.
-3. **Prove the primitive before doing any work.** `mkdirat` two throwaway
-   directories inside the transaction directory and exchange them with
+
+   Then, still holding the lock and before any other step runs, sweep the
+   residue no journal accounts for. A run killed anywhere between this step
+   and step 9's journal rename leaves entries behind that nothing owns:
+   `staged` half populated by step 9, a `journal.tmp` that never reached its
+   rename, `probe.a` and `probe.b` from step 3, a `hub-lock.pre` or
+   `hub-lock.restore` orphaned by a teardown that did not finish. The next run
+   would otherwise meet them as `EEXIST` from step 3's `mkdirat` or from step
+   9's `O_EXCL`, or, worse, would stage into a directory its predecessor
+   partly filled and exchange a tree it did not generate. The sweep is
+   unconditional, runs before the probe and before any staging, and is bounded
+   by the closed name set above rather than by anything it reads on disk.
+   `lock` and `published` are never removed by it; they are the ownership
+   token and the receipt, not transaction state. `journal` decides the rest.
+   Absent, no recovery can be decided from anything, so nothing owns the
+   residue and every entry named `staged`, `journal.tmp`, `hub-lock.pre`,
+   `hub-lock.restore`, `probe.a` or `probe.b` is removed. Present and
+   parseable at a format version this build knows, step 4 owns every one of
+   them and this sweep removes nothing at all. Present and not parseable at a
+   known version, the command exits nonzero naming `journal`, deletes nothing,
+   and prescribes no remedy that deletes it, because a record this build
+   cannot read is the one thing that could have bounded a removal. An entry
+   under any name outside the closed nine is refused the same way: listed
+   repository-relative, left exactly where it is, no other entry swept, and
+   the command exits nonzero.
+
+   Removing `staged` when there is no journal is safe by construction rather
+   than by inspection. Step 9 makes the journal durable before step 10
+   exchanges, so no journal means no exchange, so `staged` can only be an
+   unpublished staging area that no tracked path has ever occupied. The
+   removal is bounded the same way step 11's is, by descriptor rather than by
+   trust: every entry is resolved from the transaction directory's descriptor
+   with `openat2` under the four resolve flags of this step, `fstat`ed on the
+   descriptor that will be unlinked, and required to be a directory for the
+   three directory names or a regular file for the three file names, so a
+   symlink, a device node, a fifo or a socket planted under one of those names
+   refuses and is reported instead of being followed or unlinked blind;
+   `staged` is walked bottom-up under the same per-entry rule with
+   `unlinkat(AT_REMOVEDIR)` per directory, which by constraint 14 cannot
+   outrun its own bound. `ENOENT` is success throughout, because the sweep
+   names a goal state and not an action: a sweep killed halfway is finished by
+   the next one, and a sweep with nothing to do is a no-op, which is what
+   makes running the command twice in a row indistinguishable from running it
+   once.
+3. **Prove the primitive before doing any work.** `mkdirat` `probe.a` and
+   `probe.b` inside the transaction directory, two fixed names rather than
+   generated ones so that step 2's sweep has a closed set to bound itself by,
+   and exchange them with
    `renameat2(RENAME_EXCHANGE)`. `EINVAL`, `ENOSYS`, `EOPNOTSUPP` or `EPERM`
    here means this worktree is on a filesystem that cannot publish the subtree
    safely; the command exits nonzero naming the filesystem and the remedy,
@@ -633,7 +693,9 @@ directory. Step 10 is the only step that writes the generated subtree, and
    alternative to the exchange is refusal.
 4. **Finish or refuse an interrupted transaction.** A `journal` present in the
    transaction directory means a previous run did not reach its end. Recovery
-   is decided by content, never by a phase flag, and is stated in full below.
+   is decided by the live tree's content against the sets that journal already
+   recorded, never by a phase flag, with exactly one recorded fact the tree
+   cannot supply, and is stated in full below.
 5. **Generate into scratch.** Emit the broker splice workspace into a scratch
    directory under the repository's ignored `.scratch/` root, through the
    generator entry point of section 4, from
@@ -699,15 +761,25 @@ directory. Step 10 is the only step that writes the generated subtree, and
 9. **Stage the validated bytes beside the target.** `mkdirat` `staged` inside
    the transaction directory and reproduce the validated scratch tree into it
    descriptor-relatively: `mkdirat` per directory, `openat2` with
-   `O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC` under the same four resolve flags
-   per file, write, `fsync` each file. Read every staged file back through the
-   descriptors just written and require its digest to equal the validated
+   `O_RDWR | O_CREAT | O_EXCL | O_CLOEXEC` under the same four resolve flags
+   per file, write, `fsync` each file. The access mode is `O_RDWR` and not
+   `O_WRONLY` for a reason this step depends on: the verification below reads
+   each staged file back through the descriptor that wrote it, and a
+   write-only description cannot be read from, so `O_WRONLY` would leave the
+   readback with two options, both wrong. It could reopen the file by name,
+   which is a second resolution of a name this command already resolved and
+   exactly the defect the anchored descriptor chain of step 2 exists to
+   remove; or it could be dropped, which would reduce the check to a
+   restatement of the bytes the command already held. Read every staged file
+   back through the descriptors just written, from offset zero, and require
+   its digest to equal the validated
    scratch digest, so "the validated bytes" names the bytes that reached the
    device and not the bytes that were offered to it. `fsync` the staged
    directories bottom-up, then the transaction directory. Then write the
    journal once, before anything tracked moves: a format version, the
    repository-relative subtree path, the old-tree inventory step 7 measured,
-   and the staged tree's path and digest set, materialized as `journal.tmp`,
+   the staged tree's path and digest set, and no child record, because no
+   child has run; materialized as `journal.tmp`,
    fsynced, `renameat`d over `journal`, with the transaction directory fsynced
    after.
 10. **Exchange, once.** Re-read the live subtree through the same anchored
@@ -756,27 +828,57 @@ directory. Step 10 is the only step that writes the generated subtree, and
     unweakened, and it keeps its own job: it is what catches a
     `skip_cargo_lockfile_overwrite` regression rewriting an authoritative
     `Cargo.lock` (constraint 5) or a second hub's lock moving. On success the
-    generated lock is accepted, both digests are reported, and `hub-lock.pre`
-    is discarded. On failure the snapshot is restored exactly: materialize
+    generated lock is accepted, both digests are reported, and the journal is
+    rewritten once more, through the same `journal.tmp`, fsync, `renameat`,
+    fsync-the-directory sequence step 9 uses, to record that the child
+    completed successfully and to carry the accepted lock's digest. That
+    record is written strictly after the
+    child exited zero and after this step accepted what it wrote, and it is
+    the one fact a recovering run cannot derive from the tree. `hub-lock.pre`
+    itself is discarded by step 14, after the journal that names it has been
+    retired, which is what keeps a journal and its snapshot from ever
+    disagreeing. On failure the
+    snapshot is restored exactly: materialize
     `hub-lock.restore` from `hub-lock.pre`, fsync it, `renameat` it over
     `bazel/cargo/broker.lock` through the anchor, fsync the anchor; or
     `unlinkat` the lock when the record says it was absent. The restore is
     reported with the digest the child left, so a child that half-wrote the
-    lock is visible rather than merely undone.
+    lock is visible rather than merely undone. No child record is written on
+    this path, and none is needed: a child that failed is settled here, and
+    step 14 still runs.
 14. **Hold the command to its permitted set, and tear the transaction down.**
     The command's own change set, step 1's snapshot subtracted from the same
     snapshot retaken, must be a subset of `bazel/cargo/broker-workspace/**`
     plus `bazel/cargo/broker.lock`. Any other changed path fails the command
     and is listed repository-relative. Steps 13 and 14 are different checks:
     13 bounds what Bazel wrote, 14 bounds what the whole command wrote, and
-    only 14 sees a generator that scribbled outside its own subtree. Then
-    unlink `hub-lock.pre` and any `.tmp` residue, and last, `renameat` the
+    only 14 sees a generator that scribbled outside its own subtree. Then tear
+    down, in this order: `renameat` the
     journal over `published`, one atomic operation that both clears the
-    recovery trigger and installs the receipt of what was published. A crash
-    before that rename leaves `journal` in place, so the next run re-enters
-    recovery and finds nothing left to do. `lock`, `published` and the
+    recovery trigger and installs the receipt of what was published; and only
+    after that unlink `hub-lock.pre` and any `.tmp` residue. That order is the
+    opposite of the obvious one and it is the order that keeps recovery
+    total. Unlinking first would leave a window in which a journal names a
+    hub-lock snapshot that is already gone, which is the one hub-lock state a
+    recovering run cannot interpret, since it cannot tell a finished teardown
+    from a snapshot that was never taken. Renaming first means that for as
+    long as a journal exists its snapshot exists, and that whatever survives
+    the rename is residue no journal accounts for, which is precisely what
+    step 2 sweeps. A crash
+    before the rename leaves `journal` in place, so the next run re-enters
+    recovery, which reads that journal's child record and finds either nothing
+    left to do or a child still to spawn. `lock`, `published` and the
     transaction directory stay; they are the ownership token and the receipt,
     not transaction state.
+
+    This step runs whether the child succeeded or failed, and the transaction
+    is torn down either way. A failed child has already been settled by step
+    13, the subtree it was handed is published and correct, and the receipt
+    should record that; leaving the journal in place instead would make the
+    contributor's next ordinary run a recovery of a transaction whose recorded
+    sets could by then be older than the manifest they edited. So a failed
+    child ends in an ordinary worktree with an exit status, and only a killed
+    command leaves a journal.
 
 **Recovery is decided by content, not by a marker.** There is no way to write
 a marker atomically with `renameat2`, so a phase flag recovery could trust does
@@ -789,21 +891,81 @@ recovering one changes nothing about the decision:
 - live subtree equal to the journal's old-tree inventory: the exchange had not
   happened. Any `staged` is an unpublished staging area that no tracked work
   has ever occupied, so it is removed bounded by the journal's staged path set,
-  and the run continues at step 5 with a fresh generation of its own.
+  and the run continues at step 5 with a fresh generation of its own, which
+  reaches step 12 and spawns the child like any other run.
 - live subtree equal to the journal's staged digest set: the exchange had
-  happened. Any `staged` must equal the journal's old-tree inventory and is
+  happened, and the exchange was never the end of the transaction. Any
+  `staged` must equal the journal's old-tree inventory and is
   removed bounded by it; one that does not is left in place, named, and the
-  command exits nonzero without deleting it. Otherwise the run continues from
-  step 11, where the journal's hub-lock record decides whether a snapshot is
-  still to be settled, and then tears the transaction down. A journal that
-  names a `hub-lock.pre` which is absent means the previous run was already
-  tearing down, and the settlement is finished rather than redone.
+  command exits nonzero without deleting it. With the retired tree gone, the
+  journal's child record and not any further reading of the tree decides what
+  remains:
+
+  - the journal records a successful child: the only thing the crash
+    interrupted is the teardown. Apply step 14's command-scoped changed-path
+    check against the snapshot this run took at step 1, tear the transaction
+    down exactly as step 14 does, and exit zero. No child is
+    spawned. A recorded success is never repinned a second time.
+  - the journal records no successful child: the transaction is unfinished and
+    the run rejoins the closed sequence at the step the record leaves safe,
+    rather than tearing down a transaction whose whole point has not happened
+    yet. The journal's hub-lock record decides where that step is. Carrying no
+    hub-lock record at all, no snapshot was ever taken; step 11's snapshot
+    precedes step 12's child, so no child can have run, so
+    `bazel/cargo/broker.lock` still carries its pre-child bytes and step 11 is
+    redone from the top, over any stale `hub-lock.pre` a crash left there.
+    Recording the lock as absent, that record is itself the snapshot and
+    nothing is reread. Recording a snapshot file that is present, that file is
+    kept, because it is the pre-child bytes and this run cannot recover them
+    from anywhere else. Recording a snapshot file that is not there, refuse
+    and name both: the
+    only writer that unlinks it is step 14's teardown, which retires the
+    journal before it unlinks the snapshot precisely so this pair cannot
+    arise, so meeting it means the transaction directory
+    was changed by something other than this command, and spawning a child
+    whose failure could then not be undone is not an acceptable way to find
+    out. Otherwise the run continues at step 12, spawns the child, settles the
+    lock under step 13, records the child there, and tears down under step 14.
+    Its exit status is that whole sequence's, not the recovery's alone.
 - live subtree equal to neither: refuse. List every path that matched neither
   side, prescribe the reversible remedy, delete nothing, and exchange nothing.
 
 The two branches can both hold only when the old tree and the staged tree are
-byte-equal, in which case either continuation reaches the same end state, so
-the decision is total and unambiguous rather than merely usually right.
+byte-equal. A recorded successful child settles that case before the content
+is consulted: the record exists only if the exchange preceded it, so the run
+takes the settled branch and spawns nothing. Absent such a record either
+continuation reaches the same end state, because both end in a child, a
+settlement and a teardown. The decision is therefore total and unambiguous
+rather than merely usually right.
+
+**The one thing content cannot decide, and the only fact the journal records.**
+Every branch above reads the tree, because for the tree the content is the
+evidence. The hub lock is the exception and has to be: its bytes come out of a
+network-touching resolve, so no offline predicate over them exists, which is
+the same reason it sits outside step 7's ambient check. A recovering run
+therefore cannot look at `bazel/cargo/broker.lock` and learn whether the child
+that should have rendered it ever ran. So the journal records that one fact,
+and it is not the phase flag this section rejects. A phase flag for the
+exchange is untrustworthy because no write can be made atomic with
+`renameat2`, so the flag and the fact disagree inside the crash window. The
+child record has the opposite shape: it is installed by an atomic rename
+strictly after the child exited zero and step 13 accepted its output, so it
+can only ever understate what happened, never overstate it. Those two errors
+are not symmetric. An understated record costs one further deterministic repin
+of a hub whose inputs have not moved. An overstated one leaves
+`bazel/cargo/broker.lock` rendered from a tree the repository has since
+replaced, which is the artifact this record's own failure list names and which
+three of the four gates are structurally blind to. The design takes the
+direction whose error is redundant work.
+
+Without that record the second branch would establish the published subtree,
+retire the old tree, settle a lock no child had written, tear the transaction
+down and exit zero. The contributor would then hold a green command, a current
+generated tree, and a hub lock describing the previous one, with nothing in
+the run's output saying so. A command that produces that state on its own
+recovery path is not a command that fails closed, whatever the rest of the
+section does; so the recovery path ends where an uninterrupted run ends, at a
+settled child, and not at the first point where the tree looks finished.
 
 **The window that cannot be closed, and what happens in it.** Step 10 re-reads
 the live subtree immediately before the exchange, which bounds the interval
@@ -892,6 +1054,18 @@ exchanges a tree for its own twin; and spawns the child again. Re-running is
 therefore always safe and is never the wrong thing to do, which is the property
 a partial-failure recovery has to have, and which round 2's clean-at-`HEAD`
 rule on the hub lock silently contradicted.
+
+A failed child and a killed command are not the same state, and it matters
+which one the contributor is in. A failed child is settled here: step 13
+restores the snapshot, step 14's check and teardown still run, the receipt is
+installed, and no journal survives, so the next invocation is an ordinary run
+that regenerates, exchanges a tree for its twin, and spawns the child. A
+killed command leaves the journal, and then the child record inside it is what
+decides whether the recovering run spawns a child at all. The one case where
+the two look alike from outside, a run killed after the child succeeded but
+before the record reached the device, resolves toward doing the work again: the
+recovering run finds no record, spawns the child a second time, and renders
+the same lock from the same inputs.
 
 If instead the contributor wants the whole change gone, the recovery is one
 reversible command that covers tracked, untracked and ignored entries alike,
@@ -1188,6 +1362,18 @@ substrate's repin-required message. This is a deliberate trade: round 1 had no
 such residue and paid for it with a refusal that made the ordinary mutation a
 two-command ritual.
 
+A killed command is a different state from a failed child and is handled
+differently. A failed child is settled and torn down, so the next invocation is
+an ordinary run. A killed one leaves its journal, and the journal records
+whether the Bazel child ever completed successfully, because that is the one
+fact the published tree cannot tell a recovering run. Without a recorded
+success the recovery continues to the hub-lock snapshot, the child and the
+settlement rather than tearing down a transaction that had only published; with
+one it tears down and spawns nothing, so a recorded success is never repinned
+twice. The transaction directory is also swept of the residue a run killed
+before its journal existed left behind, under a closed set of names, so the
+next run is not refused by its predecessor's half-written staging area.
+
 **Idempotence is now unconditional, and it was not.** Round 2 required
 `bazel/cargo/broker.lock` clean at `HEAD` before the command would run, which
 made a successful run poison the next one: the file it had just legitimately
@@ -1363,6 +1549,47 @@ window of absence and no recursive delete on the publish path; the support
 probe of step 3 so an unsupported filesystem refuses before any tracked
 mutation; and the inventory bound of step 11 so the only recursive removal in
 the design is confined to entries the command measured itself.
+
+**A recovery that calls the job done because the tree looks done.** This is
+the failure the transaction itself makes possible, and it is the one that
+would ship a wrong artifact through a green command. Kill the command anywhere
+after step 10's exchange and before step 13 has settled a child: the generated
+subtree on disk is complete, current, and equal to the journal's staged digest
+set. A recovering run that read only the tree would conclude that publication
+was the transaction, retire the old copy, settle a hub lock no child had
+rendered, tear the transaction down and exit zero, leaving
+`bazel/cargo/broker.lock` describing the tree the repository just replaced.
+That is the same wrong artifact this section already names under the ordering
+hazard, arrived at from the other direction, and it is invisible to the same
+three gates: `gen-bazel --check` compares the tree to the manifests and they
+agree, the offline `cargo metadata --locked` compares the tree to the lock and
+they agree, and constraint 4 never fires because the resolve did not move. The
+guard is the journal's child record and the branch that reads it: a recovering
+run whose journal carries no successful child rejoins the closed sequence at
+the hub-lock snapshot, spawns the child, settles it, and only then tears down,
+so the recovery path ends where an uninterrupted run ends. The record is
+written after the fact it records and by an atomic rename, so its only failure
+direction is one redundant repin, and a recorded success is what makes the
+recovering run skip the child rather than repin twice.
+
+**Residue from a run that died before its journal existed.** Kill the command
+between step 2 and step 9's journal rename and the transaction directory keeps
+whatever that run had reached: a half-populated `staged`, a `journal.tmp` that
+never renamed, `probe.a` and `probe.b` from the support probe. No journal
+names any of it, so no recovery branch owns it and no inventory bounds it. The
+next run then meets it as `EEXIST` from step 3's `mkdirat` or from step 9's
+`O_EXCL` staging, which is a confusing refusal on a healthy worktree; and a
+staging step written to tolerate `EEXIST` instead would be far worse, because
+it would exchange in a directory partly filled by a run whose generation it
+never validated. The guard is step 2's sweep, which runs before the probe and
+before any staging, bounds itself by the closed nine-name set rather than by
+what it finds, verifies each entry's type on the descriptor it is about to
+unlink so a planted symlink or device node refuses rather than being followed,
+refuses any name outside the set without touching the others, and treats
+`ENOENT` as success so it is a goal state rather than an action. `lock` and
+`published` are outside its reach by name, which is what keeps a sweep from
+eating the ownership token or the receipt that step 7's third permitted state
+depends on.
 
 **A Bazel child that half-writes the hub lock and then fails.** `cargo-bazel`
 renders `bazel/cargo/broker.lock` from a resolve that touches the network; a
@@ -1745,7 +1972,10 @@ integration can reach.
    `O_RDWR | O_CREAT | O_CLOEXEC`, opened in exactly one place and never
    duplicated by `dup`, `dup2` or `fcntl(F_DUPFD)`, so no child it spawns and
    no daemon such a child leaves running can inherit the open file description
-   and hold the lock past this command's exit; it proves `RENAME_EXCHANGE`
+   and hold the lock past this command's exit; it clears, under that lock and
+   before anything else, the pre-journal residue no journal accounts for,
+   bounded by the closed name set of the transaction directory and refusing
+   any other name; it proves `RENAME_EXCHANGE`
    works on that filesystem before doing any
    other work and refuses with the filesystem and the remedy named when it does
    not; it finishes or refuses an interrupted transaction; it regenerates the
@@ -1783,8 +2013,11 @@ integration can reach.
    unbounded deletion. The validated bytes are copied into
    `bazel/cargo/.broker-workspace.txn/staged`, a directory created by `mkdirat`
    under the anchored `bazel/cargo` descriptor and therefore on the same
-   filesystem by construction; every staged file is fsynced and read back
-   through the descriptor that wrote it; a journal recording the measured
+   filesystem by construction; every staged file is created with
+   `O_RDWR | O_CREAT | O_EXCL | O_CLOEXEC`, fsynced, and read back
+   through the descriptor that wrote it, the access mode being what makes that
+   readback possible without resolving the name a second time; a journal
+   recording the measured
    old-tree inventory and the staged digest set is made durable first; and the
    subtree is then published by one
    `renameat2(.., RENAME_EXCHANGE)` when it exists or one
@@ -1799,7 +2032,20 @@ integration can reach.
    sets the journal already recorded, its old-tree inventory and its staged
    digest set, never by a phase marker and never against a fresh generation
    that a later manifest edit could have moved, and refuses without deleting or
-   exchanging anything when the live subtree matches neither.
+   exchanging anything when the live subtree matches neither. Before the
+   support probe and before any staging, and unconditionally under the same
+   lock, the command sweeps the residue no journal accounts for: when no
+   `journal` is present it removes exactly the entries named `staged`,
+   `journal.tmp`, `hub-lock.pre`, `hub-lock.restore`, `probe.a` and `probe.b`,
+   each resolved and type-checked on the descriptor it is about to unlink so
+   that anything other than a directory under the three directory names or a
+   regular file under the three file names refuses instead of being followed;
+   when a parseable journal is present it removes nothing and recovery owns
+   them all; when a `journal` is present that this build cannot parse it
+   refuses naming that file and deletes nothing. Any entry outside those nine
+   names refuses, is left in place, and is reported. `lock` and `published`
+   are never removed by the sweep, `ENOENT` counts as success throughout, and
+   a sweep interrupted partway is completed by the next run.
 10. That command then spawns exactly one Bazel child under ADR 0052 section 3's
     scoped controls and derived output root. Two changed-path rules bound the
     result. The child may change only `bazel/cargo/broker.lock`, which is ADR
@@ -1812,17 +2058,29 @@ integration can reach.
     failure they are restored exactly by a single-file `renameat` through the
     anchor, or by `unlinkat` when the record says absent, and the digest the
     child left is reported; on child success the rendered lock is accepted, the
-    digest transition is reported, and the snapshot is discarded. When the child
+    digest transition is reported, the journal is rewritten by atomic rename to
+    record that the child completed successfully, and the snapshot is discarded
+    at teardown, after the journal naming it has been retired, so a journal and
+    its snapshot never disagree. Publishing the subtree is never the end of the
+    transaction. A
+    recovering run that finds the live subtree equal to the journal's staged
+    digest set and no recorded successful child continues to the hub-lock
+    snapshot, the Bazel child and the settlement before it applies the
+    command-scoped changed-path check and tears the transaction down; it may
+    skip the child only when the journal records one that succeeded, and it
+    never spawns a second child after such a record. When the child
     fails after publication the command reports the resulting state, subtree
     current and hub lock byte-identical to its pre-child bytes, never rolls the
-    subtree back and never overwrites a modification it did not make;
+    subtree back and never overwrites a modification it did not make, and tears
+    the transaction down so that no journal survives a settled failure;
     re-running the same command is the recovery and is idempotent from every
     state this command can leave, including one in which
     `bazel/cargo/broker.lock` differs from `HEAD`.
 11. This decision adds no Make target, no Layer-1 job, no required
     continuous-integration context, and no top-level shell gate. Its drift
     checks extend `test-drift`, which already exists for this class of
-    staleness, and its transaction, changed-path and lock-descriptor negatives
+    staleness, and its transaction, recovery, residue, changed-path and
+    lock-descriptor negatives
     are `#[test]`s in `packages/xtask`, running under the existing
     `rust-main-workspace-tests` surface against throwaway fixture repositories
     rather than the contributor's worktree; no new shell gate carries any of
@@ -2052,15 +2310,27 @@ record merges. Each is a command and a verdict.
     recursive remove is the inventory-bounded one against the transaction
     directory, and a grep for an unbounded recursive remove over the subtree
     path returns nothing.
-14. Recovery from an interruption is exact and bounded. For each of these
+
+    The staged bytes are verified against the device rather than against
+    memory. Every staged file is opened
+    `O_RDWR | O_CREAT | O_EXCL | O_CLOEXEC` and its digest is read back from
+    the same descriptor; the control is a build with that access mode changed
+    to `O_WRONLY`, under which the readback must fail with `EBADF` rather than
+    be skipped, silently pass, or reopen the file by name. A grep of the
+    implementation finds exactly one open of a staged file and no second
+    resolution of a staged path by name after it. Reverted.
+14. Recovery from an interruption is exact and bounded, and it never ends
+    before the child does. For each of these
     injected abort points, with the process killed rather than allowed to
     unwind, re-running `cargo xtask bazel-repin --hub broker` reaches the same
     end state as an uninterrupted run and reports what it recovered: after the
     staged tree is written but before the journal is durable; after the journal
     is durable but before the exchange; after the exchange but before the
     hub-lock snapshot; after the snapshot but before the old tree is
-    retired; and after retirement but before the journal is renamed over the
-    receipt. In the third, fourth and fifth cases the recovering run must not
+    retired; after retirement but before the Bazel child is spawned; during
+    the child; after the child succeeded but before the journal records it;
+    and after that record but before the journal is renamed over the
+    receipt. In the third through eighth cases the recovering run must not
     re-exchange, which is checked by the subtree's inode number being unchanged
     across the recovery. Editing a broker manifest between the interrupted run
     and the recovering one changes none of those outcomes, which is the
@@ -2071,6 +2341,54 @@ record merges. Each is a command and a verdict.
     removing it. With the live subtree replaced by content matching neither the
     journal's inventory nor the journal's staged digest set, the recovering run
     refuses, names the paths, deletes nothing, and exchanges nothing.
+
+    The child half of that list is checked by what the recovering run spawns,
+    not only by where it ends, and each expectation is exact. For the abort
+    after the exchange, after the hub-lock snapshot, after retirement, and
+    during the child, the recovering run spawns exactly one Bazel child,
+    ends with `bazel/cargo/broker.lock` rendered from the published subtree
+    and reported as a digest transition, and exits zero; a recovering run in
+    any of those cases that exits zero having spawned no child fails this
+    check, which is the arm that would have passed before the journal carried
+    a child record. For the abort after the child succeeded but before the
+    record is durable, the recovering run spawns exactly one child again and
+    ends in the same state, which is the accepted cost of a record that can
+    only understate. For the abort after that record, the recovering run
+    spawns no child at all, performs the command-scoped changed-path check,
+    tears the transaction down, and exits zero, with
+    `bazel/cargo/broker.lock` byte-identical under `cmp` to what the recorded
+    child left, so a recorded success is never repinned twice. In every one of
+    these the child count is measured by an injected wrapper that counts its
+    own invocations, not inferred from timing or from the report.
+
+    Pre-journal residue is cleared unconditionally, and the sweep is
+    idempotent. These are `#[test]`s in `packages/xtask` on the same throwaway
+    fixture repositories as check 12. For each of these abort points, all
+    before any journal exists, the process is killed and the command is then
+    run twice: after step 3's probe directories are created but before they
+    are removed; after `staged` is created but before any file is written into
+    it; after `staged` is partly populated; and after `journal.tmp` is written
+    but before it is renamed. One further abort point is on the other side of
+    the transaction and is swept by the same rule: after step 14's journal
+    rename but before `hub-lock.pre` is unlinked, which leaves a snapshot with
+    no journal to own it. In each case the first re-run exits zero, the
+    transaction directory afterwards holds only `lock` and `published`, and
+    the second re-run exits zero and changes nothing further, which is what
+    makes the sweep a goal state rather than an action. `published` is
+    byte-identical across all of it and `lock` is never unlinked, which is
+    checked by its inode number being unchanged. With a symlink, a fifo, a
+    socket, a character device and a directory each planted in turn at
+    `hub-lock.pre`, and with a regular file planted at `staged`, the run exits
+    nonzero, names that path, unlinks nothing, and spawns no Bazel. With an
+    unrecognized name planted in the transaction directory, the run exits
+    nonzero, names it, and leaves every other residue entry in place, which is
+    the evidence that an unknown entry refuses rather than being swept
+    alongside the known ones. With a `journal` present and parseable, none of
+    the residue names is swept and recovery owns them, checked by the staged
+    tree surviving a run that then recovers through it; with a `journal`
+    present whose format version this build does not know, the run exits
+    nonzero naming `journal` and deletes nothing, `journal` included. All
+    reverted.
 15. Two writers cannot race the publication. With one
     `cargo xtask bazel-repin --hub broker` held at an injected pause inside its
     transaction, a second invocation of the repin and an invocation of
