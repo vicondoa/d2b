@@ -30369,8 +30369,7 @@ mod broker_dispatch_tests {
                 let state = &state;
                 scope.spawn(move || {
                     start.wait();
-                    let reservation =
-                        super::reserve_typed_shell_session_create(state, 1000, &name);
+                    let reservation = super::reserve_typed_shell_session_create(state, 1000, &name);
                     match reservation {
                         Ok(reservation) => {
                             outcomes.lock().unwrap().push(1u8);
