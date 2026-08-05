@@ -20,16 +20,26 @@
   never built them. An explicit check refuses any build graph in which the
   privileged binary reaches a library built against the other dependency set,
   or the main build reaches one built against the broker's, so the audited
-  closure cannot silently become a mixture of the two.
+  closure cannot silently become a mixture of the two. That check first
+  confirms it is looking at exactly the set of libraries the broker's own
+  dependency resolution implies, and fails on a set that is empty, short or
+  too long, so it cannot report success by examining nothing.
 - Recorded that regenerating the broker's build-side dependency lock is one
   contributor command that brings the generated stand-in workspace up to date
   itself rather than refusing and asking for a second command. It regenerates
   and validates those inputs offline before it starts the build tool, refuses
   outright when the stand-in workspace already carries local changes it did not
-  make, naming each one and a single reversible command that puts tracked and
-  untracked entries alike safely aside, and afterwards proves it changed
-  nothing beyond the stand-in workspace and that one build-side lock, naming
-  any other changed path. It accepts a stand-in workspace it wrote itself on an
+  make, naming each one and a single reversible command that puts tracked,
+  untracked and ignored entries alike safely aside, and afterwards proves it
+  changed nothing beyond the stand-in workspace and that one build-side lock,
+  naming any other changed path. The command it prints is chosen to actually
+  clear the
+  refusal: the most likely leftover is a build output directory that version
+  control ignores, and the narrower form of the same command silently leaves
+  that behind. Where a half-finished merge is the cause, it prints the bounded
+  command that finishes it for those paths instead, because setting changes
+  aside is not something version control will do for a file with an unresolved
+  conflict. It accepts a stand-in workspace it wrote itself on an
   earlier run whose result is not yet committed, so making two dependency
   changes before committing works, and it still compares every file byte for
   byte. It never asks anyone to delete a path recursively.
@@ -43,8 +53,12 @@
   recovered by comparing what is on disk rather than by trusting a flag it
   could not have written reliably, the previous copy is deleted only when every
   file in it is one the command itself measured, and two regeneration commands
-  cannot run over each other. Nothing here adds a privileged path or any state
-  outside the contributor's own working copy.
+  cannot run over each other. The token that keeps them apart is held only
+  while a regeneration is actually running: it is closed automatically when the
+  command starts the build tool, so the build tool's long-lived background
+  server cannot end up holding it and locking the contributor out of their own
+  working copy until that server is stopped. Nothing here adds a privileged
+  path or any state outside the contributor's own working copy.
 - Recorded that the command takes an exact copy of the build-side lock before
   it starts the build tool. If the build tool fails, that copy is put back, so
   the lock is exactly what it was even if the tool had already begun rewriting
