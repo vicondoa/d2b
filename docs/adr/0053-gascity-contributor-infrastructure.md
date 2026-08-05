@@ -2,6 +2,42 @@
 
 - Status: Accepted
 - Date: 2026-08-02
+- Amended: 2026-08-04. The panel roster changes from a closed ten-role set to
+  a **selected subset of a twelve-role pool**: seven mandatory seats plus
+  every optional seat a deterministic trigger table selects, under a
+  **surface-dependent floor** of ten seats on a code or operative-configuration
+  candidate and eight on a documentation-only one. Three seats are added to the
+  pool, `simplicity`, `agentic` and `reliability`, and one is **removed**,
+  `rust`. `software` becomes the mandatory multi-language reviewer: it is
+  reordered to hunt correctness before convention, and it carries an explicit
+  **standards profile per language**, Rust, Python, Bash and POSIX shell, and
+  Nix, activated mechanically from the changed paths and **bound by the
+  controller** in the dispatch record rather than chosen by the seat. The depth
+  the removed
+  seat held, unsafe and FFI soundness, public API design, Cargo SemVer
+  classification and workspace dependency direction, moves into `software`'s
+  Rust profile. `security` gains an explicit adversarial penetration-tester
+  mandate; `product` gains scope and gap analysis, external contract fidelity,
+  and a controller-assigned Gas City profile for reviews of this record; `docs`
+  gains intra-document coherence. The record gains one producer-written field,
+  `relevant`, with effective relevance derived by the controller so a session
+  cannot opt a reviewer out.
+  **D21 is added** and carries the whole contract, with **M33 through M38**
+  added as its acceptance items.
+  **D7, D8, D9, D10, D20, P2, the non-goals list, M7, M10 and M14 are amended
+  in place**, the "What we leverage upstream" rows for
+  `packages/xtask/src/delivery/model.rs` and `panel.rs` are corrected, and
+  Consequences and Alternatives gain the costs and the rejected options this
+  change created. Three earlier statements are **withdrawn**: that `PanelRecord`,
+  `PanelRequest` and `validate_record_set` are preserved byte-identical, that
+  the roster is a closed ten-role set, and, from an earlier revision of this
+  same amendment, that `rust` remains an optional depth seat.
+  Every other decision in this record
+  stands unchanged, and nothing here is superseded. None of this is implemented
+  yet; the committed code still carries the ten-role roster, `PanelRole::Rust`
+  included, re-measured on the
+  amendment date. Supporting source and prompt-construction material lives in
+  [`specs/0053-panel-prompt-sources.md`](specs/0053-panel-prompt-sources.md).
 - Related: [ADR 0015](0015-daemon-only-clean-break.md) (daemon-only clean
   break), [ADR 0035](0035-efficiency-and-simplification-roadmap.md),
   [ADR 0046](0046-d2b-3-provider-control-plane.md) and its validation and
@@ -157,6 +193,7 @@ with no error. Hence the `d2b-` prefix rule and the winner doctor check in D5.
 
 `PanelRecord` is a strict fourteen-field struct and `validate` checks it
 against the stored `PanelRequest`; nothing in either cares who produced it.
+
 What is not neutral is ingestion: `panel-attest` takes `--records DIR`,
 `read_record_dir` requires a directory, `record_file_name(role)` fixes
 `<role>.json`, and `PanelRequest.record_files` enumerates those names.
@@ -168,6 +205,18 @@ a final unanimous set. It enforces **distinct** `run_id`, `receipt_locator` and
 `deny_unknown_fields` with no round ordinal, prior tip or evidence reference,
 so a "round manifest" would be a new artifact class rather than a transport
 adapter.
+
+**Re-measured 2026-08-04, and still true of committed code.** `PANEL_ROLES` is
+a closed ten-element array; `PanelRole` has ten variants under
+`rename_all = "snake_case"`; `PanelRequest::validate` rejects any request whose
+`roles` is not exactly `PANEL_ROLES` in order; `validate_record_set` requires
+exactly ten files; `PanelAttestation::validate` rejects anything short of
+unanimity with the literal message "ten of ten signoffs are required"; and
+`DELIVERY_SCHEMA_VERSION` is a single shared constant, currently `2`, that
+every delivery artifact is checked against by equality. **D21 changes all of
+this and none of it is implemented yet.** The paragraphs above are the measured
+baseline the amendment is written against, not a description of the target
+state.
 
 **Receipt checking today is purely syntactic.** `validate_receipt_locator`
 requires the string to start with `"{provider}://"` and contain no control
@@ -275,8 +324,8 @@ default. Where the deployed binary is v1.4.0 rather than `main`, P7 governs.
 | Spec Kit planning | [`templates/commands/specify.md`](https://github.com/github/spec-kit/blob/d1e86f638277a99b82715c22c90558cd58d3cffd/templates/commands/specify.md), [`clarify.md`](https://github.com/github/spec-kit/blob/d1e86f638277a99b82715c22c90558cd58d3cffd/templates/commands/clarify.md), [`plan.md`](https://github.com/github/spec-kit/blob/d1e86f638277a99b82715c22c90558cd58d3cffd/templates/commands/plan.md), [`tasks.md`](https://github.com/github/spec-kit/blob/d1e86f638277a99b82715c22c90558cd58d3cffd/templates/commands/tasks.md), [`analyze.md`](https://github.com/github/spec-kit/blob/d1e86f638277a99b82715c22c90558cd58d3cffd/templates/commands/analyze.md) | The planning chain. We do **not** use [`implement.md`](https://github.com/github/spec-kit/blob/d1e86f638277a99b82715c22c90558cd58d3cffd/templates/commands/implement.md). |
 | Spec Kit task format | [`templates/tasks-template.md`](https://github.com/github/spec-kit/blob/d1e86f638277a99b82715c22c90558cd58d3cffd/templates/tasks-template.md) | The id and marker conventions D15's importer parses. No schema exists. |
 | Gas City package | [`packages/gascity/package.nix`](https://github.com/numtide/llm-agents.nix/blob/7b99fc4bbb8a7c2fff82c2708d8636c1cbc65661/packages/gascity/package.nix) | The `gc` binary and its wrapped PATH. Records that it builds v1.4.0, sets `main.commit=nixpkgs`, disables checks, and omits `python3`. |
-| d2b panel policy | [`packages/xtask/src/delivery/model.rs`](https://github.com/vicondoa/d2b/blob/b5881b2a6a42cd6e4db89c662c9df853f6a98d55/packages/xtask/src/delivery/model.rs) | `PANEL_ROLES` and the pinned provider, model and effort policy, unchanged by this record. |
-| d2b panel gate | [`packages/xtask/src/delivery/panel.rs`](https://github.com/vicondoa/d2b/blob/b5881b2a6a42cd6e4db89c662c9df853f6a98d55/packages/xtask/src/delivery/panel.rs) | `PanelRecord`, `PanelRequest` and `validate_record_set`, all preserved byte-identical by D8. |
+| d2b panel policy | [`packages/xtask/src/delivery/model.rs`](https://github.com/vicondoa/d2b/blob/b5881b2a6a42cd6e4db89c662c9df853f6a98d55/packages/xtask/src/delivery/model.rs) | The pinned provider, model and effort policy, unchanged by this record. `PANEL_ROLES` **is** changed: D21 replaces the closed ten-role constant with a twelve-role pool plus a mandatory subset. |
+| d2b panel gate | [`packages/xtask/src/delivery/panel.rs`](https://github.com/vicondoa/d2b/blob/b5881b2a6a42cd6e4db89c662c9df853f6a98d55/packages/xtask/src/delivery/panel.rs) | `PanelRecord`, `PanelRequest` and `validate_record_set`. D8's byte-identity claim over these three is **withdrawn by D21**, which adds one record field and makes the roster check roster-driven, with the admitted seat count set by the candidate surface class. The `deny_unknown_fields` discipline, the distinctness checks and the unanimity predicate are unchanged. |
 | d2b delivery storage | [`packages/xtask/src/delivery/storage.rs`](https://github.com/vicondoa/d2b/blob/b5881b2a6a42cd6e4db89c662c9df853f6a98d55/packages/xtask/src/delivery/storage.rs) | The `0700` and uid-equality checks and the outside-every-Git-tree rule that D10 designs around. |
 | d2b panel skill | [`.github/skills/d2b-panel-round/SKILL.md`](https://github.com/vicondoa/d2b/blob/b5881b2a6a42cd6e4db89c662c9df853f6a98d55/.github/skills/d2b-panel-round/SKILL.md) | The standalone producer, which stays supported. Its working-file layout is not a contract. |
 
@@ -309,8 +358,8 @@ implementation change updates the skill and its adapter to capture the receipt
 locator automatically, adds a preflight that requires a supported harness
 resolver, and makes the panel **refuse before dispatch** when one is absent.
 There is no legacy acceptance path and no warning-and-continue, because a
-panel that runs ten seats and then discovers it cannot attest has wasted the
-expensive part and produced nothing.
+panel that runs its whole roster and then discovers it cannot attest has wasted
+the expensive part and produced nothing.
 
 Existing users get a cutover, not a deprecation window. This is contributor
 tooling with one operator, so no window is required; what is required is that
@@ -411,23 +460,33 @@ until closed and the closing action is the operator's, per D13.
 
 **D7. Gas City orchestrates the binding panel, and binding assurance comes from
 the dispatch record.** For an opted-in run Gas City owns orchestration
-end to end: it dispatches the ten seats, drives the rounds, supplies each seat
-its snapshot, diff and validation context, collects verdicts, and blocks
-progression until the roster is unanimous. It does not own semantics, which are
-unchanged: closed ten-role roster, independent seats, pinned provider, model
-and effort policy, validation evidence supplied rather than re-run, delta
-review after round one, content change invalidating prior sign-off, `signoff`
-true iff `recommendations` is empty, unanimity, records bound to the same
+end to end: it dispatches the selected roster, drives the rounds, supplies each
+seat its snapshot, diff and validation context, collects verdicts, and blocks
+progression until every seat on the roster has signed off. It does not own
+semantics, which are unchanged except where D21 amends them: the roster is
+controller-selected and controller-owned rather than session-chosen,
+independent seats, pinned provider, model and effort policy, validation
+evidence supplied rather than re-run, delta review after round one, content
+change invalidating prior sign-off, `signoff` true iff `recommendations` is
+empty, unanimity over the selected roster, records bound to the same
 `candidate_id`, `content_id` and `snapshot_sha256`, and no lane attesting its
 own work.
+
+**Amended 2026-08-04.** The phrase "closed ten-role roster" in the sentence
+above is **withdrawn**. D21 replaces it with a selected subset of a
+twelve-role pool under a surface-dependent floor, ten seats on a code or
+operative-configuration candidate and eight on a documentation-only one, with
+seven seats always present. Nothing else in
+D7 changes: the roster is still closed at dispatch time, still bound to the
+candidate, and still not a thing a session may choose.
 
 **Mechanically the panel is a `check` loop**, because `check` is the only
 engine loop and cannot be combined with `gate`, `loop`, `expand`, `assignee` or
 `retry`. `d2b-panel` is one step whose `[steps.check]` carries `max_attempts`
-and whose exec mode invokes the admission script; the ten seats are dispatched
-beneath it. Fix rounds use `d2b-panel-fix` extending `fix-loop-base`. Round
-history lives in beads. P2 proves this shape or routes to an external driver
-invoked from a single step.
+and whose exec mode invokes the admission script; every seat on the selected
+roster is dispatched beneath it. Fix rounds use `d2b-panel-fix` extending
+`fix-loop-base`. Round history lives in beads. P2 proves this shape or routes
+to an external driver invoked from a single step.
 
 **Binding assurance is derived, not asserted.** An earlier revision made
 unattended orchestration conditional on cryptographically trusted receipts,
@@ -435,8 +494,9 @@ which contradicted the requirement that Gas City orchestrate the panel in the
 first version: every run would park and the deployment would satisfy one
 decision by violating the other. That rule is withdrawn. Instead:
 
-- All ten seats are dispatched through **one provider profile owned by the
-  config repo**, so the intended binding is configuration rather than a claim.
+- Every seat on the selected roster is dispatched through **one provider
+  profile owned by the config repo**, so the intended binding is configuration
+  rather than a claim.
 - The admission tool **re-derives** `provider`, `model_version` and
   `reasoning_effort` from the **orchestrator's own dispatch record**, an
   immutable bounded record produced at the Gas City dispatch boundary, and not
@@ -490,12 +550,13 @@ endpoint its identity can reach.
 
 It does exactly three things:
 
-1. **Dispatch.** It launches or authorizes panel dispatch under a fixed
-   provider, model and effort profile that it owns, and emits the trusted
-   dispatch record. If the seats must themselves run as Gas City sessions, the
-   trusted binding still comes from the controller's own dispatch, never from
-   session-written state. P2 must prove that; if it cannot, the Gas City panel
-   does not ship.
+1. **Dispatch.** It selects the roster per D21, launches or authorizes panel
+   dispatch under a fixed provider, model and effort profile that it owns, and
+   emits the trusted dispatch record carrying both the binding and the roster.
+   If the seats must themselves run as Gas City sessions, the trusted binding
+   and the trusted roster still come from the controller's own dispatch, never
+   from session-written state. P2 must prove that; if it cannot, the Gas City
+   panel does not ship.
 2. **Approval.** It receives operator decisions on the operator endpoint and
    writes a protected append-only approval and audit record.
 3. **Manifest.** It emits the canonical panel and publication manifest, bound
@@ -520,6 +581,20 @@ made in the other direction.
 `PanelRecord` and `PanelRequest` are preserved byte-identical, including
 `deny_unknown_fields`. Two neutral inputs are added beside the existing
 `--records DIR`:
+
+> **Amended 2026-08-04.** The byte-identity sentence above is **withdrawn in
+> part**. D21 adds one producer-written field to `PanelRecord`, makes the
+> roster checks in `PanelRequest::validate`, `validate_record_set` and
+> `PanelAttestation::validate` roster-driven rather than fixed at ten, with the
+> admitted cardinality set by the candidate's surface class, and bumps
+> `DELIVERY_SCHEMA_VERSION`. What survives unchanged is everything D8 was
+> actually protecting: `deny_unknown_fields` on both types, every field
+> mandatory, the pinned provider, model and effort constants, the distinctness
+> checks over `run_id`, `receipt_locator` and `output_sha256`, the
+> `signoff` iff empty-`recommendations` predicate, the refusal of any set
+> containing a finding, and the rule that no producer string is ever evidence.
+> The rest of D8 below, including both trusted-evidence variants, the typed
+> verifier, the error taxonomy and the migration wrapper, is unaffected.
 
 - `--records-stdin`, a record stream; and
 - an **injectable trusted dispatch boundary**, `--dispatch-record PATH` or a
@@ -565,8 +640,9 @@ wrote it.
 
 **The standalone cutover is gated before dispatch, not after.** The panel
 refuses to dispatch its seats when no supported resolver is present, so the
-failure costs a preflight rather than ten reviews. Partially running the panel
-and failing at admission is specifically what this gate exists to prevent.
+failure costs a preflight rather than a full roster of reviews. Partially
+running the panel and failing at admission is specifically what this gate
+exists to prevent.
 
 **Resolution goes through an injected interface, not a hardcoded process.**
 Preflight and admission both take a `HarnessReceiptResolver` as a parameter:
@@ -916,6 +992,13 @@ the standalone skill's adapter. Adapters translate shape only; none may supply
 a default, relax a policy value, infer a seat, reuse a record across rounds, or
 accept a mismatched binding, and every refusal is identical from every producer.
 
+**This survives the 2026-08-04 amendment.** D21's roster artifact and
+continuity ledger are **controller-side**, not gate inputs: the gate still sees
+exactly one final unanimous set and still has no round ordinal. What it gains
+is a roster, a surface class and a `held` set carried on the trusted dispatch
+record it already consumes, which is one more field group on an existing input
+rather than a new artifact class in xtask.
+
 **Snapshot and request generation follow the Git candidate**, never authorship
 or tool history. Absent panel evidence means "panel required and not yet
 satisfied", never "unsupported changes", and the message names the active
@@ -1075,16 +1158,20 @@ before the push is still an attempt.
 
 **The PR body is rendered by the orchestrator from the seal**, not by the
 publisher, because delivery state is readable only by its owning uid. It
-carries the panel result as `10/10 unanimous` taken from the attested record
-set, the integration commit, `snapshot_sha256`, `candidate_id`, `content_id`,
-the round count, a per-seat table of role, verdict and receipt locator, a
-validation evidence summary by reference or digest, the route input summary,
-the verification matrix summary, the simplification outcome, unresolved risks,
-and an explicit statement that merge requires human action. It carries no
-transcripts, credentials, raw identifiers or authenticated URLs, and it is
-bounded in bytes. PR creation is impossible while any finding stands, a seat is
-missing, the snapshot is stale, the binding is underived, or the publication
-approval is absent or bound to different bytes.
+carries the panel result as `<n>/<n> unanimous`, where `n` is the size of the
+attested roster, taken from the attested record set, the integration commit,
+`snapshot_sha256`, `candidate_id`, `content_id`, the round count, the surface
+class the roster was sized from, a per-seat table of role, verdict and receipt
+locator that renders a `relevant: false` pass **distinctly** from a substantive
+sign-off, the selection reason for every seat, a validation evidence summary by
+reference or digest, the route input summary, the verification matrix summary,
+the simplification outcome, unresolved risks, and an explicit statement that
+merge requires human action.
+It carries no transcripts, credentials, raw identifiers or authenticated URLs,
+and it is bounded in bytes. PR creation is impossible while any finding stands,
+a roster seat is missing, the roster violates D21's composition rules, the
+snapshot is stale, the binding is underived, or the publication approval is
+absent or bound to different bytes.
 
 **D10. Three identities in v1, and the boundary is stated honestly.** The
 delivery state root is `0700`, uid-owned, checked by uid equality rather than
@@ -1426,7 +1513,9 @@ following are deliberately **not** frozen here and belong to the follow-on spec
 after their prototypes: the panel dispatch-record wire shape; any audit store
 layout, retention algorithm or sharding; unit names beyond Gas City's real
 ones; the egress rule syntax and allowlist resolution; the publisher's exact
-invocation; the Discord approval adapter, if P5 permits one. An ADR that
+invocation; the Discord approval adapter, if P5 permits one; and, added by the
+2026-08-04 amendment, the wire shape of the change-surface artifact, the panel
+roster artifact and the continuity ledger that D21 requires. An ADR that
 freezes the hard-to-reverse details while deferring the easy ones has the
 trade backwards, which is what the previous revision did.
 
@@ -1444,6 +1533,605 @@ planted control catches. This repository already uses that shape
 in `packages/xtask/src/delivery/storage.rs`, so it is established practice
 rather than a novel demand.
 
+**D21. The panel roster is a selected subset of a twelve-role pool under a
+surface-dependent floor, and selection is controller-owned.** *Added by the
+2026-08-04 amendment. It amends D7 and D8 and is the single place the panel
+composition contract lives.*
+
+A fixed roster of ten was wrong in both directions at once. On an ADR-text
+change it ran `kernel`, `networking` and `nixos` against prose those seats have
+nothing to say about, at three sessions of cost and three chances for a
+peripheral nit to force another round. On a code change it was simultaneously
+too thin: nobody owned deletion, nobody owned the agent and prompt surface that
+now decides how most work gets done here, and nobody owned resource ownership,
+cleanup on crash paths, restart adoption and on-disk state migration, which is
+the defect class this repository's own decision set is mostly about (ADR 0011,
+0027, 0034, 0040, 0049). Widening the pool and selecting from it fixes both
+ends, and it is the smaller change: the seats already exist as a concept, the
+record already keys on role, and the gate already refuses anything that is not
+unanimous.
+
+**The pool is closed at twelve.**
+
+| Class | Seats |
+| --- | --- |
+| **Mandatory**, on every panel, never removable | `software`, `test`, `product`, `docs`, `security`, `observability`, `simplicity` |
+| **Optional**, selected by trigger | `reliability`, `agentic`, `nixos`, `networking`, `kernel` |
+
+`simplicity`, `agentic` and `reliability` are new. **`rust` is removed from the
+pool**, and its territory moves into `software`, which becomes the mandatory
+multi-language reviewer carrying an explicit standards profile per language.
+`software`, `security`, `product` and `docs` change scope. `nixos`,
+`networking` and `kernel` are unchanged in scope and move from mandatory to
+optional. The committed collection point for the sources, prompt requirements
+and anti-patterns of all twelve, plus the `software` language profiles and the
+Gas City `product` profile, is
+[`specs/0053-panel-prompt-sources.md`](specs/0053-panel-prompt-sources.md).
+Every seat prompt cites it; it is decision-support material and is not
+dispatched to anything.
+
+**Every seat name is a single lowercase word.** That is a constraint, not an
+accident, and the reason is in the implementation hazard below. `simplify`
+would have been a verb naming an action on a panel where every finding costs a
+full round, so the seat is named `simplicity` after the property it defends.
+`agentic-coding` would have been the first two-word seat and the first place
+three independent spellings of a role could silently disagree, so the seat is
+named `agentic`, which is also the more accurate name: it reviews agent
+configuration and orchestration contracts, not a coding practice.
+
+**Composition invariants.** For any panel on any candidate:
+
+1. `roster` is a subset of the pool.
+2. Every mandatory seat is in `roster`. There is no candidate class, no
+   escape hatch and no operator flag that removes one.
+3. **The floor is surface-dependent**, evaluated from the classifier below:
+   - `class = code-operative`: `|roster intersect optional| >= 3`, so at least
+     three of the five optional seats.
+   - `class = docs-only`: `|roster intersect optional| >= 1`.
+4. `|roster| >= 10` when `class = code-operative`, and `|roster| >= 8` when
+   `class = docs-only`. This follows from 2 and 3 and is checked separately
+   anyway, because a check that holds only by derivation is one refactor away
+   from not holding.
+5. `roster` is larger than its floor whenever the trigger table selects more
+   **distinct** optional seats than the floor requires. Selection is not a
+   quota: it takes every optional seat whose trigger matches, not the first
+   three. Two rules that select the same seat select one seat.
+6. Exactly one record per roster seat, and no record for a seat outside
+   `roster`.
+
+**Why the floor is conditional rather than a constant.** Ten seats on a code
+change is the size this repository wants, and the arithmetic makes that
+concrete: seven mandatory plus a floor of ten means at least three of the five
+optional seats are always dispatched on code. Ten seats on an ADR is the
+original defect, restated. A single unconditional ten would fill a
+documentation-only roster from the head of the fill order regardless of what
+the candidate contains, seating `reliability`, `agentic` and `nixos` against
+prose none of them can read. That is exactly the thing D21 exists to stop, so
+the constant is not worth its simplicity here. Cost is not linear in seats
+either: because `signoff` is true if and only if `recommendations` is empty,
+one non-empty record re-runs the whole roster, so seat count multiplies into
+round count rather than adding to it.
+
+**The surface classifier is a deny-by-default allowlist, and it fails closed.**
+`class(candidate)` is `docs-only` if and only if **every** path in the change
+surface satisfies `docs_only(p)`; otherwise it is `code-operative`. All five
+conditions must hold for `docs_only(p)` to be true:
+
+1. `p` ends in `.md`. Every other extension, and every extensionless path, is
+   code-operative. A `.json`, `.nix`, `.rs`, `.sh`, `.py`, `.toml`, `.bzl` or
+   `.mjs` path is code-operative whatever directory it sits in.
+2. `p` is under `docs/`, `specs/` or `changelog.d/`, or `p` is one of the five
+   tracked root Markdown files `README.md`, `CHANGELOG.md`, `CONTRIBUTING.md`,
+   `SECURITY.md`, `TODO.md`. Everything else is code-operative by construction,
+   which deliberately includes `tests/`, `proofs/`, `labs/`, `examples/`,
+   `templates/` and `.github/` even where the file is Markdown. `docs/` here
+   includes `docs/adr/` and `docs/adr/specs/`, which is what makes this record
+   and its supporting specification a documentation-only candidate.
+3. `p` is not `AGENTS.md` and does not end in `/AGENTS.md`. Those are operative
+   instruction files that agents load at runtime; the extension is Markdown and
+   the function is configuration.
+4. `p` is not under `.github/`. Redundant against 2 and stated anyway, because
+   this is the exact trap the rule exists for: operative prompts that look like
+   documentation. Measured 2026-08-04, `.github/` holds `agents/`, `skills/`,
+   `workflows/` and a pull-request template; `agents/*.agent.md` and
+   `skills/*/SKILL.md` are the Markdown that is really configuration, and
+   `prompts/`, `instructions/` and `copilot-instructions.md` do not exist here
+   yet but are the vendor's standard locations and would be the same trap.
+5. `p` is not a generated contract. The generated set is carried in the
+   versioned table as a literal path list, because the gate has no repository
+   access and cannot read the gate script that owns it. Measured 2026-08-04,
+   the `drift_paths` array in `tests/unit/gates/drift-check.sh` is
+   `docs/reference/schemas/`, `docs/reference/error-codes.md`,
+   `docs/reference/daemon-api.md`, `docs/manpages/`, `docs/completions/`,
+   `docs/reference/cli-output/`, `docs/specs/ADR-046-spec-set.json`,
+   `docs/specs/ADR-046-work-items.json`,
+   `docs/specs/ADR-046-implementation-graph.json`,
+   `docs/specs/ADR-046-implementation-graph.md`, `nixos-modules/generated/`,
+   `packages/d2b-contracts/src/generated`, `packages/d2b-guestd/src/generated`
+   and `packages/d2b-resource-api/src/generated`. A drift test asserts the
+   table's copy equals that array, so the duplication is checked rather than
+   trusted.
+
+Three refusals complete it, all in the fail-closed direction: an **empty**
+change surface classifies `code-operative`; a **rename** is classified from
+both sides and is `code-operative` if either side is; and anything the
+classifier cannot decide, including an unrecognised path shape in a future
+tree layout, classifies `code-operative`. There is no "probably docs" outcome.
+The cost of being wrong toward code is three extra seats; the cost of being
+wrong toward docs is a code change reviewed by an eight-seat panel with no
+specialist on it.
+
+**Selection is two steps, and the split is what makes the second one
+gate-checkable.** First `match(change_surface) -> matched_rules`, evaluated by
+the controller against the versioned table below. Then
+`select(matched_rules, class, held) -> roster`, a pure set computation:
+
+```
+roster = mandatory
+       union { seat(rule) : rule in matched_rules }
+       union held
+       union quorum_fill(class)
+```
+
+where `matched_rules` is the set of **seat rule** identifiers from the table
+below that match the candidate's change surface, `held` is the sticky set
+defined further down, and `quorum_fill` takes seats in the fixed order
+`[reliability, agentic, nixos, networking, kernel]`, skipping any already
+selected, until invariant 3 holds for `class`. The result is a **set**, so a
+seat selected three ways appears once and carries the highest-precedence reason
+in the order `mandatory > held > triggered > quorum_fill`.
+
+**The fill order is ranked by breadth, not by importance.** `reliability` leads
+because it is the only optional seat with something to say about nearly every
+candidate: any change that opens a resource, spawns a child, writes state or
+bumps a schema constant is in its territory. `agentic` is second because the
+agent and prompt surface is the most frequently touched non-code surface in
+this tree. `nixos` is third because Nix is the second language of this tree and
+`nixos` is the only language territory left in the pool once Rust moved into
+`software`. `networking` and `kernel` are last because they are the two
+narrowest territories and the two most likely to have nothing to say.
+
+**Removing `rust` from the pool makes the fill tighter, and that cost is
+named.** Three of five optional seats on code is a higher forced fraction than
+three of six was, and the seat that vacated the third fill slot is the one that
+had something to say about the language most of this tree is written in.
+The concrete case is a change confined to `packages/*/src/**.rs` that matches
+no `reliability` path or token: no optional seat rule matches at all, so the
+roster reaches ten by seating `nixos` on a diff with no Nix in it. Note what
+this is **not**: it is not a saving. The floor is unchanged, so on a candidate
+at its floor the roster is the same ten it always was, with a different and
+worse third optional seat. The saving appears only on candidates that already
+triggered more than three optionals. That
+is a real irrelevance and it is accepted for two reasons. The Rust review did
+not disappear and did not shrink: it moved into `software`, which is mandatory,
+is never rotatable out of a later round the way an optional seat is, and whose
+Rust profile activates on exactly the paths `rust-sources` used to match. And
+the cost of the wrong fill is one session and a truthful
+`relevant: false`, which carries `signoff: true` and therefore cannot force a
+round, while the roster artifact records `quorum_fill` as the reason so the
+pattern is visible to whoever reads the PR body. If that pattern turns out to
+be common, the remedy is a table change, which is a reviewed commit, not a
+floor exemption.
+
+**The trigger table is a versioned constant in `packages/xtask`, not a
+heuristic.** It starts at **version 1** with the settled pool: no selector for
+mandatory `simplicity`, no selector for the removed `rust` seat, deterministic
+`reliability` and `agentic` rules, and the four `software-*-profile` rules.
+Leaving a dead row in a constant the gate recomputes is a trap: a later reader
+would assume the selector can change an outcome, while a rule naming a seat
+outside the pool has no resolvable target at all.
+
+Path rules match repository-relative paths on either side of a rename, and
+apply to every path in the change surface. **Content rules match added lines
+only, case-sensitively, against a fixed token list, and are evaluated only on
+paths that individually fail `docs_only(p)`.** A token in prose is a citation,
+not a call: this record mentions `pidfd`, `deny_unknown_fields` and
+`DELIVERY_SCHEMA_VERSION` repeatedly without any of them being a use. The last
+five rows are **profile rules**, not seat rules: they select nobody and bind a
+profile onto a seat that is mandatory anyway.
+
+| Rule id | Selects | Matches |
+| --- | --- | --- |
+| `nix-sources` | `nixos` | `**/*.nix`, `flake.lock`, `nixos-modules/**`, `nix/**`, `pkgs/**`, `templates/**`, `examples/**` |
+| `net-paths` | `networking` | `nixos-modules/network*.nix`, `nixos-modules/net.nix`, and any path whose basename contains `firewall`, `nftables`, `bridge`, `vsock`, `dhcp` or `dns` |
+| `net-tokens` | `networking` | added line contains any of `nftables`, `iptables`, `AF_VSOCK`, `systemd.network`, `169.254.`, `bind(`, `listen(`, `resolv` |
+| `kernel-paths` | `kernel` | `nixos-modules/minijail*`, `packages/d2b-priv-broker/**`, `packages/d2b-guest-shell-runner/**` |
+| `kernel-tokens` | `kernel` | added line contains any of `pidfd`, `cgroup`, `clone3`, `unshare(`, `setns`, `seccomp`, `ioctl`, `openat2`, `RESOLVE_`, `MS_`, `/proc/`, `/sys/fs/cgroup` |
+| `reliability-paths` | `reliability` | `packages/xtask/src/delivery/**`, `packages/d2bd/src/**`, `packages/d2b-priv-broker/src/**`, `packages/d2b-resource-store*/**`, `nixos-modules/store.nix`, and any path under `packages/*/src/**` whose basename contains `storage`, `state`, `lifecycle`, `session`, `shutdown`, `restart`, `pool`, `adopt`, `lock`, `lease`, `sync`, `reconcile`, `supervisor` or `cleanup` |
+| `reliability-tokens` | `reliability` | added line contains any of `Drop for`, `tokio::spawn`, `thread::spawn`, `JoinHandle`, `Mutex<`, `RwLock<`, `Atomic`, `catch_unwind`, `rename(`, `fsync`, `O_TMPFILE`, `SCHEMA_VERSION`, `deny_unknown_fields`, `EBUSY` |
+| `agentic-paths` | `agentic` | `.github/agents/**`, `.github/prompts/**`, `.github/instructions/**`, `.github/skills/**`, `.github/copilot-instructions.md`, `scripts/copilot/**`, `.gc/**`, `**/AGENTS.md`, `**/*.formula.toml`, `**/pack.toml`, `**/prompt.template.md`, `docs/contributing/copilot-agents.md`, `docs/contributing/panel-review.md`, `docs/adr/0053-gascity-contributor-infrastructure.md`, `docs/adr/specs/0053-panel-prompt-sources.md` |
+| `software-rust-profile` | nobody; adds `rust` to `software.profiles` | `**/*.rs`, `**/Cargo.toml`, `Cargo.lock`, `rust-toolchain*.toml`, `**/BUILD.bazel`, `**/*.bzl`, `MODULE.bazel*` |
+| `software-python-profile` | nobody; adds `python` to `software.profiles` | `**/*.py`, `pyproject.toml`, `setup.py`, `setup.cfg`, `requirements*.txt` |
+| `software-shell-profile` | nobody; adds `shell` to `software.profiles` | `**/*.sh`, `**/*.bash`, any extensionless path whose parent directory is named `bin` or `tools`, or added line starting with any of `#!/bin/sh`, `#!/usr/bin/env sh`, `#!/bin/bash`, `#!/usr/bin/env bash`, `#!/bin/dash`, `# shellcheck shell=` |
+| `software-nix-profile` | nobody; adds `nix` to `software.profiles` | `**/*.nix`, `flake.lock` |
+| `adr-0053-product-profile` | nobody; binds `product.profile = gascity` | `docs/adr/0053-*.md`, `docs/adr/specs/0053-*` |
+
+**`software`'s language profiles are controller-derived, exactly like
+`product`'s.** The four `software-*-profile` rules bind a set,
+`software.profiles`, in the dispatch record; the gate refuses a `software`
+record produced under a different set for that candidate. This reuses the
+mechanism `adr-0053-product-profile` already needs rather than inventing a
+second one, and it converts "did the seat apply the Rust standards?" from a
+prompt hope into a dispatch fact a human can read in the PR body. Six
+properties are decided here:
+
+- **Every applicable profile activates.** A diff touching `.rs`, `.sh` and
+  `.nix` binds all three. There is no primary-language election, because the
+  defect a mixed diff hides is exactly the one at the language boundary.
+- **The empty set is legal and is not an abstention.** A change confined to
+  `scripts/copilot/check-bindings.mjs`, to a `Makefile`, or to a `.json`
+  schema binds no profile, and `software` still runs its shared
+  correctness-first and local-convention sections over it. Measured
+  2026-08-04, `.mjs` is the one real source type in this tree with no profile;
+  a fifth profile is the extension point if JavaScript grows here, and until
+  then an unrecognised source type is a reason to review without a standards
+  citation, never a reason to abstain.
+- **Profiles are scope, not selection reason.** Telling a seat which languages
+  its delta contains is a statement about the delta. Telling it why it is on
+  the roster is not, and stays controller-side under the rule further down.
+- **`software-nix-profile` is deliberately narrower than `nix-sources`.** The
+  seat rule fires on the whole Nix surface including directories that carry no
+  `.nix` file in the delta, because that is where module wiring lives; the
+  profile fires on Nix source, because that is what carries Nix code quality.
+  The overlap is intended and the ownership split is stated below.
+- **`software-shell-profile` is the one rule with both a path clause and a
+  content clause**, because this tree commits four executable shell scripts
+  with no extension and a suffix rule would miss them. Its parent-directory
+  clause catches the two under `tests/tools/` and the two under a `bin/`
+  directory measured 2026-08-04; its shebang clause catches anything else,
+  under the same restriction every content rule carries, that it is evaluated
+  only on paths which individually fail `docs_only(p)`. A shebang quoted in
+  prose therefore never binds a profile.
+- **Bound-exceeded binds every profile, not none.** When an oversized change
+  surface makes selection return the entire pool, profile binding returns the
+  entire profile set by the same reasoning: an over-cited standard costs a
+  paragraph, an un-applied one costs the review.
+
+Worked example, and the one that matters first: a change confined to
+`docs/adr/0053-gascity-contributor-infrastructure.md`, `docs/adr/README.md` and
+`docs/adr/specs/0053-panel-prompt-sources.md`. Every path is `.md`, under
+`docs/`, is not an `AGENTS.md`, is not under `.github/` and is not in the
+generated set, so `class = docs-only` and the floor is eight with one optional
+seat. `agentic-paths` matches two of the three paths and selects `agentic`;
+`adr-0053-product-profile` matches and binds the profile; no
+`software-*-profile` rule matches, so `software.profiles` is empty and the seat
+runs its shared sections only; no content rule is evaluated at all, because no
+path in this surface is code-operative. One optional seat satisfies the floor,
+so `quorum_fill` adds nothing. The roster is the seven mandatory seats plus
+`agentic`, **exactly eight**, and `product` runs under the Gas City profile.
+**That is the roster for the panel review of this amendment.**
+
+**Over-selection is the fail-closed direction.** The change surface is a new
+bounded artifact, derived by the delivery tooling from the candidate's
+`base_oid..head_oid` across the repository set and digested into the dispatch
+record, so nothing downstream needs a Git tree to reason about it. If a
+candidate exceeds its bound, selection returns the **entire pool**. We can
+survive reviewing something twice; we cannot survive silently not reviewing it.
+The same rule applies to an unrecognised rule identifier or a trigger-table
+version the reader does not implement: refuse, or select everything, never
+select less.
+
+**The `product` profile is controller-assigned, never session-declared.** When
+`adr-0053-product-profile` matches, the controller sets the `product` seat's
+profile to `gascity` in the dispatch record and the gate refuses a `product`
+record produced under any other profile for that candidate. Under that profile
+the seat must check upstream behaviour claims against commit-pinned normative
+Gas City specifications and source, not against guides, and must respect the
+normativity ladder Gas City's own reference index declares. This exists because
+this record is almost entirely claims about somebody else's software, and a
+product review that reads the guides agrees with everything the record already
+says.
+
+**Seat scope, stated here because the roster is only as good as its ownership
+map.** The prompt-level detail is in the supporting specification; what belongs
+in the decision is the boundary between seats, because that is what stops a
+wider pool from producing duplicate blocking findings.
+
+- **`software` reviews correctness first, and it is explicitly
+  language-profiled.** Its prompt is ordered: mentally execute the changed
+  control flow and hunt boundary and off-by-one errors, absence and null
+  propagation where the language has it, race and
+  time-of-check-to-time-of-use, invalid state transitions, and broken error
+  propagation; then structure, readability and error handling; then local
+  coding, naming, file and directory conventions; then measured performance.
+  Those four sections are **shared and always run**, whatever the delta
+  contains. On top of them the prompt carries one **standards profile per
+  language** - Rust, Python, Bash and POSIX shell, and Nix - each naming its
+  own normative sources, and the profiles that run are exactly the ones the
+  `software-*-profile` rules bound for this candidate. It follows
+  repository-local conventions first and cites the exact local or external rule
+  behind every convention finding. Formatting-only findings stay non-blocking.
+  A `software` record whose findings are all convention-level while a logic
+  defect sits in the delta has not done the work, and the order exists to make
+  that a stated failure rather than a matter of taste.
+- **The Rust profile carries the depth where being wrong is silent**: unsafe
+  and FFI soundness, public API design, the Cargo SemVer classification of a
+  signature change, workspace dependency direction, error-source chains, Rust
+  naming and idiom, and Rust-specific performance. Those duties were an
+  optional seat before this amendment. Coverage of Rust candidates is
+  unchanged, because the rule that selected that seat matched the same paths
+  the profile now activates on. What changes is that the depth arrives inside a
+  seat that has already read the whole delta, and that it can no longer be
+  rotated out of a later round, because a mandatory seat never can. **It does
+  not generally save a session**, and the arithmetic is worth stating because
+  it is the opposite of what "one fewer seat" suggests: on a candidate whose
+  triggers already reach the floor, `quorum_fill` replaces the vacated seat
+  with the next one in the order and the roster is the same size, which is the
+  irrelevance cost named above. A session is saved only on candidates that
+  triggered more than three optional seats, where the roster was above its
+  floor to begin with. **Performance belongs to
+  `software`** whole, so the most measurement-hungry topic in the pool has one
+  owner and no seat boundary runs through it.
+- **`nixos` is the only language specialist left, and the split with
+  `software`'s Nix profile is explicit.** `software` owns general Nix code
+  quality: readability, naming, idiom, `with`-scope and `let` hygiene, dead
+  bindings, and the formatter boundary. `nixos` owns the module system: option
+  declarations and types, `mkDefault` versus `mkForce`, merge semantics,
+  assertions, activation ordering, and NixOS-specific correctness including
+  ADR 0015's three-root-unit rule. A finding about how a Nix expression reads
+  is `software`'s; a finding about what the module system will do with it is
+  `nixos`'s. Where a candidate contains Nix, both are usually present, and this
+  is the one place in the pool where two seats read the same file on purpose.
+- **`product` gains scope and gap analysis and external contract fidelity.** It
+  enumerates the decision and acceptance items of the artifact under review and
+  states, per item, covered or not covered by this delta, plus anything in the
+  delta that no item asked for. It owns CLI surface and exit codes, wire and
+  artifact schema compatibility, version discipline, and the operator migration
+  and upgrade path, and any change to a serialized type or a schema constant
+  gets an explicit compatibility statement: break, additive, or version bump.
+  It also owns cross-decision consistency and supersession. Under the Gas City
+  profile it owns the **truth and normativity** of this record's claims about
+  upstream; `agentic` owns the **mechanics** of what d2b itself authors.
+- **`docs` gains intra-document coherence** on top of Diataxis placement,
+  changelog fragments, schema-to-prose drift, ADR index coverage, and the
+  process-marker and dash rules: contradictions between sections, terminology
+  drift, forward references to undefined things, statements two careful readers
+  would read differently, and cross-links that do not resolve. For a repository
+  whose primary artifact is a self-amending record of this length, that is the
+  highest-value reading available and it costs nothing extra.
+- **`simplicity` is mandatory and carries two lenses**, because a mandatory
+  seat with a code-only charter is a no-op on the most common candidate class
+  here. The **code lens** is unchanged: the simplest maintainable
+  implementation that meets the stated requirements, reuse of a mature
+  supported library over a hand-rolled one, no reinvented wheels, no needless
+  indirection, and deletion where deletion lowers risk. The **artifact lens**
+  applies to an ADR, a specification or a plan: is the decision surface
+  minimal, does the record reinvent behaviour upstream already provides, is a
+  previously rejected alternative being reintroduced without new evidence, and
+  is a contract stated once rather than duplicated between prose and schema.
+  Its rejections stand and are rejections, not preferences: code golf, lost
+  validation or error handling or tests or observability sold as
+  simplification, dependency sprawl, complexity laundering behind a dependency
+  or macro or configuration surface, unsupported or unmaintained dependencies,
+  and abstraction churn.
+- **`reliability` is new and its boundary is explicit**, because it borders
+  three seats that already exist. It owns resource ownership and cleanup on
+  error and crash paths, restart, adoption and idempotency, ordering and
+  concurrency across components, partial-failure and degraded-state behaviour,
+  and on-disk state and schema migration. `kernel` owns syscall and
+  kernel-interface semantics and version floors; `software` owns in-function
+  correctness and error propagation; `test` owns whether any of it is covered;
+  `product` owns the operator-facing migration and compatibility experience.
+  `reliability` owns the design property across components, which is the
+  question none of those four asks.
+- **`security` carries the adversarial mandate**: state the attacker model and
+  the capability assumed, then reach something with it, and carry a concrete
+  exploitation path on every blocking finding.
+
+**The verdict gains exactly one producer-written field.** `PanelRecord` adds
+`relevant: bool`. Nothing else about the record becomes producer-written,
+because a producer-written field is a forgery surface and D7's whole posture is
+that a producer string is never evidence. Round ordinal, selection reason, rule
+identifier, seat profile, surface class and effective relevance are
+**controller-derived** and live in the dispatch record, the roster artifact and
+the continuity ledger.
+
+Record-local rules, both rejections:
+
+- The existing predicate is unchanged and applies to **every** record:
+  `signoff` is true if and only if `recommendations` is empty.
+- `relevant: false` requires `recommendations` empty. Combined with the above,
+  a not-relevant record therefore always carries `signoff: true`. A
+  not-relevant record with a recommendation is invalid.
+
+`relevant: false` is a **pass, not an abstention**. Unanimity is therefore
+unchanged as a predicate: every seat on the roster signed off. What changes is
+only that the roster is variable, so the message stops saying ten of ten.
+
+**The selection reason never reaches the seat.** The prompt carries the seat's
+scope, the snapshot, the diff ranges and the validation evidence, and nothing
+about why that seat is on this roster. `selection_reason`, including the
+`quorum_fill` value, lives in the dispatch record, the roster artifact, the
+seal and the PR body, where a human reads it. This is decided rather than left
+open because both leaks are bad in opposite directions: a seat told it was
+seated by quorum fill writes `relevant: false` reflexively and the floor buys
+nothing, while a seat told it was triggered by a specific rule reviews the rule
+instead of the diff. A seat decides its own relevance from the change surface
+it was given, which is the only input that can produce an honest answer.
+
+**Effective relevance is derived by the controller and latches.**
+
+```
+effective_relevant(seat) = OR over every round k so far of
+                           ( record(k).relevant OR record(k).recommendations non-empty )
+```
+
+Once true it never becomes false for that candidate lineage. A later
+`relevant: false` from a seat that has already latched is **recorded and
+ignored** for relevance and continuity; it is not a rejection, because refusing
+an honest "I have nothing further" would cost a round to punish a verdict that
+changes nothing. The ledger stores both the claim and the derived value, so the
+divergence is visible rather than lost. **A session cannot opt a reviewer out
+by writing `relevant: false`**, which is the whole reason relevance is derived
+rather than asserted.
+
+**Reviewer continuity.** For a candidate lineage:
+
+- `held = { seat : effective_relevant(seat) and the seat's most recent record
+  did not carry signoff true }`. Every seat in `held` is on the next round's
+  roster by construction of `select`.
+- A seat that has never been effectively relevant may be **rotated out** in a
+  later round, subject to the composition invariants. A seat that has been
+  effectively relevant and has not yet signed off may not.
+- A seat whose most recent record carried `signoff: true` leaves `held`, but
+  the trigger table immediately re-selects it if any of its rules still match
+  the new change surface. Release is therefore only real when the change
+  surface has genuinely moved away from that seat. This is the mechanism, not a
+  promise.
+- Seat **identity** is pinned while a seat is in `held`: the same role bound to
+  the same provider, model, effort and prompt digest. Swapping a reviewer that
+  is holding a finding for a fresh one is how a finding gets laundered, so it
+  is forbidden until that reviewer returns a true sign-off.
+- New specialists are added freely as fixes change the surface. Roster growth
+  between rounds needs no justification beyond the trigger table.
+- Mandatory seats are never in the rotatable set at all.
+
+**Every held reviewer reads its own prior findings before writing a new
+verdict.** A seat whose earlier record on this candidate lineage carried
+recommendations opens its next record's summary by taking each of those
+recommendations in turn and judging it **resolved or not resolved against the
+new delta**, before it issues any verdict. This is the cheapest round-count
+reduction available: today a held seat can restate a fixed finding or drop an
+unfixed one with equal ease, and neither is visible. It is a prompt
+requirement, not a gate refusal, and this record says so plainly rather than
+implying a control it does not have: `recommendations` is the only structured
+channel the record has, and D21 deliberately did not add a second one to carry
+per-finding resolution state.
+
+**Continuity and content invalidation are reconciled, not traded off.** The
+existing rule stands untouched: any content change invalidates every prior
+sign-off, and later rounds review the delta plus full context. The two rules
+operate on different objects. Invalidation is about **verdicts**, which never
+carry across a content change and are re-earned every round against the final
+`content_id`. Continuity is about **roster membership and seat identity**,
+which do carry across, precisely so that a content change cannot quietly drop
+the reviewer whose finding caused it. A seat that signed off in round two has
+not signed off on round three's bytes; it produces a fresh record or the panel
+does not pass.
+
+**Two floors stop the mandatory seats from becoming a rubber stamp.** Both are
+derived from controller-owned inputs and both are refusals:
+
+- At least one mandatory seat must be effectively relevant. A panel on which
+  nobody read anything is not evidence of anything.
+- If the candidate classifies `code-operative`, `software` must be effectively
+  relevant. A code change that the general software reviewer found irrelevant
+  is a contradiction, and the honest reading is that the seat did not do the
+  work. This reuses the classifier rather than inventing a second path test, so
+  there is one definition of what counts as code and both the floor and the
+  seat count move together.
+
+**What the gate enforces, and what it does not.** This boundary is stated
+plainly because the alternative is a claim that does not survive contact.
+
+- **The gate enforces**, from artifact bytes alone with no repository access:
+  every composition invariant, including the surface class carried on the
+  trusted dispatch record and the floor that class selects; that `roster`
+  equals `select(matched_rules, class, held)` recomputed from the trusted
+  dispatch record's own fields; that the roster in the request equals the
+  roster in the dispatch record; one record per roster seat and none outside
+  it; the record-local predicates; unanimity; that `held` is a subset of
+  `roster`; that the dispatch record's controller-derived effective-relevance
+  set is consistent with the final round it is looking at, so a seat writing
+  `relevant: true` cannot be absent from it; both relevance floors
+  evaluated over that set; and that every seat profile the dispatch record
+  binds, `product.profile` and each member of `software.profiles`, is a
+  declared profile of a seat that is on the roster, with each such record
+  produced under exactly that binding.
+- **The gate does not enforce** that `matched_rules`, `class` or the bound
+  profile set is a truthful
+  description of the diff, because the delivery gate has no Git tree by
+  construction: the state root is refused inside any enclosing Git working
+  tree. `match`, `classify` and `profiles` are the controller's, reproducible
+  offline from
+  the change-surface artifact by a recompute command and auditable from the
+  roster artifact. Nor does the gate re-derive effective relevance across
+  earlier rounds, since it only ever sees the final set: the continuity
+  ledger's integrity comes from the append-only sink of D17, which the
+  `gascity` uid cannot rewrite, not from a second mechanism invented here.
+- **The named residual**, since a generic risk section is worthless: a
+  controller that under-reports `matched_rules`, that misclassifies a
+  code-operative candidate as docs-only, that drops a seat from `held`, or that
+  binds a thinner profile set than the delta warrants,
+  produces a smaller roster or a shallower `software` review that the gate will
+  accept because it is internally
+  consistent. What catches it is that the roster artifact records the
+  change-surface digest, the surface class, the table version and the bound
+  profile set, the recompute
+  command reproduces `classify`, `match`, `profiles` and `select` from the same
+  bytes, the
+  ledger is append-only outside the `gascity` uid, and the roster with its
+  per-seat reasons, its class and its profiles appears in the PR body where a
+  human decides
+  to merge. Misclassification is the most legible of the four, because the
+  PR body carries a class and a seat count that must agree; a thin profile set
+  is the least legible, because nothing downstream knows what languages the
+  delta contained without recomputing. What does not catch
+  it is anything automatic, and this record does not pretend otherwise.
+
+**One concrete implementation hazard, named because it is silent.** `PanelRole`
+serializes under `rename_all = "snake_case"`, `record_file_name` is built from
+a hand-written `as_str`, and `scripts/copilot/check-bindings.mjs` derives its
+expected agent filename by converting the enum variant to kebab case. Today
+every role is a single word so all three spellings agree by accident, and D21
+keeps that property deliberately: `simplicity`, `agentic` and `reliability` are
+one word each, so `Simplicity` serializes `simplicity`, `as_str` returns
+`simplicity`, and the script expects `panel-simplicity.agent.md`. The first
+two-word seat breaks this without any type error, producing a record written
+under one spelling and looked up under another, which surfaces as a missing
+seat rather than as a naming bug. A test therefore asserts all three spellings
+are the same string **for every pool member**, and it lands now rather than
+with the seat that would need it.
+
+**Version discipline is a clean break.** `DELIVERY_SCHEMA_VERSION` is a single
+shared constant checked by equality, so adding a record field bumps it for
+every delivery artifact and no cross-version record is readable. That is the
+correct outcome here and matches D3's posture: this is contributor tooling with
+one operator, so in-flight candidates re-run rather than acquiring a
+compatibility path nobody will maintain. There is no v2 acceptance path.
+
+**Three new seats and one removal mean three added seat prompts and one
+deleted one, and the binding check already knows.** Measured 2026-08-04:
+`scripts/copilot/check-bindings.mjs` parses `PANEL_ROLES` out of `model.rs`
+with a regex that **fails closed** if it cannot find the array, derives the
+expected agent file set from it in both directions, and requires the
+`## The bar for a finding` block to be byte-identical across every
+`panel-*.agent.md`. So the file set is already derived rather than hardcoded,
+and adding three pool members automatically requires
+`panel-simplicity.agent.md`, `panel-agentic.agent.md` and
+`panel-reliability.agent.md` to exist carrying the same bar bytes. Because the
+check is bidirectional, dropping `rust` from the pool automatically requires
+`.github/agents/panel-rust.agent.md` to be **deleted in the same change**; the
+Rust standards it carries are rewritten into the `software` prompt's Rust
+profile, not orphaned. Ten committed agent files minus one plus three is
+twelve, which is the pool size, and the check is what proves that rather than
+this sentence. Four things must move with the constant, and each is a real
+failure if it does not:
+
+- The script's parse target. Renaming or reshaping the roster constant makes
+  the regex miss and the check fail closed, which is the right failure but is
+  still a failure until the script is updated in the same change.
+- The bidirectional check must read the **pool**, not the mandatory set. An
+  optional seat still needs a committed prompt; selection decides who runs, not
+  who exists.
+- The bar-mismatch error text, which says "All ten seats". That string is the
+  one place the count is genuinely hardcoded.
+- The `PanelRole::Rust` variant itself. Removing a variant from a serialized
+  enum makes every record and fixture carrying `"role": "rust"` unreadable,
+  which is the correct outcome under the clean-break rule above and is a
+  failure the moment a stale fixture survives the change. The removal lands
+  with the `DELIVERY_SCHEMA_VERSION` bump D21 already forces, not separately.
+
+**None of this is implemented.** At the time of this amendment the committed
+code has the closed ten-role roster measured above, which still contains
+`PanelRole::Rust`, ten committed panel agents including
+`panel-rust.agent.md`, and a binding check whose bar-mismatch message names ten
+seats. D21 decides the
+target; the implementation lands under the prototype and acceptance gates
+below, and the contributor documentation that describes the panel to humans is
+updated in the same change that ships the code, per the repository's rule that
+contributor docs describe what works now.
+
 ## Prototype gates
 
 These are binding pre-specification gates. **No implementation of the affected
@@ -1456,7 +2144,7 @@ works.
 | --- | --- | --- | --- |
 | **P0** | Resolve `check.path`'s base directory: author a formula with a relative check path, cook and run it, observe which file executes and as which uid, then attempt to overwrite it from a task worktree. | The script resolves to a pack or module-owned path and is not writable by the `gascity` session identity. | D14 becomes a hard blocker: no privileged check step may reference a rig-writable path, and implementation stops until the module owns them. |
 | **P1** | Import `gc`, `superpowers` and a two-formula `d2b-engineering` as **siblings** in a scratch city; run `gc doctor`, `gc formula show`, and cook a three-step `d2b-build` on a throwaway rig. Repeat with the packs **nested** under a composite pack. | Sibling variant resolves all agents and dispatches `gc.run_target` steps with no collision; nested variant **fails**. | D5 is wrong and the composition model must be redesigned before any pack work. |
-| **P2** | `d2b-panel` as a `check` loop whose exec script shells `xtask ... panel-attest --records-stdin --dispatch-record <fd>` against a fixture wave; and the controller-emitted dispatch record the verifier re-derives binding from, with the seats running as Gas City sessions. | Round one non-unanimous spawns attempt two from the engine; round two unanimous closes the step and writes a seal; `max_attempts` is enforced by the dispatcher; binding is re-derived from the **controller's** dispatch record, and a session-written claim cannot change it. | The panel becomes an external driver invoked from one step. If the controller cannot own dispatch for session-run seats, the Gas City panel **does not ship** and the standalone producer remains the only supported one. No fail-open. |
+| **P2** | `d2b-panel` as a `check` loop whose exec script shells `xtask ... panel-attest --records-stdin --dispatch-record <fd>` against a fixture wave; and the controller-emitted dispatch record the verifier re-derives binding **and roster** from, with the seats running as Gas City sessions. Run it three times: once on a documentation-only fixture whose change surface triggers exactly one optional seat, once on a code-operative fixture that triggers four, and once on a code-operative fixture that triggers none; and drive a two-round case in which a seat returns a finding in round one. | Round one non-unanimous spawns attempt two from the engine; round two unanimous closes the step and writes a seal; `max_attempts` is enforced by the dispatcher; binding **and roster** are re-derived from the **controller's** dispatch record, and a session-written claim can change neither. The documentation-only fixture dispatches exactly eight seats, the four-trigger code fixture dispatches eleven, and the zero-trigger code fixture dispatches ten by taking `reliability`, `agentic` and `nixos` from the fill order, all three matching `classify` and `select` recomputed offline. The seat that returned a finding in round one is present in round two under the same seat identity, and a session-written `relevant: false` from it does not remove it. | The panel becomes an external driver invoked from one step. If the controller cannot own dispatch **or roster selection** for session-run seats, the Gas City panel **does not ship** and the standalone producer remains the only supported one. No fail-open. |
 | **P3** | From inside the proposed confinement, run `gc bd update`, `gc bd close`, a check script and a Discord post; then attempt the supervisor mutation endpoint and the controller socket from an agent session. | Control-plane calls succeed with loopback and the Dolt port reachable, **and** the mutation endpoint is refused while the controller socket rejects the agent peer. | D11's rules are wrong; egress filtering is re-derived until the control plane is reachable without reopening the mutation surface. |
 | **P4** | Publish from a unit with an explicit `WorkingDirectory` on the integration store: `git -C <repo> push origin <sha>:refs/heads/<branch>`, then create-or-edit the PR, retried twice; body transferred over the socket or an open fd rather than by path. | The branch appears at exactly that sha, retry converges without duplicating, the body cannot be substituted by swapping a path, and an unapproved sha is refused. | **Publishing design is blocked and returns for redesign.** There is no App fallback: adopting the shared-key `github` pack path while claiming credential isolation is forbidden. |
 | **P5** | Approve a gate end to end from Discord **without** inbound public HTTPS and without any agent session participating. | The gate bead closes and no agent session was involved. | D13 stands as written: Discord stays notification-only and approvals remain local. |
@@ -1478,8 +2166,37 @@ works.
 - **No reliance on `compose.branch`, `compose.gate` or `compose.aspects`**, and
   no assumption that a gate `type` has a watcher.
 - **No panel semantics weakened at any producer seam**, no round manifest added
-  to xtask, and no change to `PanelRecord`, `PanelRequest`,
-  `validate_record_set` or the pinned policy constants.
+  to xtask, and no change to the pinned provider, model and effort constants.
+  **Amended 2026-08-04:** the former blanket "no change to `PanelRecord`,
+  `PanelRequest`, `validate_record_set`" is narrowed by D21 to the properties
+  it was protecting, listed in D8's amendment note. Widening the roster is not
+  weakening a seam; every added seat is another seat that must sign off.
+- **No roster chosen by a model, a session, or a prompt.** Selection is a total
+  function of the change surface evaluated by the controller against a
+  versioned constant table, and a session-written field never changes it.
+- **No panel below its class floor**, ten seats on a code-operative candidate
+  and eight on a documentation-only one, and no candidate class, escape hatch
+  or flag that removes a mandatory seat. **No surface class inferred
+  optimistically**: anything the classifier cannot decide is code-operative.
+- **No selection reason disclosed to a seat.** The prompt receives scope and
+  evidence; `quorum_fill` and every other selection reason stay controller-side
+  and are read by a human in the PR body, never by the reviewer they describe.
+- **No reviewer self-release.** A seat that has been effectively relevant
+  cannot leave the roster by declaring itself irrelevant, and cannot be
+  swapped for a different reviewer identity until it returns a true sign-off.
+- **No second blocking channel.** `recommendations` remains the only field a
+  finding can enter. Prior-finding resolution, residual risk and cross-seat
+  observations live in the seat's summary, and this record does not pretend a
+  prompt requirement is a gate.
+- **No link-check gate** for the source set in
+  [`specs/0053-panel-prompt-sources.md`](specs/0053-panel-prompt-sources.md),
+  and **no twelve separate committed prompt-source files**. One collection
+  point, retrieval dates, and explicit moving-source markers.
+- **No prompt built from a leaked, extracted, unattributed or
+  licence-incompatible source.** Structures and checklists are extracted from
+  sources whose licence and provenance are recorded; prose is not copied; and a
+  premade prompt's numeric thresholds are never adopted as if they were this
+  repository's.
 - **No producer-asserted binding accepted as proof**, and equally **no
   fail-open**: the Gas City panel path ships with derived binding or does not
   ship.
@@ -1578,7 +2295,9 @@ and it ships planted violations it must reject.
   round two closes the step and writes a seal; `max_attempts` is enforced by
   the dispatcher. The gate receives exactly one final unanimous set, never an
   intermediate one, and round history is observable in beads rather than in
-  xtask.
+  xtask. Unanimity is over the **selected roster**, and the run is exercised on
+  at least two candidates of different roster size, one of eight and one of at
+  least ten, so a hardcoded cardinality cannot pass this item.
 - **M8 Binding is derived, not asserted.** Admission re-derives `provider`,
   `model_version` and `reasoning_effort` from the dispatch record. Three
   **well-formed** envelopes are each rejected with their own typed semantic
@@ -1599,6 +2318,13 @@ and it ships planted violations it must reject.
   eligibility**: the wave is not merge-eligible, the records do not carry over,
   and a fresh unanimous round against the new snapshot is required. Rejecting a
   late submission alone does not satisfy this item.
+
+  **Continuity survives the invalidation.** The same test asserts that a seat
+  which was effectively relevant before the mutation is still on the roster
+  after it, under the same seat identity, and that its invalidated sign-off is
+  not reused as evidence for the new content. An implementation that satisfies
+  the invalidation half by discarding the roster along with the verdicts fails
+  this item, because that is precisely the way a finding disappears.
 - **M11 Check scripts are unwritable by agents, and helper paths are anchored.**
   Every script referenced by a privileged or orchestrator-run `check` step
   resolves outside every agent-writable tree and is not writable by the
@@ -1627,13 +2353,26 @@ and it ships planted violations it must reject.
   an absent or mismatched publication approval. No merge, auto-merge or merge
   queue is enabled under any configuration.
 - **M14 The PR body carries the canonical panel result.** The rendered body
-  contains `10/10 unanimous` from the attested set, the integration commit,
-  `snapshot_sha256`, `candidate_id`, `content_id`, the round count, all ten
-  seats with verdict and receipt locator, a validation summary by reference,
-  the route input summary, the verification matrix summary, the simplification
-  outcome, unresolved risks, and the merge-requires-human statement. It
+  contains `<n>/<n> unanimous` from the attested set, where `n` is the attested
+  roster size, the integration commit, `snapshot_sha256`, `candidate_id`,
+  `content_id`, the round count, the surface class, **every roster seat** with
+  verdict, selection reason and receipt locator, a validation summary by
+  reference, the route input summary, the verification matrix summary, the
+  simplification outcome, unresolved risks, and the merge-requires-human
+  statement. A seat that passed with `relevant: false` renders **distinctly**
+  from a substantive sign-off, asserted against a fixture containing both. It
   contains no transcript, credential, raw identifier or authenticated URL, and
-  is within its size bound. A planted nine-of-ten body is rejected.
+  is within its size bound.
+
+  Five planted bodies are each **rejected**: one whose numerator is below its
+  denominator; one whose denominator is below the floor its stated class
+  requires; one whose seat table omits a roster seat; one whose roster violates
+  a composition invariant, at minimum by dropping a mandatory seat; and one
+  whose stated class is `docs-only` while its seat count is ten, since a body
+  that reports both is reporting a roster nobody could have selected. The test
+  is run over rosters of eight, ten and more than ten, so a body renderer with
+  `10` compiled into it fails rather than passing on the one size it was
+  written for.
 - **M15 The publisher never reads delivery state.** With the publisher running
   as its own identity, an attempt to read the delivery state root, the seal or
   any panel record is refused, and publication nonetheless succeeds from the
@@ -2262,6 +3001,170 @@ and it ships planted violations it must reject.
   because nothing was looking. The rule is the repository's, not this record's:
   contributor docs describe what works now.
 
+The six items below are added by the 2026-08-04 amendment and belong to D21.
+
+- **M33 Selection is a total function, and the table is the only input.**
+  A pure `select(matched_rules, class, held)` is exercised over a counted,
+  non-empty fixture corpus of change surfaces, and each case asserts the
+  **exact** roster set, not merely its size. The corpus covers at minimum: the
+  documentation-only ADR change of D21's worked example, whose roster is
+  exactly the seven mandatory seats plus `agentic` and nothing else; a
+  Rust-only change under `packages/*/src/**`, whose roster is asserted to
+  contain no seat selected by a language rule, because no such rule survives
+  for Rust; a Nix-only change, whose roster contains `nixos`; a code change
+  matching four or more optional rules, whose roster is larger than ten; and a
+  code change matching none, which reaches ten by taking `reliability`,
+  `agentic` and `nixos` from the fill order in that order. Running `select`
+  twice on the same fixture returns byte-identical output, and running it on
+  two fixtures that differ only in path ordering returns the same roster, so
+  the function is proven order-independent rather than assumed to be.
+
+  **Profile binding is asserted on the same corpus**, because a mandatory
+  multi-language seat whose profiles are wrong is a seat that reviewed the
+  wrong standards. A pure `profiles(change_surface) -> map` is exercised and
+  each case asserts the exact set: the Rust-only fixture binds
+  `software.profiles = {rust}`; the Nix-only fixture binds `{nix}`; a fixture
+  touching `.rs`, `.sh` and `.nix` in one delta binds `{rust, shell, nix}`,
+  so a mixed diff is proven to activate every applicable profile rather than
+  electing one; a fixture touching only `scripts/copilot/check-bindings.mjs`
+  binds the **empty set** and its roster still contains `software`, so an
+  unrecognised source type is proven not to remove the seat; a fixture touching
+  only `tests/tools/layer1-jobs`, which has no extension, binds `{shell}`; and
+  the documentation-only fixture binds the empty set while
+  `product.profile = gascity`. A planted `software` record whose bound profile
+  set differs from the dispatch record's is refused.
+
+  Three refusals are required, each its own typed error: a change surface
+  beyond its bound, which selects the **entire pool** rather than failing open
+  or selecting less; an unrecognised rule identifier; and a trigger-table
+  version the reader does not implement. A fixture that selects **fewer** seats
+  on any of the three fails this item.
+
+  Two table-integrity controls are required as well: an assertion that every
+  **seat** rule in the committed table selects a member of the optional set,
+  which mechanically catches both a rule naming a mandatory seat, since such a
+  rule can never change an outcome and is therefore a rule that lies, and a
+  rule naming a seat outside the pool, of which `rust` is the concrete case this
+  amendment creates; and an assertion that the committed table's declared
+  version is 1. A companion assertion covers the **profile** rules: each
+  selects nobody, and each names a seat in the pool and a profile in that
+  seat's declared profile set.
+
+- **M34 Every composition invariant is enforced as a refusal, with a planted
+  control each.** Planted rosters are each **rejected**: one missing a
+  mandatory seat; one on a `code-operative` candidate with fewer than three
+  optional seats; one on a `docs-only` candidate with no optional seat; one of
+  size nine on a `code-operative` candidate; one of size seven on a `docs-only`
+  candidate; one carrying two records for the same seat; and one carrying a
+  record for a seat that is not on the roster. One planted roster of size eight
+  on a `docs-only` candidate, one of size ten on a `code-operative` candidate
+  and one larger than ten are each **accepted**, so the check is shown to admit
+  the sizes it must. The attestation error text is asserted to name the actual
+  roster size rather than a literal ten, and a grep over the delivery crate
+  asserts no remaining ten-of-ten string.
+
+  Separately, the request roster, the trusted dispatch record's roster and the
+  attested record set are asserted to agree, and three planted disagreements
+  are each refused: a request roster larger than the dispatch record's, one
+  smaller, and one of the same size with a substituted seat. A planted
+  disagreement between the request's surface class and the dispatch record's is
+  refused as its own typed error, because a candidate whose class is in dispute
+  has no defined floor.
+
+- **M35 A session cannot forge relevance, selection, or its own release.**
+  Each of these is attempted from a producer and **refused or ignored**, and
+  the test asserts which of the two, because they are different outcomes: a
+  record carrying a roster, a surface class, a selection reason or a rule
+  identifier is **refused**, since those fields are not the producer's to
+  write; a record with `relevant: false` and a non-empty `recommendations` is
+  **refused**; a `relevant: false` from a seat that already latched effectively
+  relevant is **accepted and ignored**, with the ledger showing both the claim
+  and the derived value, and the seat still present on the next round's roster;
+  and a `relevant: false` from a seat that has never been relevant is
+  **accepted** as a pass, after which that seat is observed to be rotatable out
+  of a later roster while the composition invariants still hold.
+
+  A three-round lineage is then driven end to end: a seat returns a finding in
+  round one, is present in rounds two and three under the same pinned seat
+  identity, and a planted attempt to substitute a different reviewer identity
+  for it before it signs off is **refused**. A mandatory seat is planted for
+  removal in every round and is **refused** every time.
+
+  The prompt renderer is asserted **not** to interpolate `selection_reason`,
+  `matched_rules` or the surface class into any seat prompt: the rendered bytes
+  for a `quorum_fill` seat and for the same seat selected by trigger are
+  asserted identical, and a planted renderer that includes the reason is
+  **rejected**. Without that control the fill seats learn they were seated to
+  satisfy a cardinality invariant, and the floor buys nothing.
+
+- **M36 Both relevance floors refuse, and they read the classifier.** A panel
+  on which every mandatory seat returned `relevant: false` is **refused**. A
+  panel whose candidate classifies `code-operative` while `software` returned
+  `relevant: false` is **refused**. Two positive controls are required
+  alongside them so the floors are not satisfied by refusing everything: a
+  `docs-only` panel on which `observability`, `reliability`-class concerns and
+  others legitimately declare irrelevance while at least one mandatory seat is
+  relevant **passes**, and a code panel on which `software` is relevant
+  **passes**.
+
+- **M37 The three new seats exist end to end, and no role name drifts.**
+  `simplicity`, `agentic` and `reliability` are present in the pool, produce
+  records the gate accepts, and `agentic` and `reliability` are selected by
+  their own trigger rules on a fixture that matches each. `simplicity` is
+  asserted present on **every** roster in the M33 corpus, including the
+  documentation-only cases, since it is mandatory.
+
+  A test asserts, for **every** pool member, that the serialized role string,
+  `as_str`, and the kebab-case name `check-bindings.mjs` derives from the enum
+  variant are the same string, and a planted variant whose three spellings do
+  not agree is **rejected**. Every pool member is asserted to be a single
+  lowercase word with no hyphen and no underscore, which is what makes the
+  three spellings coincide; the planted control is a two-word variant, and it
+  must fail. Without this the mismatch is silent: the record file is written
+  under one spelling and looked up under the other, and the failure reads as a
+  missing seat rather than as a naming bug.
+
+  `check-bindings.mjs` is asserted to require a committed
+  `panel-<role>.agent.md` for **every pool member**, optional seats included,
+  and to reject a `panel-*` agent that is not a pool member. A planted pool
+  member with no agent file is **refused**, and so is a planted agent file with
+  no pool member. Its bar-mismatch message is asserted not to name a literal
+  seat count, and a planted fourteenth file with a paraphrased bar block is
+  **rejected**.
+
+  The `product` Gas City profile is exercised: on a candidate matching
+  `adr-0053-product-profile` the dispatch record carries
+  `product.profile = gascity`, a `product` record produced under any other
+  profile is **refused**, and a producer-declared profile is **refused**
+  whatever its value.
+
+- **M38 The surface classifier is conservative, and every trap case is
+  asserted.** A pure `classify(change_surface) -> class` is exercised over a
+  counted fixture corpus in which each of the following classifies
+  **`code-operative`**, one case each: a change to
+  `.github/agents/panel-software.agent.md`; a change to
+  `.github/skills/d2b-panel-round/SKILL.md`; a change to a root `AGENTS.md`;
+  a change to `tests/AGENTS.md`; a change to `tests/README.md`, which is
+  Markdown but sits outside every allowlisted prefix; a change to
+  `.github/PULL_REQUEST_TEMPLATE.md`; a change to `docs/reference/error-codes.md`,
+  which is Markdown under `docs/` and is a generated contract; a change to
+  `docs/reference/schemas/v2/bundle.json`; a change to
+  `nixos-modules/store.nix`; a change to `tests/tools/layer1-jobs.py`; a change
+  to a `Makefile`, which has no extension; an **empty** change surface; and a
+  rename whose old side is `docs/explanation/design.md` and whose new side is
+  `packages/d2b-core/src/design.rs`, plus the same rename in the other
+  direction. Each of the following classifies **`docs-only`**: the three-file
+  surface of D21's worked example; a `changelog.d/` fragment; a
+  `docs/how-to/` page; a `docs/contributing/` page; and a `CHANGELOG.md` edit.
+
+  The generated-path list carried in the versioned table is asserted equal to
+  the `drift_paths` array in `tests/unit/gates/drift-check.sh`, and a planted
+  divergence **fails**, so the duplication the gate's lack of repository access
+  forces is checked rather than trusted. A mixed surface of one `.md` docs page
+  and one `.rs` file classifies `code-operative`, and the resulting roster is
+  asserted to be at least ten, so the mixed case is proven to take the higher
+  floor rather than the average of two.
+
 ## Consequences
 
 **d2b gains nothing, which is the point, and Gas City gains no guarantees
@@ -2318,6 +3221,153 @@ specified an on-disk audit layout, an fsync sequence, quarantine sharding, five
 principals and a five-unit matrix. Several were wrong against the running
 system and all were hard to reverse. Moving them to specs means the ADR says
 less and what it says is more likely to survive contact.
+
+The paragraphs below are added by the 2026-08-04 amendment.
+
+**A ten-seat floor on code is expensive, and the expense is multiplicative.**
+Seven mandatory plus at least three of five optional means every code candidate
+pays at
+least ten reviewer sessions per round, and because `signoff` is true if and
+only if `recommendations` is empty, one non-empty record re-runs all ten. Seat
+count therefore multiplies into round count rather than adding to it: at a
+per-seat blocking rate of one in ten, the expected total sessions to unanimity
+is roughly half again what an eight-seat panel costs, and this repository's own
+recorded datapoint is far worse than one in ten, a Wave-1 panel that returned
+zero of eight sign-offs with eleven HIGH findings. The floor is accepted
+because the failures a specialist catches are the ones the static gates do not,
+and because the documentation-only class, which is the most common candidate
+class here, is explicitly exempted. It is not accepted because it is cheap.
+
+**A selected roster costs more code in the gate than a fixed one, and the cost
+is real.** A closed array of ten was one constant, one length check and one
+comparison. What replaces it is a versioned trigger table, a surface
+classifier, a selection function, a bounded change-surface artifact, a roster
+artifact, a continuity ledger, per-seat selection reasons, and a duplicated
+generated-path list that must be kept equal to a shell array in another tree.
+Every one of those is a thing that can be wrong, and the delivery crate is the
+part of this repository where being wrong is most expensive. The trade is
+accepted because the alternative was paying three irrelevant reviews on most
+candidates forever, and because over-selection is the fail-closed direction on
+every ambiguity.
+
+**Seven mandatory seats will truthfully report irrelevance, and that is not a
+malfunction.** On a documentation-only candidate, `observability` and often
+`security` and `test` have nothing to say, and `relevant: false` is the honest
+and cheap answer. The cost is that a record can read as unanimous while most of
+its seats read nothing, and the sharp edge is that the same one-line pass is
+available to a seat that simply did not look. The two floors in D21 catch only
+the degenerate shapes: nobody relevant at all, and `software` irrelevant on a
+code-operative candidate. Everything between those and a real review is caught
+by the PR body rendering `relevant: false` distinctly from a sign-off, which is
+a human control, not a gate. Naming it as a human control is the point; calling
+it a guard would be the lie.
+
+**A wider pool overlaps more, and the ownership map is the only thing stopping
+it.** `simplicity` and `software` both have opinions about abstraction;
+`security` and `observability` both look at what leaks into telemetry;
+`reliability`, `kernel` and `software` all border on races; and `software`'s
+Nix profile and `nixos` read the same file by design. With ten fixed
+seats the overlaps were tolerable. With twelve they are not, and the
+mitigation is thin: an ownership table restated in every prompt, the explicit
+`reliability`-versus-`kernel`-versus-`software`-versus-`test` boundary in D21,
+the explicit `software`-versus-`nixos` split on Nix, the single owner for
+performance, and the rule that a seat noticing something
+in another seat's territory writes an observation rather than a
+`recommendation`. That rule has no field to enforce it, because
+`recommendations` is the only blocking channel the record has and this
+amendment deliberately did not add a second one. The honest position is that
+duplicate blocking findings are a prompt-quality problem, not a mechanical one,
+and the first sign of failure will be rounds that grow rather than shrink.
+Merging `rust` into `software` removed one seat boundary and therefore one
+overlap, which is the one arithmetic improvement in this paragraph; it moved
+that overlap inside a single prompt, where the failure mode changes shape
+rather than disappearing, as the next paragraph records.
+
+**Merging Rust into `software` buys one fewer seat and costs prompt weight,
+and the specific failure it makes possible is shallow breadth.** The
+`software` prompt now carries four shared sections plus four language profiles,
+each with its own normative source set, and it is by a wide margin the longest
+seat prompt in the pool. The failure that creates is not the old one, a seat
+told to be a generalist that reviews nothing in depth; it is the new one, a
+seat with five hundred lines of standards that reads the first section of each
+and blocks on naming while an unsound `unsafe` block sits in the delta. Two
+mechanisms are aimed at exactly that. The **order is stated and is a
+requirement**: correctness before structure before convention before
+performance, and a record whose findings are all convention-level while a logic
+defect sits in the delta has not done the work. And **profile activation is
+controller-bound rather than seat-chosen**, so the prompt cannot be diluted by
+a seat quietly skipping the profile whose depth is expensive; the dispatch
+record says which profiles applied and the gate refuses a record produced under
+a different set. Neither mechanism proves depth. What they buy is that a
+shallow review is visible in the record rather than indistinguishable from a
+thorough one, and the first sign of failure will be `software` records whose
+findings cluster in the convention section on candidates that changed Rust.
+
+**Continuity state is machinery that did not exist, and it is the part most
+likely to be got wrong first.** `held`, latched effective relevance, pinned
+seat identity and the append-only ledger are four coupled mechanisms whose
+whole purpose is to make one failure impossible, a finding disappearing between
+rounds. Each is individually simple and together they are a state machine
+carried across rounds by a controller the gate cannot audit. The first question
+on any acceptance failure in this area is whether the roster the controller
+computed is the roster the gate recomputed; the second is whether `held` was
+computed from the ledger or from the round in front of it.
+
+**The sources this panel reasons from move, some are nobody's standard, and
+five seats plus one language profile have no premade prompt at all.** During
+source collection four
+GitHub Copilot documentation URLs redirected or returned 404, VS Code relocated
+its whole customization tree, OpenTelemetry retired an attribute-naming path,
+Anthropic moved its Claude Code guidance from `anthropic.com/engineering` to
+`code.claude.com`, `github/awesome-copilot` removed its entire `prompts/` and
+`chatmodes/` asset classes, and Diataxis rate-limited automated fetches.
+Several load-bearing sources are advisory rather than normative: Google's
+engineering practices, the SRE books, the Prometheus practices pages which say
+up front that they are not requirements, and the upstream Gas City and
+Compound Engineering prompts, which are product code and can change without
+notice. Worse for the promise of "ideal prompts", an enumeration of five
+collections found **no** ready-made review prompt for `nixos`, `networking`,
+`kernel` or `reliability`, only vendor-specific ones for `observability`, and
+none carrying the unsafe, FFI and SemVer depth that `software`'s Rust profile
+now owns; those seats and that profile are authored from normative
+specifications and local code instead,
+which is more work and a thinner safety net. Merging `rust` into `software`
+moved that gap rather than closing it: it is now a source gap inside one
+profile of a mandatory prompt, where it is easier to overlook than it was as a
+seat with its own file. The mitigation is retrieval dates,
+explicit normative-versus-advisory markers, a licensing ladder, and a rule that
+only a normative source or a demonstrable defect makes a finding blocking.
+There is deliberately **no link-check gate**: a network-dependent blocking
+check is a flaky blocking check, and a moved documentation URL is not a reason
+to stop a merge.
+
+**Local conventions and remote guidance disagree, and the disagreements now
+need explicit decisions rather than silent precedence.** The `software` seat is
+told to follow repository-local conventions first, which is `AGENTS.md`'s rule,
+but on several points there is no local rule to follow and the external one
+does not fit, and every one of them now lands inside a language profile of the
+one mandatory seat rather than being spread across two.
+Measured 2026-08-04: all twelve tracked Python files use
+`kebab-case.py`, which PEP 8 forbids for modules and which makes them
+unimportable; the Google Shell Style Guide is Bash-only while seven tracked
+scripts declare a POSIX `sh` shebang, five as `#!/usr/bin/env sh` and two as
+`#!/bin/sh`; Rust's own API guidelines mark crate and
+feature naming "unclear"; and no standard exists for general directory naming.
+Each of those is now a stated position in the supporting specification rather
+than a seat's judgement call, and the Python one is a settled migration that
+this record does not perform. The cost is that the panel cannot ship a
+`snake_case.py` rule until that migration lands, so the seat prompt carries an
+explicit transition rule in the meantime, and a transition rule is one more
+thing that must be removed on time or it becomes permanent.
+
+**Nothing here is implemented, and the gap is now larger than it was.** Before
+this amendment the record described a Gas City panel path over an existing
+ten-seat gate. It now also describes a gate that does not exist: a twelve-role
+pool, a surface classifier, a `relevant` field, a selection function, a
+per-seat profile binding and three
+artifact classes. Any acceptance failure in this area has one more candidate
+cause than it did, and the first question is whether the roster the controller
+computed is the roster the gate recomputed.
 
 ## Alternatives considered
 
@@ -2395,3 +3445,218 @@ legible there without going to look for it.
 **Let Gas City merge.** Rejected. `v3` is protected and the merge is the point
 of no return; every other control here bounds what reaches it rather than
 removing it.
+
+The alternatives below were considered for the 2026-08-04 amendment.
+
+**Keep the closed, fixed ten-role roster.** Rejected. It was cheap to check and
+it is the reason three seats produce a sign-off on prose they have nothing to
+say about, at three sessions of cost per candidate and three chances to force
+another round on a peripheral nit. It also has no room for the three reviews
+this repository most needs, deletion, the agent surface, and resource lifecycle
+across error paths, without becoming a fixed twelve and making the prose case
+three times worse. Note what is **not** rejected here: ten is a good number for
+a code panel, and D21 keeps it as the floor for that class. What is rejected is
+ten as a constant that ignores what changed.
+
+**Make the floor an unconditional ten.** Rejected, and this is the closest
+call in the amendment. It keeps one number instead of two and removes the
+classifier and every trap case the classifier has to get right, which is real
+simplicity in the part of the system where being wrong is most expensive. It
+fails on arithmetic. Seven mandatory plus a floor of ten forces three of five
+optional seats onto every candidate, so a change confined to `docs/how-to/`
+that matches no trigger would seat `reliability`, `agentic` and `nixos` on
+prose. That is the original defect with two of the three names changed, and it
+would be paid on the most common candidate class in this tree. The conditional
+floor costs a classifier; the unconditional one costs the thing the amendment
+was written to fix.
+
+**Fix the roster at exactly eight.** Rejected, and it is the more tempting
+error because it keeps a constant. A hard eight forces a choice between
+specialists whenever more triggers fire than seats remain, and the choice is
+made by whatever tiebreak the implementation happens to have. A candidate that
+touches a Nix module, a firewall rule, a syscall and a restart path needs four
+specialists;
+capping it at one means three of those reviews silently do not happen and the
+record still reads as unanimous. Eight is now the floor for documentation only,
+ten is the floor for code, and the ceiling in both cases is the pool.
+
+**Let a model or a heuristic pick the roster.** Rejected outright. It is not
+auditable, not reproducible, and not gate-checkable: two runs on the same
+candidate could dispatch different seats, and no later reader could tell
+whether a missing specialist was a judgement or a mistake. Worse, it puts
+roster selection inside the same session boundary D7 spent an entire decision
+excluding from every other authority. Upstream Compound Engineering does
+exactly this and forbids keyword matching outright, so this is a deliberate
+divergence rather than an oversight: a versioned constant table is less clever
+and can be re-run offline by anyone with the change surface, which is the
+property that makes the gate's recomputation check possible at all.
+
+**Merge `reliability` into `software`, `test` and `kernel` rather than adding a
+seat.** Rejected. That is where the concern lives today and it is why nobody
+owns it. `software` reviews correctness inside a function; `test` reviews
+whether a restart path is covered, which presumes somebody already decided what
+the restart path should be; `kernel` reviews whether `pidfd_open` was used
+correctly, not whether the descriptor is closed on the error branch three
+frames up. The question that falls between all three is who owns this resource,
+who releases it when the process dies here, and what the on-disk state means
+after that. For a repository whose decision set is ADR 0011, 0027, 0034, 0040
+and 0049, that is the largest unowned territory in the pool, and splitting it
+three ways is how it stayed unowned. It is optional rather than mandatory
+because a pure-documentation candidate genuinely does not have it, and it leads
+the fill order because almost every code candidate does.
+
+**Make simplification a step in the implementation formula rather than a
+reviewer.** Rejected. `pr-pipeline`'s `mol-pr-ship` already offers exactly that
+shape and it stops at a report; more to the point, a simplification step runs
+before the change is finished and reviews the author's own work, which is the
+one arrangement this record forbids everywhere else. Simplification needs a
+verdict that can block, a seat identity, and a pinned binding, and only a
+reviewer has those. A step produces advice; a seat produces a sign-off.
+
+**Leave `simplicity` optional rather than mandatory.** Rejected. Its two
+triggers, dependency-manifest paths and net-added source lines, fired on
+essentially every code candidate already, so optional status bought nothing on
+code and cost the two dead rules D21 deletes. What it did cost was the
+documentation case, where the seat was absent precisely when a record was most
+at risk of restating a contract twice or reintroducing a rejected alternative.
+The price of making it mandatory is that a code-only charter would make it a
+no-op on prose, which is why D21 gives it an artifact lens rather than just a
+promotion.
+
+**Keep `rust` as a separate optional depth seat.** Rejected, and this reverses
+an earlier revision of this same amendment, which is recorded rather than
+quietly rewritten. The argument for keeping it was that the depth where being
+wrong is silent - unsafe and FFI soundness, the Cargo SemVer classification of
+a public API change, workspace dependency direction - rests on different
+documents and a different reading posture from general code review, and would
+be a prompt nobody reads if it were bolted onto a generalist. What defeated it
+is that the generalist stopped being a generalist. `software` is mandatory and
+now carries an explicit standards profile per language, each with its own
+normative source set, activated mechanically from the changed paths and bound
+by the controller rather than chosen by the seat. Once the Rust profile exists
+and is provably active on every candidate containing Rust, a separate seat is a
+second reader of the same documents on the same candidates, whose non-overlap
+with the first reader has to be maintained by prose. Two smaller facts
+sealed it.
+Performance had already moved wholly to `software`, which was the one topic
+both seats plausibly owned, so the boundary that remained was thinner than it
+looked. And an enumeration of five prompt collections found no premade deep
+Rust review prompt at all, so the seat was going to be authored from the Rust
+API Guidelines, the Cargo SemVer reference and the Rustonomicon either way -
+and those are sources, not a seat.
+
+**The cost is stated plainly: the `software` prompt is now the largest in the
+pool and must enforce activation and priority itself.** It carries four shared
+sections and four language profiles where it used to carry breadth and defer
+depth. The failure that creates is shallow breadth - a seat that skims every
+profile and blocks on naming while an unsound `unsafe` block sits in the delta.
+D21 answers it with a stated review order that is a requirement rather than a
+suggestion, and with controller-bound profile activation that the gate checks,
+so a review that skipped the expensive profile is visible in the record. Those
+make the failure legible; they do not make it impossible, and Consequences says
+so. `nixos` stays a separate seat under the same reasoning applied honestly:
+its territory is the module system's evaluation and merge semantics, not Nix
+code quality, and that is a different question rather than a deeper reading of
+the same documents.
+
+**Let a reviewer release itself after prior relevance.** Rejected, and this is
+the load-bearing rejection of the amendment. If a `relevant: false` could
+retire a seat that had already raised a finding, the cheapest way past a
+blocking review would be to run the round again and have the seat declare the
+matter no longer its concern. Effective relevance is therefore derived by the
+controller and latches, a later `relevant: false` from a latched seat is
+recorded and ignored, and seat identity stays pinned until a true sign-off.
+A never-relevant seat may still be rotated out, because nothing is being
+escaped there.
+
+**Disclose the selection reason to the seat.** Rejected. It looks like
+transparency and it is a leak. A seat told it was seated by `quorum_fill`
+learns that no rule matched it and writes `relevant: false` reflexively, at
+which point the floor is a headcount rather than a review; a seat told which
+rule matched reviews the rule rather than the diff. The reason is written to
+the roster artifact, the seal and the PR body, where a human reads it and can
+act on it, which is the audience it was always for.
+
+**Add separate seats for previous comments, gap analysis, API contract,
+deployment verification and coherence.** Rejected. Those are the five
+conditional lanes upstream Compound Engineering carries that d2b does not, and
+every one of them is a **lens** on a seat that already exists rather than a
+territory of its own: prior-finding resolution is a duty of every held seat,
+scope and gap analysis and external contract fidelity and the operator upgrade
+path belong to `product`, and intra-document coherence belongs to `docs`. Each
+would have been a seat that runs on every candidate, produces a record, and can
+block, which is the most expensive way to add a checklist item. The same
+reasoning now excludes language lanes as well: after this amendment language
+depth is a **profile of `software`**, activated from the change surface, rather
+than a seat with its own verdict. `nixos` remains a seat because the module
+system is a different question, not a deeper reading of the same documents.
+
+**Copy a leaked, extracted or licence-incompatible prompt.** Rejected, and
+stated as a rule rather than a preference because the temptation is real: the
+best-known reviewer prompts in circulation are extractions. Three concrete
+refusals came out of source collection. Third-party compilations attributed to
+the inventor of Claude Code are unverifiable, self-described as synthesised
+from dozens of sources, and in one case published under a misspelled filename;
+no first-party public prompt artifact under that authorship was found, so
+nothing is attributed to it. `hesreallyhim/awesome-claude-code` is
+CC BY-NC-ND at the surveyed revision, so it is a discovery index and nothing
+may be adapted from it. `gastownhall/gascity-packs` carries no repository
+LICENSE at the pinned commit, so its stage prompts may be read and cited for
+structure and their text may not be copied, while its two vendored subtrees
+record MIT provenance in `upstream.toml` and may supply adaptable structures
+with attribution. The rule that falls out of all three is the same: extract
+structures and checklists, record the licence and the provenance, and never
+paste prose whose origin cannot be stated.
+
+**Adopt the thresholds that come with a premade prompt.** Rejected, and this is
+the subtler version of the previous rejection. The best available community and
+upstream review prompts carry numbers: confidence anchors at 100, 75, 50 and
+25; a file-size finding at 1000 lines; adversarial depth bands at 50 and 200
+changed lines; a duplication threshold at three matching lines; an
+exploitability bar at 80 percent confidence; four-band severity ladders with a
+block, request-changes and approve decision matrix. Every one of those is tuned
+to a codebase that is not this one, and importing a number silently creates a
+threshold this repository never authorised. Worse, the multi-band ladders are
+structurally untranslatable: d2b has exactly one blocking channel, `signoff` is
+true if and only if `recommendations` is empty, so a four-band verdict has
+nowhere to land. What is adopted is the **mechanism**, a stated rule for which
+severities may enter `recommendations` at all, and the byte-identical
+`## The bar for a finding` block stays the one place that rule is written.
+
+**Commit twelve separate prompt-source files, one per seat.** Rejected. The
+seat prompts already exist under `.github/agents/`; a second per-seat file set
+doubles the surface that must stay in step and guarantees twelve independent
+notions of what a good source is, which is the same drift the byte-identical
+finding-bar gate exists to prevent. One collection point with per-role sections
+is the artifact a reviewer of the panel design can actually read end to end.
+
+**Add a link-check gate over the source set.** Rejected. The failure it detects
+is a moved documentation URL, which is not a reason to block a merge, and the
+check itself is network-dependent and would be the flakiest blocking job in the
+repository. Retrieval dates, moving-source markers and the `docs` seat cover it
+at the right cost.
+
+**Carry a `sources_consulted` list in the record.** Rejected. It is
+producer-written, unverifiable, and would be a free-form string vector on the
+one artifact this record works hardest to keep free of them. A finding that
+rests on a source cites it in the `recommendation` where a human will read it.
+
+**Let the operator add a seat by hand.** Rejected for v1. It would make the
+roster no longer a total function of the change surface, and the gate's
+recomputation check would have to consult the approval record to distinguish a
+legitimate addition from a tampered roster. If the table selects the wrong
+seats, the remedy is to change the table, which is a reviewed commit.
+
+**Rename the ten committed seats.** Rejected. `software`, `test`, `product`,
+`docs`, `security`, `observability`, `nixos`, `networking`, `rust` and `kernel`
+are implemented in a constant, in ten agent files, in a byte-identity check, in
+contributor documentation and in five skills, and none of them is imprecise
+enough to cause wrong review behaviour. `product` is the weakest fit now that
+it carries operator experience, contract fidelity, scope analysis and the Gas
+City upstream-claims profile, and it is still not worth the churn. `rust` is
+the one committed seat that does not survive this amendment, and what happens
+to it is a **removal**, not a rename: D21 deletes the pool member, the enum
+variant and `panel-rust.agent.md`, and rewrites its standards into the
+`software` prompt's Rust profile. The two renames D21 does make, `simplify` to
+`simplicity` and `agentic-coding` to `agentic`, are free because neither seat
+exists yet.
