@@ -146,6 +146,9 @@
         ];
         nix-unit-misc = [
           "assertions.nix"
+          "assertions-1.nix"
+          "assertions-2.nix"
+          "assertions-3.nix"
           "autostart-wiring.nix"
           "examples-with-observability.nix"
           "ifname-nix-rust-parity.nix"
