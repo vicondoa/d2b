@@ -189,24 +189,38 @@ manifest-driven hub resolution.
 
 ## Decision
 
-### Root command hardening
+### Repository Nix launcher
 
-Every root-runnable Cargo command uses this boundary, varying only the command inside the final single quotes:
-
+Implementation adds compiled Rust launcher `./d2b-nix`, sourced at
+`packages/d2b-nix-launcher/src/main.rs` and tested at `packages/d2b-nix-launcher/tests/launcher.rs`. Setup materializes that ELF first; no canonical
+command uses `cargo run`, `nix run`, a shell, or caller `PATH`:
 ```text
-/usr/bin/env -i HOME="$HOME" USER="$USER" PATH=/nix/var/nix/profiles/default/bin:/run/current-system/sw/bin nix develop --ignore-environment --command bash --noprofile --norc -c 'cd packages && cargo xtask gen-package-policy-inputs --check'
+./d2b-nix -C packages -- cargo xtask gen-package-policy-inputs --check
 ```
+It ignores caller `HOME`, `NIX_BIN`, and `PATH`, using `getpwuid` only for the effective user's home in this closed candidate order:
+1. `/run/current-system/sw/bin/nix`
+2. `/nix/var/nix/profiles/default/bin/nix`
+3. `<passwd-home>/.nix-profile/bin/nix`
 
-`/usr/bin/env` is the measured portable absolute coreutils path. The fixed `PATH`
-covers the continuous-integration Nix installer and NixOS system profiles; it
-cannot resolve a function. `HOME` and `USER` are the only copied values.
-`env -i` removes every other entry before Nix starts, so no child shell can import
-a function first; `--ignore-environment` clears the allowlist before shell setup.
+An absent candidate advances; an existing invalid candidate refuses. The launcher resolves the profile symlink chain, opens the final target without
+following another link, and requires a regular executable descriptor at `/nix/store/<store-component>/bin/nix`. Loops, dangling or changing chains,
+bad type or mode, targets outside `/nix/store`, or a device/inode mismatch refuse. Execution uses that descriptor, never a later lookup. If all entries
+are absent, the exact refusal is:
+```text
+d2b-nix: no approved Nix executable found; install Nix or fix /run/current-system/sw/bin/nix, /nix/var/nix/profiles/default/bin/nix, or ~/.nix-profile/bin/nix
+```
+The launcher atomically creates and verifies a private mode-`0700` directory under `/tmp` with empty mode-`0700` `home` and `xdg` children. It uses
+`clearenv`, equivalent to `env -i`, then sets only `HOME=<private>/home`, `XDG_CONFIG_HOME=<private>/xdg`, `NIX_USER_CONF_FILES=/dev/null`, and
+`PATH=/run/current-system/sw/bin:/nix/var/nix/profiles/default/bin`. It executes the descriptor as
+`nix develop --ignore-environment --command ...`; a non-shell child stage applies `-C` only inside the root dev shell. No user `nix.conf`,
+`plugin-files`, startup file, allowlist, or function reaches Nix. The parent waits, forwards handled termination, removes the private tree after
+completion, and returns the child status; cleanup failure changes success to failure.
 
-The hostile test sets aborting `BASH_ENV` and `ENV` files and exports nonzero functions named `read`, `cargo`, `nix`, `bazel`, `cargo-bazel`, `git`,
-`cargo-deny`, and `cargo-audit`. Policy check and both repin arms must leave no
-sentinel, seeded ambient entry, or imported function and must complete with real pinned Cargo,
-`xtask`, and downstream tools. Import, shadowing, or no real execution fails.
+Tests cover valid system, root, and per-user targets with earlier entries absent, every refusal shape, and a symlink-swap race. A hostile passwd home
+and different hostile caller `HOME` each have both user-config locations and `nix.conf` naming a sentinel-writing plugin. Fake `NIX_BIN` and `PATH`,
+aborting `BASH_ENV` and `ENV`, and functions named `read`, `cargo`, `nix`, `bash`, `env`, `bazel`, `cargo-bazel`, `git`, `cargo-deny`, and `cargo-audit`
+leave no sentinel while pinned tools run. Tests bind initial emptiness, modes, cleanup for every exit class, the exact no-Nix refusal, and retired-hub
+remediation bytes.
 
 ### 1. Use one authoritative product workspace and lock
 
@@ -216,8 +230,8 @@ package's nested `[workspace]`, workspace-local `[profile.*]` tables, and
 `Cargo.lock`. Generate and verify the sole authoritative product lock with:
 
 ```text
-/usr/bin/env -i HOME="$HOME" USER="$USER" PATH=/nix/var/nix/profiles/default/bin:/run/current-system/sw/bin nix develop --ignore-environment --command bash --noprofile --norc -c 'cd packages && cargo generate-lockfile --offline'
-/usr/bin/env -i HOME="$HOME" USER="$USER" PATH=/nix/var/nix/profiles/default/bin:/run/current-system/sw/bin nix develop --ignore-environment --command bash --noprofile --norc -c 'cd packages && cargo metadata --locked --offline --format-version 1'
+./d2b-nix -C packages -- cargo generate-lockfile --offline
+./d2b-nix -C packages -- cargo metadata --locked --offline --format-version 1
 ```
 
 The packages keep `default = []` and their explicit dependencies. The guest
@@ -239,12 +253,12 @@ The existing `real-libshpool` code gates remain.
 The root-runnable package selectors are:
 
 ```text
-/usr/bin/env -i HOME="$HOME" USER="$USER" PATH=/nix/var/nix/profiles/default/bin:/run/current-system/sw/bin nix develop --ignore-environment --command bash --noprofile --norc -c 'cd packages && cargo test --locked -p d2b-priv-broker --no-default-features -- --test-threads 1'
-/usr/bin/env -i HOME="$HOME" USER="$USER" PATH=/nix/var/nix/profiles/default/bin:/run/current-system/sw/bin nix develop --ignore-environment --command bash --noprofile --norc -c 'cd packages && cargo test --locked -p d2b-priv-broker --no-default-features --features layer1-bootstrap -- --test-threads 1'
-/usr/bin/env -i HOME="$HOME" USER="$USER" PATH=/nix/var/nix/profiles/default/bin:/run/current-system/sw/bin nix develop --ignore-environment --command bash --noprofile --norc -c 'cd packages && cargo test --locked -p d2b-priv-broker --no-default-features --features fake-backends -- --test-threads 1'
-/usr/bin/env -i HOME="$HOME" USER="$USER" PATH=/nix/var/nix/profiles/default/bin:/run/current-system/sw/bin nix develop --ignore-environment --command bash --noprofile --norc -c 'cd packages && cargo fmt -p d2b-guest-shell-runner --check'
-/usr/bin/env -i HOME="$HOME" USER="$USER" PATH=/nix/var/nix/profiles/default/bin:/run/current-system/sw/bin nix develop --ignore-environment --command bash --noprofile --norc -c 'cd packages && cargo clippy --locked -p d2b-guest-shell-runner --no-default-features --features real-libshpool --all-targets -- -D warnings'
-/usr/bin/env -i HOME="$HOME" USER="$USER" PATH=/nix/var/nix/profiles/default/bin:/run/current-system/sw/bin nix develop --ignore-environment --command bash --noprofile --norc -c 'cd packages && cargo nextest run --locked -p d2b-guest-shell-runner --no-default-features --features real-libshpool'
+./d2b-nix -C packages -- cargo test --locked -p d2b-priv-broker --no-default-features -- --test-threads 1
+./d2b-nix -C packages -- cargo test --locked -p d2b-priv-broker --no-default-features --features layer1-bootstrap -- --test-threads 1
+./d2b-nix -C packages -- cargo test --locked -p d2b-priv-broker --no-default-features --features fake-backends -- --test-threads 1
+./d2b-nix -C packages -- cargo fmt -p d2b-guest-shell-runner --check
+./d2b-nix -C packages -- cargo clippy --locked -p d2b-guest-shell-runner --no-default-features --features real-libshpool --all-targets -- -D warnings
+./d2b-nix -C packages -- cargo nextest run --locked -p d2b-guest-shell-runner --no-default-features --features real-libshpool
 ```
 
 Broker lanes remain three serial `cargo test` processes in isolated target
@@ -255,8 +269,8 @@ default-feature, and `real-libshpool` selectors.
 The exact generic-main split is:
 
 ```text
-/usr/bin/env -i HOME="$HOME" USER="$USER" PATH=/nix/var/nix/profiles/default/bin:/run/current-system/sw/bin nix develop --ignore-environment --command bash --noprofile --norc -c 'cd packages && cargo clippy --locked --workspace --all-targets --exclude d2b-priv-broker --exclude d2b-guest-shell-runner -- -D warnings'
-/usr/bin/env -i HOME="$HOME" USER="$USER" PATH=/nix/var/nix/profiles/default/bin:/run/current-system/sw/bin nix develop --ignore-environment --command bash --noprofile --norc -c 'cd packages && cargo nextest run --locked --workspace --exclude d2b-contract-tests --exclude d2b-priv-broker --exclude d2b-guest-shell-runner'
+./d2b-nix -C packages -- cargo clippy --locked --workspace --all-targets --exclude d2b-priv-broker --exclude d2b-guest-shell-runner -- -D warnings
+./d2b-nix -C packages -- cargo nextest run --locked --workspace --exclude d2b-contract-tests --exclude d2b-priv-broker --exclude d2b-guest-shell-runner
 ```
 
 The generic doctest and harness-free companion discovery uses the nextest
@@ -316,8 +330,8 @@ The workspace merge regenerates only the product Bazel-side lock. The walker
 lock stays byte-identical. These are the only root-runnable repin commands:
 
 ```text
-/usr/bin/env -i HOME="$HOME" USER="$USER" PATH=/nix/var/nix/profiles/default/bin:/run/current-system/sw/bin nix develop --ignore-environment --command bash --noprofile --norc -c 'cd packages && cargo xtask bazel-repin --hub product'
-/usr/bin/env -i HOME="$HOME" USER="$USER" PATH=/nix/var/nix/profiles/default/bin:/run/current-system/sw/bin nix develop --ignore-environment --command bash --noprofile --norc -c 'cd packages && cargo xtask bazel-repin --hub walker'
+./d2b-nix -C packages -- cargo xtask bazel-repin --hub product
+./d2b-nix -C packages -- cargo xtask bazel-repin --hub walker
 ```
 
 `main`, `broker`, and `guest` are retired, not aliases. They fail before Bazel
@@ -326,13 +340,14 @@ and these exact diagnostics:
 
 | Refused hub | Exact diagnostic |
 | --- | --- |
-| `main` | `Hub 'main' is retired; run /usr/bin/env -i HOME="$HOME" USER="$USER" PATH=/nix/var/nix/profiles/default/bin:/run/current-system/sw/bin nix develop --ignore-environment --command bash --noprofile --norc -c 'cd packages && cargo xtask bazel-repin --hub product'` |
-| `broker` | `Hub 'broker' is retired; run /usr/bin/env -i HOME="$HOME" USER="$USER" PATH=/nix/var/nix/profiles/default/bin:/run/current-system/sw/bin nix develop --ignore-environment --command bash --noprofile --norc -c 'cd packages && cargo xtask bazel-repin --hub product'` |
-| `guest` | `Hub 'guest' is retired; run /usr/bin/env -i HOME="$HOME" USER="$USER" PATH=/nix/var/nix/profiles/default/bin:/run/current-system/sw/bin nix develop --ignore-environment --command bash --noprofile --norc -c 'cd packages && cargo xtask bazel-repin --hub product'` |
+| `main` | `Hub 'main' is retired; run ./d2b-nix -C packages -- cargo xtask bazel-repin --hub product` |
+| `broker` | `Hub 'broker' is retired; run ./d2b-nix -C packages -- cargo xtask bazel-repin --hub product` |
+| `guest` | `Hub 'guest' is retired; run ./d2b-nix -C packages -- cargo xtask bazel-repin --hub product` |
 
-The refusal test removes only the fixed prefix and line terminator. The captured bytes must equal the canonical product command, end in `0x27`, and
-execute without edits. Appended punctuation, normalized quoting, or a second
-remediation spelling fails.
+The refusal test removes only the fixed prefix and line terminator. The
+captured bytes must equal the canonical product command and execute without
+edits. Appended punctuation, alternate quoting, or a second remediation
+spelling fails.
 
 Changing the walker lock remains a separately reviewed change. Entering
 `packages/` is load-bearing: rustup discovers `rust-toolchain.toml` there and
@@ -371,8 +386,8 @@ wrong native edge or an inexact selected Cargo closure is not.
 The repository-owned generator has these exact root-runnable entry points:
 
 ```text
-/usr/bin/env -i HOME="$HOME" USER="$USER" PATH=/nix/var/nix/profiles/default/bin:/run/current-system/sw/bin nix develop --ignore-environment --command bash --noprofile --norc -c 'cd packages && cargo xtask gen-package-policy-inputs'
-/usr/bin/env -i HOME="$HOME" USER="$USER" PATH=/nix/var/nix/profiles/default/bin:/run/current-system/sw/bin nix develop --ignore-environment --command bash --noprofile --norc -c 'cd packages && cargo xtask gen-package-policy-inputs --check'
+./d2b-nix -C packages -- cargo xtask gen-package-policy-inputs
+./d2b-nix -C packages -- cargo xtask gen-package-policy-inputs --check
 ```
 
 The target set is exactly the root flake's `systems`, with distinct host and
@@ -412,9 +427,9 @@ root dev closure described above. Every drift diagnostic lists all stale paths
 repository-relative and ends with this remediation, in this order:
 
 ```text
-/usr/bin/env -i HOME="$HOME" USER="$USER" PATH=/nix/var/nix/profiles/default/bin:/run/current-system/sw/bin nix develop --ignore-environment --command bash --noprofile --norc -c 'cd packages && cargo xtask gen-package-policy-inputs'
+./d2b-nix -C packages -- cargo xtask gen-package-policy-inputs
 Review and commit the generated changes under packages/policy-inputs/.
-/usr/bin/env -i HOME="$HOME" USER="$USER" PATH=/nix/var/nix/profiles/default/bin:/run/current-system/sw/bin nix develop --ignore-environment --command bash --noprofile --norc -c 'cd packages && cargo xtask gen-package-policy-inputs --check'
+./d2b-nix -C packages -- cargo xtask gen-package-policy-inputs --check
 ```
 
 For each policy set, the implementation reuses ADR 0052's pinned offline source
@@ -445,16 +460,17 @@ mismatch emits its own early diagnostic, never later policy or leakage output.
 Recurring enforcement stays in existing Layer-1 jobs:
 
 - `make test-rust-supply-chain` runs generated source census, deny, and pinned
-  offline audit logic for broker GNU and guest musl on x86_64 and aarch64.
+  offline audit logic for broker GNU and guest musl on each native runner.
 - `make test-drift` enforces generation `--check`, the eight-check inventory
   and exact mapping, with missing-check, cross-system, and wrong-target plants.
 - `make test-flake` owns realization. `D2B_FLAKE_REALIZED_CHECKS` adds
   `broker-production-dependency-policy`, `guest-shell-runner-static-dependency-policy`,
   `broker-production-package-policy`, `guest-real-libshpool-package-policy`, and
   `guest-static-elf`, retaining `video-binary-contract`. X86 shards build those
-  five checks. Existing job `test-flake-aarch64` retains its id and context,
-  moves to public `ubuntu-24.04-arm`, and runs the same target for the five
-  aarch64 checks; no top-level job is added.
+  five checks on a native x86_64 runner. Existing job `test-flake-aarch64`
+  retains its id and context, moves to public `ubuntu-24.04-arm`, and runs the
+  same target for the five aarch64 checks; no top-level job is added. Neither
+  lane passes a foreign `--system` or configures a remote builder.
 
 Implementation pins it as `flake-aarch64-realized` at 60 minutes in `tests/layer1-jobs.json`, regenerates the workflow and realized class, and makes
 `make flake-matrix-pin` regenerate both system inventories. Either stale pin fails drift, making aarch64 wiring and execution recurrent evidence.
@@ -513,35 +529,49 @@ package/license pairs. A blanket license expansion is not the remedy. The
 exact root-runnable remedy and recheck sequence is:
 
 ```text
-/usr/bin/env -i HOME="$HOME" USER="$USER" PATH=/nix/var/nix/profiles/default/bin:/run/current-system/sw/bin nix develop --ignore-environment --command bash --noprofile --norc -c 'cd packages && cargo xtask gen-package-policy-inputs'
+./d2b-nix -C packages -- cargo xtask gen-package-policy-inputs
 Review and commit packages/d2b-guest-shell-runner/deny.toml and the generated packages/policy-inputs/ changes.
-/usr/bin/env -i HOME="$HOME" USER="$USER" PATH=/nix/var/nix/profiles/default/bin:/run/current-system/sw/bin nix develop --ignore-environment --command bash --noprofile --norc -c 'cd packages && cargo xtask gen-package-policy-inputs --check'
-make flake-matrix-pin
-make test-drift
-nix build --no-link \
-  .#checks.x86_64-linux.broker-production-dependency-policy \
-  .#checks.aarch64-linux.broker-production-dependency-policy \
-  .#checks.x86_64-linux.guest-shell-runner-static-dependency-policy \
-  .#checks.aarch64-linux.guest-shell-runner-static-dependency-policy \
-  .#checks.x86_64-linux.broker-production-package-policy \
-  .#checks.aarch64-linux.broker-production-package-policy \
-  .#checks.x86_64-linux.guest-real-libshpool-package-policy \
-  .#checks.aarch64-linux.guest-real-libshpool-package-policy
-make test-rust-supply-chain
-make test-policy
-nix build --no-link \
-  .#checks.x86_64-linux.guest-static-elf \
-  .#checks.aarch64-linux.guest-static-elf
-nix build --no-link \
-  .#checks.x86_64-linux.rust-deny \
-  .#checks.aarch64-linux.rust-deny \
-  .#checks.x86_64-linux.rust-audit \
-  .#checks.aarch64-linux.rust-audit
+./d2b-nix -C packages -- cargo xtask gen-package-policy-inputs --check
+./d2b-nix -- make flake-matrix-pin
+./d2b-nix -- make test-drift
 ```
 
-Guest static checks read only exact system-and-musl-target
-`production/closure.json` and `production/Cargo.lock`, never standalone or root
-locks. Review `make flake-matrix-pin`; then drift and builds above must pass.
+Then run this block on a native x86_64-linux runner:
+
+```text
+./d2b-nix -- nix build --no-link \
+  .#checks.x86_64-linux.broker-production-dependency-policy \
+  .#checks.x86_64-linux.guest-shell-runner-static-dependency-policy \
+  .#checks.x86_64-linux.broker-production-package-policy \
+  .#checks.x86_64-linux.guest-real-libshpool-package-policy \
+  .#checks.x86_64-linux.guest-static-elf \
+  .#checks.x86_64-linux.rust-deny \
+  .#checks.x86_64-linux.rust-audit
+./d2b-nix -- make test-rust-supply-chain
+./d2b-nix -- make test-policy
+```
+
+The recurring `flake-eval-x86-realized` lane must pass on that same native
+runner. Separately, run this block on a native aarch64-linux runner:
+
+```text
+./d2b-nix -- nix build --no-link \
+  .#checks.aarch64-linux.broker-production-dependency-policy \
+  .#checks.aarch64-linux.guest-shell-runner-static-dependency-policy \
+  .#checks.aarch64-linux.broker-production-package-policy \
+  .#checks.aarch64-linux.guest-real-libshpool-package-policy \
+  .#checks.aarch64-linux.guest-static-elf \
+  .#checks.aarch64-linux.rust-deny \
+  .#checks.aarch64-linux.rust-audit
+./d2b-nix -- make test-rust-supply-chain
+```
+
+The recurring `test-flake-aarch64` lane must pass on that same native runner.
+Neither block may set a foreign system, use `--builders`, or rely on a remote
+builder. No single invocation builds both systems. Guest static checks read
+only the exact native system-and-musl-target `production/closure.json` and
+`production/Cargo.lock`, never standalone or root locks. The common pin and
+drift step and both native blocks must pass.
 
 ### 5. Amend Spec 003 after merge
 
