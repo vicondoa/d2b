@@ -22,11 +22,12 @@ ROOT=${ROOT:-$(cd "$HERE/.." && pwd)}
 D2B_LOG=${D2B_LOG:-/dev/null}
 export ROOT D2B_LOG
 
-# Repaired complete local-shard baseline: 14,255,252 KiB process-tree RSS.
-# The immutable 25% headroom produces a 17,819,065 KiB ceiling. This is a
-# lane contract, not an operator knob; lower thresholds belong only to
+# Refreshed post-06255750 complete local-shard baseline: 11,732,298 KiB
+# process-tree RSS. The immutable 25% headroom produces a 14,665,373 KiB
+# ceiling. This is a lane contract, not an operator knob; lower thresholds
+# belong only to hermetic
 # hermetic peak-rss helper self-tests.
-FLAKE_RSS_MAX_KIB=17819065
+FLAKE_RSS_MAX_KIB=14665373
 rss_guarded=0
 if [ "${1:-}" = "--internal-peak-rss-guarded" ]; then
   shift

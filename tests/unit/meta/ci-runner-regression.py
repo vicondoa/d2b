@@ -1300,8 +1300,8 @@ printf '%s\n' "$sanitized_line"
         flake_runner = (ROOT / "tests" / "test-flake.sh").read_text(
             encoding="utf-8"
         )
-        self.assertIn("NIX_UNIT_RSS_MAX_KIB=10712982", nix_runner)
-        self.assertIn("FLAKE_RSS_MAX_KIB=17819065", flake_runner)
+        self.assertIn("NIX_UNIT_RSS_MAX_KIB=10683720", nix_runner)
+        self.assertIn("FLAKE_RSS_MAX_KIB=14665373", flake_runner)
         self.assertIn("tests/tools/peak-rss.py", nix_runner)
         self.assertIn("tests/tools/peak-rss.py", flake_runner)
         self.assertIn("--lane nix-unit", nix_runner)
