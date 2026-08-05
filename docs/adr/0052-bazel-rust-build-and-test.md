@@ -12,42 +12,10 @@
   happens to find, and records the measured `crate_universe` repin controls
   that make a scoped, reviewed lock regeneration possible without a gate-path
   escape hatch. No decision here is reversed and nothing here is superseded.
-- Amended: 2026-08-05. Qualification now has one canonical predicate over the
-  complete chronological eligible protected-`v3` merged-PR push lineage.
-  Immutable Cargo, Bazel, policy, fixture, and slice workflow run/job IDs and
-  authoritative GitHub resolver evidence bind every row to one head SHA.
-  Passing same-commit policy and fixture jobs are mandatory for the streak,
-  cold samples, and promotion. Missing, failed, cancelled, wrong-commit,
-  stale-reused, forged, ineligible, omitted, duplicate, reordered, and
-  omitted-reset evidence fails closed as section 9 defines. This tightens the
-  evidence proof without changing the selected executor or migration scope.
-- Proposed broker graph refinement:
-  [ADR 0054](0054-broker-hub-generated-splice-workspace.md) is limited to the
-  committed generated splice workspace and exact graph fidelity for the
-  standalone `broker` workspace. The authoritative set remains the four
-  hub/workspace Cargo locks for `main`, `broker`, `guest`, and `walker`;
-  `packages/Cargo.guest.lock` remains a separate generated and cache-key input,
-  not a hub. The broker witness preserves the authoritative broker lock and
-  `skip_cargo_lockfile_overwrite = True`. `cargo xtask gen-bazel` alone writes
-  that witness, and `gen-bazel --check` is strictly read-only. ADR 0054 does
-  not define, refine, or implement broker repin. Until a separate accepted ADR
-  defines that lifecycle, `HubInventory` is the four-value set `main`,
-  `broker`, `guest`, and `walker`, while `RepinnableHub` is exactly `main`,
-  `guest`, and `walker`. An already-built `xtask` process recognizes broker
-  before generic dispatch and emits the stable path-free
-  `broker-repin-architecture-pending` result plus the fixed statement that
-  broker repin is unavailable, no local recovery command exists, and resumption
-  requires an accepted repin-lifecycle ADR plus amended and re-panelled Spec
-  003 artifacts. That process spawns no child and changes no path. The public
-  `cargo xtask` launcher may emit Cargo bootstrap output and create Cargo cache
-  or target state, so its aggregate stderr and filesystem effects are not the
-  exact-result contract. Broker production compilation excludes
-  `d2b-core/test-support` and `d2b-host/fake-backends`; complete configured
-  dependency graphs split `d2b-core`, `d2b-contracts`, and `d2b-host` between
-  production and test contexts, while the default, layer1-bootstrap, and
-  fake-backends broker carriers retain independent member target, feature,
-  edge, and case censuses. Spec 003 W0 remains parked at broker lock
-  regeneration.
+- Proposed refinement: [ADR 0054](0054-broker-hub-generated-splice-workspace.md)
+  decides only the generated splice workspace and graph-fidelity contract for
+  the standalone `broker` hub. It does not authorize broker repin; that
+  lifecycle requires a separate accepted ADR.
 - Related: [ADR 0009](0009-rust-toolchain-msrv-and-supply-chain.md) (Rust
   toolchain, MSRV, and supply-chain policy), which keeps its authority
   unchanged and is not superseded;
@@ -166,15 +134,15 @@ contradict the guidance that would otherwise have been followed.
    to five minutes, which means garbage collection never runs during a short
    continuous-integration job unless it is set to zero.
 7. **The workspace is pure first-party Rust with heavy repository coupling.**
-   56 main-workspace members, 205 integration test files, 912 tracked `.rs`
-   files under `packages/`, and four hub/workspace locks resolving 544, 117,
-   161 and 10 packages for main, broker, guest-shell-runner, and walker
-   respectively. There are no first-party build scripts, no first-party
-   proc-macro crates, and no `links =` declarations; there is exactly one git
-   dependency (`wl-proxy`, pinned by rev) and six `harness = false` targets
-   across two crates. But 20 test files resolve `CARGO_MANIFEST_DIR`, 11 of
-   them define a `repo_root()` helper that walks out into the working tree, and
-   25 files locate binaries through `env!("CARGO_BIN_EXE_...")`.
+   56 workspace members, 205 integration test files, 912 tracked `.rs` files
+   under `packages/`, and locks resolving 544, 117 and 161 packages for the
+   main, broker and guest-shell-runner workspaces. There are no first-party
+   build scripts, no first-party proc-macro crates, and no `links =`
+   declarations; there is exactly one git dependency (`wl-proxy`, pinned by
+   rev) and six `harness = false` targets across two crates. But 20 test files
+   resolve `CARGO_MANIFEST_DIR`, 11 of them define a `repo_root()` helper that
+   walks out into the working tree, and 25 files locate binaries through
+   `env!("CARGO_BIN_EXE_...")`.
 8. **Every workflow must call an approved Make target.**
    `packages/xtask/tests/policy_ci.rs` holds `APPROVED_MAKE_TARGETS` as a
    closed list and `ALLOWLISTED_WORKFLOWS` as a three-entry allowlist asserted
@@ -302,15 +270,13 @@ settled them.
 
 ### 2. Cargo stays the authoritative dependency and toolchain input
 
-The Cargo manifests, the four authoritative hub/workspace locks
-(`packages/Cargo.lock`, `packages/d2b-priv-broker/Cargo.lock`,
-`packages/d2b-guest-shell-runner/Cargo.lock`, and
-`tests/tools/no-bash-ast-walker/Cargo.lock`), the applicable `deny.toml`
-files, and the two `rust-toolchain.toml` files remain the single source of
-truth for dependency resolution, feature selection, supply-chain policy, and
-compiler version. `packages/Cargo.guest.lock` remains a separate generated
-guest-workspace and cache-key input, not a hub/workspace lock. Bazel consumes
-these inputs; it never becomes the place a dependency is declared.
+The Cargo manifests, the four authoritative hub/workspace locks for `main`,
+`broker`, `guest`, and `walker`, `packages/deny.toml`, and the two
+`rust-toolchain.toml` files remain the single source of truth for dependency
+resolution, feature selection and compiler version. `packages/Cargo.guest.lock`
+is a separate generated guest-workspace and cache-key input, not a fifth hub.
+Bazel consumes these inputs; it never becomes the place a dependency is
+declared.
 
 Concretely:
 
@@ -319,13 +285,9 @@ Concretely:
   non-vendored mode with a committed Bazel-side lock per Cargo workspace. A
   repin drift check (section 5) fails closed when the Bazel-side lock does not
   match what the Cargo lock resolves to, which is the Bazel equivalent of the
-  `--locked` flag the gate passes today. Three of the four hubs read their
-  authoritative `Cargo.toml` directly. The `broker` hub cannot, because its
-  workspace path-depends on members of the main workspace and the splicer
-  refuses that shape; it reads a generated, drift-checked splice workspace,
-  naming that workspace's root and stub manifests so they enter the hub digest,
-  while its `cargo_lockfile` still names the authoritative broker lock. See
-  [ADR 0054](0054-broker-hub-generated-splice-workspace.md).
+  `--locked` flag the gate passes today. The `broker` hub consumes the
+  generated splice workspace decided by ADR 0054 while retaining its
+  authoritative standalone Cargo lock.
 - The Rust toolchains registered in Bazel are exactly the channels named in
   `packages/rust-toolchain.toml` (1.97.0) and
   `packages/d2b-api-surface/rust-toolchain.toml` (nightly-2026-02-16). A guard
@@ -363,40 +325,30 @@ ADR justified by measured prototypes, and this ADR authorizes no such move.
   integration.
 - A committed lock still has to be regenerable, and forbidding the environment
   controls without naming a supported path is what pushes a contributor into
-  `CARGO_BAZEL_REPIN=1 make ...` under deadline. Regeneration for `main`,
-  `guest`, and `walker` is therefore the repository-owned command
-  `cargo xtask bazel-repin --hub <name>`, and it is the only place in the
-  repository those three environment names may appear as a process-environment
-  assignment. The command requires an explicit token from the closed set
-  `main`, `broker`, `guest`, and `walker`. For `main`, `guest`, and `walker`,
-  it sets `CARGO_BAZEL_REPIN` and `CARGO_BAZEL_REPIN_ONLY=<hub>` only in the
-  environment of its Bazel child, never process-globally, and admits exactly
-  the selected hub's Bazel-side lock as output. `guest-shell` is not a hub
-  token.
-
-  `broker` remains an inventory token but is not an enabled repin path. Until
-  a separate accepted ADR defines its writer serialization, process lifetime,
-  output publication, recovery, diagnostics, and cleanup contract,
-  `cargo xtask bazel-repin --hub broker` runs no Bazel child and fails with the
-  stable path-free result `broker-repin-architecture-pending`. ADR 0054 settles
-  only the broker's generated splice workspace and graph fidelity.
-
-  The `main`, `guest`, and `walker` forms retain the same absolute output user
-  root, output base, and symlink prefix the wrapper derives, so they cannot
-  start a second server. Their single-hub changed-path guards are unchanged.
-  An already-current lock is exit zero with nothing changed rather than an
-  error; the run that must report a change is the one after a Cargo workspace
-  change, which is where a wrong invocation shows up. The command is not a
+  `CARGO_BAZEL_REPIN=1 make ...` under deadline. Regeneration is therefore a
+  repository-owned command, `cargo xtask bazel-repin --hub <name>`, and it is
+  the only place in the repository those three names may appear as a
+  process-environment assignment. This authorization applies to `main`,
+  `guest`, and `walker`. `broker` remains part of the four-hub inventory, but
+  no broker repin path is authorized by ADR 0054 or this paragraph; that
+  requires a separate accepted ADR. For an authorized hub, the command sets
+  `CARGO_BAZEL_REPIN` and `CARGO_BAZEL_REPIN_ONLY=<hub>`
+  only in the environment of the single Bazel child process it spawns, never
+  process-globally, uses the same absolute output user root, output base and
+  symlink prefix the wrapper derives, so it cannot start a second server, and
+  fails if any tracked file other than that hub's committed Bazel-side lock
+  changed. An already-current lock is exit zero with nothing changed rather
+  than an error; the run that must report a change is the one after a Cargo
+  workspace change, which is where a wrong invocation shows up. It is not a
   Make target and no workflow may invoke it. Measured at `rules_rust` 0.73.0:
   `CARGO_BAZEL_REPIN_ONLY` is a comma-delimited allowlist compared by exact
-  hub name in `determine_repin`, so single-hub scoping is a substrate property
-  rather than a convention. `skip_cargo_lockfile_overwrite` defaults to
-  `false`, so every hub configuration must set it to `true` or an enabled
-  repin could silently rewrite the authoritative `Cargo.lock` this section
-  just froze. For the same reason every hub sets both `lockfile` and
-  `cargo_lockfile`: the extension reports itself reproducible only when both
-  are present, and `--lockfile_mode=error` is only meaningful for a
-  reproducible extension.
+  hub name in `determine_repin`, so single-hub scoping is a substrate
+  property rather than a convention, and `skip_cargo_lockfile_overwrite`
+  defaults to `false`, so every hub must set it to `true` or a repin silently
+  rewrites the authoritative `Cargo.lock` this section just froze. For the same
+  reason every hub sets both `lockfile` and `cargo_lockfile`: the extension
+  reports itself reproducible only when both are present, and
+  `--lockfile_mode=error` is only meaningful for a reproducible extension.
 - `rules_rust` is pinned to a single explicit version in `MODULE.bazel` (0.73.0
   is the newest release on the Bazel Central Registry as of this date; the
   implementer pins whatever is newest and compatible with Bazel 8.6.0 at
@@ -405,15 +357,12 @@ ADR justified by measured prototypes, and this ADR authorizes no such move.
 
 ### 4. First-party BUILD files are generated by a repository-owned generator
 
-`cargo xtask gen-bazel` reads `cargo metadata` for the four hub/workspace
-locks - `main`, `broker`, `guest`, and `walker` - and emits the first-party
-`BUILD.bazel` files, the broker's generated resolution witness, and the
-tracked governed-source manifest that section 6's no-bash scan consumes.
-`packages/Cargo.guest.lock` remains a separate generator and cache-key input.
-`cargo xtask gen-bazel --check` computes the expected bytes and exact output
-census without creating scratch, lock, or temporary state and fails on any
-difference; it is wired into `test-drift`, which already exists to catch this
-class of staleness for the other `xtask gen-*` outputs.
+`cargo xtask gen-bazel` reads `cargo metadata` for the three Cargo workspaces
+and emits the first-party `BUILD.bazel` files, plus the tracked
+governed-source manifest that section 6's no-bash scan consumes.
+`cargo xtask gen-bazel --check` regenerates into a scratch tree and fails on
+any difference; it is wired into `test-drift`, which already exists to catch
+exactly this class of staleness for the other `xtask gen-*` outputs.
 
 `gazelle_rust` is rejected. It would add a Go toolchain and a third-party
 generator to the trusted build path for a workspace whose interesting cases are
@@ -521,13 +470,7 @@ Nine of the eighteen surfaces are not `rules_rust` tests in any natural sense.
 Pretending otherwise is how coverage disappears during a migration, so each one
 gets a named representation and a named hazard.
 
-**cargo-deny (three intentional supply-chain surfaces).** The current
-supply-chain leaf covers exactly the `main`, `broker`, and `guest` locks:
-`packages/Cargo.lock`, `packages/d2b-priv-broker/Cargo.lock`, and
-`packages/d2b-guest-shell-runner/Cargo.lock`. The `walker` workspace is the
-fourth dependency hub but is not covered by deny or audit today, so this
-section does not invent a fourth supply-chain carrier. A Bazel test per
-covered workspace runs the
+**cargo-deny (three surfaces).** A Bazel test per workspace that runs the
 nixpkgs-pinned `cargo-deny` against declared inputs: that workspace's
 `Cargo.toml` set, its `Cargo.lock`, its `deny.toml`, and a materialized
 vendored Cargo source tree.
@@ -561,14 +504,13 @@ internal content-addressed store with no label and no enumeration interface,
 and `crate_universe`'s spoke repositories expose per-crate rules rather than
 `.crate` archives or a whole-tree filegroup.
 
-The rule re-declares the downloads instead. For each of the three covered
-supply-chain locks - `main`, `broker`, and `guest` - it reads every package
-with a registry source and calls `ctx.download` with the crate's registry URL
-and the `checksum` the lock already records; a download declared with a
-`sha256` is served from `--repository_cache` when the content is already
-present, so the re-declaration reuses the bytes the pinned `crate_universe`
-fetch already brought in without needing an interface the cache does not
-have. It extracts each archive and writes
+The rule re-declares the downloads instead. For each of the three locks it
+reads every package with a registry source and calls `ctx.download` with the
+crate's registry URL and the `checksum` the lock already records; a download
+declared with a `sha256` is served from `--repository_cache` when the content
+is already present, so the re-declaration reuses the bytes the pinned
+`crate_universe` fetch already brought in without needing an interface the
+cache does not have. It extracts each archive and writes
 `.cargo-checksum.json` as `{"files":{},"package":"<sha256>"}`, the shape the
 committed flake path already produces, yielding the `cargo vendor`-shaped tree
 of extracted crate sources that `cargo-deny` needs.
@@ -627,10 +569,9 @@ retirement. No waiver is created and no advisory becomes unenforced.
 What could move silently is an enforcing outcome `cargo-deny`'s `advisories`
 check produces that `cargo-audit` does not, yanked-crate detection being the
 obvious candidate, because it needs a registry index that neither the vendored
-tree nor the pinned advisory snapshot provides. Guard: before promotion the implementer records in the wave notes the exit
-status and the finding set of today's `cargo deny check` and of the decomposed
-pair, over the three covered supply-chain locks: `main`, `broker`, and
-`guest`.
+tree nor the pinned advisory snapshot provides. Guard: before promotion the
+implementer records in the wave notes the exit status and the finding set of
+today's `cargo deny check` and of the decomposed pair, over all three locks.
 Today's leaf invokes `cargo deny --manifest-path ... check --config ...` with
 no subcommand list, so `advisories` runs there in addition to `cargo audit`,
 which is what makes that comparison meaningful rather than tautological.
@@ -641,8 +582,8 @@ not dropping the outcome.
 **The carrier is unconditional, so the capability does not depend on what the
 comparison happens to find.** An earlier form of this section built the carrier
 only when the recorded comparison showed a yanked-state difference. That is
-wrong in the direction that matters. The comparison is one observation of one lock set at one moment; "no crate in
-these three covered supply-chain locks is yanked today" is not
+wrong in the direction that matters. The comparison is one observation of one
+lock set at one moment; "no crate in these three locks is yanked today" is not
 "this repository can detect a yanked crate". A capability gated on a finding is
 absent exactly when the finding first appears, and it appears after promotion,
 when the Cargo executor that used to carry the outcome is gone. Continuous
@@ -652,9 +593,8 @@ Therefore, whatever the comparison shows:
 
 - A **yanked-crate check against a committed, lock-bounded index snapshot**
   lands during the shadow stage, before promotion. The snapshot records, for
-  every `(name, version)` in the `main`, `broker`, and `guest` locks, its
-  yanked state and the index revision identifier the generator observed it
-  at. It is refreshed by a
+  every `(name, version)` in the three locks, its yanked state and the index
+  revision identifier the generator observed it at. It is refreshed by a
   repository-owned `xtask` subcommand that reads the index only during an
   explicit reviewed update, outside the gate, and the result is committed.
 - The enforcing drift check is offline: it verifies that the snapshot's
@@ -662,18 +602,16 @@ Therefore, whatever the comparison shows:
   committed locks and never regenerates yanked state from the live index.
   The Bazel action consumes the committed snapshot as a declared input and
   runs offline. A full index snapshot is rejected: the state the check needs is
-  bounded by the three covered supply-chain locks, so the artifact is bounded
-  by those three committed locks.
+  bounded by three committed locks, so the artifact is bounded by three
+  committed locks.
 - An all-clear snapshot is the normal case and is still committed. A snapshot
   with no yanked entry is evidence, not an excuse to skip the artifact; it is
   the baseline the next diff line is read against.
 
 The comparison keeps its full force and is unchanged as promotion evidence:
 promotion criterion 7 still records today's `cargo deny check` against the
-decomposed pair over the `main`, `broker`, and `guest` locks and still blocks
-on any differing enforcing outcome. The walker lock remains outside this
-intentional three-lock supply-chain comparison because no deny or audit
-surface covers it today. What the comparison no longer decides is whether the
+decomposed pair over all three locks and still blocks on any differing
+enforcing outcome. What the comparison no longer decides is whether the
 detection capability exists.
 
 The carrier reports under the existing `rust-deny-main`, `rust-deny-broker` and
@@ -699,9 +637,7 @@ The gate today falls back to `nix shell` when `cargo-deny` is absent and fails
 closed when neither is available, citing ADR 0009's no-waiver rule; the Bazel
 form has no fallback at all, because the tool is a declared input.
 
-**cargo-audit (three intentional supply-chain surfaces).** The same exact
-`main`, `broker`, and `guest` scope applies. The `walker` hub has no audit
-surface today. The advisory database
+**cargo-audit (three surfaces).** Same shape, plus the advisory database
 becomes a declared, pinned input rather than a network fetch, and, per the
 decomposition above, `cargo-audit` becomes the sole carrier of the advisories
 policy on the Bazel path. The flake already pins a RustSec advisory database
@@ -1254,9 +1190,9 @@ grounded in this repository's committed comments. The handoff's rule is to
 avoid runner fan-out that hides duplicated compilation. These four slices
 duplicate nothing: the API census renders through a separately pinned nightly
 toolchain into its own tree and, as the gate documentation already states,
-"shares nothing with the workspace build"; the broker, guest-shell-runner, and
-walker are separate Cargo workspaces with separate locks; and the supply-chain
-targets compile no first-party code. The one slice that does contain a shared
+"shares nothing with the workspace build"; the broker and guest-shell-runner
+are separate Cargo workspaces with separate locks; and the supply-chain targets
+compile no first-party code. The one slice that does contain a shared
 dependency graph, `main`, is not split, and that is where Bazel's deduplication
 is actually collected. Splitting along boundaries that already share nothing
 converts runner minutes into wall clock, which is what the budget in section 11
@@ -1282,59 +1218,15 @@ protected `v3`, and none resolves to `main`. Pushes to `main`, the weekly
 schedule and `workflow_dispatch` remain useful as liveness probes and produce
 no evidence.
 
-**The canonical qualification predicate is `Q`; every other qualification
-site consumes it rather than defining a weaker copy.** The lineage begins with
-the merged W3 shadow-workflow commit and ends at the recorded protected-`v3`
-tip. It contains every `push` event on `refs/heads/v3` in that first-parent
-interval whose head is the merge commit of a pull request merged to `v3`, in
-chronological branch order. The repository-owned resolver proves that event,
-branch, merged-pull-request relation, and order from the GitHub Actions and
-Pull Requests APIs. An authored evidence row is never authority for its own
-eligibility.
-
-Every lineage row records the immutable workflow ID, workflow run ID, run
-attempt, job ID, head SHA, event, branch, conclusion, and normalized resolver
-evidence reference and digest for:
-
-- the required Cargo rollup running
-  `D2B_SKIP_FIXTURE_BUILD=1 make test-rust`;
-- the Bazel shadow rollup;
-- the enforcing `make test-policy` job;
-- the enforcing
-  `D2B_ENABLE_FIXTURE_BUILD=1 make test-fixture-contracts` job; and
-- each of the four attributed Bazel slice jobs.
-
-The same workflow run ID may legitimately own more than one job, but every job
-ID is immutable, belongs to the recorded run attempt, and is used by exactly
-one lineage row and carrier slot. The resolver projection is the evidence:
-recorded conclusions, head SHAs, names, or IDs that do not resolve exactly are
-not trusted. The required Cargo workflow triggers on `push` for `[main, v3]`
-(constraint 10), so every carrier is resolved against the one eligible
-`head_sha` under the one `push` event.
-
-| Canonical check | `Q(row)` requirement | Failure effect |
-| --- | --- | --- |
-| Eligibility | Event is `push`, branch is `refs/heads/v3`, and the head is the merge commit of a pull request merged to `v3`. | An ineligible row in qualification evidence disqualifies the evidence set. |
-| Complete lineage | Every eligible push from the W3 anchor through `lineage_end_sha` appears exactly once in chronological first-parent order. | An omitted or duplicate eligible push, a gap, or an order change disqualifies the evidence set until corrected. |
-| Resolver identity | Every Cargo, Bazel, policy, fixture, and slice run/job ID resolves, belongs to the recorded workflow and attempt, has the recorded head SHA, and is not reused in another row or slot. | A forged, stale-reused, cross-attempt, wrong-workflow, or wrong-commit ID disqualifies the evidence set. |
-| Cargo and Bazel | Both rollup jobs reached terminal `success` on the eligible head SHA. | Missing, failed, timed-out, skipped, or cancelled resets the streak at this eligible push. |
-| Policy | The same-commit `make test-policy` job reached terminal `success`. | Missing, failed, timed-out, skipped, or cancelled resets the streak. |
-| Fixture | The same-commit `D2B_ENABLE_FIXTURE_BUILD=1 make test-fixture-contracts` job reached terminal `success`. | Missing, failed, timed-out, skipped, or cancelled resets the streak. |
-| Slices | All four named Bazel slice job IDs resolve to the Bazel run and attempt at the same head SHA and reached terminal `success`. | Missing, failed, timed-out, skipped, cancelled, duplicated, or misattributed slice resets the streak. |
-| Shadow cache | The resolved shadow run restored and wrote no Bazel cache. | A restore or write makes the row nonqualifying and resets the streak; it also cannot be a cold sample. |
-
-Thus `Q(row)` is true only when every row above passes. The policy and fixture
-verdicts are both same-commit requirements even though neither is compared
-between executors. A real eligible push is always represented: missing or
-cancelled jobs produce a nonqualifying reset row, including when every job was
-cancelled. They are never erased as "no record."
-
-The streak is the length of the maximal suffix of the complete chronological
-lineage for which `Q` is true. Every false `Q` resets it to zero at that row.
-The streak count stored in evidence is derived and must equal a replay of the
-canonical predicate; an omitted reset disqualifies the evidence set. Sections
-11 and 12 draw their cold samples and promotion evidence from this resolved
-record stream and from nothing else.
+**A qualification record is a `push` event on `refs/heads/v3` produced by a
+merged pull request.** It carries the head SHA, the shadow-workflow run
+identifier, the required Cargo workflow run identifier, both verdicts, and, for
+a cold-sample record, the measured wall clock of each of the four slice jobs.
+The required Cargo workflow triggers on `push` for `[main, v3]` (constraint
+10), so both runs are identified by the same `head_sha` under the same `push`
+event, which is what makes "both paths tested the same commit" mechanically
+true rather than approximately true. Sections 11 and 12 draw their evidence
+from this record stream and from nothing else.
 
 **Pull-request runs stay diagnostic and stay path-filtered.** A pull-request
 run tells a contributor whether their Bazel-surface change builds; it is not a
@@ -1346,11 +1238,13 @@ precisely the sample in which a Cargo-versus-Bazel divergence cannot appear, so
 a streak built from it would prove nothing about the surfaces the gate exists
 to protect.
 
-Pull-request runs remain diagnostic even if all jobs pass. Likewise
-`main`-push, scheduled, and dispatched runs are ineligible and never enter a
-lineage, streak, or measurement set. Injecting one into qualification evidence
-is an evidence-set failure rather than another opportunity to increment a
-counter.
+Streak arithmetic is fail-closed, and it is stated so a machine can evaluate
+it. A record whose two verdicts differ resets the streak to zero. A
+push-to-`v3` shadow run that reaches no verdict while its paired Cargo run
+reaches one counts as a mismatch and also resets the streak, because otherwise
+cancelling a run that was about to go red would launder the streak. A push
+where neither side reached a verdict, which is what a superseding push
+produces, is not a record at all: it neither extends nor resets.
 
 The workflow satisfies the existing structural policies without exception:
 `defaults.run.shell: sh tests/tools/ci-shell {0}`, and every
@@ -1386,14 +1280,10 @@ and it is the single largest thing a naive implementation would try to carry.
 **Keys.** The primary key is unique per successful push-to-`v3` run; the
 restore prefix omits the run identifier and never contains a commit SHA. Both
 key and prefix bind: `.bazelversion`, `MODULE.bazel`, `MODULE.bazel.lock`,
-`.bazelrc`, both `rust-toolchain.toml` files, the four authoritative
-hub/workspace locks (`main`, `broker`, `guest`, and `walker`), all four
-per-hub Bazel-side locks, the separate `packages/Cargo.guest.lock` generator
-input, the three `deny.toml` files, the advisory-database and yanked-state
-pins, the `cargo-bazel` checksum, `.bazelignore`, startup and symlink
-configuration, the build-script and action-environment digests, and the
-generated BUILD-tree digest. A change to any of those must produce a different
-key rather than a subtly stale cache.
+`.bazelrc`, both `rust-toolchain.toml` files, the three `Cargo.lock` files and
+`packages/Cargo.guest.lock`, the three `deny.toml` files, the advisory-database
+pin, and a digest of the generated BUILD tree. A change to any of those must
+produce a different key rather than a subtly stale cache.
 
 **Writer policy.** Pull requests restore read-only and never save. Pushes to
 protected `v3` restore, run, trim, and publish exactly one refreshed snapshot,
@@ -1550,17 +1440,14 @@ by the Actions API, which no step can influence.
 measurement set, and the budget holds when the median is at or under the
 ceiling **and** no single measurement exceeds 1.2 times the ceiling. The
 measurement set is three consecutive runs locally on the reference host, and in
-continuous integration the five most recent rows for which section 9's
-canonical `Q(row)` is true and each of the four authoritatively resolved slice
-jobs has a complete Actions-API duration. Cold-sample qualification is exactly
-`C(row) = Q(row) && cache_restored == 0 && four complete resolved slice
-durations`; it therefore requires passing same-commit Cargo, Bazel,
-`make test-policy`, fixture-contract, and slice verdicts. The scalar duration
-is the maximum of those four durations. During the shadow stage every
-conforming run is cold by construction because section 10 publishes and
-restores nothing. Scheduled, dispatched and `main`-push runs are liveness
-probes and never enter the set. All measurements and their immutable run/job
-IDs and resolver evidence references are reported, not just the median.
+continuous integration the five most recent qualifying cold qualification
+records as section 9 defines them. Qualifying means the shadow run restored no
+Bazel cache of any kind and all four slice jobs ran to completion with a
+recorded duration; during the shadow stage every run is cold by construction,
+because section 10 publishes and restores nothing, so the qualifier exists to
+exclude runs that produced no measurement rather than to select among warm and
+cold runs. Scheduled, dispatched and `main`-push runs are liveness probes and
+never enter the set. All measurements are reported, not just the median.
 
 **Fail-closed response when a budget is missed.**
 
@@ -1856,16 +1743,17 @@ hold. Each is mechanically checkable.
    exactly one identifier, no Rust test target is unmapped, and no hand-written
    fragment is unlisted, the channel transition and the `rustdoc_json` rule
    included.
-2. **Equivalence, positive.** The complete authoritative lineage through the
-   recorded end SHA has a maximal suffix of at least ten rows for which section
-   9's canonical `Q(row)` is true. Consequently every one of the ten has
-   immutable resolver-confirmed Cargo, Bazel, `make test-policy`,
-   fixture-contract, and four-slice run/job IDs at one head SHA and every job
-   passed. The fixture lane remains outside the Bazel comparison, but it and
-   policy are mandatory same-commit companion verdicts. Missing, failed,
-   cancelled, wrong-commit, stale-reused, forged, ineligible, omitted, or
-   omitted-reset evidence has exactly the reset or disqualification effect in
-   the canonical table; no local promotion predicate may reinterpret it.
+2. **Equivalence, positive.** Ten consecutive matching qualification records as
+   section 9 defines them: ten consecutive push-to-`v3` records in which the
+   Bazel rollup and the Cargo
+   `D2B_SKIP_FIXTURE_BUILD=1 make test-rust` rollup reached the same verdict at
+   the same `head_sha`, and the separate enforcing
+   `D2B_ENABLE_FIXTURE_BUILD=1 make test-fixture-contracts` lane passed on that
+   same commit. The fixture lane is not compared to Bazel because its two
+   surfaces remain explicitly outside this migration; it is a required
+   companion verdict so a qualification record cannot hide a contract-layer
+   regression. Pull-request, `main`-push, scheduled and dispatched runs never
+   enter the streak, and the reset rules in section 9 apply.
 3. **Equivalence, negative.** A recorded seeded-failure matrix: for each of the
    eighteen surfaces, a deliberately broken tree makes exactly that Bazel
    target fail and does not make an unrelated surface fail. This is recorded
@@ -1886,9 +1774,7 @@ hold. Each is mechanically checkable.
    every measurement recorded, and the in-band deadline handoff is wired.
 7. **Supply chain.** The section 6 comparison is recorded: today's
    `cargo deny check` against the decomposed `cargo-deny` plus `cargo-audit`
-   pair, over the intentionally covered `main`, `broker`, and `guest` locks,
-   with no differing enforcing outcome. The walker lock remains outside this
-   comparison because it has no deny or audit surface today. The
+   pair, over all three locks, with no differing enforcing outcome. The
    section 6 yanked carrier has landed under the three `rust-deny-*`
    identifiers regardless of what that comparison found, its committed
    lock-bounded snapshot passes its offline key-set drift check, and the union
@@ -1968,8 +1854,7 @@ recorded decision rather than a silent regression.
   makes the surface deterministic; it also means database freshness is now a
   property of a committed pin. Per section 6, `cargo-deny` runs only
   `bans licenses sources` on the Bazel path and the `[advisories]` sections of
-  the three `main`, `broker`, and `guest` `deny.toml` files become inert there,
-  with the live ignore
+  the three `deny.toml` files become inert there, with the live ignore
   semantics carried by `cargo-audit --ignore`. The aggregate policy is
   preserved as the union of the two tools; the recorded outcome comparison in
   section 6 is what proves it.
@@ -2296,11 +2181,6 @@ the promoted workflow actually has.
     `test-performance-budgets`, and the heavy-lane semaphore are all
     unchanged. This ADR changes the executor beneath the Rust gate and nothing
     above it.
-14. Neutral: qualification now retains the complete eligible protected-`v3`
-    push lineage and authoritative resolver projections for Cargo, Bazel,
-    policy, fixture, and slice jobs. Both same-commit companion verdicts are
-    mandatory for every streak row, cold sample, and promotion check; evidence
-    cannot discard a red or cancelled push to improve the suffix.
 
 ### The specific failures this design makes possible
 
@@ -2364,17 +2244,15 @@ and requires failure, because a locator that never misses is indistinguishable
 from one that chains.
 
 **A laundered equivalence streak.** The streak is the single piece of evidence
-between the shadow stage and a required context changing executors. Pairing a
-job from another tree, reusing an old green job ID, fabricating an ID, omitting
-an eligible push, dropping a reset, or cancelling a red run can all inflate it.
-The canonical predicate closes those routes with one authoritative resolver:
-it enumerates the complete protected-`v3` merged-PR push lineage, resolves each
-Cargo, Bazel, policy, fixture, and slice run/job pair to the same head and
-attempt, and derives the streak. Missing, failed, timed-out, skipped, or
-cancelled jobs remain reset rows even when every carrier was cancelled.
-Wrong-commit, stale-reused, forged, ineligible, omitted, duplicate, reordered,
-or omitted-reset evidence disqualifies the set. Committed negative fixtures
-exercise each class through the existing Layer-1 Rust policy carrier.
+between the shadow stage and a required context changing executors, and two
+ways to inflate it are real. Counting a run whose paired Cargo verdict came
+from a different tree is the first; it is closed by pairing on `head_sha` under
+the `push` event on `v3` rather than on a pull-request number, because
+`refs/pull/N/merge` is recomputed against a moving base. Cancelling a shadow
+run that is about to go red is the second; it is closed by counting a shadow
+run that reached no verdict, while its paired Cargo run reached one, as a
+mismatch that resets the streak. The residual is a double cancellation that
+stops both sides, which produces no record and therefore buys nothing.
 
 **A vendor tree that is quietly short a crate.** `cargo-deny licenses` harvests
 license text from crate sources. A vendored tree missing a package produces
@@ -2468,9 +2346,8 @@ closed when any `.bazelrc` line or wrapper argument sets that flag.
   statement about what the gate can detect. The carrier lands in the shadow
   stage either way, and an all-clear snapshot is a normal committed baseline.
 - **Pinning a full crates.io index snapshot for the yanked check.** Rejected:
-  the state that check needs is bounded by the three covered supply-chain
-  locks - `main`, `broker`, and `guest` - so the artifact is bounded by those
-  three committed locks. A full index would be a
+  the state that check needs is bounded by three committed locks, so the
+  artifact is bounded by three committed locks. A full index would be a
   multi-gigabyte input on the trusted path to answer a few hundred questions.
 - **Keeping every clock on the literal default branch.** Rejected on
   measurement: `origin/HEAD` is `main`, `v3` never merges to `main`, and the
@@ -2577,12 +2454,9 @@ closed when any `.bazelrc` line or wrapper argument sets that flag.
 1. Bazel is the Rust build and test scheduler for the surfaces in the coverage
    map, and for nothing else. It does not build Nix outputs, package artifacts,
    images, or release binaries under this decision.
-2. Cargo manifests, the four hub/workspace locks for `main`, `broker`,
-   `guest`, and `walker`, and the two `rust-toolchain.toml` files remain the
-   authoritative dependency and toolchain inputs.
-   `packages/Cargo.guest.lock` remains a separate generated guest-workspace and
-   cache-key input. A dependency or toolchain change is a Cargo-file change
-   followed by regeneration.
+2. `Cargo.toml`, `Cargo.lock` and the two `rust-toolchain.toml` files remain
+   the authoritative dependency and toolchain inputs. A dependency or toolchain
+   change is a Cargo-file change followed by regeneration.
 3. Every one of the eighteen baseline execution-manifest surfaces has a
    nonempty carrier set and every carrier belongs to exactly one identifier:
    the mapping is total and unambiguous, not one-to-one. Mapped-label existence
@@ -2638,12 +2512,8 @@ closed when any `.bazelrc` line or wrapper argument sets that flag.
 8. The Bazel output base is never cached as a blob. The action cache and the
    repository/download cache are separate entries with separate keys.
 9. Cache keys bind the Bazel version, module lock, `.bazelrc`, both toolchain
-   pins, all four authoritative hub/workspace locks, all four per-hub
-   Bazel-side locks, the separate `packages/Cargo.guest.lock` generator input,
-   all deny configurations, the advisory-database and yanked-state pins, the
-   `cargo-bazel` checksum, `.bazelignore`, startup and symlink configuration,
-   build-script and action-environment digests, and the generated BUILD-tree
-   digest.
+   pins, all Cargo locks, all deny configurations, the advisory-database pin,
+   and the generated BUILD tree digest.
 10. Retired and superseded cache entries are deleted through the Actions API
     by a maintenance job that runs only on pushes to protected `v3`, before a
     new snapshot is saved, never by merging a commit and never by waiting for
@@ -2777,23 +2647,22 @@ closed when any `.bazelrc` line or wrapper argument sets that flag.
     new top-level shell gate, Layer-1 job, or Make target carries
     them.
 21. Every promotion, cache, shadow and post-promotion clock this decision
-    defines runs on protected `v3`; none resolves to `main`. Qualification
-    retains every eligible merged-PR `push` from the merged W3 anchor through
-    the recorded lineage end in chronological first-parent order. Section 9's
-    canonical `Q` is the only qualification predicate. Each row carries
-    immutable, authoritative-resolver-confirmed workflow run and job IDs,
-    attempts, head SHA, event, branch, merged-PR eligibility, and conclusions
-    for Cargo, Bazel, `make test-policy`,
-    `D2B_ENABLE_FIXTURE_BUILD=1 make test-fixture-contracts`, and all four
-    slices. `Q` requires every job to pass at the same head with no shadow
-    cache restore or write. Any real eligible push with a missing, failed,
-    timed-out, skipped, or cancelled carrier is retained and resets the streak.
-    Wrong-commit, stale-reused, forged, ineligible, omitted, duplicate,
-    reordered, or omitted-reset evidence disqualifies the set. Promotion
-    requires a ten-row true-`Q` suffix. A cold sample additionally requires all
-    four resolved durations and uses their maximum; the cold set is the five
-    most recent such rows. Pull-request, `main`-push, scheduled and dispatched
-    runs are diagnostic and never enter the lineage.
+    defines runs on protected `v3`; none resolves to `main`. A qualification
+    record is a `push` event on `refs/heads/v3` produced by a merged pull
+    request, carrying the head SHA, both run identifiers, both verdicts, and,
+    for a cold-sample record, the four slice durations, with both runs
+    identified by the same `head_sha`. The positive equivalence evidence is ten
+    consecutive matching qualification records and the cold
+    continuous-integration measurement set is the five most recent qualifying
+    cold records, where qualifying means no Bazel cache was restored and all
+    four slice jobs completed with a recorded duration. A differing verdict
+    resets the streak; a shadow run that reaches no verdict while its paired
+    Cargo run does is a mismatch and resets it; a record where neither side
+    reaches a verdict does not exist. Pull-request, `main`-push, scheduled and
+    dispatched runs are diagnostic and never enter a streak or a measurement
+    set. Each qualification record also carries a passing
+    `test-fixture-contracts` verdict for the same commit; fixture surfaces
+    remain outside the Bazel comparison but cannot regress invisibly.
 22. No first-party test under Bazel locates a binary through compile-time
     `env!("CARGO_BIN_EXE_*")`, resolves a repository path by walking out of
     `CARGO_MANIFEST_DIR`, or resolves anything by an absolute execroot path.
@@ -2837,13 +2706,8 @@ closed when any `.bazelrc` line or wrapper argument sets that flag.
 - `docs/reference/test-execution-manifest.md`, the baseline surface set
 - `docs/contributing/gates-and-lints.md`, the Rust budget and execution
   manifest section
-- `packages/xtask/tests/bazel_qualification.rs`, the qualification
-  resolver/predicate carrier and its
-  missing-policy, missing-fixture, failed, cancelled, wrong-commit,
-  stale-reused-job, forged-ID, ineligible-event, omitted-eligible-push, and
-  omitted-reset fixtures
-- `specs/003-adr052-bazel-rust/contracts/shadow-promotion-evidence.md`, the
-  Spec 003 projection of section 9's canonical qualification predicate
+- `packages/xtask/tests/policy_ci.rs`, the approved Make target list and
+  workflow allowlist
 - `packages/d2b-contract-tests/tests/policy_docs.rs`, the secure-cleanup
   marker set and the ban on path-based recursive cleanup
 - `packages/d2b-exec-runner/src/service_mode.rs`, the committed
