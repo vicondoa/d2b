@@ -16,7 +16,7 @@
   [ADR 0054](0054-broker-hub-generated-splice-workspace.md), which decides how
   the `broker` hub obtains a spliceable Cargo workspace without merging the
   standalone broker into the main workspace. The authoritative set is four
-  hub/workspace Cargo locks, for `main`, `broker`, `guest-shell`, and `walker`;
+  hub/workspace Cargo locks, for `main`, `broker`, `guest`, and `walker`;
   `packages/Cargo.guest.lock` is a separate generated and cache-key input, not
   a hub. The broker hub reads a committed generated resolution witness while
   its independent Cargo lock remains authoritative and
@@ -25,13 +25,15 @@
   enforcing `--check` form is strictly read-only.
   `cargo xtask bazel-repin --hub broker` admits only a clean stable original
   with the complete Cargo-input and generated-output set committed at `HEAD`,
-  runs Bazel in a bounded detached worktree at that exact commit, and publishes
-  only the validated `bazel/cargo/broker.lock` through anchored no-symlink
-  exchange. Stale or uncommitted inputs require the explicit generate, review,
-  commit-together, then repin workflow. The required hub argument, scoped
-  child environment, and absence from Make and workflows are unchanged. Spec
-  003's plan, tasks, and contracts require amendment before implementation
-  resumes. This refinement reverses and supersedes no decision here.
+  takes the generator's worktree-local OFD writer lock, and runs Bazel directly
+  in that worktree with `--batch`. Exact before and after Git censuses admit
+  only `bazel/cargo/broker.lock` or a successful no-op; failed or interrupted
+  runs restore that file from the required-clean `HEAD`. Stale or uncommitted
+  inputs require the explicit generate, review, commit-together, then repin
+  workflow. The required hub argument, scoped child environment, and absence
+  from Make and workflows are unchanged. Spec 003's plan, tasks, and contracts
+  require amendment before implementation resumes. This refinement reverses
+  and supersedes no decision here.
 - Related: [ADR 0009](0009-rust-toolchain-msrv-and-supply-chain.md) (Rust
   toolchain, MSRV, and supply-chain policy), which keeps its authority
   unchanged and is not superseded;
@@ -351,19 +353,26 @@ ADR justified by measured prototypes, and this ADR authorizes no such move.
   repository-owned command, `cargo xtask bazel-repin --hub <name>`, and it is
   the only place in the repository those three names may appear as a
   process-environment assignment. It requires an explicit hub from the closed
-  four-hub set, sets `CARGO_BAZEL_REPIN` and `CARGO_BAZEL_REPIN_ONLY=<hub>`
-  only in the environment of its Bazel child, never process-globally, and
-  admits exactly the selected hub's Bazel-side lock as output. The broker form
-  is refined by ADR 0054: it requires a clean stable original with the complete
-  Cargo-input and generated-output set committed, uses `--batch` only in a
-  bounded detached worktree at exact `HEAD`, and publishes the validated
-  broker lock through anchored exchange. It never gives Bazel the contributor
-  worktree. The other hub handlers must retain an equivalent single-hub
-  changed-path guard and may not weaken the broker form. An already-current
-  lock is exit zero with nothing changed rather than an error; the run that
-  must report a change is the one after a Cargo workspace change, which is
-  where a wrong invocation shows up. It is not a Make target and no workflow
-  may invoke it. Measured at `rules_rust` 0.73.0:
+  set `main`, `broker`, `guest`, and `walker`, sets `CARGO_BAZEL_REPIN` and
+  `CARGO_BAZEL_REPIN_ONLY=<hub>` only in the environment of its Bazel child,
+  never process-globally, and admits exactly the selected hub's Bazel-side lock
+  as output. `guest-shell` is not a hub token.
+
+  The `main`, `guest`, and `walker` forms use the same absolute output user
+  root, output base, and symlink prefix the wrapper derives, so they cannot
+  start a second server. ADR 0054 gives only `broker` a stronger and different
+  protocol: required-clean current worktree and committed generated inputs, a
+  shared worktree-local OFD writer lock, direct `broker.lock` output,
+  `--batch`, process-group containment, and exact before and after Git
+  censuses. Broker failure may leave that one lock dirty and restores it from
+  the required-clean `HEAD`; there is no snapshot or publication transaction.
+  The other three hub handlers retain the original startup-path rule and their
+  single-hub changed-path guards; they do not inherit the broker protocol.
+
+  An already-current lock is exit zero with nothing changed rather than an
+  error; the run that must report a change is the one after a Cargo workspace
+  change, which is where a wrong invocation shows up. It is not a Make target
+  and no workflow may invoke it. Measured at `rules_rust` 0.73.0:
   `CARGO_BAZEL_REPIN_ONLY` is a comma-delimited allowlist compared by exact
   hub name in `determine_repin`, so single-hub scoping is a substrate
   property rather than a convention, and `skip_cargo_lockfile_overwrite`
@@ -381,7 +390,7 @@ ADR justified by measured prototypes, and this ADR authorizes no such move.
 ### 4. First-party BUILD files are generated by a repository-owned generator
 
 `cargo xtask gen-bazel` reads `cargo metadata` for the four hub/workspace
-locks - main, broker, guest-shell, and walker - and emits the first-party
+locks - `main`, `broker`, `guest`, and `walker` - and emits the first-party
 `BUILD.bazel` files, the broker's generated resolution witness, and the
 tracked governed-source manifest that section 6's no-bash scan consumes.
 `packages/Cargo.guest.lock` remains a separate generator and cache-key input.
@@ -497,10 +506,12 @@ Pretending otherwise is how coverage disappears during a migration, so each one
 gets a named representation and a named hazard.
 
 **cargo-deny (three intentional supply-chain surfaces).** The current
-supply-chain leaf covers the main, broker, and guest-shell locks. The walker
-workspace is the fourth dependency hub but is not covered by deny or audit
-today, so this section does not invent a fourth supply-chain carrier. A Bazel
-test per covered workspace runs the
+supply-chain leaf covers exactly the `main`, `broker`, and `guest` locks:
+`packages/Cargo.lock`, `packages/d2b-priv-broker/Cargo.lock`, and
+`packages/d2b-guest-shell-runner/Cargo.lock`. The `walker` workspace is the
+fourth dependency hub but is not covered by deny or audit today, so this
+section does not invent a fourth supply-chain carrier. A Bazel test per
+covered workspace runs the
 nixpkgs-pinned `cargo-deny` against declared inputs: that workspace's
 `Cargo.toml` set, its `Cargo.lock`, its `deny.toml`, and a materialized
 vendored Cargo source tree.
@@ -535,7 +546,7 @@ and `crate_universe`'s spoke repositories expose per-crate rules rather than
 `.crate` archives or a whole-tree filegroup.
 
 The rule re-declares the downloads instead. For each of the three covered
-supply-chain locks - main, broker, and guest-shell - it reads every package
+supply-chain locks - `main`, `broker`, and `guest` - it reads every package
 with a registry source and calls `ctx.download` with the crate's registry URL
 and the `checksum` the lock already records; a download declared with a
 `sha256` is served from `--repository_cache` when the content is already
@@ -600,10 +611,10 @@ retirement. No waiver is created and no advisory becomes unenforced.
 What could move silently is an enforcing outcome `cargo-deny`'s `advisories`
 check produces that `cargo-audit` does not, yanked-crate detection being the
 obvious candidate, because it needs a registry index that neither the vendored
-tree nor the pinned advisory snapshot provides. Guard: before promotion the
-implementer records in the wave notes the exit status and the finding set of
-today's `cargo deny check` and of the decomposed pair, over the three covered
-supply-chain locks: main, broker, and guest-shell.
+tree nor the pinned advisory snapshot provides. Guard: before promotion the implementer records in the wave notes the exit
+status and the finding set of today's `cargo deny check` and of the decomposed
+pair, over the three covered supply-chain locks: `main`, `broker`, and
+`guest`.
 Today's leaf invokes `cargo deny --manifest-path ... check --config ...` with
 no subcommand list, so `advisories` runs there in addition to `cargo audit`,
 which is what makes that comparison meaningful rather than tautological.
@@ -614,9 +625,8 @@ not dropping the outcome.
 **The carrier is unconditional, so the capability does not depend on what the
 comparison happens to find.** An earlier form of this section built the carrier
 only when the recorded comparison showed a yanked-state difference. That is
-wrong in the direction that matters. The comparison is one observation of one
-lock set at one moment; "no crate in these three covered supply-chain locks is
-yanked today" is not
+wrong in the direction that matters. The comparison is one observation of one lock set at one moment; "no crate in
+these three covered supply-chain locks is yanked today" is not
 "this repository can detect a yanked crate". A capability gated on a finding is
 absent exactly when the finding first appears, and it appears after promotion,
 when the Cargo executor that used to carry the outcome is gone. Continuous
@@ -626,7 +636,7 @@ Therefore, whatever the comparison shows:
 
 - A **yanked-crate check against a committed, lock-bounded index snapshot**
   lands during the shadow stage, before promotion. The snapshot records, for
-  every `(name, version)` in the main, broker, and guest-shell locks, its
+  every `(name, version)` in the `main`, `broker`, and `guest` locks, its
   yanked state and the index revision identifier the generator observed it
   at. It is refreshed by a
   repository-owned `xtask` subcommand that reads the index only during an
@@ -644,7 +654,7 @@ Therefore, whatever the comparison shows:
 
 The comparison keeps its full force and is unchanged as promotion evidence:
 promotion criterion 7 still records today's `cargo deny check` against the
-decomposed pair over the main, broker, and guest-shell locks and still blocks
+decomposed pair over the `main`, `broker`, and `guest` locks and still blocks
 on any differing enforcing outcome. The walker lock remains outside this
 intentional three-lock supply-chain comparison because no deny or audit
 surface covers it today. What the comparison no longer decides is whether the
@@ -673,9 +683,9 @@ The gate today falls back to `nix shell` when `cargo-deny` is absent and fails
 closed when neither is available, citing ADR 0009's no-waiver rule; the Bazel
 form has no fallback at all, because the tool is a declared input.
 
-**cargo-audit (three intentional supply-chain surfaces).** The same main,
-broker, and guest-shell scope applies. The walker hub has no audit surface
-today. The advisory database
+**cargo-audit (three intentional supply-chain surfaces).** The same exact
+`main`, `broker`, and `guest` scope applies. The `walker` hub has no audit
+surface today. The advisory database
 becomes a declared, pinned input rather than a network fetch, and, per the
 decomposition above, `cargo-audit` becomes the sole carrier of the advisories
 policy on the Bazel path. The flake already pins a RustSec advisory database
@@ -1318,11 +1328,14 @@ and it is the single largest thing a naive implementation would try to carry.
 **Keys.** The primary key is unique per successful push-to-`v3` run; the
 restore prefix omits the run identifier and never contains a commit SHA. Both
 key and prefix bind: `.bazelversion`, `MODULE.bazel`, `MODULE.bazel.lock`,
-`.bazelrc`, both `rust-toolchain.toml` files, the four hub/workspace locks
-(main, broker, guest-shell, and walker), the separate
-`packages/Cargo.guest.lock` generator input, the three `deny.toml` files, the
-advisory-database pin, and a digest of the generated BUILD tree. A change to
-any of those must produce a different key rather than a subtly stale cache.
+`.bazelrc`, both `rust-toolchain.toml` files, the four authoritative
+hub/workspace locks (`main`, `broker`, `guest`, and `walker`), all four
+per-hub Bazel-side locks, the separate `packages/Cargo.guest.lock` generator
+input, the three `deny.toml` files, the advisory-database and yanked-state
+pins, the `cargo-bazel` checksum, `.bazelignore`, startup and symlink
+configuration, the build-script and action-environment digests, and the
+generated BUILD-tree digest. A change to any of those must produce a different
+key rather than a subtly stale cache.
 
 **Writer policy.** Pull requests restore read-only and never save. Pushes to
 protected `v3` restore, run, trim, and publish exactly one refreshed snapshot,
@@ -1813,7 +1826,7 @@ hold. Each is mechanically checkable.
    every measurement recorded, and the in-band deadline handoff is wired.
 7. **Supply chain.** The section 6 comparison is recorded: today's
    `cargo deny check` against the decomposed `cargo-deny` plus `cargo-audit`
-   pair, over the intentionally covered main, broker, and guest-shell locks,
+   pair, over the intentionally covered `main`, `broker`, and `guest` locks,
    with no differing enforcing outcome. The walker lock remains outside this
    comparison because it has no deny or audit surface today. The
    section 6 yanked carrier has landed under the three `rust-deny-*`
@@ -1895,7 +1908,7 @@ recorded decision rather than a silent regression.
   makes the surface deterministic; it also means database freshness is now a
   property of a committed pin. Per section 6, `cargo-deny` runs only
   `bans licenses sources` on the Bazel path and the `[advisories]` sections of
-  the three main, broker, and guest-shell `deny.toml` files become inert there,
+  the three `main`, `broker`, and `guest` `deny.toml` files become inert there,
   with the live ignore
   semantics carried by `cargo-audit --ignore`. The aggregate policy is
   preserved as the union of the two tools; the recorded outcome comparison in
@@ -2389,7 +2402,7 @@ closed when any `.bazelrc` line or wrapper argument sets that flag.
   stage either way, and an all-clear snapshot is a normal committed baseline.
 - **Pinning a full crates.io index snapshot for the yanked check.** Rejected:
   the state that check needs is bounded by the three covered supply-chain
-  locks - main, broker, and guest-shell - so the artifact is bounded by those
+  locks - `main`, `broker`, and `guest` - so the artifact is bounded by those
   three committed locks. A full index would be a
   multi-gigabyte input on the trusted path to answer a few hundred questions.
 - **Keeping every clock on the literal default branch.** Rejected on
@@ -2497,8 +2510,8 @@ closed when any `.bazelrc` line or wrapper argument sets that flag.
 1. Bazel is the Rust build and test scheduler for the surfaces in the coverage
    map, and for nothing else. It does not build Nix outputs, package artifacts,
    images, or release binaries under this decision.
-2. Cargo manifests, the four hub/workspace locks for main, broker,
-   guest-shell, and walker, and the two `rust-toolchain.toml` files remain the
+2. Cargo manifests, the four hub/workspace locks for `main`, `broker`,
+   `guest`, and `walker`, and the two `rust-toolchain.toml` files remain the
    authoritative dependency and toolchain inputs.
    `packages/Cargo.guest.lock` remains a separate generated guest-workspace and
    cache-key input. A dependency or toolchain change is a Cargo-file change
@@ -2558,9 +2571,12 @@ closed when any `.bazelrc` line or wrapper argument sets that flag.
 8. The Bazel output base is never cached as a blob. The action cache and the
    repository/download cache are separate entries with separate keys.
 9. Cache keys bind the Bazel version, module lock, `.bazelrc`, both toolchain
-   pins, the four hub/workspace locks, the separate
-   `packages/Cargo.guest.lock` generator input, all deny configurations, the
-   advisory-database pin, and the generated BUILD tree digest.
+   pins, all four authoritative hub/workspace locks, all four per-hub
+   Bazel-side locks, the separate `packages/Cargo.guest.lock` generator input,
+   all deny configurations, the advisory-database and yanked-state pins, the
+   `cargo-bazel` checksum, `.bazelignore`, startup and symlink configuration,
+   build-script and action-environment digests, and the generated BUILD-tree
+   digest.
 10. Retired and superseded cache entries are deleted through the Actions API
     by a maintenance job that runs only on pushes to protected `v3`, before a
     new snapshot is saved, never by merging a commit and never by waiting for
