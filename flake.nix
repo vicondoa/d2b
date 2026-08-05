@@ -906,6 +906,7 @@
             "observability.nix"
             "observability-guest.nix"
             "observability-host-collector.nix"
+            "observability-host-collector-extra.nix"
             "provider-catalog.nix"
             "provider-elf-shim.nix"
             "provider-projection-exportability.nix"

@@ -987,6 +987,8 @@ let
     "obs-host-collector-default-off"
     "obs-host-collector-journal"
     "obs-host-collector-otlp"
+  ];
+  hostCollectorExtraCases = [
     "obs-host-collector-both-processor-split"
     "obs-host-identity-override"
     "obs-host-otlp-client-group-umask"
@@ -1000,9 +1002,12 @@ let
     else if casePartition == "guest" then builtins.elem name guestCases
     else if casePartition == "host-collector" then
       builtins.elem name hostCollectorCases
+    else if casePartition == "host-collector-extra" then
+      builtins.elem name hostCollectorExtraCases
     else
       !(builtins.elem name guestCases
-        || builtins.elem name hostCollectorCases);
+        || builtins.elem name hostCollectorCases
+        || builtins.elem name hostCollectorExtraCases);
 in
 lib.filterAttrs
   (name: _: partitionMatches (lib.removePrefix "observability/" name))
