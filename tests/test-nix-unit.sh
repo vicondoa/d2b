@@ -439,16 +439,30 @@ for shard in "${nix_unit_shards[@]}"; do
   shard_stderr="$shard_dir/$shard.stderr"
   shard_status_file="$shard_dir/$shard.status"
   rm -f -- "$shard_result" "$shard_stderr" "$shard_status_file"
-  (
-    exec nix-eval-jobs \
+  if [ "$shard_workers" -eq 1 ]; then
+    set +e
+    nix-eval-jobs \
       --no-instantiate \
       --flake "${flake_ref}#nixUnitJobShards.${system}.${shard}" \
       --workers 1 \
       --max-memory-size "$memory_mb" \
       --show-trace >"$shard_result" 2>"$shard_stderr"
-  ) &
-  shard_pids+=("$!")
-  shard_statuses+=("$shard_status_file")
+    rc=$?
+    set -e
+    printf '%s\n' "$rc" >"$shard_status_file"
+    [ "$rc" -eq 0 ] || shard_status=1
+  else
+    (
+      exec nix-eval-jobs \
+        --no-instantiate \
+        --flake "${flake_ref}#nixUnitJobShards.${system}.${shard}" \
+        --workers 1 \
+        --max-memory-size "$memory_mb" \
+        --show-trace >"$shard_result" 2>"$shard_stderr"
+    ) &
+    shard_pids+=("$!")
+    shard_statuses+=("$shard_status_file")
+  fi
 done
 while [ "${#shard_pids[@]}" -gt 0 ]; do
   harvest_nix_unit_shard "${shard_pids[0]}" "${shard_statuses[0]}"
