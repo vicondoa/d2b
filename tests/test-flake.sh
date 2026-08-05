@@ -22,6 +22,36 @@ ROOT=${ROOT:-$(cd "$HERE/.." && pwd)}
 D2B_LOG=${D2B_LOG:-/dev/null}
 export ROOT D2B_LOG
 
+# Repaired complete local-shard baseline: 14,255,252 KiB process-tree RSS.
+# The immutable 25% headroom produces a 17,819,065 KiB ceiling. This is a
+# lane contract, not an operator knob; lower thresholds belong only to
+# hermetic peak-rss helper self-tests.
+FLAKE_RSS_MAX_KIB=17819065
+rss_guarded=0
+if [ "${1:-}" = "--internal-peak-rss-guarded" ]; then
+  shift
+  rss_guarded=1
+fi
+if [ "$rss_guarded" -eq 0 ]; then
+  peak_rss_helper="$ROOT/tests/tools/peak-rss.py"
+  if command -v python3 >/dev/null 2>&1; then
+    exec python3 "$peak_rss_helper" \
+      --lane flake \
+      --max-kib "$FLAKE_RSS_MAX_KIB" \
+      -- bash "$0" --internal-peak-rss-guarded "$@"
+  elif command -v nix >/dev/null 2>&1; then
+    exec nix shell --quiet --inputs-from "$ROOT" nixpkgs#python3 \
+      --command python3 "$peak_rss_helper" \
+      --lane flake \
+      --max-kib "$FLAKE_RSS_MAX_KIB" \
+      -- bash "$0" --internal-peak-rss-guarded "$@"
+  else
+    printf '%s\n' \
+      "flake peak RSS guard requires python3 or nix to provide it" >&2
+    exit 125
+  fi
+fi
+
 # shellcheck disable=SC1091
 . "$ROOT/tests/lib.sh"
 # shellcheck source=tests/tools/flake-check-classes.sh
@@ -29,6 +59,16 @@ export ROOT D2B_LOG
 
 export NIX_CONFIG="${NIX_CONFIG:-experimental-features = nix-command flakes}"
 cd "$ROOT"
+
+# The repaired flake lane uses the existing local-shard topology by default.
+# One resident shard is the measured stable cap; callers can request two, but
+# the enforcing RSS guard remains authoritative.
+if [ -z "${D2B_FLAKE_CHECK:-}" ] \
+  && [ "${D2B_FLAKE_OUTPUTS:-0}" != 1 ] \
+  && [ "${D2B_FLAKE_ALL_SYSTEMS:-0}" != 1 ]; then
+  export D2B_FLAKE_LOCAL_SHARDS="${D2B_FLAKE_LOCAL_SHARDS:-1}"
+  export D2B_FLAKE_JOBS="${D2B_FLAKE_JOBS:-1}"
+fi
 
 # git+file:// (never a bare path): source-capture from the git tree only, so the
 # sibling cargo target/ + scratch dirs stay invisible to the eval (disk-hygiene
@@ -137,11 +177,13 @@ if [ "${D2B_FLAKE_LOCAL_SHARDS:-0}" = 1 ]; then
     case "$kind" in
       check)
         env -u D2B_FLAKE_LOCAL_SHARDS -u D2B_FLAKE_OUTPUTS \
-          D2B_FLAKE_CHECK="$value" bash "$0"
+          D2B_FLAKE_CHECK="$value" bash "$0" \
+          --internal-peak-rss-guarded
         ;;
       outputs)
         env -u D2B_FLAKE_LOCAL_SHARDS -u D2B_FLAKE_CHECK \
-          D2B_FLAKE_OUTPUTS=1 bash "$0"
+          D2B_FLAKE_OUTPUTS=1 bash "$0" \
+          --internal-peak-rss-guarded
         ;;
       *)
         echo "unknown local flake shard kind: $kind" >&2

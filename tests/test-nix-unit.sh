@@ -15,6 +15,36 @@ ROOT=${ROOT:-$(cd "$HERE/.." && pwd)}
 D2B_LOG=${D2B_LOG:-/dev/null}
 export ROOT D2B_LOG
 
+# Repaired complete-run baseline: 16,182,296 KiB process-tree RSS. The
+# immutable 25% headroom produces a 20,227,870 KiB ceiling. This is a lane
+# contract, not an operator knob; lower thresholds belong only to hermetic
+# peak-rss helper self-tests.
+NIX_UNIT_RSS_MAX_KIB=20227870
+rss_guarded=0
+if [ "${1:-}" = "--internal-peak-rss-guarded" ]; then
+  shift
+  rss_guarded=1
+fi
+if [ "$rss_guarded" -eq 0 ]; then
+  peak_rss_helper="$ROOT/tests/tools/peak-rss.py"
+  if command -v python3 >/dev/null 2>&1; then
+    exec python3 "$peak_rss_helper" \
+      --lane nix-unit \
+      --max-kib "$NIX_UNIT_RSS_MAX_KIB" \
+      -- bash "$0" --internal-peak-rss-guarded "$@"
+  elif command -v nix >/dev/null 2>&1; then
+    exec nix shell --quiet --inputs-from "$ROOT" nixpkgs#python3 \
+      --command python3 "$peak_rss_helper" \
+      --lane nix-unit \
+      --max-kib "$NIX_UNIT_RSS_MAX_KIB" \
+      -- bash "$0" --internal-peak-rss-guarded "$@"
+  else
+    printf '%s\n' \
+      "nix-unit peak RSS guard requires python3 or nix to provide it" >&2
+    exit 125
+  fi
+fi
+
 if [ "${D2B_NIX_UNIT_JOBS+x}" = x ]; then
   printf '%s\n' \
     "D2B_NIX_UNIT_JOBS is retired; unset it and use D2B_NIX_UNIT_WORKERS (1 through 4)." \
@@ -51,7 +81,8 @@ if [ -n "${D2B_EXECUTION_MANIFEST:-}" ] \
     --target test-nix-unit \
     --commit "$manifest_commit" \
     -- env D2B_NIX_UNIT_MANIFEST_LIFECYCLE=1 \
-      bash "$ROOT/tests/test-nix-unit.sh" "$@"
+      bash "$ROOT/tests/test-nix-unit.sh" \
+      --internal-peak-rss-guarded "$@"
 fi
 
 # shellcheck disable=SC1091
@@ -204,7 +235,8 @@ if ! command -v nix-eval-jobs >/dev/null 2>&1 \
   exec nix develop --quiet --no-warn-dirty --no-write-lock-file \
     "${flake_ref}#devShells.${system}.nix-unit" \
     --command env D2B_NIX_UNIT_TOOLCHAIN_REENTRY=1 \
-      bash "$ROOT/tests/test-nix-unit.sh" "$@"
+      bash "$ROOT/tests/test-nix-unit.sh" \
+      --internal-peak-rss-guarded "$@"
 fi
 
 logical_cpus=$(getconf _NPROCESSORS_ONLN 2>/dev/null || nproc 2>/dev/null || printf '%s' 1)
