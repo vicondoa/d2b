@@ -192,6 +192,22 @@ if [ "${D2B_FLAKE_LOCAL_SHARDS:-0}" = 1 ]; then
     log_path="$shard_dir/${key}.log"
     status_path="$shard_dir/${key}.status"
     rm -f -- "$log_path" "$status_path"
+    if [ "$flake_jobs" -eq 1 ]; then
+      rc=0
+      set +e
+      run_flake_local_item "$kind" "$value" >"$log_path" 2>&1
+      rc=$?
+      set -e
+      printf '%s\n' "$rc" > "$status_path"
+      if [ "$rc" -eq 0 ]; then
+        ok "$label"
+      else
+        log "$label FAILED - tail follows:"
+        tail -120 "$log_path" >&2 || true
+        failed="$rc"
+      fi
+      return
+    fi
     (
       rc=0
       set +e
