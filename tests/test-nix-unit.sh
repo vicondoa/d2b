@@ -427,6 +427,19 @@ harvest_nix_unit_shard() {
   set -e
   printf '%s\n' "$rc" >"$status_file"
   [ "$rc" -eq 0 ] || shard_status=1
+  settle_nix_unit_children
+}
+
+settle_nix_unit_children() {
+  local attempt
+  for attempt in $(seq 1 50); do
+    if ! pgrep -P "$$" >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 0.1
+  done
+  fail "nix-unit shard left a child process after evaluator exit; refusing to start the next shard"
+  return 1
 }
 
 for shard in "${nix_unit_shards[@]}"; do
@@ -451,6 +464,7 @@ for shard in "${nix_unit_shards[@]}"; do
     set -e
     printf '%s\n' "$rc" >"$shard_status_file"
     [ "$rc" -eq 0 ] || shard_status=1
+    settle_nix_unit_children
   else
     (
       exec nix-eval-jobs \
