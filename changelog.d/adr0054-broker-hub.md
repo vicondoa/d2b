@@ -59,7 +59,18 @@
   had any recovery record to its name is cleared at the start of the next run,
   from a fixed list of the names it could have created, leaving the command's
   own bookkeeping files alone and refusing an unfamiliar name rather than
-  guessing what it is. The token that keeps them apart is held only
+  guessing what it is. Each of the three refusals that can come out of that
+  bookkeeping area now prints a recovery command that actually clears it,
+  against the area that holds the state rather than against the generated
+  directory, which is the one the earlier wording pointed at and which would
+  have left the contributor refused in exactly the same way on every re-run.
+  The command sets the state aside reversibly instead of deleting it, so it
+  can still be read afterwards and put back; where an entry is of a kind
+  version control cannot store at all, and so cannot be set aside, the
+  refusal says which entry that is and gives a single bounded removal for
+  that one path that refuses the moment the path holds anything worth
+  keeping. Unrelated changes elsewhere in the working copy, staged or not,
+  tracked or ignored, are left alone by all of it. The token that keeps them apart is held only
   while a regeneration is actually running: it is closed automatically when the
   command starts the build tool, so the build tool's long-lived background
   server cannot end up holding it and locking the contributor out of their own

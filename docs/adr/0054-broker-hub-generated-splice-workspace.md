@@ -658,10 +658,18 @@ directory. Step 10 is the only step that writes the generated subtree, and
    them and this sweep removes nothing at all. Present and not parseable at a
    known version, the command exits nonzero naming `journal`, deletes nothing,
    and prescribes no remedy that deletes it, because a record this build
-   cannot read is the one thing that could have bounded a removal. An entry
+   cannot read is the one thing that could have bounded a removal. What it
+   prescribes instead is the transaction directory's own reversible remedy,
+   `git stash push --all -- bazel/cargo/.broker-workspace.txn/`, run once this
+   command has exited, followed by re-running it. An entry
    under any name outside the closed nine is refused the same way: listed
    repository-relative, left exactly where it is, no other entry swept, and
-   the command exits nonzero.
+   the command exits nonzero. Its remedy is that same stash for every listed
+   entry git can represent, and a bounded single-path removal for a listed
+   entry git cannot represent, because an entry a stash provably cannot
+   capture is an entry the stash alone would refuse over again forever. The
+   paragraphs on transaction-directory recovery below record what that stash
+   captures, what it cannot, and how to get it back.
 
    Removing `staged` when there is no journal is safe by construction rather
    than by inspection. Step 9 makes the journal durable before step 10
@@ -924,8 +932,13 @@ recovering one changes nothing about the decision:
     arise, so meeting it means the transaction directory
     was changed by something other than this command, and spawning a child
     whose failure could then not be undone is not an acceptable way to find
-    out. Otherwise the run continues at step 12, spawns the child, settles the
-    lock under step 13, records the child there, and tears down under step 14.
+    out. The remedy it prints is the transaction directory's remedy and only
+    that, `git stash push --all -- bazel/cargo/.broker-workspace.txn/`
+    followed by a re-run; it names neither `bazel/cargo/broker-workspace/`
+    nor `bazel/cargo/broker.lock`, for the reasons the paragraphs below
+    record. Otherwise the run continues at step 12, spawns the child, settles
+    the lock under step 13, records the child there, and tears down under
+    step 14.
     Its exit status is that whole sequence's, not the recovery's alone.
 - live subtree equal to neither: refuse. List every path that matched neither
   side, prescribe the reversible remedy, delete nothing, and exchange nothing.
@@ -1140,6 +1153,117 @@ untracked or ignored files, which is measured above and is the specific way
 round 2's wording was wrong: it named a remedy that leaves the refusal's most
 likely cause in place, so the contributor re-runs, is refused identically, and
 concludes the command is broken.
+
+**The three transaction-directory refusals prescribe a different pathspec.**
+The unparseable `journal`, the unrecognized entry and the recorded-but-missing
+hub-lock snapshot are the three refusals whose offending paths lie inside
+`bazel/cargo/.broker-workspace.txn/` rather than under the generated subtree.
+Step 7's remedy names the wrong pathspec for all three: it would clear nothing
+they name, so the contributor re-runs and is refused identically, which is the
+same defect this section already corrected once for `git restore`. Their
+remedy is the same shape of command against the directory that actually holds
+the state, `git stash push --all -- bazel/cargo/.broker-workspace.txn/`,
+followed by re-running the command. Measured at git 2.54.0 on a fixture
+carrying the committed `.broker-*/` ignore rule: with an unparseable
+`journal`, a `lock`, a `published`, a `hub-lock.pre` and a populated `staged/`
+planted in that directory, and with an unrelated tracked edit, an unrelated
+untracked file, an unrelated ignored `target/` output and a staged
+modification to `bazel/cargo/broker.lock` elsewhere in the worktree, that
+invocation exited 0, captured all five transaction entries, removed the
+directory, and left all four unrelated states byte-identical, staging
+included. `--all` is required, and more strictly here than under the subtree,
+where `--include-untracked` at least took the tracked and untracked entries:
+every entry in this directory is ignored rather than merely untracked, because
+`.broker-*/` is a committed rule, so on the same fixture
+`git stash push --include-untracked -- bazel/cargo/.broker-workspace.txn/`
+exited 0 reporting `No local changes to save` and captured nothing whatever,
+leaving all five entries exactly where they were.
+
+**Why that one pathspec is the whole of it.** Neither
+`bazel/cargo/broker-workspace/` nor `bazel/cargo/broker.lock` belongs in these
+three remedies, and naming either would be a defect rather than caution. The
+missing-snapshot refusal is reached only on the branch where the live subtree
+equals the journal's staged digest set, which is the tree step 5
+deterministically reproduces, so the re-run meets it in step 7's second
+permitted state and passes; stashing it would file a validated tree away in
+order to regenerate it byte for byte. The hub lock sits outside step 7's
+ambient check by the decision recorded above, so no state of that file can
+refuse the re-run, and the re-run snapshots whatever bytes it finds and lets
+the child replace them wholesale. The other two refusals fire before any of
+that is read at all. A remedy naming either path would move work the next run
+neither needs nor touches.
+
+One cost is real and is named rather than hidden: the stash takes `published`
+with it, because the directory whose integrity these three refusals dispute is
+not a directory whose receipt should still be trusted. That collapses step 7's
+permitted set from three states to two on the next run, exactly as a missing
+receipt does anywhere else, so a contributor whose subtree carries bytes only
+the receipt would have admitted meets step 7's ordinary refusal and its
+ordinary remedy. That is one further bounded refusal with a working remedy,
+not a loop.
+
+**The one thing the stash provably cannot capture.** Git's object store has no
+representation for an empty directory or for a fifo, a socket or a device
+node, so `git stash push --all` neither captures nor removes one. Measured on
+the same fixture with five shapes planted under unrecognized names: the stash
+exited 0, captured the regular file, the symlink and the non-empty directory,
+and left the empty directory and the fifo exactly where they were. For the
+unrecognized-entry refusal, which is the only one of the three where an
+arbitrary shape can appear, prescribing the stash alone would therefore print
+a remedy that provably cannot clear its own refusal. So that refusal
+classifies the entries it lists, as step 7 classifies unmerged paths: every
+listed entry git can represent gets the stash, and a listed entry git cannot
+represent gets one bounded single-path removal, `rmdir -- <path>` for a
+directory and `rm -- <path>` for a fifo, a socket or a device node. Neither is
+`rm -rf` and neither widens into it: measured, `rmdir` exited 1 with
+`Directory not empty` against a directory holding one file and removed
+nothing, and `rm` without `-r` exited 1 with `Is a directory` against a
+directory, so both refuse the instant the path holds anything a contributor
+could lose. Neither destroys bytes either, because neither shape holds any: an
+empty directory and a fifo are precisely the two cases where there is nothing
+to preserve and so nothing a reversible remedy could buy. The empty `probe.a`
+and `probe.b` a killed probe leaves behind are inside the closed nine, so
+step 2's sweep removes them on the next run and the stash's inability to
+capture them costs nothing and is never prescribed against.
+
+**Running it at the wrong moment, and getting it back.** The remedy is run
+once the command has exited, and the refusal says so, because git honours no
+advisory lock: measured, with an `F_OFD_SETLK` write lock held on
+`bazel/cargo/.broker-workspace.txn/lock`, `git stash push --all` on that
+pathspec exited 0 and unlinked the lock file out from under its live holder.
+Against a live repin that would take the ownership token away from a running
+writer, which is why it is prescribed to a contributor whose command has
+already refused and exited rather than as something to try while one is
+running.
+
+The stash is inspectable without being restored, which is what makes it a
+remedy for state a contributor may want to read rather than discard. The
+listing to inspect is the untracked and ignored parent, and naming that
+precisely rather than naming the stash entry matters. Measured,
+`git show --name-only --format= stash@{0}^3` listed exactly the transaction
+entries the remedy removed and nothing else, while
+`git stash show --include-untracked --name-only stash@{0}` listed those and
+also an unrelated staged tracked path, because `git stash push` snapshots the
+whole index into the stash commit whatever pathspec it is handed. That is a
+property of the record and not of the worktree: on the same fixture the remedy
+left that unrelated path staged with its bytes unchanged, before and after,
+and a later `git stash pop` exited 0 and left it staged still. A contributor
+told to inspect `stash@{0}` and finding an unrelated file in the listing would
+reasonably conclude the remedy had over-reached, so the refusal names the
+parent.
+
+`git stash pop` before the re-run restored every captured entry, ignored ones
+included, and exited 0. After a re-run has recreated `lock` and `published`,
+`git stash pop` exits 1 with `... already exists, no checkout` and keeps the
+stash entry rather than dropping it, so nothing is lost by attempting it; the
+targeted form that succeeds there is
+`git checkout stash@{0}^3 -- bazel/cargo/.broker-workspace.txn/`, measured to
+exit 0 and restore the captured entries, which stages them, so a contributor
+who wants them back without that also runs `git reset -- <pathspec>`. Running
+the prescribed remedy when the directory is already absent is a safe no-op
+rather than an error that captures something else: measured, it exited 0
+reporting `No local changes to save`, created no stash entry, and left an
+unrelated edit untouched.
 
 **The ordering hazard is gone by construction, not by refusal.** Round 1
 described the dangerous sequence: repin first, so the hub renders from the
@@ -1590,6 +1714,19 @@ refuses any name outside the set without touching the others, and treats
 `published` are outside its reach by name, which is what keeps a sweep from
 eating the ownership token or the receipt that step 7's third permitted state
 depends on.
+
+**A refusal whose printed remedy cannot clear it.** The sweep's two refusals,
+the unparseable `journal` and the unrecognized entry, and step 4's
+missing-snapshot refusal, all name paths inside
+`bazel/cargo/.broker-workspace.txn/`, and that directory is ignored by a
+committed rule. A remedy carried over from step 7 would name the generated
+subtree, clear none of what was listed, and refuse the contributor
+identically on the next run, which is the `git restore` defect repeated
+against a different pathspec. The guard is that all three print the stash
+against the transaction directory itself, and that the unrecognized-entry
+refusal classifies what it lists first, because an empty directory and a fifo
+are measured to survive `git stash push --all` and would otherwise be a
+permanent loop rather than a slow one.
 
 **A Bazel child that half-writes the hub lock and then fails.** `cargo-bazel`
 renders `bazel/cargo/broker.lock` from a resolve that touches the network; a
@@ -2045,7 +2182,15 @@ integration can reach.
    refuses naming that file and deletes nothing. Any entry outside those nine
    names refuses, is left in place, and is reported. `lock` and `published`
    are never removed by the sweep, `ENOENT` counts as success throughout, and
-   a sweep interrupted partway is completed by the next run.
+   a sweep interrupted partway is completed by the next run. Every refusal
+   whose offending paths lie inside the transaction directory, these two and
+   step 4's missing recorded hub-lock snapshot, prescribes
+   `git stash push --all -- bazel/cargo/.broker-workspace.txn/` and that
+   pathspec alone, never the generated subtree and never
+   `bazel/cargo/broker.lock`; and the unrecognized-entry refusal additionally
+   classifies what it lists, prescribing `rmdir -- <path>` or `rm -- <path>`
+   for exactly those entries git cannot represent and a stash therefore
+   cannot capture.
 10. That command then spawns exactly one Bazel child under ADR 0052 section 3's
     scoped controls and derived output root. Two changed-path rules bound the
     result. The child may change only `bazel/cargo/broker.lock`, which is ADR
@@ -2389,6 +2534,65 @@ record merges. Each is a command and a verdict.
     present whose format version this build does not know, the run exits
     nonzero naming `journal` and deletes nothing, `journal` included. All
     reverted.
+
+    The remedy each transaction-directory refusal prints is executed, not
+    merely string-matched. These are `#[test]`s in `packages/xtask` on the
+    same throwaway fixture repositories, each carrying the committed
+    `.broker-*/` ignore rule and three unrelated states that must survive
+    every case: a modified tracked file, an untracked file, and an ignored
+    `target/` output, all outside `bazel/cargo/`, plus a staged modification
+    so the index is covered too. For each of the three refusals, an
+    unparseable `journal`, an unrecognized entry, and a `journal` recording a
+    `hub-lock.pre` that is not on disk, the test plants that state, runs the
+    command, extracts the command lines the refusal prints verbatim rather
+    than reconstructing them, runs them with the repository as the working
+    directory, and asserts three things. Every extracted command exits zero.
+    A second `cargo xtask bazel-repin --hub broker` does not reproduce the
+    same refusal, asserted against the refusal identity and not against exit
+    status alone, so a re-run stopped for some unrelated reason cannot pass
+    it silently. And the four unrelated states are byte-identical to their
+    pre-remedy values with `git status --porcelain` unchanged, so a remedy
+    that reaches outside its pathspec fails. The second assertion is the one
+    that fails on a message naming a pathspec that does not cover the planted
+    state, which is the whole point of the check.
+
+    The negatives are the remedies this record rejects, run against the same
+    planted states, each asserted to leave the state uncleared, and each
+    measured at git 2.54.0 before being written down. Against a planted
+    `journal`, step 7's pathspec
+    `git stash push --all -- bazel/cargo/broker-workspace/` exits 0 reporting
+    `No local changes to save` and `journal` is still on disk. Against the
+    same state `git stash push --include-untracked` on the transaction
+    pathspec exits 0 and captures none of the entries, and `git restore` on
+    it exits 1 with `pathspec ... did not match any file(s) known to git` and
+    captures none either. Against an unrecognized empty directory and an
+    unrecognized fifo, the prescribed
+    `git stash push --all -- bazel/cargo/.broker-workspace.txn/` itself exits
+    0 and leaves both on disk, which is what makes the classified arms
+    load-bearing rather than decorative; those arms are then run and asserted
+    to clear their own shape, and asserted to exit nonzero when `rmdir --` is
+    pointed at a non-empty directory and `rm --` at a directory. A negative
+    that starts passing means either the printed message has drifted onto a
+    remedy that works by accident or the substrate's behaviour has changed,
+    and this record wants both surfaced rather than absorbed. The stash side
+    is asserted reversible in the same tests, and asserted against the
+    untracked parent rather than the stash entry:
+    `git show --name-only --format= stash@{0}^3` lists exactly the planted
+    transaction entries and nothing else, whereas
+    `git stash show --include-untracked --name-only stash@{0}` also lists the
+    fixture's unrelated staged path, because a pathspec stash still snapshots
+    the whole index; a test asserting the latter is exactly equal to the
+    planted set would be asserting something false. That the index snapshot
+    is a property of the record and not of the worktree is asserted
+    separately, by the unrelated staged path being still staged with the same
+    bytes after the remedy and after a later `git stash pop`. Restoration is
+    asserted through
+    `git checkout stash@{0}^3 -- bazel/cargo/.broker-workspace.txn/`, which
+    exits 0, restores the entries byte-identically, and stages them, so the
+    test also asserts `git reset -- <pathspec>` returns the index to where it
+    was with the entries still on disk. Running the prescribed remedy against
+    an absent transaction directory exits 0, creates no stash entry, and
+    leaves the unrelated states unchanged. All reverted.
 15. Two writers cannot race the publication. With one
     `cargo xtask bazel-repin --hub broker` held at an injected pause inside its
     transaction, a second invocation of the repin and an invocation of
