@@ -191,6 +191,8 @@
         nix-unit-runtime = [
           "clipboard.nix"
           "external-vm-kind.nix"
+          "external-vm-kind-rejections.nix"
+          "external-vm-kind-runtime.nix"
           "niri-vm-borders.nix"
           "requested-vm-config.nix"
           "security-key-gating.nix"
