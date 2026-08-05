@@ -545,7 +545,10 @@ tool could have run itself.
 **One authorized sibling holds the transaction state.**
 `bazel/cargo/.broker-workspace.txn/` is the only path outside
 `bazel/cargo/broker-workspace/**` and `bazel/cargo/broker.lock` that this
-decision authorizes either writer to create. It is a sibling of the generated
+decision authorizes either writer to create during a transaction; the four
+quarantine slots the recovery mode below renames it onto are the only other
+authorized paths, and no run that publishes creates one. It is a sibling of
+the generated
 subtree under the same anchored parent, which is what makes it the same
 filesystem by construction rather than by hope (constraint 15), and it is
 transaction state rather than general scratch: nothing generates into it,
@@ -659,17 +662,22 @@ directory. Step 10 is the only step that writes the generated subtree, and
    known version, the command exits nonzero naming `journal`, deletes nothing,
    and prescribes no remedy that deletes it, because a record this build
    cannot read is the one thing that could have bounded a removal. What it
-   prescribes instead is the transaction directory's own reversible remedy,
-   `git stash push --all -- bazel/cargo/.broker-workspace.txn/`, run once this
-   command has exited, followed by re-running it. An entry
+   prescribes instead is this command's own recovery mode,
+   `cargo xtask bazel-repin --hub broker --quarantine-transaction-state`, run
+   once this command has exited, followed by re-running the ordinary repin. An
+   entry
    under any name outside the closed nine is refused the same way: listed
    repository-relative, left exactly where it is, no other entry swept, and
-   the command exits nonzero. Its remedy is that same stash for every listed
-   entry git can represent, and a bounded single-path removal for a listed
-   entry git cannot represent, because an entry a stash provably cannot
-   capture is an entry the stash alone would refuse over again forever. The
-   paragraphs on transaction-directory recovery below record what that stash
-   captures, what it cannot, and how to get it back.
+   the command exits nonzero. Its remedy is that same quarantine whatever the
+   listed entry turns out to be, because the quarantine's bound does not
+   depend on what the entry is: it moves the directory the entry is in,
+   without reading the entry, naming it in anything executable, or removing
+   it. The listing itself is diagnostic only. It renders each unrecognized
+   name with bytes outside printable ASCII escaped, and that rendering appears
+   in no command line the contributor is told to run, so a name nobody chose
+   never reaches a shell. The paragraphs on transaction-directory recovery
+   below record what that mode does, what it deliberately does not do, and why
+   a stash with per-shape removals cannot clear this refusal.
 
    Removing `staged` when there is no journal is safe by construction rather
    than by inspection. Step 9 makes the journal durable before step 10
@@ -933,7 +941,8 @@ recovering one changes nothing about the decision:
     was changed by something other than this command, and spawning a child
     whose failure could then not be undone is not an acceptable way to find
     out. The remedy it prints is the transaction directory's remedy and only
-    that, `git stash push --all -- bazel/cargo/.broker-workspace.txn/`
+    that,
+    `cargo xtask bazel-repin --hub broker --quarantine-transaction-state`
     followed by a re-run; it names neither `bazel/cargo/broker-workspace/`
     nor `bazel/cargo/broker.lock`, for the reasons the paragraphs below
     record. Otherwise the run continues at step 12, spawns the child, settles
@@ -1144,126 +1153,187 @@ succeeds on the same pathspec; measured in that order on the same fixture. The
 command never claims otherwise, because a remedy that the tool refuses to
 execute is worse than no remedy.
 
-Three remedies are never prescribed. `rm -rf` is not, because an ADR that tells
+Four remedies are never prescribed. `rm -rf` is not, because an ADR that tells
 a contributor to recursively delete a path under their worktree has externalized
 exactly the risk the rest of this section is spent removing. A broad
 `git clean` is not, because its blast radius is the worktree and the problem is
-one subtree. And `git restore` alone is not, because it does not remove
+one subtree. `git restore` alone is not, because it does not remove
 untracked or ignored files, which is measured above and is the specific way
 round 2's wording was wrong: it named a remedy that leaves the refusal's most
 likely cause in place, so the contributor re-runs, is refused identically, and
-concludes the command is broken.
+concludes the command is broken. And a list of per-entry removals over names
+the command read off the disk is not, because its length, its depth and its
+quoting are all decided by bytes nobody chose, and because a removal is the
+wrong instrument for state a refusal exists to surface; the transaction-state
+refusals below prescribe a rename this command performs itself instead.
 
-**The three transaction-directory refusals prescribe a different pathspec.**
+**The three transaction-directory refusals prescribe one built-in recovery.**
 The unparseable `journal`, the unrecognized entry and the recorded-but-missing
 hub-lock snapshot are the three refusals whose offending paths lie inside
 `bazel/cargo/.broker-workspace.txn/` rather than under the generated subtree.
 Step 7's remedy names the wrong pathspec for all three: it would clear nothing
 they name, so the contributor re-runs and is refused identically, which is the
 same defect this section already corrected once for `git restore`. Their
-remedy is the same shape of command against the directory that actually holds
-the state, `git stash push --all -- bazel/cargo/.broker-workspace.txn/`,
-followed by re-running the command. Measured at git 2.54.0 on a fixture
-carrying the committed `.broker-*/` ignore rule: with an unparseable
-`journal`, a `lock`, a `published`, a `hub-lock.pre` and a populated `staged/`
-planted in that directory, and with an unrelated tracked edit, an unrelated
-untracked file, an unrelated ignored `target/` output and a staged
-modification to `bazel/cargo/broker.lock` elsewhere in the worktree, that
-invocation exited 0, captured all five transaction entries, removed the
-directory, and left all four unrelated states byte-identical, staging
-included. `--all` is required, and more strictly here than under the subtree,
-where `--include-untracked` at least took the tracked and untracked entries:
-every entry in this directory is ignored rather than merely untracked, because
-`.broker-*/` is a committed rule, so on the same fixture
-`git stash push --include-untracked -- bazel/cargo/.broker-workspace.txn/`
-exited 0 reporting `No local changes to save` and captured nothing whatever,
-leaving all five entries exactly where they were.
+remedy is one command this repository owns,
+`cargo xtask bazel-repin --hub broker --quarantine-transaction-state`. It
+renames the whole transaction directory to the first free one of four fixed
+sibling names, `bazel/cargo/.broker-workspace.txn.quarantine.0` through
+`bazel/cargo/.broker-workspace.txn.quarantine.3`, prints that path
+repository-relative, tells the contributor to re-run
+`cargo xtask bazel-repin --hub broker`, and does nothing else whatever.
 
-**Why that one pathspec is the whole of it.** Neither
-`bazel/cargo/broker-workspace/` nor `bazel/cargo/broker.lock` belongs in these
-three remedies, and naming either would be a defect rather than caution. The
+**Stated as the closed sequence it is.** Open the worktree root by ordinary
+`open`, because a contributor's worktree legitimately sits under symlinked
+ancestors (constraint 17). Resolve `bazel/cargo` beneath it with `openat2`
+under `RESOLVE_BENEATH | RESOLVE_NO_SYMLINKS | RESOLVE_NO_MAGICLINKS |
+RESOLVE_NO_XDEV`, opened `O_RDONLY | O_DIRECTORY | O_CLOEXEC` so that one
+descriptor is both the rename anchor and the fsync target. Resolve
+`.broker-workspace.txn` beneath it under the same four flags; `ENOENT` there
+is success and the command exits zero having written nothing, because it names
+a goal state and not an action. Resolve `lock` beneath the transaction
+directory, `O_RDWR | O_CREAT | O_CLOEXEC` at mode 0600, and take
+`F_OFD_SETLK` with `F_WRLCK`; `EAGAIN` means a generator or a repin is
+running, and the command names that lock path and the fact that another
+generator or repin holds it, and exits nonzero having touched nothing. Then
+`renameat2(RENAME_NOREPLACE)` from that anchor to that same anchor, at most
+four times and stopping at the first that returns 0, one
+`fsync` of it, which is one call rather than two because the source and the
+destination sit in the same directory, and the lock descriptor closes with the
+process. That is the whole of it. The flag is accepted only with
+`--hub broker`, since no other hub has a transaction directory. It reads no
+manifest, no lock, no tracked path and no entry inside the directory it moves;
+it spawns no process at all and therefore no Bazel child; it sets none of the
+three repin environment names; it is not a Make target and no workflow, gate
+or build path may invoke it. It deletes nothing, ever, and there is no flag
+that makes it.
+
+**Why a rename rather than a stash or a classified removal.** The state these
+three refusals dispute is arbitrary: an unrecognized name can be any entry a
+filesystem can hold, at any depth. A rename is the only remedy whose bound
+does not depend on that. It moves one directory entry in one parent, so it
+preserves every nested byte, every special file and every name whose bytes are
+not valid UTF-8, and it never parses, renders or interpolates a name a
+contributor did not write. Measured 2026-08-04 on Linux 7.0.10 with the
+worktree on ext4, unprivileged, by direct syscall from the same C probe shape
+constraints 14 through 19 use: `renameat2` with `RENAME_NOREPLACE` moved a
+transaction directory holding `lock`, `published` and an unrecognized
+directory carrying a regular file, a fifo, a unix socket, a symlink, an empty
+directory, a name whose bytes are not valid UTF-8, and a second level holding
+another fifo, and returned 0. Afterwards `openat2` on the transaction name
+returned `ENOENT`, every one of those entries was present under the quarantine
+name with its type intact, the unrecognized directory's inode number was
+unchanged, and the nested regular file's bytes read back identical. A
+character device is the one shape the probe could not plant, since `mknodat`
+for one returned `EPERM` unprivileged; this record does not claim to have
+measured it, and it is the shape the argument least needs, because a rename
+enumerates nothing and so cannot distinguish it from the fifo and the socket
+it did move.
+
+**The stash cannot clear these three, which is why it is not prescribed for
+them.** An earlier round of this record prescribed
+`git stash push --all -- bazel/cargo/.broker-workspace.txn/` here, with a
+per-shape single-path removal for each listed entry git cannot represent, and
+that is withdrawn because it is measured not to work. Git's object store has
+no representation for an empty directory or for a fifo, a socket or a device
+node, and the failing case is not the top-level shape classification covers:
+it is an unrecognized directory git can represent, holding entries it cannot.
+Measured at git 2.54.0 on a fixture carrying the committed `.broker-*/` rule,
+with an unrecognized directory holding a regular file, a fifo and a
+subdirectory holding another fifo, the stash exited 0, took the regular file
+along with `journal`, `lock` and `published`, and left the unrecognized
+directory, its subdirectory and both fifos exactly where they were. The
+refusal therefore reproduces on the next run, and the classified arms cannot
+finish the job: against that same surviving directory `rmdir --` exited 1 with
+`Directory not empty` and `rm --` exited 1 with `Is a directory`, both of them
+correctly, because both are built to refuse the moment the path holds
+anything. So the printed remedy exits 0, the state it was supposed to clear is
+still on disk, part of the evidence has been filed into a stash and the rest
+has not, and the next run refuses identically. Making classification work
+would mean walking to the leaves and printing a removal per arbitrary nested
+name for the contributor to paste into a shell, a remedy whose depth, whose
+bound and whose quoting all depend on bytes nobody chose. The rename has no
+depth, no per-entry decision and no interpolated argument to get wrong.
+
+**Taking the lock is the second reason the recovery belongs in the tool.**
+Git honours no advisory lock: measured, with an `F_OFD_SETLK` write lock held
+on `bazel/cargo/.broker-workspace.txn/lock`, `git stash push --all` on that
+pathspec exited 0 and unlinked the lock file out from under its live holder,
+which against a running repin takes the ownership token away from a writer
+mid-transaction. The built-in takes that lock before it moves anything and is
+refused with `EAGAIN` while another writer holds it, measured on the same
+probe, so a contributor who runs the recovery at the wrong moment gets a
+refusal rather than a corrupted transaction. That is also why this recovery
+could not be a line of shell in the refusal text however carefully quoted: the
+safety here is the lock, and no shell command can take it.
+
+**Collision is bounded and exhaustion is a refusal.** The four slots are tried
+in ascending order and the first `RENAME_NOREPLACE` that returns 0 wins;
+`EEXIST` advances to the next. Measured, `RENAME_NOREPLACE` onto an occupied
+slot returned `EEXIST` and left the transaction directory exactly where it
+was, so an occupied slot costs nothing and clobbers nothing, which is
+constraint 16's complement doing the work it was measured for. With all four
+occupied the command exits nonzero, lists the four quarantine paths
+repository-relative, moves nothing, and tells the contributor to read what
+they have collected and clear what they no longer want. It prints no command
+for that, because by then those directories are inert evidence that no command
+reads and no gate sees. Four is chosen so that the second, third and fourth
+occurrence of the same corruption still recover with no manual step, and so
+that a fifth
+is a signal that something is producing corrupt transaction state faster than
+anyone is reading it. One fixed name would refuse the second occurrence with
+`EEXIST` and leave a manual recursive delete as the only way forward, which is
+where this started.
+
+**Why the quarantine touches nothing else.** Neither
+`bazel/cargo/broker-workspace/` nor `bazel/cargo/broker.lock` is read or
+written by it, and naming either would be a defect rather than caution. The
 missing-snapshot refusal is reached only on the branch where the live subtree
 equals the journal's staged digest set, which is the tree step 5
 deterministically reproduces, so the re-run meets it in step 7's second
-permitted state and passes; stashing it would file a validated tree away in
-order to regenerate it byte for byte. The hub lock sits outside step 7's
-ambient check by the decision recorded above, so no state of that file can
-refuse the re-run, and the re-run snapshots whatever bytes it finds and lets
-the child replace them wholesale. The other two refusals fire before any of
-that is read at all. A remedy naming either path would move work the next run
-neither needs nor touches.
+permitted state and passes; setting that subtree aside would file a validated
+tree away in order to regenerate it byte for byte. The hub lock sits outside
+step 7's ambient check by the decision recorded above, so no state of that
+file can refuse the re-run, and the re-run snapshots whatever bytes it finds
+and lets the child replace them wholesale. The other two refusals fire before
+any of that is read at all. No Cargo manifest and no Cargo lock in either
+workspace is opened by this mode. And the move is invisible to git: measured
+at git 2.54.0, `git check-ignore -v` matched the committed `.broker-*/` rule
+against all four quarantine names, so they need no `.gitignore` entry of their
+own, and `git status --porcelain` was byte-identical before and after a
+quarantine on a fixture carrying a modified tracked file, an untracked file,
+an ignored `target/` output and a staged modification, all four of which were
+byte-unchanged afterwards. That invisibility is what keeps the recovery out of
+both changed-path checks. What the generator does emit is one `.bazelignore`
+entry per quarantine slot beside the transaction directory's own, because a
+quarantined directory can carry a `staged/` tree with its own `BUILD.bazel`.
+Fixed slot names are what make that possible: an ignore entry can be emitted
+and drift-checked for a name known in advance and not for a timestamp, and
+this record does not assume a pattern syntax in that file it has not measured.
+`cargo xtask gen-bazel --check` refuses when any of those entries is missing.
 
-One cost is real and is named rather than hidden: the stash takes `published`
-with it, because the directory whose integrity these three refusals dispute is
-not a directory whose receipt should still be trusted. That collapses step 7's
-permitted set from three states to two on the next run, exactly as a missing
-receipt does anywhere else, so a contributor whose subtree carries bytes only
-the receipt would have admitted meets step 7's ordinary refusal and its
-ordinary remedy. That is one further bounded refusal with a working remedy,
-not a loop.
+One cost is real and is named rather than hidden: the quarantine takes
+`published` with it, because the directory whose integrity these three
+refusals dispute is not a directory whose receipt should still be trusted.
+That collapses step 7's permitted set from three states to two on the next
+run, exactly as a missing receipt does anywhere else, so a contributor whose
+subtree carries bytes only the receipt would have admitted meets step 7's
+ordinary refusal and its ordinary remedy. That is one further bounded refusal
+with a working remedy, not a loop.
 
-**The one thing the stash provably cannot capture.** Git's object store has no
-representation for an empty directory or for a fifo, a socket or a device
-node, so `git stash push --all` neither captures nor removes one. Measured on
-the same fixture with five shapes planted under unrecognized names: the stash
-exited 0, captured the regular file, the symlink and the non-empty directory,
-and left the empty directory and the fifo exactly where they were. For the
-unrecognized-entry refusal, which is the only one of the three where an
-arbitrary shape can appear, prescribing the stash alone would therefore print
-a remedy that provably cannot clear its own refusal. So that refusal
-classifies the entries it lists, as step 7 classifies unmerged paths: every
-listed entry git can represent gets the stash, and a listed entry git cannot
-represent gets one bounded single-path removal, `rmdir -- <path>` for a
-directory and `rm -- <path>` for a fifo, a socket or a device node. Neither is
-`rm -rf` and neither widens into it: measured, `rmdir` exited 1 with
-`Directory not empty` against a directory holding one file and removed
-nothing, and `rm` without `-r` exited 1 with `Is a directory` against a
-directory, so both refuse the instant the path holds anything a contributor
-could lose. Neither destroys bytes either, because neither shape holds any: an
-empty directory and a fifo are precisely the two cases where there is nothing
-to preserve and so nothing a reversible remedy could buy. The empty `probe.a`
-and `probe.b` a killed probe leaves behind are inside the closed nine, so
-step 2's sweep removes them on the next run and the stash's inability to
-capture them costs nothing and is never prescribed against.
-
-**Running it at the wrong moment, and getting it back.** The remedy is run
-once the command has exited, and the refusal says so, because git honours no
-advisory lock: measured, with an `F_OFD_SETLK` write lock held on
-`bazel/cargo/.broker-workspace.txn/lock`, `git stash push --all` on that
-pathspec exited 0 and unlinked the lock file out from under its live holder.
-Against a live repin that would take the ownership token away from a running
-writer, which is why it is prescribed to a contributor whose command has
-already refused and exited rather than as something to try while one is
-running.
-
-The stash is inspectable without being restored, which is what makes it a
-remedy for state a contributor may want to read rather than discard. The
-listing to inspect is the untracked and ignored parent, and naming that
-precisely rather than naming the stash entry matters. Measured,
-`git show --name-only --format= stash@{0}^3` listed exactly the transaction
-entries the remedy removed and nothing else, while
-`git stash show --include-untracked --name-only stash@{0}` listed those and
-also an unrelated staged tracked path, because `git stash push` snapshots the
-whole index into the stash commit whatever pathspec it is handed. That is a
-property of the record and not of the worktree: on the same fixture the remedy
-left that unrelated path staged with its bytes unchanged, before and after,
-and a later `git stash pop` exited 0 and left it staged still. A contributor
-told to inspect `stash@{0}` and finding an unrelated file in the listing would
-reasonably conclude the remedy had over-reached, so the refusal names the
-parent.
-
-`git stash pop` before the re-run restored every captured entry, ignored ones
-included, and exited 0. After a re-run has recreated `lock` and `published`,
-`git stash pop` exits 1 with `... already exists, no checkout` and keeps the
-stash entry rather than dropping it, so nothing is lost by attempting it; the
-targeted form that succeeds there is
-`git checkout stash@{0}^3 -- bazel/cargo/.broker-workspace.txn/`, measured to
-exit 0 and restore the captured entries, which stages them, so a contributor
-who wants them back without that also runs `git reset -- <pathspec>`. Running
-the prescribed remedy when the directory is already absent is a safe no-op
-rather than an error that captures something else: measured, it exited 0
-reporting `No local changes to save`, created no stash entry, and left an
-unrelated edit untouched.
+**The evidence stays readable, and it is not put back automatically.** A
+quarantined directory is an ordinary directory in the worktree: the journal
+this build could not parse, the unrecognized entry and the recorded snapshot
+are all still there under their own names and their own bytes, and reading
+them needs no git command, no stash listing and no restore step. Nothing
+offers to move a quarantine back into place. The state was refused because
+this build could not account for it, and a mode that reinstated it would only
+reproduce the refusal it had just cleared. Re-running
+`cargo xtask bazel-repin --hub broker` after a quarantine meets an absent
+transaction directory, creates a fresh one and proceeds as an ordinary run:
+measured on the probe, a `lock` created under a freshly created transaction
+directory took `F_OFD_SETLK` and returned 0 while a descriptor on the
+quarantined one was still held open, so even a stale holder of the moved lock
+cannot block the next run.
 
 **The ordering hazard is gone by construction, not by refusal.** Round 1
 described the dangerous sequence: repin first, so the hub renders from the
@@ -1421,16 +1491,21 @@ makes a stale generator visible as a cache miss rather than a wrong hit.
 **Repository surface.** Fifteen new tracked files: one root manifest, six stub
 manifests, six empty `src/lib.rs` files, one lock mirror, one `BUILD.bazel`.
 Measured at 139 lines of manifest for the real closure. All generated, all
-drift-checked, none authored. Two tracked one-line additions carry the
-transaction directory: a `.gitignore` entry, which is committed and hand
-maintained, and a `.bazelignore` entry, which the generator emits.
-`cargo xtask gen-bazel --check` refuses when either is missing, because the
+drift-checked, none authored. Six tracked one-line additions carry the
+transaction directory and its four quarantine slots: a `.gitignore` entry for
+the transaction directory, which is committed and hand maintained, and five
+`.bazelignore` entries, one for the transaction directory and one for each
+quarantine slot, all of which the generator emits.
+`cargo xtask gen-bazel --check` refuses when any is missing, because the
 first is what keeps `bazel/cargo/.broker-workspace.txn/` out of
 `git status --porcelain` and therefore out of both changed-path checks, and the
-second is what keeps Bazel from defining a package for a staged tree carrying
-its own `BUILD.bazel`.
+rest are what keep Bazel from defining a package for a staged tree carrying
+its own `BUILD.bazel`, whether that tree is live or quarantined. The
+quarantine slots need no `.gitignore` entry of their own: the committed
+`.broker-*/` rule is measured to match all four.
 
-**Untracked surface, and it is one directory.**
+**Untracked surface, and it is one directory, plus up to four a refusal
+creates.**
 `bazel/cargo/.broker-workspace.txn/` exists in a contributor's worktree after
 the first generator or repin run and persists, holding one zero-byte `lock`
 file between transactions. It is authorized transaction state and nothing else:
@@ -1443,6 +1518,12 @@ but a running writer: the descriptor carries `O_CLOEXEC`, so no Bazel client,
 no Bazel server and no `cargo metadata` child inherits the open file
 description, and there is therefore no state in which a contributor has to
 break a lock, no stale-lock timeout to tune, and no `--force` to add later.
+`bazel/cargo/.broker-workspace.txn.quarantine.0` through
+`bazel/cargo/.broker-workspace.txn.quarantine.3` are the only other paths
+either writer creates, they are created only by the quarantine mode and only
+by renaming the transaction directory onto one of them, they are never read by
+anything afterwards, and a worktree that has never met a transaction-state
+refusal never holds one.
 
 **Repin surface.** `cargo xtask bazel-repin --hub broker` keeps every property
 ADR 0052 section 3 gave it: an explicit hub from the closed four-hub set,
@@ -1450,7 +1531,7 @@ exactly one Bazel child, `CARGO_BAZEL_REPIN` and `CARGO_BAZEL_REPIN_ONLY`
 scoped to that child's environment and forbidden everywhere else, the wrapper's
 derived output user root and output base so no second server starts, no Make
 target and no workflow reachability, and exit zero with nothing changed when
-the lock is already current. Three things change, all narrow.
+the lock is already current. Four things change, all narrow.
 
 It generates and validates the broker splice inputs itself instead of reading
 them, so the mutation is one command rather than an ordered pair, and the
@@ -1470,7 +1551,17 @@ exactly one changed tracked file, the hub's Bazel-side lock; that rule is not
 weakened, and it is the one that catches an authoritative `Cargo.lock` being
 rewritten. The command as a whole is held to that file plus the one subtree it
 synchronized, `bazel/cargo/broker-workspace/**`, and it fails listing any other
-changed path repository-relative. Nothing else in ADR 0052 section 3 moves.
+changed path repository-relative.
+
+And it gains one flag that performs no repin,
+`--quarantine-transaction-state`, which is the printed remedy for the three
+refusals whose offending paths lie inside the transaction directory. It takes
+the same lock, renames that directory onto the first free one of four fixed
+ignored sibling names, fsyncs the shared parent and stops: no generation, no
+validation, no Bazel child, no deletion, and nothing read out of the directory
+it moves. It is a contributor command like the repin itself, unreachable from
+Make, from any workflow and from any gate. Nothing else in ADR 0052 section 3
+moves.
 
 **A partial state this command can leave behind.** If the Bazel child fails
 after step 10, the generated subtree is current and `bazel/cargo/broker.lock`
@@ -1546,10 +1637,11 @@ subtree and in none of the three permitted file sets. That is the concrete
 reason the prescribed remedy is `git stash push --all` on the pathspec:
 `--include-untracked` is measured to leave that exact directory in place.
 Mitigations: the generated marker on line one of the root manifest, a
-generated `.bazelignore` entry for `bazel/cargo/broker-workspace/target/` and
-for `bazel/cargo/.broker-workspace.txn/`, a committed `.gitignore` entry for
+generated `.bazelignore` entry for `bazel/cargo/broker-workspace/target/`, for
+`bazel/cargo/.broker-workspace.txn/` and for each of the four quarantine
+slots, a committed `.gitignore` entry for
 the transaction directory, and `gen-bazel --check` refusing when the marker or
-either ignore entry is absent.
+any ignore entry is absent.
 
 **ADR 0052.** Nothing is reversed and nothing is superseded. Invariant 2 holds
 unchanged: `Cargo.toml`, the three `Cargo.lock` files and the two
@@ -1563,17 +1655,23 @@ the `from_specs` prohibition is untouched. The four-hub set, the three
 authoritative locks, and the ban on the source bootstrap and the repin
 environment controls are all unchanged.
 
-The section 3 repin command is refined in exactly three places, all narrow and
+The section 3 repin command is refined in exactly four places, all narrow and
 all stated in full in the repin-surface consequence above: it synchronizes the
 broker hub's generated splice inputs before it spawns Bazel; it publishes that
 subtree as a transaction, exchanging a validated staged sibling with the live
 name under an ownership lock and snapshotting the hub lock before the child
-runs so a failing child leaves that file exactly as the child found it; and its
+runs so a failing child leaves that file exactly as the child found it; its
 changed-path rule splits into a child-scoped rule, unchanged from ADR 0052, and
 a command-scoped rule permitting that one file plus the one subtree the command
-synchronized. Its required hub argument, its scoped child environment, its
+synchronized; and it gains one flag,
+`--quarantine-transaction-state`, which performs no repin at all and exists
+only to move this command's own transaction state aside when this command has
+refused over it. That flag spawns no Bazel child, so ADR 0052's rules about
+the child, its environment and its output base have nothing to bind on it.
+Its required hub argument, its scoped child environment, its
 single output base, its single child process, its exit-zero-when-current
-behaviour and its absence from Make and continuous integration are unchanged.
+behaviour and its absence from Make and continuous integration are unchanged,
+and the flag is subject to every one of those that still applies.
 Nothing in ADR 0052 required the hub's Bazel-side lock to be clean at `HEAD`
 before a repin; round 2 of this record added that and round 3 withdraws it, so
 this is a correction inside this record and not a change to ADR 0052.
@@ -1722,11 +1820,19 @@ missing-snapshot refusal, all name paths inside
 committed rule. A remedy carried over from step 7 would name the generated
 subtree, clear none of what was listed, and refuse the contributor
 identically on the next run, which is the `git restore` defect repeated
-against a different pathspec. The guard is that all three print the stash
-against the transaction directory itself, and that the unrecognized-entry
-refusal classifies what it lists first, because an empty directory and a fifo
-are measured to survive `git stash push --all` and would otherwise be a
-permanent loop rather than a slow one.
+against a different pathspec. A stash against the transaction directory
+itself, with a per-shape removal for the entries git cannot represent, has the
+same defect one level down and is the shape this record carried until round 3
+found it: an unrecognized directory git can represent, holding a fifo it
+cannot, is measured to survive that stash intact, after which `rmdir --` on it
+exits 1 with `Directory not empty` and `rm --` exits 1 with `Is a directory`,
+both correctly, and the refusal repeats forever with the evidence split
+between a stash and the disk. The guard is that all three refusals print
+`cargo xtask bazel-repin --hub broker --quarantine-transaction-state`, whose
+bound is a single `renameat2(RENAME_NOREPLACE)` of the containing directory
+under the transaction lock: it does not enumerate what it moves, so no nested
+shape can outlast it, and it removes nothing, so the state stays readable
+where the contributor can see it.
 
 **A Bazel child that half-writes the hub lock and then fails.** `cargo-bazel`
 renders `bazel/cargo/broker.lock` from a resolve that touches the network; a
@@ -2037,14 +2143,72 @@ state the next run regenerates from anyway. The rejected alternative here is
 printing one remedy for every refusal shape, which is how round 2's single
 `git restore` line became wrong; the command classifies the paths it names.
 
-**Let the command stash or move the conflicting entries itself.** Rejected, and
-this is the boundary between it and the previous entry. Prescribing a
-reversible command the contributor runs keeps the command's output set at two
-paths and keeps its behaviour reviewable; performing the stash makes the
-command a thing that relocates work, which is one more place to look when
-something goes missing and one more state a failed run can leave. The one place
-this record accepts a relocation is the interrupt window of step 10, where the
-alternative is deletion rather than a prompt.
+**Let the command stash or move the conflicting entries itself.** Rejected for
+the generated subtree, and the boundary is worth stating exactly. Prescribing
+a reversible command the contributor runs keeps the command's output set at
+two paths and keeps its behaviour reviewable; performing the stash makes the
+command a thing that relocates a contributor's work, which is one more place
+to look when something goes missing and one more state a failed run can leave.
+Two relocations are accepted against that rule, and neither one moves
+contributor work: the interrupt window of step 10, where the alternative is
+deletion rather than a prompt, and the quarantine mode, which moves only the
+transaction state this command itself owns, only when separately and
+explicitly invoked, and never as a side effect of a run that publishes
+anything.
+
+**Prescribe a stash against the transaction directory for the three
+transaction-state refusals.** Carried by an earlier round of this record,
+withdrawn here on measurement, and kept as a negative the checks still run.
+`git stash push --all -- bazel/cargo/.broker-workspace.txn/` does clear the
+representable state: measured at git 2.54.0 on a fixture carrying the
+committed `.broker-*/` rule, it exited 0, captured an unparseable `journal`, a
+`lock`, a `published`, a `hub-lock.pre` and a populated `staged/`, removed the
+directory, and left an unrelated tracked edit, an untracked file, an ignored
+`target/` output and a staged modification to `bazel/cargo/broker.lock`
+byte-identical, staging included; on the same state `--include-untracked`
+exited 0 reporting `No local changes to save` and captured nothing whatever,
+because a committed rule makes every entry there ignored rather than merely
+untracked, and `git restore` exited 1 with `pathspec ... did not match any
+file(s) known to git`. Three things defeat it anyway. It has no representation
+for an empty directory, a fifo, a socket or a device node, and the per-shape
+`rmdir --` and `rm --` arms added to cover those do not reach the case that
+matters: an unrecognized directory git can represent, holding a fifo it
+cannot, survives the stash whole and then refuses both arms, which is the
+permanent loop this round removes. It honours no advisory lock: measured, it
+unlinked the transaction lock out from under a live `F_OFD_SETLK` holder. And
+its record is wider than its pathspec:
+`git stash show --include-untracked --name-only stash@{0}` listed an unrelated
+staged path alongside the captured entries, because `git stash push` snapshots
+the whole index whatever pathspec it is handed, so the refusal had to send
+contributors to `git show --name-only --format= stash@{0}^3` instead, and to
+follow a targeted `git checkout stash@{0}^3 -- <pathspec>` with
+`git reset -- <pathspec>` to unstage what the checkout staged. A remedy that
+needs three paragraphs of qualification to be safe is a remedy in the wrong
+place.
+
+**Classify the unrecognized entry and prescribe bounded removals per shape.**
+Rejected, and it is the fix the finding against the previous round proposed.
+Classifying a directory correctly means recursing to its leaves, and the
+remedy that comes out is a list of removals over names nobody chose, each
+quoted into a shell the contributor pastes, at a depth the message cannot
+bound, over bytes that need not be valid UTF-8. It also has to delete in order
+to succeed, which destroys the evidence the refusal exists to surface. One
+`renameat2` subsumes every one of those cases without reading a single name.
+
+**Quarantine into `.scratch/` rather than into a sibling under
+`bazel/cargo/`.** Rejected by constraint 15. Nothing in the repository
+constrains what `.scratch/` is mounted on, and a cross-mount rename returned
+`EXDEV`, so the one operation that must not fail would fail exactly on the
+machines whose `.scratch/` is a tmpfs. The quarantine is a sibling under the
+anchored parent for the same reason `staged` is.
+
+**One fixed quarantine name, or a timestamped unique one.** Rejected at both
+ends. A single name refuses the second occurrence with `EEXIST` and leaves a
+manual recursive delete as the only way forward, which is the remedy this
+section exists not to print. A timestamp or a random suffix cannot be named in
+a `.bazelignore` entry ahead of time, and a quarantined `staged/` carries its
+own `BUILD.bazel`; nor can a check assert a path it cannot predict. Four fixed
+slots are ignorable in advance, assertable exactly, and bounded.
 
 **Let a gate or the Make wrapper regenerate when it finds the tree stale.**
 Rejected, and it is the shape this repository has refused before. A gate that
@@ -2135,17 +2299,23 @@ integration can reach.
    and never has been by ADR 0052; requiring it would make a successful run
    refuse the next one.
    Every refusal above names every offending path repository-relative,
-   prescribes a reversible remedy bounded to that pathspec, and
+   prescribes a remedy that is bounded to what the refusal names, that
+   destroys nothing and that can be undone, and
    spawns no Bazel process, creates no output base, and places
    `CARGO_BAZEL_REPIN` and `CARGO_BAZEL_REPIN_ONLY` in no child environment.
    The remedy is classified by path state rather than printed uniformly:
    `git stash push --all` on the named pathspec for tracked, untracked and
-   ignored entries, never `--include-untracked`, which is measured to leave an
-   ignored `target/` under the subtree in place; and, for any path git reports
+   ignored entries under the generated subtree, never `--include-untracked`,
+   which is measured to leave an
+   ignored `target/` under the subtree in place; for any path git reports
    unmerged, the bounded index resolution instead, since `git stash push`
-   refuses a pathspec that names an unmerged path in every form. `rm -rf`, a
+   refuses a pathspec that names an unmerged path in every form; and for any
+   refusal whose offending paths lie inside the transaction directory, the
+   built-in quarantine of invariant 9 rather than any git command at all.
+   `rm -rf`, a
    broad `git clean`, and a bare `git restore` offered as a way to remove an
-   untracked or ignored entry are never printed.
+   untracked or ignored entry are never printed, and no remedy this command
+   prints interpolates a path it read from disk into a command line.
 9. The publication is a transaction with no window of absence and no
    unbounded deletion. The validated bytes are copied into
    `bazel/cargo/.broker-workspace.txn/staged`, a directory created by `mkdirat`
@@ -2185,12 +2355,24 @@ integration can reach.
    a sweep interrupted partway is completed by the next run. Every refusal
    whose offending paths lie inside the transaction directory, these two and
    step 4's missing recorded hub-lock snapshot, prescribes
-   `git stash push --all -- bazel/cargo/.broker-workspace.txn/` and that
-   pathspec alone, never the generated subtree and never
-   `bazel/cargo/broker.lock`; and the unrecognized-entry refusal additionally
-   classifies what it lists, prescribing `rmdir -- <path>` or `rm -- <path>`
-   for exactly those entries git cannot represent and a stash therefore
-   cannot capture.
+   `cargo xtask bazel-repin --hub broker --quarantine-transaction-state` and
+   that command alone, never the generated subtree, never
+   `bazel/cargo/broker.lock`, and never a git command. That mode is the only
+   recovery for transaction state and is bounded by what it does not do. It
+   resolves `bazel/cargo` and everything under it descriptor-relatively under
+   the four resolve flags, opens the transaction lock
+   `O_RDWR | O_CREAT | O_CLOEXEC` and refuses with the lock path named when
+   `F_OFD_SETLK` returns `EAGAIN`; it then renames the whole transaction
+   directory onto the first free one of the four fixed sibling names
+   `bazel/cargo/.broker-workspace.txn.quarantine.0` through
+   `bazel/cargo/.broker-workspace.txn.quarantine.3` with
+   `renameat2(RENAME_NOREPLACE)`, fsyncs the shared parent, releases the lock,
+   prints the quarantine path repository-relative and names re-running the
+   ordinary repin. It reads no entry inside what it moves, removes nothing,
+   spawns no process, writes nothing under `bazel/cargo/broker-workspace/`,
+   `bazel/cargo/broker.lock` or any Cargo manifest or lock, exits zero without
+   writing when the transaction directory is absent, and refuses without
+   moving anything when all four slots are occupied.
 10. That command then spawns exactly one Bazel child under ADR 0052 section 3's
     scoped controls and derived output root. Two changed-path rules bound the
     result. The child may change only `bazel/cargo/broker.lock`, which is ADR
@@ -2224,8 +2406,8 @@ integration can reach.
 11. This decision adds no Make target, no Layer-1 job, no required
     continuous-integration context, and no top-level shell gate. Its drift
     checks extend `test-drift`, which already exists for this class of
-    staleness, and its transaction, recovery, residue, changed-path and
-    lock-descriptor negatives
+    staleness, and its transaction, recovery, residue, quarantine,
+    changed-path and lock-descriptor negatives
     are `#[test]`s in `packages/xtask`, running under the existing
     `rust-main-workspace-tests` surface against throwaway fixture repositories
     rather than the contributor's worktree; no new shell gate carries any of
@@ -2237,12 +2419,22 @@ integration can reach.
     contributor-invoked, both take the same write lock before writing, on a
     descriptor opened `O_CLOEXEC` so the lock cannot outlive the writer that
     took it, and neither is reachable from Make or continuous
-    integration. `cargo xtask gen-bazel --check` in `test-drift` stays
+    integration. The quarantine mode is the same command under a flag and
+    inherits all of that: it is contributor-invoked, takes that same lock,
+    writes neither the subtree nor anything else, and is reachable from no
+    Make target, no workflow and no gate.
+    `cargo xtask gen-bazel --check` in `test-drift` stays
     read-only, takes no lock, and remains the fail-closed gate for a stale
     tracked tree.
 12. `bazel/cargo/.broker-workspace.txn/` is the only path outside
     `bazel/cargo/broker-workspace/**` and `bazel/cargo/broker.lock` that either
-    writer may create. It is transaction state, not general scratch: no gate,
+    writer may create during a transaction, and
+    `bazel/cargo/.broker-workspace.txn.quarantine.0` through
+    `bazel/cargo/.broker-workspace.txn.quarantine.3` are the only other paths
+    this decision authorizes at all. Those four come into existence only by the
+    quarantine mode renaming the transaction directory onto one of them, never
+    by a run that publishes, and nothing reads one afterwards.
+    It is transaction state, not general scratch: no gate,
     build, or hub declaration reads it, it holds only the ownership lock and
     the publication receipt between transactions, it is owned by the invoking
     user, and this decision creates no
@@ -2251,7 +2443,10 @@ integration can reach.
     carrying it is `O_CLOEXEC` and never duplicated; there is no stale-lock
     timeout, no lock-breaking flag, and no pid file, and none may be added. It
     is named in a committed `.gitignore` entry and in a generated `.bazelignore`
-    entry, and `cargo xtask gen-bazel --check` refuses when either is missing.
+    entry, each quarantine slot is named in a generated `.bazelignore` entry of
+    its own and is covered by the same committed `.broker-*/` rule without one
+    of its own, and `cargo xtask gen-bazel --check` refuses when any of them is
+    missing.
     Unvalidated generation stays in `.scratch/`, whose filesystem this decision
     does not constrain and does not depend on. The receipt widens no
     permission: every path it names is still compared byte for byte, so a
@@ -2288,9 +2483,14 @@ record merges. Each is a command and a verdict.
    in neither `git status --short` nor `git status --porcelain`, which is the
    evidence that the committed `.gitignore` entry is present and that neither
    changed-path check can trip over the command's own workspace. Removing
-   either the `.gitignore` or the `.bazelignore` entry makes
+   the `.gitignore` entry, the transaction directory's `.bazelignore` entry,
+   or any of the four quarantine slots' `.bazelignore` entries makes
    `cargo xtask gen-bazel --check` exit nonzero naming the missing entry;
-   reverted.
+   reverted. `git check-ignore -v` on each of
+   `bazel/cargo/.broker-workspace.txn.quarantine.0` through
+   `bazel/cargo/.broker-workspace.txn.quarantine.3` reports the committed
+   `.broker-*/` rule, which is why those four need no `.gitignore` entry of
+   their own.
 2. `cargo xtask gen-bazel --check` exits zero on the committed tree, and exits
    nonzero naming the file for each of these planted mutations, reverted after
    each: a version bump in a stub manifest, a removed `[features]` entry, a
@@ -2536,25 +2736,72 @@ record merges. Each is a command and a verdict.
     reverted.
 
     The remedy each transaction-directory refusal prints is executed, not
-    merely string-matched. These are `#[test]`s in `packages/xtask` on the
+    merely string-matched, and it is one command rather than a shell line.
+    These are `#[test]`s in `packages/xtask` on the
     same throwaway fixture repositories, each carrying the committed
-    `.broker-*/` ignore rule and three unrelated states that must survive
+    `.broker-*/` ignore rule and four unrelated states that must survive
     every case: a modified tracked file, an untracked file, and an ignored
     `target/` output, all outside `bazel/cargo/`, plus a staged modification
     so the index is covered too. For each of the three refusals, an
     unparseable `journal`, an unrecognized entry, and a `journal` recording a
     `hub-lock.pre` that is not on disk, the test plants that state, runs the
-    command, extracts the command lines the refusal prints verbatim rather
-    than reconstructing them, runs them with the repository as the working
-    directory, and asserts three things. Every extracted command exits zero.
-    A second `cargo xtask bazel-repin --hub broker` does not reproduce the
-    same refusal, asserted against the refusal identity and not against exit
-    status alone, so a re-run stopped for some unrelated reason cannot pass
-    it silently. And the four unrelated states are byte-identical to their
-    pre-remedy values with `git status --porcelain` unchanged, so a remedy
-    that reaches outside its pathspec fails. The second assertion is the one
-    that fails on a message naming a pathspec that does not cover the planted
-    state, which is the whole point of the check.
+    command, asserts that the refusal names
+    `cargo xtask bazel-repin --hub broker --quarantine-transaction-state` and
+    contains no `git` command, no `rm`, no `rmdir` and no interpolated path
+    from the directory it refused over, then runs that mode as a library entry
+    point and asserts four things. It exits zero.
+    `bazel/cargo/.broker-workspace.txn/` is gone and
+    `bazel/cargo/.broker-workspace.txn.quarantine.0` holds exactly what the
+    transaction directory held, compared entry by entry on name bytes, type
+    and content. A second `cargo xtask bazel-repin --hub broker` does not
+    reproduce the same refusal, asserted against the refusal identity and not
+    against exit status alone, so a re-run stopped for some unrelated reason
+    cannot pass it silently. And the four unrelated states are byte-identical
+    to their pre-remedy values with `git status --porcelain` unchanged, which
+    here is a stricter assertion than it is for the subtree remedies: the
+    quarantine names are covered by the committed `.broker-*/` rule, measured
+    with `git check-ignore -v`, so that output must be byte-identical rather
+    than merely free of unrelated paths.
+
+    The quarantine preserves what nothing else can, and that is the arm the
+    round-3 finding forces. On the unrecognized-entry fixture the planted
+    entry is a directory holding, one of each: a regular file with known
+    bytes; a file whose name a `.gitignore` rule matches and one whose name it
+    does not, both planted to prove the distinction means nothing inside a
+    directory a committed rule already ignores; a fifo; a unix socket; a
+    symlink; an empty directory; a name whose bytes are not valid UTF-8; and a
+    second level holding another fifo. After the quarantine every one of them
+    is present under the quarantine path with its type intact, the nested
+    regular file's bytes compare equal, and the containing directory's inode
+    number is unchanged, which is the evidence that the entries were moved
+    rather than copied and reconstructed. The character-device arm is
+    conditional and says so: `mknodat` for one returns `EPERM` unprivileged,
+    so the test skips that shape with a recorded reason rather than asserting
+    something it did not run. No assertion in any of these arms renders a
+    planted name into a command line.
+
+    Lock contention, collision, repetition and absence are each their own arm.
+    With an injected pause holding the transaction lock, the quarantine mode
+    exits nonzero naming `bazel/cargo/.broker-workspace.txn/lock`, moves
+    nothing, and the transaction directory is byte-unchanged; killing the
+    holder lets the next invocation proceed. With `.quarantine.0` already
+    present, the next quarantine lands in `.quarantine.1` and `.quarantine.0`
+    is byte-unchanged, which is the collision arm and is asserted against that
+    exact slot rather than against any free one. With all four slots occupied
+    the mode exits nonzero, lists all four repository-relative, leaves the
+    transaction directory in place, prints no removal command of any kind, and
+    leaves `git status --porcelain` unchanged. Run twice in a row it exits
+    zero both times, the second run having found no transaction directory and
+    written nothing. After any successful quarantine an ordinary
+    `cargo xtask bazel-repin --hub broker` creates a fresh transaction
+    directory, takes the lock, and reaches the same end state as a run on a
+    clean tree, which is the arm that proves the recovery recovers rather than
+    merely stopping the command from working. Throughout, no arm spawns a
+    Bazel process or creates an output base, and
+    `bazel/cargo/broker-workspace/**`, `bazel/cargo/broker.lock`,
+    `packages/d2b-priv-broker/Cargo.toml` and
+    `packages/d2b-priv-broker/Cargo.lock` are byte-identical before and after
+    every one of them.
 
     The negatives are the remedies this record rejects, run against the same
     planted states, each asserted to leave the state uncleared, and each
@@ -2565,34 +2812,20 @@ record merges. Each is a command and a verdict.
     same state `git stash push --include-untracked` on the transaction
     pathspec exits 0 and captures none of the entries, and `git restore` on
     it exits 1 with `pathspec ... did not match any file(s) known to git` and
-    captures none either. Against an unrecognized empty directory and an
-    unrecognized fifo, the prescribed
-    `git stash push --all -- bazel/cargo/.broker-workspace.txn/` itself exits
-    0 and leaves both on disk, which is what makes the classified arms
-    load-bearing rather than decorative; those arms are then run and asserted
-    to clear their own shape, and asserted to exit nonzero when `rmdir --` is
-    pointed at a non-empty directory and `rm --` at a directory. A negative
-    that starts passing means either the printed message has drifted onto a
-    remedy that works by accident or the substrate's behaviour has changed,
-    and this record wants both surfaced rather than absorbed. The stash side
-    is asserted reversible in the same tests, and asserted against the
-    untracked parent rather than the stash entry:
-    `git show --name-only --format= stash@{0}^3` lists exactly the planted
-    transaction entries and nothing else, whereas
-    `git stash show --include-untracked --name-only stash@{0}` also lists the
-    fixture's unrelated staged path, because a pathspec stash still snapshots
-    the whole index; a test asserting the latter is exactly equal to the
-    planted set would be asserting something false. That the index snapshot
-    is a property of the record and not of the worktree is asserted
-    separately, by the unrelated staged path being still staged with the same
-    bytes after the remedy and after a later `git stash pop`. Restoration is
-    asserted through
-    `git checkout stash@{0}^3 -- bazel/cargo/.broker-workspace.txn/`, which
-    exits 0, restores the entries byte-identically, and stages them, so the
-    test also asserts `git reset -- <pathspec>` returns the index to where it
-    was with the entries still on disk. Running the prescribed remedy against
-    an absent transaction directory exits 0, creates no stash entry, and
-    leaves the unrelated states unchanged. All reverted.
+    captures none either. The remedy this round withdrew is a negative in its
+    own right: against an unrecognized directory holding a regular file, a
+    fifo and a subdirectory holding another fifo,
+    `git stash push --all -- bazel/cargo/.broker-workspace.txn/` exits 0,
+    takes the regular file, and leaves the directory, the subdirectory and
+    both fifos on disk, after which `rmdir --` on that directory exits 1 with
+    `Directory not empty` and `rm --` on it exits 1 with `Is a directory`, so
+    the sequence the earlier round prescribed clears nothing and the refusal
+    reproduces; the test asserts that reproduction explicitly. A negative that
+    starts passing means either the printed message has drifted onto a remedy
+    that works by accident or the substrate's behaviour has changed, and this
+    record wants both surfaced rather than absorbed. That no stash is printed
+    by any of these three refusals is asserted too, which is what keeps a
+    later edit from reintroducing one. All reverted.
 15. Two writers cannot race the publication. With one
     `cargo xtask bazel-repin --hub broker` held at an injected pause inside its
     transaction, a second invocation of the repin and an invocation of
@@ -2762,5 +2995,22 @@ record merges. Each is a command and a verdict.
   source file, an untracked extra file, an ignored `target/debug/out.bin`
   under the subtree and one unrelated edit outside it, plus `UU`, `AA` and
   `DU` conflict fixtures for the unmerged-path arms
+- The quarantine measurements of section 6: a second C probe run 2026-08-04 on
+  Linux 7.0.10, unprivileged, with the worktree on ext4, issuing
+  `renameat2(RENAME_NOREPLACE)` over a transaction directory holding `lock`,
+  `published` and an unrecognized directory carrying a regular file, a fifo, a
+  unix socket, a symlink, an empty directory, a name whose bytes are not valid
+  UTF-8 and a second level holding another fifo, with `mknodat` for a
+  character device returning `EPERM` and that shape therefore left unmeasured;
+  plus its `EEXIST` collision arm, its `F_OFD_SETLK` contention arm, an arm
+  taking the lock on a freshly created transaction directory while a
+  descriptor on the quarantined one is still held, and a git 2.54.0 fixture
+  carrying the committed `.broker-*/` rule on which
+  `git stash push --all -- bazel/cargo/.broker-workspace.txn/` left an
+  unrecognized directory, its subdirectory and both nested fifos on disk,
+  `rmdir --` and `rm --` then refused it, `git check-ignore -v` matched all
+  four quarantine names, and `git status --porcelain` was byte-identical
+  across the quarantine with a modified tracked file, an untracked file, an
+  ignored `target/` output and a staged modification present
 - `specs/003-adr052-bazel-rust/contracts/workspace-and-tool-pinning.md`, the
   hub and repin contract this record leaves intact

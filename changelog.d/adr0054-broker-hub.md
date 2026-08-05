@@ -64,12 +64,21 @@
   against the area that holds the state rather than against the generated
   directory, which is the one the earlier wording pointed at and which would
   have left the contributor refused in exactly the same way on every re-run.
-  The command sets the state aside reversibly instead of deleting it, so it
-  can still be read afterwards and put back; where an entry is of a kind
-  version control cannot store at all, and so cannot be set aside, the
-  refusal says which entry that is and gives a single bounded removal for
-  that one path that refuses the moment the path holds anything worth
-  keeping. Unrelated changes elsewhere in the working copy, staged or not,
+  That recovery is a mode of the regeneration command itself rather than a
+  line of version-control shell for the contributor to paste. It moves the
+  whole bookkeeping directory aside, in one step, to an ignored name beside
+  it, without reading, copying, renaming or deleting anything inside it, so
+  entries of a kind version control cannot store at all are preserved exactly
+  at any depth and under any name, rather than surviving the recovery and
+  refusing the next run in the same way. It takes the same exclusion token a
+  regeneration takes and declines to act while a regeneration is actually
+  running, which the version-control command it replaces was measured not to
+  do. It prints where it put the state, so it stays readable in place, and
+  says to run the ordinary regeneration again. There is a small fixed number
+  of places it will put state aside; once they are full it stops and says so
+  rather than choosing for the contributor, and it never deletes anything or
+  tells anyone else to. Unrelated changes elsewhere in the working copy,
+  staged or not,
   tracked or ignored, are left alone by all of it. The token that keeps them apart is held only
   while a regeneration is actually running: it is closed automatically when the
   command starts the build tool, so the build tool's long-lived background
