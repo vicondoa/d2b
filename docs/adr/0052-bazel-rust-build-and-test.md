@@ -12,36 +12,24 @@
   happens to find, and records the measured `crate_universe` repin controls
   that make a scoped, reviewed lock regeneration possible without a gate-path
   escape hatch. No decision here is reversed and nothing here is superseded.
-- Refined by: [ADR 0054](0054-broker-hub-generated-splice-workspace.md), which
-  decides how the `broker` hub of section 2 obtains a spliceable Cargo
-  workspace. Measured against the same substrate, `crate_universe` cannot
-  splice the standalone `packages/d2b-priv-broker` workspace directly, because
-  its first-party path dependencies are members of the separate main
-  workspace. That record leaves the four-hub set, the three authoritative
-  Cargo locks, `skip_cargo_lockfile_overwrite = True` and invariant 2
-  unchanged. It refines the section 3 repin command in three narrow places.
-  `cargo xtask bazel-repin --hub broker` synchronizes the broker hub's
-  generated splice inputs itself before it spawns Bazel: it regenerates them
-  into scratch through the generator entry point `cargo xtask gen-bazel` calls,
-  validates them offline, refuses without writing when the generated subtree
-  carries a local modification the command did not make, and then writes only
-  that subtree, so a dependency change is one command rather than an ordered
-  pair. It publishes that subtree as a transaction under a contributor-owned
-  worktree lock, exchanging a validated staged sibling with the live name so
-  the tracked path is never absent or half written, and it snapshots the hub's
-  Bazel-side lock before the single child runs so a failing child leaves that
-  file byte-identical to what it was handed. And the changed-path rule becomes
-  two rules: the single
-  Bazel child is still held to exactly one changed tracked file, that hub's
-  Bazel-side lock, and the command as a whole is held to that file plus the one
-  generated subtree it synchronized, failing and listing any other changed path
-  repository-relative. The required hub argument, the scoped child environment,
-  the single child process, the single output base, the exit-zero-when-current
-  behaviour and the absence from Make and continuous integration are unchanged,
-  and no gate or build entrypoint generates anything. Nothing in this record
-  ever required a hub's Bazel-side lock clean at `HEAD` before a repin, and
-  that record does not add such a rule. That record reverses and supersedes
-  nothing here.
+- Refined and factually corrected by:
+  [ADR 0054](0054-broker-hub-generated-splice-workspace.md), which decides how
+  the `broker` hub obtains a spliceable Cargo workspace without merging the
+  standalone broker into the main workspace. The authoritative set is four
+  hub/workspace Cargo locks, for `main`, `broker`, `guest`, and `walker`;
+  `packages/Cargo.guest.lock` is a separate generated and cache-key input, not
+  a hub. The broker hub reads a committed generated resolution witness while
+  its independent Cargo lock remains authoritative and
+  `skip_cargo_lockfile_overwrite = True` remains required.
+  `cargo xtask gen-bazel` alone writes generated Bazel inputs, and its
+  enforcing `--check` form is strictly read-only.
+  `cargo xtask bazel-repin --hub broker` runs the broker check before Bazel
+  and writes only `bazel/cargo/broker.lock`; stale inputs require the explicit
+  generate, review, commit, then repin workflow. The required hub argument,
+  scoped child environment, and absence from Make and workflows are
+  unchanged. Spec 003's plan, tasks, and contracts require amendment before
+  implementation resumes. This refinement reverses and supersedes no decision
+  here.
 - Related: [ADR 0009](0009-rust-toolchain-msrv-and-supply-chain.md) (Rust
   toolchain, MSRV, and supply-chain policy), which keeps its authority
   unchanged and is not superseded;
