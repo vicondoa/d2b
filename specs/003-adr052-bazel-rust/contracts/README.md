@@ -24,19 +24,16 @@ Files:
 - `workspace-and-tool-pinning.md` - startup options and the one construction
   that derives them, the crate dependency direction that construction's home
   depends on, the workspace boundary, the
-  four-value hub inventory and its locks, the three-value repinnable subset,
-  the exact pending broker branch, the complete production and three-carrier
-  broker compilation contexts, the repository-owned commands that regenerate
-  each authorized lock and validate the yanked snapshot, the
+  four dependency hubs and their locks, the repository-owned commands that
+  regenerate each committed lock and validate the yanked snapshot, the
   injectable index boundary the networked refresh calls through, the exact
   operator-facing recovery text every refusal must carry, the wave-note
   command-shape rule, the anchored filesystem boundary the policy lint reads
   the note corpus through, and the two violation shapes it renders, and
   permitted tool acquisition.
 - `execution-manifest-binding.md` - executor-to-existing-contract binding.
-- `shadow-promotion-evidence.md` - the ADR 0052 canonical-predicate projection,
-  complete authoritative qualification lineage, resolver evidence, negative
-  fixtures, evidence, and lifecycle gates.
+- `shadow-promotion-evidence.md` - qualification records, evidence, and
+  lifecycle gates.
 - `cache-workflow-boundaries.md` - permissions, credentials, key inputs,
   trimming, and generations.
 - `recovery-deadline.md` - cleanup, shutdown, and deadline behavior.

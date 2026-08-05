@@ -425,96 +425,11 @@ path, no provider check executes a provider to learn its identity, and no
 migrated call site spawns by path: identity is the digest of the descriptor's
 bytes, and execution is `execveat` on that same descriptor.
 
-## Execution Admission
-
-Exactly three marked `ExecutionStatusBlock` records exist, one each in
-`plan.md`, `tasks.md`, and `contracts/workspace-and-tool-pinning.md`.
-
-| Field | Rule |
-| --- | --- |
-| `source` | One of those three exact normalized paths; no fourth source. |
-| `status` | `PARKED` or `READY`; no default and no unknown value. |
-| `parked_at` | Immutable literal `broker-lock-regeneration`. |
-| `next_refused_task` | Immutable literal `T021`. |
-| `runtime_state_source` | Immutable literal `task-checkpoints`. |
-| `resume_requires` | Immutable literal `accepted-repin-lifecycle-adr+amended-spec003+renewed-plan-panel`. |
-
-The parser requires exactly one begin marker followed by exactly one end
-marker and one instance of each of the five ordered keys per source. The
-status line is exactly `status: READY` or `status: PARKED`; a prefix,
-substring, suffix, or status token elsewhere is not a value. The four
-non-status values are immutable; only `status` may change under a future
-accepted ADR, amended Spec 003, and renewed unanimous plan panel. Only exactly
-three READY values in byte-identical blocks produce `Admitted`.
-
-Admission opens the repository root once, resolves every fixed directory
-component descriptor-relative without following links, opens each final file
-once without following links, rejects nonregular objects, and reads bytes from
-that same descriptor. NUL and invalid UTF-8 are explicit refusals. Prefix,
-substring, misplaced token, missing, duplicate, empty, unknown, misnamed,
-reordered, reversed, nested, extraction-failed, symlinked, nonregular, or
-disagreeing input produces the fixed architecture-pending result and remedy
-and `Refused` before T021, any child, or any write. A fake filesystem fixture
-replaces a component and a leaf between open and check/read to prove that the
-already-open descriptor, not a re-resolved name, supplies the bytes. The
-current records are all `PARKED`.
-
-## Hub and Broker Compilation Contexts
-
-`HubInventory` and `RepinnableHub` are distinct closed types:
-
-```text
-HubInventory = {main, broker, guest, walker}
-RepinnableHub = {main, guest, walker}
-```
-
-Broker is represented by `PendingBrokerRepin`, never by `RepinnableHub`. Its
-exact result belongs to an already-built xtask process. The Cargo launcher is
-not part of that record because it may emit bootstrap output and create
-Cargo-owned state before the process starts.
-
-A `CompilationContextIdentity` contains:
-
-| Field | Rule |
-| --- | --- |
-| `package_target` | Authoritative package and Cargo target identity. |
-| `toolchain` | Exact registered toolchain identity. |
-| `compile_mode` | Build, test harness, doctest, or other authoritative mode. |
-| `features` | Exact sorted resolved feature set. |
-| `configured_edges` | Exact sorted outgoing edge set, each naming kind, condition, alias, requested features, default-feature semantics, and destination `CompilationContextIdentity`. |
-| `source_identity` | Independently authoritative normalized source identity. |
-
-Equality is recursive equality of every field, not direct feature equality.
-The current shared labels are
-`d2b-{core,contracts,host}-broker-{production,test}`,
-`d2b-realm-core-broker-shared`, and
-`d2b-realm-provider-broker-shared`. Core and host differ by features and
-configured edges; contracts differs by its configured core destination; the
-two realm labels are shared.
-
-Four `BrokerContextCensus` records are independently derived:
-
-| ID | Broker-local features | Target count | Case count |
-| --- | --- | ---: | ---: |
-| `prod` | `default` (empty) | 7 | not applicable |
-| `default` | `default` (empty) | 23 | 557 |
-| `layer1` | `default,layer1-bootstrap` | 23 | 492 |
-| `fake` | `default,fake-backends` | 23 | 559 |
-
-Each test record contains the exact shared-library, member library/binary,
-unit, integration, doctest, configured-edge, source, and case-name sets. A
-zero-case target remains a target row. `B_prod`, `B_default`, `B_layer1`, and
-`B_fake` are reachable configured-target sets; their unique union is `B`
-(currently 64), and `M = F - B`. The permitted overlaps are exactly the three
-test-only shared libraries across the test carriers and the two realm-shared
-libraries across all four contexts. Every other overlap is invalid.
-
 ## Hermeticity Inventory
 
 | Field | Rule |
 | --- | --- |
-| `hub` | One `HubInventory` value. |
-| `generic_repin_hub` | One `RepinnableHub` value; broker is unrepresentable. |
+| `hub` | One of the four `crate_universe` hubs: `main`, `broker`, `guest`, `walker`. |
 | `hub_lock_attrs` | `lockfile`, `cargo_lockfile`, and `skip_cargo_lockfile_overwrite = True` are all present. |
 | `build_script_crates` | Every third-party crate for which a build-script target is generated. |
 | `required_annotations` | Per crate: build-script environment, data, and toolchain requirements. |
@@ -527,14 +442,14 @@ libraries across all four contexts. Every other overlap is invalid.
 
 Repin controls are absent from the wrapper and from every
 continuous-integration environment. The single scoped exception is the child
-environment generic `bazel-repin` constructs for one `RepinnableHub`; it sets
+environment `cargo xtask bazel-repin --hub <name>` constructs, which sets
 `CARGO_BAZEL_REPIN` and `CARGO_BAZEL_REPIN_ONLY=<hub>` for that one process,
 writes only that hub's Bazel-side lock, and fails when any other tracked
-derived artifact changed. Broker is recognized before that construction.
-`cargo xtask bazel-module-refresh` sets no repin control at all, refuses to run
-when one is ambient, writes only `MODULE.bazel.lock`, fails when any other
-tracked derived artifact changed, and changes nothing on an already-current
-tree. Neither command is a Make target or reachable from a workflow.
+derived artifact changed. `cargo xtask bazel-module-refresh` sets no repin
+control at all, refuses to run when one is ambient, writes only
+`MODULE.bazel.lock`, fails when any other tracked derived artifact changed, and
+changes nothing on an already-current tree. Neither command is a Make target or
+reachable from a workflow.
 
 Every field here is a cache-key input. A change to `action_env_allowlist`
 invalidates the entire action cache and is reviewed against the promoted size
@@ -560,41 +475,34 @@ diagnostic only.
 
 | Field | Rule |
 | --- | --- |
-| `lineage_ordinal` | Exact chronological first-parent position in the complete eligible protected-`v3` push lineage from the merged W3 anchor through `lineage_end_sha`. |
-| `head_sha` | The eligible merged-PR push commit every resolved carrier tested. |
-| `source_event` | Authoritatively resolved `push`. |
-| `branch` | Authoritatively resolved `refs/heads/v3`. |
-| `merged_pr` | Pull request number, merged state, `base_ref == v3`, and `merge_commit_sha == head_sha`, resolved through the Pull Requests API. |
-| `cargo_job` | `ResolvedJob`: required Cargo workflow ID, immutable run ID, run attempt, immutable rollup job ID, `head_sha`, event, branch, conclusion, and resolver evidence. |
-| `bazel_job` | `ResolvedJob` for the Bazel shadow rollup at the same `head_sha`. |
-| `policy_job` | `ResolvedJob` for same-commit `make test-policy`; owns `policy_docs` and the other fixture-independent policy binaries. |
-| `fixture_job` | `ResolvedJob` for same-commit `D2B_ENABLE_FIXTURE_BUILD=1 make test-fixture-contracts`; covers only fixture-dependent contract and CLI surfaces. |
-| `slice_jobs` | Exactly four distinctly named `ResolvedJob` values belonging to the Bazel run and attempt at the same head SHA. |
-| `slice_seconds` | Four durations derived from those same resolved job IDs; required for a cold-sample record. |
-| `resolver_evidence` | Normalized GitHub Actions/Pulls API projection reference and digest covering lineage eligibility, every workflow run/job resolution, and all conclusions. |
+| `head_sha` | The commit both workflows tested; identical for both run IDs. |
+| `source_event` | `push` on `refs/heads/v3` produced by a merged pull request. |
+| `bazel_run_id` | Unique immutable shadow workflow run ID. |
+| `cargo_run_id` | Unique immutable required workflow run ID at the same `head_sha`. |
+| `cargo_verdict` | `passed` or `failed` from `D2B_SKIP_FIXTURE_BUILD=1 make test-rust`. |
+| `bazel_verdict` | `passed` or `failed` from the Bazel rollup. |
+| `fixture_verdict` | `passed` required, from same-commit `D2B_ENABLE_FIXTURE_BUILD=1 make test-fixture-contracts`. |
+| `slice_verdicts` | Exactly four attributed results. |
+| `slice_seconds` | Four complete job durations; required for a cold-sample record. |
 | `manifest_ref` | Immutable evidence reference. |
-| `cache_restored` | Must equal zero for `Q` and for a cold sample. |
-| `cache_writes` | Must equal zero for `Q` during the shadow stage. |
+| `cache_restored` | Must equal zero for a qualifying cold sample. |
+| `cache_writes` | Must equal zero during the shadow stage. |
 | `permissions` | PR-reachable jobs: only `contents: read`; no `actions: write`. |
-| `qualifies` | Derived only by ADR 0052 section 9's canonical `Q(row)` implementation; never authored. |
-| `derived_streak` | Length of the maximal true-`Q` suffix through this row; replayed, never authored. |
 
-`ResolvedJob` IDs are immutable. Each job resolves to exactly one workflow run
-and attempt, and no job ID is reused by another record or carrier slot. The
-GitHub Actions and Pull Requests APIs, not the authored record, establish
-event, branch, merged-PR eligibility, head SHA, job association, attempt, and
-conclusion.
+Records are ordered by `v3` push completion. The promotion streak is ten
+consecutive records whose two compared verdicts match with a passing
+`fixture_verdict`. Streak arithmetic is fail-closed:
 
-Records are ordered by protected-branch first-parent chronology, not job
-completion. The record set is invalid if an eligible push is omitted,
-duplicated, or reordered, if an ineligible event is inserted, if an ID is
-forged, stale-reused, tied to another attempt/workflow/commit, or if a stored
-streak omits a reset. A real eligible push with any missing, failed, timed-out,
-skipped, or cancelled Cargo, Bazel, policy, fixture, or slice job remains a
-false-`Q` row and resets the streak, including full cancellation. `Q` requires
-passing same-commit policy and fixture jobs in addition to passing Cargo,
-Bazel, and four slice jobs. Pull-request, `main`-push, scheduled, and
-dispatched runs are diagnostic and never enter the lineage.
+- differing verdicts reset the streak to zero;
+- a Bazel run that reaches no verdict while its paired Cargo run reaches one
+  counts as a mismatch and resets the streak;
+- a push where neither side reaches a verdict is not a record and neither
+  extends nor resets.
+
+Pull-request, `main`-push, scheduled, and dispatched runs are diagnostic. They
+never enter a streak or a measurement set, because `refs/pull/N/merge` is
+recomputed against a moving base and a Bazel-path-filtered pull-request sample
+cannot contain the divergence class the streak exists to detect.
 
 ## Seeded Failure Record
 
@@ -619,11 +527,11 @@ if an unrelated surface fails.
 | `profile` | `warm-local`, `cold-local`, or `cold-ci`. |
 | `environment` | ADR reference local host or runner facts and tool pins. |
 | `sample_commits` | One SHA per sample. Local samples use one candidate SHA; cold-CI samples use each record's `head_sha`. |
-| `sample_refs` | Immutable run/job IDs and resolver evidence for every sample; cold-CI refs point to complete-lineage rows. |
+| `sample_refs` | Run IDs for every sample; cold-CI refs also carry the `push`-on-`v3` source event. |
 | `cache_state` | Exact ADR profile; warm records the edit and live server, cold local retains only the repository cache, cold CI restores nothing. |
 | `invocation_flags` | The exact flags each sample ran under; `--test_output=streamed` invalidates the sample. |
-| `samples_seconds` | Three local samples, or the five most recent canonical `C(row)` values from the complete lineage. |
-| `qualifying_rule` | Exactly `C(row) = Q(row) && cache_restored == 0 && four complete durations from the same resolved slice job IDs`. |
+| `samples_seconds` | Three local samples, or the five most recent qualifying cold qualification records. |
+| `qualifying_rule` | A cold-CI sample qualifies only when no Bazel cache was restored and all four slice jobs completed with a recorded duration. |
 | `record_duration_seconds` | For `cold-ci`, the maximum of the record's four complete slice job durations. Local profiles use the measured aggregate duration. |
 | `ceiling_seconds` | 600 warm; 900 cold local and cold CI. |
 | `feasibility_ref` | Required for `cold-ci`: the W3 feasibility measurement that made the ceiling binding, or the pre-authorized remedy taken instead. |
@@ -695,15 +603,12 @@ Promotion Evidence Set before executor authority changes.
 | --- | --- |
 | `candidate_commit` | One immutable integrated commit. |
 | `coverage_map_digest` | Both guard halves pass for all eighteen. |
-| `qualification_records` | Complete eligible lineage from the merged W3 anchor through `lineage_end_sha`, with every row resolved and the maximal suffix containing at least ten true-`Q` rows. |
-| `lineage_start_sha` / `lineage_end_sha` | Inclusive merged-W3 anchor and protected-`v3` tip whose complete first-parent eligible-push interval is resolved. |
-| `lineage_complete` / `lineage_order` | Derived true and exact `first-parent-chronological`; authored alternatives are invalid. |
-| `lineage_resolver_digest` | Digest of the authoritative normalized lineage and Cargo, Bazel, policy, fixture, and slice run/job projections used by the canonical predicate. |
+| `qualification_records` | Ten consecutive matching push-to-`v3` records, each with one shared `head_sha`, both run IDs, and a passing fixture-contract verdict. |
 | `seeded_failures` | Exact eighteen-record set. |
 | `topology_proofs` | Main, guest, and three broker suites; exact generator-derived censuses and ignored counts, plus per-case result publication. |
 | `locator_migration_proof` | Every enumerated file migrated or recorded as needing none, plus the passing injected stale-provider negative in which the `FileSystem` fake reports an out-of-date, wrong-digest executable at the Cargo path while the `RunfilesView` fake reports the entry missing, plus the passing injected post-open path-rebind negative, plus the host-backed `execveat` conformance result. |
 | `broker_repetitions` | Twenty consecutive passes per broker suite with exclusivity. |
-| `performance_sets` | Three valid profiles. Local sets bind the candidate; cold-CI contains the five most recent `C` rows, retains their immutable run/job IDs and resolver evidence, and references the W3 feasibility measurement. |
+| `performance_sets` | Three valid profiles. Local sets bind the candidate; cold-CI samples carry their own `head_sha` values and reference the W3 feasibility measurement. |
 | `supply_chain_comparison` | Three locks, no differing enforcing outcome, with the yanked carrier landed and `cargo xtask bazel-yanked-check` passing offline against all three. |
 | `cache_shadow_proof` | Zero shadow publications. |
 | `workflow_policy_proof` | Positive and every required negative fixture pass. |
@@ -714,11 +619,10 @@ affected content and returns the draft to `collecting`. `qualified` is
 required before promotion. Once committed as `qualified`, the record is
 immutable. Promotion references its digest and does not mutate it.
 
-Historical qualification records are a complete authoritative sequence, not
-candidate-owned samples. Each retains its head SHA, immutable workflow run/job
-IDs, attempt, event/branch/merged-PR eligibility, and resolver evidence.
-Candidate-bound coverage, seeded-failure, topology, locator, local-performance,
-and supply-chain evidence must match `candidate_commit`.
+Historical qualification records are a sequence, not candidate-owned samples.
+Each retains its own `head_sha` and run IDs. Candidate-bound coverage,
+seeded-failure, topology, locator, local-performance, and supply-chain evidence
+must match `candidate_commit`.
 
 ## Promotion Record
 

@@ -30,26 +30,19 @@ positive integer and remains the only resource budget. Cold-local evidence
 preparation is an internal, temporary W2 xtask helper, not a Make target or
 environment contract, and is removed in W5.
 
-Five other operations are deliberately **not** Make targets and never become
+Four other operations are deliberately **not** Make targets and never become
 approved targets, because every approved target is reachable from a workflow:
 
-- `cargo xtask bazel-repin --hub <main|guest|walker>`, the `RepinnableHub`
-  lock regeneration described in `workspace-and-tool-pinning.md`;
+- `cargo xtask bazel-repin --hub <name>`, the single-hub lock regeneration
+  described in `workspace-and-tool-pinning.md`;
 - `cargo xtask bazel-module-refresh`, the `MODULE.bazel.lock` update described
   in the same contract;
 - `cargo xtask bazel-yanked-refresh`, the reviewed networked yanked-snapshot
   update;
-- `cargo xtask bazel-evidence prepare-cold-local`, the temporary W2 helper;
-- `cargo xtask bazel-evidence qualification [--check]`, the W3-W4
-  authoritative Actions/Pulls API resolver and sole canonical
-  qualification/streak/cold-sample/promotion predicate. The write form emits a
-  candidate summary; `--check` refetches and compares authoritative evidence
-  without changing the summary.
+- `cargo xtask bazel-evidence prepare-cold-local`, the temporary W2 helper.
 
 The workflow guard rejects any workflow that invokes any of them, and the
 approved-target guard rejects any `Makefile` recipe that names one.
-Both evidence subcommands are removed in W5 after immutable qualification is
-consumed; neither is a workflow observation path.
 
 `cargo xtask bazel-yanked-check` is the one exception in shape but not in
 policy. It is the offline key-set validator the three Bazel supply-chain
@@ -65,12 +58,6 @@ validator out of that list would be the easy mistake, because it is the one a
 workflow author would reach for in good faith to "also check the snapshot", and
 the result would be a second, unattributed execution of a check the carriers
 already own.
-
-`broker` is a `HubInventory` value but not a `RepinnableHub`. The public
-`cargo xtask bazel-repin --hub broker` spelling reaches an exact pending result
-owned by the already-built xtask process; Cargo bootstrap diagnostics and
-Cargo-owned state are outside that exact-result contract. It never becomes a
-Make target or workflow step.
 
 ## Promotion
 

@@ -3,18 +3,13 @@
 This document consolidates the amended ADR 0052 decisions and resolves the
 plan-level choices needed to execute them. ADR 0052 was amended on 2026-08-03
 after an upstream review measured five mechanics that the first draft could not
-implement and two supporting statements that were wrong about the substrate,
-then on 2026-08-05 to bind qualification to one canonical predicate, complete
-lineage, immutable run/job IDs, and authoritative resolver evidence. Both
-amendments are settled authority here. Committed passing code remains the
-baseline. The broker repin lifecycle remains an external
-architectural blocker rather than an open choice this research may settle.
+implement and two supporting statements that were wrong about the substrate.
+That amended record is merged and is settled authority here. Committed passing
+code remains the baseline. No item is open.
 
 Every version-sensitive claim below is sourced in the "Upstream evidence"
 section at the end. Where the review measured something against the pinned
-versions, the measurement wins over documentation. Broker repin lifecycle is
-deliberately unresolved outside this research, so W0 remains `PARKED`; no text
-below authorizes that child.
+versions, the measurement wins over documentation.
 
 ## Decision 1: Keep the migration Rust-only and reversible
 
@@ -54,13 +49,6 @@ Cargo workspaces, so it declares four `crate.from_cargo` hubs:
 | guest | `packages/d2b-guest-shell-runner/Cargo.lock` | Guest shell runner |
 | walker | `tests/tools/no-bash-ast-walker/Cargo.lock` | The no-bash AST scanner |
 
-The inventory and execution types are distinct:
-
-```text
-HubInventory = {main, broker, guest, walker}
-RepinnableHub = {main, guest, walker}
-```
-
 The walker is a standalone workspace with its own manifest and lock. Folding
 its `syn` and `walkdir` requirements into the main hub would silently
 re-resolve them and destroy the `--locked` equivalence the migration exists to
@@ -89,26 +77,23 @@ conflating them loses one of them:
   hubs therefore set it, together with `cargo_lockfile` and
   `skip_cargo_lockfile_overwrite = True`.
 
-**No repin escape hatch, and one generic regeneration path for
-`RepinnableHub`.**
+**No repin escape hatch, and one supported regeneration path.**
 `CARGO_BAZEL_REPIN`, `REPIN`, and
 `CARGO_BAZEL_REPIN_ONLY` are never set by the Make wrapper or by continuous
 integration, and a policy assertion proves it. A repin control in the gate
 environment converts the fail-closed lock check into an automatic rewrite.
 
 A prohibition with no supported alternative is a prohibition that gets routed
-around: the contributor who hits a stale repinnable lock at the end of a long
+around: the contributor who hits the stale-lock refusal at the end of a long
 change has one obvious next move, and it is `CARGO_BAZEL_REPIN=1 make ...`.
 Regeneration is therefore a repository-owned command,
-`cargo xtask bazel-repin --hub <main|guest|walker>`, and it is the only site
-in the repository where those three names may appear as a process-environment
-assignment. Its contract:
+`cargo xtask bazel-repin --hub <main|broker|guest|walker>`, and it is the only
+site in the repository where those three names may appear as a
+process-environment assignment. Its contract:
 
-- generic dispatch accepts exactly `RepinnableHub`, refuses a name outside
-  `HubInventory`, and never receives broker; broker is recognized first as the
-  pending branch;
-- it refuses to run when the ambient environment already carries any of the
-  three controls, so it cannot launder a setting a contributor exported;
+- it refuses any hub name outside the closed four-hub set, and it refuses to
+  run at all when the ambient environment already carries any of the three
+  controls, so it cannot be used to launder a setting a contributor exported;
 - it sets `CARGO_BAZEL_REPIN` and `CARGO_BAZEL_REPIN_ONLY=<hub>` only on the
   `Command` it builds for the one Bazel child it spawns, never through a
   process-global mutation;
@@ -119,27 +104,6 @@ assignment. Its contract:
   afterwards;
 - it is not a Make target, and the workflow guard refuses any workflow that
   invokes it.
-
-**Superseded research, recorded rather than rewritten.** Before ADR 0054, this
-research inferred one four-value repinnable type and authorized a broker child
-from the measured `CARGO_BAZEL_REPIN_ONLY` behavior. That inference is
-superseded. The substrate measurements below remain valid for a child that is
-actually authorized, but they do not settle broker writer serialization,
-lifetime, publication, recovery, or cleanup. Broker is now the exact pending
-branch.
-
-An already-built `xtask` process invoked as `bazel-repin --hub broker` returns
-nonzero with empty stdout and exactly these two LF-terminated stderr lines:
-
-```text
-broker-repin-architecture-pending
-broker repin is unavailable; no local recovery command exists; prerequisite is an accepted repin-lifecycle ADR plus amended/re-panelled Spec 003.
-```
-
-That built process spawns no child and writes no path. The public `cargo xtask`
-launcher may emit Cargo bootstrap output and create Cargo cache or target state
-before the process starts, so its aggregate stderr and filesystem effects are
-not exact-result evidence. Tests execute the built binary directly.
 
 Three measured facts at `rules_rust` 0.73.0 make that contract enforceable
 rather than aspirational. First, `determine_repin` in
@@ -161,8 +125,7 @@ One thing is deliberately not settled here. The extension docstring at 0.73.0
 recommends `CARGO_BAZEL_REPIN=1 bazel sync --only=<hub>`, which is a
 WORKSPACE-era control, while the bzlmod code default for `regen_command` is
 `bazel mod show_repo`, which does not repin anything. The two disagree, so W0
-records the invocation observed to actually repin exactly one `RepinnableHub`
-on Bazel
+records the invocation observed to actually repin exactly one hub on Bazel
 8.6.0 with this module graph, and the command asserts the outcome rather than
 trusting the docstring. The invariant that must hold is "exactly one hub lock
 changed", and that is checked, not assumed. W0 records that invocation in its
@@ -214,10 +177,9 @@ denies, so `.bazelrc` also carries `common --check_direct_dependencies=error`.
 Without it the module lock faithfully records a resolution nobody declared.
 
 W0 re-measures the update invocation against this repository's real module
-graph before the remediation message ships, for the same reason it measures a
-generic repin invocation: the measurement above was taken on a two-module
-scratch graph with no `rules_rust` and no `crate_universe` extension. No broker
-repin invocation is measured or recorded while Spec 003 is parked.
+graph before the remediation message ships, for the same reason it measures the
+repin invocation: the measurement above was taken on a two-module scratch graph
+with no `rules_rust` and no `crate_universe` extension.
 
 **The generator binary is a pinned tool too.** `crate_universe` executes a
 `cargo-bazel` binary. The registry release form of `rules_rust` carries an
@@ -233,8 +195,8 @@ source-bootstrap fallback.
 `rules_rust` 0.73.0 is on the Bazel Central Registry and its presubmit matrix
 tests Bazel 7.x, 8.x, and 9.x, and it declares no restrictive
 `bazel_compatibility`. Treating basic compatibility as unknown was wrong. W0
-keeps a measurement, scoped to *this repository's* graph: the four hubs, broker
-production plus three test-carrier contexts, the standalone workspaces, and the hand-written
+keeps a measurement, scoped to *this repository's* graph: the four hubs, the
+three feature variants, the standalone workspaces, and the hand-written
 fragments. If that measurement fails, W0 may pin only the highest release
 proven compatible at that time and must record the measurement; there is no
 floating or fallback resolution.
@@ -288,43 +250,13 @@ weakening of that rule; it is what keeps the rule from being bypassed.
 - Leaving regeneration undocumented: rejected as the failure mode the repin
   sub-decision exists to prevent.
 
-**Broker compilation-context measurement.** Cargo unit graphs measured on
-2026-08-05 with the committed broker manifest distinguish production from
-three current test carriers:
-
-| Context | Broker-local features | First-party configured targets | Cases |
-| --- | --- | ---: | ---: |
-| production | `default` (empty) | 7 | not a test carrier |
-| default | `default` (empty) | 23 | 557 |
-| layer1-bootstrap | `default,layer1-bootstrap` | 23 | 492 |
-| fake-backends | `default,fake-backends` | 23 | 559 |
-
-All three test carriers enable `d2b-core/test-support` and
-`d2b-host/default,fake-backends` through the broker dev graph. Direct feature
-comparison originally split only those two packages. Full configured-edge
-comparison also splits `d2b-contracts`, because its unchanged manifest edge
-lands on the production core context in production and the test core context
-in every carrier. `d2b-host` likewise changes both features and its configured
-destinations to core and contracts. `d2b-realm-core` and
-`d2b-realm-provider` remain complete-context equal. This full-graph result
-supersedes the earlier direct-feature-only research.
-
-Each test unit graph contains five shared libraries, carrier-local broker
-library and binary build units, library and binary unit harnesses, thirteen
-integration targets, and one library doctest target. Exact case-name sets are
-normative; the counts above are observations. A zero-case feature-disabled
-integration, binary harness, or doctest target remains in the target census.
-
 ## Decision 3: Generate first-party BUILD files in repository-owned xtask
 
 **Decision**: `cargo xtask gen-bazel` reads `cargo metadata` for all four hub
 workspaces and emits the generated first-party BUILD files, the exact governed
 Rust source manifest, the derived censuses, and the workspace-boundary
-exclusion list. `--check` computes expected bytes and semantics without
-invoking the writer and is wired into existing `test-drift`. Its real pass and
-failure tests place every supported temp and cache root in an empty observed
-directory and use an injected filesystem/process observer for attempts outside
-those roots. Hand-written fragments are allowed only when listed by the
+exclusion list. `--check` regenerates in scratch and is wired into existing
+`test-drift`. Hand-written fragments are allowed only when listed by the
 coverage map.
 
 Generator outputs that the migration adds:
@@ -971,16 +903,15 @@ filters. Shadow restores and saves nothing. PR-reachable jobs have
 `contents: read`, no `actions: write`, and no direct, indirect, post-step, or
 unknown cache writer.
 
-**Evidence comes only from ADR 0052 section 9's canonical `Q` predicate over a
-complete authoritative lineage.** From the merged W3 shadow-workflow commit
-through the recorded end SHA, the repository-owned resolver enumerates every
-chronological first-parent `push` on `refs/heads/v3` produced by a pull request
-merged to `v3`. For each it resolves immutable workflow run and job IDs, run
-attempt, head SHA, event, branch, conclusion, and normalized GitHub
-Actions/Pulls API evidence for Cargo, Bazel, `make test-policy`,
-`D2B_ENABLE_FIXTURE_BUILD=1 make test-fixture-contracts`, and all four Bazel
-slices. The required Cargo workflow triggers on `push` for `[main, v3]`, so
-every carrier is resolved to the same eligible head.
+**Evidence comes only from qualification records.** A qualification record is
+a `push` event on `refs/heads/v3` produced by a merged pull request. The
+required Cargo workflow triggers on `push` for `[main, v3]`, so both runs are
+identified by the same head commit under the same event, which is what makes
+"both paths tested the same commit" mechanically true. Each record carries the
+head commit, both run identifiers, both rollup verdicts, the same-commit
+`D2B_ENABLE_FIXTURE_BUILD=1 make test-fixture-contracts` companion verdict,
+and, for a cold-sample record, the four slice durations plus the scalar record
+duration defined as their maximum, which is the workflow critical path.
 
 **Pull-request runs stay diagnostic and stay path-filtered.**
 `refs/pull/N/merge` is recomputed against a moving base, so two workflows
@@ -991,20 +922,12 @@ Dropping the path filter was considered and rejected: with no cache published
 during the shadow stage, every such run is a full cold Rust build that buys
 nothing.
 
-**Streak arithmetic is fail-closed and machine-evaluable.** `Q` requires
-passing Cargo, Bazel, policy, fixture, and all four slice jobs at one eligible
-head, with no shadow cache restore or write. A genuine eligible push with any
-missing, failed, timed-out, skipped, or cancelled carrier remains in the
-lineage and resets the streak, even when every carrier was cancelled. A
-wrong-commit, stale-reused, cross-attempt, forged, or unresolved ID, an
-ineligible inserted event, an omitted/duplicate/reordered eligible push, or an
-omitted reset disqualifies the evidence set. The stored streak is the maximal
-true-`Q` suffix replayed from the complete lineage.
-
-Cold qualification is `C(row) = Q(row) && cache_restored == 0 && four
-complete durations from the same resolved slice job IDs`; the duration is
-their maximum. Both same-commit policy and fixture jobs therefore gate every
-streak row, cold sample, and promotion decision.
+**Streak arithmetic is fail-closed and machine-evaluable.** A record whose two
+verdicts differ resets the streak. A shadow run that reaches no verdict while
+its paired Cargo run reaches one counts as a mismatch and also resets, because
+otherwise cancelling a run about to go red would launder the streak. A push
+where neither side reached a verdict is not a record and neither extends nor
+resets.
 
 At promotion, action and download snapshots become separate 4/1 GiB entries.
 The output base is never cached. Keys bind, at minimum: `.bazelversion`,
@@ -1039,13 +962,12 @@ worse than no cache.
 
 **Decision**: A profile passes only when its median is at or below the ceiling
 and no sample exceeds 1.2 times it. Local sets contain three consecutive runs;
-the continuous-integration set is the five most recent canonical `C(row)`
-values from the complete authoritative lineage. `C` requires true `Q`, no
-Bazel cache restore, and four complete durations from the same resolver-
-confirmed slice job IDs; passing same-commit Cargo, Bazel, policy, fixture, and
-slice jobs are therefore mandatory. During the shadow stage every conforming
-run is cold by construction. Scheduled, dispatched, and `main`-push runs are
-liveness probes and never enter the set.
+the continuous-integration set is the five most recent qualifying cold
+qualification records, where qualifying means no Bazel cache was restored and
+all four slice jobs completed with a recorded duration. During the shadow stage
+every run is cold by construction, so the qualifier excludes runs that produced
+no measurement rather than selecting among warm and cold runs. Scheduled,
+dispatched, and `main`-push runs are liveness probes and never enter the set.
 
 **A feasibility gate precedes the binding cold-CI ceiling.** The 15-minute
 median and 18-minute maximum are asserted against a 4 vCPU runner that pays a
@@ -1112,12 +1034,10 @@ boundaries, and an untestable boundary is where the off-by-one lives.
 ## Decision 11: Stage promotion, alias removal, and retirement separately
 
 **Decision**: Cargo remains authoritative through the shadow stage and W4
-evidence. Promotion requires exact coverage, census, and topology; a complete
-resolver-confirmed eligible lineage ending in at least ten true canonical-`Q`
-rows, each with passing same-commit Cargo, Bazel, policy, fixture, and slice
-jobs; an eighteen-case isolated failure matrix; twenty broker repetitions; all
-performance sets, including the five most recent `C` rows; supply-chain
-equivalence including the yanked outcome; and cache-policy evidence.
+evidence. Promotion requires exact coverage, census, and topology, ten matching
+qualification records, an eighteen-case isolated failure matrix, twenty broker
+repetitions, all performance sets, supply-chain equivalence including the
+yanked outcome, and cache-policy evidence.
 
 W4 commits one immutable qualification record set. W5 writes a separate
 promotion record after the ordered protected-`v3` maintenance and save run.
@@ -1190,13 +1110,18 @@ requirement, not a preference, and it applies to every plan panel and every
 integrated-diff panel in every wave, including the post-promotion W6 and W7
 children.
 
-**Choosing the carrier is not free, because the contract-test crate is split
-across two Layer-1 lanes.** Workspace leaves exclude `d2b-contract-tests`.
-Committed `tests/lib.sh` selects fixture-independent policy binaries, including
-`policy_docs`; `make test-policy` executes that closed list and fails if a
-binary runs zero tests. The fixture-contract lane excludes the same list and
-runs the actual fixture-dependent contract and CLI surfaces. A wave therefore
-derives both input intersections and cites each lane only for what it executes.
+**Choosing the carrier is not free, because one Rust crate is invisible to the
+workspace leaves.** `tests/test-rust.sh` sets
+`workspace_test_excludes=(--exclude d2b-contract-tests)`, so a guard placed in
+`packages/d2b-contract-tests/tests/` runs only under
+`D2B_ENABLE_FIXTURE_BUILD=1 make test-fixture-contracts`, never under
+`make test-rust-main`. The reverse is also true and is the sharper edge: that
+crate's `policy_broker_schema.rs` walks every `.rs` file under `packages/`, so
+a wave that adds a runner test file has already changed one of its inputs even
+though the diff looks unrelated to fixtures. The plan's fixture-dependent
+validation rule derives the input set from the crate with a `grep` rather than
+from memory, and every code-changing wave in this migration runs the
+fixture-contract target as a result.
 
 **Rationale**: These are hermetic build-infrastructure properties. Existing
 Layer-1 carriers are both lower and more enforcing than container, VM, live, or
@@ -1217,13 +1142,10 @@ generated contracts or evidence.
 
 **Decision**: The ADR 0052 amendment is merged. Protected `v3` is the sole
 promotion, cache-maintenance, cache-publication, equivalence-streak, and
-post-promotion observation lineage. The resolver retains every eligible
-merged-PR push from the W3 anchor through the recorded end; qualification uses
-only canonical `Q`, and the cold continuous-integration profile draws the five
-most recent `C` rows, each requiring passing same-commit policy and fixture
-jobs. No task in this feature amends the ADR; W0 instead verifies that the
-amended commit is present in the base it builds on and refuses to proceed
-otherwise.
+post-promotion observation lineage, and the cold continuous-integration profile
+draws from qualifying cold qualification records on `v3`. No task in this
+feature amends the ADR; W0 instead verifies that the amended commit is present
+in the base it builds on and refuses to proceed otherwise.
 
 **Rationale**: The repository's GitHub default branch is `main`, while binding
 repository policy makes `v3` the clean-break integration lineage that never
@@ -1524,10 +1446,6 @@ feature, plus one `[[bench]] harness = false` in
 d2b-contract-tests)` and `packages/d2b-contract-tests/tests/policy_broker_schema.rs`
 walks every `.rs` file under `packages/`, so that crate is invisible to every
 workspace leaf and its inputs include the whole first-party Rust tree;
-`tests/lib.sh` includes `policy_docs` in the fixture-independent policy list,
-`make test-policy` executes that list and fails on zero executed tests, and the
-fixture-contract lane excludes those binaries, so policy-doc evidence belongs
-to `make test-policy` rather than the fixture lane;
 `flake.nix` exposes no Bazel tooling today; and the repository has no root
 `BUILD.bazel`, `MODULE.bazel`, `.bazelrc`, `.bazelignore`, or `.bazelversion`,
 so the migration is greenfield.

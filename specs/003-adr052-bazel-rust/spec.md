@@ -11,14 +11,12 @@
 ## Context
 
 ADR 0052 is accepted, was amended on 2026-08-03 after an upstream review of the
-build substrate and on 2026-08-05 to make qualification lineage authoritative
-and fail-closed, and defines a staged migration of d2b's Rust build and test
+build substrate, and defines a staged migration of d2b's Rust build and test
 gate from its current Cargo-based execution path to Bazel. The amended record
 is settled authority for this feature: it fixes the promotion lineage, the
-canonical qualification predicate and resolver evidence, the binary and
-fixture location rules, the nightly-channel mechanism, the vendored
-supply-chain materialization, and the closed list of deliberate differences.
-The migration is intended to remove
+qualification-record definition, the binary and fixture location rules, the
+nightly-channel mechanism, the vendored supply-chain materialization, and the
+closed list of deliberate differences. The migration is intended to remove
 duplicated compilation and scheduling work while preserving the exact coverage,
 failure, test-isolation, supply-chain, and execution-evidence contracts that
 protect the repository today.
@@ -37,10 +35,6 @@ binaries, cross-compilation, remote execution, or any Layer-1 job outside the
 Rust rollup. The detailed mechanisms and safety invariants in
 `docs/adr/0052-bazel-rust-build-and-test.md` remain binding.
 
-Spec 003 execution is currently `PARKED` before T021 at broker lock
-regeneration. ADR 0054 settles the broker splice graph but deliberately does
-not authorize broker repin.
-
 ## Clarifications
 
 ### Session 2026-08-02
@@ -48,36 +42,28 @@ not authorize broker repin.
 - Q: Which branch owns promotion evidence, cache maintenance, and publication?
   -> A: The protected `v3` integration lineage.
 - Q: Which runs supply the cold continuous-integration measurement set?
-  -> A: The five most recent canonical `C(row)` values drawn from the complete
-  resolver-confirmed eligible protected-`v3` lineage. Each is already true
-  `Q`, so same-commit policy and fixture jobs both passed.
+  -> A: The five most recent qualifying cold Bazel runs drawn from the
+  qualification-record stream on protected `v3`.
 
 ### Session 2026-08-03
 
 - Q: What is a qualification record, given that a pull-request merge reference
   is recomputed against a moving base and both paths must test one tree?
-  -> A: ADR 0052 section 9's canonical `Q` predicate operates over the complete
-  chronological protected-`v3` merged-PR push lineage from the W3 merge
-  through the recorded end SHA. An authoritative GitHub Actions/Pulls API
-  resolver, not authored JSON, proves the event, branch, merged-PR relation,
-  head SHA, workflow run/job IDs, attempt, and conclusions for every carrier.
-  Pull-request runs are diagnostic only.
+  -> A: A qualification record is a push event on protected `v3` produced by a
+  merged pull request. Both the Cargo and the Bazel workflow runs are
+  identified by the same head commit under that push event, so "both paths
+  tested the same commit" is mechanically true. Pull-request runs are
+  diagnostic only and never enter a streak or a measurement set.
 - Q: What must each qualification record carry beyond the two compared
   verdicts?
-  -> A: Immutable workflow run and job IDs plus authoritative resolver evidence
-  for the Cargo and Bazel rollups, same-commit `make test-policy`,
-  same-commit
-  `D2B_ENABLE_FIXTURE_BUILD=1 make test-fixture-contracts`, and all four Bazel
-  slices. Every one must pass at the eligible head. Policy and fixture remain
-  outside the executor comparison but both gate `Q`, cold samples, and
-  promotion.
+  -> A: A passing `D2B_SKIP_FIXTURE_BUILD=1` Rust rollup equivalence result for
+  both executors and a passing same-commit fixture-contract companion verdict.
+  The fixture surfaces stay outside the Bazel comparison, but they cannot
+  regress invisibly behind a qualifying record.
 - Q: How does the streak treat a run that reaches no verdict?
-  -> A: Every genuine eligible push remains a lineage row. Any missing, failed,
-  timed-out, skipped, or cancelled Cargo, Bazel, policy, fixture, or slice job
-  makes `Q` false and resets the streak, including full cancellation.
-  Wrong-commit, stale-reused, forged, or unresolved IDs, ineligible inserted
-  events, omitted/duplicate/reordered eligible pushes, and omitted resets
-  disqualify the evidence set.
+  -> A: A Bazel run that reaches no verdict while its paired Cargo run reaches
+  one counts as a mismatch and resets the streak. A push where neither side
+  reaches a verdict is not a record and neither extends nor resets.
 - Q: Are the migration's exact censuses committed literals?
   -> A: No. Every census is derived by the repository-owned generator from the
   same selector the current Cargo gate uses, committed as a generated artifact,
@@ -114,44 +100,6 @@ not authorize broker repin.
   names, so the refusal never leaves a contributor to reconstruct an invocation
   from an upstream diagnostic that omits every startup option this repository
   requires.
-
-### Session 2026-08-05
-
-- Q: Does the four-hub inventory make all four hubs repinnable?
-  -> A: No. `HubInventory = {main, broker, guest, walker}` and
-  `RepinnableHub = {main, guest, walker}`. Broker is recognized before generic
-  dispatch and always takes the pending refusal while this specification is
-  parked.
-- Q: Which process owns the exact broker pending result?
-  -> A: An already-built `xtask` process invoked as
-  `bazel-repin --hub broker`. That process returns the stable code and two
-  path-free stderr lines with empty stdout, no child, and no write. The public
-  `cargo xtask` launcher may emit Cargo bootstrap output and create Cargo cache
-  or target state, so its aggregate output and state are not an exact two-line,
-  no-write contract.
-- Q: What mechanically admits T021 after the missing lifecycle decision lands?
-  -> A: Exactly one marked execution-status block in each of `plan.md`,
-  `tasks.md`, and `contracts/workspace-and-tool-pinning.md`, for exactly three
-  blocks total. Only three blocks with one BEGIN followed by one END, the
-  closed ordered five-key schema, one exact `status: READY` line each, and
-  identical values admit. The four non-status literals are immutable; only
-  status may change under a future accepted ADR, amended Spec 003, and renewed
-  unanimous plan panel. Prefix, substring, misplaced status token, missing,
-  duplicate, empty, unknown, misnamed, reordered, reversed, nested,
-  extraction-failed, NUL-bearing, invalid-UTF-8, symlinked, nonregular,
-  component-replaced, or disagreeing input emits the fixed
-  architecture-pending result and remedy and refuses before T021, any child,
-  or any write.
-- Q: What makes two broker compilation variants equal?
-  -> A: Equality of the full configured dependency graph, not direct feature
-  equality. Current unit graphs split `d2b-core`, `d2b-contracts`, and
-  `d2b-host` between production and tests. The broker default,
-  layer1-bootstrap, and fake-backends carriers retain independent local
-  feature, edge, target, and case censuses.
-
-All qualification, streak, cold-sample, and promotion decisions consume ADR
-0052 section 9's one canonical `Q` predicate. No requirement below defines a
-weaker local substitute.
 
 ## User Scenarios & Testing *(mandatory)*
 
@@ -279,12 +227,12 @@ findings with the current Cargo path for all three lock files.
    difference, and the snapshot's offline key set equals the three locks' key
    set exactly as proved by the repository-owned offline validator the carriers
    and a contributor shell both run.
-8. **Given** a committed `main`, `guest`, or `walker` dependency-resolution
-   lock that no longer matches its Cargo lock, **When** a contributor
-   regenerates it, **Then** the only supported path accepts one
-   `RepinnableHub`, changes only that hub's lock, and the same regeneration
-   control set in a build entry point or continuous-integration environment is
-   still rejected.
+8. **Given** a committed dependency-resolution lock that no longer matches its
+   Cargo lock, **When** a contributor regenerates it, **Then** the only
+   supported path is the repository-owned single-hub command, that command
+   changes only the named hub's lock, and the same regeneration control set in
+   a build entry point or continuous-integration environment is still
+   rejected.
 9. **Given** a build-system module resolution the committed module lock does
    not cover, **When** any build entry point runs, **Then** the run fails
    without rewriting the lock and names the repository-owned no-argument
@@ -306,15 +254,6 @@ findings with the current Cargo path for all three lock files.
     index answers is tested, **Then** every answer is supplied through an
     injectable boundary and no test opens a socket, and the offline validator
     can reach neither that boundary nor its networked implementation.
-13. **Given** broker lock drift, **When** the already-built xtask binary is
-    invoked with `bazel-repin --hub broker`, **Then** it emits the fixed pending
-    result, spawns no child, and writes no path; no generic stale-lock remedy
-    names broker. The public Cargo launcher is tested only for reaching that
-    result, not for exact aggregate stderr or no Cargo bootstrap state.
-14. **Given** Spec 003 admission, **When** the three status artifacts are
-    parsed, **Then** only exactly three agreeing `READY` blocks admit and every
-    missing, duplicate, empty, unknown, misnamed, or disagreeing mutation
-    refuses before activity.
 
 ---
 
@@ -397,13 +336,10 @@ produced by merged pull requests yield qualification records.
    enforceable deadline covers the complete measured job window and can fail
    actionably before the outer timeout backstop.
 6. **Given** a push to protected `v3` produced by a merged pull request,
-   **When** canonical `Q` is evaluated, **Then** the complete lineage retains
-   that push and the resolver binds immutable Cargo, Bazel, same-commit
-   `make test-policy`, same-commit fixture-contract, and four-slice run/job IDs
-   to one head. Every job must pass for the row to qualify; a missing, failed,
-   or cancelled job resets, while forged, stale, wrong-commit, ineligible, or
-   omitted evidence disqualifies the set. A pull-request run remains diagnostic
-   and produces no lineage row.
+   **When** both the Cargo and Bazel workflows run, **Then** both are
+   identified by the same head commit, both verdicts and the same-commit
+   fixture-contract verdict are recorded as one qualification record, and a
+   pull-request run produces no record at all.
 
 ---
 
@@ -424,12 +360,10 @@ retirement conditions independently block premature deletion.
 
 **Acceptance Scenarios**:
 
-1. **Given** an incomplete eligible lineage, a true-`Q` suffix shorter than
-   ten, any missing, failed, timed-out, skipped, or cancelled carrier, any
-   wrong-commit, stale-reused, forged, ineligible, omitted, duplicate,
-   reordered, or omitted-reset evidence, an incomplete seeded-failure matrix,
-   a missed performance ceiling, or any failed census or topology proof,
-   **When** promotion is evaluated, **Then** promotion is blocked.
+1. **Given** fewer than ten consecutive matching qualification records, an
+   incomplete seeded-failure matrix, a missed performance ceiling, or any
+   failed census or topology proof, **When** promotion is evaluated, **Then**
+   promotion is blocked.
 2. **Given** all promotion criteria are satisfied, **When** the promotion
    change lands, **Then** the required context remains named `test-rust`, the
    authoritative Rust target uses Bazel for the eighteen baseline surfaces,
@@ -489,11 +423,7 @@ retirement conditions independently block premature deletion.
 - A pull-request workflow can reach a cache writer indirectly through a
   post-step or inherited permission.
 - A qualification streak is inflated by pairing runs that tested different
-  trees, reusing a stale green job, forging a run ID, omitting an eligible
-  push or reset, or cancelling a run that was about to fail.
-- A missing, failed, or cancelled same-commit policy or fixture verdict is
-  ignored while the two Rust verdicts still extend the qualification streak or
-  supply a cold sample.
+  trees, or by cancelling a run that was about to fail.
 - A dependency policy check runs against a materialized tree that is quietly
   short a package, so it reports fewer findings and exits zero.
 - The migration comparison finds no yanked crate today, so no yanked detection
@@ -573,18 +503,13 @@ retirement conditions independently block premature deletion.
   environment. Transitive build-system modules MUST be pinned by a committed
   resolution lock that fails closed rather than silently updating, including
   when a declared direct dependency disagrees with the resolved graph.
-  `HubInventory` MUST be the closed set `main`, `broker`, `guest`, and `walker`;
-  `RepinnableHub` MUST be the closed set `main`, `guest`, and `walker`.
-  Regenerating a committed dependency-resolution lock MUST be possible only
-  through a repository-owned command that names exactly one `RepinnableHub`,
-  applies the re-resolution control solely to the environment of the single
-  child process it spawns, reuses the same absolute server-selecting startup
-  values the wrapper supplies, writes only that hub's committed lock, and fails
-  when any other generated or committed derived artifact changes. Broker MUST
-  be recognized before generic dispatch. An already-built xtask process MUST
-  emit its stable pending code and fixed path-free text with empty stdout, no
-  child, and no write. The Cargo launcher MAY emit bootstrap output and create
-  Cargo-owned state and is not subject to the exact-result contract.
+  Regenerating
+  a committed dependency-resolution lock MUST be possible only through a
+  repository-owned command that names exactly one dependency hub from a closed
+  set, applies the re-resolution control solely to the environment of the
+  single child process it spawns, reuses the same absolute server-selecting
+  startup values the wrapper supplies, writes only that hub's committed lock,
+  and fails when any other generated or committed derived artifact changes.
   Regenerating the committed build-system module resolution lock MUST likewise
   be possible only through a separate repository-owned command that takes no
   arguments, reuses the same absolute server-selecting startup values, writes
@@ -621,15 +546,9 @@ retirement conditions independently block premature deletion.
 - **FR-012**: The main workspace and guest shell runner suites MUST preserve
   one fresh process per test case, exact per-binary test census, and faithful
   ignored-case reporting.
-- **FR-013**: Broker production and the default, layer1-bootstrap, and
-  fake-backends test carriers MUST each have an independently derived complete
-  configured dependency graph. Production MUST contain no test-only feature.
-  Each test carrier MUST have its exact broker-local cfg/features, library and
-  binary build targets, unit, integration, and doctest target census, exact
-  case-name census, one process per test binary, bounded internal threads, and
-  exclusive execution until a separate isolation review authorizes a change.
-  Shared packages MUST split whenever their own features or any configured
-  dependency destination differs; direct feature equality is insufficient.
+- **FR-013**: The three broker feature suites MUST preserve one process per
+  test binary with bounded internal threads and MUST execute exclusively until
+  a separate isolation review authorizes a change.
 - **FR-014**: Doctests and harness-free companions MUST remain independently
   discovered and executed, the executed harness-free set MUST be derived from
   the same selector the current gate uses rather than from a manifest count,
@@ -637,12 +556,7 @@ retirement conditions independently block premature deletion.
   an unexpectedly empty discovery MUST fail.
 - **FR-015**: Repository-scanning and generated-output checks MUST assert
   exact nonempty input and output censuses before accepting a clean or
-  reproducible result. F, B, M, and each broker production/default/
-  layer1-bootstrap/fake-backends context MUST independently reject missing,
-  extra, empty, and misnamed entries before edge isolation. Authoritative
-  target and source expectations MUST come from Cargo manifests and locked
-  metadata, while actual configured features and edges MUST come from real
-  Bazel configured-graph inspection.
+  reproducible result.
 - **FR-016**: The schema reproducibility surface MUST compare two independent
   generations, each containing the exact generated and committed schema census
   with nonempty valid content, and that census MUST be a drift-checked
@@ -783,19 +697,15 @@ retirement conditions independently block premature deletion.
   enforcement, surface removal, or a relaxed ceiling.
 - **FR-045**: Promotion MUST be blocked until all coverage, census, topology,
   supply-chain, cache, and performance requirements pass, ten consecutive
-  rows at the end of the complete protected-`v3` eligible lineage satisfy ADR
-  0052 section 9's canonical `Q`, and an eighteen-surface seeded-failure matrix
-  proves each carrier fails independently. The lineage MUST contain every
-  chronological merged-PR push from the W3 anchor through its recorded end.
-  Each row MUST retain immutable workflow run/job IDs and authoritative
-  resolver evidence for Cargo, Bazel, same-commit `make test-policy`,
-  same-commit fixture contracts, and all four slices at one head SHA. Any
-  genuine eligible push with a missing, failed, timed-out, skipped, or
-  cancelled carrier MUST reset the streak. Wrong-commit, stale-reused, forged,
-  or unresolved IDs, ineligible inserted events, omitted/duplicate/reordered
-  eligible pushes, or an omitted reset MUST disqualify the evidence set.
-  Pull-request, other-branch, scheduled, and manually dispatched runs are
-  diagnostic and MUST NOT enter a lineage, streak, or measurement set.
+  qualification records show matching Bazel and Cargo rollup verdicts at the
+  same head commit with a passing same-commit fixture-contract companion, and
+  an eighteen-surface seeded-failure matrix proves each carrier fails
+  independently. A qualification record MUST be a push event on protected `v3`
+  produced by a merged pull request; pull-request, other-branch, scheduled, and
+  manually dispatched runs are diagnostic and MUST NOT enter a streak or a
+  measurement set. A differing verdict MUST reset the streak, a Bazel run that
+  reaches no verdict while its paired Cargo run does MUST reset the streak, and
+  a push where neither side reaches a verdict MUST NOT be a record.
 - **FR-046**: Promotion MUST preserve the required context name `test-rust`,
   route the eighteen baseline surfaces through Bazel, and leave the two
   fixture-backed contract surfaces on their existing path.
@@ -838,10 +748,7 @@ retirement conditions independently block premature deletion.
   assertion.
 - **FR-053**: The feature MUST use existing Rust, policy, and workflow test
   surfaces for its guards and MUST NOT add a new top-level shell gate,
-  Layer-1 job, or independent required context. The `policy_docs` binary MUST
-  execute and be cited under `make test-policy`, as selected by committed
-  `tests/lib.sh`; the fixture-contract lane MUST be cited only for the
-  fixture-dependent contract and CLI surfaces it actually executes.
+  Layer-1 job, or independent required context.
 - **FR-054**: Every migrated test suite MUST publish a structured per-case
   result to the location the executor designates, containing one entry per
   enumerated case with explicit passed, failed, and ignored outcomes and only
@@ -891,12 +798,9 @@ retirement conditions independently block premature deletion.
   environment expansion, each recorded either as migrated or as needing no
   migration with the reason.
 - **Qualification Record**: One push event on protected `v3` produced by a
-  merged pull request within the complete W3-anchor-to-end lineage, carrying
-  immutable workflow run/job IDs and authoritative resolver evidence for
-  Cargo, Bazel, same-commit policy, same-commit fixture contracts, and all four
-  slices at one head SHA. It qualifies only through canonical `Q`; cold
-  qualification additionally uses the four durations from those same resolved
-  slice jobs.
+  merged pull request, carrying the head commit, both workflow run
+  identifiers, both rollup verdicts, the same-commit fixture-contract verdict,
+  and, for a cold sample, the four slice durations.
 - **Performance Profile**: A reproducible warm local, cold local, or cold
   continuous-integration measurement with a defined host, cache state, start,
   stop, and ceiling.
@@ -916,13 +820,9 @@ retirement conditions independently block premature deletion.
   carrier set, every carrier belongs to exactly one identifier, and the
   coverage guard reports zero unmapped identifiers, targets, test targets,
   process topologies, exact censuses, or hand-written fragments.
-- **SC-002**: The authoritative complete eligible lineage has a maximal suffix
-  of at least ten true-`Q` rows. Every row has passing resolver-confirmed Cargo,
-  Bazel, same-commit `make test-policy`, same-commit fixture-contract, and four
-  slice jobs at one head SHA. Every missing, failed, timed-out, skipped, or
-  cancelled carrier resets; every wrong-commit, stale-reused, forged,
-  ineligible, omitted, duplicate, reordered, or omitted-reset record
-  disqualifies the set.
+- **SC-002**: Ten consecutive qualification records produce the same pass or
+  fail verdict from the Bazel and Cargo Rust rollups at the same head commit,
+  each with a passing same-commit fixture-contract companion verdict.
 - **SC-003**: An 18-case seeded-failure matrix causes the intended carrier to
   fail in all 18 cases and causes zero unrelated Rust surfaces to fail.
 - **SC-004**: The Bazel and Cargo paths report identical test-case,
@@ -938,11 +838,9 @@ retirement conditions independently block premature deletion.
   minutes and a maximum of at most 18 minutes.
 - **SC-008**: A recorded feasibility measurement on the real runner class
   exists, and the five most recent qualifying cold Bazel qualification records
-  are the five most recent `C(row)` values from the complete authoritative
-  lineage. Each has passing same-commit policy and fixture jobs, immutable
-  Cargo/Bazel/policy/fixture/slice run/job IDs, and defines its duration as the
-  maximum of the four durations resolved from those slice jobs; the five have a
-  median of at most 15 minutes and no duration above 18 minutes.
+  each define their record duration as the maximum of the four slice job
+  durations; those five record durations have a median of at most 15 minutes
+  and no record duration above 18 minutes.
 - **SC-009**: The shadow stage creates zero shared Bazel cache entries, and
   pull-request-reachable jobs create zero cache writes and request zero
   `actions: write` permissions.
@@ -988,8 +886,6 @@ retirement conditions independently block premature deletion.
   `D2B_SKIP_FIXTURE_BUILD=1`; the two fixture-backed contract surfaces remain
   outside this Bazel-only set and are carried as a required same-commit
   companion verdict rather than being compared between executors.
-  Fixture-contract and `make test-policy` verdicts both pass for every
-  canonical `Q` row, cold sample, and promotion decision.
 - The reference local host and continuous-integration runner are the profiles
   defined by ADR 0052 unless a separately reviewed change records a new basis.
 - The current Make target names and required `test-rust` context are public

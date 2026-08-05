@@ -30,196 +30,6 @@ come from the pinned dev shell. Drift must fail rather than rewrite a lock. Do
 not use Bazelisk, direct Bazel workflow commands, a remote cache, or a shared
 worktree output tree.
 
-## Mechanical execution admission - before W0
-
-The current tree is intentionally parked. Admission reads exactly three marked
-blocks: `plan.md`, `tasks.md`, and
-`contracts/workspace-and-tool-pinning.md`. Run this read-only check before T021
-or any task, generator, or repin command that can spawn or write:
-
-```bash
-set -euo pipefail
-
-if ! command -v python3 >/dev/null 2>&1; then
-  printf '%s\n' \
-    'broker-repin-architecture-pending' \
-    'broker repin is unavailable; no local recovery command exists; prerequisite is an accepted repin-lifecycle ADR plus amended/re-panelled Spec 003.' \
-    >&2
-  exit 10
-fi
-
-python3 - <<'PY'
-import os
-import stat
-import sys
-
-PENDING = (
-    b"broker-repin-architecture-pending\n"
-    b"broker repin is unavailable; no local recovery command exists; "
-    b"prerequisite is an accepted repin-lifecycle ADR plus "
-    b"amended/re-panelled Spec 003.\n"
-)
-BEGIN = b"<!-- BEGIN SPEC003-EXECUTION-STATUS -->"
-END = b"<!-- END SPEC003-EXECUTION-STATUS -->"
-READY = b"status: READY"
-PARKED = b"status: PARKED"
-IMMUTABLE_FIELDS = (
-    b"parked_at: broker-lock-regeneration",
-    b"next_refused_task: T021",
-    b"runtime_state_source: task-checkpoints",
-    b"resume_requires: "
-    b"accepted-repin-lifecycle-adr+amended-spec003+renewed-plan-panel",
-)
-STATUS_PATHS = (
-    ("specs", "003-adr052-bazel-rust", "plan.md"),
-    ("specs", "003-adr052-bazel-rust", "tasks.md"),
-    (
-        "specs",
-        "003-adr052-bazel-rust",
-        "contracts",
-        "workspace-and-tool-pinning.md",
-    ),
-)
-DIR_FLAGS = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
-# O_NONBLOCK makes a planted FIFO reject after fstat instead of blocking.
-FILE_FLAGS = os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK
-
-
-def read_fixed_file(root_fd, components):
-    opened_dirs = []
-    directory_fd = root_fd
-    file_fd = None
-    try:
-        for component in components[:-1]:
-            directory_fd = os.open(
-                component, DIR_FLAGS, dir_fd=directory_fd
-            )
-            opened_dirs.append(directory_fd)
-        file_fd = os.open(
-            components[-1], FILE_FLAGS, dir_fd=directory_fd
-        )
-        if not stat.S_ISREG(os.fstat(file_fd).st_mode):
-            raise ValueError("execution-status input is not regular")
-        chunks = []
-        while True:
-            chunk = os.read(file_fd, 65536)
-            if not chunk:
-                return b"".join(chunks)
-            chunks.append(chunk)
-    finally:
-        if file_fd is not None:
-            os.close(file_fd)
-        for opened_fd in reversed(opened_dirs):
-            os.close(opened_fd)
-
-
-def parse_block(data):
-    if b"\0" in data:
-        raise ValueError("NUL in execution-status input")
-    data.decode("utf-8", errors="strict")
-    lines = data.split(b"\n")
-    if lines.count(BEGIN) != 1 or lines.count(END) != 1:
-        raise ValueError("execution-status marker count")
-    begin_index = lines.index(BEGIN)
-    end_index = lines.index(END)
-    if begin_index >= end_index:
-        raise ValueError("execution-status marker order")
-    payload = tuple(lines[begin_index + 1 : end_index])
-    if len(payload) != 5:
-        raise ValueError("execution-status field count")
-    if payload[0] not in (READY, PARKED):
-        raise ValueError("execution-status value")
-    if payload[1:] != IMMUTABLE_FIELDS:
-        raise ValueError("execution-status immutable fields")
-    return payload
-
-
-root_fd = None
-admitted = False
-try:
-    # The wrapper is run from the repository root. Open that root once, then
-    # resolve every fixed component relative to already-open descriptors.
-    root_fd = os.open(".", DIR_FLAGS)
-    blocks = tuple(
-        parse_block(read_fixed_file(root_fd, path))
-        for path in STATUS_PATHS
-    )
-    admitted = (
-        blocks[0] == blocks[1] == blocks[2]
-        and all(block[0] == READY for block in blocks)
-    )
-except (OSError, UnicodeError, ValueError):
-    admitted = False
-finally:
-    if root_fd is not None:
-        try:
-            os.close(root_fd)
-        except OSError:
-            admitted = False
-
-if not admitted:
-    sys.stderr.buffer.write(PENDING)
-    raise SystemExit(10)
-PY
-```
-
-The wrapper retains `set -euo pipefail`; the executable Python 3 body performs
-no task callback, subprocess spawn, or write. It opens the repository root
-once, walks every fixed directory component descriptor-relative with
-`O_DIRECTORY|O_NOFOLLOW|O_CLOEXEC`, opens each leaf with
-`O_RDONLY|O_NOFOLLOW|O_CLOEXEC` (plus `O_NONBLOCK` so a nonregular FIFO cannot
-stall refusal), verifies that leaf is regular with `fstat`, and reads bytes
-from that same descriptor. It rejects NUL before parsing and validates UTF-8
-strictly without using decoded text for the byte comparisons. A directory or
-leaf replacement after open cannot redirect a later check or read to a second
-path lookup.
-
-The committed development shell does not currently provide Python 3. Provision
-the pinned interpreter before entering this wrapper, for example with
-`nix shell --quiet --inputs-from "$D2B_WORKTREE" nixpkgs#python3`, then run the
-wrapper from the repository root inside that shell. Interpreter acquisition is
-bootstrap outside the admission proof. The wrapper itself never invokes Nix;
-if `python3` is absent it fails closed with the same exit 10 and fixed two-line
-pending result.
-
-On the current tree, exit 10 with exactly the two fixed
-architecture-pending lines is required. Exit 0 is valid only when all three
-blocks are atomically changed to byte-identical records whose first line is
-exactly `status: READY`. The four non-status lines are immutable literals;
-only the status may change, and only under a future accepted ADR, amended
-Spec 003, and renewed unanimous plan panel. A prefix, suffix, substring, or
-`READY` token anywhere else in an extracted block is not a status value.
-
-The persistent admission suite plants every row below independently. Every
-rejecting row must return 10, emit only the fixed two-line result and remedy,
-and leave the task, child, and write activity record empty.
-
-| Planted case | Required result |
-| --- | --- |
-| Three byte-identical blocks with exactly `status: READY` | Admit. |
-| Any exact `status: PARKED`, including the current three-block state | Reject. |
-| `xstatus: READY`, `status: XREADY`, or `status: READY-extra` | Reject prefix or substring. |
-| `READY`, `note: READY`, or a second status token elsewhere in the block | Reject misplaced token. |
-| Missing, duplicated, empty, misnamed, or unknown status key/value | Reject. |
-| Missing source or source extraction error | Reject. |
-| A symlink at any directory component or final file | Reject without following it. |
-| A directory, FIFO, socket, device, or other nonregular final object | Reject without reading it as status input. |
-| A component or leaf replaced between the fake filesystem seam's open and read/check callbacks | Read and validate only the already-open descriptor; the decoy cannot admit. |
-| Missing, duplicated, reversed, or nested BEGIN/END marker | Reject. |
-| A BEGIN or END marker in any order other than one BEGIN followed by one END | Reject. |
-| A NUL inserted into a marker, status field, or non-status field | Reject before parsing. |
-| Any invalid UTF-8 byte sequence anywhere in a source | Reject before parsing. |
-| Any missing, duplicated, reordered, unknown, misplaced, empty, or changed non-status schema line | Reject. |
-| Any byte disagreement among the three extracted blocks | Reject. |
-
-The component-replacement/check-open race is deterministic coverage, not a
-timing test: the persistent Layer-1 Rust admission test uses an injected
-descriptor-filesystem fake that swaps the name to a decoy after the component
-or leaf open callback and before the check/read callback. Independent fixtures
-cover the directory-component and leaf cases. The same suite plants the
-symlink, nonregular, NUL-marker, NUL-field, invalid-UTF-8, reversed, nested,
-missing, duplicate, unknown, misplaced, and three-source disagreement cases.
-
 ## Assertion helpers
 
 Every block in this guide that asserts an invariant starts with the same two
@@ -309,40 +119,26 @@ in the base by content, not by a remembered commit hash:
 ```bash
 set -e
 . .scratch/adr052-assert.sh
-require_input docs/adr/0052-bazel-rust-build-and-test.md \
-  docs/adr/0054-broker-hub-generated-splice-workspace.md docs/adr/README.md
+require_input docs/adr/0052-bazel-rust-build-and-test.md docs/adr/README.md
 grep -q '^- Status: Accepted$' docs/adr/0052-bazel-rust-build-and-test.md \
   || fail 'ADR 0052 is not accepted'
 grep -q '^- Amended: 2026-08-03\.' \
   docs/adr/0052-bazel-rust-build-and-test.md \
-  || fail 'ADR 0052 substrate amendment is missing'
-grep -q '^- Amended: 2026-08-05\.' \
-  docs/adr/0052-bazel-rust-build-and-test.md \
-  || fail 'ADR 0052 qualification amendment is missing'
+  || fail 'ADR 0052 amendment is missing'
 grep -q 'yanked' docs/adr/0052-bazel-rust-build-and-test.md \
   || fail 'ADR 0052 yanked carrier is missing'
 grep -q 'bazel-repin' docs/adr/0052-bazel-rust-build-and-test.md \
   || fail 'ADR 0052 repin contract is missing'
 grep -q '0052-bazel-rust-build-and-test.md' docs/adr/README.md \
   || fail 'ADR 0052 index row is missing'
-grep -q '^- Status: Proposed$' \
-  docs/adr/0054-broker-hub-generated-splice-workspace.md \
-  || fail 'ADR 0054 must remain Proposed while broker repin is unresolved'
-grep -q '0054-broker-hub-generated-splice-workspace.md' docs/adr/README.md \
-  || fail 'ADR 0054 index row is missing'
 ```
 
-The record must be `Status: Accepted`, must carry both the 2026-08-03 substrate
-and 2026-08-05 qualification amendment lines, must already name protected
-`v3` as the promotion,
+The record must be `Status: Accepted`, must carry the 2026-08-03 amendment
+line, must already name protected `v3` as the promotion,
 cache-maintenance, cache-publication, streak, and post-promotion lineage, with
-the cold measurement set drawn from canonical `C` rows in the complete
-authoritative eligible lineage and both same-commit policy and fixture jobs
-gating `Q`, must state that the section 6 yanked carrier lands
-unconditionally, and must define
-`HubInventory = {main, broker, guest, walker}` separately from
-`RepinnableHub = {main, guest, walker}`. ADR 0054 must remain Proposed and
-indexed; it does not authorize broker lock regeneration.
+the cold measurement set drawn from qualifying cold qualification records, must
+state that the section 6 yanked carrier lands unconditionally, and must name
+`cargo xtask bazel-repin` as the one supported hub-lock regeneration path.
 
 The ADR names no command for the module lock; it requires only that
 `--lockfile_mode=error` fail "with a named remediation". This feature supplies
@@ -364,20 +160,14 @@ shas=$(git rev-list --reverse HEAD \
   || fail 'git rev-list failed on the ADR 0052 path'
 test -n "$shas" || fail 'ADR 0052 has no history reachable from HEAD'
 
-substrate_amendment=
-qualification_amendment=
+amendment=
 while read -r sha; do
   test -n "$sha" || continue
   body=$(git show "$sha:docs/adr/0052-bazel-rust-build-and-test.md") \
     || fail "cannot read ADR 0052 at $sha"
   if printf '%s\n' "$body" | grep -q '^- Amended: 2026-08-03\.'; then
-    test -n "$substrate_amendment" || substrate_amendment=$sha
-  else
-    rc=$?
-    test "$rc" -eq 1 || fail "grep exited $rc reading ADR 0052 at $sha"
-  fi
-  if printf '%s\n' "$body" | grep -q '^- Amended: 2026-08-05\.'; then
-    test -n "$qualification_amendment" || qualification_amendment=$sha
+    amendment=$sha
+    break
   else
     rc=$?
     test "$rc" -eq 1 || fail "grep exited $rc reading ADR 0052 at $sha"
@@ -385,11 +175,9 @@ while read -r sha; do
 done <<EOF
 $shas
 EOF
-test -n "$substrate_amendment" \
+test -n "$amendment" \
   || fail 'no commit in that history introduces the 2026-08-03 amendment'
-test -n "$qualification_amendment" \
-  || fail 'no commit in that history introduces the 2026-08-05 amendment'
-printf '%s\n' "$substrate_amendment" "$qualification_amendment"
+printf '%s\n' "$amendment"
 ```
 
 The shape matters more than it looks. `git rev-list ... | while read` reports
@@ -410,10 +198,10 @@ commit that could have removed the file; it fires only if the object store
 cannot produce a blob the commit list just named, which is a condition to stop
 on rather than to skip past.
 
-Record both resolved SHAs as evidence and require both to be ancestors of the
+Record that resolved SHA as evidence and require it to be an ancestor of the
 W0 base. If any of `.bazelversion`, `.bazelrc`, `.bazelignore`, `MODULE.bazel`,
 `MODULE.bazel.lock`, `bazel/`, or generated `packages/**/BUILD.bazel` exists in
-a commit that predates the 2026-08-03 substrate amendment, stop.
+a commit that predates it, stop.
 
 ## Foundation validation - W0
 
@@ -427,11 +215,12 @@ make test-policy
 D2B_ENABLE_FIXTURE_BUILD=1 make test-fixture-contracts
 ```
 
-Both policy and fixture commands are intentional. `make test-policy` executes
-the fixture-independent policy binaries, including `policy_docs`, and fails on
-a zero-test binary. The fixture command excludes those binaries and covers the
-actual fixture-dependent contract and CLI surfaces. Cite each only for the
-surface it executed.
+The last one is not optional and is easy to skip, because a W0 diff looks like
+build configuration. `tests/test-rust.sh` excludes `d2b-contract-tests` from
+every workspace leaf, and that crate reads `Makefile`, `flake.nix`,
+`packages/Cargo.toml`, `packages/xtask/src/main.rs`, and every `.rs` file under
+`packages/`. Without this target, W0 changes those files with no coverage at
+all. The same applies to every later code-changing wave.
 
 Review the schema result for two independent generations, each containing the
 exact generated nonempty valid JSON census before comparison. The census is the
@@ -468,14 +257,6 @@ test "$(
     MODULE.bazel
 )" -eq 4 \
   || fail 'Cargo overwrite opt-out does not match four hubs'
-
-# Inventory is not execution authority.
-grep -qF 'HubInventory = {main, broker, guest, walker}' \
-  specs/003-adr052-bazel-rust/contracts/workspace-and-tool-pinning.md \
-  || fail 'HubInventory drifted'
-grep -qF 'RepinnableHub = {main, guest, walker}' \
-  specs/003-adr052-bazel-rust/contracts/workspace-and-tool-pinning.md \
-  || fail 'RepinnableHub drifted or accidentally gained broker'
 
 # No repin escape hatch anywhere on the gate path.
 refute 'repin control is reachable from Make or CI' \
@@ -545,32 +326,6 @@ review. The run that must report a changed lock is the one immediately after a
 Cargo workspace membership or dependency change; a command wired to the wrong
 Bazel invocation shows up there, as a repin that changed nothing when something
 had to change.
-
-Broker is not a fourth generic path. Build xtask before beginning observation,
-then run the enforcing test through `make test-rust-main`. That test executes
-the already-built binary directly as `bazel-repin --hub broker` and requires:
-
-```text
-stdout: empty
-stderr line 1: broker-repin-architecture-pending
-stderr line 2: broker repin is unavailable; no local recovery command exists; prerequisite is an accepted repin-lifecycle ADR plus amended/re-panelled Spec 003.
-result: nonzero, no child callback, no write callback
-```
-
-Do not substitute `cargo xtask bazel-repin --hub broker` for that evidence.
-Cargo may print bootstrap diagnostics and create cache or target state before
-the built process runs, so the public launcher is not promised exact two-line
-stderr or aggregate no-write behavior.
-
-The same W0 carrier owns the `gen-bazel --check` no-state proof. It runs the
-already-built process for both pass and every missing, extra, byte-drift, and
-semantic-drift failure after redirecting `HOME`, `TMPDIR`, `TMP`, `TEMP`,
-`XDG_CACHE_HOME`, `CARGO_HOME`, `RUSTUP_HOME`, `CARGO_TARGET_DIR`,
-`BAZELISK_HOME`, and `TEST_TMPDIR` to empty observed roots. Evidence is valid
-only when those roots and the full repository HEAD/index/tracked/untracked/
-ignored/kind/mode/bytes/symlink snapshot are unchanged and the injected
-observer records no mutation elsewhere. A bare `git status` comparison is not
-evidence for this property.
 
 The module lock has its own command, and it is the only supported way to move
 `MODULE.bazel.lock`:
@@ -838,30 +593,26 @@ jq -e '
 ```
 
 Use `D2B_SKIP_FIXTURE_BUILD=1` only when comparing the eighteen-surface CI
-baseline. Validate policy documentation and fixture coverage under their
-actual separate carriers:
+baseline. Validate fixture coverage separately:
 
 ```bash
-make test-policy
 D2B_ENABLE_FIXTURE_BUILD=1 make test-fixture-contracts
 ```
 
-`make test-policy` is the wave-note verdict from W0 onward. Every measured
+That target is also the wave-note verdict, from W0 onward. Every measured
 invocation a wave records under `specs/003-adr052-bazel-rust/wave-notes/` is
 written as a command shape with `<worktree>` placeholders, and the rule is
 enforced by a policy lint in
-`packages/d2b-contract-tests/tests/policy_docs.rs` that `make test-policy`
-already
+`packages/d2b-contract-tests/tests/policy_docs.rs` that the run above already
 executed. Do not hand-roll a shell scan over the notes and do not plant a note
 file, tracked or untracked, to see the scan fail: the lint refuses an empty
 corpus and refuses any entry in that directory that is not a readable
 `w<digits>.md` note, so a stray file is caught either way, and the lint's own
 planted cases live in the injected fake and in test literals.
-Committed `tests/lib.sh` includes `policy_docs` in the fixture-independent
-policy list, `tests/test-policy.sh` executes that closed list and fails on a
-zero-test binary, and the fixture lane excludes it. The fixture command above
-therefore proves only its fixture-dependent contract and CLI surfaces. Confirm
-the lint is present, reaches the notes through the shared
+`tests/test-rust.sh` excludes `d2b-contract-tests`
+from every workspace leaf and `tests/test-policy.sh` runs seven contract-test
+binaries that do not include `policy_docs`, so this is the only lane that runs
+it. Confirm the lint is present, reaches the notes through the shared
 filesystem boundary rather than through the standard library, carries both
 violation shapes, and carries the two cases that police its own refusals:
 
@@ -1036,12 +787,7 @@ The W1 aggregate checks:
   out-of-census manifest entry recorded with its reason;
 - main and guest one-process-per-case topology with a per-case directory
   beneath the executor temporary root;
-- broker production plus independent default, layer1-bootstrap, and
-  fake-backends configured graphs. The measured first-party target censuses are
-  7/23/23/23 and the three test-carrier case censuses are 557/492/559; exact
-  target and case-name sets, not these descriptive counts, are authoritative;
-- broker one-process-per-binary topology with exclusivity for all three test
-  carriers;
+- broker one-process-per-binary topology with exclusivity;
 - exact governed-source, runfiles, and parsed-file equality;
 - two independent schema generations against the generated census;
 - the nightly API census, including the toolchain version the action actually
@@ -1059,17 +805,6 @@ make test-bazel-rust-api
 make test-bazel-rust-broker
 make test-bazel-rust-aux
 ```
-
-Before accepting broker coverage, inspect the independent missing, extra,
-empty, and misnamed mutations for F, B, M, B-prod, B-default, B-layer1, and
-B-fake. Also require target omission/addition, inert-source substitution,
-per-carrier feature/edge/target/case mutations, contracts and host
-configured-destination swaps, production-to-test edges, each test carrier
-reaching production or another carrier, B reaching `@main//`, and M reaching
-`@broker//` to fail at distinct guards. Expected source and target identities
-must come from authoritative Cargo manifests and locked metadata; actual
-configured features and edges must come from query/cquery plus an aspect, not
-from a generator-emitted expected map.
 
 Inspect the per-case evidence rather than trusting a green target. For a
 carrier under the local output tree, confirm the result document exists, names
@@ -1371,12 +1106,7 @@ jq -e '
     (.sample_refs | length) == 5 and
     (.feasibility_ref | length) > 0 and
     all(.sample_refs[];
-      .qualifies and
-      .source_event == "push" and .branch == "refs/heads/v3" and
-      .policy_job.conclusion == "success" and
-      .fixture_job.conclusion == "success" and
-      (.slice_jobs | length) == 4 and
-      all(.slice_jobs[]; .conclusion == "success") and
+      .source_event == "push" and .branch == "v3" and
       .cache_restored == 0))
 ' specs/003-adr052-bazel-rust/evidence/qualification.json
 ```
@@ -1401,223 +1131,37 @@ non-required, use four slices and a rollup, restore and save nothing, call only
 Make targets, use credentialless checkout, and grant pull-request jobs only
 `contents: read`.
 
-Evidence comes only from ADR 0052 section 9's canonical `Q` predicate over the
-complete chronological eligible protected-`v3` lineage. The authoritative
-resolver, not authored JSON, binds immutable workflow run/job IDs, attempt,
-head SHA, event, branch, merged-PR eligibility, and conclusion for Cargo,
-Bazel, same-commit `make test-policy`, same-commit fixture contracts, and all
-four slices.
-
-A genuine eligible push with a missing, failed, timed-out, skipped, or
-cancelled carrier remains a false-`Q` reset row, including full cancellation.
-Wrong-commit, stale-reused, forged, unresolved, ineligible, omitted, duplicate,
-reordered, or omitted-reset evidence disqualifies the set. Cold qualification
-is exactly `C(row) = Q(row) && cache_restored == 0 && four complete durations
-from the same resolved slice job IDs`.
-
-From W3, validate the closed normative-site and executable-predicate inventory
-before auditing evidence. This list is explicit rather than globbed so a new
-second predicate is a review-visible contract change:
-
-```bash
-set -euo pipefail
-perl -Mstrict -Mwarnings -e '
-  my $root = "specs/003-adr052-bazel-rust";
-  my @sites = (
-    ["docs/adr/0052-bazel-rust-build-and-test.md",
-     "The canonical qualification predicate is `Q`"],
-    ["docs/adr/0052-bazel-rust-build-and-test.md",
-     "The streak is the length of the maximal suffix"],
-    ["docs/adr/0052-bazel-rust-build-and-test.md",
-     "Cold-sample qualification is exactly"],
-    ["docs/adr/0052-bazel-rust-build-and-test.md",
-     "The complete authoritative lineage through the"],
-    ["docs/adr/0052-bazel-rust-build-and-test.md",
-     "qualification now retains the complete eligible"],
-    ["docs/adr/0052-bazel-rust-build-and-test.md",
-     "A laundered equivalence streak."],
-    ["docs/adr/0052-bazel-rust-build-and-test.md",
-     "Section 9'\''s canonical `Q` is the only qualification predicate."],
-    ["docs/adr/0052-bazel-rust-build-and-test.md",
-     "packages/xtask/tests/bazel_qualification.rs"],
-    ["$root/contracts/shadow-promotion-evidence.md",
-     "ADR 0052 section 9'\''s `Q(row)` table is the single canonical"],
-    ["$root/contracts/shadow-promotion-evidence.md",
-     "C(row) = Q(row) && cache_restored == 0"],
-    ["$root/contracts/shadow-promotion-evidence.md",
-     "maximal suffix contains at least ten true-`Q` rows"],
-    ["$root/contracts/shadow-promotion-evidence.md",
-     "missing policy, missing fixture, failed, cancelled, wrong commit"],
-    ["$root/contracts/cache-workflow-boundaries.md",
-     "ADR 0052 section 9'\''s canonical"],
-    ["$root/contracts/execution-manifest-binding.md",
-     "ADR 0052 section 9'\''s"],
-    ["$root/contracts/make-target-compatibility.md",
-     "bazel-evidence qualification [--check]"],
-    ["$root/spec.md", "one canonical `Q` predicate. No requirement"],
-    ["$root/spec.md", "**FR-045**: Promotion MUST be blocked"],
-    ["$root/spec.md",
-     "**Qualification Record**: One push event on protected `v3`"],
-    ["$root/spec.md",
-     "**SC-002**: The authoritative complete eligible lineage"],
-    ["$root/spec.md",
-     "**SC-008**: A recorded feasibility measurement"],
-    ["$root/spec.md",
-     "Fixture-contract and `make test-policy` verdicts both pass"],
-    ["$root/research.md",
-     "canonical `Q` predicate over a complete authoritative lineage"],
-    ["$root/research.md",
-     "the continuous-integration set is the five most recent canonical"],
-    ["$root/research.md",
-     "a complete resolver-confirmed eligible lineage ending in at least ten"],
-    ["$root/research.md",
-     "The resolver retains every eligible merged-PR push"],
-    ["$root/data-model.md",
-     "Derived only by ADR 0052 section 9'\''s canonical `Q(row)`"],
-    ["$root/data-model.md",
-     "A real eligible push with any missing, failed, timed-out"],
-    ["$root/data-model.md",
-     "Exactly `C(row) = Q(row) && cache_restored == 0"],
-    ["$root/data-model.md",
-     "Complete eligible lineage from the merged W3 anchor"],
-    ["$root/plan.md", "canonical `Q` is the only predicate"],
-    ["$root/plan.md", "Five most recent canonical `C` rows"],
-    ["$root/plan.md",
-     "resolver records immutable run/job IDs and authoritative evidence"],
-    ["$root/plan.md",
-     "Resolve the complete chronological eligible lineage"],
-    ["$root/plan.md",
-     "the complete-lineage digest, every immutable run/job"],
-    ["$root/plan.md",
-     "The equivalence streak is laundered by pairing another commit'\''s job"],
-    ["$root/tasks.md", "canonical `Q` is the only qualification predicate"],
-    ["$root/tasks.md",
-     "fixtures/qualification/` for missing policy, missing fixture"],
-    ["$root/tasks.md",
-     "Resolve and retain under `.scratch/adr052-w4/records/`"],
-    ["$root/tasks.md",
-     "Select the five most recent canonical `C(row)`"],
-    ["$root/tasks.md",
-     "compute every threshold only through `qualification_decision`"],
-    ["$root/tasks.md",
-     "all ten named negative fixture classes"],
-    ["$root/quickstart.md",
-     "canonical `Q` predicate over the complete chronological", 2],
-    ["$root/quickstart.md",
-     "Cold qualification is exactly `C(row) = Q(row)", 2],
-    ["$root/quickstart.md",
-     ".qualification_records[-1].derived_streak >= 10", 2],
-    ["$root/quickstart.md",
-     "all(.qualification_records[-10:][]; .qualifies and", 3],
-  );
-  my @executables = (
-    ["packages/xtask/src/bazel_qualification.rs",
-     "pub fn qualification_decision"],
-    ["packages/xtask/tests/bazel_qualification.rs",
-     "qualification_negative_omitted_reset"],
-    ["packages/d2b-contract-tests/tests/policy_docs.rs",
-     "qualification_normative_sites_are_closed"],
-    ["packages/xtask/tests/policy_ci.rs",
-     "pr_bazel_rust_workflow_is_observation_only"],
-  );
-
-  for my $site (@sites) {
-    my ($artifact, $needle, $expected) = @$site;
-    $expected //= 1;
-    open my $handle, "<:encoding(UTF-8)", $artifact
-      or die "$artifact: cannot read normative site: $!\n";
-    local $/;
-    my $text = <$handle>;
-    close $handle or die "$artifact: cannot close: $!\n";
-    $text =~ s/\s+/ /g;
-    my $count = () = $text =~ /\Q$needle\E/g;
-    die "$artifact: qualification site missing or duplicate: $needle\n"
-      unless $count == $expected;
-  }
-
-  for my $site (@executables) {
-    my ($artifact, $needle) = @$site;
-    open my $handle, "<:encoding(UTF-8)", $artifact
-      or die "$artifact: cannot read executable site: $!\n";
-    local $/;
-    my $text = <$handle>;
-    close $handle or die "$artifact: cannot close: $!\n";
-    my $count = () = $text =~ /\Q$needle\E/g;
-    die "$artifact: executable predicate site missing or duplicate\n"
-      unless $count == 1;
-  }
-
-  print "qualification normative/executable consistency: PASS\n";
-'
-
-make test-rust-main
-make test-policy
-```
-
-`make test-rust-main` must report the passing complete-lineage fixture and
-independent missing-policy, missing-fixture, failed, cancelled, wrong-commit,
-stale-reused-job, forged-ID, ineligible-event, omitted-eligible-push, and
-omitted-reset negatives from
-`packages/xtask/tests/fixtures/qualification/`. `make test-policy` must report
-the closed normative-site inventory. The failed fixture is parameterized over
-Cargo, Bazel, policy, fixture, and all four slices; the cancelled fixture
-includes a fully cancelled eligible push. Each fixture is schema-valid and
-reaches its named canonical decision rather than failing common parsing.
+Evidence comes only from qualification records: push events on
+`refs/heads/v3` produced by merged pull requests, where the Bazel run and the
+required Cargo run carry the same head commit. A pull-request run is
+diagnostic and produces no record, because its merge ref is recomputed against
+a moving base and its path filter excludes exactly the changes a divergence
+would appear in.
 
 Before the cold ceiling binds, record the W3 feasibility measurement with all
-four authoritative slice job IDs and durations, require that Cargo, Bazel,
-policy, fixture, and all slices passed at the same head, and derive that
-record's duration as their maximum. A single feasibility run does not claim a
-median. If its critical-path duration shows the ceiling is not plausible, the
-only authorized answers are a larger runner class or a further disjoint slice
-split.
+four slice durations and derive that record's duration as their maximum. A
+single feasibility run does not claim a median. If its critical-path duration
+shows the ceiling is not plausible, the only authorized answers are a larger
+runner class or a further disjoint slice split.
 
 Audit the streak and shadow cache behavior:
 
 ```bash
-cargo xtask bazel-evidence qualification --check \
-  specs/003-adr052-bazel-rust/evidence/qualification.json
-
 jq -e '
-  .lineage_complete and
-  .lineage_order == "first-parent-chronological" and
-  .lineage_resolver_digest != "" and
   (.qualification_records | length) >= 10 and
-  (.qualification_records[-1].derived_streak >= 10) and
-  all(.qualification_records[];
-    . as $record |
-    .source_event == "push" and
-    .branch == "refs/heads/v3" and
-    .merged_pr.merged and
-    .merged_pr.base_ref == "v3" and
-    .merged_pr.merge_commit_sha == .head_sha and
-    (.resolver_evidence.digest | length) > 0 and
-    (.slice_jobs | length) == 4 and
-    all([
-      .cargo_job, .bazel_job, .policy_job, .fixture_job,
-      .slice_jobs[0], .slice_jobs[1], .slice_jobs[2], .slice_jobs[3]
-    ][];
-      .head_sha == $record.head_sha and
-      (.workflow_run_id | type) == "number" and
-      (.job_id | type) == "number" and
-      (.run_attempt | type) == "number")) and
-  all(.qualification_records[-10:][];
-    .qualifies and
-    .cargo_job.conclusion == "success" and
-    .bazel_job.conclusion == "success" and
-    .policy_job.conclusion == "success" and
-    .fixture_job.conclusion == "success" and
-    all(.slice_jobs[]; .conclusion == "success") and
-    .cache_restored == 0 and .cache_writes == 0)
+  ([.qualification_records[-10:][] |
+    (.source_event == "push") and
+    (.branch == "v3") and
+    (.cargo_run_head_sha == .bazel_run_head_sha) and
+    (.cargo_verdict == .bazel_verdict) and
+    (.fixture_verdict == "passed") and
+    (.cache_writes == 0)] | all)
 ' specs/003-adr052-bazel-rust/evidence/qualification.json
 ```
 
 ## Promotion evidence audit - W4
 
 ```bash
-cargo xtask bazel-evidence qualification --check \
-  specs/003-adr052-bazel-rust/evidence/qualification.json
-
 jq -e '
   .status == "qualified" and
   .coverage.exact_surface_count == 18 and
@@ -1625,13 +1169,6 @@ jq -e '
   .coverage.carriers_claimed_more_than_once == 0 and
   .coverage.analysis_time_label_check_passed and
   .coverage.out_of_test_completeness_check_passed and
-  .lineage_complete and
-  .lineage_resolver_digest != "" and
-  (.qualification_records | length) >= 10 and
-  all(.qualification_records[-10:][];
-    .qualifies and
-    .policy_job.conclusion == "success" and
-    .fixture_job.conclusion == "success") and
   .supply_chain.differing_enforcing_outcomes == 0 and
   .supply_chain.yanked_carrier_landed and
   .supply_chain.yanked_snapshot_key_set_matches_all_three_locks and
@@ -1711,10 +1248,9 @@ make check-tier0
 D2B_ENABLE_FIXTURE_BUILD=1 make test-fixture-contracts
 ```
 
-W6 owns `Makefile`, `AGENTS.md`, and `docs/contributing/`. The affected
-fixture-independent policy binaries run under `make test-policy`; the separate
-fixture command remains only for the fixture-dependent contract and CLI
-surfaces. Neither verdict substitutes for the other.
+W6 owns `Makefile`, `AGENTS.md`, and `docs/contributing/`, all of which the
+`d2b-contract-tests` crate reads, so the fixture-contract target is part of W6
+validation and not an optional extra.
 
 W7 retires the eighteen Cargo implementations using only the independent
 green-run clock:

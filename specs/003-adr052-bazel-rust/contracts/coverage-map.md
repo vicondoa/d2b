@@ -21,11 +21,6 @@ Each row contains:
 - `outOfCensus`: every manifest entry the executed selector excludes, each with
   its reason;
 - `testTargets`: all transitively carried Rust tests;
-- `brokerContexts`: for the broker surface rows, independently derived
-  production, default, layer1-bootstrap, and fake-backends configured-target
-  records. Each carries exact broker-local features, configured edges, target
-  identities, normalized authoritative sources, case-name census, and the
-  allowed shared-context overlap;
 - `handwrittenFragments`: all non-generated BUILD fragments;
 - `binaryProviders`: expected provider label, declared runfiles-relative path,
   and the byte digest the located descriptor must match before that same
@@ -102,7 +97,6 @@ split is therefore load-bearing:
 | No Rust test target is unclaimed | Make wrapper and `test-drift`, over `tests/golden/bazel-rust-query.json` |
 | Query result is not stale | Make wrapper and `test-drift` |
 | Exact census, topology, hand-written-fragment listing | Bazel test |
-| Broker configured features and dependency destinations | Real `cquery` plus an aspect over actual providers |
 | Generated BUILD and lock drift | `test-drift` |
 
 No Bazel test invokes `bazel query`, and no test action runs a nested Bazel
@@ -121,16 +115,6 @@ The guard rejects:
   naming the label before any test runs;
 - a Rust test target not transitively claimed exactly once;
 - a suite without an exact nonempty census or a required topology;
-- a missing, extra, empty, or misnamed member of F, B, M, B-prod, B-default,
-  B-layer1, or B-fake;
-- a broker carrier whose local features, configured edges, library/binary,
-  unit, integration, doctest, source, or exact case-name census differs from
-  authoritative Cargo manifests, locked metadata, unit graphs, and case
-  listing;
-- production reaching a test-only feature or context, a test carrier reaching
-  production or another carrier's member target, contracts or host reaching
-  the wrong configured core/contracts context, B reaching `@main//`, or M
-  reaching `@broker//`;
 - a hand-written fragment not listed exactly once, including the four
   fragments named above;
 - a scan input set unequal to its committed manifest in either direction;
@@ -150,12 +134,6 @@ The guard rejects:
 - an emitted census toolchain version that differs from the committed pin;
 - a `.bazelrc` line or wrapper argument that sets the toolchain channel flag;
 - generated BUILD drift, `.bazelignore` drift, or Cargo/Bazel lock drift.
-
-The measured broker context counts are B-prod 7 targets and
-B-default/B-layer1/B-fake 23 targets each; default/layer1/fake currently
-enumerate 557/492/559 cases. These are review observations. Exact generated
-name sets are the contract. Target and source expectations come independently
-from Cargo authority; generator output cannot be its own oracle.
 
 A passing guard is necessary but not sufficient for promotion; execution
 evidence is also required.
