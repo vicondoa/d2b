@@ -1373,7 +1373,7 @@ fn execution_manifest_schema_and_prose_agree_with_non_empty_discovery() {
     );
     assert!(
         nix_driver.contains("nixUnitJobShards.${system}")
-            && nix_driver.contains("builtins.getAttr \"${check}\" shards")
+            && nix_driver.contains("builtins.getAttr \\\"${check}\\\" shards")
             && nix_driver.contains("selected_jobs_file")
             && nix_driver.contains("mapfile -t selected_jobs")
             && nix_driver.contains("for job in \"${selected_jobs[@]}\"; do"),
