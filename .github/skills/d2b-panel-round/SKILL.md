@@ -25,16 +25,16 @@ it against the policy constants in `packages/xtask/src/delivery/model.rs`.
 
 | Seat | `agent_type` | `model` | `reasoning_effort` | `context_tier` |
 |---|---|---|---|---|
-| software | `panel-software` | `gemini-3.1-pro-preview` | `high` | `default` |
-| test | `panel-test` | `gemini-3.1-pro-preview` | `high` | `default` |
-| nixos | `panel-nixos` | `gemini-3.1-pro-preview` | `high` | `default` |
-| networking | `panel-networking` | `gemini-3.1-pro-preview` | `high` | `default` |
-| security | `panel-security` | `gemini-3.1-pro-preview` | `high` | `default` |
-| rust | `panel-rust` | `gemini-3.1-pro-preview` | `high` | `default` |
-| product | `panel-product` | `gemini-3.1-pro-preview` | `high` | `default` |
-| docs | `panel-docs` | `gemini-3.1-pro-preview` | `high` | `default` |
-| observability | `panel-observability` | `gemini-3.1-pro-preview` | `high` | `default` |
-| kernel | `panel-kernel` | `gemini-3.1-pro-preview` | `high` | `default` |
+| software | `panel-software` | `gpt-5.6-sol` | `xhigh` | `default` |
+| test | `panel-test` | `gpt-5.6-sol` | `xhigh` | `default` |
+| nixos | `panel-nixos` | `gpt-5.6-sol` | `xhigh` | `default` |
+| networking | `panel-networking` | `gpt-5.6-sol` | `xhigh` | `default` |
+| security | `panel-security` | `gpt-5.6-sol` | `xhigh` | `default` |
+| rust | `panel-rust` | `gpt-5.6-sol` | `xhigh` | `default` |
+| product | `panel-product` | `gpt-5.6-sol` | `xhigh` | `default` |
+| docs | `panel-docs` | `gpt-5.6-sol` | `xhigh` | `default` |
+| observability | `panel-observability` | `gpt-5.6-sol` | `xhigh` | `default` |
+| kernel | `panel-kernel` | `gpt-5.6-sol` | `xhigh` | `default` |
 
 **Never omit a parameter.** A subagent does not inherit the session's
 reasoning effort. An omitted `reasoning_effort` silently runs the lane at the
@@ -43,8 +43,9 @@ attest `high`. That is a false attestation on the binding gate, and it
 produces a plausible-looking record rather than an error, which is why it is
 worth saying twice.
 
-`gemini-3.1-pro-preview` supports `low`, `medium` and `high` only. A request
-for `xhigh` on this model is invalid, not merely unusual.
+Legacy records from `gemini-3.1-pro-preview` at `high` remain readable as an
+exact compatibility pair. Never dispatch a new lane on that binding, and
+never mix one member of the legacy pair with the current binding.
 
 `scripts/copilot/check-bindings.mjs` validates this table against the agent
 files and against the xtask policy constants. Run it after editing either.
@@ -119,8 +120,8 @@ Then write `.scratch/panel/<ROUND>/observed.json`, recording what each lane
 ```json
 {
   "security": {
-    "model": "gemini-3.1-pro-preview",
-    "reasoning_effort": "high",
+    "model": "gpt-5.6-sol",
+    "reasoning_effort": "xhigh",
     "run_id": "...",
     "receipt_locator": "github-copilot://..."
   }

@@ -906,27 +906,13 @@ fn generated_artifacts_are_deterministic_and_carry_no_superseded_bindings() {
             text.ends_with('\n'),
             "`{rel}` must end with exactly one trailing newline"
         );
-        // The panel binding has moved twice. An earlier change rebound it from
-        // an early Gemini model to a `gpt-5.6` coding model, and this assertion
-        // then pinned "gemini" as the superseded value. A later operator
-        // decision supersedes that rebinding: the panel now runs on
-        // `gemini-3.1-pro-preview` while a `gpt-5.6` sibling is the model that
-        // writes the code. Keeping the reviewing model distinct from the
-        // authoring model is the point, so the value this pins is inverted
-        // rather than dropped - a manifest that reintroduces the coding model
-        // as a panel binding is the regression to catch now.
-        //
-        // This pins the whole `gpt-5.6` family rather than one sibling. It
-        // named `gpt-5.6-sol` while that was the coding model, which meant the
-        // guard silently stopped covering the real regression the moment the
-        // coding model moved to `gpt-5.6-luna`: the manifest could have
-        // reintroduced the new coding model as a panel binding and this
-        // assertion would still have passed. A family-wide prefix keeps the
-        // guard honest across any future rebinding, and no Gemini panel model
-        // shares it. The comparison folds case so a manifest spelling the
-        // binding `GPT-5.6-Luna` cannot slip past it.
+        // The reviewing model must remain distinct from the model that writes
+        // the code. Both are now GPT-5.6 siblings, so pin the authoring sibling
+        // rather than rejecting the whole family and accidentally rejecting
+        // the current `gpt-5.6-sol` panel binding. The comparison folds case so
+        // a manifest spelling `GPT-5.6-Luna` cannot slip past it.
         assert!(
-            !text.to_ascii_lowercase().contains("gpt-5.6"),
+            !text.to_ascii_lowercase().contains("gpt-5.6-luna"),
             "`{rel}` references a coding-model binding; the panel model must stay \
              distinct from the model that writes the code"
         );

@@ -1207,7 +1207,7 @@
         "ADR-046-zone-routing"
       ],
       "path" : "docs/specs/ADR-046-validation-and-delivery.md",
-      "sha256" : "d361e2b39e4949b5f5c6d40b1a648fa8d233f03405337deca2432ef88d196aad",
+      "sha256" : "ad445f1b06e71d0fd8b0a4e1dcb7a671013a28cd3d449bdbc06f492a2d1a40b0",
       "specId" : "ADR-046-validation-and-delivery",
       "status" : "Accepted",
       "supersedes" : "This repository's current `AGENTS.md` \"Panel review\" phase-gate as the *sole* review mechanism for ADR 0046 work (extended, not replaced, per §12); ad hoc per-agent validation ordering for ADR 0046 implementation",
