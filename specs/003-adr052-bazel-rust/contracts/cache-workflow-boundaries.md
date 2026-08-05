@@ -4,9 +4,12 @@
 
 - The workflow is non-required and outside `V3_PR_GATE_WORKFLOWS`.
 - It restores and saves no Bazel cache.
-- Qualification and measurement draw only from qualification records, which are
-  `push` events on `refs/heads/v3` produced by merged pull requests. See
-  `shadow-promotion-evidence.md`.
+- Qualification and measurement consume only ADR 0052 section 9's canonical
+  `Q` and `C` decisions over the complete chronological eligible protected-
+  `v3` merged-PR push lineage. Every consumed row has passing same-commit
+  `make test-policy` and fixture-contract jobs plus immutable
+  Cargo/Bazel/policy/fixture/slice run/job IDs and authoritative resolver
+  evidence. See `shadow-promotion-evidence.md`.
 - Pull-request runs stay path-filtered and diagnostic. They produce no record.
 - PR-reachable jobs request only `contents: read`.
 - No PR-reachable job requests `actions: write`.

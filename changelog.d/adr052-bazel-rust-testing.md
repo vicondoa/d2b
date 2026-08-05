@@ -13,10 +13,14 @@
   inputs, and the decision covers Rust only.
 - The evidence for switching over is drawn from post-merge pushes to the
   protected integration lineage, so both paths always compare the same commit.
-  Ten consecutive matching pushes are required, and the cold
-  continuous-integration measurement is taken from the five most recent
-  qualifying cold pushes. A run that reaches no verdict while its counterpart
-  reaches one resets the count, so cancelling a run cannot inflate it.
+  The complete eligible push lineage is retained, with immutable workflow and
+  job identifiers resolved authoritatively for the Cargo and Bazel rollups,
+  policy checks, fixture contracts, and all four slices. Ten consecutive
+  passing pushes are required, including the same-commit policy and fixture
+  jobs, and the cold continuous-integration measurement is taken from the five
+  most recent qualifying cold pushes under that same rule. Missing, failed, or
+  cancelled work resets the count even when an entire push was cancelled;
+  wrong-commit, reused, forged, ineligible, or omitted evidence is refused.
   Pull-request runs stay diagnostic and keep their path filter.
 - Integration tests will locate their binaries and fixtures through a locator
   with two modes: declared build inputs under Bazel, and the existing Cargo

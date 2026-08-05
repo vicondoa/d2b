@@ -28,10 +28,14 @@ identifier, status, or lifecycle rule.
 
 ## Equivalence
 
-Cargo and Bazel evidence is comparable only when it refers to the same commit,
-uses the same fixture mode, and validates against schema v1. Passing promotion
-evidence contains all eighteen baseline IDs. A failed/interrupted manifest is
-valid diagnostic evidence but cannot satisfy positive equivalence.
+Cargo and Bazel evidence is comparable only when ADR 0052 section 9's
+authoritative resolver binds both jobs to the same eligible commit and
+attempt, both pass, same-commit `make test-policy` and fixture-contract jobs
+pass, all four slice jobs pass, the fixture mode agrees, and schema v1
+validates. Passing promotion evidence contains all eighteen baseline IDs. A
+failed, interrupted, cancelled, wrong-commit, stale-reused, forged, ineligible,
+or omitted record is handled only by canonical `Q`; diagnostic evidence cannot
+satisfy positive equivalence.
 
 Static source or Bazel query inventory cannot substitute for execution
 evidence.
