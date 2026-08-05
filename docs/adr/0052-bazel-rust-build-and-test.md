@@ -22,17 +22,23 @@
   `skip_cargo_lockfile_overwrite = True`. `cargo xtask gen-bazel` alone writes
   that witness, and `gen-bazel --check` is strictly read-only. ADR 0054 does
   not define, refine, or implement broker repin. Until a separate accepted ADR
-  defines that lifecycle, `cargo xtask bazel-repin --hub broker` is blocked by
-  the stable path-free `broker-repin-architecture-pending` result and the
-  fixed statement that broker repin is unavailable, no local recovery command
-  exists, and resumption requires an accepted repin-lifecycle ADR plus amended
-  and re-panelled Spec 003 artifacts. That arm spawns no Bazel child and
-  changes no path. The `main`, `guest`, and `walker` repin paths remain exactly
-  as this ADR defines them. Broker production compilation excludes
-  `d2b-core/test-support` and `d2b-host/fake-backends`; broker member tests use
-  distinct shared-library variants carrying those measured dev-dependency
-  features, while equal shared contexts remain single variants. Spec 003 W0
-  remains parked at broker lock regeneration.
+  defines that lifecycle, `HubInventory` is the four-value set `main`,
+  `broker`, `guest`, and `walker`, while `RepinnableHub` is exactly `main`,
+  `guest`, and `walker`. An already-built `xtask` process recognizes broker
+  before generic dispatch and emits the stable path-free
+  `broker-repin-architecture-pending` result plus the fixed statement that
+  broker repin is unavailable, no local recovery command exists, and resumption
+  requires an accepted repin-lifecycle ADR plus amended and re-panelled Spec
+  003 artifacts. That process spawns no child and changes no path. The public
+  `cargo xtask` launcher may emit Cargo bootstrap output and create Cargo cache
+  or target state, so its aggregate stderr and filesystem effects are not the
+  exact-result contract. Broker production compilation excludes
+  `d2b-core/test-support` and `d2b-host/fake-backends`; complete configured
+  dependency graphs split `d2b-core`, `d2b-contracts`, and `d2b-host` between
+  production and test contexts, while the default, layer1-bootstrap, and
+  fake-backends broker carriers retain independent member target, feature,
+  edge, and case censuses. Spec 003 W0 remains parked at broker lock
+  regeneration.
 - Related: [ADR 0009](0009-rust-toolchain-msrv-and-supply-chain.md) (Rust
   toolchain, MSRV, and supply-chain policy), which keeps its authority
   unchanged and is not superseded;

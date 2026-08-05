@@ -41,6 +41,16 @@ section 6 carries that policy for exactly `main`, `broker`, and `guest`.
 `walker` has no deny, audit, or yanked-state carrier. This ADR changes neither
 inventory.
 
+Two closed types prevent that inventory from becoming execution authority:
+
+```text
+HubInventory = {main, broker, guest, walker}
+RepinnableHub = {main, guest, walker}
+```
+
+`broker` is always the exact pending-refusal branch. It is never accepted by
+generic repin dispatch.
+
 The broker is a standalone Cargo workspace. It path-depends on five packages
 that belong to the separate main workspace: `d2b-contracts`, `d2b-core`,
 `d2b-host`, `d2b-realm-core`, and `d2b-realm-provider`.
@@ -85,10 +95,13 @@ hub/workspace locks, all four Bazel-side locks, and the separate
 test, Make target, or workflow may generate, repair, or publish that tree.
 `bazel/cargo/broker.lock` is not generator-owned.
 
-`cargo xtask gen-bazel --check` is strictly read-only. It computes the
-expected bytes, output census, semantic projections, and declaration ledger,
-then refuses any missing, extra, byte-different, or semantically different
-generated output. It never repairs drift.
+The `gen-bazel --check` operation of an already-built xtask process is strictly
+read-only. It computes the expected bytes, output census, semantic projections,
+and declaration ledger, then refuses any missing, extra, byte-different, or
+semantically different generated output. It never repairs drift. The public
+`cargo xtask gen-bazel --check` spelling is the contributor interface, but any
+Cargo bootstrap state created before the built process starts is outside the
+process-level read-only proof.
 
 Both passing and failing check runs leave the complete repository state
 unchanged. The before and after identity covers `HEAD`, the index, tracked
@@ -185,34 +198,60 @@ is accepted only when the authoritative declaration census proves it empty.
 Every inert target matches the closed template and package census and is
 absent from first-party compilation inputs.
 
-### 5. Separate production features from broker-test features
+### 5. Separate complete compilation contexts
 
-Authoritative locked metadata and `cargo tree` over normal/build edges versus
-normal/build/dev edges show two differing shared feature vectors:
+A compilation context is not a direct feature vector. Its identity is the
+package and target, toolchain, compile mode, resolved features, and every
+configured outgoing dependency edge recursively, including the destination
+context. Two variants are equal only when that complete graph is equal.
 
-| Package | Production | Broker test |
+Locked Cargo unit graphs measured on 2026-08-05 establish these shared-library
+contexts:
+
+| Package | Production context | Test-carrier context |
 | --- | --- | --- |
 | `d2b-core` | no features | `test-support` |
-| `d2b-host` | `default` (empty) | `default,fake-backends` |
+| `d2b-contracts` | no features; edge to production `d2b-core` | no features; edge to test `d2b-core` |
+| `d2b-host` | `default`; edges to production `d2b-core` and `d2b-contracts` | `default,fake-backends`; edges to test `d2b-core` and `d2b-contracts` |
+| `d2b-realm-core` | shared | shared |
+| `d2b-realm-provider` | shared | shared |
 
-Those packages have exactly these distinct library targets:
+The deterministic library labels are
+`d2b-{core,contracts,host}-broker-{production,test}`,
+`d2b-realm-core-broker-shared`, and
+`d2b-realm-provider-broker-shared`. All eight are library-only. Shared-package
+tests remain solely on ordinary main-workspace variants. A shared label may be
+reused only where its complete context is equal; direct feature equality alone
+is insufficient.
 
-- `d2b-core-broker-production`;
-- `d2b-core-broker-test`;
-- `d2b-host-broker-production`; and
-- `d2b-host-broker-test`.
+Broker member contexts are independent:
 
-The other shared packages have equal production and test feature vectors and
-remain single broker variants: `d2b-contracts-broker`,
-`d2b-realm-core-broker`, and `d2b-realm-provider-broker`. No equal context may
-be duplicated in anticipation of a future difference.
+| Context | Broker-local Cargo features | First-party configured targets | Enumerated cases |
+| --- | --- | ---: | ---: |
+| `production` | `default` (empty) | 7 | not a test carrier |
+| `default` | `default` (empty) | 23 | 557 |
+| `layer1-bootstrap` | `default,layer1-bootstrap` | 23 | 492 |
+| `fake-backends` | `default,fake-backends` | 23 | 559 |
 
-All seven are library-only. They expose no `rust_test`, doctest, binary,
-example, benchmark, or other test target. Production broker member targets
-reach only the production variants; broker member test and doctest targets
-consume the two test variants. A production closure reaching `test-support` or
-`fake-backends`, or a broker test bypassing the matching test variant, fails.
-Tests for shared packages remain solely on their ordinary main variants.
+Each test carrier has five shared libraries, carrier-local broker library and
+binary build targets, broker library and binary unit-test harnesses, thirteen
+integration targets, and one library doctest target. Zero cases in the binary
+unit harness, a feature-disabled integration target, or the doctest target are
+retained in the target census rather than erased. The case census is the exact
+Cargo `--list` name set, not only the measured count.
+
+Under `//packages/d2b-priv-broker`, production labels are
+`:broker-production-{lib,bin}`. For each test carrier `<carrier>` in
+`default`, `layer1-bootstrap`, and `fake-backends`, labels are
+`:broker-<carrier>-{lib,bin}`,
+`:broker-<carrier>-unit-{lib,bin}`,
+`:broker-<carrier>-doctest-lib`, and
+`:broker-<carrier>-test-<cargo-target>`, with Cargo `_` normalized to Bazel
+`-`. The thirteen integration suffixes are `bridge-lifecycle`,
+`broker-export-audit`, `broker-protocol-compatibility`, `broker-socket-acl`,
+`bundle-tampered-broker`, `kernel-surface`, `persistent-tap-lifecycle`,
+`pidfd-handoff-scm-rights`, `pidfd-real-spawner`, `security-key-broker`,
+`socket-activation`, `w12-fd-passing-response`, and `w15-install-migrate`.
 
 ### 6. Require exact first-party and spoke graph fidelity
 
@@ -220,31 +259,22 @@ Tests for shared packages remain solely on their ordinary main variants.
 locked metadata plus the closed hand-written-fragment registry. It includes
 target identity, kind, normalized source, source package, compilation context,
 feature vector, and hub owner. It does not read generator output.
-`F_actual` comes from real Bazel query.
+`F_actual` comes from real Bazel query, configured cquery, and the same
+provider aspect used for B's actual graph.
 
-`B_production_expected` is the five shared production/equal library variants
-plus every non-test broker member target derived from authoritative metadata.
-The measured current census is seven: five shared libraries, the broker
-library, and the broker binary. `B_test_expected` is the two test-only shared
-variants plus every broker member unit, integration, and doctest target derived
-from the same authority. The measured current census is eighteen: two shared
-test libraries, two member unit-test harnesses, thirteen integration tests,
-and one doctest. Counts are observations; the derivation is normative.
+`B_prod_expected`, `B_default_expected`, `B_layer1_expected`, and
+`B_fake_expected` are independently derived reachable configured-target sets.
+Their measured censuses are 7, 23, 23, and 23. The three test sets reuse the
+same three shared test variants and two realm-shared variants; production
+reuses only the two realm-shared variants. No other cross-context overlap is
+allowed. Their unique union `B_expected` currently contains 64 configured
+first-party targets. Counts are observations; authoritative manifests, locked
+unit graphs, and exact Cargo target and case listings are normative.
 
-Within `//packages/d2b-priv-broker`, the member labels are exactly
-`:broker-production-lib`, `:broker-production-bin`, `:broker-test-lib`,
-`:broker-test-bin`, `:broker-doctest-lib`, and
-`:broker-test-<cargo-target>` for each authoritative integration target, with
-Cargo `_` normalized to Bazel `-`. The current integration suffixes are
-`bridge-lifecycle`, `broker-export-audit`, `broker-protocol-compatibility`,
-`broker-socket-acl`, `bundle-tampered-broker`, `kernel-surface`,
-`persistent-tap-lifecycle`, `pidfd-handoff-scm-rights`,
-`pidfd-real-spawner`, `security-key-broker`, `socket-activation`,
-`w12-fd-passing-response`, and `w15-install-migrate`.
-
-`B_expected` is their disjoint union. `B_actual`,
-`B_production_actual`, and `B_test_actual` are queried sets owned by the broker
-hub and classified from actual features, edges, kinds, and sources.
+`B_actual` and its four context projections come from real Bazel `query`,
+configured `cquery`, and an aspect over actual providers. Plain query alone is
+not graph evidence because it cannot observe configured features or dependency
+destinations.
 
 `M_expected` is exactly `F_expected - B_expected`, and `M_actual` is exactly
 `F_actual - B_actual`. M is never separately curated.
@@ -252,14 +282,17 @@ hub and classified from actual features, edges, kinds, and sources.
 Before checking edges:
 
 - expected and actual F, B, and M are symmetrically equal and nonempty;
-- expected and actual B production and test partitions are independently
-  symmetric, nonempty, and disjoint;
+- each expected and actual B context is independently symmetric and nonempty;
+- the exact permitted context-overlap ledger above is symmetric;
 - `B intersection M` is empty; and
 - `B union M == F`.
 
-For first-party `deps` and `proc_macro_deps`, the closure reachable from B
-stays in B and the closure reachable from M stays in M. For direct third-party
-spokes, B uses only the actual `@broker//` repository. Every M target uses its
+Production reaches only production/shared libraries and no test-only feature.
+Each test carrier reaches its exact broker-local context and the shared
+test/shared libraries, never another carrier's broker member target. For
+first-party `deps` and `proc_macro_deps`, the closure reachable from B stays in
+B and the closure reachable from M stays in M. For direct third-party spokes,
+B uses only the actual `@broker//` repository. Every M target uses its
 independently derived hub owner and never `@broker//` unless it belongs to B.
 The actual `@broker` identity is queried and materialized; an expected label
 map is not accepted as proof.
@@ -293,19 +326,23 @@ planted mutations:
    actual `@broker` each have an identity mutation and independent
    source/checksum/revision/feature/target/alias/edge mutations while the
    witness and the other actual representation remain unchanged.
-8. F, B, B-production, B-test, and M have independent missing, extra, and
-   empty mutations that fail before edge isolation. Independent mutations swap
-   each production/test feature vector and target name. Independent planted
-   edges cover both first-party cross-partition directions, each broker
-   production/test direction, B bound to `@main//`, and an ordinary M target
-   bound to `@broker//`.
-9. Real Bazel query and representative builds reproduce the target,
-   repository, F, B, M, and spoke censuses from the committed witness.
+8. F, B, M, and each of B-prod, B-default, B-layer1, and B-fake have
+   independent missing, extra, empty, and misnamed mutations that fail before
+   edge isolation. Each carrier independently mutates its broker-local feature,
+   configured edge, target, and case census. Cross-context mutations cover
+   production reaching each test variant; each test carrier reaching a
+   production variant or another carrier's broker member; production/test
+   `d2b-contracts` reaching the wrong `d2b-core`; production/test `d2b-host`
+   reaching the wrong core or contracts context; B bound to `@main//`; and an
+   ordinary M target bound to `@broker//`.
+9. Real Bazel query, cquery, provider-aspect output, and representative builds
+   reproduce the target, repository, F, B, M, and spoke censuses from the
+   committed witness.
 10. Three separate Layer-1 carriers reject: removing
     `skip_cargo_lockfile_overwrite = True`; granting any second writer the
-    broker witness; and letting the pending broker-repin arm spawn its child,
-    vary its exact output, or attempt any write. These carriers do not share an
-    expected map or one mutation dispatcher.
+    broker witness; and letting the pending built-xtask broker arm spawn any
+    child, vary its exact result, or attempt any write. These carriers do not
+    share an expected map or one mutation dispatcher.
 
 Each mutation changes one dimension and fails exactly once at its named guard,
 not at a shared parser or an earlier unrelated guard. Generated expected maps
@@ -313,31 +350,37 @@ alone do not prove actual lock, repository, query, build, or spoke identity.
 
 ## Explicit non-decision and implementation block
 
-ADR 0054 does not authorize, define, refine, or implement
-`cargo xtask bazel-repin --hub broker`. Until a separate accepted ADR defines
-its writer serialization, process lifetime, output publication, recovery,
-diagnostics, and cleanup contract, that command must perform no repin work and
-must return nonzero with empty stdout and exactly these two LF-terminated
-stderr lines:
+ADR 0054 does not authorize, define, refine, or implement broker repin. Until a
+separate accepted ADR defines its writer serialization, process lifetime,
+output publication, recovery, diagnostics, and cleanup contract, an
+already-built `xtask` process invoked as `bazel-repin --hub broker` must return
+nonzero with empty stdout and exactly these two LF-terminated stderr lines:
 
 ```text
 broker-repin-architecture-pending
 broker repin is unavailable; no local recovery command exists; prerequisite is an accepted repin-lifecycle ADR plus amended/re-panelled Spec 003.
 ```
 
-The refusal happens before generic repin dispatch. It spawns no Bazel child
-and creates, removes, or changes no path. A sentinel child and a write-refusing
-filesystem prove both properties. The generic repin implementation accepts
-only `main`, `guest`, and `walker`, whose behavior remains exactly as ADR 0052
-defines it.
+The built process emits the result before generic repin dispatch, spawns no
+child, and creates, removes, or changes no path. Tests execute that built
+binary directly with a sentinel child and a write-refusing filesystem. The
+public `cargo xtask bazel-repin --hub broker` spelling may produce Cargo
+bootstrap output and Cargo cache or target state before the built process
+starts; its aggregate stderr and filesystem effects are therefore not the
+exact-result contract. The generic implementation accepts only
+`RepinnableHub`, whose behavior remains exactly as ADR 0052 defines it.
 
 This record selects no lock, monitor, process hierarchy, worktree admission
 rule, bookkeeping location, scratch layout, rc policy, publication mechanism,
 recovery command, diagnostic envelope, or cleanup behavior for broker repin.
 None may be inferred from an earlier ADR 0054 draft.
 
-Spec 003 W0 remains parked at broker lock regeneration. After ADR 0054 merges,
-the required order is:
+Spec 003 W0 remains parked at broker lock regeneration. Admission reads exactly
+one marked execution-status block from each of `plan.md`, `tasks.md`, and the
+workspace contract. Only exactly three `READY` blocks with the closed key set
+and byte-identical values admit T021. A missing block, duplicate block, unknown
+key or value, or disagreement refuses before T021, any child, or any write.
+After ADR 0054 merges, the required order is:
 
 1. accept a separate broker-repin ADR;
 2. amend the Spec 003 plan, tasks, contracts, ownership map, and validation;
@@ -355,9 +398,10 @@ ADR alone, as completing W0.
   one remaining architectural decision.
 - Generated workspace drift and actual Bazel graph drift fail closed against
   Cargo authority.
-- Equal shared contexts compile once for the broker resolve; only `d2b-core`
-  and `d2b-host` split production from broker-test features. Shared package
-  tests remain single-owned.
+- Equal complete contexts compile once. `d2b-core`, `d2b-contracts`, and
+  `d2b-host` split between production and test carriers; realm contexts stay
+  shared. Broker-local default, layer1-bootstrap, and fake-backends contexts
+  remain independently enumerable. Shared package tests remain single-owned.
 - Broker lock regeneration remains unavailable until its separate ADR is
   accepted and the Spec 003 artifacts are amended and re-panelled.
 
@@ -402,14 +446,17 @@ execution protocol.
    and exact package, source, revision, checksum, feature, target, alias, and
    edge semantics.
 5. The ledger is exact and the lock mirror is byte-identical.
-6. Library-only production/test broker variants and actual F, B production,
-   B test, M, `@broker`, and spokes match their authoritative derivation.
+6. Library-only shared variants and actual F, B-prod, B-default, B-layer1,
+   B-fake, B, M, `@broker`, targets, cases, and spokes match their
+   authoritative derivation.
 7. ADR 0054 authorizes no broker repin execution or lifecycle contract.
-8. Broker repin remains a no-child, no-write exact refusal with
+8. Broker repin remains a built-process no-child, no-write exact refusal with
    `broker-repin-architecture-pending` until a separate accepted ADR replaces
-   that block.
+   that block; Cargo-launcher bootstrap output and state are outside the exact
+   result.
 9. Main, guest, and walker repin behavior remains exactly ADR 0052 behavior.
-10. Spec 003 W0 remains parked pending that ADR, amendment, and a new panel.
+10. Spec 003 W0 remains parked, and only three exact agreeing `READY` blocks
+    can admit T021, pending that ADR, amendment, and a new panel.
 
 ## References
 

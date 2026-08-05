@@ -7,6 +7,7 @@ acquisitions are permitted.
 
 ## Execution status
 
+<!-- BEGIN SPEC003-EXECUTION-STATUS -->
 ```text
 SPEC003_EXECUTION_STATUS=PARKED
 SPEC003_PARKED_AT=broker-lock-regeneration
@@ -14,13 +15,18 @@ SPEC003_NEXT_REFUSED_TASK=T021
 SPEC003_RUNTIME_STATE_SOURCE=task-checkpoints
 SPEC003_RESUME_REQUIRES=accepted-repin-lifecycle-adr+amended-spec003+renewed-plan-panel
 ```
+<!-- END SPEC003-EXECUTION-STATUS -->
 
 This machine-readable block is admission input only. The task checklist and
-checkpoints remain runtime state. Pre-W0 and resume admission MUST refuse T021
-while any matching status block in this contract, `plan.md`, or `tasks.md`
-says `PARKED`. ADR 0054 is not authority to regenerate the broker lock or close
-W0. After ADR 0054 merges, an accepted repin-lifecycle ADR, an amended Spec 003,
-and a renewed unanimous plan panel are prerequisites to changing this block.
+checkpoints remain runtime state. Pre-W0 and resume admission MUST find exactly
+one marked block in this contract, `plan.md`, and `tasks.md`. The parser accepts
+only the five keys shown above and the known status values `PARKED` and
+`READY`; all three blocks must be byte-identical. Only exactly three `READY`
+blocks admit T021. A missing, duplicate, empty, unknown, misnamed, or
+disagreeing block refuses before T021, any child, or any write. ADR 0054 is not
+authority to regenerate the broker lock or close W0. After ADR 0054 merges, an
+accepted repin-lifecycle ADR, an amended Spec 003, and a renewed unanimous plan
+panel are prerequisites to changing all three blocks atomically.
 
 ## Startup options come from the wrapper
 
@@ -123,6 +129,13 @@ directories. Therefore:
 
 ## Four hubs, four Bazel-side locks
 
+The types are:
+
+```text
+HubInventory = {main, broker, guest, walker}
+RepinnableHub = {main, guest, walker}
+```
+
 | Hub | Cargo lock | Bazel-side lock |
 | --- | --- | --- |
 | main | `packages/Cargo.lock` | required |
@@ -147,66 +160,94 @@ directories. Therefore:
   **not** a hub, because no Rust gate surface builds against it.
 
 The declarations do not make broker lock regeneration available. The
-`broker` lock is the parked W0 deliverable. The generic repin child accepts
-only `main`, `guest`, and `walker`; the broker form is the exact refusal below.
+`broker` lock is the parked W0 deliverable. Generic repin accepts only
+`RepinnableHub`; broker is the exact pending branch below.
 
-## Broker production and test compilation contexts
+## Broker production and carrier compilation contexts
 
-The independent authority is the committed Cargo manifests plus locked offline
-metadata over `packages/d2b-priv-broker/Cargo.toml`. A normal/build feature
-projection and a normal/build/dev projection establish exactly two differing
-shared package contexts:
+The independent authority is the committed Cargo manifests, locked offline
+metadata, Cargo unit graphs, and exact Cargo target and `--list` case sets over
+`packages/d2b-priv-broker/Cargo.toml`. A variant identity includes package and
+target, toolchain, compile mode, resolved features, source identity, and every
+configured outgoing edge recursively. Direct feature equality alone never
+establishes context equality.
 
-| Package | Production label and features | Broker-test label and features |
+The measured shared-library contexts are:
+
+| Package | Production label and context | Test label and context |
 | --- | --- | --- |
-| `d2b-core` | `d2b-core-broker-production`: none | `d2b-core-broker-test`: `test-support` |
-| `d2b-host` | `d2b-host-broker-production`: empty `default` | `d2b-host-broker-test`: `default,fake-backends` |
+| `d2b-core` | `d2b-core-broker-production`: no features | `d2b-core-broker-test`: `test-support` |
+| `d2b-contracts` | `d2b-contracts-broker-production`: edge to production core | `d2b-contracts-broker-test`: edge to test core |
+| `d2b-host` | `d2b-host-broker-production`: `default`, edges to production core/contracts | `d2b-host-broker-test`: `default,fake-backends`, edges to test core/contracts |
+| `d2b-realm-core` | `d2b-realm-core-broker-shared` | same complete context |
+| `d2b-realm-provider` | `d2b-realm-provider-broker-shared` | same complete context |
 
-The equal-context packages remain exactly one broker label each:
-`d2b-contracts-broker`, `d2b-realm-core-broker`, and
-`d2b-realm-provider-broker`. Creating a second label for any of those is an
-extra-target failure. All seven labels are library-only and emit no shared
-package test, doctest, binary, example, or benchmark.
+All eight labels are library-only and emit no shared-package test, doctest,
+binary, example, or benchmark. Shared-package tests remain on ordinary
+main-workspace variants. Duplicating either realm label is an extra-context
+failure; collapsing any of core, contracts, or host is a missing-context
+failure.
 
-`B_production_expected` is those five production/equal libraries plus every
-authoritative broker member non-test target. The measured current value is
-seven: five libraries, the broker library, and the broker binary.
-`B_test_expected` is the two test-only libraries plus every authoritative
-broker member unit, integration, and doctest target. The measured current value
-is eighteen: two libraries, two unit-test harnesses, thirteen integration
-tests, and one doctest. These counts are observations, not literals the
-generator owns. `B_expected` is their disjoint union and `M_expected` is
-`F_expected - B_expected`.
+Broker member contexts are independent:
 
-Within `//packages/d2b-priv-broker`, the exact member label rule is:
-`:broker-production-lib`, `:broker-production-bin`, `:broker-test-lib`,
-`:broker-test-bin`, `:broker-doctest-lib`, and
-`:broker-test-<cargo-target>` with `_` normalized to `-`. The current
+| Context ID | Broker-local features | First-party configured targets | Exact cases |
+| --- | --- | ---: | ---: |
+| `prod` | `default` (empty) | 7 | not applicable |
+| `default` | `default` (empty) | 23 | 557 |
+| `layer1` | `default,layer1-bootstrap` | 23 | 492 |
+| `fake` | `default,fake-backends` | 23 | 559 |
+
+Each test context contains five shared libraries, carrier-local broker library
+and binary build targets, library and binary unit harnesses, thirteen
+integration targets, and one library doctest target. A zero-case binary
+harness, feature-disabled integration target, or doctest remains in the target
+census. The exact sorted case-name set is normative; the counts above are
+measured observations.
+
+Within `//packages/d2b-priv-broker`, production labels are
+`:broker-production-{lib,bin}`. For each `<carrier>` in `default`,
+`layer1-bootstrap`, and `fake-backends`, member labels are
+`:broker-<carrier>-{lib,bin}`,
+`:broker-<carrier>-unit-{lib,bin}`,
+`:broker-<carrier>-doctest-lib`, and
+`:broker-<carrier>-test-<cargo-target>` with `_` normalized to `-`. The current
 integration suffix census is `bridge-lifecycle`, `broker-export-audit`,
 `broker-protocol-compatibility`, `broker-socket-acl`,
 `bundle-tampered-broker`, `kernel-surface`, `persistent-tap-lifecycle`,
 `pidfd-handoff-scm-rights`, `pidfd-real-spawner`, `security-key-broker`,
 `socket-activation`, `w12-fd-passing-response`, and `w15-install-migrate`.
-The independent Cargo derivation must reproduce this observation; the
-generator does not read this paragraph as input.
 
-The verifier derives target identity, kind, normalized source, `test`,
-`doctest`, required features, and compilation context directly from
-authoritative manifests and metadata. It does not read a generated manifest,
-generated `BUILD.bazel`, or generator-emitted expected map. Actual labels,
-sources, features, and edges come from real Bazel query. Each expected/actual
-B partition must be symmetric, nonempty, and disjoint before edge checks.
-Production broker targets may not reach `test-support`, `fake-backends`, or a
-`-broker-test` label. Broker member unit, integration, and doctest targets must
-consume both test labels. Independent mutations cover a missing, extra, and
-empty production partition; a missing, extra, and empty test partition; each
-feature and target-name swap; and both production-to-test and test-to-production
-edge directions.
+`B_prod_expected`, `B_default_expected`, `B_layer1_expected`, and
+`B_fake_expected` are independently derived reachable configured-target sets
+with the measured 7/23/23/23 censuses. Their unique union `B_expected` is
+currently 64. The three test contexts overlap exactly on the three test-shared
+and two realm-shared libraries; production overlaps them only on the two realm
+labels. No other overlap is permitted. `M_expected` remains exactly
+`F_expected - B_expected`, never a separately curated list.
 
-The same independent authority defines generated witness target and source
-expectations. Separate mutations omit one generated manifest target, add one
-target, and substitute one inert source for another. Actual first-party compile
-sources come from query and may never resolve below
+The verifier derives expected target identity, kind, normalized source,
+`test`, `doctest`, required features, compilation context, configured edges,
+and cases directly from authority. It reads no generated manifest,
+`BUILD.bazel`, or generator-emitted expected map. Actual unconfigured labels
+and sources come from real Bazel `query`; configured features, targets, and
+edges come from real `cquery` plus an aspect over actual providers. Each
+expected/actual F, B, M, and B-context projection is symmetric and nonempty
+before edge isolation.
+
+Production may reach only production/shared libraries and no test-only
+feature. Each test carrier reaches its exact broker-local context and
+test/shared libraries, never another carrier's member target. Independent
+mutations cover missing, extra, empty, and misnamed entries for F, B, M, and
+each B context; carrier-local feature, target, edge, and case changes;
+production/test contracts edges to the wrong core; production/test host edges
+to the wrong core or contracts; each production-to-test direction; each test
+carrier to production or another carrier; B bound to `@main//`; and M bound to
+`@broker//`.
+
+Target and source expectations are independently authoritative. Separate
+mutations omit and add a manifest target and substitute one inert source for
+another while generated output remains internally self-consistent. Actual
+first-party compile sources may never resolve below
 `bazel/cargo/broker-workspace/`.
 
 ## Two lock mechanisms, kept separate
@@ -304,21 +345,26 @@ notes below.
 
 ### Broker lock: architectural refusal
 
-`cargo xtask bazel-repin --hub broker` is recognized before generic dispatch.
-It returns nonzero with empty stdout and exactly these two LF-terminated stderr
-lines:
+An already-built `xtask` process invoked as `bazel-repin --hub broker` is
+recognized before generic dispatch. It returns nonzero with empty stdout and
+exactly these two LF-terminated stderr lines:
 
 ```text
 broker-repin-architecture-pending
 broker repin is unavailable; no local recovery command exists; prerequisite is an accepted repin-lifecycle ADR plus amended/re-panelled Spec 003.
 ```
 
-It constructs no startup options, spawns no Bazel child, and creates, removes,
-or changes no path. There is no stale-lock recovery command to substitute. A
-separate accepted repin-lifecycle ADR must land, this Spec must be amended, and
-the amended plan must receive a renewed unanimous panel before the status block
-may change and T021 may run. Main, guest, and walker retain the generic
-behavior above.
+It constructs no startup options, spawns no child, and creates, removes, or
+changes no path. Tests execute the already-built binary directly with a
+sentinel child and write-refusing filesystem. The public `cargo xtask
+bazel-repin --hub broker` spelling may emit Cargo bootstrap output and create
+Cargo cache or target state before the binary starts, so aggregate stderr and
+filesystem effects from the launcher are not exact-result evidence. There is
+no stale-lock recovery command to substitute. A separate accepted
+repin-lifecycle ADR must land, this Spec must be amended, and the amended plan
+must receive a renewed unanimous panel before all three status blocks may
+change and T021 may run. Main, guest, and walker retain the generic behavior
+above.
 
 ### Module lock: `cargo xtask bazel-module-refresh`
 
@@ -476,23 +522,27 @@ Make target, or workflow may read the tree but may not generate, repair,
 publish, or remove it. `bazel/cargo/broker.lock` is outside generator
 ownership.
 
-`cargo xtask gen-bazel --check` compares expected bytes and semantics without
-calling a writer. Its real-command pass and failure tests redirect the closed
-state-root set `HOME`, `TMPDIR`, `TMP`, `TEMP`, `XDG_CACHE_HOME`, `CARGO_HOME`,
+The already-built xtask process's `gen-bazel --check` operation compares
+expected bytes and semantics without calling a writer. Its direct-process pass
+and failure tests redirect the closed state-root set `HOME`, `TMPDIR`, `TMP`,
+`TEMP`, `XDG_CACHE_HOME`, `CARGO_HOME`,
 `RUSTUP_HOME`, `CARGO_TARGET_DIR`, `BAZELISK_HOME`, and `TEST_TMPDIR` to empty
 observed directories. Before/after snapshots cover each root plus repository
 HEAD, index, tracked, ordinary-untracked, ignored, file kind, mode, bytes, and
 symlink target. An injected filesystem/process observer separately refuses any
 mutation, including one outside those roots. Missing, extra, byte-different,
 and semantic-drift failures each run both checks; a passing run does too.
+Cargo launcher bootstrap state is excluded by building before observation and
+executing the built process directly.
 
 Three independent existing Layer-1 carriers own the negative proof:
 
 1. `packages/xtask/tests/policy_ci.rs` under `make test-rust-main` removes
    `skip_cargo_lockfile_overwrite = True` from one hub at a time.
 2. `packages/d2b-contract-tests/tests/policy_docs.rs` under
-   `D2B_ENABLE_FIXTURE_BUILD=1 make test-fixture-contracts` grants each
-   forbidden surface witness-writer ownership one at a time.
+   `make test-policy` grants each forbidden surface witness-writer ownership
+   one at a time. `tests/lib.sh` selects this fixture-independent binary, and
+   the fixture lane excludes it.
 3. `packages/xtask/src/bazel.rs` under `make test-rust-main` uses a sentinel
    child and write-refusing filesystem for the broker refusal and independently
    mutates child dispatch, the code line, the text line, and a write attempt.
@@ -552,9 +602,10 @@ Tests follow the emitter, not the table:
 - `packages/xtask/src/bazel.rs` carries the table-driven message test for the
   generator, stale generic hub lock, stale broker lock, both ambient-control,
   and both unrelated-change rows, because it emits those strings itself. The
-  broker test additionally asserts nonzero, empty stdout, and the stable code
-  plus fixed text as exactly two LF-terminated stderr lines. It carries no test
-  for a message it does not emit.
+  broker test executes the already-built binary directly and additionally
+  asserts nonzero, empty stdout, stable code plus fixed text as exactly two
+  LF-terminated stderr lines, no child, and no write. It carries no exact
+  aggregate-output assertion over the Cargo launcher.
 - The module-lock row is proved by an integration test that plants real module
   drift, runs the pinned Bazel under `--lockfile_mode=error`, and asserts the
   repository's recovery line beside the real upstream diagnostic. Asserting
@@ -801,11 +852,12 @@ UTF-8, a second such name that differs from the first only in bytes a lossy
 conversion collapses, an invalid raw name ordered against a valid non-ASCII
 one, and the two near-miss placeholder
 spellings plus the `file:` URI.
-The one lane that executes it is
-`D2B_ENABLE_FIXTURE_BUILD=1 make test-fixture-contracts`, because
-`tests/test-rust.sh` excludes `d2b-contract-tests` from every workspace leaf
-and `tests/test-policy.sh` names seven contract-test binaries that do not
-include `policy_docs`. No new gate or shell script is added.
+The lane that executes it is `make test-policy`. Committed `tests/lib.sh`
+includes `policy_docs` in `D2B_FIXTURE_INDEPENDENT_POLICY_BINARIES`, and
+`tests/test-policy.sh` executes that closed list and refuses a binary that runs
+zero tests. The fixture-contract lane excludes the same list and remains
+evidence only for its fixture-dependent contract and CLI surfaces. No new gate
+or shell script is added.
 
 ## Tool acquisition
 

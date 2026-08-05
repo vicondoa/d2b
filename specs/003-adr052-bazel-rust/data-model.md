@@ -425,11 +425,82 @@ path, no provider check executes a provider to learn its identity, and no
 migrated call site spawns by path: identity is the digest of the descriptor's
 bytes, and execution is `execveat` on that same descriptor.
 
+## Execution Admission
+
+Exactly three marked `ExecutionStatusBlock` records exist, one each in
+`plan.md`, `tasks.md`, and `contracts/workspace-and-tool-pinning.md`.
+
+| Field | Rule |
+| --- | --- |
+| `source` | One of those three exact normalized paths; no fourth source. |
+| `status` | `PARKED` or `READY`; no default and no unknown value. |
+| `parked_at` | Required nonempty token. |
+| `next_refused_task` | Required nonempty task token. |
+| `runtime_state_source` | Required nonempty token. |
+| `resume_requires` | Required nonempty prerequisite expression. |
+
+The parser requires exactly one begin marker, one end marker, and one instance
+of each of the five keys per source. Only exactly three `READY` records with
+byte-identical field values produce `Admitted`. Missing, duplicate, empty,
+unknown, misnamed, or disagreeing input produces `Refused` before T021, any
+child, or any write. The current records are all `PARKED`.
+
+## Hub and Broker Compilation Contexts
+
+`HubInventory` and `RepinnableHub` are distinct closed types:
+
+```text
+HubInventory = {main, broker, guest, walker}
+RepinnableHub = {main, guest, walker}
+```
+
+Broker is represented by `PendingBrokerRepin`, never by `RepinnableHub`. Its
+exact result belongs to an already-built xtask process. The Cargo launcher is
+not part of that record because it may emit bootstrap output and create
+Cargo-owned state before the process starts.
+
+A `CompilationContextIdentity` contains:
+
+| Field | Rule |
+| --- | --- |
+| `package_target` | Authoritative package and Cargo target identity. |
+| `toolchain` | Exact registered toolchain identity. |
+| `compile_mode` | Build, test harness, doctest, or other authoritative mode. |
+| `features` | Exact sorted resolved feature set. |
+| `configured_edges` | Exact sorted outgoing edge set, each naming kind, condition, alias, requested features, default-feature semantics, and destination `CompilationContextIdentity`. |
+| `source_identity` | Independently authoritative normalized source identity. |
+
+Equality is recursive equality of every field, not direct feature equality.
+The current shared labels are
+`d2b-{core,contracts,host}-broker-{production,test}`,
+`d2b-realm-core-broker-shared`, and
+`d2b-realm-provider-broker-shared`. Core and host differ by features and
+configured edges; contracts differs by its configured core destination; the
+two realm labels are shared.
+
+Four `BrokerContextCensus` records are independently derived:
+
+| ID | Broker-local features | Target count | Case count |
+| --- | --- | ---: | ---: |
+| `prod` | `default` (empty) | 7 | not applicable |
+| `default` | `default` (empty) | 23 | 557 |
+| `layer1` | `default,layer1-bootstrap` | 23 | 492 |
+| `fake` | `default,fake-backends` | 23 | 559 |
+
+Each test record contains the exact shared-library, member library/binary,
+unit, integration, doctest, configured-edge, source, and case-name sets. A
+zero-case target remains a target row. `B_prod`, `B_default`, `B_layer1`, and
+`B_fake` are reachable configured-target sets; their unique union is `B`
+(currently 64), and `M = F - B`. The permitted overlaps are exactly the three
+test-only shared libraries across the test carriers and the two realm-shared
+libraries across all four contexts. Every other overlap is invalid.
+
 ## Hermeticity Inventory
 
 | Field | Rule |
 | --- | --- |
-| `hub` | One of the four `crate_universe` hubs: `main`, `broker`, `guest`, `walker`. |
+| `hub` | One `HubInventory` value. |
+| `generic_repin_hub` | One `RepinnableHub` value; broker is unrepresentable. |
 | `hub_lock_attrs` | `lockfile`, `cargo_lockfile`, and `skip_cargo_lockfile_overwrite = True` are all present. |
 | `build_script_crates` | Every third-party crate for which a build-script target is generated. |
 | `required_annotations` | Per crate: build-script environment, data, and toolchain requirements. |
@@ -442,14 +513,14 @@ bytes, and execution is `execveat` on that same descriptor.
 
 Repin controls are absent from the wrapper and from every
 continuous-integration environment. The single scoped exception is the child
-environment `cargo xtask bazel-repin --hub <name>` constructs, which sets
+environment generic `bazel-repin` constructs for one `RepinnableHub`; it sets
 `CARGO_BAZEL_REPIN` and `CARGO_BAZEL_REPIN_ONLY=<hub>` for that one process,
 writes only that hub's Bazel-side lock, and fails when any other tracked
-derived artifact changed. `cargo xtask bazel-module-refresh` sets no repin
-control at all, refuses to run when one is ambient, writes only
-`MODULE.bazel.lock`, fails when any other tracked derived artifact changed, and
-changes nothing on an already-current tree. Neither command is a Make target or
-reachable from a workflow.
+derived artifact changed. Broker is recognized before that construction.
+`cargo xtask bazel-module-refresh` sets no repin control at all, refuses to run
+when one is ambient, writes only `MODULE.bazel.lock`, fails when any other
+tracked derived artifact changed, and changes nothing on an already-current
+tree. Neither command is a Make target or reachable from a workflow.
 
 Every field here is a cache-key input. A change to `action_env_allowlist`
 invalidates the entire action cache and is reviewed against the promoted size
@@ -481,7 +552,8 @@ diagnostic only.
 | `cargo_run_id` | Unique immutable required workflow run ID at the same `head_sha`. |
 | `cargo_verdict` | `passed` or `failed` from `D2B_SKIP_FIXTURE_BUILD=1 make test-rust`. |
 | `bazel_verdict` | `passed` or `failed` from the Bazel rollup. |
-| `fixture_verdict` | `passed` required, from same-commit `D2B_ENABLE_FIXTURE_BUILD=1 make test-fixture-contracts`. |
+| `policy_verdict` | `passed` required, from same-commit `make test-policy`; owns `policy_docs` and the other fixture-independent policy binaries. |
+| `fixture_verdict` | `passed` required, from same-commit `D2B_ENABLE_FIXTURE_BUILD=1 make test-fixture-contracts`; covers only fixture-dependent contract and CLI surfaces. |
 | `slice_verdicts` | Exactly four attributed results. |
 | `slice_seconds` | Four complete job durations; required for a cold-sample record. |
 | `manifest_ref` | Immutable evidence reference. |
@@ -491,7 +563,7 @@ diagnostic only.
 
 Records are ordered by `v3` push completion. The promotion streak is ten
 consecutive records whose two compared verdicts match with a passing
-`fixture_verdict`. Streak arithmetic is fail-closed:
+`policy_verdict` and `fixture_verdict`. Streak arithmetic is fail-closed:
 
 - differing verdicts reset the streak to zero;
 - a Bazel run that reaches no verdict while its paired Cargo run reaches one
@@ -603,7 +675,7 @@ Promotion Evidence Set before executor authority changes.
 | --- | --- |
 | `candidate_commit` | One immutable integrated commit. |
 | `coverage_map_digest` | Both guard halves pass for all eighteen. |
-| `qualification_records` | Ten consecutive matching push-to-`v3` records, each with one shared `head_sha`, both run IDs, and a passing fixture-contract verdict. |
+| `qualification_records` | Ten consecutive matching push-to-`v3` records, each with one shared `head_sha`, both run IDs, and passing policy and fixture-contract verdicts. |
 | `seeded_failures` | Exact eighteen-record set. |
 | `topology_proofs` | Main, guest, and three broker suites; exact generator-derived censuses and ignored counts, plus per-case result publication. |
 | `locator_migration_proof` | Every enumerated file migrated or recorded as needing none, plus the passing injected stale-provider negative in which the `FileSystem` fake reports an out-of-date, wrong-digest executable at the Cargo path while the `RunfilesView` fake reports the entry missing, plus the passing injected post-open path-rebind negative, plus the host-backed `execveat` conformance result. |

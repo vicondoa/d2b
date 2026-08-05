@@ -15,8 +15,11 @@ merged pull request. Each record identifies:
 - the Bazel shadow workflow run ID and the required Cargo workflow run ID;
 - both rollup verdicts, where the Cargo verdict is
   `D2B_SKIP_FIXTURE_BUILD=1 make test-rust`;
+- the same-commit `make test-policy` verdict, which owns `policy_docs` and
+  every other fixture-independent policy binary selected by `tests/lib.sh`;
 - the same-commit `D2B_ENABLE_FIXTURE_BUILD=1 make test-fixture-contracts`
-  verdict, which must be passing;
+  verdict for the fixture-dependent contract and CLI surfaces, which must be
+  passing;
 - the four Bazel slice verdicts and, for a cold-sample record, the four
   complete slice job durations;
 - manifest references, cache restore and write counts, and effective workflow
@@ -28,9 +31,11 @@ workflows triggered by the same pull request can legitimately test different
 trees. Pull-request, `main`-push, scheduled, and dispatched runs are
 diagnostic. They never enter a streak or a measurement set.
 
-The fixture lane is not compared between executors, because its two surfaces
-stay explicitly outside this migration. It is a required companion verdict so a
-qualification record cannot hide a contract-layer regression.
+The policy and fixture lanes are not compared between executors. Policy is a
+required same-commit verdict for its fixture-independent binaries, including
+`policy_docs`. Fixture contracts remain a separate required companion for the
+two fixture-dependent surfaces outside this migration; that verdict is never
+cited as policy-doc execution.
 
 ### Streak arithmetic
 

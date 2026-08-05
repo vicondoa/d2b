@@ -35,6 +35,10 @@ binaries, cross-compilation, remote execution, or any Layer-1 job outside the
 Rust rollup. The detailed mechanisms and safety invariants in
 `docs/adr/0052-bazel-rust-build-and-test.md` remain binding.
 
+Spec 003 execution is currently `PARKED` before T021 at broker lock
+regeneration. ADR 0054 settles the broker splice graph but deliberately does
+not authorize broker repin.
+
 ## Clarifications
 
 ### Session 2026-08-02
@@ -57,9 +61,11 @@ Rust rollup. The detailed mechanisms and safety invariants in
 - Q: What must each qualification record carry beyond the two compared
   verdicts?
   -> A: A passing `D2B_SKIP_FIXTURE_BUILD=1` Rust rollup equivalence result for
-  both executors and a passing same-commit fixture-contract companion verdict.
-  The fixture surfaces stay outside the Bazel comparison, but they cannot
-  regress invisibly behind a qualifying record.
+  both executors, a passing same-commit `make test-policy` verdict for
+  fixture-independent policy binaries including `policy_docs`, and a passing
+  same-commit fixture-contract companion verdict for the actual
+  fixture-dependent contract and CLI surfaces. Both stay outside the Bazel
+  comparison, but neither may regress invisibly behind a qualifying record.
 - Q: How does the streak treat a run that reaches no verdict?
   -> A: A Bazel run that reaches no verdict while its paired Cargo run reaches
   one counts as a mismatch and resets the streak. A push where neither side
@@ -100,6 +106,33 @@ Rust rollup. The detailed mechanisms and safety invariants in
   names, so the refusal never leaves a contributor to reconstruct an invocation
   from an upstream diagnostic that omits every startup option this repository
   requires.
+
+### Session 2026-08-05
+
+- Q: Does the four-hub inventory make all four hubs repinnable?
+  -> A: No. `HubInventory = {main, broker, guest, walker}` and
+  `RepinnableHub = {main, guest, walker}`. Broker is recognized before generic
+  dispatch and always takes the pending refusal while this specification is
+  parked.
+- Q: Which process owns the exact broker pending result?
+  -> A: An already-built `xtask` process invoked as
+  `bazel-repin --hub broker`. That process returns the stable code and two
+  path-free stderr lines with empty stdout, no child, and no write. The public
+  `cargo xtask` launcher may emit Cargo bootstrap output and create Cargo cache
+  or target state, so its aggregate output and state are not an exact two-line,
+  no-write contract.
+- Q: What mechanically admits T021 after the missing lifecycle decision lands?
+  -> A: Exactly one marked execution-status block in each of `plan.md`,
+  `tasks.md`, and `contracts/workspace-and-tool-pinning.md`, for exactly three
+  blocks total. Only three `READY` blocks with the closed five-key schema and
+  identical values admit. Missing, duplicate, empty, unknown, misnamed, or
+  disagreeing input refuses before T021, any child, or any write.
+- Q: What makes two broker compilation variants equal?
+  -> A: Equality of the full configured dependency graph, not direct feature
+  equality. Current unit graphs split `d2b-core`, `d2b-contracts`, and
+  `d2b-host` between production and tests. The broker default,
+  layer1-bootstrap, and fake-backends carriers retain independent local
+  feature, edge, target, and case censuses.
 
 ## User Scenarios & Testing *(mandatory)*
 
@@ -227,12 +260,12 @@ findings with the current Cargo path for all three lock files.
    difference, and the snapshot's offline key set equals the three locks' key
    set exactly as proved by the repository-owned offline validator the carriers
    and a contributor shell both run.
-8. **Given** a committed dependency-resolution lock that no longer matches its
-   Cargo lock, **When** a contributor regenerates it, **Then** the only
-   supported path is the repository-owned single-hub command, that command
-   changes only the named hub's lock, and the same regeneration control set in
-   a build entry point or continuous-integration environment is still
-   rejected.
+8. **Given** a committed `main`, `guest`, or `walker` dependency-resolution
+   lock that no longer matches its Cargo lock, **When** a contributor
+   regenerates it, **Then** the only supported path accepts one
+   `RepinnableHub`, changes only that hub's lock, and the same regeneration
+   control set in a build entry point or continuous-integration environment is
+   still rejected.
 9. **Given** a build-system module resolution the committed module lock does
    not cover, **When** any build entry point runs, **Then** the run fails
    without rewriting the lock and names the repository-owned no-argument
@@ -254,6 +287,15 @@ findings with the current Cargo path for all three lock files.
     index answers is tested, **Then** every answer is supplied through an
     injectable boundary and no test opens a socket, and the offline validator
     can reach neither that boundary nor its networked implementation.
+13. **Given** broker lock drift, **When** the already-built xtask binary is
+    invoked with `bazel-repin --hub broker`, **Then** it emits the fixed pending
+    result, spawns no child, and writes no path; no generic stale-lock remedy
+    names broker. The public Cargo launcher is tested only for reaching that
+    result, not for exact aggregate stderr or no Cargo bootstrap state.
+14. **Given** Spec 003 admission, **When** the three status artifacts are
+    parsed, **Then** only exactly three agreeing `READY` blocks admit and every
+    missing, duplicate, empty, unknown, misnamed, or disagreeing mutation
+    refuses before activity.
 
 ---
 
@@ -503,13 +545,18 @@ retirement conditions independently block premature deletion.
   environment. Transitive build-system modules MUST be pinned by a committed
   resolution lock that fails closed rather than silently updating, including
   when a declared direct dependency disagrees with the resolved graph.
-  Regenerating
-  a committed dependency-resolution lock MUST be possible only through a
-  repository-owned command that names exactly one dependency hub from a closed
-  set, applies the re-resolution control solely to the environment of the
-  single child process it spawns, reuses the same absolute server-selecting
-  startup values the wrapper supplies, writes only that hub's committed lock,
-  and fails when any other generated or committed derived artifact changes.
+  `HubInventory` MUST be the closed set `main`, `broker`, `guest`, and `walker`;
+  `RepinnableHub` MUST be the closed set `main`, `guest`, and `walker`.
+  Regenerating a committed dependency-resolution lock MUST be possible only
+  through a repository-owned command that names exactly one `RepinnableHub`,
+  applies the re-resolution control solely to the environment of the single
+  child process it spawns, reuses the same absolute server-selecting startup
+  values the wrapper supplies, writes only that hub's committed lock, and fails
+  when any other generated or committed derived artifact changes. Broker MUST
+  be recognized before generic dispatch. An already-built xtask process MUST
+  emit its stable pending code and fixed path-free text with empty stdout, no
+  child, and no write. The Cargo launcher MAY emit bootstrap output and create
+  Cargo-owned state and is not subject to the exact-result contract.
   Regenerating the committed build-system module resolution lock MUST likewise
   be possible only through a separate repository-owned command that takes no
   arguments, reuses the same absolute server-selecting startup values, writes
@@ -546,9 +593,15 @@ retirement conditions independently block premature deletion.
 - **FR-012**: The main workspace and guest shell runner suites MUST preserve
   one fresh process per test case, exact per-binary test census, and faithful
   ignored-case reporting.
-- **FR-013**: The three broker feature suites MUST preserve one process per
-  test binary with bounded internal threads and MUST execute exclusively until
-  a separate isolation review authorizes a change.
+- **FR-013**: Broker production and the default, layer1-bootstrap, and
+  fake-backends test carriers MUST each have an independently derived complete
+  configured dependency graph. Production MUST contain no test-only feature.
+  Each test carrier MUST have its exact broker-local cfg/features, library and
+  binary build targets, unit, integration, and doctest target census, exact
+  case-name census, one process per test binary, bounded internal threads, and
+  exclusive execution until a separate isolation review authorizes a change.
+  Shared packages MUST split whenever their own features or any configured
+  dependency destination differs; direct feature equality is insufficient.
 - **FR-014**: Doctests and harness-free companions MUST remain independently
   discovered and executed, the executed harness-free set MUST be derived from
   the same selector the current gate uses rather than from a manifest count,
@@ -556,7 +609,12 @@ retirement conditions independently block premature deletion.
   an unexpectedly empty discovery MUST fail.
 - **FR-015**: Repository-scanning and generated-output checks MUST assert
   exact nonempty input and output censuses before accepting a clean or
-  reproducible result.
+  reproducible result. F, B, M, and each broker production/default/
+  layer1-bootstrap/fake-backends context MUST independently reject missing,
+  extra, empty, and misnamed entries before edge isolation. Authoritative
+  target and source expectations MUST come from Cargo manifests and locked
+  metadata, while actual configured features and edges MUST come from real
+  Bazel configured-graph inspection.
 - **FR-016**: The schema reproducibility surface MUST compare two independent
   generations, each containing the exact generated and committed schema census
   with nonempty valid content, and that census MUST be a drift-checked
@@ -748,7 +806,10 @@ retirement conditions independently block premature deletion.
   assertion.
 - **FR-053**: The feature MUST use existing Rust, policy, and workflow test
   surfaces for its guards and MUST NOT add a new top-level shell gate,
-  Layer-1 job, or independent required context.
+  Layer-1 job, or independent required context. The `policy_docs` binary MUST
+  execute and be cited under `make test-policy`, as selected by committed
+  `tests/lib.sh`; the fixture-contract lane MUST be cited only for the
+  fixture-dependent contract and CLI surfaces it actually executes.
 - **FR-054**: Every migrated test suite MUST publish a structured per-case
   result to the location the executor designates, containing one entry per
   enumerated case with explicit passed, failed, and ignored outcomes and only

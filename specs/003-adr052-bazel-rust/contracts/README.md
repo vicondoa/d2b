@@ -24,8 +24,10 @@ Files:
 - `workspace-and-tool-pinning.md` - startup options and the one construction
   that derives them, the crate dependency direction that construction's home
   depends on, the workspace boundary, the
-  four dependency hubs and their locks, the repository-owned commands that
-  regenerate each committed lock and validate the yanked snapshot, the
+  four-value hub inventory and its locks, the three-value repinnable subset,
+  the exact pending broker branch, the complete production and three-carrier
+  broker compilation contexts, the repository-owned commands that regenerate
+  each authorized lock and validate the yanked snapshot, the
   injectable index boundary the networked refresh calls through, the exact
   operator-facing recovery text every refusal must carry, the wave-note
   command-shape rule, the anchored filesystem boundary the policy lint reads

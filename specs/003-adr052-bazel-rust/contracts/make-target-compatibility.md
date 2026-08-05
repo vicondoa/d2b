@@ -33,8 +33,8 @@ environment contract, and is removed in W5.
 Four other operations are deliberately **not** Make targets and never become
 approved targets, because every approved target is reachable from a workflow:
 
-- `cargo xtask bazel-repin --hub <name>`, the single-hub lock regeneration
-  described in `workspace-and-tool-pinning.md`;
+- `cargo xtask bazel-repin --hub <main|guest|walker>`, the `RepinnableHub`
+  lock regeneration described in `workspace-and-tool-pinning.md`;
 - `cargo xtask bazel-module-refresh`, the `MODULE.bazel.lock` update described
   in the same contract;
 - `cargo xtask bazel-yanked-refresh`, the reviewed networked yanked-snapshot
@@ -58,6 +58,12 @@ validator out of that list would be the easy mistake, because it is the one a
 workflow author would reach for in good faith to "also check the snapshot", and
 the result would be a second, unattributed execution of a check the carriers
 already own.
+
+`broker` is a `HubInventory` value but not a `RepinnableHub`. The public
+`cargo xtask bazel-repin --hub broker` spelling reaches an exact pending result
+owned by the already-built xtask process; Cargo bootstrap diagnostics and
+Cargo-owned state are outside that exact-result contract. It never becomes a
+Make target or workflow step.
 
 ## Promotion
 

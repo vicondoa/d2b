@@ -30,6 +30,66 @@ come from the pinned dev shell. Drift must fail rather than rewrite a lock. Do
 not use Bazelisk, direct Bazel workflow commands, a remote cache, or a shared
 worktree output tree.
 
+## Mechanical execution admission - before W0
+
+The current tree is intentionally parked. Admission reads exactly three marked
+blocks: `plan.md`, `tasks.md`, and
+`contracts/workspace-and-tool-pinning.md`. Run this read-only check before T021
+or any command that can spawn or write:
+
+```bash
+set -e
+
+status_files=(
+  specs/003-adr052-bazel-rust/plan.md
+  specs/003-adr052-bazel-rust/tasks.md
+  specs/003-adr052-bazel-rust/contracts/workspace-and-tool-pinning.md
+)
+expected_keys=$(
+  printf '%s\n' \
+    SPEC003_EXECUTION_STATUS \
+    SPEC003_NEXT_REFUSED_TASK \
+    SPEC003_PARKED_AT \
+    SPEC003_RESUME_REQUIRES \
+    SPEC003_RUNTIME_STATE_SOURCE
+)
+blocks=()
+for file in "${status_files[@]}"; do
+  test "$(grep -c '^<!-- BEGIN SPEC003-EXECUTION-STATUS -->$' "$file")" -eq 1
+  test "$(grep -c '^<!-- END SPEC003-EXECUTION-STATUS -->$' "$file")" -eq 1
+  block=$(
+    sed -n \
+      '/^<!-- BEGIN SPEC003-EXECUTION-STATUS -->$/,/^<!-- END SPEC003-EXECUTION-STATUS -->$/p' \
+      "$file" | grep '^SPEC003_'
+  )
+  test "$(printf '%s\n' "$block" | wc -l)" -eq 5
+  keys=$(printf '%s\n' "$block" | sed 's/=.*//' | sort)
+  test "$keys" = "$expected_keys"
+  test -z "$(printf '%s\n' "$block" | sed -n '/=$/p')"
+  blocks+=("$block")
+done
+test "${blocks[0]}" = "${blocks[1]}"
+test "${blocks[1]}" = "${blocks[2]}"
+
+case "${blocks[0]}" in
+  *'SPEC003_EXECUTION_STATUS=READY'*) exit 0 ;;
+  *'SPEC003_EXECUTION_STATUS=PARKED'*)
+    printf '%s\n' \
+      broker-repin-architecture-pending \
+      'broker repin is unavailable; no local recovery command exists; prerequisite is an accepted repin-lifecycle ADR plus amended/re-panelled Spec 003.' >&2
+    exit 10
+    ;;
+  *) exit 20 ;;
+esac
+```
+
+On the current tree, exit 10 is the required result. Exit 0 is valid only after
+all three blocks are atomically changed to identical `READY` records by the
+accepted lifecycle follow-up. The enforcing admission tests additionally
+inject missing source/block/key, duplicate block/key, empty value, unknown or
+misnamed key/value, PARKED, and disagreement states and prove every one
+refuses before task, child, and write callbacks.
+
 ## Assertion helpers
 
 Every block in this guide that asserts an invariant starts with the same two
@@ -119,7 +179,8 @@ in the base by content, not by a remembered commit hash:
 ```bash
 set -e
 . .scratch/adr052-assert.sh
-require_input docs/adr/0052-bazel-rust-build-and-test.md docs/adr/README.md
+require_input docs/adr/0052-bazel-rust-build-and-test.md \
+  docs/adr/0054-broker-hub-generated-splice-workspace.md docs/adr/README.md
 grep -q '^- Status: Accepted$' docs/adr/0052-bazel-rust-build-and-test.md \
   || fail 'ADR 0052 is not accepted'
 grep -q '^- Amended: 2026-08-03\.' \
@@ -131,14 +192,21 @@ grep -q 'bazel-repin' docs/adr/0052-bazel-rust-build-and-test.md \
   || fail 'ADR 0052 repin contract is missing'
 grep -q '0052-bazel-rust-build-and-test.md' docs/adr/README.md \
   || fail 'ADR 0052 index row is missing'
+grep -q '^- Status: Proposed$' \
+  docs/adr/0054-broker-hub-generated-splice-workspace.md \
+  || fail 'ADR 0054 must remain Proposed while broker repin is unresolved'
+grep -q '0054-broker-hub-generated-splice-workspace.md' docs/adr/README.md \
+  || fail 'ADR 0054 index row is missing'
 ```
 
 The record must be `Status: Accepted`, must carry the 2026-08-03 amendment
 line, must already name protected `v3` as the promotion,
 cache-maintenance, cache-publication, streak, and post-promotion lineage, with
 the cold measurement set drawn from qualifying cold qualification records, must
-state that the section 6 yanked carrier lands unconditionally, and must name
-`cargo xtask bazel-repin` as the one supported hub-lock regeneration path.
+state that the section 6 yanked carrier lands unconditionally, and must define
+`HubInventory = {main, broker, guest, walker}` separately from
+`RepinnableHub = {main, guest, walker}`. ADR 0054 must remain Proposed and
+indexed; it does not authorize broker lock regeneration.
 
 The ADR names no command for the module lock; it requires only that
 `--lockfile_mode=error` fail "with a named remediation". This feature supplies
@@ -215,12 +283,11 @@ make test-policy
 D2B_ENABLE_FIXTURE_BUILD=1 make test-fixture-contracts
 ```
 
-The last one is not optional and is easy to skip, because a W0 diff looks like
-build configuration. `tests/test-rust.sh` excludes `d2b-contract-tests` from
-every workspace leaf, and that crate reads `Makefile`, `flake.nix`,
-`packages/Cargo.toml`, `packages/xtask/src/main.rs`, and every `.rs` file under
-`packages/`. Without this target, W0 changes those files with no coverage at
-all. The same applies to every later code-changing wave.
+Both policy and fixture commands are intentional. `make test-policy` executes
+the fixture-independent policy binaries, including `policy_docs`, and fails on
+a zero-test binary. The fixture command excludes those binaries and covers the
+actual fixture-dependent contract and CLI surfaces. Cite each only for the
+surface it executed.
 
 Review the schema result for two independent generations, each containing the
 exact generated nonempty valid JSON census before comparison. The census is the
@@ -257,6 +324,14 @@ test "$(
     MODULE.bazel
 )" -eq 4 \
   || fail 'Cargo overwrite opt-out does not match four hubs'
+
+# Inventory is not execution authority.
+grep -qF 'HubInventory = {main, broker, guest, walker}' \
+  specs/003-adr052-bazel-rust/contracts/workspace-and-tool-pinning.md \
+  || fail 'HubInventory drifted'
+grep -qF 'RepinnableHub = {main, guest, walker}' \
+  specs/003-adr052-bazel-rust/contracts/workspace-and-tool-pinning.md \
+  || fail 'RepinnableHub drifted or accidentally gained broker'
 
 # No repin escape hatch anywhere on the gate path.
 refute 'repin control is reachable from Make or CI' \
@@ -326,6 +401,32 @@ review. The run that must report a changed lock is the one immediately after a
 Cargo workspace membership or dependency change; a command wired to the wrong
 Bazel invocation shows up there, as a repin that changed nothing when something
 had to change.
+
+Broker is not a fourth generic path. Build xtask before beginning observation,
+then run the enforcing test through `make test-rust-main`. That test executes
+the already-built binary directly as `bazel-repin --hub broker` and requires:
+
+```text
+stdout: empty
+stderr line 1: broker-repin-architecture-pending
+stderr line 2: broker repin is unavailable; no local recovery command exists; prerequisite is an accepted repin-lifecycle ADR plus amended/re-panelled Spec 003.
+result: nonzero, no child callback, no write callback
+```
+
+Do not substitute `cargo xtask bazel-repin --hub broker` for that evidence.
+Cargo may print bootstrap diagnostics and create cache or target state before
+the built process runs, so the public launcher is not promised exact two-line
+stderr or aggregate no-write behavior.
+
+The same W0 carrier owns the `gen-bazel --check` no-state proof. It runs the
+already-built process for both pass and every missing, extra, byte-drift, and
+semantic-drift failure after redirecting `HOME`, `TMPDIR`, `TMP`, `TEMP`,
+`XDG_CACHE_HOME`, `CARGO_HOME`, `RUSTUP_HOME`, `CARGO_TARGET_DIR`,
+`BAZELISK_HOME`, and `TEST_TMPDIR` to empty observed roots. Evidence is valid
+only when those roots and the full repository HEAD/index/tracked/untracked/
+ignored/kind/mode/bytes/symlink snapshot are unchanged and the injected
+observer records no mutation elsewhere. A bare `git status` comparison is not
+evidence for this property.
 
 The module lock has its own command, and it is the only supported way to move
 `MODULE.bazel.lock`:
@@ -593,26 +694,30 @@ jq -e '
 ```
 
 Use `D2B_SKIP_FIXTURE_BUILD=1` only when comparing the eighteen-surface CI
-baseline. Validate fixture coverage separately:
+baseline. Validate policy documentation and fixture coverage under their
+actual separate carriers:
 
 ```bash
+make test-policy
 D2B_ENABLE_FIXTURE_BUILD=1 make test-fixture-contracts
 ```
 
-That target is also the wave-note verdict, from W0 onward. Every measured
+`make test-policy` is the wave-note verdict from W0 onward. Every measured
 invocation a wave records under `specs/003-adr052-bazel-rust/wave-notes/` is
 written as a command shape with `<worktree>` placeholders, and the rule is
 enforced by a policy lint in
-`packages/d2b-contract-tests/tests/policy_docs.rs` that the run above already
+`packages/d2b-contract-tests/tests/policy_docs.rs` that `make test-policy`
+already
 executed. Do not hand-roll a shell scan over the notes and do not plant a note
 file, tracked or untracked, to see the scan fail: the lint refuses an empty
 corpus and refuses any entry in that directory that is not a readable
 `w<digits>.md` note, so a stray file is caught either way, and the lint's own
 planted cases live in the injected fake and in test literals.
-`tests/test-rust.sh` excludes `d2b-contract-tests`
-from every workspace leaf and `tests/test-policy.sh` runs seven contract-test
-binaries that do not include `policy_docs`, so this is the only lane that runs
-it. Confirm the lint is present, reaches the notes through the shared
+Committed `tests/lib.sh` includes `policy_docs` in the fixture-independent
+policy list, `tests/test-policy.sh` executes that closed list and fails on a
+zero-test binary, and the fixture lane excludes it. The fixture command above
+therefore proves only its fixture-dependent contract and CLI surfaces. Confirm
+the lint is present, reaches the notes through the shared
 filesystem boundary rather than through the standard library, carries both
 violation shapes, and carries the two cases that police its own refusals:
 
@@ -787,7 +892,12 @@ The W1 aggregate checks:
   out-of-census manifest entry recorded with its reason;
 - main and guest one-process-per-case topology with a per-case directory
   beneath the executor temporary root;
-- broker one-process-per-binary topology with exclusivity;
+- broker production plus independent default, layer1-bootstrap, and
+  fake-backends configured graphs. The measured first-party target censuses are
+  7/23/23/23 and the three test-carrier case censuses are 557/492/559; exact
+  target and case-name sets, not these descriptive counts, are authoritative;
+- broker one-process-per-binary topology with exclusivity for all three test
+  carriers;
 - exact governed-source, runfiles, and parsed-file equality;
 - two independent schema generations against the generated census;
 - the nightly API census, including the toolchain version the action actually
@@ -805,6 +915,17 @@ make test-bazel-rust-api
 make test-bazel-rust-broker
 make test-bazel-rust-aux
 ```
+
+Before accepting broker coverage, inspect the independent missing, extra,
+empty, and misnamed mutations for F, B, M, B-prod, B-default, B-layer1, and
+B-fake. Also require target omission/addition, inert-source substitution,
+per-carrier feature/edge/target/case mutations, contracts and host
+configured-destination swaps, production-to-test edges, each test carrier
+reaching production or another carrier, B reaching `@main//`, and M reaching
+`@broker//` to fail at distinct guards. Expected source and target identities
+must come from authoritative Cargo manifests and locked metadata; actual
+configured features and edges must come from query/cquery plus an aspect, not
+from a generator-emitted expected map.
 
 Inspect the per-case evidence rather than trusting a green target. For a
 carrier under the local output tree, confirm the result document exists, names
@@ -1154,6 +1275,7 @@ jq -e '
     (.branch == "v3") and
     (.cargo_run_head_sha == .bazel_run_head_sha) and
     (.cargo_verdict == .bazel_verdict) and
+    (.policy_verdict == "passed") and
     (.fixture_verdict == "passed") and
     (.cache_writes == 0)] | all)
 ' specs/003-adr052-bazel-rust/evidence/qualification.json
@@ -1248,9 +1370,10 @@ make check-tier0
 D2B_ENABLE_FIXTURE_BUILD=1 make test-fixture-contracts
 ```
 
-W6 owns `Makefile`, `AGENTS.md`, and `docs/contributing/`, all of which the
-`d2b-contract-tests` crate reads, so the fixture-contract target is part of W6
-validation and not an optional extra.
+W6 owns `Makefile`, `AGENTS.md`, and `docs/contributing/`. The affected
+fixture-independent policy binaries run under `make test-policy`; the separate
+fixture command remains only for the fixture-dependent contract and CLI
+surfaces. Neither verdict substitutes for the other.
 
 W7 retires the eighteen Cargo implementations using only the independent
 green-run clock:
