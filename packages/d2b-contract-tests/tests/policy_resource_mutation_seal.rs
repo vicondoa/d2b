@@ -272,11 +272,28 @@ fn strip_test_items(source: &str) -> String {
 }
 
 fn non_test_source(relative: &str, source: &str) -> String {
-    if relative.split('/').any(|component| component == "tests") || relative.ends_with("/tests.rs")
+    if relative
+        .split('/')
+        .any(|component| matches!(component, "tests" | "benches"))
+        || relative.ends_with("/tests.rs")
     {
         return String::new();
     }
     strip_test_items(source)
+}
+
+#[test]
+fn cargo_bench_support_is_test_only() {
+    let source = "mutation_seal_pair(store_identity());";
+    assert!(
+        non_test_source("packages/example/benches/support.rs", source).is_empty(),
+        "Cargo bench support must not count as a production call site"
+    );
+    assert_eq!(
+        non_test_source("packages/example/src/support.rs", source),
+        source,
+        "ordinary source must remain part of the production scan"
+    );
 }
 
 fn without_solver_assertion(source: &str) -> String {
