@@ -1,5 +1,5 @@
 {
-  "$id": "https://d2bus.org/schemas/v3/Zone.schema.json",
+  "$id": "https://d2bus.org/schemas/v3/core.d2bus.org_Zone.schema.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
   "description": "Zone store self-resource; a pure identity anchor with an empty spec.",

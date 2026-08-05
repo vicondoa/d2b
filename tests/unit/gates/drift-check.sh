@@ -70,7 +70,7 @@ drift_paths=(
   docs/reference/error-codes.md
   docs/reference/daemon-api.md
   docs/manpages/
-  docs/completions/
+  completions/
   docs/reference/cli-output/
   docs/specs/ADR-046-spec-set.json
   docs/specs/ADR-046-work-items.json

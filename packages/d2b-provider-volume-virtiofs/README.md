@@ -4,6 +4,9 @@
 virtiofs. It reconciles `virtiofs.d2bus.org.Export` resources and never
 writes a Volume row.
 
+See [Create a Provider](../../docs/how-to/create-provider.md) for the
+uniform crate layout, schema links, configuration, and test lanes.
+
 ## Provider identity
 
 | Field | Value |

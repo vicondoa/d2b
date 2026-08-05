@@ -4,6 +4,9 @@
 `Device` realization. The crate contains no daemon, broker, host lifecycle,
 or other Provider implementation dependency.
 
+See [Create a Provider](../../docs/how-to/create-provider.md) for the
+uniform crate layout, schema links, configuration, and test lanes.
+
 ## Provider identity
 
 | Field | Value |

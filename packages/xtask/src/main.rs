@@ -974,7 +974,7 @@ fn markdown_cell(value: &str) -> String {
 fn gen_cli_shell_artifacts() -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {
     let repo_root = repo_root()?;
     let man_dir = repo_root.join("docs/manpages");
-    let comp_dir = repo_root.join("docs/completions");
+    let comp_dir = repo_root.join("completions");
     fs::create_dir_all(&man_dir)?;
     fs::create_dir_all(&comp_dir)?;
 

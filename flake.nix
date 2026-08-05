@@ -247,9 +247,9 @@
         '';
 
         completions = pkgs.runCommand "d2b-completions" { } ''
-          install -Dm644 ${./docs/completions/d2b.bash} "$out/share/bash-completion/completions/d2b"
-          install -Dm644 ${./docs/completions/d2b.zsh}  "$out/share/zsh/site-functions/_d2b"
-          install -Dm644 ${./docs/completions/d2b.fish} "$out/share/fish/vendor_completions.d/d2b.fish"
+          install -Dm644 ${./completions/d2b.bash} "$out/share/bash-completion/completions/d2b"
+          install -Dm644 ${./completions/d2b.zsh}  "$out/share/zsh/site-functions/_d2b"
+          install -Dm644 ${./completions/d2b.fish} "$out/share/fish/vendor_completions.d/d2b.fish"
         '';
         d2b-guestd-static = guestStaticPackage "d2b-guestd" "d2b-guestd";
         d2b-exec-runner-static =

@@ -739,6 +739,35 @@ fn non_provider_crates_are_exempt() {
     }
 }
 
+/// Every `d2b-provider-*` workspace name belongs to exactly one visible
+/// classification: a non-Provider helper, one of the two recorded legacy
+/// exemptions, a conforming Provider identity, or a malformed name that must
+/// be rejected. Keeping the partition explicit prevents a new prefixed crate
+/// from becoming silently unclassified.
+#[test]
+fn every_provider_prefixed_workspace_name_has_one_classification() {
+    for name in workspace_members()
+        .into_iter()
+        .filter(|name| name.starts_with("d2b-provider"))
+    {
+        let non_provider = NON_PROVIDER_PREFIXED.contains(&name.as_str());
+        let legacy = EXEMPT_CRATES.iter().any(|(exempt, _)| *exempt == name);
+        let provider = provider_identity(&name).is_some();
+        let malformed = name.starts_with("d2b-provider-")
+            && !non_provider
+            && !legacy
+            && split_provider_name(&name).is_none();
+        let classifications = [non_provider, legacy, provider, malformed]
+            .into_iter()
+            .filter(|classified| *classified)
+            .count();
+        assert_eq!(
+            classifications, 1,
+            "{name} must have exactly one Provider-name classification"
+        );
+    }
+}
+
 /// The two recorded exemptions, and only those two.
 ///
 /// Each is asserted to still exist and to still fail the naming rule. An

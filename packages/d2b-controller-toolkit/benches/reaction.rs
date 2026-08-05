@@ -7,7 +7,7 @@
 //! records the Provider effect boundary; store, API, bus, session stream,
 //! queue, handler, and status paths are production implementations.
 
-#[path = "../../d2b-bus/tests/support/reaction.rs"]
+#[path = "support/reaction.rs"]
 mod bus_support;
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};

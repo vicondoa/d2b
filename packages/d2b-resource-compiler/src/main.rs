@@ -15,7 +15,7 @@ use std::{
 
 use d2b_contracts::v3::{
     ArtifactDigest, ArtifactId, CanonicalJsonValue, ProviderManifest, canonical_json_bytes,
-    framed_canonical_digest,
+    framed_canonical_digest, identity::STANDARD_RESOURCE_TYPES,
 };
 use d2b_resource_compiler::{
     ArtifactCatalogEntry, CatalogDigests, Diagnostic, StaticPublisherKeys, compile_linux_artifact,
@@ -28,6 +28,14 @@ const MAX_DIAGNOSTIC_BYTES: usize = d2b_resource_compiler::MAX_DIAGNOSTIC_BYTES;
 const MAX_RESOURCES: usize = 4096;
 const MAX_RESOURCE_BYTES: usize = 512 * 1024;
 const MAX_SCHEMA_BYTES: usize = 8 * 1024 * 1024;
+
+fn resource_schema_filename(resource_type: &str) -> String {
+    if STANDARD_RESOURCE_TYPES.contains(&resource_type) {
+        format!("core.d2bus.org_{resource_type}.schema.json")
+    } else {
+        format!("{resource_type}.schema.json")
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct CliError {
@@ -717,7 +725,7 @@ impl SchemaCache {
                 "resource type is not a supported schema name",
             ));
         }
-        let path = root.join(format!("{resource_type}.schema.json"));
+        let path = root.join(resource_schema_filename(resource_type));
         if !path.exists() {
             return Err(CliError::new(
                 "resource-compiler-schema-missing",

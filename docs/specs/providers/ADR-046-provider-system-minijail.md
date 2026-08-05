@@ -1403,7 +1403,8 @@ The build:
 
 1. Renders the canonical JSON ResourceSpec.
 2. Validates it against the committed ResourceTypeSchema
-   (`docs/reference/schemas/v3/Process.json` and `EphemeralProcess.json`).
+   (`docs/reference/schemas/v3/core.d2bus.org_Process.schema.json` and
+   `core.d2bus.org_EphemeralProcess.schema.json`).
 3. Validates `spec.sandbox` against the signed Provider schema extension for
    minijail-specific fields.
 4. Verifies no Nix store path appears in any rendered field.
@@ -1687,7 +1688,7 @@ delivery assumptions are not copied.
 | Dependency/owner | ADR046-minijail-005; Nix integrator; test infrastructure owner |
 | Current source | `nixos-modules/processes-json.nix`; `nixos-modules/minijail-profiles.nix`; `packages/d2b-contract-tests/tests/policy_observability.rs` |
 | Reuse action | adapt |
-| Destination | `nixos-modules/` - v3 Nix `Process`/`EphemeralProcess` resource authoring; Provider catalog entry; `docs/reference/schemas/v3/Process.json`; `docs/reference/schemas/v3/EphemeralProcess.json`; `make test-drift` schema drift gate |
+| Destination | `nixos-modules/` - v3 Nix `Process`/`EphemeralProcess` resource authoring; Provider catalog entry; `docs/reference/schemas/v3/core.d2bus.org_Process.schema.json`; `docs/reference/schemas/v3/core.d2bus.org_EphemeralProcess.schema.json`; `make test-drift` schema drift gate |
 | Detailed design | Nix module accepts `d2b.zones.<zone>.resources.<name>` with `type = "Process"` or `"EphemeralProcess"`; eval-time validation rules (§16.4); build-time JSON validation (§16.5); artifact catalog integration; cleanup contract tests (§16.5) |
 | Integration | `d2b.artifacts` catalog; Zone bundle emission; `make test-drift` |
 | Data migration | Current `nixos-modules/processes-json.nix` and minijail profile Nix removed at cutover |

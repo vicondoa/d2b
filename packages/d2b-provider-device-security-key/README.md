@@ -5,6 +5,9 @@ This crate implements the unprivileged contracts for
 observations, CID translation, and relay/frontend Process declarations. Core
 resolves physical authority and supplies opaque effect tickets.
 
+See [Create a Provider](../../docs/how-to/create-provider.md) for the
+uniform crate layout, schema links, configuration, and test lanes.
+
 ## Provider identity
 
 | Field | Value |

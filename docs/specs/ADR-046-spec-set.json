@@ -666,7 +666,7 @@
         "ADR-046-terminology-and-identities"
       ],
       "path" : "docs/specs/providers/ADR-046-provider-system-minijail.md",
-      "sha256" : "c498189dd045c15ec00e53a1b8c51980d99f7e94a8c5e05d07e7eb1d096f39ec",
+      "sha256" : "9821ba97dda8c92d7a2e2ed2f7cbd939d5e8b6817d1ce9cebdafcd5973f578d0",
       "specId" : "ADR-046-provider-system-minijail",
       "status" : "Accepted",
       "supersedes" : "Current `d2b-priv-broker` SpawnRunner, `d2b-core` minijail profile, and `d2bd` supervisor pidfd/wait paths for minijail-spawned processes",
@@ -933,7 +933,7 @@
         "ADR-046-resource-reconciliation"
       ],
       "path" : "docs/specs/ADR-046-resources-device.md",
-      "sha256" : "15d2fff897feb70971ec97ba4ab4b5f110a46a2010b5d88e4db5a5a2945d82f4",
+      "sha256" : "589284b2f980ddc6db463de3a55f5f87babe5206e3ce735ef654b0f928ad3a75",
       "specId" : "ADR-046-resources-device",
       "status" : "Accepted",
       "supersedes" : "Current ProcessRole device sidecars (Swtpm, SwtpmPreStartFlush, Usbip, SecurityKeyFrontend, Gpu, GpuRenderNode, Video) and their Nix components",
@@ -974,7 +974,7 @@
         "ADR-046-terminology-and-identities"
       ],
       "path" : "docs/specs/ADR-046-resources-network.md",
-      "sha256" : "5848fea34024c2d7d207cfe46fb70cbe57ce42f72dd378f35ef881c3330fef95",
+      "sha256" : "a6c0c9d5d6559805a107d5af5e6e64c105125b24f4b8ebe952d105afb4391b92",
       "specId" : "ADR-046-resources-network",
       "status" : "Accepted",
       "supersedes" : "`d2b.envs.<env>` and `d2b.realms.<realm>.network` Nix surfaces (v3 reset)",
@@ -1225,7 +1225,7 @@
         "ADR-046-terminology-and-identities"
       ],
       "path" : "docs/specs/ADR-046-zone-routing.md",
-      "sha256" : "a0c12f38d6c238192fa0ec1a00507041e74be505186b30209afc5acdae94fb3e",
+      "sha256" : "4f17e1ec0672e51806189014a783907abc7ea719158e2ec917c6c8f61b9641c2",
       "specId" : "ADR-046-zone-routing",
       "status" : "Accepted",
       "supersedes" : "`RealmEntrypointTable`/`EntrypointMode`/`RealmControllerPlacement` enum (→ compiler-only `parentZone` topology + ZoneLink transport + private Zone runtime bootstrap placement); `RouteTreeEngine`/`routing.rs` route contracts (adapted, not deleted); `RemoteNodeRegistry` (→ ZoneLink controller); `OperationRouter` (→ ZoneLinkIdempotencyKey in d2b-bus); `realm_access_resolver` module (→ ZoneEntrypointResolver); `realm-controllers.json`/`realm-identity.json` bundle artifacts (→ Nix-authored Zone settings/ZoneLink resources); `d2b.realms.*` Nix option namespace (→ `d2b.zones.*`); `WorkloadId` routing targets (→ typed Guest/Host resource refs); `CapabilitySet`-only routing authz (→ per-hop RBAC narrowing + allocator-issued capability scope)",

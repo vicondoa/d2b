@@ -10,13 +10,14 @@ let
   cfg = config.d2b;
   validationEnabled = cfg._resourceSchemaValidation.enable;
   standardResourceTypes = import ./generated/resource-types.nix;
+  coreSchemaFileName = resourceType: "core.d2bus.org_${resourceType}.schema.json";
   schemaFarm =
     if builtins.hasAttr "d2b-resource-schemas" pkgs
     then pkgs."d2b-resource-schemas"
     else pkgs.linkFarm "d2b-resource-schemas" (map
       (resourceType: {
-        name = "${resourceType}.schema.json";
-        path = ../docs/reference/schemas/v3 + "/${resourceType}.schema.json";
+        name = coreSchemaFileName resourceType;
+        path = ../docs/reference/schemas/v3 + "/${coreSchemaFileName resourceType}";
       })
       standardResourceTypes);
 
@@ -25,7 +26,7 @@ let
   # assertions; the farm is retained as an explicit build input below so a
   # Provider package can replace it for the derivation-time round trip.
   schemaFor = resourceType:
-    let path = ../docs/reference/schemas/v3 + "/${resourceType}.schema.json";
+    let path = ../docs/reference/schemas/v3 + "/${coreSchemaFileName resourceType}";
     in if builtins.pathExists path
     then builtins.fromJSON (builtins.readFile path)
     else null;
@@ -314,7 +315,7 @@ let
 
       for resource in resources:
           resource_type = resource["type"]
-          schema_path = pathlib.Path(schema_root) / f"{resource_type}.schema.json"
+          schema_path = pathlib.Path(schema_root) / f"core.d2bus.org_{resource_type}.schema.json"
           if not schema_path.exists():
               raise SystemExit(f"{resource_type}: committed schema is missing")
           root = json.loads(schema_path.read_text())

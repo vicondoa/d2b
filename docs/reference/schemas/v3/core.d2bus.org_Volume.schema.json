@@ -1,5 +1,5 @@
 {
-  "$id": "https://d2bus.org/schemas/v3/Volume.schema.json",
+  "$id": "https://d2bus.org/schemas/v3/core.d2bus.org_Volume.schema.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
   "definitions": {

@@ -10,6 +10,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use crate::zone_schema::core_schema_artifact_name;
 use d2b_contracts::v3::{
     EndpointSpec, EphemeralProcessSpec, GuestSpec, HostSpec, UserSpec, process::ProcessSpec,
 };
@@ -32,7 +33,8 @@ pub fn generate(repo_root: &Path) -> Result<Vec<PathBuf>, Box<dyn std::error::Er
     ];
     let mut written = Vec::with_capacity(types.len() * 2);
     for name in types {
-        let schema_path = schema_dir.join(format!("{name}.schema.json"));
+        let schema_file = core_schema_artifact_name(name);
+        let schema_path = schema_dir.join(&schema_file);
         // The existing Zone-schema generator owns the committed JSON files.
         // Reuse those authoritative artifacts when present; the Rust DTO
         // fallback keeps this command useful for a clean bootstrap tree
@@ -68,7 +70,7 @@ pub fn generate(repo_root: &Path) -> Result<Vec<PathBuf>, Box<dyn std::error::Er
              {{ lib }}:\n\
              {{\n\
                type = \"{name}\";\n\
-               schema = builtins.fromJSON (builtins.readFile ../docs/reference/schemas/v3/{name}.schema.json);\n\
+               schema = builtins.fromJSON (builtins.readFile ../docs/reference/schemas/v3/{schema_file});\n\
              }}\n",
             lower = source
         );

@@ -13,7 +13,7 @@ artifact and requires a clean `git diff`, fail-closed.
 
 | Artifact | Generator | Consumers | Notes |
 | --- | --- | --- | --- |
-| `docs/reference/schemas/v3/<Type>.schema.json` | `xtask gen-zone-schemas` | Nix eval, contract tests, companions | NEW; `v2/` remains until its paths retire |
+| `docs/reference/schemas/v3/core.d2bus.org_<Type>.schema.json` | `xtask gen-zone-schemas` | Nix eval, contract tests, companions | NEW; `v2/` remains until its paths retire |
 | `nixos-modules/generated/resource-types.nix` | `xtask gen-zone-nix-options` | Nix option surface | NEW in W2 |
 | `nixos-modules/generated/options-zones-<Type>.nix` | `xtask gen-zone-nix-options` | Nix option surface | NEW in W2, one per ResourceType |
 | per-Zone `resource-bundle.json` | `zone-resources-json.nix` + `bundle-artifacts.nix` | Zone runtime, core controllers | Integrity-pinned |

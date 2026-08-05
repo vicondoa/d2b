@@ -3,5 +3,5 @@
 { lib }:
 {
 type = "Process";
-schema = builtins.fromJSON (builtins.readFile ../docs/reference/schemas/v3/Process.schema.json);
+schema = builtins.fromJSON (builtins.readFile ../docs/reference/schemas/v3/core.d2bus.org_Process.schema.json);
 }

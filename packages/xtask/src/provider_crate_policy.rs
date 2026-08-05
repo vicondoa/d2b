@@ -468,6 +468,8 @@ fn integration_has_rust_scenario(integration: &Path) -> Result<bool, String> {
 mod tests {
     use std::sync::atomic::{AtomicU32, Ordering};
 
+    use crate::repo_root;
+
     use super::*;
 
     static FIXTURE_COUNTER: AtomicU32 = AtomicU32::new(0);
@@ -570,6 +572,90 @@ mod tests {
         let fixture = Fixture::new("clean");
         assert_eq!(check(&fixture.root), Ok(()));
         assert_eq!(check(&fixture.root), Ok(()));
+    }
+
+    #[test]
+    fn every_provider_prefixed_name_has_one_explicit_classification() {
+        let root = repo_root().expect("resolve repository root");
+        let members = cargo_workspace_members(&root).expect("read workspace metadata");
+        let mut names: BTreeSet<String> = members
+            .into_iter()
+            .map(|member| member.package_name)
+            .filter(|name| name.starts_with(PROVIDER_PREFIX))
+            .collect();
+        for entry in fs::read_dir(root.join("packages")).expect("read packages directory") {
+            let entry = entry.expect("read package entry");
+            if entry.file_type().expect("read package entry type").is_dir() {
+                let name = entry.file_name().to_string_lossy().into_owned();
+                if name.starts_with(PROVIDER_PREFIX) {
+                    names.insert(name);
+                }
+            }
+        }
+
+        assert!(
+            !names.is_empty(),
+            "Provider-name classification must inspect a non-empty scope"
+        );
+        for name in names {
+            let kind = provider_name_kind(&name);
+            match kind {
+                ProviderNameKind::NonProvider => {
+                    assert!(
+                        NON_PROVIDER_PREFIXED.contains(&name.as_str()),
+                        "{name} is not an explicit non-Provider helper"
+                    );
+                }
+                ProviderNameKind::Legacy => {
+                    assert!(
+                        EXEMPT_LEGACY_CRATES.contains(&name.as_str()),
+                        "{name} is not an explicit legacy exemption"
+                    );
+                }
+                ProviderNameKind::Provider => {
+                    assert!(
+                        name.strip_prefix(PROVIDER_PREFIX)
+                            .is_some_and(|suffix| suffix.split('-').count() >= 2),
+                        "{name} is not a two-segment Provider identity"
+                    );
+                }
+                ProviderNameKind::Malformed => {
+                    assert!(
+                        name.starts_with(PROVIDER_PREFIX),
+                        "{name} is malformed but not Provider-prefixed"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn readme_only_integration_ratchet_is_exactly_the_scaffolded_set() {
+        let expected = [
+            "d2b-provider-credential-entra",
+            "d2b-provider-credential-managed-identity",
+            "d2b-provider-credential-secret-service",
+            "d2b-provider-system-core",
+            "d2b-provider-system-minijail",
+            "d2b-provider-system-systemd",
+            "d2b-provider-volume-virtiofs",
+        ];
+        assert_eq!(
+            README_ONLY_INTEGRATION_RATCHET, &expected,
+            "README-only integration coverage must remain an explicit closed set"
+        );
+        let root = repo_root().expect("resolve repository root");
+        for name in expected {
+            let integration = root.join("packages").join(name).join("integration");
+            assert!(
+                integration.join("README.md").is_file(),
+                "{name} must retain its integration scaffold README"
+            );
+            assert!(
+                !integration_has_rust_scenario(&integration).expect("inspect integration scaffold"),
+                "{name} must leave executable integration wiring to its owning implementation"
+            );
+        }
     }
 
     #[test]

@@ -11,6 +11,10 @@ let
   cfg = config.d2b;
   resourceModel = import ./resources.nix { inherit lib; };
   resourceBundle = import ./resources-bundle.nix { inherit lib; };
+  coreSchemaFileName = resourceType:
+    if builtins.elem resourceType resourceModel.standardResourceTypes
+    then "core.d2bus.org_${resourceType}.schema.json"
+    else "${resourceType}.schema.json";
 
   controlTypes = [
     "Zone"
@@ -120,7 +124,7 @@ let
     else null;
 
   schemaFor = resourceType:
-    let path = ../docs/reference/schemas/v3 + "/${resourceType}.schema.json";
+    let path = ../docs/reference/schemas/v3 + "/${coreSchemaFileName resourceType}";
     in if builtins.pathExists path
     then builtins.fromJSON (builtins.readFile path)
     else { };

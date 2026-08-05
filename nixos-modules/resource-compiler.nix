@@ -44,8 +44,9 @@ let
   resourceTypes = import ./generated/resource-types.nix;
   schemaRoot = pkgs.linkFarm "d2b-resource-schemas" (map
     (resourceType: {
-      name = "${resourceType}.schema.json";
-      path = ../docs/reference/schemas/v3 + "/${resourceType}.schema.json";
+      name = "core.d2bus.org_${resourceType}.schema.json";
+      path = ../docs/reference/schemas/v3
+        + "/core.d2bus.org_${resourceType}.schema.json";
     })
     resourceTypes);
 in

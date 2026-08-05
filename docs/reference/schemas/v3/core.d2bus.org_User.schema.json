@@ -1,18 +1,25 @@
 {
-  "$id": "https://d2bus.org/schemas/v3/Provider.schema.json",
+  "$id": "https://d2bus.org/schemas/v3/core.d2bus.org_User.schema.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
   "definitions": {
-    "ArtifactId": {
+    "BoundedText": {
+      "maxLength": 128,
+      "minLength": 0,
+      "type": "string"
+    },
+    "OsGroupName": {
       "maxLength": 63,
       "minLength": 1,
       "type": "string"
     },
-    "CanonicalJsonObject": {
-      "type": "object"
+    "OsUsername": {
+      "maxLength": 255,
+      "minLength": 1,
+      "type": "string"
     }
   },
-  "description": "Installed Provider package selection and schema-bound configuration.",
+  "description": "Zone-local named operating-system identity.",
   "properties": {
     "apiVersion": {
       "const": "resources.d2bus.org/v3"
@@ -58,24 +65,31 @@
     },
     "spec": {
       "additionalProperties": false,
-      "description": "The Provider ResourceType base spec: exactly two authored fields.\n\nAdding a third field here would restate manifest-derived data in the resource row, which the specification forbids.",
+      "description": "The User ResourceType base spec.",
       "properties": {
-        "artifactId": {
-          "$ref": "#/definitions/ArtifactId"
+        "displayName": {
+          "$ref": "#/definitions/BoundedText"
         },
-        "config": {
-          "$ref": "#/definitions/CanonicalJsonObject"
+        "groups": {
+          "items": {
+            "$ref": "#/definitions/OsGroupName"
+          },
+          "type": "array"
+        },
+        "osUsername": {
+          "$ref": "#/definitions/OsUsername"
         }
       },
       "required": [
-        "artifactId",
-        "config"
+        "displayName",
+        "groups",
+        "osUsername"
       ],
-      "title": "ProviderSpec",
+      "title": "UserSpec",
       "type": "object"
     },
     "type": {
-      "const": "Provider"
+      "const": "User"
     }
   },
   "required": [
@@ -84,6 +98,6 @@
     "spec",
     "type"
   ],
-  "title": "Provider",
+  "title": "User",
   "type": "object"
 }

@@ -3,5 +3,5 @@
 { lib }:
 {
 type = "Guest";
-schema = builtins.fromJSON (builtins.readFile ../docs/reference/schemas/v3/Guest.schema.json);
+schema = builtins.fromJSON (builtins.readFile ../docs/reference/schemas/v3/core.d2bus.org_Guest.schema.json);
 }

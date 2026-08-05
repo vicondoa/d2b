@@ -1,8 +1,8 @@
 {
-  "$id": "https://d2bus.org/schemas/v3/Quota.schema.json",
+  "$id": "https://d2bus.org/schemas/v3/core.d2bus.org_RoleBinding.schema.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
-  "description": "Zone-wide aggregate resource ceilings.",
+  "description": "Zone-local binding of a Role to authenticated subjects.",
   "properties": {
     "apiVersion": {
       "const": "resources.d2bus.org/v3"
@@ -49,91 +49,41 @@
     "spec": {
       "additionalProperties": false,
       "properties": {
-        "ceilings": {
-          "additionalProperties": false,
-          "properties": {
-            "maxCpu": {
-              "anyOf": [
-                {
-                  "minimum": 1,
-                  "type": "integer"
-                },
-                {
-                  "type": "null"
-                }
-              ]
+        "externalPrincipalSelector": {
+          "anyOf": [
+            {
+              "type": "object"
             },
-            "maxMemoryMib": {
-              "anyOf": [
-                {
-                  "minimum": 1,
-                  "type": "integer"
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
-            "maxOwnerDepth": {
-              "maximum": 32,
-              "minimum": 1,
-              "type": "integer"
-            },
-            "maxResources": {
-              "maximum": 65536,
-              "minimum": 1,
-              "type": "integer"
-            },
-            "maxResourcesPerType": {
-              "maximum": 65536,
-              "minimum": 1,
-              "type": "integer"
-            },
-            "maxStorageGib": {
-              "anyOf": [
-                {
-                  "minimum": 1,
-                  "type": "integer"
-                },
-                {
-                  "type": "null"
-                }
-              ]
+            {
+              "type": "null"
             }
-          },
-          "required": [
-            "maxResources",
-            "maxResourcesPerType",
-            "maxOwnerDepth",
-            "maxCpu",
-            "maxMemoryMib",
-            "maxStorageGib"
-          ],
-          "type": "object"
-        },
-        "enforcementPolicy": {
-          "enum": [
-            "hard",
-            "soft"
-          ],
-          "type": "string"
-        },
-        "perTypeCeilings": {
-          "additionalProperties": {
-            "type": "object"
-          },
-          "maxProperties": 64,
-          "type": "object"
+          ]
         },
         "providerRef": {
           "pattern": "^[A-Z][A-Za-z0-9]{0,62}/[a-z][a-z0-9-]{0,62}$",
           "type": "string"
         },
-        "scope": {
-          "enum": [
-            "zone"
-          ],
+        "roleRef": {
+          "pattern": "^Role/[a-z][a-z0-9-]{0,62}$",
           "type": "string"
+        },
+        "scopeNarrowing": {
+          "anyOf": [
+            {
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "subjects": {
+          "items": {
+            "pattern": "^[A-Z][A-Za-z0-9]{0,62}/[a-z][a-z0-9-]{0,62}$",
+            "type": "string"
+          },
+          "maxItems": 64,
+          "type": "array"
         },
         "updatePolicy": {
           "additionalProperties": false,
@@ -152,15 +102,15 @@
         }
       },
       "required": [
-        "ceilings",
-        "perTypeCeilings",
-        "scope",
-        "enforcementPolicy"
+        "roleRef",
+        "subjects",
+        "externalPrincipalSelector",
+        "scopeNarrowing"
       ],
       "type": "object"
     },
     "type": {
-      "const": "Quota"
+      "const": "RoleBinding"
     }
   },
   "required": [
@@ -169,6 +119,6 @@
     "spec",
     "type"
   ],
-  "title": "Quota",
+  "title": "RoleBinding",
   "type": "object"
 }

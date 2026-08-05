@@ -1386,7 +1386,8 @@ d2b.zones.<zone>.resources.<name> = {
 | `status` | Entirely read-only; managed by Provider controller |
 
 **Nix option types, defaults, and documentation** are generated from the
-committed ResourceTypeSchema (`docs/reference/schemas/v3/device.schema.json`) and
+committed ResourceTypeSchema
+(`docs/reference/schemas/v3/core.d2bus.org_Device.schema.json`) and
 the per-Provider settings schemas. There is no second bespoke Nix vocabulary:
 `spec` field names, types, bounds, and defaults in Nix are identical to those in
 the schema. A `spec` field absent from the schema fails eval. A

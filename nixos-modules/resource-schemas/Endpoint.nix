@@ -3,5 +3,5 @@
 { lib }:
 {
 type = "Endpoint";
-schema = builtins.fromJSON (builtins.readFile ../docs/reference/schemas/v3/Endpoint.schema.json);
+schema = builtins.fromJSON (builtins.readFile ../docs/reference/schemas/v3/core.d2bus.org_Endpoint.schema.json);
 }

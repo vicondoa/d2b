@@ -3,6 +3,9 @@
 The fixed `system-core` bootstrap Provider: the one core-controller process
 per Zone, which is also `Provider/system-core`.
 
+See [Create a Provider](../../docs/how-to/create-provider.md) for the
+uniform crate layout, schema links, configuration, and test lanes.
+
 ## Provider identity
 
 `system-core`, referenced as `Provider/system-core`. It is one of the two

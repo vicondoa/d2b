@@ -520,7 +520,7 @@ fn classify_generated_surface(path: &str) -> Option<&'static str> {
         Some("cli-output-schema-json")
     } else if path.starts_with("docs/manpages/") {
         Some("cli-manpage")
-    } else if path.starts_with("docs/completions/") {
+    } else if path.starts_with("completions/") {
         Some("cli-completion")
     } else if path.starts_with("packages/d2b-contracts/proto/") && path.ends_with(".proto") {
         Some("guest-control-proto-source")

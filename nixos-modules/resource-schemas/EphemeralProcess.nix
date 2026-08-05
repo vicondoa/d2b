@@ -3,5 +3,5 @@
 { lib }:
 {
 type = "EphemeralProcess";
-schema = builtins.fromJSON (builtins.readFile ../docs/reference/schemas/v3/EphemeralProcess.schema.json);
+schema = builtins.fromJSON (builtins.readFile ../docs/reference/schemas/v3/core.d2bus.org_EphemeralProcess.schema.json);
 }

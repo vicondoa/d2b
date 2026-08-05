@@ -194,9 +194,9 @@ EOF
   d2bCliShellArtifactsPackage = pkgs.runCommand "d2b-cli-shell-artifacts" { } ''
     install -Dm644 ${../docs/manpages/d2b.1} "$out/share/man/man1/d2b.1"
     ${pkgs.gzip}/bin/gzip -n -c ${../docs/manpages/d2b.1} > "$out/share/man/man1/d2b.1.gz"
-    install -Dm644 ${../docs/completions/d2b.bash} "$out/share/bash-completion/completions/d2b"
-    install -Dm644 ${../docs/completions/d2b.zsh} "$out/share/zsh/site-functions/_d2b"
-    install -Dm644 ${../docs/completions/d2b.fish} "$out/share/fish/vendor_completions.d/d2b.fish"
+    install -Dm644 ${../completions/d2b.bash} "$out/share/bash-completion/completions/d2b"
+    install -Dm644 ${../completions/d2b.zsh} "$out/share/zsh/site-functions/_d2b"
+    install -Dm644 ${../completions/d2b.fish} "$out/share/fish/vendor_completions.d/d2b.fish"
   '';
 
   daemonConfigJson = builtins.toJSON {

@@ -3,5 +3,5 @@
 { lib }:
 {
 type = "User";
-schema = builtins.fromJSON (builtins.readFile ../docs/reference/schemas/v3/User.schema.json);
+schema = builtins.fromJSON (builtins.readFile ../docs/reference/schemas/v3/core.d2bus.org_User.schema.json);
 }

@@ -1,5 +1,8 @@
 # `d2b-provider-observability-otel`
 
+See [Create a Provider](../../docs/how-to/create-provider.md) for the
+uniform crate layout, schema links, configuration, and test lanes.
+
 ## Provider identity
 
 | Provider name | `observability-otel` |

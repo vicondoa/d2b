@@ -1,3 +1,10 @@
+//! Hermetic production-store and authenticated-bus support for the reaction
+//! benchmark in the parent `benches/` directory.
+//!
+//! The helper provisions an isolated redb store, opens a Resource-API watch,
+//! and supplies the named-stream plumbing used to measure the complete
+//! controller reaction path without touching a deployed daemon or host state.
+
 use std::fs::OpenOptions;
 use std::sync::Arc;
 

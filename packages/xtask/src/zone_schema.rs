@@ -3,7 +3,8 @@
 //!
 //! Two generators read this one model:
 //!
-//! * `gen-zone-schemas` writes `docs/reference/schemas/v3/<Type>.schema.json`,
+//! * `gen-zone-schemas` writes
+//!   `docs/reference/schemas/v3/core.d2bus.org_<Type>.schema.json`,
 //!   the committed JSON Schema for the emitted canonical resource object.
 //! * `gen-zone-nix-options` writes the committed generated Nix modules under
 //!   `nixos-modules/generated/`.
@@ -36,6 +37,7 @@ const TRANSPORT_PROVIDER_REF_PATTERN: &str = "^Provider/transport-[a-z][a-z0-9-]
 const RESOURCE_REF_PATTERN: &str = "^[A-Z][A-Za-z0-9]{0,62}/[a-z][a-z0-9-]{0,62}$";
 
 const API_VERSION: &str = "resources.d2bus.org/v3";
+const CORE_SCHEMA_NAMESPACE: &str = "core.d2bus.org";
 
 /// The canonical 19-type registry from `ADR-046-resource-object-model`. The
 /// unit test below pins it against `nixos-modules/resources.nix`, which is the
@@ -332,7 +334,10 @@ fn metadata_schema(type_name: &str) -> Value {
 fn resource_schema(schema: &ResourceTypeSchema) -> Value {
     json!({
         "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "$id": format!("https://d2bus.org/schemas/v3/{}.schema.json", schema.name),
+        "$id": format!(
+            "https://d2bus.org/schemas/v3/{}",
+            core_schema_artifact_name(schema.name)
+        ),
         "title": schema.name,
         "description": schema.description,
         "type": "object",
@@ -513,7 +518,10 @@ fn dto_resource_schema<T: JsonSchema>(
 fn resource_envelope_schema(name: &str, description: &str, spec: Value) -> Value {
     json!({
         "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "$id": format!("https://d2bus.org/schemas/v3/{}.schema.json", name),
+        "$id": format!(
+            "https://d2bus.org/schemas/v3/{}",
+            core_schema_artifact_name(name)
+        ),
         "title": name,
         "description": description,
         "type": "object",
@@ -986,6 +994,16 @@ fn standard_resource_schemas() -> Vec<(&'static str, Value)> {
     schemas
 }
 
+/// Return the committed artifact name for a standard ResourceType schema.
+///
+/// Qualified Provider schemas already carry their namespace in the committed
+/// filename.  The standard catalog uses the same flattened namespace shape so
+/// a schema filename is unambiguous without changing the API ResourceType
+/// spelling or its schema title.
+pub(crate) fn core_schema_artifact_name(resource_type: &str) -> String {
+    format!("{CORE_SCHEMA_NAMESPACE}_{resource_type}.schema.json")
+}
+
 /// `gen-zone-schemas`: emit the committed JSON Schema for every Zone-control
 /// ResourceType this model owns.
 pub fn gen_zone_schemas(repo_root: &Path) -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {
@@ -994,7 +1012,7 @@ pub fn gen_zone_schemas(repo_root: &Path) -> Result<Vec<PathBuf>, Box<dyn std::e
 
     let mut written = Vec::new();
     for (name, schema) in standard_resource_schemas() {
-        let path = out_dir.join(format!("{}.schema.json", name));
+        let path = out_dir.join(core_schema_artifact_name(name));
         let mut data = serde_json::to_string_pretty(&schema)?;
         data.push('\n');
         fs::write(&path, data)?;
@@ -1154,12 +1172,12 @@ in
 fn generated_options_module(schema: &ResourceTypeSchema) -> String {
     let mut rows = Vec::new();
     field_spec_rows(schema.spec_fields, &[], &mut rows);
+    let schema_file = core_schema_artifact_name(schema.name);
 
     let mut out = String::new();
     out.push_str(GENERATED_HEADER);
     out.push_str(&format!(
-        "# Source of truth: docs/reference/schemas/v3/{}.schema.json\n",
-        schema.name
+        "# Source of truth: docs/reference/schemas/v3/{schema_file}\n",
     ));
     out.push_str(&format!(
         "#\n# Field-level type, pattern, bound, and required checks for every\n\
@@ -1413,10 +1431,24 @@ mod tests {
     }
 
     #[test]
+    fn standard_schema_artifacts_are_namespace_prefixed() {
+        assert_eq!(
+            core_schema_artifact_name("Credential"),
+            "core.d2bus.org_Credential.schema.json"
+        );
+        assert_eq!(
+            core_schema_artifact_name("ZoneLink"),
+            "core.d2bus.org_ZoneLink.schema.json"
+        );
+    }
+
+    #[test]
     fn committed_artifacts_match_the_generator() {
         let root = repo_root();
         for (name, schema) in standard_resource_schemas() {
-            let schema_path = root.join(format!("docs/reference/schemas/v3/{}.schema.json", name));
+            let schema_path = root
+                .join("docs/reference/schemas/v3")
+                .join(core_schema_artifact_name(name));
             let mut expected = serde_json::to_string_pretty(&schema).expect("schema renders");
             expected.push('\n');
             let committed = fs::read_to_string(&schema_path)
@@ -1424,10 +1456,9 @@ mod tests {
             assert_eq!(committed, expected, "{} drifted", schema_path.display());
         }
         for schema in &RESOURCE_TYPE_SCHEMAS {
-            let schema_path = root.join(format!(
-                "docs/reference/schemas/v3/{}.schema.json",
-                schema.name
-            ));
+            let schema_path = root
+                .join("docs/reference/schemas/v3")
+                .join(core_schema_artifact_name(schema.name));
             let mut expected =
                 serde_json::to_string_pretty(&resource_schema(schema)).expect("schema renders");
             expected.push('\n');
