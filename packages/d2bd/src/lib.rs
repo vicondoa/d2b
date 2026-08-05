@@ -3711,6 +3711,7 @@ fn typed_shell_resource_error_frame(error: &TypedError) -> Value {
         | TypedError::UnsafeLocalShellFailed {
             kind: UnsafeHost::ShellUnavailable,
         } => ResourceErrorKind::UnsupportedCapability,
+        TypedError::RuntimeCapabilityUnsupported { .. } => ResourceErrorKind::UnsupportedCapability,
         TypedError::GuestControlShellFailed {
             kind: Guest::Transport,
         }
@@ -30284,6 +30285,31 @@ mod broker_dispatch_tests {
 
         let err = map_shell_attach_response(attach).expect_err("guest error maps");
         assert_eq!(err.kind(), "guest-control-shell-capability-unavailable");
+    }
+
+    #[test]
+    fn typed_shell_runtime_capability_error_maps_to_closed_unsupported_capability() {
+        let frame = super::typed_shell_resource_error_frame(
+            &crate::typed_error::TypedError::RuntimeCapabilityUnsupported {
+                vm: "/private/workload.d2b".to_owned(),
+                runtime_kind: "unsafe-local".to_owned(),
+                capability: "persistent-shell".to_owned(),
+                verb: "shell".to_owned(),
+            },
+        );
+        assert_eq!(
+            frame,
+            json!({
+                "type": "error",
+                "error": {
+                    "kind": "unsupported-capability",
+                    "errorClass": "unsupported-capability",
+                    "retryClass": "never",
+                    "message": "unsupported-capability",
+                    "remediation": "inspect the ShellSession Provider state and retry after its authoritative runtime is ready",
+                }
+            })
+        );
     }
 
     #[test]
