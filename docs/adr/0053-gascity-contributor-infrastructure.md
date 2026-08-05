@@ -19,10 +19,12 @@
   Rust profile. `security` gains an explicit adversarial penetration-tester
   mandate; `product` gains scope and gap analysis, external contract fidelity,
   and a controller-assigned Gas City profile for reviews of this record; `docs`
-  gains intra-document coherence. The record gains one producer-written field,
-  `relevant`, with effective relevance derived by the controller so a session
-  cannot opt a reviewer out.
-  **D21 is added** and carries the whole contract, with **M33 through M38**
+  gains intra-document coherence. The record gains two producer-written fields,
+  `relevant` and the closed-shape `prior_resolutions`, with effective relevance
+  derived by the controller so a session
+  cannot opt a reviewer out and a held reviewer cannot release itself without a
+  complete structured resolution of every prior finding.
+  **D21 is added** and carries the whole contract, with **M33 through M40**
   added as its acceptance items.
   **D7, D8, D9, D10, D20, P2, the non-goals list, M7, M10 and M14 are amended
   in place**, the "What we leverage upstream" rows for
@@ -31,7 +33,11 @@
   change created. Three earlier statements are **withdrawn**: that `PanelRecord`,
   `PanelRequest` and `validate_record_set` are preserved byte-identical, that
   the roster is a closed ten-role set, and, from an earlier revision of this
-  same amendment, that `rust` remains an optional depth seat.
+  same amendment, that `rust` remains an optional depth seat. Four statements
+  from earlier revisions **of this amendment** are corrected in place: that
+  content rules evaluate added lines only, that a shebang is a content rule,
+  that an over-bound change surface is simultaneously a refusal and a fallback,
+  and that `recommendations` is the only structured channel the record needs.
   Every other decision in this record
   stands unchanged, and nothing here is superseded. None of this is implemented
   yet; the committed code still carries the ten-role roster, `PanelRole::Rust`
@@ -553,8 +559,17 @@ It does exactly three things:
 1. **Dispatch.** It selects the roster per D21, launches or authorizes panel
    dispatch under a fixed provider, model and effort profile that it owns, and
    emits the trusted dispatch record carrying both the binding and the roster.
-   If the seats must themselves run as Gas City sessions, the trusted binding
-   and the trusted roster still come from the controller's own dispatch, never
+   **It also constructs the bounded per-seat review payload D21 defines** -
+   candidate address, staged diff locators and digests, validation evidence
+   reference, assigned profiles, and the seat's open prior findings as
+   resolution obligations - dispatches it or hands it to the trusted
+   dispatcher, and binds its digest per seat into that same dispatch record.
+   The orchestrator transports it and never authors it, which is what stops a
+   held reviewer from being starved of its own findings by the party with an
+   interest in a shorter round.
+   If the seats must themselves run as Gas City sessions, the trusted binding,
+   the trusted roster and the bound payload digests still come from the
+   controller's own dispatch, never
    from session-written state. P2 must prove that; if it cannot, the Gas City
    panel does not ship.
 2. **Approval.** It receives operator decisions on the operator endpoint and
@@ -583,7 +598,8 @@ made in the other direction.
 `--records DIR`:
 
 > **Amended 2026-08-04.** The byte-identity sentence above is **withdrawn in
-> part**. D21 adds one producer-written field to `PanelRecord`, makes the
+> part**. D21 adds two producer-written fields to `PanelRecord`, `relevant` and
+> the closed-shape `prior_resolutions`, makes the
 > roster checks in `PanelRequest::validate`, `validate_record_set` and
 > `PanelAttestation::validate` roster-driven rather than fixed at ten, with the
 > admitted cardinality set by the candidate's surface class, and bumps
@@ -593,6 +609,10 @@ made in the other direction.
 > checks over `run_id`, `receipt_locator` and `output_sha256`, the
 > `signoff` iff empty-`recommendations` predicate, the refusal of any set
 > containing a finding, and the rule that no producer string is ever evidence.
+> D21 adds one reading-order requirement that D8's typed verifier must honour:
+> the schema version is read by a permissive envelope pre-parse **before**
+> strict deserialization, so a cross-version artifact produces the version
+> error rather than an opaque unknown-field or unknown-variant one.
 > The rest of D8 below, including both trusted-evidence variants, the typed
 > verifier, the error taxonomy and the migration wrapper, is unaffected.
 
@@ -1156,22 +1176,33 @@ before the push is still an attempt.
 **Merging stays human.** No merge, no auto-merge, no merge queue in v1.
 
 
-**The PR body is rendered by the orchestrator from the seal**, not by the
-publisher, because delivery state is readable only by its owning uid. It
-carries the panel result as `<n>/<n> unanimous`, where `n` is the size of the
-attested roster, taken from the attested record set, the integration commit,
-`snapshot_sha256`, `candidate_id`, `content_id`, the round count, the surface
-class the roster was sized from, a per-seat table of role, verdict and receipt
-locator that renders a `relevant: false` pass **distinctly** from a substantive
-sign-off, the selection reason for every seat, a validation evidence summary by
-reference or digest, the route input summary, the verification matrix summary,
-the simplification outcome, unresolved risks, and an explicit statement that
-merge requires human action.
-It carries no transcripts, credentials, raw identifiers or authenticated URLs,
-and it is bounded in bytes. PR creation is impossible while any finding stands,
-a roster seat is missing, the roster violates D21's composition rules, the
-snapshot is stale, the binding is underived, or the publication approval is
-absent or bound to different bytes.
+**The PR body has a trusted half and a narrative half.** *Amended 2026-08-04
+by D21.* The **canonical review block** is rendered by the **controller** into
+the publication manifest as bounded bytes inside an explicit delimited block,
+and carries the surface class the roster was sized from, the selected roster
+with each seat's role, verdict, selection reason and receipt locator, the
+`<n>/<n> unanimous` result over the attested roster, the bound profile set, and
+any unresolved or held state. The publisher **reconstructs that block
+independently from the manifest and compares it byte for byte** against what it
+is asked to publish, refusing outright on any difference. The orchestrator
+renders the **narrative** half from the seal, outside the delimiters: the
+integration commit, `snapshot_sha256`, `candidate_id`, `content_id`, the round
+count, a validation evidence summary by reference or digest, the route input
+summary, the verification matrix summary, the simplification outcome,
+unresolved risks, and the explicit statement that merge requires human action.
+An earlier revision had the orchestrator render all of it, which put the sentence
+reporting whether the review happened under the control of the party with the
+strongest interest in it looking complete.
+
+Within the canonical block a `relevant: false` pass renders **distinctly** from
+a substantive sign-off.
+The body carries no transcripts, credentials, raw identifiers or authenticated
+URLs, and it is bounded in bytes. PR creation is impossible while any finding
+stands,
+a roster seat is missing, the roster violates D21's composition rules, a held
+seat is unreleased, the canonical block does not reconstruct, the snapshot is
+stale, the binding is underived, or the publication approval is absent or bound
+to different bytes.
 
 **D10. Three identities in v1, and the boundary is stated honestly.** The
 delivery state root is `0700`, uid-owned, checked by uid equality rather than
@@ -1515,7 +1546,11 @@ layout, retention algorithm or sharding; unit names beyond Gas City's real
 ones; the egress rule syntax and allowlist resolution; the publisher's exact
 invocation; the Discord approval adapter, if P5 permits one; and, added by the
 2026-08-04 amendment, the wire shape of the change-surface artifact, the panel
-roster artifact and the continuity ledger that D21 requires. An ADR that
+roster artifact, the per-seat review payload and the continuity ledger that D21
+requires. Their **retention** is deliberately not on this list: D21 classifies
+all four into D17's existing round-input and audit-floor classes under a single
+enforcing owner, because deferring a bound is how an artifact becomes a disk
+incident, while deferring a wire shape costs nothing. An ADR that
 freezes the hard-to-reverse details while deferring the easy ones has the
 trade backwards, which is what the previous revision did.
 
@@ -1614,7 +1649,7 @@ round count rather than adding to it.
 
 **The surface classifier is a deny-by-default allowlist, and it fails closed.**
 `class(candidate)` is `docs-only` if and only if **every** path in the change
-surface satisfies `docs_only(p)`; otherwise it is `code-operative`. All five
+surface satisfies `docs_only(p)`; otherwise it is `code-operative`. All six
 conditions must hold for `docs_only(p)` to be true:
 
 1. `p` ends in `.md`. Every other extension, and every extensionless path, is
@@ -1651,6 +1686,20 @@ conditions must hold for `docs_only(p)` to be true:
    and `packages/d2b-resource-api/src/generated`. A drift test asserts the
    table's copy equals that array, so the duplication is checked rather than
    trusted.
+6. `p` is not under `docs/contributing/`. Those files are Markdown by
+   extension and **binding operative procedure** by function: `AGENTS.md` is an
+   index that routes an agent into the matching `docs/contributing/` page and
+   instructs it to read that page before acting, and those pages carry the
+   rules the agent then follows. A change to `panel-review.md` or
+   `gates-and-lints.md` rewrites how later work is reviewed and validated, in
+   exactly the way a change to `.github/agents/**` does, so it takes the
+   code-operative roster. The line is drawn at that directory and not one level
+   up because root `CONTRIBUTING.md` delegates operational policy to
+   `AGENTS.md` and carries none of its own, while `AGENTS.md` and every nested
+   `AGENTS.md` are already excluded by condition 3. Any future
+   runtime-loaded or procedure-binding instruction surface outside `docs/`
+   is already code-operative by construction under condition 2, which is what
+   `.specify/memory/constitution.md` relies on today.
 
 Three refusals complete it, all in the fail-closed direction: an **empty**
 change surface classifies `code-operative`; a **rename** is classified from
@@ -1722,35 +1771,129 @@ would assume the selector can change an outcome, while a rule naming a seat
 outside the pool has no resolvable target at all.
 
 Path rules match repository-relative paths on either side of a rename, and
-apply to every path in the change surface. **Content rules match added lines
-only, case-sensitively, against a fixed token list, and are evaluated only on
-paths that individually fail `docs_only(p)`.** A token in prose is a citation,
-not a call: this record mentions `pidfd`, `deny_unknown_fields` and
-`DELIVERY_SCHEMA_VERSION` repeatedly without any of them being a use. The last
-five rows are **profile rules**, not seat rules: they select nobody and bind a
-profile onto a seat that is mandatory anyway.
+apply to every path in the change surface. **Content rules match changed lines
+- added and deleted alike - case-sensitively, against a fixed token list, and
+are evaluated only on paths that individually fail `docs_only(p)`.** A token in
+prose is a citation, not a call: this record mentions `pidfd`,
+`deny_unknown_fields` and `DELIVERY_SCHEMA_VERSION` repeatedly without any of
+them being a use.
+
+**Deleted lines count, and this is a correction of a whole class rather than of
+one rule.** An earlier revision of this amendment evaluated content rules on
+added lines only, which silently exempted the single change shape each of these
+seats most needs to see: a removal. Deleting an `nftables` rule, dropping
+`O_CLOEXEC` from an `open` call, removing a `mkForce` neutralizer, or deleting
+the `Drop` impl that released a resource are all reachability, syscall or
+ownership changes that produce no added token at all, so an added-line-only
+selector returns no match and the specialist is never seated. The rule is
+therefore stated once, for every content selector in the table -
+`net-tokens`, `kernel-tokens` and `reliability-tokens` today, and any content
+selector added later - rather than patched per row: **a token on either side of
+a changed line on a code-operative path selects the seat.** The cost is
+over-selection on a pure move or rename that carries a token through, which is
+the fail-closed direction this record already chose everywhere else. Rules with
+a path clause are unaffected, because a path rule already matches both sides of
+a rename.
+
+The last five rows are **profile rules**, not seat rules: they select nobody
+and bind a profile onto a seat that is mandatory anyway.
 
 | Rule id | Selects | Matches |
 | --- | --- | --- |
 | `nix-sources` | `nixos` | `**/*.nix`, `flake.lock`, `nixos-modules/**`, `nix/**`, `pkgs/**`, `templates/**`, `examples/**` |
-| `net-paths` | `networking` | `nixos-modules/network*.nix`, `nixos-modules/net.nix`, and any path whose basename contains `firewall`, `nftables`, `bridge`, `vsock`, `dhcp` or `dns` |
-| `net-tokens` | `networking` | added line contains any of `nftables`, `iptables`, `AF_VSOCK`, `systemd.network`, `169.254.`, `bind(`, `listen(`, `resolv` |
+| `net-paths` | `networking` | `nixos-modules/network*.nix`, `nixos-modules/net.nix`, `nixos-modules/net-*.nix`, `packages/d2b-provider-network-local/**`, `packages/d2b-zone-routing/**`, `packages/d2b-realm-router/**`, `packages/d2b-realm-transport/**`, `docs/reference/inet-d2b-chains.md`, `docs/reference/host-egress-policy.md`, and any path whose basename contains `firewall`, `nftables`, `nft`, `bridge`, `vsock`, `dhcp`, `dnsmasq`, `dns`, `resolv`, `route`, `ifname`, `egress`, `mtu` or `networkmanager`, matched case-insensitively on the basename |
+| `net-tokens` | `networking` | changed line contains any of `nftables`, `iptables`, `AF_VSOCK`, `AF_INET`, `systemd.network`, `systemd-networkd`, `NetworkManager`, `169.254.`, `0.0.0.0`, `::/0`, `bind(`, `listen(`, `connect(`, `SO_BINDTODEVICE`, `resolv`, `/etc/hosts`, `masquerade`, `snat`, `dnat`, `forward`, `mtu`, `MTU`, `mss`, `MSS`, `TCPMSS`, `ip route`, `RTM_`, `gateway`, `default via` |
 | `kernel-paths` | `kernel` | `nixos-modules/minijail*`, `packages/d2b-priv-broker/**`, `packages/d2b-guest-shell-runner/**` |
-| `kernel-tokens` | `kernel` | added line contains any of `pidfd`, `cgroup`, `clone3`, `unshare(`, `setns`, `seccomp`, `ioctl`, `openat2`, `RESOLVE_`, `MS_`, `/proc/`, `/sys/fs/cgroup` |
+| `kernel-tokens` | `kernel` | changed line contains any of `pidfd`, `cgroup`, `clone3`, `unshare(`, `setns`, `seccomp`, `ioctl`, `openat2`, `RESOLVE_`, `MS_`, `/proc/`, `/sys/fs/cgroup`, `signal(`, `sigaction`, `signalfd`, `SIGKILL`, `SIGTERM`, `SIGCHLD`, `SIGPIPE`, `SA_RESTART`, `O_CLOEXEC`, `FD_CLOEXEC`, `fcntl(`, `F_OFD_`, `flock(`, `mount(`, `umount`, `MNT_`, `statx`, `renameat2`, `EXDEV`, `EINTR`, `EAGAIN`, `ENOSPC` |
 | `reliability-paths` | `reliability` | `packages/xtask/src/delivery/**`, `packages/d2bd/src/**`, `packages/d2b-priv-broker/src/**`, `packages/d2b-resource-store*/**`, `nixos-modules/store.nix`, and any path under `packages/*/src/**` whose basename contains `storage`, `state`, `lifecycle`, `session`, `shutdown`, `restart`, `pool`, `adopt`, `lock`, `lease`, `sync`, `reconcile`, `supervisor` or `cleanup` |
-| `reliability-tokens` | `reliability` | added line contains any of `Drop for`, `tokio::spawn`, `thread::spawn`, `JoinHandle`, `Mutex<`, `RwLock<`, `Atomic`, `catch_unwind`, `rename(`, `fsync`, `O_TMPFILE`, `SCHEMA_VERSION`, `deny_unknown_fields`, `EBUSY` |
+| `reliability-tokens` | `reliability` | changed line contains any of `Drop for`, `tokio::spawn`, `thread::spawn`, `JoinHandle`, `Mutex<`, `RwLock<`, `Atomic`, `catch_unwind`, `rename(`, `fsync`, `O_TMPFILE`, `SCHEMA_VERSION`, `deny_unknown_fields`, `EBUSY` |
 | `agentic-paths` | `agentic` | `.github/agents/**`, `.github/prompts/**`, `.github/instructions/**`, `.github/skills/**`, `.github/copilot-instructions.md`, `scripts/copilot/**`, `.gc/**`, `**/AGENTS.md`, `**/*.formula.toml`, `**/pack.toml`, `**/prompt.template.md`, `docs/contributing/copilot-agents.md`, `docs/contributing/panel-review.md`, `docs/adr/0053-gascity-contributor-infrastructure.md`, `docs/adr/specs/0053-panel-prompt-sources.md` |
 | `software-rust-profile` | nobody; adds `rust` to `software.profiles` | `**/*.rs`, `**/Cargo.toml`, `Cargo.lock`, `rust-toolchain*.toml`, `**/BUILD.bazel`, `**/*.bzl`, `MODULE.bazel*` |
 | `software-python-profile` | nobody; adds `python` to `software.profiles` | `**/*.py`, `pyproject.toml`, `setup.py`, `setup.cfg`, `requirements*.txt` |
-| `software-shell-profile` | nobody; adds `shell` to `software.profiles` | `**/*.sh`, `**/*.bash`, any extensionless path whose parent directory is named `bin` or `tools`, or added line starting with any of `#!/bin/sh`, `#!/usr/bin/env sh`, `#!/bin/bash`, `#!/usr/bin/env bash`, `#!/bin/dash`, `# shellcheck shell=` |
+| `software-shell-profile` | nobody; adds `shell` to `software.profiles` | `**/*.sh`, `**/*.bash`, any extensionless path whose parent directory is named `bin` or `tools`, or any path whose **interpreter fact** is `shell` or `undecidable` |
 | `software-nix-profile` | nobody; adds `nix` to `software.profiles` | `**/*.nix`, `flake.lock` |
 | `adr-0053-product-profile` | nobody; binds `product.profile = gascity` | `docs/adr/0053-*.md`, `docs/adr/specs/0053-*` |
 
+**The interpreter fact is a current-file classifier input, not a content
+rule.** This is the second correction of the added-line class, and it is a
+different fix from the deleted-line one above because the defect is different:
+a shebang is a property of the **file**, not of the hunk. An added-line
+selector binds the shell profile on the commit that creates
+`tests/tools/layer1-jobs` and on no commit afterwards, because a later edit
+touches some line other than the first, so the mandatory software seat reviews
+an
+edit to a Bash script with no Bash or POSIX standards attached to it. That is
+the exact failure the profile exists to prevent.
+
+So the controller derives one bounded fact per path, from the candidate
+snapshot rather than from the diff:
+
+```
+interpreter_fact(p) = shell | other | undecidable | absent
+```
+
+- It is computed **only** for paths that individually fail `docs_only(p)` and
+  that have no recognised extension. A `.md` file quoting a shebang, and a
+  `.rs` file whose profile is already decided by extension, never produce one.
+  A shebang in prose therefore still binds nothing, which is the property the
+  earlier content-rule restriction was protecting and which is preserved here.
+- It reads the **first line** of the file at `head_oid`, or at `base_oid` when
+  the path is deleted at head, and nothing else. No other byte of the file is
+  read, so this is not a general content scan re-entering by another door.
+- The bound is **256 bytes**, which is `BINPRM_BUF_SIZE` and therefore the
+  length past which the kernel itself will not honour the interpreter line.
+  Measured 2026-08-04 from `include/linux/binfmts.h` in the linux-headers
+  6.18.7 derivation this tree resolves, `BINPRM_BUF_SIZE` is 256; it was 128
+  before Linux 5.1, and this repository's kernel floor is far above that, so
+  256 is the live value rather than the remembered one. A first line longer
+  than the bound is not a shebang the system would execute, so truncating where
+  the loader truncates is the defensible bound rather than an invented number.
+- `shell` when the truncated first line begins with `#!` and its interpreter
+  path's basename is one of `sh`, `bash`, `dash`, `ksh`, `zsh`, or begins with
+  `#!` and names `env` followed by one of those, or when it is a
+  `# shellcheck shell=` directive, which is how a sourced fragment with no
+  shebang declares its dialect.
+- `other` when the first line is a shebang naming any other interpreter.
+- `undecidable` when the first line is not valid UTF-8, contains a NUL, or is
+  truncated by the bound without resolving. `undecidable` **binds the shell
+  profile**, because over-binding a standards profile costs a paragraph and
+  under-binding one costs the review, which is the same rule this record
+  applies to over-bound profile binding below.
+- `absent` when the path exists on neither side, which only a malformed change
+  surface produces. It binds nothing and is not an error by itself.
+
+If the controller cannot read the candidate snapshot at all, that is
+`change-surface-snapshot-unreadable`, a typed refusal with a remedy, not a
+silently empty fact set: a fact set that fails open is worse than no fact set,
+because the roster still looks complete. The fact is carried in the
+change-surface artifact beside the path list, so the recompute command
+reproduces `profiles` offline without a Git tree, exactly like every other
+selection input.
+
+Measured 2026-08-04, this tree commits four extensionless files with a shebang:
+`tests/tools/ci-shell` (`#!/bin/sh`), `tests/tools/layer1-jobs`
+(`#!/usr/bin/env bash`), `tests/tools/scrub-shell-environment` (`#!/bin/sh`)
+and `labs/window-chrome/bin/d2b-chrome-lab` (`#!/usr/bin/env bash`). The
+parent-directory clause already catches all four, three under `tests/tools/`
+and one under a `bin/` directory; the interpreter fact is what catches the
+fifth one, wherever it lands, on every edit rather than only on the commit that
+created it.
+
 **`software`'s language profiles are controller-derived, exactly like
-`product`'s.** The four `software-*-profile` rules bind a set,
-`software.profiles`, in the dispatch record; the gate refuses a `software`
-record produced under a different set for that candidate. This reuses the
-mechanism `adr-0053-product-profile` already needs rather than inventing a
+`product`'s, and they are dispatch data rather than verdict data.** The four
+`software-*-profile` rules bind a set, `software.profiles`, in the **trusted
+dispatch record**. A `PanelRecord` has no profile field at all and never gains
+one, so "a record produced under the wrong profile set" is not a state a
+producer can express: a record carrying a profile field is refused by
+`deny_unknown_fields` before any profile logic runs, and the binding a seat
+actually reviewed under is the one the controller wrote into the per-seat
+review payload whose digest the dispatch record binds. What the gate compares
+is therefore dispatch data against dispatch data - the dispatch record's bound
+set against `profiles(change_surface)` recomputed from the bound
+change-surface artifact, and the per-seat review payload's assigned-profile
+list against the dispatch record's binding - never a producer field against a
+controller field. This reuses the mechanism
+`adr-0053-product-profile` already needs rather than inventing a
 second one, and it converts "did the seat apply the Rust standards?" from a
 prompt hope into a dispatch fact a human can read in the PR body. Six
 properties are decided here:
@@ -1775,14 +1918,14 @@ properties are decided here:
   profile fires on Nix source, because that is what carries Nix code quality.
   The overlap is intended and the ownership split is stated below.
 - **`software-shell-profile` is the one rule with both a path clause and a
-  content clause**, because this tree commits four executable shell scripts
-  with no extension and a suffix rule would miss them. Its parent-directory
-  clause catches the two under `tests/tools/` and the two under a `bin/`
-  directory measured 2026-08-04; its shebang clause catches anything else,
-  under the same restriction every content rule carries, that it is evaluated
-  only on paths which individually fail `docs_only(p)`. A shebang quoted in
-  prose therefore never binds a profile.
-- **Bound-exceeded binds every profile, not none.** When an oversized change
+  current-file clause**, because this tree commits four executable shell
+  scripts with no extension and a suffix rule would miss them. Its
+  parent-directory clause catches all four measured 2026-08-04; its interpreter
+  fact, defined above, catches anything else on **every** edit rather than only
+  on the commit that introduced the shebang, and is computed only for
+  extensionless paths that individually fail `docs_only(p)`. A shebang quoted
+  in prose therefore never binds a profile.
+- **Over-bound binds every profile, not none.** When an over-bound change
   surface makes selection return the entire pool, profile binding returns the
   entire profile set by the same reasoning: an over-cited standard costs a
   paragraph, an un-applied one costs the review.
@@ -1801,20 +1944,66 @@ so `quorum_fill` adds nothing. The roster is the seven mandatory seats plus
 `agentic`, **exactly eight**, and `product` runs under the Gas City profile.
 **That is the roster for the panel review of this amendment.**
 
-**Over-selection is the fail-closed direction.** The change surface is a new
+**Over-selection is the fail-closed direction, and it is a state rather than a
+refusal.** The change surface is a new
 bounded artifact, derived by the delivery tooling from the candidate's
 `base_oid..head_oid` across the repository set and digested into the dispatch
-record, so nothing downstream needs a Git tree to reason about it. If a
-candidate exceeds its bound, selection returns the **entire pool**. We can
-survive reviewing something twice; we cannot survive silently not reviewing it.
-The same rule applies to an unrecognised rule identifier or a trigger-table
-version the reader does not implement: refuse, or select everything, never
-select less.
+record, so nothing downstream needs a Git tree to reason about it.
+
+The bound is a versioned constant beside the trigger table:
+`change_surface_max_paths = 4000` and `change_surface_max_bytes = 8 MiB` for
+the serialized artifact, whichever binds first. Measured 2026-08-04 this
+repository tracks 2675 files, so the path bound is one candidate that rewrites
+the entire tree and a half, which no reviewable change is; the byte bound
+exists because a path list is not the only thing that grows, the interpreter
+facts and per-path class decisions travel with it. Both are constants in the
+same versioned table as the rules, so raising either is a reviewed commit that
+bumps the table version, and no operator flag reaches them at run time.
+
+**An over-bound surface cannot be both a refusal and a fallback, and an earlier
+revision of this amendment said it was both.** It is one state, `over_bound`,
+carried on the change-surface artifact and on the dispatch record, and it has
+two distinct consequences at two distinct points:
+
+- **Selection is total on it and over-selects.** The state is carried on the
+  change-surface artifact and copied onto the dispatch record, and it
+  short-circuits selection before any rule is evaluated: `select` returns the
+  **entire pool**, `profiles` returns the **entire profile set**, and the panel
+  runs at full width. The gate recomputes the same way from the same field, so
+  a roster of twelve on an `over_bound` candidate is exactly as checkable as
+  any other. There is no path on which an over-bound candidate is
+  reviewed by fewer seats than a bounded one, which is the whole point: we can
+  survive reviewing something twice, we cannot survive silently not reviewing
+  it.
+- **Sealing and publication refuse.** `panel-attest` emits no seal and the
+  publisher refuses, with the typed `change-surface-over-bound` error, even on
+  a unanimous full-pool result. A candidate too large for the tooling to
+  describe is a candidate whose roster nobody can recompute offline, and a seal
+  is a claim that somebody can. The remedy is in the error and is not "contact
+  somebody": split the candidate until its surface fits the bound, or raise
+  `change_surface_max_paths` or `change_surface_max_bytes` in the versioned
+  table through a reviewed commit that bumps the table version, then re-run
+  selection against the new table.
+
+Those are different outcomes at different times and a test must distinguish
+them: the over-bound fixture is asserted to produce a twelve-seat roster and
+the full profile set **and** to be refused at seal, and a fixture that
+refuses at selection, or that seals, fails the item either way.
+
+An unrecognised rule identifier and a trigger-table version the reader does not
+implement are **plain refusals**, not this state, because neither yields a
+roster anyone can compute: an unimplemented table cannot be evaluated at all.
+Both carry remedies in the typed-error table below. The invariant that survives
+all three is the one that matters: **never select less**.
 
 **The `product` profile is controller-assigned, never session-declared.** When
 `adr-0053-product-profile` matches, the controller sets the `product` seat's
-profile to `gascity` in the dispatch record and the gate refuses a `product`
-record produced under any other profile for that candidate. Under that profile
+profile to `gascity` in the dispatch record and in that seat's review payload.
+Like `software.profiles`, this is dispatch data: a `PanelRecord` carries no
+profile field, so a producer-declared profile of any value is refused as an
+unknown field, and a mismatch is only expressible between the dispatch record
+and the recomputed rule set or between the review payload and the dispatch
+record. Under that profile
 the seat must check upstream behaviour claims against commit-pinned normative
 Gas City specifications and source, not against guides, and must respect the
 normativity ladder Gas City's own reference index declares. This exists because
@@ -1918,21 +2107,83 @@ wider pool from producing duplicate blocking findings.
   the capability assumed, then reach something with it, and carry a concrete
   exploitation path on every blocking finding.
 
-**The verdict gains exactly one producer-written field.** `PanelRecord` adds
-`relevant: bool`. Nothing else about the record becomes producer-written,
+**The verdict gains two producer-written fields, and both are closed shapes.**
+`PanelRecord` adds `relevant: bool` and `prior_resolutions`, a bounded list
+keyed by controller-issued finding identifiers. Nothing else about the record
+becomes producer-written,
 because a producer-written field is a forgery surface and D7's whole posture is
 that a producer string is never evidence. Round ordinal, selection reason, rule
 identifier, seat profile, surface class and effective relevance are
 **controller-derived** and live in the dispatch record, the roster artifact and
 the continuity ledger.
 
-Record-local rules, both rejections:
+**Why a second field, when an earlier revision of this amendment said one was
+enough.** That revision made the prior-recommendation duty a prompt
+requirement, stated plainly that `recommendations` was the only structured
+channel, and accepted that a held seat's resolution reasoning would arrive as
+summary prose nothing parses. That was wrong, and the failure is mechanical
+rather than aesthetic: a held seat could write `relevant: false`, which forces
+empty `recommendations` and therefore `signoff: true`, and leave `held` without
+anything anywhere proving its earlier finding was addressed. The reviewer
+holding the finding released itself. Closing that with a refusal of
+`relevant: false` from held seats was the obvious move and it is the wrong one,
+because it punishes an honest "I have nothing further" with a full extra round
+and contradicts the settled rule that a later `false` is ignored rather than
+rejected. The bypass closes on the **release condition** instead, and closing
+it needs a channel a gate can read.
+
+`prior_resolutions` is that channel and it is not a second findings channel.
+Each entry is `{ finding_id, state }` where `finding_id` is one of the open
+prior finding identifiers the controller issued to this seat in this candidate
+lineage and `state` is the closed enum `resolved | not_resolved`. There is no
+text field, no severity, no free-form note; the observation channel is still
+the summary and the blocking channel is still `recommendations`. One existing
+shape widens by one optional member as a consequence: a `recommendation` may
+carry `supersedes`, a single `finding_id`, which is how a `not_resolved` entry
+is tied to the finding that replaces it. That is a link, not a third field with
+semantics of its own, and it is named here so the count is honest.
+
+Record-local rules, now four, all rejections:
 
 - The existing predicate is unchanged and applies to **every** record:
   `signoff` is true if and only if `recommendations` is empty.
 - `relevant: false` requires `recommendations` empty. Combined with the above,
   a not-relevant record therefore always carries `signoff: true`. A
   not-relevant record with a recommendation is invalid.
+- `prior_resolutions` covers the seat's open prior finding identifiers
+  **exactly**: one entry per open identifier, no duplicates, and no identifier
+  the controller did not issue to this seat. Under-coverage, over-coverage and
+  an unknown identifier are each invalid. A seat with no open prior findings
+  carries an empty list; that is the ordinary first-round case.
+- A `not_resolved` entry requires a `recommendation` in the same record
+  carrying that `finding_id` as its `supersedes` value, and a `resolved` entry
+  forbids one. This is what keeps the two channels consistent with each other
+  and with `signoff`: any `not_resolved` implies a non-empty `recommendations`
+  and therefore `signoff: false`, so the existing predicate is preserved
+  exactly rather than qualified.
+
+**What is wire DTO and what is correct by construction.** The three flat
+fields above are the **wire DTO** and they stay flat, with
+`deny_unknown_fields`, every field mandatory, and no defaulting, because a
+transport shape that a human can read and a fixture can hand-write is worth
+more than an elegant one. The DTO is legal to construct in invalid
+combinations, and that is exactly why nothing downstream is allowed to hold
+one: admission parses the DTO into an **internal verdict type that cannot
+represent an inconsistent combination**, shaped as
+
+```
+Pass     { declared: Relevant | NotRelevant, resolutions: ResolutionSet }
+Blocking { recommendations: NonEmpty<Recommendation>, resolutions: ResolutionSet }
+```
+
+so `relevant: false` beside a recommendation, `signoff: true` beside a
+recommendation, and a `not_resolved` with no superseding recommendation are all
+unrepresentable after admission rather than merely rejected during it. The
+constructor is fallible, takes the seat's open-identifier set as an input, and
+is the only way to obtain the internal type. `EffectiveRelevance` is a separate
+controller-owned type that no producer record can construct, which is what
+stops the derived value from being confused with the claimed one three call
+sites later.
 
 `relevant: false` is a **pass, not an abstention**. Unanimity is therefore
 unchanged as a predicate: every seat on the roster signed off. What changes is
@@ -1958,45 +2209,78 @@ effective_relevant(seat) = OR over every round k so far of
 
 Once true it never becomes false for that candidate lineage. A later
 `relevant: false` from a seat that has already latched is **recorded and
-ignored** for relevance and continuity; it is not a rejection, because refusing
+normalized**: the record is admitted, the claim is stored verbatim, and the
+seat's effective relevance is the derived value, which is still true. It is not
+a rejection, because refusing
 an honest "I have nothing further" would cost a round to punish a verdict that
 changes nothing. The ledger stores both the claim and the derived value, so the
 divergence is visible rather than lost. **A session cannot opt a reviewer out
 by writing `relevant: false`**, which is the whole reason relevance is derived
-rather than asserted.
+rather than asserted. Everything downstream - the roster, `held`, both relevance
+floors, and the PR body - reads the derived value, never the claim, so there is
+no surface on which a normalized `false` behaves like a real one.
 
-**Reviewer continuity.** For a candidate lineage:
+**Reviewer continuity, and the release condition that closes the bypass.** For
+a candidate lineage:
 
-- `held = { seat : effective_relevant(seat) and the seat's most recent record
-  did not carry signoff true }`. Every seat in `held` is on the next round's
-  roster by construction of `select`.
+- The controller assigns every recommendation a stable `finding_id` when it
+  ingests the round that produced it. `open_findings(seat)` is the set of that
+  seat's issued identifiers not yet judged `resolved` in a later record by that
+  same seat. The identifiers are controller-owned: a producer cannot mint,
+  retire or rename one, and a record naming an identifier the controller did
+  not issue to that seat is refused.
+- `held = { seat : effective_relevant(seat) and not released(seat) }`, where
+  **`released(seat)` requires both halves and neither alone**: the seat's most
+  recent record carries `signoff: true`, **and** that record's
+  `prior_resolutions` covers every member of `open_findings(seat)` with
+  `state: resolved`. A true sign-off with an incomplete resolution set does not
+  release, and a complete resolution set without a true sign-off cannot occur,
+  because any `not_resolved` forces a superseding recommendation and therefore
+  `signoff: false`.
+- Every seat in `held` is on the next round's roster by construction of
+  `select`, and receives the controller-built review payload for that round
+  carrying its own open findings verbatim as **resolution obligations**. The
+  seat does not have to remember them and the orchestrator does not get to
+  choose which ones it is shown; both properties are the point.
+- **A normalized `relevant: false` from a held seat releases nothing by
+  itself.** Its effective relevance is true, so it stays in scope, and it
+  leaves `held` only by satisfying the same two-part condition every other
+  record satisfies. A held seat that genuinely has nothing further writes
+  `relevant: false`, `signoff: true` and a complete all-`resolved` resolution
+  set, which is a specific, attributable, gate-checkable claim about each prior
+  finding rather than a silence that reads like one.
 - A seat that has never been effectively relevant may be **rotated out** in a
   later round, subject to the composition invariants. A seat that has been
-  effectively relevant and has not yet signed off may not.
-- A seat whose most recent record carried `signoff: true` leaves `held`, but
+  effectively relevant and has not yet released may not.
+- A released seat leaves `held`, but
   the trigger table immediately re-selects it if any of its rules still match
   the new change surface. Release is therefore only real when the change
   surface has genuinely moved away from that seat. This is the mechanism, not a
   promise.
 - Seat **identity** is pinned while a seat is in `held`: the same role bound to
-  the same provider, model, effort and prompt digest. Swapping a reviewer that
+  the same provider, model, effort and prompt digest, and the review payload
+  carrying the resolution obligations is addressed to that pinned identity.
+  Swapping a reviewer that
   is holding a finding for a fresh one is how a finding gets laundered, so it
-  is forbidden until that reviewer returns a true sign-off.
+  is forbidden until that reviewer releases, and a substituted identity is
+  refused with the obligations still open.
 - New specialists are added freely as fixes change the surface. Roster growth
   between rounds needs no justification beyond the trigger table.
 - Mandatory seats are never in the rotatable set at all.
 
-**Every held reviewer reads its own prior findings before writing a new
-verdict.** A seat whose earlier record on this candidate lineage carried
-recommendations opens its next record's summary by taking each of those
-recommendations in turn and judging it **resolved or not resolved against the
-new delta**, before it issues any verdict. This is the cheapest round-count
-reduction available: today a held seat can restate a fixed finding or drop an
-unfixed one with equal ease, and neither is visible. It is a prompt
-requirement, not a gate refusal, and this record says so plainly rather than
-implying a control it does not have: `recommendations` is the only structured
-channel the record has, and D21 deliberately did not add a second one to carry
-per-finding resolution state.
+**Every held reviewer judges its own prior findings before writing a new
+verdict, and now the judgement is structured.** A seat whose earlier record on
+this candidate lineage carried recommendations takes each open finding in turn
+and judges it **resolved or not resolved against the new delta**, before it
+issues any verdict. The prose form of that judgement still belongs in the
+summary, where a human reads it, and the prompt still requires it. What changed
+in this revision is that the judgement is **also** recorded in
+`prior_resolutions`, where the gate reads it, so the claim is no longer carried
+solely by prose nothing parses. An earlier revision of this amendment said
+`recommendations` was the only structured channel the record had and accepted
+the consequence; the consequence was a reviewer that could release itself, so
+the channel was added. The two directions still cost differently and the record
+says which: a restated fix costs a paragraph, a dropped miss costs the defect.
 
 **Continuity and content invalidation are reconciled, not traded off.** The
 existing rule stands untouched: any content change invalidates every prior
@@ -2008,6 +2292,44 @@ which do carry across, precisely so that a content change cannot quietly drop
 the reviewer whose finding caused it. A seat that signed off in round two has
 not signed off on round three's bytes; it produces a fresh record or the panel
 does not pass.
+
+**The reviewer's context is built by the trusted controller, not by the
+orchestrator.** The roster and the profile binding are worth nothing if the
+untrusted orchestrator decides what each seat actually receives: an
+orchestrator that omits a held seat's prior findings, or hands it the wrong
+profile set, produces a panel whose metadata is internally consistent and whose
+review never happened. So the controller of D7 constructs, per seat per round,
+a **bounded review payload** carrying exactly:
+
+1. the candidate address: `candidate_id`, `content_id`, `snapshot_sha256`, and
+   the `base_oid..head_oid` ranges for the delta and for full context;
+2. the staged diff **locators and digests**, not the bytes, so the payload
+   stays bounded while remaining unambiguous about what was reviewed;
+3. the validation evidence reference and its digest;
+4. the seat's assigned profiles, `product.profile` or the members of
+   `software.profiles`;
+5. the seat's open prior findings verbatim, as **resolution obligations**, and
+   nothing about any other seat's findings.
+
+It carries no `selection_reason`, no `matched_rules` and no surface class, per
+the rule above. The controller either dispatches the payload itself or hands it
+to the trusted dispatcher, and **binds the payload digest, per seat, into the
+trusted dispatch record**. The orchestrator may transport it and may not author
+or alter it: admission refuses a record whose seat has no bound payload digest,
+and refuses a payload whose digest does not match the one the dispatch record
+carries.
+
+**This deliberately does not demand a cryptographic receipt from the model
+provider.** D7 already states that no such artifact is known to exist for
+`github-copilot` and that requiring one would make the design unimplementable;
+that stands, and nothing here reopens it. The trust anchor is the controller's
+own dispatch record, produced under the controller's uid, which the `gascity`
+identity cannot write. The residual is the one D7 already names: a controller
+that fabricates a dispatch record defeats this, and the structural defence is
+unchanged, that the panel model is not the coding model, so a lane cannot both
+author and attest. What the payload binding adds is narrower and worth stating
+exactly: the orchestrator can no longer starve a seat of its obligations
+without the digest mismatching.
 
 **Two floors stop the mandatory seats from becoming a rubber stamp.** Both are
 derived from controller-owned inputs and both are refusals:
@@ -2021,6 +2343,20 @@ derived from controller-owned inputs and both are refusals:
   there is one definition of what counts as code and both the floor and the
   seat count move together.
 
+**The canonical review block of the PR body is trusted output.** D9 has the
+orchestrator render the PR body from the seal. That stays true for the
+narrative half and is **amended for the half a human uses to decide whether the
+review happened at all**. The canonical review block - surface class, the
+selected roster with each seat's selection reason and verdict, the
+`<n>/<n> unanimous` result, the bound profile set, and the unresolved and held
+state - is rendered by the **controller** into the publication manifest as
+bounded bytes inside a delimited block, and the publisher **independently
+reconstructs it from the manifest and compares byte for byte** before creating
+or editing the pull request, refusing on any difference. The orchestrator may
+supply separate narrative outside the delimiters and cannot author or alter
+what is inside them. Without this the party with the strongest incentive to
+hide a reduced roster is the party writing the sentence that reports it.
+
 **What the gate enforces, and what it does not.** This boundary is stated
 plainly because the alternative is a claim that does not survive contact.
 
@@ -2030,14 +2366,20 @@ plainly because the alternative is a claim that does not survive contact.
   equals `select(matched_rules, class, held)` recomputed from the trusted
   dispatch record's own fields; that the roster in the request equals the
   roster in the dispatch record; one record per roster seat and none outside
-  it; the record-local predicates; unanimity; that `held` is a subset of
-  `roster`; that the dispatch record's controller-derived effective-relevance
+  it; the record-local predicates, including the exact-coverage rule on
+  `prior_resolutions` and the superseding-recommendation rule; unanimity; that
+  `held` is a subset of
+  `roster`; that no seat in the dispatch record's `held` set was released
+  without both halves of the release condition; that the dispatch record's
+  controller-derived effective-relevance
   set is consistent with the final round it is looking at, so a seat writing
   `relevant: true` cannot be absent from it; both relevance floors
-  evaluated over that set; and that every seat profile the dispatch record
+  evaluated over that set; that every seat on the roster has a bound review
+  payload digest and that each submitted payload matches it; and that every
+  seat profile the dispatch record
   binds, `product.profile` and each member of `software.profiles`, is a
-  declared profile of a seat that is on the roster, with each such record
-  produced under exactly that binding.
+  declared profile of a seat that is on the roster and agrees with that seat's
+  bound review payload.
 - **The gate does not enforce** that `matched_rules`, `class` or the bound
   profile set is a truthful
   description of the diff, because the delivery gate has no Git tree by
@@ -2061,7 +2403,8 @@ plainly because the alternative is a claim that does not survive contact.
   command reproduces `classify`, `match`, `profiles` and `select` from the same
   bytes, the
   ledger is append-only outside the `gascity` uid, and the roster with its
-  per-seat reasons, its class and its profiles appears in the PR body where a
+  per-seat reasons, its class and its profiles appears in the canonical review
+  block of the PR body where a
   human decides
   to merge. Misclassification is the most legible of the four, because the
   PR body carries a class and a seat count that must agree; a thin profile set
@@ -2083,12 +2426,107 @@ seat rather than as a naming bug. A test therefore asserts all three spellings
 are the same string **for every pool member**, and it lands now rather than
 with the seat that would need it.
 
-**Version discipline is a clean break.** `DELIVERY_SCHEMA_VERSION` is a single
+**Version discipline is a clean break, and the version is read before anything
+is parsed strictly.** `DELIVERY_SCHEMA_VERSION` is a single
 shared constant checked by equality, so adding a record field bumps it for
 every delivery artifact and no cross-version record is readable. That is the
 correct outcome here and matches D3's posture: this is contributor tooling with
 one operator, so in-flight candidates re-run rather than acquiring a
 compatibility path nobody will maintain. There is no v2 acceptance path.
+
+**Reading order is part of the contract, because getting it wrong turns a clean
+break into an opaque one.** Every delivery artifact is admitted in two steps:
+
+1. A **permissive envelope pre-parse** reads `schema_version` and nothing else.
+   It tolerates unknown fields by construction, because its whole job is to
+   read a version out of bytes written by a version it does not know. A payload
+   with no `schema_version` is `delivery-schema-version-missing`; a payload
+   whose version is not `DELIVERY_SCHEMA_VERSION` is
+   `delivery-schema-version-unsupported`, and the error names both versions and
+   the remedy.
+2. Only then does **strict deserialization** run, with `deny_unknown_fields`,
+   every field mandatory, and closed enums for role, profile and resolution
+   state.
+
+The order matters concretely for this amendment. Removing `PanelRole::Rust`
+means a stale record carrying `"role": "rust"` no longer parses. Deserialized
+strictly first, the operator gets an unknown-variant error about an enum
+variant that no longer exists, which reads as a tooling bug. Version-checked
+first, the same bytes produce the intended clean-break message: this record was
+written under schema version N-1, this tool implements N, re-run the panel
+round against current tooling. A record at the **current** version naming
+`rust` is a different failure and gets its own error, `panel-role-unknown`,
+naming the twelve pool members, because that one is a live producer sending a
+role that does not exist rather than an artifact left behind by a migration.
+
+**Every refusal this decision adds names its remedy.** The repository rule is
+that an actionable error names the corrective action where it is knowable, and
+"knowable" is the whole of it here: every one of these is an operator action,
+not a support request, and none of the text below offers a fallback, a retry
+with a wider hammer, or a suggestion to ask somebody.
+
+| Typed error | Raised when | Operator remedy named in the message |
+| --- | --- | --- |
+| `delivery-schema-version-missing` | Envelope pre-parse finds no `schema_version` | Re-run the panel round with current tooling; artifacts predating the version field are not readable and are not migrated |
+| `delivery-schema-version-unsupported` | Envelope version differs from `DELIVERY_SCHEMA_VERSION` | Names both versions; re-run the round that produced the artifact against this tool version. In-flight candidates re-run by decision, so there is no migration command to offer |
+| `panel-role-unknown` | A current-version artifact names a role outside the pool | Names the offending role and the twelve pool members; fix the producing seat binding, and if the role was intentionally retired, the record belongs to a prior schema version |
+| `trigger-table-version-unsupported` | The trigger table's declared version is one this reader does not implement | Names the table version found and the versions implemented; update the delivery tool to the revision that carries that table, or re-run selection against the committed table |
+| `trigger-rule-unknown` | A rule identifier appears that the reader has no evaluator for | Names the identifier and the table version; the table and the evaluator move together in one commit, so update the reader rather than editing the artifact |
+| `change-surface-over-bound` | Sealing or publication is attempted for an `over_bound` candidate | Split the candidate until its surface fits `change_surface_max_paths` and `change_surface_max_bytes`, or raise those constants in the versioned table through a reviewed commit that bumps the table version, then re-run selection. The panel itself already ran at full width; only the seal is refused |
+| `change-surface-snapshot-unreadable` | The controller cannot read the candidate snapshot to derive interpreter facts | Names the candidate address and the unreadable path; re-create the candidate snapshot from `base_oid..head_oid` and re-run selection. Selection does not proceed on a partial fact set |
+| `surface-class-disagreement` | The request's surface class differs from the trusted dispatch record's | Names both classes; the dispatch record is authoritative, so discard the request and re-request dispatch from the controller. A candidate whose class is in dispute has no defined floor and none is guessed |
+| `profile-binding-mismatch` | The dispatch record's bound profile set differs from `profiles(change_surface)` recomputed from the bound artifact, or a seat's review payload disagrees with the dispatch record | Names the bound set, the recomputed set and the seat; re-run controller dispatch against the current change-surface artifact. A stale binding is never accepted as the narrower of the two |
+| `review-payload-digest-mismatch` | A submitted review payload does not match the digest the dispatch record bound for that seat | Names the seat and both digests; re-dispatch that seat from the controller. The payload is controller-owned, so the remedy is never to re-submit an edited payload |
+| `held-seat-unreleased` | A held seat's record carries `signoff: true` with an incomplete `prior_resolutions` set | Names the seat and each open finding identifier left unjudged; re-run that seat with the full resolution obligation set and judge each identifier `resolved` or `not_resolved` |
+| `held-seat-identity-substituted` | A held seat's pinned identity differs from the one that raised the open finding | Names the seat, the pinned binding and the submitted one; re-dispatch that seat under its pinned provider, model, effort and prompt digest |
+| `agent-file-mismatch` | `check-bindings.mjs` finds a pool member with no `panel-<role>.agent.md`, or a `panel-*` agent file with no pool member | Names both directions and the offending names; add the missing agent file, or delete the orphaned one, in the same commit as the pool change |
+| `generated-path-drift` | The versioned table's generated-path list differs from `drift_paths` in `tests/unit/gates/drift-check.sh` | Names the paths present on one side only; copy the current `drift_paths` array into the table and bump the table version, since the gate script owns the list and the table only mirrors it |
+| `change-surface-store-full` | The retained round-input store is at its cap and every remaining artifact belongs to an active candidate or an unresolved held reviewer | Names the lineages holding the space and `d2b-gc rounds list --active`; close or abort them through the controller's decision enum, or raise the configured size bound through a reviewed configuration change. Nothing active is evicted to make room |
+
+**Retention for the artifacts D21 adds is D17's contract, not a second one.**
+Four persistent artifacts are new: the change-surface artifact, the roster
+artifact, the per-seat review payload, and the continuity ledger. They are
+classified into the two retention classes D17 already defines, rather than
+acquiring a policy of their own:
+
+- **Round inputs**, retained **30 days or 2 GiB, whichever binds first**: the
+  change-surface artifact and the per-seat review payloads. They are exactly
+  what D17 means by exact review-input bytes - the diff locators, the path
+  list, the interpreter facts and the resolution obligations a round was run
+  against - and they are recoverable from Git and from the ledger after the
+  window.
+- **Audit floor**, retained for the audit period: the roster artifact and the
+  continuity ledger. Both are already made of fixed digests, closed enum values
+  and bounded numerics, which is precisely what D17 permits in the append-only
+  sink, so they cost little and they are what proves months later which seats
+  reviewed which bytes.
+
+The **cleanup trigger** is the one D17 already names - the scheduled enforcer,
+either a `gascity.nix` timer or a pack-owned cleanup command - plus an
+**admission-time check before new bytes land**, because a cap evaluated only
+after the fact cannot fail closed. The **enforcing owner is single**, and the
+way that stays true whichever form D17's enforcer takes is that the enforcer
+drives the **controller's own cleanup entrypoint** rather than deleting files
+under the controller's state root itself. Exactly one component writes that
+state, which is what `AGENTS.md`'s single-repair-owner rule requires; a second
+sweeper reaching into the same directories would violate it even if it deleted
+only what the first would have. The audit sink keeps its own
+rotation over its own records and does not reach into controller state.
+
+Two rules bound the eviction, and the second is the one that makes this
+fail-closed rather than merely bounded:
+
+- **Nothing active or unresolved is ever evicted.** An artifact belonging to a
+  candidate lineage with an open round, or to a seat in `held`, is not
+  eligible at any age or size. Evicting a held seat's resolution obligations
+  would release it by deletion, which is the same bypass this amendment just
+  closed, arriving through the janitor instead of the reviewer.
+- **If only ineligible state remains at the cap, the controller refuses new
+  dispatch** with `change-surface-store-full` and the remedy above. It does not
+  delete, does not degrade to a smaller payload, and does not proceed without
+  retaining the input. An operator with too many open candidates gets a
+  refusal that names them; an operator who has genuinely outgrown the bound
+  raises it in configuration, which is a reviewed change.
 
 **Three new seats and one removal mean three added seat prompts and one
 deleted one, and the binding check already knows.** Measured 2026-08-04:
@@ -2183,11 +2621,17 @@ works.
   and are read by a human in the PR body, never by the reviewer they describe.
 - **No reviewer self-release.** A seat that has been effectively relevant
   cannot leave the roster by declaring itself irrelevant, and cannot be
-  swapped for a different reviewer identity until it returns a true sign-off.
+  swapped for a different reviewer identity until it releases, which takes a
+  true sign-off **and** a complete structured resolution of every finding the
+  controller issued it.
 - **No second blocking channel.** `recommendations` remains the only field a
-  finding can enter. Prior-finding resolution, residual risk and cross-seat
+  new finding can enter. Residual risk and cross-seat
   observations live in the seat's summary, and this record does not pretend a
-  prompt requirement is a gate.
+  prompt requirement is a gate. `prior_resolutions` is not an exception: it is
+  a two-member enum keyed by controller-issued identifiers, it carries no new
+  finding and no free text, and it exists precisely so that one prompt
+  requirement, the prior-finding judgement, stops being a promise and becomes a
+  gate.
 - **No link-check gate** for the source set in
   [`specs/0053-panel-prompt-sources.md`](specs/0053-panel-prompt-sources.md),
   and **no twelve separate committed prompt-source files**. One collection
@@ -2352,17 +2796,30 @@ and it ships planted violations it must reject.
   finding present, a missing seat, a stale snapshot, an underived binding, and
   an absent or mismatched publication approval. No merge, auto-merge or merge
   queue is enabled under any configuration.
-- **M14 The PR body carries the canonical panel result.** The rendered body
+- **M14 The PR body carries the canonical panel result, and the trusted side
+  renders it.** The rendered body
   contains `<n>/<n> unanimous` from the attested set, where `n` is the attested
   roster size, the integration commit, `snapshot_sha256`, `candidate_id`,
   `content_id`, the round count, the surface class, **every roster seat** with
-  verdict, selection reason and receipt locator, a validation summary by
+  verdict, selection reason and receipt locator, the bound profile set, any
+  unresolved or held state, a validation summary by
   reference, the route input summary, the verification matrix summary, the
   simplification outcome, unresolved risks, and the merge-requires-human
   statement. A seat that passed with `relevant: false` renders **distinctly**
   from a substantive sign-off, asserted against a fixture containing both. It
   contains no transcript, credential, raw identifier or authenticated URL, and
   is within its size bound.
+
+  **The canonical review block is asserted to be trusted output.** The
+  controller-rendered block inside the delimiters is reconstructed by the
+  publisher from the protected manifest and compared byte for byte, and three
+  planted bodies are each **refused at publication**: one whose canonical block
+  was altered by the orchestrator after the controller emitted it, at minimum
+  by removing one seat row; one whose canonical block is absent while the
+  narrative half claims a unanimous result; and one whose narrative half
+  contradicts the canonical block's seat count. A planted orchestrator edit
+  **outside** the delimiters is **accepted**, so the boundary is shown to be a
+  boundary rather than a freeze of the whole body.
 
   Five planted bodies are each **rejected**: one whose numerator is below its
   denominator; one whose denominator is below the floor its stated class
@@ -3001,7 +3458,7 @@ and it ships planted violations it must reject.
   because nothing was looking. The rule is the repository's, not this record's:
   contributor docs describe what works now.
 
-The six items below are added by the 2026-08-04 amendment and belong to D21.
+The eight items below are added by the 2026-08-04 amendment and belong to D21.
 
 - **M33 Selection is a total function, and the table is the only input.**
   A pure `select(matched_rules, class, held)` is exercised over a counted,
@@ -3031,14 +3488,45 @@ The six items below are added by the 2026-08-04 amendment and belong to D21.
   unrecognised source type is proven not to remove the seat; a fixture touching
   only `tests/tools/layer1-jobs`, which has no extension, binds `{shell}`; and
   the documentation-only fixture binds the empty set while
-  `product.profile = gascity`. A planted `software` record whose bound profile
-  set differs from the dispatch record's is refused.
+  `product.profile = gascity`.
 
-  Three refusals are required, each its own typed error: a change surface
-  beyond its bound, which selects the **entire pool** rather than failing open
-  or selecting less; an unrecognised rule identifier; and a trigger-table
-  version the reader does not implement. A fixture that selects **fewer** seats
-  on any of the three fails this item.
+  **The interpreter fact is asserted as a current-file input, not as a hunk
+  input**, because that distinction is the entire fix. Required cases: a
+  fixture whose only change is a hunk deep inside an existing extensionless
+  Bash script under a parent directory named neither `bin` nor `tools`, so no
+  path clause matches and no added line contains a shebang, binds `{shell}`;
+  the same fixture with the shebang line itself deleted and no replacement
+  binds `{shell}` from the base-side read; a fixture whose extensionless file
+  has a first line that is 300 bytes of non-shebang text binds `{shell}` by
+  the `undecidable` rule, proving the bound over-binds rather than under-binds;
+  a fixture whose extensionless file is a binary blob binds `{shell}` for the
+  same reason; a fixture whose extensionless file begins `#!/usr/bin/env
+  python3` binds `{python}` and **not** `{shell}`; and a documentation fixture
+  whose `.md` body quotes `#!/bin/bash` inside a fenced block binds the
+  **empty set**, proving prose is still excluded. A controller that cannot read
+  the candidate snapshot raises `change-surface-snapshot-unreadable` and
+  selection does not proceed; a planted implementation that returns an empty
+  fact set instead fails this item.
+
+  **The over-bound state is asserted at two points, and the test must
+  distinguish them.** A change surface past `change_surface_max_paths` or
+  `change_surface_max_bytes` produces the `over_bound` state, and on that state
+  `select` returns the **entire twelve-seat pool** and `profiles` returns the
+  **entire profile set**, asserted exactly; the same fixture is then asserted
+  to be **refused at seal** with `change-surface-over-bound`, and to be refused
+  at publication, even when every seat signed off. A fixture that refuses at
+  selection fails the item, and so does one that seals. Two further refusals
+  are required, each its own typed error and each a plain refusal rather than
+  this state: an unrecognised rule identifier, and a trigger-table version the
+  reader does not implement. A fixture that selects **fewer** seats on any of
+  the three fails this item.
+
+  **Every typed error named by D21 is asserted to carry its remedy.** For each
+  row of D21's typed-error table, the rendered message is asserted to contain
+  the operator action that row names, and a grep over the delivery crate
+  asserts no refusal message contains a support-referral or
+  contact-somebody phrase. A planted error whose message states only what went
+  wrong, with no corrective action, is **rejected**.
 
   Two table-integrity controls are required as well: an assertion that every
   **seat** rule in the committed table selects a member of the optional set,
@@ -3049,6 +3537,14 @@ The six items below are added by the 2026-08-04 amendment and belong to D21.
   version is 1. A companion assertion covers the **profile** rules: each
   selects nobody, and each names a seat in the pool and a profile in that
   seat's declared profile set.
+
+  **Content selectors are asserted on both sides of a changed line.** For each
+  content selector in the table, a fixture whose only change **deletes** a line
+  carrying one of its tokens on a code-operative path selects that seat: a
+  deleted `nftables` rule selects `networking`, a deleted `O_CLOEXEC` selects
+  `kernel`, and a deleted `Drop for` selects `reliability`. The same deletions
+  inside a `.md` file under `docs/` select nothing, so the code-operative
+  restriction is proven to survive the change.
 
 - **M34 Every composition invariant is enforced as a refusal, with a planted
   control each.** Planted rosters are each **rejected**: one missing a
@@ -3068,26 +3564,69 @@ The six items below are added by the 2026-08-04 amendment and belong to D21.
   are each refused: a request roster larger than the dispatch record's, one
   smaller, and one of the same size with a substituted seat. A planted
   disagreement between the request's surface class and the dispatch record's is
-  refused as its own typed error, because a candidate whose class is in dispute
-  has no defined floor.
+  refused as `surface-class-disagreement`, because a candidate whose class is
+  in dispute has no defined floor.
+
+  **Profile and payload mismatches are planted in dispatch data, because that
+  is the only place they can exist.** `PanelRecord` has no profile field, so
+  three controls are required and each names its own artifact: a **trusted
+  dispatch record** whose `software.profiles` differs from
+  `profiles(change_surface)` recomputed from the bound change-surface artifact
+  is refused as `profile-binding-mismatch`, in both directions, thinner and
+  wider; a **per-seat review payload** whose assigned-profile list disagrees
+  with the dispatch record's binding for that seat is refused as the same typed
+  error; and a review payload whose bytes do not match the digest the dispatch
+  record bound for that seat is refused as `review-payload-digest-mismatch`.
+  A fourth control closes the producer side by construction rather than by
+  logic: a `PanelRecord` carrying a `profiles` or `profile` field of any value
+  is refused by `deny_unknown_fields` before any profile comparison runs, and
+  the test asserts the error is the unknown-field one, so nobody later
+  "improves" it into a comparison against a producer string.
 
 - **M35 A session cannot forge relevance, selection, or its own release.**
-  Each of these is attempted from a producer and **refused or ignored**, and
+  Each of these is attempted from a producer and **refused or normalized**, and
   the test asserts which of the two, because they are different outcomes: a
   record carrying a roster, a surface class, a selection reason or a rule
   identifier is **refused**, since those fields are not the producer's to
   write; a record with `relevant: false` and a non-empty `recommendations` is
   **refused**; a `relevant: false` from a seat that already latched effectively
-  relevant is **accepted and ignored**, with the ledger showing both the claim
-  and the derived value, and the seat still present on the next round's roster;
+  relevant is **accepted and normalized**, with the ledger showing both the
+  claim and the derived value `true`, and the seat still present on the next
+  round's roster;
   and a `relevant: false` from a seat that has never been relevant is
   **accepted** as a pass, after which that seat is observed to be rotatable out
   of a later roster while the composition invariants still hold.
 
+  **The release condition is the item's centre, because a held reviewer that
+  can release itself makes every other control decorative.** Over a lineage in
+  which one seat raised two findings in round one, the following are each
+  asserted: a round-two record from that seat with `signoff: true` and an
+  **empty** `prior_resolutions` is refused as `held-seat-unreleased` naming
+  both open identifiers; one covering only the first identifier is refused
+  naming the second; one covering both as `resolved` **releases** the seat; one
+  covering one `resolved` and one `not_resolved` carries a superseding
+  recommendation, therefore `signoff: false`, and keeps the seat held; one
+  carrying a `not_resolved` with **no** superseding recommendation is refused;
+  one carrying `resolved` **and** a superseding recommendation for the same
+  identifier is refused; and one naming an identifier the controller never
+  issued to that seat is refused. The pivotal control is the last:
+  a round-two record from that seat carrying `relevant: false`,
+  `signoff: true`, empty `recommendations` and an **empty**
+  `prior_resolutions` is **accepted, normalized to effective relevance true,
+  and does not release the seat**, which is asserted by finding it on round
+  three's roster with both identifiers still open. A planted implementation
+  that releases on `signoff: true` alone fails this item.
+
   A three-round lineage is then driven end to end: a seat returns a finding in
   round one, is present in rounds two and three under the same pinned seat
-  identity, and a planted attempt to substitute a different reviewer identity
-  for it before it signs off is **refused**. A mandatory seat is planted for
+  identity, receives its own open findings in the controller-built review
+  payload for each round, and a planted attempt to substitute a different
+  reviewer identity
+  for it before it releases is **refused** as `held-seat-identity-substituted`.
+  A planted review payload that **omits** a held seat's open findings is
+  refused as `review-payload-digest-mismatch`, so an orchestrator cannot starve
+  a seat of its obligations and then accept the resulting empty resolution set.
+  A mandatory seat is planted for
   removal in every round and is **refused** every time.
 
   The prompt renderer is asserted **not** to interpolate `selection_reason`,
@@ -3134,9 +3673,14 @@ The six items below are added by the 2026-08-04 amendment and belong to D21.
 
   The `product` Gas City profile is exercised: on a candidate matching
   `adr-0053-product-profile` the dispatch record carries
-  `product.profile = gascity`, a `product` record produced under any other
-  profile is **refused**, and a producer-declared profile is **refused**
-  whatever its value.
+  `product.profile = gascity` and that seat's review payload carries the same
+  value; a **dispatch record** binding any other profile for that candidate is
+  refused as `profile-binding-mismatch`; a **review payload** whose profile
+  disagrees with the dispatch record is refused as the same error; and a
+  `PanelRecord` carrying a producer-declared profile is refused as an unknown
+  field whatever its value, since the record has no such field to carry.
+  `agent-file-mismatch` is asserted in both directions with the remedy text
+  named in D21's typed-error table.
 
 - **M38 The surface classifier is conservative, and every trap case is
   asserted.** A pure `classify(change_surface) -> class` is exercised over a
@@ -3148,6 +3692,10 @@ The six items below are added by the 2026-08-04 amendment and belong to D21.
   Markdown but sits outside every allowlisted prefix; a change to
   `.github/PULL_REQUEST_TEMPLATE.md`; a change to `docs/reference/error-codes.md`,
   which is Markdown under `docs/` and is a generated contract; a change to
+  `docs/contributing/panel-review.md` and a change to
+  `docs/contributing/gates-and-lints.md`, which are Markdown under `docs/` and
+  are binding operative procedure that later reviews and gates follow; a change
+  to
   `docs/reference/schemas/v2/bundle.json`; a change to
   `nixos-modules/store.nix`; a change to `tests/tools/layer1-jobs.py`; a change
   to a `Makefile`, which has no extension; an **empty** change surface; and a
@@ -3155,15 +3703,77 @@ The six items below are added by the 2026-08-04 amendment and belong to D21.
   `packages/d2b-core/src/design.rs`, plus the same rename in the other
   direction. Each of the following classifies **`docs-only`**: the three-file
   surface of D21's worked example; a `changelog.d/` fragment; a
-  `docs/how-to/` page; a `docs/contributing/` page; and a `CHANGELOG.md` edit.
+  `docs/how-to/` page; a root `CONTRIBUTING.md` edit, which delegates
+  operational policy to `AGENTS.md` and carries none of its own; and a
+  `CHANGELOG.md` edit.
 
   The generated-path list carried in the versioned table is asserted equal to
   the `drift_paths` array in `tests/unit/gates/drift-check.sh`, and a planted
-  divergence **fails**, so the duplication the gate's lack of repository access
+  divergence **fails** with `generated-path-drift`, so the duplication the
+  gate's lack of repository access
   forces is checked rather than trusted. A mixed surface of one `.md` docs page
   and one `.rs` file classifies `code-operative`, and the resulting roster is
   asserted to be at least ten, so the mixed case is proven to take the higher
   floor rather than the average of two.
+
+- **M39 The schema version is read before anything is parsed strictly.** The
+  admission path is exercised on planted payloads and each outcome is asserted
+  by **typed error**, not merely by failure, because the whole point is which
+  error arrives:
+
+  - a `PanelRecord` at `DELIVERY_SCHEMA_VERSION - 1` carrying `"role": "rust"`
+    is refused as `delivery-schema-version-unsupported`, naming both versions,
+    and **not** as an unknown-enum-variant error. This is the stale-fixture
+    case the removal of `PanelRole::Rust` creates and it is the reason the item
+    exists;
+  - a record at the **current** version carrying `"role": "rust"` is refused
+    as `panel-role-unknown`, naming the twelve pool members, so a live producer
+    sending a retired role is distinguishable from an artifact left behind by a
+    version bump;
+  - a payload with no `schema_version` field is refused as
+    `delivery-schema-version-missing`;
+  - a payload at a **future** version is refused as
+    `delivery-schema-version-unsupported`, so the check is equality and not a
+    floor;
+  - a record at the current version carrying an unknown profile name, an
+    unknown `prior_resolutions` state, or any unknown field is refused by the
+    strict parse, proving the permissive envelope pre-parse did not loosen the
+    second step.
+
+  The order is asserted structurally as well as behaviourally: a planted
+  implementation that deserializes strictly first and checks the version
+  afterwards fails this item even though it refuses the same payloads, because
+  it refuses them with the wrong error. The corpus is counted and the item
+  **fails closed on an empty corpus**.
+
+- **M40 The new artifacts are retained under a bound something enforces, and
+  nothing active is evicted.** Over the four artifacts D21 adds - the
+  change-surface artifact, the roster artifact, the per-seat review payload and
+  the continuity ledger - the enforcer named in D17 is observed to run on
+  schedule and to apply the class each artifact was assigned:
+
+  - round inputs past the 30-day age bound, and round inputs past the 2 GiB
+    size bound while inside the age window, are both observed removed, which is
+    two planted corpora and not one;
+  - roster artifacts and continuity ledger entries for the same lineages
+    **survive**, because they carry the audit floor;
+  - an artifact belonging to a candidate lineage with an open round is **not
+    removed** at any age or size, and neither is a review payload belonging to
+    a seat still in `held`; a planted enforcer that removes either fails this
+    item, because deleting a held seat's resolution obligations releases it by
+    deletion;
+  - with the store at its cap and every remaining artifact ineligible, the
+    controller **refuses new dispatch** with `change-surface-store-full`, the
+    message names the blocking lineages and the operator command, and nothing
+    is deleted. An implementation that evicts the oldest ineligible artifact to
+    make room fails this item;
+  - exactly one enforcing owner exists: the scheduled enforcer is observed to
+    drive the controller's cleanup entrypoint rather than unlinking under the
+    state root itself, and a scan asserts no second component writes those
+    directories.
+
+  A deployment with bounds configured and no enforcer scheduled fails this
+  item, and so does one that trims only by age.
 
 ## Consequences
 
@@ -3242,13 +3852,16 @@ class here, is explicitly exempted. It is not accepted because it is cheap.
 is real.** A closed array of ten was one constant, one length check and one
 comparison. What replaces it is a versioned trigger table, a surface
 classifier, a selection function, a bounded change-surface artifact, a roster
-artifact, a continuity ledger, per-seat selection reasons, and a duplicated
+artifact, a continuity ledger, a per-seat review payload, per-seat selection
+reasons, and a duplicated
 generated-path list that must be kept equal to a shell array in another tree.
 Every one of those is a thing that can be wrong, and the delivery crate is the
 part of this repository where being wrong is most expensive. The trade is
 accepted because the alternative was paying three irrelevant reviews on most
 candidates forever, and because over-selection is the fail-closed direction on
-every ambiguity.
+every ambiguity. It also adds a retention obligation: four persistent artifact
+classes now exist that did not, and D21 assigns all four to D17's existing
+bounds under one enforcing owner rather than letting them accumulate.
 
 **Seven mandatory seats will truthfully report irrelevance, and that is not a
 malfunction.** On a documentation-only candidate, `observability` and often
@@ -3297,21 +3910,27 @@ performance, and a record whose findings are all convention-level while a logic
 defect sits in the delta has not done the work. And **profile activation is
 controller-bound rather than seat-chosen**, so the prompt cannot be diluted by
 a seat quietly skipping the profile whose depth is expensive; the dispatch
-record says which profiles applied and the gate refuses a record produced under
-a different set. Neither mechanism proves depth. What they buy is that a
+record says which profiles applied and the gate compares that binding against
+the recomputed rule set and against the seat's bound review payload, never
+against a producer string. Neither mechanism proves depth. What they buy is
+that a
 shallow review is visible in the record rather than indistinguishable from a
 thorough one, and the first sign of failure will be `software` records whose
 findings cluster in the convention section on candidates that changed Rust.
 
 **Continuity state is machinery that did not exist, and it is the part most
 likely to be got wrong first.** `held`, latched effective relevance, pinned
-seat identity and the append-only ledger are four coupled mechanisms whose
+seat identity, the structured `prior_resolutions` release condition and the
+append-only ledger are five coupled mechanisms whose
 whole purpose is to make one failure impossible, a finding disappearing between
 rounds. Each is individually simple and together they are a state machine
 carried across rounds by a controller the gate cannot audit. The first question
 on any acceptance failure in this area is whether the roster the controller
 computed is the roster the gate recomputed; the second is whether `held` was
-computed from the ledger or from the round in front of it.
+computed from the ledger or from the round in front of it; the third is whether
+a seat left `held` on a true sign-off alone rather than on both halves of the
+release condition, which is the specific bug an earlier revision of this
+amendment shipped by design.
 
 **The sources this panel reasons from move, some are nobody's standard, and
 five seats plus one language profile have no premade prompt at all.** During
@@ -3565,9 +4184,29 @@ retire a seat that had already raised a finding, the cheapest way past a
 blocking review would be to run the round again and have the seat declare the
 matter no longer its concern. Effective relevance is therefore derived by the
 controller and latches, a later `relevant: false` from a latched seat is
-recorded and ignored, and seat identity stays pinned until a true sign-off.
+recorded and normalized to true, and seat identity stays pinned until release.
 A never-relevant seat may still be rotated out, because nothing is being
 escaped there.
+
+**Close that bypass by refusing `relevant: false` from a held seat.**
+Rejected, and the rejection is worth recording because it is the obvious fix
+and it is wrong. The first draft of this amendment latched relevance but let
+release turn on `signoff: true` alone, which left the bypass open one level
+down: a held seat could write `relevant: false`, which forces empty
+`recommendations` and therefore `signoff: true`, and walk off the roster with
+its finding unaddressed. Refusing such a record closes it and costs a full
+extra round every time a held seat honestly has nothing further to add, which
+is a real and common case, and it contradicts the settled rule that a later
+`false` is ignored rather than rejected. The chosen fix moves the control to
+the **release condition** instead: the record is still admitted, the claim is
+still recorded, relevance is still normalized to true, and the seat leaves
+`held` only on a true sign-off **plus** a complete structured resolution of
+every open finding the controller issued to it. That required adding a second
+producer-written field, which an earlier revision explicitly declined to do on
+the grounds that `recommendations` was channel enough. It was not: a channel
+the gate cannot parse is not a control, and the cost of the extra field is one
+closed enum keyed by controller-issued identifiers, with no free-form text and
+no second severity ladder.
 
 **Disclose the selection reason to the seat.** Rejected. It looks like
 transparency and it is a leak. A seat told it was seated by `quorum_fill`

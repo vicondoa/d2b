@@ -55,14 +55,29 @@ with the worst provenance.
 | **T1** first-party normative | Standards bodies, language and platform specifications, official reference manuals, a vendor statement about the vendor's own product | PEP 8, RFC 430, Cargo SemVer reference, OpenTelemetry semantic conventions, man7 and kernel.org pages, Gas City `docs/reference/specs/*`, GitHub Copilot documentation, `code.claude.com` documentation | May carry a blocking finding. Short normative sentences may be quoted with citation. |
 | **T2** mature project practice | Engineering handbooks and mature-project conventions with a named owner and a change history | Google engineering practices, Google Shell Style Guide, Nixpkgs `pkgs/README.md` and `pkgs/by-name/README.md`, Rust API Guidelines | Supports an argument. Blocking only when a repository rule also applies. |
 | **T3** permissively licensed community and upstream prompt assets | MIT, CC0 or Apache-licensed prompt, agent and skill collections whose licence is verified at a pinned commit | `github/awesome-copilot` (MIT), `github/spec-kit` (MIT), `obra/superpowers` as vendored (MIT), `EveryInc/compound-engineering-plugin` as vendored (MIT), `anthropics/claude-code-security-review` (MIT), `f/awesome-chatgpt-prompts` prompt data (CC0) | Extract **structures and checklist items**. Do not copy prose. Never blocking on their authority alone. |
-| **T4** restricted or unverifiable | No-derivatives or non-commercial licences, sources with no stated licence, unattributable aggregations, extracted or leaked prompt texts | `hesreallyhim/awesome-claude-code` (CC BY-NC-ND 4.0 at the surveyed revision), `gastownhall/gascity-packs` at the pinned commit (no repository LICENSE), third-party compilations claiming to reproduce an unpublished vendor prompt | Reference by URL only, and only where naming the source is itself the point. **No copying, no adaptation, no derivative work.** Never cite as authority. |
+| **T4** restricted or unverifiable | No-derivatives or non-commercial licences, sources with no stated licence, unattributable aggregations, extracted or leaked prompt texts | `hesreallyhim/awesome-claude-code` (CC BY-NC-ND 4.0 at the surveyed revision), `gastownhall/gascity-packs` at the pinned commit (no repository LICENSE), third-party compilations claiming to reproduce an unpublished vendor prompt | Read and cite as **behavioural evidence about the system under review**, and only where naming the source is itself the point. **No copying and no adaptation of text, organization, or expressive structure.** Never cite as authority. |
+
+**T4 is behavioural evidence, not a template, and the distinction is the one
+most likely to be blurred.** Reading `GCP gascity/assets/workflows/build-base/review.md`
+to establish *that upstream gates this step on an artifact schema*, and citing
+it for that, is evidence about a system this repository integrates with; that
+is legitimate and section 5 depends on it. Retyping its headings in the same
+order, mirroring its section decomposition, or lifting its checklist taxonomy
+is adaptation of expressive structure, and the absence of a licence grant makes
+that unavailable regardless of how much the words are changed. The
+consequence for section 5 is concrete: a d2b stage prompt is derived from the
+permissively licensed material below plus this repository's own requirements,
+and the T4 anchor tells the author **which upstream step the prompt overrides
+and what that step declares**, not how to lay the prompt out.
 
 **Adaptation policy.** These are rules, not preferences.
 
-1. **Extract structure, retype text.** Take the taxonomy, the checklist
-   headings, the ordering, the "what I do not flag" device. Do not paste more
+1. **Extract structure, retype text - from T3 only.** Take the taxonomy, the
+   checklist headings, the ordering, the "what I do not flag" device **from a
+   permissively licensed source**. Do not paste more
    than a short quoted fragment from any T3 asset, and attribute the source
-   repository and its licence when you do.
+   repository and its licence when you do. This permission does not reach T4:
+   from a T4 source neither the text nor the structure is available.
 2. **Never adopt a premade prompt's numbers.** Confidence anchors, file-size
    thresholds, changed-line depth bands, duplication line counts, percentage
    exploitability bars and multi-band severity ladders are tuned to codebases
@@ -142,9 +157,9 @@ the boundaries; this is the operative restatement.
 | Minimal decision surface, reuse over reinvention, abstraction count, indirection, dependency adoption and removal, deletions; and the same questions asked of a record rather than of code | `simplicity` |
 | Resource ownership and cleanup on error and crash paths; restart, adoption and idempotency; ordering and concurrency across components; partial failure and degraded state; on-disk state and schema migration | `reliability` |
 | Agent profiles, instruction layering, prompt contracts, formula and pack mechanics, mechanical gates versus prompt-only assurances | `agentic` |
-| Module and option system, activation ordering, merge semantics, NixOS-specific correctness | `nixos` |
-| Reachability delta, firewall posture, address and port allocation | `networking` |
-| Syscall and kernel interface semantics, version floors, race classes | `kernel` |
+| Module and option system, activation ordering, merge semantics and priority, eval-time assertions, structural option surfaces per RFC 42, NixOS-specific correctness | `nixos` |
+| Reachability delta, firewall posture, address and port allocation, MTU and MSS, routing, host network coexistence | `networking` |
+| Syscall and kernel interface semantics, version floors, race classes, descriptor inheritance and lock semantics, signal semantics, mount semantics, filesystem error cases | `kernel` |
 
 Four boundaries are stated again because they are the ones that will be got
 wrong:
@@ -158,15 +173,29 @@ wrong:
   owns the design property across components: who owns this resource, who
   releases it when this process dies here, what the on-disk state means
   afterwards. `kernel` owns whether the syscall was used correctly and what
-  kernel version it needs. `test` owns whether any of it is covered.
+  kernel version it needs, **including descriptor inheritance across `exec`,
+  open file description versus POSIX record lock semantics, signal disposition
+  and restart behaviour, mount semantics, and which errno a filesystem call can
+  return**. `test` owns whether any of it is covered. The `kernel` and
+  `reliability` line is drawn at the same file twice: whether `O_CLOEXEC` was
+  set on the `open` is `kernel`'s, whether the descriptor is closed on the
+  error branch three frames up is `reliability`'s; whether an OFD lock survives
+  the close of an unrelated descriptor to the same file is `kernel`'s, whether
+  the lock is released when the component crashes is `reliability`'s.
 - **`software` versus `nixos`, the only remaining language overlap.**
   `software`'s Nix profile owns Nix as code: readability, naming, idiom,
   `with`-scope and `let` hygiene, dead bindings, and the boundary where
   formatting stops being a finding. `nixos` owns Nix as a module system:
   option declarations and types, `mkDefault` versus `mkForce`, merge
-  semantics, assertions, activation ordering, and ADR 0015's three-root-unit
+  semantics, eval-time assertions, structural option surfaces per RFC 42,
+  activation ordering, and ADR 0015's three-root-unit
   rule. A finding about how the expression reads is `software`'s; a finding
-  about what module evaluation will do with it is `nixos`'s. This is the one
+  about what module evaluation will do with it is `nixos`'s. **RFC 42 sits
+  wholly on the `nixos` side**, because a stringly `extraConfig` is a statement
+  about what the module system can merge and type-check rather than about how
+  the expression reads; an earlier revision of this document gave it to both
+  seats, which is exactly the duplicate blocking finding the split exists to
+  prevent. This is the one
   place in the pool where two seats read the same file on purpose, and it is
   the boundary most likely to produce a duplicate blocking finding, so both
   prompts carry it in these words. There is deliberately **no** equivalent
@@ -182,8 +211,13 @@ wrong:
 
 **A seat that notices something in another seat's territory reports it as an
 observation in its summary, never as a `recommendation`.** There is no
-non-blocking field in the record: `recommendations` is the blocking channel and
-nothing else exists. D21 declined to add a second one. The observation belongs
+non-blocking findings field in the record: `recommendations` is the blocking
+channel and nothing else exists for a new observation. D21 declined to add one
+and still does. `prior_resolutions` is not a counterexample: it carries a
+two-member enum keyed by identifiers the controller issued, it can say nothing
+the controller did not already ask about, and it is the release evidence for
+findings this seat already made rather than a channel for new ones. The
+observation belongs
 in the seat's working notes under `.scratch/panel/<round>/`, which ADR 0053
 already records as not read by the gate. A seat that wants another seat's
 finding to block asks for that seat to be on the roster; it does not launder
@@ -192,9 +226,10 @@ the finding through its own verdict.
 ### 1.3 The verdict contract
 
 Every prompt states the record contract in the same words, and states that the
-producer writes exactly three things: `relevant`, `signoff`, and
-`recommendations`. Roster membership, selection reason, matched rules, surface
-class, round ordinal, seat profile, and effective relevance are
+producer writes exactly four things: `relevant`, `signoff`, `recommendations`,
+and `prior_resolutions`. Roster membership, selection reason, matched rules,
+surface class, round ordinal, seat profile, finding identifiers, and effective
+relevance are
 controller-derived and are not the seat's to assert. D21 owns the semantics;
 the prompt restates only what the seat must do:
 
@@ -205,10 +240,15 @@ the prompt restates only what the seat must do:
   thing of a skipped lane, a recorded reason rather than silence, and that is
   the one part of its design worth borrowing.
 - `relevant: false` is not an exit. A seat that was relevant earlier in the
-  same candidate stays on the roster whatever it writes later.
+  same candidate stays on the roster whatever it writes later: the controller
+  normalizes the later claim to effective relevance true, records both values,
+  and keeps the seat held. Writing it is not an error and is not refused; it
+  simply does not release the seat.
 - `signoff` is true if and only if `recommendations` is empty. A seat that
   wants to raise something it is not willing to block on has the summary for
   it.
+- `prior_resolutions` carries one entry per open prior finding identifier the
+  dispatch payload gave this seat, and nothing else. See section 1.4.
 - **The prompt does not tell the seat why it was selected**, and the seat must
   not infer it. D21 keeps `selection_reason` controller-side precisely so that
   a seat cannot read "you are here to satisfy a headcount" and act on it. Judge
@@ -217,19 +257,47 @@ the prompt restates only what the seat must do:
 ### 1.4 The prior-recommendation duty
 
 D21 requires it and every prompt carries it: a seat whose earlier record on
-this candidate lineage carried recommendations opens its next record's summary
-by taking each prior recommendation in turn and judging it **resolved or not
-resolved against the new delta**, before issuing any verdict. A restated fix
+this candidate lineage carried recommendations takes each prior recommendation
+in turn and judges it **resolved or not resolved against the new delta**,
+before issuing any verdict. A restated fix
 and a dropped miss look identical without this, and both cost full rounds.
+
+**The judgement is recorded twice, in two places that do different jobs.** The
+prose judgement opens the summary, where a human reads it. The machine
+judgement goes in `prior_resolutions`, one entry per open finding identifier,
+`state` drawn from `resolved | not_resolved`, and it is what the gate reads.
+Prose alone was the earlier design and it did not hold: a held seat could sign
+off with a summary saying anything at all, and nothing downstream could tell
+whether the finding had been addressed or forgotten.
+
+The mechanics the prompt must state exactly:
+
+- The dispatch payload gives the seat its **own** open finding identifiers, and
+  only its own. The seat does not mint, rename or retire an identifier, and a
+  record naming one it was not given is refused.
+- Coverage is exact: every identifier given, once each, no others. An
+  incomplete set is refused with the missing identifiers named, so a seat that
+  answers three of four is told which one it skipped rather than silently
+  releasing.
+- `not_resolved` requires a recommendation in the same record carrying that
+  identifier as its `supersedes` value. `resolved` forbids one. That is what
+  keeps `signoff` true if and only if `recommendations` is empty: any
+  `not_resolved` produces a recommendation and therefore a false sign-off.
+- **A seat leaves the held set only on a true sign-off plus a complete
+  all-`resolved` set.** A held seat with genuinely nothing further writes
+  `relevant: false`, `signoff: true` and a complete all-`resolved` set, which
+  is a specific claim about each finding rather than a silence that reads like
+  one. Writing the `relevant: false` without the resolutions releases nothing.
 
 Two corollaries:
 
 - A seat newly added in a later round does not re-litigate a point an earlier
   round settled unless the new bytes reopened it. The delta ranges it is given
-  are the scope.
-- "Not resolved" is a finding and goes in `recommendations`. "Resolved" is a
-  sentence in the summary. There is no third state, because the record has no
-  field for one.
+  are the scope. It has no open identifiers and carries an empty
+  `prior_resolutions`.
+- "Not resolved" is a finding and goes in `recommendations`, linked to the
+  identifier it supersedes. "Resolved" is an entry plus a sentence in the
+  summary. There is no third state, because the enum has two members.
 
 ### 1.5 Source hygiene
 
@@ -553,6 +621,17 @@ practice, never as a standard. Where the guide and ShellCheck agree, cite the
 ShellCheck code, because a code is checkable and a guide section is not. Where
 they disagree, the declared shebang and the ShellCheck code win.
 
+**The profile is activated from the controller's interpreter fact, not from the
+hunk.** D21 derives an interpreter fact for every extensionless code-operative
+path in the change surface, read from the candidate snapshot rather than from
+added lines, so this profile activates on **every** edit to an extensionless
+shell script rather than only on the commit that introduced its shebang. Two
+consequences for the prompt: the seat may be given a shell profile on a delta
+whose hunks contain no shebang at all, which is correct and is not a signal
+that the binding was wrong; and an `undecidable` first line binds the profile
+deliberately, so a seat handed a file it cannot classify says so in the summary
+rather than treating the binding as an error.
+
 **Prompt requirements.** Determine the dialect from the shebang, or from a
 `# shellcheck shell=` directive where the file is sourced rather than executed;
 if neither is present, that absence is itself the finding. Map every finding to
@@ -587,21 +666,29 @@ naming. It does **not** own the module system; see the `software`-versus-
 | nix.dev best practices | N | T1 | <https://nix.dev/guides/best-practices> |
 | Nixpkgs `CONTRIBUTING.md` and `pkgs/README.md`, conventions and file organisation | A | T2 | <https://github.com/NixOS/nixpkgs/blob/master/pkgs/README.md> |
 | Nixpkgs `pkgs/by-name/README.md`, mechanical file and directory layout | A | T2 | <https://github.com/NixOS/nixpkgs/blob/master/pkgs/by-name/README.md> |
-| RFC 42, structural `settings` instead of stringly `extraConfig` | N | T1 | <https://github.com/NixOS/rfcs/blob/master/rfcs/0042-config-option.md> |
 | RFC 166, Nix formatting, adopting nixfmt as the standard formatter | N | T1 | <https://github.com/NixOS/rfcs/blob/master/rfcs/0166-nix-formatting.md> |
 | Section 6.6 of this document, and the observed `kebab-case.nix` layout of `nixos-modules/` | N | T1 | repository-local, and binding |
+
+**RFC 42 is deliberately absent from this table.** Structural `settings`
+versus stringly `extraConfig` is a statement about what the module system can
+merge, type-check and report on, which is `nixos`'s territory under section
+1.2. An earlier revision of this document listed it here **and** in section
+3.3, instructing two seats to enforce the same rule; on a panel where one
+non-empty record re-runs the whole roster, that is a manufactured duplicate
+blocking finding. A stringly option noticed while reading Nix as code is an
+observation for the summary, addressed to `nixos`, not a recommendation from
+this profile.
 
 **RFC 166 is the formatting boundary, and the boundary is a refusal.** It
 adopted a standard Nix formatter through the RFC process, which settles
 formatting as a mechanical concern. A formatting finding from this profile is
 therefore never blocking; the remedy is to run the formatter. What the profile
 does own is everything the formatter cannot see: a `with` over a large scope, a
-`let` binding nobody uses, a stringly option where RFC 42 wants structural
-`settings`, and a file whose name does not follow the `kebab-case.nix`
-convention `nixos-modules/` observes universally.
+`let` binding nobody uses, and a file whose name does not follow the
+`kebab-case.nix` convention `nixos-modules/` observes universally.
 
 **Prompt requirements.** Map every Nix finding to a nix.dev best practice, a
-Nixpkgs convention, RFC 42, or the observed local layout, and say which. Where
+Nixpkgs convention, or the observed local layout, and say which. Where
 a naming or layout question arises, prefer the argument-renaming discipline
 Nixpkgs states over hiding a version constraint in an override, because a
 hidden constraint is the merge-conflict failure mode in a place with no merge
@@ -609,8 +696,9 @@ tool. Option attribute paths in `camelCase` are long-standing convention and
 **not** specification, so an option-naming finding is advisory unless a local
 rule applies.
 
-**Anti-patterns.** Reviewing module evaluation, option merge order,
-`mkDefault` versus `mkForce`, activation ordering or unit proposals, all of
+**Anti-patterns.** Reviewing module evaluation, option merge order and
+priority, `mkDefault` versus `mkForce`, eval-time assertions, RFC 42 structural
+option surfaces, activation ordering or unit proposals, all of
 which are `nixos`'s and produce the duplicate blocking finding this split
 exists to prevent; blocking on formatting nixfmt owns; and citing the Nixpkgs
 manual's coding-conventions chapter, which is now a stub of "this section has
@@ -749,9 +837,9 @@ normative sources, not against guides.
 | Command Execution Trust Boundaries | N | T1 | `GC docs/reference/trust-boundaries.md` |
 | Understanding Formulas | A | T2 | `GC docs/guides/understanding-formulas.md` |
 | Configuring an Agent | A | T2 | `GC docs/guides/configuring-an-agent.md` |
-| `build-base` formula, the stage and seam contract | N for what it declares | T4 for text | `GCP gascity/formulas/build-base.formula.toml` |
-| `fix-loop-base` formula | N for what it declares | T4 for text | `GCP gascity/formulas/fix-loop-base.formula.toml` |
-| Per-stage prompt assets | A | T4 for text | `GCP gascity/assets/workflows/build-base/<stage>.md` |
+| `build-base` formula, the stage and seam contract | N for what it declares | T4, behavioural evidence only | `GCP gascity/formulas/build-base.formula.toml` |
+| `fix-loop-base` formula | N for what it declares | T4, behavioural evidence only | `GCP gascity/formulas/fix-loop-base.formula.toml` |
+| Per-stage prompt assets | A | T4, behavioural evidence only | `GCP gascity/assets/workflows/build-base/<stage>.md` |
 | GitHub Spec Kit planning templates | N | T1 | `SK templates/commands/plan.md` |
 
 **Prompt requirements.**
@@ -777,8 +865,10 @@ normative sources, not against guides.
   sits on is unusable.
 - **Respect the licence boundary.** `gastownhall/gascity-packs` carries no
   repository LICENSE at the pinned commit. Its formulas and stage prompts may
-  be read and cited as evidence of what upstream declares; their text may not
-  be reproduced in a d2b artifact.
+  be read and cited as **behavioural evidence** of what upstream declares;
+  neither their text nor their organisation nor their expressive structure may
+  be reproduced or adapted in a d2b artifact. A finding that d2b copied one is
+  this profile's to raise.
 
 **Anti-patterns and non-goals.**
 
@@ -1107,6 +1197,13 @@ persisted state mean afterwards?
 `kernel` owns syscall and kernel-interface semantics and version floors, so
 whether `pidfd_open` was called correctly is `kernel`'s and whether the
 descriptor is closed on the error branch three frames up is this seat's.
+**Descriptor inheritance and lock semantics moved to `kernel` with this
+revision**: whether `O_CLOEXEC` was set, and whether an open file description
+lock behaves the way the code assumes across a `fork` or a second `close`, are
+questions about what the syscall does, and they are cited from the same man
+pages `kernel` already owns. What stays here is the cross-component lifecycle
+question those primitives serve: who holds this descriptor, who releases this
+lock when the process dies here, and what the next start-up finds.
 `software` owns in-function correctness and error propagation, so a swallowed
 `Result` is `software`'s and an unreleased lock across a component boundary is
 this seat's. `test` owns whether a restart path is covered, which presumes
@@ -1121,9 +1218,7 @@ seat's.
 | --- | --- | --- | --- |
 | Google SRE Book, Managing Critical State and Handling Overload | A | T2 | <https://sre.google/sre-book/managing-critical-state/> |
 | Google SRE Workbook, Addressing Cascading Failures | A | T2 | <https://sre.google/sre-book/addressing-cascading-failures/> |
-| `open(2)` and `O_CLOEXEC`, descriptor inheritance semantics | N | T1 | <https://man7.org/linux/man-pages/man2/open.2.html> |
-| `fcntl(2)`, open file description locks | N | T1 | <https://man7.org/linux/man-pages/man2/fcntl.2.html> |
-| `rename(2)`, atomic replacement semantics | N | T1 | <https://man7.org/linux/man-pages/man2/rename.2.html> |
+| `rename(2)`, atomic replacement semantics, for the durability ordering rather than the errno set | N | T1 | <https://man7.org/linux/man-pages/man2/rename.2.html> |
 | `fsync(2)` and durability ordering | N | T1 | <https://man7.org/linux/man-pages/man2/fsync.2.html> |
 | The Rustonomicon, on panics, unwinding and `Drop` | N | T1 | <https://doc.rust-lang.org/nomicon/exception-safety.html> |
 | ADR 0034, storage lifecycle, restart and synchronization | N | T1 | repository-local, and binding |
@@ -1132,16 +1227,24 @@ seat's.
 | ADR 0049, store-owned mutation seal | N | T1 | repository-local |
 | `docs/explanation/daemon-lifecycle.md` | N | T1 | repository-local |
 
+`open(2)` and `fcntl(2)` were listed here in an earlier revision and now sit
+with `kernel` in section 3.5, which is where descriptor inheritance and OFD
+lock semantics belong. This seat still reasons about the resources those calls
+produce; it cites `kernel`'s finding rather than restating the man page.
+
 **Premade prompt assets: none found, and the nearest neighbour is a
 misleading match.** Compound Engineering carries a conditional `reliability`
 lane, and its reviewer is scoped to single-boundary error handling rather than
 to cross-component resource ownership; adopting it would recreate the overlap
-with `software` that this seat exists to avoid. The transferable material is
-therefore the upstream review formula's two relevant scorecard categories,
-**resource lifecycle and cleanup** and **concurrency, ordering and state
-safety**, taken as category names and diff-walk questions rather than as text,
-from `GCP pr-pipeline/formulas/mol-pr-review.formula.toml`, which carries no
-repository licence and is structure-only.
+with `software` that this seat exists to avoid. `GCP
+pr-pipeline/formulas/mol-pr-review.formula.toml` carries no repository licence
+and is therefore **behavioural evidence only**: it establishes that upstream's
+review formula scores resource lifecycle and concurrency separately, which is
+worth knowing about a system this repository integrates with, and its
+categories, wording and organisation are not available to adapt. The prompt
+requirements below are derived instead from ADR 0034, ADR 0011, ADR 0040 and
+ADR 0049 and from `AGENTS.md`'s single-repair-owner rule, which is the correct
+provenance for a seat whose whole subject is this repository's own decisions.
 
 **Prompt requirements.**
 
@@ -1180,7 +1283,8 @@ repository licence and is structure-only.
   cross-component ownership question that makes it this seat's.
 - Demanding retries, timeouts or circuit breakers with no named failure mode
   they address. A resilience pattern proposed for its own sake is taste.
-- Reviewing syscall correctness or kernel version floors, which are `kernel`'s.
+- Reviewing syscall correctness, descriptor inheritance, lock or signal
+  semantics, or kernel version floors, which are `kernel`'s.
 - Proposing a second repair owner. `AGENTS.md` requires every host-mutable path
   or lock surface to name a single repair owner and route repair through it;
   "add a cleanup pass" is usually a finding against that rule rather than a
@@ -1294,10 +1398,14 @@ what the seat may accept:
 ### 3.3 `nixos`
 
 **Purpose and scope.** Module wiring, option declarations, `mkDefault` and
-`mkForce` correctness, assertions, activation ordering, merge semantics, and
+`mkForce` correctness, eval-time assertions, activation ordering, merge
+semantics and priority, structural option surfaces per RFC 42, and
 NixOS-specific correctness. **Not** general Nix code quality: readability,
 naming, idiom, `with`-scope and `let` hygiene and the formatter boundary are
 `software`'s Nix profile, per section 2.1d and the boundary in section 1.2.
+**RFC 42 belongs to this seat alone**; an earlier revision of this document
+assigned it to both seats, which invites two blocking findings for one defect
+on a panel where any non-empty record re-runs the entire roster.
 This is the one seat pair in the pool that reads the same file on purpose, so
 both prompts carry the split in the same words: how the expression reads is
 `software`'s, what module evaluation does with it is this seat's.
@@ -1315,6 +1423,8 @@ both prompts carry the split in the same words: how the expression reads is
 | Nixpkgs Manual | N M | T1 | <https://nixos.org/manual/nixpkgs/stable/> |
 | Nix Reference Manual | N M | T1 | <https://nix.dev/manual/nix/latest/> |
 | ADR 0015, daemon-only clean break | N | T1 | repository-local, and binding on any unit proposal |
+| `nixos-modules/assertions.nix` and the eval-time assertion row in `docs/contributing/critical-subsystems.md` | N | T1 | repository-local, and binding |
+| `AGENTS.md` critical-subsystem index, the net VM `lib.mkForce` row and the do-not-delete-an-assertion rule | N | T1 | repository-local, and binding |
 
 **Premade prompt assets: none exist, and this is a verified enumeration
 result.** Searching `github/awesome-copilot` at commit `dab758a3` across its
@@ -1328,26 +1438,84 @@ above plus this repository's own `nixos-modules/` conventions, and nothing is
 adapted from a premade prompt.
 
 **Prompt requirements.** Option types and defaults declared with descriptions;
-`mkDefault` versus `mkForce` justified per use; activation ordering checked;
-new configuration surfaces expressed as structural `settings` per RFC 42;
-module evaluation free of impure or ambient state; and any proposed unit
-checked against ADR 0015's three-root-unit rule before anything else. Where a
-naming or layout question arises, prefer the argument-renaming discipline
-Nixpkgs states over hiding a version constraint in an override, because a
-hidden constraint is the merge-conflict failure mode in a place with no merge
-tool.
+activation ordering checked; new configuration surfaces expressed as structural
+`settings` per RFC 42; module evaluation free of impure or ambient state; and
+any proposed unit checked against ADR 0015's three-root-unit rule before
+anything else. Where a naming or layout question arises, prefer the
+argument-renaming discipline Nixpkgs states over hiding a version constraint in
+an override, because a hidden constraint is the merge-conflict failure mode in
+a place with no merge tool.
+
+**Eval-time assertions are a contract with consumers, and the prompt says so.**
+`nixos-modules/assertions.nix` is a critical subsystem in this repository's own
+index: the assertions there are what a consumer's evaluation hits before
+anything is built, and they are the reason a misconfiguration fails at eval
+rather than at runtime on a host. The seat is required to check, on any delta
+that touches an option surface or an invariant:
+
+- **Does a new consumer-visible invariant have an assertion?** A rule enforced
+  only by prose, or only by a runtime check inside the daemon, is a rule a
+  consumer discovers after deployment. State which assertion carries it.
+- **Was an existing assertion weakened, narrowed or deleted?** `AGENTS.md` is
+  explicit: do not paper over a failing assertion by deleting it; if the
+  predicate is wrong, fix the predicate, and if the predicate is right but the
+  message misleads, fix the message. A delta that removes or narrows a
+  predicate without an argument that the predicate was wrong is a blocking
+  finding, and the finding names the invariant that stopped being checked.
+- **Is the failure message actionable?** An assertion that fires and names no
+  corrective action costs a consumer the same debugging session an unasserted
+  invariant would have.
+- **`assertions` versus `warnings`.** A warning is not a control. Choosing a
+  warning where the condition makes the resulting system wrong is a finding;
+  the repository's posture is that a check either denies or is not a check.
+
+**Merge priority is judged against ownership, and the repository rule is
+narrower than the common advice.** The widely repeated version - use
+`mkDefault` for everything a consumer configures and `mkForce` only to override
+consumers - is **not** this repository's rule and the prompt must not apply it.
+The actual rule:
+
+- **Every priority choice is justified against ownership.** Ask who owns the
+  value. If the framework supplies a starting point a consumer is expected to
+  change, `mkDefault` is right, because it preserves overrideability. If the
+  framework owns an invariant, a bare definition or `mkForce` may be right, and
+  which one it is depends on what else defines the same option.
+- **`mkForce` is permitted where a framework-owned invariant intentionally
+  neutralizes or overrides a competing definition**, and the canonical critical
+  example is in this tree: `nixos-modules/net.nix` uses `lib.mkForce` to
+  neutralize `base.nix`'s `10-eth-dhcp` on the net VM's uplink, because the net
+  VM must not dual-stack DHCP there. `AGENTS.md` lists removing that `mkForce`
+  as a security-relevant don't and names
+  `tests/unit/nix/cases/net-vm-network.nix` as the check. A `mkForce` of that
+  shape is correct and a finding against it is wrong.
+- **`mkForce` is never a way to make an unexplained merge conflict go away.**
+  The distinguishing question is whether the delta can name the competing
+  definition and say why this one wins. If it can, the priority is a decision.
+  If it cannot, the priority is a silencer, and the finding is that the
+  conflict was never diagnosed.
+- **State the merge result, not just the priority.** For a changed list, set or
+  attribute-set option, say what the merged value is across the modules that
+  define it, and whether the change alters that result for a consumer who
+  defines the same option. Priority regressions are silent by construction:
+  nothing fails, the value is simply different.
 
 **Anti-patterns and non-goals.** New `extraConfig`-style stringly options;
-`mkForce` used to paper over a merge conflict; `with` over large scopes, which
-is `software`'s Nix profile and is named here only so the boundary is visible
-from both sides; blocking on formatting nixfmt owns; citing the Nixpkgs
+`mkForce` used to paper over a merge conflict the delta cannot name; **also**
+the opposite error, filing a finding against the net VM's `10-eth-dhcp`
+neutralizer or any other framework-owned invariant that is correctly forced;
+demanding `mkDefault` as a blanket rule, which is not this repository's
+posture; deleting or narrowing an assertion instead of fixing its predicate;
+`with` over large scopes, which is `software`'s Nix profile and is named here
+only so the boundary is visible from both sides; blocking on formatting nixfmt
+owns; citing the Nixpkgs
 manual's coding conventions chapter, which is now a stub of "this section has
 been moved" pointers and contains no conventions at all.
 
 ### 3.4 `networking`
 
 **Purpose and scope.** Bridge isolation, firewall posture, DHCP and DNS
-behaviour, routing invariants, and host network coexistence.
+behaviour, routing invariants, MTU and MSS handling, address hygiene, and host
+network coexistence.
 
 **Primary guidance.**
 
@@ -1355,11 +1523,18 @@ behaviour, routing invariants, and host network coexistence.
 | --- | --- | --- | --- |
 | BCP 38 and RFC 2827, ingress filtering | N | T1 | <https://www.rfc-editor.org/info/bcp38> |
 | RFC 6890, special-purpose address registries | N | T1 | <https://www.rfc-editor.org/info/rfc6890> |
+| RFC 1918, address allocation for private internets | N | T1 | <https://www.rfc-editor.org/info/rfc1918> |
+| RFC 5737, IPv4 address blocks reserved for documentation | N | T1 | <https://www.rfc-editor.org/info/rfc5737> |
+| RFC 1191, path MTU discovery | N | T1 | <https://www.rfc-editor.org/info/rfc1191> |
+| RFC 4821, packetization layer path MTU discovery | N | T1 | <https://www.rfc-editor.org/info/rfc4821> |
 | nftables wiki | N | T1 | <https://wiki.nftables.org/> |
+| `ip-route(8)` | N | T1 | <https://man7.org/linux/man-pages/man8/ip-route.8.html> |
 | `vsock(7)` | N | T1 | <https://man7.org/linux/man-pages/man7/vsock.7.html> |
 | `systemd.network(5)` | N M | T1 | <https://www.freedesktop.org/software/systemd/man/latest/systemd.network.html> |
 | NIST SP 800-41 Rev. 1, Guidelines on Firewalls and Firewall Policy, 2009 | N | T1 | <https://csrc.nist.gov/pubs/sp/800/41/r1/final> |
 | ADR 0005 and ADR 0013, the firewall and coexistence contract | N | T1 | repository-local, and binding |
+| ADR 0012, the IPv6-off sysctl ordering and hash-derived interface names | N | T1 | repository-local, and binding |
+| `docs/contributing/critical-subsystems.md`, the net VM networking and firewall row and the ownership-marker conventions | N | T1 | repository-local, and binding |
 | `docs/reference/inet-d2b-chains.md` and `host-egress-policy.md` | N | T1 | repository-local |
 
 **Premade prompt assets: none exist, and this is a verified enumeration
@@ -1377,21 +1552,73 @@ normative sources above and this repository's firewall contract.
 where, before and after. Default-deny posture per environment. Address, context
 identifier and port allocation cites a registry or the repository's documented
 allocation scheme. DNS and DHCP regressions and bridge isolation invariants
-named explicitly. Any change under `nixos-modules/net.nix` is checked against
-the `lib.mkForce` neutralization rule `AGENTS.md` names as a don't, and against
-`tests/unit/nix/cases/net-vm-network.nix`. Any host mutation is checked for its
-ownership marker, because finding a foreign marker where d2b expects its own is
-fail-closed rather than a signal to overwrite.
+named explicitly. Beyond those, nine repository-critical invariants, each of
+which the seat checks by name because each is load-bearing here:
+
+- **The net VM uplink DHCP neutralizer.** Any change under
+  `nixos-modules/net.nix` is checked against the `lib.mkForce` neutralization
+  of `base.nix`'s `10-eth-dhcp` that `AGENTS.md` names as a security-relevant
+  don't, and against `tests/unit/nix/cases/net-vm-network.nix`. Losing it
+  dual-stacks DHCP on the uplink and breaks NAT. This is a critical-subsystem
+  row, not a preference.
+- **MTU and MSS.** Per-environment MTU is part of the same critical-subsystem
+  row. Where a path crosses a bridge or a tunnel, state the resulting MTU and
+  whether MSS clamping is applied on the forward path. An unclamped MSS behind
+  a reduced-MTU link is the classic failure that presents as "large transfers
+  hang" and never as a connection error, so it is checked explicitly rather
+  than noticed later.
+- **Exact interface, state and rule order.** Networking correctness here is
+  ordering-sensitive in three places at once: the order sysctls are applied
+  relative to interface creation, the order a bridge port is enslaved relative
+  to its flags, and the order rules land within a chain. ADR 0012 fixes a
+  five-step IPv6-off ordering for exactly this reason. A delta that changes
+  any of the three states the new order and why it is equivalent, or it is a
+  finding.
+- **CIDR overlap and prefix arithmetic.** Any new or changed subnet, prefix
+  length or derived address is checked for overlap with every other declared
+  environment and with the host's own ranges, and the arithmetic is shown.
+  `nixos-modules/assertions.nix` already refuses overlapping CIDRs at eval
+  time; a delta that widens a prefix without rechecking that assertion is a
+  finding.
+- **Address hygiene and generic identity.** Documentation, examples, tests and
+  defaults use RFC 1918 ranges for private addressing and RFC 5737 ranges for
+  documentation, and generic placeholder names. `AGENTS.md` forbids committing
+  real hostnames, real user identifiers and real network ranges, and records
+  that the tree has no such leaks today; a delta that introduces one is a
+  blocking finding regardless of how harmless the specific value looks.
+- **Ownership markers and byte preservation.** Every d2b host mutation is
+  delimited so foreign configuration survives byte for byte: nftables rules and
+  chains in the `inet d2b` table carry `comment "d2b managed: <ownership-id>"`
+  and foreign tables are never flushed; `/etc/hosts` and
+  `/etc/NetworkManager/conf.d/00-d2b-unmanaged.conf` are delimited by
+  `# d2b-managed begin` and `# d2b-managed end`. A delta that writes outside a
+  marker, or that widens what a marker covers, is a finding.
+- **A foreign marker is fail-closed, never a signal to overwrite.** Finding a
+  foreign marker where d2b expects its own raises `path-safety-violation`,
+  `nm-managed-foreign-conflict` or `foreign-nft-rule-preserved`. A delta that
+  turns one of those into a warning, a retry or an overwrite is a blocking
+  finding.
+- **systemd-networkd is detection-only.** d2b never writes systemd-networkd
+  configuration. A delta that adds a write path there is a finding against the
+  coexistence contract even if it works.
+- **nftables ownership comments and table scope.** New rules land in the named
+  `inet d2b` table with the ownership comment, in the documented four-chain
+  layout, and never in `raw`, `mangle` or `nat`. Cite
+  `docs/reference/inet-d2b-chains.md` for the layout and ADR 0013 for the
+  detector-to-policy matrix.
 
 **Anti-patterns and non-goals.** Hardcoded addresses outside documented ranges;
 temporarily-open rules with no expiry or owner; conflating a host-only
 transport with an authenticated channel; treating denial of service as out of
-scope because a security prompt from another project excluded it.
+scope because a security prompt from another project excluded it; proposing a
+second repair owner for a host network path, which `AGENTS.md` forbids;
+reviewing the syscall semantics of a socket call, which is `kernel`'s.
 
 ### 3.5 `kernel`
 
 **Purpose and scope.** pidfd, cgroup v2, namespace, mount, signal, ioctl and
-filesystem semantics, kernel version assumptions, and Linux API edge cases.
+filesystem semantics, descriptor inheritance and file-locking semantics, kernel
+version assumptions, and Linux API edge cases.
 
 **Primary guidance.**
 
@@ -1401,12 +1628,20 @@ filesystem semantics, kernel version assumptions, and Linux API edge cases.
 | Kernel documentation, Control Group v2 | N | T1 | <https://docs.kernel.org/admin-guide/cgroup-v2.html> |
 | `namespaces(7)` | N | T1 | <https://man7.org/linux/man-pages/man7/namespaces.7.html> |
 | `mount_namespaces(7)` | N | T1 | <https://man7.org/linux/man-pages/man7/mount_namespaces.7.html> |
+| `mount(2)` | N | T1 | <https://man7.org/linux/man-pages/man2/mount.2.html> |
+| `open(2)`, including `O_CLOEXEC` and descriptor inheritance | N | T1 | <https://man7.org/linux/man-pages/man2/open.2.html> |
+| `fcntl(2)`, open file description locks and `FD_CLOEXEC` | N | T1 | <https://man7.org/linux/man-pages/man2/fcntl.2.html> |
 | `openat2(2)`, resolve flags | N | T1 | <https://man7.org/linux/man-pages/man2/openat2.2.html> |
 | `seccomp(2)` | N | T1 | <https://man7.org/linux/man-pages/man2/seccomp.2.html> |
 | Kernel documentation, seccomp filter | N | T1 | <https://docs.kernel.org/userspace-api/seccomp_filter.html> |
 | `signal(7)` | N | T1 | <https://man7.org/linux/man-pages/man7/signal.7.html> |
+| `sigaction(2)` | N | T1 | <https://man7.org/linux/man-pages/man2/sigaction.2.html> |
+| `signal-safety(7)`, async-signal-safe function list | N | T1 | <https://man7.org/linux/man-pages/man7/signal-safety.7.html> |
+| `errno(3)`, for the filesystem and interruption error set | N | T1 | <https://man7.org/linux/man-pages/man3/errno.3.html> |
+| `rename(2)`, for its error semantics; the durability ordering stays `reliability`'s | N | T1 | <https://man7.org/linux/man-pages/man2/rename.2.html> |
 | Kernel ABI stability documentation | N | T1 | <https://docs.kernel.org/admin-guide/abi.html> |
 | ADR 0008 and ADR 0011, the platform floor and the cgroup and pidfd contract | N | T1 | repository-local, and binding |
+| ADR 0034's `O_CLOEXEC` and OFD-lock requirement, restated in `AGENTS.md` | N | T1 | repository-local, and binding |
 
 **Premade prompt assets: none exist, and this is a verified enumeration
 result.** No kernel, syscall, cgroup, namespace or seccomp review asset exists
@@ -1426,10 +1661,49 @@ the delta resolves a path under a privileged identity, check the resolve-flag
 set against the anchored-resolution rule this repository already applies, and
 treat a dropped flag as a finding rather than a style difference.
 
+Four territories moved into this seat with the 2026-08-04 revision, because
+each is a question about what the syscall does rather than about who owns the
+resource. `reliability` still owns the cross-component lifecycle those
+primitives serve; the split is restated in section 1.2 and in 3.1.
+
+- **Descriptor inheritance.** Every descriptor the delta creates is checked for
+  `O_CLOEXEC` at creation, not for `FD_CLOEXEC` set afterwards: setting
+  close-on-exec after creation is not atomic and a `fork` and `exec` in the
+  window leaks the descriptor into a child. ADR 0034 requires `O_CLOEXEC` by
+  name and `AGENTS.md` restates it. A delta that opens without it, or that
+  relies on a later `fcntl`, is a finding, and the finding names the exec path
+  that would inherit.
+- **Locks.** Open file description locks and POSIX record locks are not
+  interchangeable and the difference bites in one specific way: a POSIX record
+  lock is dropped when **any** descriptor to that file is closed by the
+  process, including one an unrelated code path opened, while an OFD lock is
+  tied to the open file description. ADR 0034 requires OFD locks. A delta that
+  reaches for `flock` or `F_SETLK` where an `F_OFD_SETLK` is required, or that
+  assumes lock ownership survives a descriptor it does not control, is a
+  finding.
+- **Signals.** Signal disposition, the async-signal-safety of anything reached
+  from a handler, `SA_RESTART` versus explicit `EINTR` retry, `SIGCHLD` and
+  reaping, and `SIGPIPE` on a write to a closed peer. Two rules the prompt
+  states outright: only async-signal-safe functions are callable from a
+  handler, per `signal-safety(7)`, and a blocking call that can return `EINTR`
+  either has `SA_RESTART` or has an explicit retry loop, never neither.
+- **Filesystem and interruption error cases.** Every filesystem call in the
+  delta is checked against the errors it can actually return, with four named
+  because they are the ones handled wrongly most often here: **`EXDEV`**, which
+  makes a `rename` across a filesystem boundary fail rather than fall back, and
+  which matters because the hardlink farm requires `/var/lib/d2b` and
+  `/nix/store` on the same filesystem; **`EINTR`**, per the signals rule above;
+  **`EAGAIN`**, which is not an error on a non-blocking descriptor and is
+  frequently treated as one; and **`ENOSPC`**, which must leave the on-disk
+  state readable rather than half-written. A delta that maps any of the four
+  into a generic error without saying so is a finding.
+
 **Anti-patterns and non-goals.** Citing distribution blog posts or
 administration guides for kernel semantics; asserting behaviour with no version
 floor; reviewing userspace design as if it were kernel code; taking
-cross-component resource lifetime, which is `reliability`'s.
+cross-component resource lifetime, which is `reliability`'s, or the durability
+ordering of a write, which is also `reliability`'s even where this seat owns
+the errno set of the same call.
 
 ## 4. Honest coverage statement
 
@@ -1464,7 +1738,7 @@ missing seat cannot:
 | `rust` | **No, for the depth this profile carries.** What exists in `github/awesome-copilot` at the pin is model-context-protocol server **generation** guidance and a general repository-wide Rust instructions file that is advisory community content with no unsafe, FFI or SemVer depth. Compound Engineering has no Rust reviewer; its only language-specific reviewer is for Swift. Superpowers and Spec Kit are language-agnostic. Authored from the Rust Reference, the API Guidelines, the Cargo SemVer reference, the Rustonomicon and the measured local lint perimeter in 2.1a. |
 | `python` | **No.** No Python review rubric was found in the five collections; what exists is authoring guidance. Authored from PEP 8, the language and library references, the typing documentation and section 6.4. |
 | `shell` | **Partly**, and not as a prompt. ShellCheck's per-code wiki is the closest thing to a review rubric that exists for shell and is used as one, together with the Google guide as Bash-only mature-project practice. No agent asset transfers. |
-| `nix` | **No.** Same verified absence as the `nixos` seat: no Nix asset of any kind in the surveyed collections. Authored from the Nix reference, nix.dev, Nixpkgs conventions and RFCs 42 and 166. |
+| `nix` | **No.** Same verified absence as the `nixos` seat: no Nix asset of any kind in the surveyed collections. Authored from the Nix reference, nix.dev, Nixpkgs conventions and RFC 166; RFC 42 belongs to the `nixos` seat, not to this profile. |
 
 **This is the honest form of what merging the Rust seat cost.** The depth gap
 did not close; it moved from a seat with its own file, where an absent prompt
@@ -1532,11 +1806,19 @@ Three statements about this list are load-bearing and easy to get wrong:
 **Licence posture for this whole section.** The stage prompt assets at
 `GCP gascity/assets/workflows/build-base/<stage>.md` and
 `GCP gascity/assets/workflows/fix-loop-base/<step>.md` sit in a repository with
-**no LICENSE at the pinned commit**. They may be read and cited as evidence of
-what upstream declares, and their **structure** may inform a d2b prompt. Their
-**text may not be copied**. The Superpowers and Compound Engineering material
-cited below is MIT with provenance recorded in `upstream.toml` and may supply
-adaptable structures with attribution.
+**no LICENSE at the pinned commit**. They may be read and cited as
+**behavioural evidence** of what upstream declares - which step exists, what it
+dispatches, what artifact schema it produces, whether a check gates it - and
+that is exactly how the table above uses them. Their **text, their
+organisation and their expressive structure may not be copied or adapted**. An
+earlier revision of this document said their structure could inform a d2b
+prompt, which contradicted this document's own T4 rule in section 0.2; that
+permission is withdrawn. A d2b stage prompt is derived from the permissively
+licensed sources named per stage below - Superpowers and Compound Engineering
+as vendored MIT with provenance in `upstream.toml`, Spec Kit MIT,
+`awesome-copilot` MIT - from T1 normative documentation and standards, and from
+this repository's own requirements. The upstream anchor tells the author which
+step is being overridden; it does not supply the shape.
 
 ### 5.2 Stage prompt contracts
 
@@ -1709,14 +1991,15 @@ and thresholds that must not be copied.
   overrides.
 - **Best public sources.** The Anthropic security review prompt (MIT) for
   delta-scoping and the misses-over-noise posture. Compound Engineering's
-  reviewer set (MIT via vendored subtree) for per-lane hunt classes. The
-  upstream review formula's scorecard, taken as category names and diff-walk
-  questions: behavioural correctness, contract and interface fidelity, change
-  impact and blast radius, concurrency ordering and state safety, error
-  handling and resilience, security surface, resource lifecycle and cleanup,
-  release safety, test evidence quality, architectural consistency, and
-  debuggability and operability. Google engineering practices for the approval
-  standard.
+  reviewer set (MIT via vendored subtree) for per-lane hunt classes. Google
+  engineering practices for the approval standard. The review categories a d2b
+  override uses are **not** taken from upstream's scorecard, which sits in an
+  unlicensed tree: they are the ownership map of section 1.2, which D21 decided
+  and which is the only category list that can match this panel's seats. That
+  upstream scores a review across named categories is a fact worth knowing
+  about the system this repository integrates with; its category list, wording
+  and ordering are not available to adapt, and an earlier revision of this
+  document reproduced them here.
 - **Required behaviours.** Review authority is an **explicit input, not a seat
   choice**, and d2b's panel is report-shaped: findings only, no code mutation,
   no fixes applied from this stage. Say so in every seat prompt, because
@@ -1899,6 +2182,16 @@ guidance; outcome, failure-class, attempt, attempt-log, blocked-reason,
 convoy-id, work-dir and step-ref metadata keys; the six build artifact schema
 identifiers; the validator script path; the convoy, drain, member-access,
 single-lane and item-failure vocabulary; and the upstream artifact filenames.
+
+**Gas City stage prompt text, organisation and expressive structure.** The
+assets under `GCP gascity/assets/workflows/` and the formulas under
+`GCP gascity/formulas/` and `GCP pr-pipeline/formulas/` carry no licence grant
+at the pinned commit. Nothing from them is copied and nothing is adapted: not
+the prose, not the section decomposition, not the heading sequence, not the
+checklist taxonomy, and not a scorecard category list. They are read to
+establish what upstream declares, and cited for that. Where a structure is
+genuinely needed, it comes from a permissively licensed source or from this
+repository's own requirements, both of which section 5.2 names per stage.
 
 **Gas City and Compound Engineering numbers.** The stage retry budget, the two
 bounded repair attempts, the fix-loop iteration default, the step timeout; the
@@ -2152,7 +2445,8 @@ missed the rule that matters.
 | --- | --- | --- | --- | --- |
 | Package file and directory layout | Nixpkgs `pkgs/by-name/README.md` | A | T2 | A mechanical sharded layout with two hard constraints and a machine validator, which is a good precedent for replacing a prompt-only assurance with a gate |
 | Conventions, file naming and organisation | Nixpkgs `CONTRIBUTING.md` and `pkgs/README.md` | A | T2 | The current homes for syntax, coding conventions, package naming and versioning |
-| Structural configuration | RFC 42 | N | T1 | Structural `settings` rather than stringly `extraConfig` |
+| Structural configuration | RFC 42 | N | T1 | Structural `settings` rather than stringly `extraConfig`. **Owned by `nixos`, not by `software`'s Nix profile**, because it is a statement about what the module system can merge and type-check |
+| Merge priority | This repository's ownership rule, section 3.3 | N | T1 | Priority is justified against ownership. `mkForce` is permitted where a framework-owned invariant intentionally neutralizes a competing definition, the net VM `10-eth-dhcp` neutralizer being the canonical critical case, and never to silence an unexplained conflict; `mkDefault` preserves consumer overrideability where the framework supplies a default. **Owned by `nixos`** |
 | Formatting | RFC 166, which adopted nixfmt as the standard formatter through the RFC process | N | T1 | Formatting belongs to the formatter, not to a seat. This is a boundary, and the boundary is a refusal: a formatting finding is never blocking, and the remedy is to run the formatter |
 | Option naming | NixOS manual option declarations, plus convention | A | T2 | `camelCase` option attribute paths are long-standing convention, **not** specification. Flag as advisory |
 
@@ -2201,7 +2495,7 @@ always wins; what varies is how visible the conflict is.
 | Google Shell Style Guide's Bash-only constructs | Both dialects present; the no-Bash rule is about the CLI surface only | Classify by shebang, per 6.5 |
 | Community assets' emoji, arrows and typographic dashes | ASCII hyphen only, gate-enforced across all file types | Extract structure, retype text, never paste |
 | Multi-band severity ladders and verdict matrices | One blocking channel: `signoff` is true if and only if `recommendations` is empty | Import the threshold mechanism, not the bands |
-| Reviewer assets that write report files to fixed paths | The record is three producer-written fields; scratch goes under the panel scratch directory and is not read by the gate | Strip all file-writing instructions |
+| Reviewer assets that write report files to fixed paths | The record is four producer-written fields; scratch goes under the panel scratch directory and is not read by the gate | Strip all file-writing instructions |
 | Verification skills that require the reviewer to run commands | Reviewers do not re-run validation; evidence is supplied | Invert the actor: audit the supplied evidence against the same table |
 | Simplification assets that reward smaller diffs with line counters | Code golf and lost validation are rejections | Import the taxonomy, drop the counters |
 | Assets that freely propose adding libraries | ADR 0009 governs the supply chain; the six-axis evidence rule applies | External guidance cannot waive ADR 0009 |
@@ -2260,7 +2554,11 @@ observations are from 2026-08-04 unless stated.
   pinned commit**; the GitHub licence endpoint returns 404 for it. MIT appears
   only inside its two vendored subtrees, each with an `upstream.toml` recording
   the upstream project, commit and licence. Its own formulas and stage prompts
-  are therefore read-for-structure, do-not-copy-text sources.
+  are therefore **behavioural-evidence-only** sources: readable and citable for
+  what upstream declares, with no copying and no adaptation of their text,
+  organisation or expressive structure. An earlier revision of this document
+  described them as read-for-structure, which was inconsistent with the T4 rule
+  in section 0.2 and is corrected.
   `hesreallyhim/awesome-claude-code` is **CC BY-NC-ND 4.0** at the surveyed
   revision: the no-derivatives term means adaptation is not permitted, so it is
   a discovery index only, and anything it lists must be checked against that
