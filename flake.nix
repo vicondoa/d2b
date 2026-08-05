@@ -135,6 +135,7 @@
           "daemon-autostart.nix"
           "daemon-default-compat.nix"
           "gateway-vm.nix"
+          "gateway-vm-guest.nix"
           "d2bd-startup-smoke.nix"
         ];
         nix-unit-guest = [

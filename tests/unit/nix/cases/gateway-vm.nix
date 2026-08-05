@@ -1,5 +1,5 @@
 # Eval coverage for realm gateway declarations.
-{ lib, mkEval, flakeRoot, ... }:
+{ lib, mkEval, flakeRoot, casePartition ? "core", ... }:
 
 let
   hostSchemaBase = {
@@ -306,7 +306,8 @@ let
   sourceGatewayGuestCfg = sourceToolsCfg.d2b._computed."sys-work-gateway".config;
   gatewayModuleSource = builtins.readFile (flakeRoot + "/nixos-modules/gateway-vm.nix");
 in
-{
+let
+  allCases = {
   "gateway-vm/auto-declared-name" = {
     expr = builtins.elem "sys-work-gateway" (builtins.attrNames goodCfg.d2b.vms);
     expected = true;
@@ -837,4 +838,18 @@ in
       hasGatewayRuntime = true;
     };
   };
-}
+};
+  guestCases = [
+    "gateway-vm/guest-services-installed-without-static-waypipe"
+    "gateway-vm/gateway-guest-json-retains-realm-provider-material"
+    "gateway-vm/guest-daemon-runs-as-d2bd-without-no-drop-flag"
+    "gateway-vm/host-guest-state-ownership-boundary"
+    "gateway-vm/source-host-tools-opt-out-selects-source-daemon"
+    "gateway-vm/reuses-standard-host-tool-package-plumbing"
+  ];
+in
+lib.filterAttrs
+  (name: _:
+    if casePartition == "guest" then builtins.elem name guestCases
+    else !(builtins.elem name guestCases))
+  allCases
