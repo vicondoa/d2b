@@ -1545,50 +1545,14 @@
                   "${pkgs.lib.removePrefix "case-" jobName}.nix"
                   files)
               nixUnitCorpus.fileJobs;
-          heavyCaseFiles = [
-            "assertions.nix"
-            "external-vm-kind.nix"
-            "gateway-vm.nix"
-            "guest-config-containment.nix"
-            "guest-control-auth.nix"
-            "guest-control-vsock.nix"
-            "guest-exec-policy.nix"
-            "guest-shell-policy.nix"
-            "observability-host-collector.nix"
-            "observability-host-collector-extra.nix"
-            "observability-host-collector-otlp.nix"
-            "observability-host-collector-processor-split.nix"
-            "observability-host-collector-identity.nix"
-            "observability-host-collector-umask.nix"
-            "observability-host-collector-flags.nix"
-            "realm-workloads.nix"
-            "realms.nix"
-            "realms-artifacts.nix"
-            "realms-controller.nix"
-            "realms-examples.nix"
-            "realms-host-local.nix"
-            "realms-identity.nix"
-            "realms-rejections.nix"
-            "realms-workloads.nix"
-            "realms-zone-control.nix"
-            "usb-security-key.nix"
-          ];
-          lightGroups = pkgs.lib.filterAttrs
-            (_: jobs: jobs != { })
-            (pkgs.lib.mapAttrs
-              (_: files:
-                jobsFor (pkgs.lib.filter
-                  (file: !(builtins.elem file heavyCaseFiles))
-                  files))
-              nixUnitShardCaseFiles);
-          heavyGroups = pkgs.lib.listToAttrs (map
+          fileGroups = pkgs.lib.listToAttrs (map
             (file: {
               name = "case-${pkgs.lib.removeSuffix ".nix" file}";
               value = jobsFor [ file ];
             })
-            heavyCaseFiles);
+            nixUnitCorpus.caseFileNames);
         in
-        lightGroups // heavyGroups // {
+        fileGroups // {
           integrity = {
             nix-unit = self.checks.${system}.nix-unit;
           };
