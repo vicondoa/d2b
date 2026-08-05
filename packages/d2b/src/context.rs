@@ -12,7 +12,7 @@ use std::{
     },
     task::{Context as TaskContext, Poll, Wake, Waker},
     thread,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use d2b_contracts::v3::{
@@ -30,6 +30,7 @@ use d2b_resource_client::{
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
+use crate::terminal_client::TerminalHostIo;
 use crate::{CliFailure, MAX_FRAME_BYTES, SeqpacketUnixSocket, print_stdout};
 
 /// The frozen JSON envelope version emitted by the CLI.
@@ -63,6 +64,13 @@ pub(crate) struct RequestDeadline(Duration);
 impl RequestDeadline {
     pub(crate) const fn duration(self) -> Duration {
         self.0
+    }
+
+    pub(crate) fn remaining(self, elapsed: Duration) -> Option<Self> {
+        self.0
+            .checked_sub(elapsed)
+            .filter(|value| !value.is_zero())
+            .map(Self)
     }
 }
 
@@ -337,12 +345,9 @@ impl ZoneContext {
         self.decorate_response(value)
     }
 
-    /// Open and close one typed Process attachment through the Zone session.
-    ///
-    /// The current CLI command reports establishment rather than proxying
-    /// stream bytes. The resource client still owns target validation,
-    /// session pinning, attach authorization, cancellation, and named-stream
-    /// close; this facade does not fall back to the old OpenTerminal request.
+    /// Proxy one typed Process or ShellSession attachment through the Zone
+    /// session. Shells retain the same authenticated session pin while their
+    /// named stream is driven by the terminal adapter below.
     pub(crate) fn attach_process(
         &self,
         resource_ref: ResourceRef,
@@ -371,6 +376,99 @@ impl ZoneContext {
             "resourceRef": resource_ref.to_canonical_string(),
             "tty": tty,
         }))
+    }
+
+    pub(crate) fn attach_shell(
+        &self,
+        session_ref: ResourceRef,
+        execution_ref: Option<ResourceRef>,
+        force: bool,
+        create: bool,
+        deadline: RequestDeadline,
+    ) -> Result<(), CliFailure> {
+        let target = ProcessAttachTarget::shell_session(
+            self.zone_path.clone(),
+            session_ref,
+            execution_ref,
+            force,
+        )
+        .map_err(|_| CliFailure::new(2, "ref-invalid: invalid ShellSession target"))?;
+        let stream = self
+            .backend
+            .canonical
+            .open_attach_stream(
+                target,
+                if create { "Create" } else { "Attach" },
+                true,
+                true,
+                deadline,
+            )
+            .map_err(|error| self.client_failure(error, OutputMode::Human))?;
+        let mut guard = crate::exec_client::FdStateGuard::enter(true, true)
+            .map_err(|_| CliFailure::new(69, "shell terminal setup failed"))?;
+        let mut host = crate::exec_client::RealHostIo;
+        let mut signals = crate::exec_client::install_signals()
+            .map_err(|_| CliFailure::new(69, "shell signal setup failed"))?;
+        let mut input = [0_u8; d2b_contracts::public_wire::EXEC_MAX_CHUNK_BYTES as usize];
+        loop {
+            for signal in crate::terminal_client::TerminalSignalSource::drain(&mut signals) {
+                match signal {
+                    crate::exec_client::ExecSignal::Winch => {
+                        if let Some((rows, cols)) = host.window_size() {
+                            let size = u16::try_from(rows)
+                                .ok()
+                                .zip(u16::try_from(cols).ok())
+                                .and_then(|(rows, cols)| TerminalSize::new(rows, cols).ok());
+                            if let Some(size) = size {
+                                let _ = block_on(stream.resize(size));
+                            }
+                        }
+                    }
+                    crate::exec_client::ExecSignal::Hangup
+                    | crate::exec_client::ExecSignal::Terminate
+                    | crate::exec_client::ExecSignal::Stop
+                    | crate::exec_client::ExecSignal::Interrupt
+                    | crate::exec_client::ExecSignal::Quit => {
+                        let _ = block_on(stream.cancel());
+                        guard.restore();
+                        return Ok(());
+                    }
+                }
+            }
+            match host.read_stdin(&mut input) {
+                Ok(0) => {
+                    let _ = block_on(stream.close());
+                    guard.restore();
+                    return Ok(());
+                }
+                Ok(read) => {
+                    block_on(stream.send(&input[..read]))
+                        .map_err(|_| CliFailure::new(69, "shell input transport failed"))?;
+                }
+                Err(error)
+                    if matches!(
+                        error.kind(),
+                        std::io::ErrorKind::WouldBlock | std::io::ErrorKind::Interrupted
+                    ) => {}
+                Err(_) => {
+                    let _ = block_on(stream.cancel());
+                    guard.restore();
+                    return Err(CliFailure::new(69, "shell input failed"));
+                }
+            }
+            let output = match block_on(stream.receive()) {
+                Ok(output) => output,
+                Err(ClientError::Cancelled) => {
+                    guard.restore();
+                    return Ok(());
+                }
+                Err(_) => return Err(CliFailure::new(69, "shell output transport failed")),
+            };
+            if !output.is_empty() {
+                host.write_stdout(&output)
+                    .map_err(|_| CliFailure::new(69, "shell output failed"))?;
+            }
+        }
     }
 
     #[cfg(test)]
@@ -561,13 +659,25 @@ impl ZoneContext {
 
     fn client_failure(&self, error: ClientError, mode: OutputMode) -> CliFailure {
         let (class, message, exit_code) = match error {
-            ClientError::InvalidTarget
-            | ClientError::InvalidService
-            | ClientError::InvalidMethod
-            | ClientError::InvalidMetadata
-            | ClientError::IdempotencyRequired => {
-                ("resource-schema-invalid", "resource request was invalid", 2)
+            ClientError::InvalidTarget => {
+                ("resource-schema-invalid", "resource target was invalid", 2)
             }
+            ClientError::InvalidService => {
+                ("resource-schema-invalid", "resource service was invalid", 2)
+            }
+            ClientError::InvalidMethod => {
+                ("resource-schema-invalid", "resource method was invalid", 2)
+            }
+            ClientError::InvalidMetadata => (
+                "resource-schema-invalid",
+                "resource metadata was invalid",
+                2,
+            ),
+            ClientError::IdempotencyRequired => (
+                "resource-schema-invalid",
+                "resource idempotency was invalid",
+                2,
+            ),
             ClientError::RouteUnavailable | ClientError::SessionLost => {
                 ("zone-unavailable", "Zone runtime is unavailable", 1)
             }
@@ -704,6 +814,48 @@ fn canonical_backend(zone_name: &str, socket_path: &Path) -> Result<ContextBacke
 }
 
 impl CanonicalZoneBackend {
+    fn open_attach_stream(
+        &self,
+        target: ProcessAttachTarget,
+        operation: &str,
+        interactive: bool,
+        tty: bool,
+        deadline: RequestDeadline,
+    ) -> Result<d2b_resource_client::ProcessAttachStream<CliAttachStream>, ClientError> {
+        let connector = CliZoneConnector::new(
+            self.zone_name.clone(),
+            self.zone_path.clone(),
+            self.socket_path.clone(),
+            ZoneServiceKind::Zone,
+            operation.to_owned(),
+            Some("attach".to_owned()),
+            deadline.duration(),
+        );
+        let initial_size = if tty {
+            let (rows, cols) =
+                crate::exec_client::current_window_size().ok_or(ClientError::InvalidMetadata)?;
+            Some(TerminalSize::new(
+                u16::try_from(rows).map_err(|_| ClientError::InvalidMetadata)?,
+                u16::try_from(cols).map_err(|_| ClientError::InvalidMetadata)?,
+            )?)
+        } else {
+            None
+        };
+        let attach_options = ProcessAttachOptions::new(interactive, tty, initial_size)?;
+        let owner = owner_for_zone(&self.zone_path);
+        let resolver = RouteTable::new(vec![RouteRecord::new(owner, TransportKind::LocalUnix)]);
+        let client = ProcessAttachClient::new(resolver, connector);
+        let call_options = call_options(deadline, ResourceVerb::Get)?;
+        let cancellation = CancellationToken::default();
+        block_on(client.attach(
+            target,
+            attach_options,
+            call_options,
+            TransportSelection::exact(TransportKind::LocalUnix),
+            &cancellation,
+        ))
+    }
+
     fn invoke(
         &self,
         method: &str,
@@ -1022,41 +1174,167 @@ impl std::fmt::Debug for CliConnectedSession {
     }
 }
 
-/// Establishment-only stream adapter for the current CLI command contract.
+/// Local transport adapter for an authenticated process attachment stream.
 ///
-/// The public CLI currently reports an accepted attachment and does not proxy
-/// byte I/O. It therefore refuses stream data operations instead of creating
-/// a second transport. The authenticated session remains responsible for the
-/// attach admission; `close` releases the client-side named-stream lease.
+/// Process attachments need only establishment, while ShellSession attachments
+/// retain the socket for bounded stdin, output, resize, cancellation, and
+/// close messages on the admitted named stream.
 struct CliAttachStream {
     closed: AtomicBool,
+    eof: AtomicBool,
+    socket: Option<Arc<Mutex<SeqpacketUnixSocket>>>,
+    stdin_offset: Mutex<u64>,
+    stdout_offset: AtomicU64,
 }
 
 impl CliAttachStream {
-    fn new() -> Self {
+    fn new(socket: Option<Arc<Mutex<SeqpacketUnixSocket>>>) -> Self {
         Self {
             closed: AtomicBool::new(false),
+            eof: AtomicBool::new(false),
+            socket,
+            stdin_offset: Mutex::new(0),
+            stdout_offset: AtomicU64::new(0),
         }
     }
 }
 
 impl NamedStreamTransport for CliAttachStream {
-    fn send(&self, _bytes: Vec<u8>) -> impl Future<Output = Result<(), ClientError>> + Send {
-        ready(Err(ClientError::ContractViolation))
+    fn send(&self, bytes: Vec<u8>) -> impl Future<Output = Result<(), ClientError>> + Send {
+        ready(self.send_stdin(&bytes))
+    }
+
+    fn resize(&self, size: TerminalSize) -> impl Future<Output = Result<(), ClientError>> + Send {
+        ready(
+            self.stream_round_trip(json!({
+                "type": "namedStreamResize",
+                "rows": size.rows(),
+                "cols": size.cols(),
+            }))
+            .map(|_| ()),
+        )
     }
 
     fn receive(&self) -> impl Future<Output = Result<Vec<u8>, ClientError>> + Send {
-        ready(Err(ClientError::ContractViolation))
+        if self.eof.load(Ordering::Acquire) {
+            return ready(Err(ClientError::Cancelled));
+        }
+        let result = self
+            .stream_round_trip(json!({
+                "type": "namedStreamReceive",
+                "offset": self.stdout_offset.load(Ordering::Acquire),
+                "maxLen": d2b_contracts::public_wire::EXEC_MAX_CHUNK_BYTES,
+            }))
+            .and_then(|value| {
+                let data = value
+                    .get("dataBase64")
+                    .and_then(Value::as_str)
+                    .ok_or(ClientError::ContractViolation)
+                    .and_then(|data| {
+                        d2b_core::base64_codec::decode(data)
+                            .map_err(|_| ClientError::ContractViolation)
+                    })?;
+                if let Some(offset) = value.get("nextOffset").and_then(Value::as_u64) {
+                    self.stdout_offset.store(offset, Ordering::Release);
+                }
+                if value.get("eof").and_then(Value::as_bool) == Some(true) {
+                    self.eof.store(true, Ordering::Release);
+                    if data.is_empty() {
+                        return Err(ClientError::Cancelled);
+                    }
+                }
+                Ok(data)
+            });
+        ready(result)
     }
 
     fn close(&self) -> impl Future<Output = Result<(), ClientError>> + Send {
         self.closed.store(true, Ordering::Release);
-        ready(Ok(()))
+        let result = if self.socket.is_some() {
+            self.stream_round_trip(json!({"type": "namedStreamClose"}))
+                .map(|_| ())
+        } else {
+            Ok(())
+        };
+        ready(result)
     }
 
     fn cancel(&self) -> impl Future<Output = Result<(), ClientError>> + Send {
         self.closed.store(true, Ordering::Release);
-        ready(Ok(()))
+        let result = if self.socket.is_some() {
+            self.stream_round_trip(json!({"type": "namedStreamCancel"}))
+                .map(|_| ())
+        } else {
+            Ok(())
+        };
+        ready(result)
+    }
+}
+
+impl CliAttachStream {
+    fn send_stdin(&self, bytes: &[u8]) -> Result<(), ClientError> {
+        let mut offset = self
+            .stdin_offset
+            .lock()
+            .map_err(|_| ClientError::SessionLost)?;
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let mut consumed = 0;
+        while consumed < bytes.len() {
+            let value = self.stream_round_trip(json!({
+                "type": "namedStreamSend",
+                "offset": *offset,
+                "dataBase64": d2b_core::base64_codec::encode(&bytes[consumed..]),
+            }))?;
+            let accepted = value
+                .get("acceptedLen")
+                .and_then(Value::as_u64)
+                .and_then(|value| usize::try_from(value).ok())
+                .ok_or(ClientError::ContractViolation)?;
+            let next_offset = value
+                .get("nextOffset")
+                .and_then(Value::as_u64)
+                .ok_or(ClientError::ContractViolation)?;
+            if accepted > bytes.len() - consumed
+                || next_offset != (*offset).saturating_add(accepted as u64)
+            {
+                return Err(ClientError::ContractViolation);
+            }
+            if accepted == 0 {
+                if value.get("stdinClosed").and_then(Value::as_bool) == Some(true) {
+                    return Err(ClientError::SessionLost);
+                }
+                if value.get("backpressured").and_then(Value::as_bool) != Some(true) {
+                    return Err(ClientError::ContractViolation);
+                }
+                if Instant::now() >= deadline {
+                    return Err(ClientError::Remote {
+                        kind: ResourceErrorKind::Backpressure,
+                        retry: RetryClass::AfterDelay,
+                    });
+                }
+                thread::sleep(Duration::from_millis(5));
+                continue;
+            }
+            *offset = next_offset;
+            consumed += accepted;
+        }
+        Ok(())
+    }
+
+    fn stream_round_trip(&self, request: Value) -> Result<Value, ClientError> {
+        let socket = self.socket.as_ref().ok_or(ClientError::ContractViolation)?;
+        let bytes = serde_json::to_vec(&request).map_err(|_| ClientError::ContractViolation)?;
+        let mut socket = socket.lock().map_err(|_| ClientError::SessionLost)?;
+        socket
+            .send_frame(&bytes)
+            .map_err(|_| ClientError::TransportFailed)?;
+        let response = socket.recv_frame().map_err(|_| ClientError::SessionLost)?;
+        let value: Value =
+            serde_json::from_slice(&response).map_err(|_| ClientError::ContractViolation)?;
+        if value.get("type").and_then(Value::as_str) == Some("error") {
+            return Err(remote_client_error(&value));
+        }
+        Ok(value)
     }
 }
 
@@ -1102,7 +1380,7 @@ impl CliConnectedSession {
         relative_timeout_nanos: u64,
     ) -> Result<CliAttachStream, ClientError> {
         if self.service != ZoneServiceKind::Zone
-            || self.operation != "Attach"
+            || !matches!(self.operation.as_str(), "Attach" | "Create")
             || self.session_verb.as_deref() != Some("attach")
         {
             return Err(ClientError::TransportPolicyMismatch);
@@ -1114,12 +1392,29 @@ impl CliConnectedSession {
                 "rows": size.rows(),
             })
         });
-        let payload = serde_json::to_vec(&json!({
+        let mut request_payload = json!({
             "interactive": options.interactive(),
             "initialSize": initial_size,
             "tty": options.tty(),
-        }))
-        .map_err(|_| ClientError::ContractViolation)?;
+        });
+        if let ProcessAttachTarget::ShellSession {
+            execution_ref,
+            force,
+            ..
+        } = request.target()
+            && let Some(object) = request_payload.as_object_mut()
+        {
+            object.insert(
+                "executionRef".to_owned(),
+                execution_ref
+                    .as_ref()
+                    .map(|reference| Value::String(reference.to_canonical_string()))
+                    .unwrap_or(Value::Null),
+            );
+            object.insert("force".to_owned(), Value::Bool(*force));
+        }
+        let payload =
+            serde_json::to_vec(&request_payload).map_err(|_| ClientError::ContractViolation)?;
         let payload =
             CanonicalJsonObject::parse(&payload).map_err(|_| ClientError::ContractViolation)?;
         self.invoke(
@@ -1127,7 +1422,9 @@ impl CliConnectedSession {
             payload,
             relative_timeout_nanos,
         )?;
-        Ok(CliAttachStream::new())
+        let socket = self.socket.clone();
+        let is_shell = matches!(request.target(), ProcessAttachTarget::ShellSession { .. });
+        Ok(CliAttachStream::new(is_shell.then_some(socket).flatten()))
     }
 
     fn invoke(
@@ -1251,7 +1548,7 @@ fn validate_operation(
         | (ZoneServiceKind::Support, "SupportService/GenerateBundle", Some("support-bundle")) => {
             Ok(operation.to_owned())
         }
-        (ZoneServiceKind::Zone, "Attach", Some("attach")) => Ok(operation.to_owned()),
+        (ZoneServiceKind::Zone, "Attach" | "Create", Some("attach")) => Ok(operation.to_owned()),
         (ZoneServiceKind::Audit | ZoneServiceKind::Support, ..) => Err(ClientError::InvalidMethod),
         (_, _, Some(_)) => Err(ClientError::InvalidMethod),
         (_, operation, None)
@@ -1779,6 +2076,7 @@ fn human_summary(value: &Value) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use nix::sys::socket::{AddressFamily, SockFlag, SockType, socketpair};
     use std::sync::Mutex;
 
     #[derive(Debug)]
@@ -1923,7 +2221,7 @@ mod tests {
 
     #[test]
     fn cli_attach_stream_closes_idempotently_and_refuses_unowned_bytes() {
-        let stream = CliAttachStream::new();
+        let stream = CliAttachStream::new(None);
         assert_eq!(
             block_on(stream.send(vec![1])).unwrap_err(),
             ClientError::ContractViolation
@@ -1935,6 +2233,130 @@ mod tests {
         block_on(stream.close()).unwrap();
         block_on(stream.close()).unwrap();
         assert!(stream.closed.load(Ordering::Acquire));
+    }
+
+    #[test]
+    fn cli_attach_stream_retries_partial_stdin_writes() {
+        let (client, server) = socketpair(
+            AddressFamily::Unix,
+            SockType::SeqPacket,
+            None,
+            SockFlag::SOCK_CLOEXEC,
+        )
+        .unwrap();
+        let server = std::thread::spawn(move || {
+            let mut server = SeqpacketUnixSocket::from_owned_fd(server);
+            let first: Value = serde_json::from_slice(&server.recv_frame().unwrap()).unwrap();
+            assert_eq!(first["type"], "namedStreamSend");
+            assert_eq!(first["offset"], 0);
+            server
+                .send_frame(
+                    &serde_json::to_vec(&json!({
+                        "acceptedLen": 1,
+                        "nextOffset": 1,
+                        "backpressured": true,
+                        "stdinClosed": false,
+                    }))
+                    .unwrap(),
+                )
+                .unwrap();
+            let second: Value = serde_json::from_slice(&server.recv_frame().unwrap()).unwrap();
+            assert_eq!(second["type"], "namedStreamSend");
+            assert_eq!(second["offset"], 1);
+            assert_eq!(
+                d2b_core::base64_codec::decode(second["dataBase64"].as_str().unwrap()).unwrap(),
+                b"bc"
+            );
+            server
+                .send_frame(
+                    &serde_json::to_vec(&json!({
+                        "acceptedLen": 2,
+                        "nextOffset": 3,
+                        "backpressured": false,
+                        "stdinClosed": false,
+                    }))
+                    .unwrap(),
+                )
+                .unwrap();
+        });
+        let stream = CliAttachStream::new(Some(Arc::new(Mutex::new(
+            SeqpacketUnixSocket::from_owned_fd(client),
+        ))));
+        block_on(stream.send(b"abc".to_vec())).unwrap();
+        assert_eq!(*stream.stdin_offset.lock().unwrap(), 3);
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn cli_attach_stream_delivers_final_bytes_then_reports_eof() {
+        let (client, server) = socketpair(
+            AddressFamily::Unix,
+            SockType::SeqPacket,
+            None,
+            SockFlag::SOCK_CLOEXEC,
+        )
+        .unwrap();
+        let server = std::thread::spawn(move || {
+            let mut server = SeqpacketUnixSocket::from_owned_fd(server);
+            let request: Value = serde_json::from_slice(&server.recv_frame().unwrap()).unwrap();
+            assert_eq!(request["type"], "namedStreamReceive");
+            server
+                .send_frame(
+                    &serde_json::to_vec(&json!({
+                        "dataBase64": d2b_core::base64_codec::encode(b"done"),
+                        "nextOffset": 4,
+                        "eof": true,
+                    }))
+                    .unwrap(),
+                )
+                .unwrap();
+        });
+        let stream = CliAttachStream::new(Some(Arc::new(Mutex::new(
+            SeqpacketUnixSocket::from_owned_fd(client),
+        ))));
+        assert_eq!(block_on(stream.receive()).unwrap(), b"done");
+        assert_eq!(
+            block_on(stream.receive()).unwrap_err(),
+            ClientError::Cancelled
+        );
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn cli_attach_stream_never_interprets_stdin_as_resize_control() {
+        let (client, server) = socketpair(
+            AddressFamily::Unix,
+            SockType::SeqPacket,
+            None,
+            SockFlag::SOCK_CLOEXEC,
+        )
+        .unwrap();
+        let stdin = br#"{"type":"namedStreamResize","rows":1,"cols":1}"#.to_vec();
+        let expected = stdin.clone();
+        let server = std::thread::spawn(move || {
+            let mut server = SeqpacketUnixSocket::from_owned_fd(server);
+            let request: Value = serde_json::from_slice(&server.recv_frame().unwrap()).unwrap();
+            assert_eq!(request["type"], "namedStreamSend");
+            let data =
+                d2b_core::base64_codec::decode(request["dataBase64"].as_str().unwrap()).unwrap();
+            assert_eq!(data, expected);
+            server
+                .send_frame(
+                    &serde_json::to_vec(&json!({
+                        "acceptedLen": data.len(),
+                        "nextOffset": data.len(),
+                        "backpressured": false,
+                        "stdinClosed": false,
+                    }))
+                    .unwrap(),
+                )
+                .unwrap();
+        });
+        let stream = CliAttachStream::new(Some(Arc::new(Mutex::new(
+            SeqpacketUnixSocket::from_owned_fd(client),
+        ))));
+        block_on(stream.send(stdin)).unwrap();
+        server.join().unwrap();
     }
 
     #[test]

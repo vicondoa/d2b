@@ -53,12 +53,27 @@ let
 
   zoneStorageCfg = (mkEvalStub [ base ({ ... }: {
     d2b.daemonExperimental.enable = true;
-    d2b.zones.local-root = { };
   }) ]).config;
   zoneStorageArtifact =
     zoneStorageCfg.d2b._bundle.extraArtifacts."zoneStorage-local-root";
   installedZoneStorage =
     zoneStorageCfg.environment.etc."d2b/zones/local-root/storage.json";
+  zoneStorageEnvCfg = (mkEvalStub [ base ({ ... }: {
+    d2b.daemonExperimental.enable = true;
+    d2b.envs.work = {
+      lanSubnet = "10.20.0.0/24";
+      uplinkSubnet = "192.0.2.0/30";
+    };
+  }) ]).config;
+  zoneStorageEnvArtifact =
+    zoneStorageEnvCfg.d2b._bundle.extraArtifacts."zoneStorage-work";
+  installedZoneStorageEnv =
+    zoneStorageEnvCfg.environment.etc."d2b/zones/work/storage.json";
+  zoneStoragePrincipal = {
+    userExists = zoneStorageEnvCfg.users.users ? d2b-zonert;
+    groupExists = zoneStorageEnvCfg.users.groups ? d2b-zonert;
+    userGroup = zoneStorageEnvCfg.users.users.d2b-zonert.group;
+  };
   expectedZoneStorageData = {
     zoneStoreId = "zone-store-local-root";
     storageOwnerPrincipal = "d2b-zonert";
@@ -144,6 +159,10 @@ in
     providerSecretCfg
     storePathString
     zoneStorageArtifact
+    zoneStorageEnvArtifact
+    installedZoneStorageEnv
+    zoneStoragePrincipal
     zoneStorageCfg
+    zoneStorageEnvCfg
     ;
 }

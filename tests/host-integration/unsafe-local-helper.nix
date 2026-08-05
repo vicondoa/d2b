@@ -17,6 +17,10 @@ pkgs.testers.runNixOSTest {
       };
       d2b.site.adminUsers = [ "alice" ];
       systemd.services.d2bd.environment.D2B_SKIP_KERNEL_MODULE_CHECK = "1";
+      d2b.zones = {
+        local-root = { };
+        other.parentZone = "local-root";
+      };
       d2b.realms.host = {
         allowedUsers = [ "alice" ];
         policy.allowUnsafeLocal = true;
@@ -37,6 +41,14 @@ pkgs.testers.runNixOSTest {
             maxSessions = 4;
           };
         };
+        workloads.extra = {
+          kind = "unsafe-local";
+          shell = {
+            enable = true;
+            defaultName = "primary";
+            maxSessions = 4;
+          };
+        };
       };
       environment.systemPackages = [ pkgs.jq pkgs.python3 ];
     };
@@ -44,6 +56,8 @@ pkgs.testers.runNixOSTest {
 
   testScript = ''
 if True:
+    import json
+
     start_all()
     machine.wait_for_unit("d2bd.service")
     machine.wait_for_file("/run/d2b/unsafe-local-helper.sock", timeout=60)
@@ -77,6 +91,13 @@ if True:
     )
     machine.succeed("systemctl restart d2bd.service")
     machine.wait_for_unit("d2bd.service")
+    machine.succeed(
+        "test -f /etc/d2b/zones/local-root/storage.json && "
+        "test -f /etc/d2b/zones/work/storage.json && "
+        "getent passwd d2b-zonert >/dev/null && "
+        "getent group d2b-zonert >/dev/null && "
+        "test -d /var/lib/d2b"
+    )
 
     machine.succeed("systemctl start user@1000.service")
     alice_user = (
@@ -115,155 +136,28 @@ if True:
     machine.fail(bob_user + " is-active d2b-unsafe-local-helper.service")
 
     machine.succeed(r"""
-      cat > /run/d2b/shell-client.py <<'PY'
-import base64
-import json
-import os
-import socket
-import struct
-import sys
-import time
-
-SOCKET = "/run/d2b/public.sock"
-TARGET = "tools.host.d2b"
-
-def send_frame(conn, value):
-    body = json.dumps(value, separators=(",", ":")).encode()
-    conn.sendall(struct.pack("<I", len(body)) + body)
-
-def recv_frame(conn):
-    packet = conn.recv(1048580)
-    if len(packet) < 4:
-        raise RuntimeError("short public frame")
-    size = struct.unpack("<I", packet[:4])[0]
-    if size != len(packet) - 4:
-        raise RuntimeError("invalid public frame length")
-    return json.loads(packet[4:])
-
-def connect():
-    conn = socket.socket(socket.AF_UNIX, socket.SOCK_SEQPACKET)
-    conn.connect(SOCKET)
-    send_frame(conn, {
-        "type": "hello",
-        "clientVersion": ">=0.4.0, <0.5.0",
-        "supportedFeatures": [
-            "typed-errors",
-            "configured-launch-v1",
-            "unsafe-local-provider-v1",
-            "unsafe-local-shell-v1"
-        ]
-    })
-    hello = recv_frame(conn)
-    if hello.get("type") != "helloOk":
-        raise RuntimeError("hello rejected")
-    if "unsafe-local-shell-v1" not in hello.get("capabilities", []):
-        raise RuntimeError("unsafe-local shell feature missing")
-    return conn
-
-def shell(conn, op, args, op_id):
-    send_frame(conn, {"type": "shell", "op": op, "args": args, "opId": op_id})
-    response = recv_frame(conn)
-    if response.get("type") == "error":
-        print(json.dumps(response), file=sys.stderr)
-        raise RuntimeError(response["error"]["kind"])
-    if response.get("type") != "shellResponse":
-        raise RuntimeError("unexpected shell response")
-    return response["result"]
-
-def attach(mode):
-    conn = connect()
-    attached = shell(conn, "attach", {
-        "vm": TARGET,
-        "name": "primary",
-        "force": False,
-        "initialTerminalSize": {"rows": 24, "cols": 80}
-    }, 1)
-    session = attached["session"]
-    shell(conn, "resize", {
-        "session": session, "rows": 33, "cols": 101, "opId": 1
-    }, 2)
-    if mode == "hold":
-        open("/run/user/1000/d2b-shell-hold.ready", "w").close()
-        cursor = 0
-        op_id = 3
-        while True:
-            result = shell(conn, "readOutput", {
-                "session": session,
-                "stream": "stdout",
-                "offset": cursor,
-                "maxLen": 65536,
-                "wait": True,
-                "timeoutMs": 250
-            }, op_id)
-            cursor = result["nextOffset"]
-            op_id += 1
-    command = os.environ.get("SHELL_COMMAND", "printf shell-roundtrip-canary")
-    expected = command.split()[-1].encode()
-    data = (command + "\n").encode()
-    shell(conn, "writeStdin", {
-        "session": session,
-        "offset": 0,
-        "chunkBase64": base64.b64encode(data).decode(),
-        "eof": False
-    }, 3)
-    cursor = 0
-    output = bytearray()
-    deadline = time.monotonic() + 15
-    op_id = 4
-    while time.monotonic() < deadline:
-        chunk = shell(conn, "readOutput", {
-            "session": session,
-            "stream": "stdout",
-            "offset": cursor,
-            "maxLen": 65536,
-            "wait": True,
-            "timeoutMs": 250
-        }, op_id)
-        output.extend(base64.b64decode(chunk["dataBase64"]))
-        cursor = chunk["nextOffset"]
-        op_id += 1
-        if expected in output:
-            break
-    else:
-        raise RuntimeError("command output timeout")
-    print(output.decode(errors="replace"))
-    shell(conn, "closeAttach", {"session": session}, op_id)
-
-def management(op):
-    conn = connect()
-    args = {"vm": TARGET}
-    if op in ("detach", "kill"):
-        args["name"] = "primary"
-    print(json.dumps(shell(conn, op, args, 1), sort_keys=True))
-
-if sys.argv[1] in ("attach", "hold"):
-    attach(sys.argv[1])
-else:
-    management(sys.argv[1])
-PY
-      chmod 0755 /run/d2b/shell-client.py
-    """)
-
-    shell_client = (
-        "runuser -u alice -- env XDG_RUNTIME_DIR=/run/user/1000 "
-        "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus "
-        "python3 /run/d2b/shell-client.py"
-    )
-    machine.succeed(r"""
       cat > /run/d2b/cli-shell-e2e.py <<'PY'
 import errno
+import fcntl
 import os
 import pty
 import select
 import signal
+import struct
+import sys
+import termios
 import time
 
 pid, master = pty.fork()
 if pid == 0:
     os.execv(
         "/run/current-system/sw/bin/d2b",
-        ["d2b", "shell", "tools.host.d2b", "--name", "cli-e2e"],
+        ["d2b", "shell", "open", "Host/tools", "--name", "primary"],
     )
+fcntl.ioctl(master, termios.TIOCSWINSZ, struct.pack("HHHH", 24, 80, 0, 0))
+attributes = termios.tcgetattr(master)
+attributes[3] &= ~termios.ECHO
+termios.tcsetattr(master, termios.TCSANOW, attributes)
 
 output = bytearray()
 
@@ -287,24 +181,18 @@ def read_until(marker, timeout):
             f"real d2b shell CLI missed {marker!r}: {bytes(output)!r}"
         )
 
-read_until(b"attached to shell", 30)
-os.write(master, b"stty -echo\\n")
-time.sleep(0.5)
-while select.select([master], [], [], 0)[0]:
-    output.extend(os.read(master, 65536))
+read_until(b"alice@machine:~]", 30)
 output.clear()
-os.write(master, b"printf cli-shell-executed-canary\\n")
-read_until(b"cli-shell-executed-canary", 30)
+expected = b"cli-shell-executed-canary"
+escaped = "".join(f"\\x{byte:02x}" for byte in expected)
+os.write(master, f"printf '{escaped}'\n".encode())
+read_until(expected, 30)
 
-os.kill(pid, signal.SIGTERM)
+os.close(master)
 deadline = time.monotonic() + 15
 while time.monotonic() < deadline:
     waited, status = os.waitpid(pid, os.WNOHANG)
     if waited == pid:
-        if not os.WIFEXITED(status) or os.WEXITSTATUS(status) != 0:
-            raise SystemExit(
-                f"real d2b shell CLI exited with status {status}: {bytes(output)!r}"
-            )
         break
     time.sleep(0.05)
 else:
@@ -319,12 +207,128 @@ PY
         "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus "
         "python3 /run/d2b/cli-shell-e2e.py"
     )
-    machine.succeed(
+    machine.sleep(3)
+    machine.succeed(r"""
+      cat > /run/d2b/cli-shell-attach-e2e.py <<'PY'
+import errno
+import fcntl
+import os
+import pty
+import select
+import signal
+import struct
+import sys
+import termios
+import time
+
+pid, master = pty.fork()
+if pid == 0:
+    shell_name = os.environ.get("SHELL_NAME", "primary")
+    os.execv(
+        "/run/current-system/sw/bin/d2b",
+        ["d2b", "shell", "attach", f"ShellSession/{shell_name}"],
+    )
+fcntl.ioctl(master, termios.TIOCSWINSZ, struct.pack("HHHH", 24, 80, 0, 0))
+attributes = termios.tcgetattr(master)
+attributes[3] &= ~termios.ECHO
+termios.tcsetattr(master, termios.TCSANOW, attributes)
+output = bytearray()
+expected = os.environ.get("SHELL_MARKER", "cli-shell-attach-canary").encode()
+escaped = "".join(f"\\x{byte:02x}" for byte in expected)
+command = f"printf '{escaped}'"
+
+def read_until(marker, timeout):
+    deadline = time.monotonic() + timeout
+    while marker not in output and time.monotonic() < deadline:
+        readable, _, _ = select.select([master], [], [], 1)
+        if not readable:
+            continue
+        try:
+            output.extend(os.read(master, 65536))
+        except OSError as error:
+            if error.errno == errno.EIO:
+                break
+            raise
+    if marker not in output:
+        print(bytes(output).decode(errors="replace"), file=sys.stderr)
+        raise SystemExit(f"typed shell attach missed {marker!r}: {bytes(output)!r}")
+
+read_until(b"alice@machine:~]", 30)
+output.clear()
+os.write(master, (command + "\n").encode())
+read_until(expected, 30)
+if os.environ.get("CHECK_RESIZE") == "1":
+    output.clear()
+    fcntl.ioctl(master, termios.TIOCSWINSZ, struct.pack("HHHH", 37, 101, 0, 0))
+    os.kill(pid, signal.SIGWINCH)
+    deadline = time.monotonic() + 30
+    next_probe = 0.0
+    while b"37 101" not in output and time.monotonic() < deadline:
+        now = time.monotonic()
+        if now >= next_probe:
+            os.write(master, b"stty size\n")
+            next_probe = now + 0.5
+        if select.select([master], [], [], 0.5)[0]:
+            try:
+                output.extend(os.read(master, 65536))
+            except OSError as error:
+                if error.errno == errno.EIO:
+                    break
+                raise
+    if b"37 101" not in output:
+        raise SystemExit(f"typed shell resize missed geometry: {bytes(output)!r}")
+if os.environ.get("EXIT_REMOTE") == "1":
+    os.write(master, b"exit\n")
+    deadline = time.monotonic() + 15
+    while time.monotonic() < deadline:
+        waited, status = os.waitpid(pid, os.WNOHANG)
+        if waited == pid:
+            if status != 0:
+                raise SystemExit(f"typed shell CLI failed after remote exit: {status}")
+            raise SystemExit(0)
+        time.sleep(0.05)
+    os.kill(pid, 9)
+    os.waitpid(pid, 0)
+    raise SystemExit("typed shell CLI did not exit after remote shell EOF")
+if os.environ.get("HOLD") == "1":
+    open("/run/user/1000/d2b-shell-hold.ready", "w").close()
+    while True:
+        waited, status = os.waitpid(pid, os.WNOHANG)
+        if waited == pid:
+            break
+        time.sleep(1)
+    if os.environ.get("EXPECT_CLI_FAILURE") == "1" and status == 0:
+        raise SystemExit("typed shell transport loss returned success")
+    raise SystemExit(0)
+os.kill(pid, signal.SIGTERM)
+os.waitpid(pid, 0)
+PY
+      chmod 0755 /run/d2b/cli-shell-attach-e2e.py
+    """)
+    shell_client = (
         "runuser -u alice -- env XDG_RUNTIME_DIR=/run/user/1000 "
         "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus "
-        "d2b shell tools.host.d2b kill --name cli-e2e --json "
-        "| jq -e '.result == \"killed\"'"
+        "/run/current-system/sw/bin/d2b --json shell"
     )
+    cli_shell = (
+        "runuser -u alice -- env XDG_RUNTIME_DIR=/run/user/1000 "
+        "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus "
+        "python3 /run/d2b/cli-shell-attach-e2e.py"
+    )
+    attach_status, attach_output = machine.execute(
+        "runuser -u alice -- env XDG_RUNTIME_DIR=/run/user/1000 "
+        "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus "
+        "python3 /run/d2b/cli-shell-attach-e2e.py"
+    )
+    if attach_status != 0:
+        print(attach_output)
+        print(machine.succeed("journalctl -u d2bd.service --no-pager -n 100"))
+        print(machine.succeed(
+            "runuser -u alice -- env XDG_RUNTIME_DIR=/run/user/1000 "
+            "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus "
+            "journalctl --user -u d2b-unsafe-local-helper.service --no-pager -n 100"
+        ))
+        raise Exception("typed shell attach probe failed")
     machine.succeed(
         "runuser -u alice -- sh -c 'setsid sleep 300 >/dev/null 2>&1 & "
         "echo $! > /run/user/1000/unrelated-same-uid.pid'"
@@ -334,22 +338,97 @@ PY
     ).strip()
 
     machine.succeed(
-        "SHELL_COMMAND='printf shell-roundtrip-canary' "
-        + shell_client + " attach | grep -q shell-roundtrip-canary"
+        "SHELL_MARKER=shell-roundtrip-canary "
+        + cli_shell
+    )
+    shell_list = json.loads(machine.succeed(shell_client + " list"))
+    print(shell_list)
+    assert shell_list["defaultName"] == "primary"
+    assert any(
+        session["name"] == "primary" and not session["attached"]
+        for session in shell_list["sessions"]
     )
     machine.succeed(
-        shell_client + " list | jq -e "
-        "'.defaultName == \"primary\" and "
-        "(.sessions | any(.name == \"primary\" and .attached == false))'"
+        "! runuser -u alice -- env "
+        "D2B_PUBLIC_SOCKET=/run/d2b/public.sock "
+        "XDG_RUNTIME_DIR=/run/user/1000 "
+        "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus "
+        "/run/current-system/sw/bin/d2b --zone missing --json "
+        "shell status ShellSession/primary "
+        ">/run/d2b/missing-zone-shell.log 2>&1 && "
+        "grep -q '\"errorClass\":\"internal-error\"' "
+        "/run/d2b/missing-zone-shell.log"
     )
     machine.succeed(
-        "SHELL_COMMAND='printf reattach-continuity-canary' "
-        + shell_client + " attach | grep -q reattach-continuity-canary"
+        "! runuser -u alice -- env "
+        "D2B_PUBLIC_SOCKET=/run/d2b/public.sock "
+        "XDG_RUNTIME_DIR=/run/user/1000 "
+        "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus "
+        "/run/current-system/sw/bin/d2b --zone other --json "
+        "shell status ShellSession/primary "
+        ">/run/d2b/other-zone-shell.log 2>&1 && "
+        "grep -q '\"errorClass\":\"internal-error\"' "
+        "/run/d2b/other-zone-shell.log"
+    )
+    json_open = json.loads(machine.succeed(
+        shell_client + " open Host/tools --name exit-session"
+    ))
+    assert json_open["resourceRef"] == (
+        "shell-terminal.d2bus.org.ShellSession/exit-session"
+    )
+    assert json_open["attached"] is False
+    assert json_open["status"]["state"] == "detached"
+    machine.succeed(
+        "SHELL_NAME=exit-session SHELL_MARKER=remote-exit-canary EXIT_REMOTE=1 "
+        + cli_shell
+    )
+    json_reopen = json.loads(machine.succeed(
+        shell_client + " open Host/tools --name primary"
+    ))
+    assert json_reopen["resourceRef"] == (
+        "shell-terminal.d2bus.org.ShellSession/primary"
+    )
+    assert json_reopen["attached"] is False
+    machine.succeed(
+        shell_client + " status ShellSession/primary | jq -e "
+        "'.name == \"primary\" and .attached == false'"
+    )
+    machine.succeed(
+        "CHECK_RESIZE=1 SHELL_MARKER=resize-canary "
+        + cli_shell
+    )
+    machine.succeed(
+        "SHELL_MARKER=reattach-continuity-canary "
+        + cli_shell
     )
 
     machine.succeed("rm -f /run/user/1000/d2b-shell-hold.ready")
     machine.succeed(
-        shell_client + " hold >/run/user/1000/d2b-shell-hold.log 2>&1 & "
+        "SHELL_MARKER=detach-hold-canary HOLD=1 "
+        + cli_shell + " >/run/user/1000/d2b-shell-hold.log 2>&1 & "
+        "echo $! > /run/user/1000/d2b-shell-hold.pid"
+    )
+    machine.wait_for_file("/run/user/1000/d2b-shell-hold.ready", timeout=60)
+    machine.succeed(
+        shell_client + " status ShellSession/primary | jq -e "
+        "'.name == \"primary\" and .attached == true'"
+    )
+    machine.succeed(
+        shell_client + " detach ShellSession/primary | jq -e "
+        "'.resolvedName == \"primary\" and .detached == true'"
+    )
+    machine.wait_until_fails(
+        "kill -0 $(cat /run/user/1000/d2b-shell-hold.pid)", timeout=60
+    )
+    machine.succeed(
+        "SHELL_MARKER=post-detach-canary "
+        + cli_shell
+    )
+
+    machine.succeed("rm -f /run/user/1000/d2b-shell-hold.ready")
+    machine.succeed(
+        "SHELL_MARKER=hold-canary HOLD=1 EXPECT_CLI_FAILURE=1 "
+        + cli_shell + " >/run/user/1000/d2b-shell-hold.log 2>&1 & "
         "echo $! > /run/user/1000/d2b-shell-hold.pid"
     )
     machine.wait_for_file("/run/user/1000/d2b-shell-hold.ready", timeout=60)
@@ -366,8 +445,8 @@ PY
         timeout=60,
     )
     machine.succeed(
-        "SHELL_COMMAND='printf daemon-restart-canary' "
-        + shell_client + " attach | grep -q daemon-restart-canary"
+        "SHELL_MARKER=daemon-restart-canary "
+        + cli_shell
     )
 
     machine.succeed(alice_user + " restart d2b-unsafe-local-helper.service")
@@ -379,16 +458,30 @@ PY
         timeout=60,
     )
     machine.succeed(
-        "SHELL_COMMAND='printf helper-adoption-canary' "
-        + shell_client + " attach | grep -q helper-adoption-canary"
+        "SHELL_MARKER=helper-adoption-canary "
+        + cli_shell
     )
-    machine.succeed(shell_client + " kill | jq -e '.killed == true'")
+    machine.succeed(shell_client + " kill ShellSession/primary | jq -e '.killed == true'")
+    machine.succeed(
+        shell_client
+        + " kill ShellSession/primary | jq -e "
+        "'.name == \"primary\" and .killed == false and .state == \"killed\"'"
+    )
+    machine.succeed(
+        shell_client
+        + " detach ShellSession/primary | jq -e "
+        "'.resolvedName == \"primary\" and .detached == false'"
+    )
     machine.succeed(f"kill -0 {unrelated_pid}")
-    machine.succeed(shell_client + " list | jq -e '.sessions | length == 0'")
+    machine.succeed(
+        shell_client
+        + " list | jq -e '.sessions | any(.name == \"exit-session\" and .state == \"killed\") and all(.name != \"primary\")'"
+    )
+    machine.succeed(shell_client + " open Host/tools --name primary >/dev/null")
 
     machine.succeed(
-        "SHELL_COMMAND='printf logout-canary' "
-        + shell_client + " attach >/run/user/1000/logout-shell.log"
+        "SHELL_MARKER=logout-canary "
+        + cli_shell + " >/run/user/1000/logout-shell.log"
     )
     shell_scope = machine.succeed(
         alice_user
@@ -415,8 +508,9 @@ PY
         "</dev/null >/run/d2b/no-manager-helper.log 2>&1"
     )
     machine.wait_until_succeeds(
-        "! " + shell_client + " attach >/run/d2b/no-manager-client.log 2>&1 && "
-        "grep -q unsafe-local-shell-user-manager-unavailable "
+        "! SHELL_MARKER=no-manager-canary " + cli_shell
+        + " >/run/d2b/no-manager-client.log 2>&1 && "
+        "grep -q provider-unavailable "
         "/run/d2b/no-manager-client.log",
         timeout=60,
     )

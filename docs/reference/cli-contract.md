@@ -68,11 +68,10 @@ d2b launch <canonical-target> [--item <item-id>]
 The public request carries only the canonical target, configured item id, and
 an idempotency operation id. It never carries argv, uid, environment, cwd,
 display paths, process ids, or unit names. An `exec` item dispatches through the
-selected provider. A local-VM `shell` item dispatches existing persistent-shell
-semantics. An unsafe-local `shell` item requires `unsafe-local-shell-v1` and
-invokes `d2b shell` with the workload's canonical target; there is no host-shell
-or SSH fallback. When `--item` is omitted, the CLI selects `defaultItem`, then
-an only item, otherwise returns the available item ids and names.
+selected provider. Shell items use the typed `d2b shell open Host/<name>` or
+`d2b shell open Guest/<name>` lifecycle; there is no host-shell or SSH
+fallback. When `--item` is omitted, the CLI selects `defaultItem`, then an only
+item, otherwise returns the available item ids and names.
 
 For local-VM exec items, d2bd derives an opaque guest exec id from the
 authenticated requester, operation id, target, and item id. Guestd persists that
@@ -81,9 +80,9 @@ existing exec instead of spawning a duplicate. A replay whose trusted argv hash
 does not match fails closed.
 
 The DTOs remain protocol version 3 and are gated by `configured-launch-v1`.
-Unsafe-local additionally requires `unsafe-local-provider-v1`; shell items also
-require `unsafe-local-shell-v1`. Unsupported peers return an update remediation
-and never fall back.
+Unsafe-local additionally requires `unsafe-local-provider-v1`. Shell lifecycle
+uses the Resource request path instead of another negotiated public-socket
+feature. Unsupported peers return an update remediation and never fall back.
 
 **Exit codes**
 
@@ -2974,143 +2973,112 @@ verbs) are emitted on **stderr** for human output only, so they never perturb a
 
 ### `shell`
 
-**Synopsis:** `d2b shell <target> [ACTION] [--name NAME] [--force] [--json|--human]`
+**Synopsis:**
 
-`ACTION` is one of:
+```text
+d2b shell open <Host|Guest>/<name> [--name NAME] [--force]
+d2b shell attach ShellSession/<name> [--force]
+d2b shell list [<Host|Guest>/<name>]
+d2b shell status ShellSession/<name> [--watch]
+d2b shell detach ShellSession/<name>
+d2b shell kill ShellSession/<name>
+```
 
-- omitted or `attach` - attach to the target's configured default shell session,
-  or to `--name NAME`;
-- `list` - list persistent shell sessions;
-- `detach` - detach a live/stale client without killing the shell;
-- `kill` - terminate a named shell session.
+`open` creates or attaches a qualified
+`shell-terminal.d2bus.org.ShellSession`. `attach`, `status`, `detach`, and
+`kill` address that resource directly. `list` optionally scopes discovery to
+one Host or Guest execution reference.
 
-The first positional after `shell` is always a d2b target address. Declared
-local VM names retain their existing behavior. Canonical direct-local workload
-targets and unambiguous workload-id aliases resolve inside `d2bd`: transition
-local VMs use `legacyVmName`, first-class local VMs use the workload id, and
-unsafe-local targets stay canonical rather than being coerced to VM names.
-A local VM named `list`, `attach`, `detach`, or `kill` attaches by default; use
-`d2b shell <target> <ACTION>` for management. Command-like trailing words such as
-`d2b shell work htop` are rejected with a hint to use
-`d2b exec run Guest/<name> -- <cmd>` for one-off commands.
-
-`shell` keeps declared local VM names on the local daemon public socket and the
-authenticated guest-control terminal transport. Unsafe-local targets use the
-same public `ShellOp` shape, but d2bd resolves bundle-owned policy and the exact
-requester-UID helper, then multiplexes the validated helper terminal fd behind
-an opaque public attachment handle. List/detach/kill use helper management
-operations. Disconnect and `closeAttach` detach only; kill tears down only the
-verified shell scope. Gateway-backed management forms
-(`list`, `detach`, `kill`) resolve the local realm entrypoint, verify the gateway
-VM is running, and run the same `d2b shell <target> ...` command inside the
-gateway VM over the typed `vm exec` guest-control path. The host does not load
-realm credentials, provider transports, raw guest-control frames, SSH, or
-provider-native shell APIs.
+Terminal attachment uses ProcessAttachClient over the authenticated Zone
+session. Stdin, output, resize, cancellation, and close use the named stream.
+List, status, detach, and kill are typed Resource requests. The retired public
+`ShellOp` socket family is unsupported. Unsafe-local execution identity and
+policy are resolved from the hash-verified private bundle and the exact
+requester-UID helper. Disconnect and named-stream close detach only; kill tears
+down only the verified shell scope. The host does not load realm credentials,
+provider transports, raw guest-control frames, SSH, or provider-native shell
+APIs.
 
 All shell actions remain admin-only. Launcher authorization for configured exec
 items does not extend to shell. Unsafe-local policy (`defaultName` and
 `maxSessions`) never appears in the public request and cannot be supplied by a
 client.
 
-Interactive gateway `attach` is fail-closed in this generation with an
-actionable `gateway-shell-attach-unavailable` error. Use
-`d2b realm enter <realm>` and run `d2b shell <target>` inside the
-gateway until semantic ADR 0039 shell attach is implemented. [ADR
-0039](../adr/0039-constellation-persistent-shell-routing.md) defines the final
-constellation route: gateway-backed targets forward through the selected gateway
-and require the remote node or provider agent to advertise `persistent-shell`.
+Remote or relayed Host and Guest execution references fail closed until their
+authoritative Zone route provides the ShellSession service.
 
 **Flags**
 
 | Flag | Applies to | Semantics |
 | --- | --- | --- |
-| `--name NAME` | attach, detach, kill | Persistent shell session name. Omitted attach/detach uses the configured default; kill requires `--name`. |
-| `--force` | attach | Detach an already-attached client for the same named session before attaching. |
-| `--json` | list, detach, kill | Emit one JSON document on stdout. Attach is human/TTY-only and rejects JSON. |
-| `--human` | list, detach, kill | Force human output. Attach is always human/TTY-only. |
+| `--name NAME` | open | ShellSession resource name; defaults to `primary`. |
+| `--force` | open, attach | Detach an already-attached client for the same resource before attaching. |
+| `--watch` | status | Emit changed status snapshots as JSON lines until a terminal state or the request deadline. Requires `--json`. |
+| `--json` | open, list, status, detach, kill | Emit the stable JSON envelope. JSON open creates or reopens the session, returns its initial detached status, and does not attach a terminal. Interactive open and attach require a terminal. |
 
 **Shell name rule**
 
-Names are 1-64 ASCII bytes, start with `[A-Za-z0-9_]`, and then contain only
-`[A-Za-z0-9._-]`. Names are user-visible operational identifiers, but daemon
-metrics never use names or terminal handles as labels.
+Names are 1-63 ASCII bytes, start with `[a-z]`, and then contain only
+`[a-z0-9-]`. Names are user-visible operational identifiers, but daemon metrics
+never use names or attachment handles as labels.
 
 **Human examples**
 
 ```text
-$ d2b shell work
-attached to shell 'default' on vm 'work'; detach with Ctrl-Space Ctrl-q; exit or Ctrl-D ends the session
+$ d2b shell open Guest/work --name build
 ```
 
 ```text
-$ d2b shell tools.host.d2b
-attached to shell 'primary' on vm 'tools.host.d2b'; detach with Ctrl-Space Ctrl-q; exit or Ctrl-D ends the session
+$ d2b shell open Host/tools
 ```
 
 ```text
-$ d2b shell work list
-NAME    STATE     ATTACHED  DEFAULT
-default detached  false     true
+$ d2b shell attach ShellSession/build
 ```
 
 **`--json` examples**
 
 ```json
 {
-  "command": "shell list",
-  "vm": "work",
-  "default_name": "default",
+  "attached": false,
+  "ok": true,
+  "resourceRef": "shell-terminal.d2bus.org.ShellSession/build",
+  "schemaVersion": 1,
+  "status": {
+    "attached": false,
+    "name": "build",
+    "state": "detached"
+  },
+  "zoneRef": "Zone/local-root"
+}
+```
+
+```json
+{
+  "defaultName": "primary",
   "sessions": [
     {
-      "name": "default",
+      "name": "primary",
       "state": "detached",
       "attached": false,
-      "is_default": true
+      "isDefault": true
     }
-  ]
+  ],
+  "ok": true,
+  "schemaVersion": 1,
+  "zoneRef": "Zone/local-root"
 }
 ```
-
-```json
-{
-  "command": "shell detach",
-  "vm": "work",
-  "name": "default",
-  "result": "already-detached-or-absent",
-  "cause": null
-}
-```
-
-```json
-{
-  "command": "shell kill",
-  "vm": "work",
-  "name": "build",
-  "result": "killed",
-  "state": "killed"
-}
-```
-
-The JSON field remains named `vm` for the current schema. For local VM targets
-it contains the resolved backing VM name; for unsafe-local it carries the
-configured canonical workload target. Gateway-backed management commands
-forward the requested target through the selected gateway; the in-gateway
-response keeps its own current schema until a future output-version bump can
-rename this field to `target`.
 
 **Exit codes**
 
 | Code | Meaning |
 | --- | --- |
 | `0` | Success, including idempotent detach/kill no-op results. |
-| `1` | Unexpected daemon reply or local protocol/serialization failure. |
-| `2` | Usage error, invalid flag combination, missing required `--name` for kill, invalid shell name, non-TTY attach, or gateway-backed interactive attach before semantic shell attach support lands. |
-| `42` | Internal scope/daemon failure. |
-| `69` | Daemon/helper/user-manager/terminal transport unavailable or timed out. |
-| `70` | Required shell capability or `unsafe-local-shell-v1` is unavailable. |
-| `75` | Admin authorization failed, another attachment owns the shell, or capacity is exhausted. |
-| `76` | Protocol, operation-correlation, name, cursor-gap, offset, or terminal-size failure. |
-| `77` | Stale public attachment handle or authenticated guest session. |
+| `1` | Zone, Provider, helper, user-manager, or terminal transport unavailable. |
+| `2` | Usage error, invalid ResourceRef, invalid shell name, or non-TTY interactive command. |
+| `3` | Operation cancelled. |
+| `77` | Zone session authentication was rejected. |
 
 **Redaction**
 
@@ -3412,4 +3380,4 @@ detached state lives in guestd's detached registry).
 | `migrate` | `rust-native` | Dry-run analysis is native; `--apply` routes through `d2bd` → broker `RunMigrate`. Daemon-unreachable / native-handler-deferred conditions surface typed envelopes (exit `1` / exit `78` per ADR 0015); the historical bash fallback was retired in v1.0. |
 | `auth status` | `rust-native` | Auth status is a read-only daemon query that reports caller mapping, socket reachability, and authorization hints. |
 | `exec run/attach/wait/status/list/logs/kill` | `rust-native` | Typed EphemeralProcess Resource operations over the Zone session; no SSH or VM lifecycle alias. |
-| `shell` | `rust-native` | Admin-only provider-neutral `ShellOp`: local VMs use authenticated guest-control; unsafe-local uses the exact requester-UID helper and a multiplexed terminal fd. No SSH, host-shell fallback, root unit, per-VM service, or broker op. |
+| `shell open/attach/list/status/detach/kill` | `rust-native` | Admin-only qualified ShellSession Resource lifecycle plus ProcessAttachClient named streams. Local VMs use authenticated guest-control; unsafe-local uses the exact requester-UID helper and a validated terminal fd. No retired `ShellOp`, SSH, host-shell fallback, root unit, per-VM service, or broker op. |

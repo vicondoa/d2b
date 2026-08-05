@@ -32,8 +32,9 @@ pub const MAX_PROCESS_ATTACH_MESSAGE_BYTES: usize =
 const STREAM_OPEN: u8 = 0;
 const STREAM_CLOSING: u8 = 1;
 const STREAM_CLOSED: u8 = 2;
+const SHELL_SESSION_TYPE: &str = "shell-terminal.d2bus.org.ShellSession";
 
-/// The two resource classes that may be named by an attach request.
+/// Resource classes that may be named by an attach request.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProcessAttachKind {
     /// A caller-created or controller-created one-shot process.
@@ -41,6 +42,8 @@ pub enum ProcessAttachKind {
     /// A configured launcher Process whose command is resolved by trusted
     /// configuration rather than by the caller.
     ConfiguredLauncher,
+    /// A persistent unsafe-local or guest shell session.
+    ShellSession,
 }
 
 /// An attach target scoped to one exact Zone and one allowed process resource.
@@ -60,6 +63,13 @@ pub enum ProcessAttachTarget {
         zone: ZonePath,
         resource: ResourceRef,
     },
+    /// Attach to a persistent `ShellSession/<name>`.
+    ShellSession {
+        zone: ZonePath,
+        resource: ResourceRef,
+        execution_ref: Option<ResourceRef>,
+        force: bool,
+    },
 }
 
 impl ProcessAttachTarget {
@@ -77,6 +87,30 @@ impl ProcessAttachTarget {
             return Err(ClientError::InvalidTarget);
         }
         Ok(Self::ConfiguredLauncher { zone, resource })
+    }
+
+    /// Construct a persistent shell-session target.  Creation carries the
+    /// trusted execution reference; reconnects intentionally omit it and let
+    /// the daemon resolve the already-created session.
+    pub fn shell_session(
+        zone: ZonePath,
+        resource: ResourceRef,
+        execution_ref: Option<ResourceRef>,
+        force: bool,
+    ) -> Result<Self, ClientError> {
+        if resource.resource_type().as_str() != SHELL_SESSION_TYPE
+            || execution_ref.as_ref().is_some_and(|reference| {
+                !matches!(reference.resource_type().as_str(), "Host" | "Guest")
+            })
+        {
+            return Err(ClientError::InvalidTarget);
+        }
+        Ok(Self::ShellSession {
+            zone,
+            resource,
+            execution_ref,
+            force,
+        })
     }
 
     /// Interpret a resource-shaped target as an EphemeralProcess target.
@@ -98,22 +132,25 @@ impl ProcessAttachTarget {
         match self {
             Self::EphemeralProcess { .. } => ProcessAttachKind::EphemeralProcess,
             Self::ConfiguredLauncher { .. } => ProcessAttachKind::ConfiguredLauncher,
+            Self::ShellSession { .. } => ProcessAttachKind::ShellSession,
         }
     }
 
     /// Borrow the exact Zone route.
     pub const fn zone(&self) -> &ZonePath {
         match self {
-            Self::EphemeralProcess { zone, .. } | Self::ConfiguredLauncher { zone, .. } => zone,
+            Self::EphemeralProcess { zone, .. }
+            | Self::ConfiguredLauncher { zone, .. }
+            | Self::ShellSession { zone, .. } => zone,
         }
     }
 
     /// Borrow the exact process ResourceRef.
     pub const fn resource_ref(&self) -> &ResourceRef {
         match self {
-            Self::EphemeralProcess { resource, .. } | Self::ConfiguredLauncher { resource, .. } => {
-                resource
-            }
+            Self::EphemeralProcess { resource, .. }
+            | Self::ConfiguredLauncher { resource, .. }
+            | Self::ShellSession { resource, .. } => resource,
         }
     }
 
@@ -301,6 +338,11 @@ pub trait NamedStreamTransport: Send + Sync {
     /// Send one bounded logical stream message.
     fn send(&self, bytes: Vec<u8>) -> impl Future<Output = Result<(), ClientError>> + Send;
 
+    /// Deliver one terminal-size control update outside the stdin byte stream.
+    fn resize(&self, _size: TerminalSize) -> impl Future<Output = Result<(), ClientError>> + Send {
+        core::future::ready(Err(ClientError::InvalidMethod))
+    }
+
     /// Receive one logical stream message.
     fn receive(&self) -> impl Future<Output = Result<Vec<u8>, ClientError>> + Send;
 
@@ -396,6 +438,12 @@ where
         }
         self.require_open()?;
         self.transport.send(bytes.to_vec()).await
+    }
+
+    /// Deliver a terminal-size control update without interpreting stdin.
+    pub async fn resize(&self, size: TerminalSize) -> Result<(), ClientError> {
+        self.require_open()?;
+        self.transport.resize(size).await
     }
 
     /// Receive one logical message from the workload-user process stream.
@@ -1075,6 +1123,36 @@ mod tests {
             &CancellationToken::default(),
         ));
         assert_eq!(result.unwrap_err(), ClientError::RouteUnavailable);
+    }
+
+    #[test]
+    fn shell_session_target_requires_qualified_type_and_host_or_guest_execution() {
+        let shell = process_ref(SHELL_SESSION_TYPE, "primary");
+        let host = process_ref("Host", "tools");
+        let target =
+            ProcessAttachTarget::shell_session(zone("dev"), shell.clone(), Some(host), false)
+                .expect("qualified shell target");
+        assert_eq!(target.kind(), ProcessAttachKind::ShellSession);
+        assert_eq!(target.resource_ref(), &shell);
+
+        assert_eq!(
+            ProcessAttachTarget::shell_session(
+                zone("dev"),
+                process_ref("Process", "primary"),
+                None,
+                false,
+            ),
+            Err(ClientError::InvalidTarget)
+        );
+        assert_eq!(
+            ProcessAttachTarget::shell_session(
+                zone("dev"),
+                process_ref(SHELL_SESSION_TYPE, "primary"),
+                Some(process_ref("Process", "wrong")),
+                false,
+            ),
+            Err(ClientError::InvalidTarget)
+        );
     }
 
     #[test]

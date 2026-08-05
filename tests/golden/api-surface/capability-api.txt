@@ -10520,6 +10520,11 @@ d2b_resource_client	pub d2b_resource_client::ProcessAttachTarget::ConfiguredLaun
 d2b_resource_client	pub d2b_resource_client::ProcessAttachTarget::EphemeralProcess
 d2b_resource_client	pub d2b_resource_client::ProcessAttachTarget::EphemeralProcess::resource: d2b_contracts::v3::resource_ref::ResourceRef
 d2b_resource_client	pub d2b_resource_client::ProcessAttachTarget::EphemeralProcess::zone: d2b_contracts::v3::zone_routing::ZonePath
+d2b_resource_client	pub d2b_resource_client::ProcessAttachTarget::ShellSession
+d2b_resource_client	pub d2b_resource_client::ProcessAttachTarget::ShellSession::execution_ref: core::option::Option<d2b_contracts::v3::resource_ref::ResourceRef>
+d2b_resource_client	pub d2b_resource_client::ProcessAttachTarget::ShellSession::force: bool
+d2b_resource_client	pub d2b_resource_client::ProcessAttachTarget::ShellSession::resource: d2b_contracts::v3::resource_ref::ResourceRef
+d2b_resource_client	pub d2b_resource_client::ProcessAttachTarget::ShellSession::zone: d2b_contracts::v3::zone_routing::ZonePath
 d2b_resource_client	pub d2b_resource_client::ServiceOwner::Guest
 d2b_resource_client	pub d2b_resource_client::ServiceOwner::Guest::guest: d2b_contracts::v3::identity::ResourceName
 d2b_resource_client	pub d2b_resource_client::ServiceOwner::Guest::zone: d2b_contracts::v3::zone_routing::ZonePath
@@ -10570,6 +10575,7 @@ d2b_resource_client	pub fn d2b_resource_client::ProcessAttachTarget::configured_
 d2b_resource_client	pub fn d2b_resource_client::ProcessAttachTarget::ephemeral_process(d2b_contracts::v3::zone_routing::ZonePath, d2b_contracts::v3::resource_ref::ResourceRef) -> core::result::Result<Self, d2b_resource_client::ClientError>
 d2b_resource_client	pub fn d2b_resource_client::ProcessAttachTarget::eq(&self, &d2b_resource_client::ProcessAttachTarget) -> bool
 d2b_resource_client	pub fn d2b_resource_client::ProcessAttachTarget::from_target(d2b_resource_client::TargetInput) -> core::result::Result<Self, d2b_resource_client::ClientError>
+d2b_resource_client	pub fn d2b_resource_client::ProcessAttachTarget::shell_session(d2b_contracts::v3::zone_routing::ZonePath, d2b_contracts::v3::resource_ref::ResourceRef, core::option::Option<d2b_contracts::v3::resource_ref::ResourceRef>, bool) -> core::result::Result<Self, d2b_resource_client::ClientError>
 d2b_resource_client	pub fn d2b_resource_client::ResolvedTarget::clone(&self) -> d2b_resource_client::ResolvedTarget
 d2b_resource_client	pub fn d2b_resource_client::ResolvedTarget::eq(&self, &d2b_resource_client::ResolvedTarget) -> bool
 d2b_resource_client	pub fn d2b_resource_client::ResolvedTarget::resource_ref(&self) -> core::option::Option<d2b_contracts::v3::resource_ref::ResourceRef>

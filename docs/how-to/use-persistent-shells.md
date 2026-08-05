@@ -60,66 +60,63 @@ helper is active:
 
 ```bash
 systemctl --user status d2b-unsafe-local-helper.service
-d2b shell tools.host.d2b list
+d2b --json shell list Host/tools
 ```
 
-The daemon must negotiate `unsafe-local-shell-v1`. Version skew fails with an
-update recommendation; there is no static, SSH, or host-shell fallback.
+Shell lifecycle uses qualified Resource references and an authenticated named
+stream. There is no static, SSH, host-shell, or retired public-socket fallback.
 
-## Attach to the default shell
+## Open a shell
 
 ```bash
-d2b shell work
-d2b shell tools.host.d2b
+d2b shell open Guest/work
+d2b shell open Host/tools
 ```
 
-The CLI prints the resolved session name before entering raw terminal mode. To
-detach without ending the shell, press `Ctrl-Space` followed by `Ctrl-q`.
-
-Typing `exit` or pressing `Ctrl-D` at an empty prompt ends the persistent shell
-session.
-
-## Attach to a named shell
+Omitting `--name` creates or attaches `ShellSession/primary`. To use another
+name:
 
 ```bash
-d2b shell work --name build
+d2b shell open Guest/work --name build
 ```
 
-Names must be 1-64 ASCII bytes, start with `[A-Za-z0-9_]`, and then contain only
-`[A-Za-z0-9._-]`.
+Names must be 1-63 ASCII bytes, start with a lowercase letter, and then contain
+only lowercase letters, digits, and hyphens.
 
 ## Reattach
 
 After detaching or closing the local terminal, attach to the same name again:
 
 ```bash
-d2b shell work --name build
+d2b shell attach ShellSession/build
 ```
 
 If another client is already attached to the same session, the attach fails.
 Use `--force` only when you intentionally want to detach that existing client:
 
 ```bash
-d2b shell work --name build --force
+d2b shell attach ShellSession/build --force
 ```
 
 ## List sessions
 
 ```bash
-d2b shell work list
-d2b shell work list --json
+d2b shell list Guest/work
+d2b --json shell list Host/tools
 ```
 
-The human output marks the configured default session. JSON output includes
-`default_name` and a `sessions` array.
+The response includes `defaultName` and a `sessions` array.
+
+## Inspect status
+
+```bash
+d2b --json shell status ShellSession/build
+```
 
 ## Detach a stale client
 
-Detach defaults to the target's configured default name when `--name` is omitted:
-
 ```bash
-d2b shell work detach
-d2b shell work detach --name build
+d2b --json shell detach ShellSession/build
 ```
 
 Detach is non-destructive. It is safe to retry when the session is already
@@ -127,26 +124,11 @@ detached or absent.
 
 ## Kill a session
 
-Killing is destructive and always requires an explicit name:
-
 ```bash
-d2b shell work kill --name build
+d2b --json shell kill ShellSession/build
 ```
 
-Use `list` first if you need to discover the configured default name.
-
-## Gateway-backed targets
-
-`d2b shell list`, `detach`, and `kill` route gateway-backed realm targets
-through the selected gateway in current generations. Interactive gateway-backed
-`attach` still fails closed on the host facade until semantic gateway attach
-lands; for that case, enter the realm gateway first, then run the shell command
-from inside that gateway boundary:
-
-```bash
-d2b realm enter work
-work-gw$ d2b shell <target>
-```
+Use `list` first if you need to discover the session name.
 
 ## Avoid co-locating untrusted same-UID services
 

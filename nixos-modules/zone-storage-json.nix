@@ -2,6 +2,9 @@
 
 let
   cfg = config.d2b;
+  enabledEnvNames = builtins.attrNames (lib.filterAttrs (_: env: env.enable) cfg.envs);
+  zoneNames = lib.unique
+    ([ cfg._zoneCompiler.localRoot ] ++ enabledEnvNames ++ builtins.attrNames cfg.zones);
 
   storageRow = zoneName: {
     zoneStoreId = "zone-store-${zoneName}";
@@ -24,17 +27,17 @@ let
     };
   };
 
-  zoneStorageArtifacts = lib.mapAttrs'
-    (zoneName: _: lib.nameValuePair "zoneStorage-${zoneName}" {
+  zoneStorageArtifacts = lib.listToAttrs (map
+    (zoneName: lib.nameValuePair "zoneStorage-${zoneName}" {
         data = storageRow zoneName;
         installFileName = "zones/${zoneName}/storage.json";
         classification = "contractPrivateNonSecret";
         sensitivity = "nonSecret";
       })
-    cfg.zones;
+    zoneNames);
 in
 {
-  config = lib.mkIf (cfg.zones != { }) {
+  config = lib.mkIf (cfg.daemonExperimental.enable || cfg.zones != { }) {
     d2b._bundle.extraArtifacts = zoneStorageArtifacts;
   };
 }

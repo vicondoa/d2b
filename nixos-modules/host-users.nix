@@ -42,6 +42,12 @@ in
     # d2b: members of this group can call the daemon public socket.
     # Add users to it via `d2b.site.launcherUsers`.
     d2b = { };
+    # The broker-owned Zone store rows use this stable principal for database
+    # inode ownership. The broker passes the opened descriptor to d2bd, so the
+    # principal does not need a long-lived process or supplementary access.
+    d2b-zonert = {
+      gid = stablePrincipalId "d2b-zonert";
+    };
     # DEPRECATED v1.2: kept as migration tombstone for the
     # d2b-launcher{,s} → d2b rename. No module references the
     # legacy groups; no user is a member. The empty declaration
@@ -106,6 +112,14 @@ in
           description = "d2b realm daemon user for ${realm.path}";
         })
       hostLocalRealms))
+    {
+      d2b-zonert = {
+        isSystemUser = true;
+        uid = stablePrincipalId "d2b-zonert";
+        group = "d2b-zonert";
+        description = "d2b Zone resource-store owner";
+      };
+    }
     (lib.mapAttrs' (name: _:
       lib.nameValuePair "d2b-${name}-gpu" {
         isSystemUser = true;

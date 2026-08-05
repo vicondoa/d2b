@@ -56,7 +56,6 @@ pub enum Request {
     HostReconcile(public_wire::HostReconcileRequest),
     ReadGuestConfig(public_wire::ReadGuestConfigRequest),
     Exec(public_wire::ExecOp),
-    Shell(public_wire::ShellOp),
     Console(public_wire::ConsoleOp),
     GatewayDisplay(public_wire::GatewayDisplayOp),
     Workload(public_wire::WorkloadOp),
@@ -118,7 +117,6 @@ impl Request {
             Self::HostReconcile(_) => "hostReconcile",
             Self::ReadGuestConfig(_) => "readGuestConfig",
             Self::Exec(_) => "exec",
-            Self::Shell(_) => "shell",
             Self::Console(_) => "console",
             Self::GatewayDisplay(_) => "gatewayDisplay",
             Self::Workload(_) => "workload",
@@ -171,7 +169,6 @@ impl Request {
             | Self::UsbipProbe
             | Self::ReadGuestConfig(_)
             | Self::Exec(_)
-            | Self::Shell(_)
             | Self::Console(_)
             | Self::GatewayDisplay(_)
             | Self::Workload(_)
@@ -397,12 +394,6 @@ pub fn parse_request(bytes: &[u8]) -> Result<Request, TypedError> {
                 .map(Request::Exec)
                 .map_err(map_parse_error)
         }
-        "shell" => {
-            object.remove("opId");
-            serde_json::from_value(Value::Object(object.clone()))
-                .map(Request::Shell)
-                .map_err(map_parse_error)
-        }
         "console" => {
             object.remove("opId");
             serde_json::from_value(Value::Object(object.clone()))
@@ -457,46 +448,6 @@ pub fn parse_exec_op(bytes: &[u8]) -> Result<(u64, public_wire::ExecOp), TypedEr
         })?
         .to_owned();
     if request_type != "exec" {
-        return Err(TypedError::WireUnsupportedRequest { request_type });
-    }
-    object.remove("type");
-    let op_id = object
-        .remove("opId")
-        .and_then(|value| value.as_u64())
-        .unwrap_or(0);
-    let op = serde_json::from_value(Value::Object(object.clone())).map_err(map_parse_error)?;
-    Ok((op_id, op))
-}
-
-/// Extract the envelope-level `opId` from a shell request frame, defaulting to
-/// `0` when absent. Mirrors exec owner framing without making `opId` part of the
-/// public `ShellOp` JSON body.
-pub fn shell_op_id(bytes: &[u8]) -> u64 {
-    serde_json::from_slice::<Value>(bytes)
-        .ok()
-        .and_then(|value| value.get("opId").and_then(Value::as_u64))
-        .unwrap_or(0)
-}
-
-/// Parse a shell op frame into its correlating `opId` and multiplexed op.
-pub fn parse_shell_op(bytes: &[u8]) -> Result<(u64, public_wire::ShellOp), TypedError> {
-    let mut value: Value =
-        serde_json::from_slice(bytes).map_err(|err| TypedError::WireInvalidFrame {
-            detail: err.to_string(),
-        })?;
-    let object = value
-        .as_object_mut()
-        .ok_or_else(|| TypedError::WireInvalidFrame {
-            detail: "request frame must be a JSON object".to_owned(),
-        })?;
-    let request_type = object
-        .get("type")
-        .and_then(Value::as_str)
-        .ok_or_else(|| TypedError::WireInvalidFrame {
-            detail: "missing request type".to_owned(),
-        })?
-        .to_owned();
-    if request_type != "shell" {
         return Err(TypedError::WireUnsupportedRequest { request_type });
     }
     object.remove("type");
@@ -686,15 +637,6 @@ pub fn exec_response_with_id(op_id: u64, payload: &public_wire::ExecOpResponse) 
     value
 }
 
-/// Serialize a `ShellOpResponse` as the `shellResponse` daemon wire frame.
-pub fn shell_response(payload: &public_wire::ShellOpResponse) -> Value {
-    let mut value = serde_json::to_value(payload).unwrap_or_else(|_| json!({}));
-    if let Some(obj) = value.as_object_mut() {
-        obj.insert("type".to_owned(), Value::String("shellResponse".to_owned()));
-    }
-    value
-}
-
 /// Serialize a `WorkloadOpResponse` as a `workloadResponse` daemon wire frame.
 pub fn workload_response(payload: &public_wire::WorkloadOpResponse) -> Value {
     let mut value = serde_json::to_value(payload).unwrap_or_else(|_| json!({}));
@@ -703,15 +645,6 @@ pub fn workload_response(payload: &public_wire::WorkloadOpResponse) -> Value {
             "type".to_owned(),
             Value::String("workloadResponse".to_owned()),
         );
-    }
-    value
-}
-
-/// `shellResponse` frame tagged with the correlating envelope `opId`.
-pub fn shell_response_with_id(op_id: u64, payload: &public_wire::ShellOpResponse) -> Value {
-    let mut value = shell_response(payload);
-    if let Some(obj) = value.as_object_mut() {
-        obj.insert("opId".to_owned(), Value::from(op_id));
     }
     value
 }
@@ -779,36 +712,13 @@ fn map_parse_error(error: serde_json::Error) -> TypedError {
 
 #[cfg(test)]
 mod tests {
-    use super::{Request, parse_request, shell_response_with_id};
-    use d2b_contracts::public_wire::{ShellListResult, ShellName, ShellOp, ShellOpResponse};
+    use super::{Request, parse_request};
 
     #[test]
-    fn shell_request_parses_as_typed_shell_op() {
+    fn retired_shell_request_is_not_dispatched() {
         let frame = br#"{"type":"shell","op":"list","args":{"vm":"corp-vm"}}"#;
-        let request = parse_request(frame).expect("shell request parses");
-        match request {
-            Request::Shell(ShellOp::List(args)) => assert_eq!(args.vm, "corp-vm"),
-            other => panic!("unexpected request: {other:?}"),
-        }
-    }
-
-    #[test]
-    fn shell_request_rejects_invalid_shape_before_dispatch() {
-        let frame = br#"{"type":"shell","op":"kill","args":{"vm":"corp-vm"}}"#;
-        let error = parse_request(frame).expect_err("kill without name rejects");
-        assert_eq!(error.kind(), "wire-invalid-frame");
-    }
-
-    #[test]
-    fn shell_response_is_op_id_tagged() {
-        let payload = ShellOpResponse::List(ShellListResult {
-            default_name: ShellName::new("default").unwrap(),
-            sessions: Vec::new(),
-        });
-        let value = shell_response_with_id(42, &payload);
-        assert_eq!(value["type"], "shellResponse");
-        assert_eq!(value["opId"], 42);
-        assert_eq!(value["op"], "list");
+        let error = parse_request(frame).expect_err("retired shell request must reject");
+        assert_eq!(error.kind(), "wire-unsupported-request");
     }
 
     #[test]

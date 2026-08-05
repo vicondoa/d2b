@@ -4,7 +4,7 @@
 // in plan.md §D-typed-error-boxing. Suppressed until that refactor lands.
 #![allow(clippy::result_large_err)]
 
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, hash_map::Entry};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque, hash_map::Entry};
 use std::ffi::OsStr;
 use std::fs::{self, File, OpenOptions};
 use std::future::Future;
@@ -555,6 +555,68 @@ struct RuntimeIdentity {
     expect_root_owned_parent: bool,
 }
 
+const MAX_TYPED_SHELL_SESSION_TARGETS: usize = 256;
+
+struct CachedTypedShellSessionTarget {
+    target: String,
+}
+
+#[derive(Default)]
+struct TypedShellSessionTargetCache {
+    entries: BTreeMap<(u32, String), CachedTypedShellSessionTarget>,
+    recency: VecDeque<(u32, String)>,
+    create_reservations: BTreeSet<(u32, String)>,
+}
+
+impl std::fmt::Debug for TypedShellSessionTargetCache {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("TypedShellSessionTargetCache")
+            .field("entry_count", &self.entries.len())
+            .finish()
+    }
+}
+
+impl TypedShellSessionTargetCache {
+    fn touch(&mut self, key: &(u32, String)) {
+        self.recency.retain(|candidate| candidate != key);
+        self.recency.push_back(key.clone());
+    }
+
+    fn remember(&mut self, key: (u32, String), target: String) {
+        if self.entries.contains_key(&key) {
+            self.entries
+                .insert(key.clone(), CachedTypedShellSessionTarget { target });
+            self.touch(&key);
+            return;
+        }
+        while self.entries.len() >= MAX_TYPED_SHELL_SESSION_TARGETS {
+            let oldest = self
+                .recency
+                .pop_front()
+                .or_else(|| self.entries.keys().next().cloned());
+            let Some(oldest) = oldest else {
+                break;
+            };
+            self.entries.remove(&oldest);
+        }
+        self.entries
+            .insert(key.clone(), CachedTypedShellSessionTarget { target });
+        self.touch(&key);
+    }
+
+    fn cached(&mut self, key: &(u32, String)) -> Option<String> {
+        let target = self.entries.get(key)?.target.clone();
+        self.touch(key);
+        Some(target)
+    }
+
+    fn forget(&mut self, key: &(u32, String)) {
+        self.entries.remove(key);
+        self.recency.retain(|candidate| candidate != key);
+    }
+}
+
 #[derive(Debug, Clone)]
 struct ServerState {
     config: DaemonConfig,
@@ -593,6 +655,11 @@ struct ServerState {
     /// trusted bundle/storage admission is incomplete; public resource
     /// requests fail closed rather than falling back to the legacy path.
     resource_plane: Arc<Mutex<Option<Arc<resource_runtime::ResourcePlane>>>>,
+    /// Bounded execution-target bindings for qualified ShellSession resources.
+    /// The provider may remove a killed session before a retry arrives, so the
+    /// daemon keeps recent exact target bindings independently of provider
+    /// lists.
+    typed_shell_session_targets: Arc<Mutex<TypedShellSessionTargetCache>>,
     /// Authoritative Zone index for daemon-side coordination state. USBIP
     /// reconciliation, force-stop generations, and activation staging all
     /// resolve through this index; no process-global lock carries that state.
@@ -608,6 +675,23 @@ struct ServerState {
 
 fn new_zone_coordinator() -> Arc<Mutex<ZoneCoordinator>> {
     Arc::new(Mutex::new(ZoneCoordinator::new()))
+}
+
+fn new_typed_shell_session_targets() -> Arc<Mutex<TypedShellSessionTargetCache>> {
+    Arc::new(Mutex::new(TypedShellSessionTargetCache::default()))
+}
+
+struct TypedShellSessionCreateReservation {
+    cache: Arc<Mutex<TypedShellSessionTargetCache>>,
+    key: (u32, String),
+}
+
+impl Drop for TypedShellSessionCreateReservation {
+    fn drop(&mut self) {
+        if let Ok(mut cache) = self.cache.lock() {
+            cache.create_reservations.remove(&self.key);
+        }
+    }
 }
 
 /// Populate the daemon's Zone authority index from the trusted host bundle.
@@ -1571,6 +1655,7 @@ pub async fn serve(options: ServeOptions) -> Result<(), TypedError> {
         public_status_read_model: Arc::new(crate::PublicStatusReadModel::new()),
         provider_runtime: Arc::new(crate::provider_registry::ProviderRuntime::new()),
         resource_plane: Arc::new(Mutex::new(None)),
+        typed_shell_session_targets: new_typed_shell_session_targets(),
         zone_coordinator: new_zone_coordinator(),
         security_key_sessions: Arc::new(parking_lot::Mutex::new(
             crate::security_key::SkSessionTable::default(),
@@ -3008,16 +3093,13 @@ fn days_to_ymd(days_since_epoch: i64) -> (i32, u32, u32) {
     (year, m, d)
 }
 
-/// Test-only seam letting an accept-loop test substitute the exec owner body so
-/// it can HOLD the owner session open. Without it, `run_exec_owner` fails fast
-/// at `load_bundle_resolver` under default test state and returns immediately,
-/// so a test could not distinguish an off-loop spawn from an inline call. The
-/// hook is consulted at the top of `run_exec_owner` (the owner body itself), so
-/// an inline `handle_connection` would block in it on the accept-loop thread; it
-/// is `None` in every build except a test that installs it, and production
-/// builds compile it out entirely.
+/// Test-only seam letting accept-loop tests substitute a long-lived owner body.
+/// The hook is consulted at the top of the owner body itself, so an inline
+/// `handle_connection` would block in it on the accept-loop thread. It is
+/// `None` in every build except a test that installs it, and production builds
+/// compile it out entirely.
 #[cfg(test)]
-mod exec_owner_test_hook {
+mod owner_connection_test_hook {
     use std::sync::{Arc, Mutex, OnceLock};
 
     pub(crate) type Hook = Arc<dyn Fn() + Send + Sync>;
@@ -3028,15 +3110,15 @@ mod exec_owner_test_hook {
     }
 
     pub(crate) fn set(hook: Hook) {
-        *slot().lock().expect("exec owner hook lock") = Some(hook);
+        *slot().lock().expect("owner connection hook lock") = Some(hook);
     }
 
     pub(crate) fn clear() {
-        *slot().lock().expect("exec owner hook lock") = None;
+        *slot().lock().expect("owner connection hook lock") = None;
     }
 
     pub(crate) fn active() -> Option<Hook> {
-        slot().lock().expect("exec owner hook lock").clone()
+        slot().lock().expect("owner connection hook lock").clone()
     }
 }
 
@@ -3065,10 +3147,10 @@ fn handle_connection(
 
 /// Connection body for an already-authorized peer. Reads the hello frame
 /// (deadlined), negotiates the wire version, then serves requests on a
-/// deadlined per-frame read loop. An attached `Exec::Start` takes over
-/// the connection on a spawned owner thread, moving the admission
-/// `permit` with it so the in-flight slot is held until the exec session
-/// (owner) terminates.
+/// deadlined per-frame read loop. An attached `Exec::Start` or typed-shell
+/// request takes over the connection on a spawned owner thread, moving the
+/// admission `permit` with it so the in-flight slot is held until the owner
+/// session terminates.
 fn handle_connection_authorized(
     stream: Socket,
     state: &ServerState,
@@ -3105,7 +3187,6 @@ fn handle_connection_authorized(
         KnownFeatureFlag::ExportBrokerAudit.wire_value(),
         KnownFeatureFlag::ConfiguredLaunchV1.wire_value(),
         KnownFeatureFlag::UnsafeLocalProviderV1.wire_value(),
-        KnownFeatureFlag::UnsafeLocalShellV1.wire_value(),
     ];
     let capabilities = advertised_capabilities
         .into_iter()
@@ -3156,6 +3237,41 @@ fn handle_connection_authorized(
             let _ = write_json_frame(&stream, &wire::error_frame(&error));
             continue;
         }
+        if let wire::Request::Resource(resource) = &request
+            && typed_shell_request(&resource.value())
+        {
+            if !matches!(peer.role, PeerRole::Admin) {
+                let error = TypedError::AuthzNotAdmin {
+                    verb: "shell".to_owned(),
+                };
+                let _ = write_json_frame(&stream, &typed_shell_resource_error_frame(&error));
+                continue;
+            }
+            if let Err(error) = resolve_typed_shell_runtime(state, &resource.value()) {
+                let _ = write_json_frame(&stream, &resource_runtime_error_frame(error));
+                continue;
+            }
+            set_frame_read_deadline(&stream, None);
+            let owner_state = state.clone();
+            let owner_peer = peer.clone();
+            let owner_request = resource.value();
+            let owner_permit = permit;
+            match spawn_typed_shell_owner(
+                stream,
+                owner_state,
+                owner_peer,
+                owner_request,
+                owner_permit,
+            ) {
+                Ok(_) => return Ok(()),
+                Err(err) => {
+                    return Err(TypedError::InternalIo {
+                        context: "spawn typed shell owner handler".to_owned(),
+                        detail: err.to_string(),
+                    });
+                }
+            }
+        }
         // Exec takes over the connection as the long-lived owner connection.
         // Admin (SO_PEERCRED) is verified here, BEFORE any session work; then
         // the connection + a cheap ServerState clone move to a SPAWNED owner
@@ -3199,56 +3315,6 @@ fn handle_connection_authorized(
                     Err(err) => {
                         return Err(TypedError::InternalIo {
                             context: "spawn exec owner handler".to_owned(),
-                            detail: err.to_string(),
-                        });
-                    }
-                }
-            }
-        }
-        if let wire::Request::Shell(op) = &request {
-            if !matches!(peer.role, PeerRole::Admin) {
-                let error = TypedError::AuthzNotAdmin {
-                    verb: "shell".to_owned(),
-                };
-                let _ = write_json_frame(&stream, &wire::error_frame(&error));
-                continue;
-            }
-            if !unsafe_local_shell_feature_negotiated(&capabilities)
-                && let Some((target, operation, resolved)) =
-                    resolve_negotiated_unsafe_local_shell(state, op)
-            {
-                let error = shell_backend::unsafe_shell_failed(
-                    typed_error::UnsafeLocalShellErrorKind::FeatureUnavailable,
-                );
-                record_resolved_shell_failure(
-                    state, peer.uid, &resolved, target, operation, None, &error,
-                );
-                let _ = write_json_frame(&stream, &wire::error_frame(&error));
-                continue;
-            }
-            if matches!(op, public_wire::ShellOp::Attach(_)) {
-                let first_op_id = wire::shell_op_id(&frame);
-                let owner_state = state.clone();
-                let owner_peer = peer.clone();
-                let op = op.clone();
-                set_frame_read_deadline(&stream, None);
-                let owner_permit = permit;
-                match std::thread::Builder::new()
-                    .name("d2b-shell-owner".to_owned())
-                    .spawn(move || {
-                        run_shell_owner(
-                            stream,
-                            owner_state,
-                            owner_peer,
-                            first_op_id,
-                            op,
-                            owner_permit,
-                        );
-                    }) {
-                    Ok(_) => return Ok(()),
-                    Err(err) => {
-                        return Err(TypedError::InternalIo {
-                            context: "spawn shell owner handler".to_owned(),
                             detail: err.to_string(),
                         });
                     }
@@ -3429,7 +3495,6 @@ fn dispatch_request_locked(
         // spawned worker off the serial accept loop). Detached management ops
         // are ordinary one-shot requests.
         wire::Request::Exec(op) => dispatch_exec_management(state, peer, op),
-        wire::Request::Shell(op) => dispatch_shell_management(state, peer, op),
         wire::Request::Console(op) => dispatch_console(state, peer, op),
         wire::Request::GatewayDisplay(op) => dispatch_gateway_display(state, peer, op),
         wire::Request::Workload(op) => dispatch_workload(state, peer, op),
@@ -3457,35 +3522,159 @@ fn dispatch_resource_request(
             resource_runtime::ResourceRuntimeError::RouteMismatch,
         ));
     }
-    let zone = request
-        .fields
-        .get("zoneRef")
-        .and_then(Value::as_str)
-        .and_then(|value| value.strip_prefix("Zone/"))
-        .and_then(|value| ZoneId::parse(value.to_owned()).ok());
-    let Some(zone) = zone else {
-        return Ok(resource_runtime_error_frame(
-            resource_runtime::ResourceRuntimeError::RouteMismatch,
-        ));
-    };
-    let plane = state
-        .resource_plane
-        .lock()
-        .ok()
-        .and_then(|plane| plane.clone());
-    let Some(plane) = plane else {
-        return Ok(resource_runtime_error_frame(
-            resource_runtime::ResourceRuntimeError::PlaneUnavailable,
-        ));
-    };
-    let runtime = match plane.zone(&zone) {
+    let typed_shell = typed_shell_resource_request(&request.value());
+    let runtime = match if typed_shell {
+        resolve_typed_shell_runtime(state, &request.value())
+    } else {
+        resolve_resource_runtime(state, &request.value())
+    } {
         Ok(runtime) => runtime,
         Err(error) => return Ok(resource_runtime_error_frame(error)),
     };
+    if typed_shell {
+        return Ok(
+            dispatch_typed_shell_resource_request(state, peer, &request.value())
+                .unwrap_or_else(|error| typed_shell_resource_error_frame(&error)),
+        );
+    }
     match block_on_future(runtime.dispatch_cli_request(&request.value())) {
         Ok(value) => Ok(value),
         Err(error) => Ok(resource_runtime_error_frame(error)),
     }
+}
+
+fn resolve_resource_runtime(
+    state: &ServerState,
+    request: &Value,
+) -> Result<Arc<resource_runtime::ZoneResourceRuntime>, resource_runtime::ResourceRuntimeError> {
+    let zone = request
+        .get("zoneRef")
+        .and_then(Value::as_str)
+        .and_then(|value| value.strip_prefix("Zone/"))
+        .and_then(|value| ZoneId::parse(value.to_owned()).ok())
+        .ok_or(resource_runtime::ResourceRuntimeError::RouteMismatch)?;
+    let plane = state
+        .resource_plane
+        .lock()
+        .ok()
+        .and_then(|plane| plane.clone())
+        .ok_or(resource_runtime::ResourceRuntimeError::PlaneUnavailable)?;
+    plane.zone(&zone)
+}
+
+fn resolve_typed_shell_runtime(
+    state: &ServerState,
+    request: &Value,
+) -> Result<Arc<resource_runtime::ZoneResourceRuntime>, resource_runtime::ResourceRuntimeError> {
+    let runtime = resolve_resource_runtime(state, request)?;
+    if runtime.zone().as_str() != "local-root" {
+        return Err(resource_runtime::ResourceRuntimeError::RouteMismatch);
+    }
+    Ok(runtime)
+}
+
+fn typed_shell_resource_request(request: &Value) -> bool {
+    let shell_ref = request
+        .get("resourceRef")
+        .and_then(Value::as_str)
+        .is_some_and(is_typed_shell_resource_ref);
+    let shell_list = request.get("resourceType").and_then(Value::as_str)
+        == Some("shell-terminal.d2bus.org.ShellSession");
+    (shell_ref || shell_list)
+        && matches!(
+            request.get("method").and_then(Value::as_str),
+            Some("List" | "Status" | "Detach" | "Kill")
+        )
+}
+
+fn dispatch_typed_shell_resource_request(
+    state: &ServerState,
+    peer: &PeerIdentity,
+    request: &Value,
+) -> Result<Value, TypedError> {
+    let method = request
+        .get("method")
+        .and_then(Value::as_str)
+        .ok_or_else(shell_protocol_failed)?;
+    let resource = request
+        .get("resourceRef")
+        .and_then(Value::as_str)
+        .map(str::to_owned);
+    if method == "List"
+        && request
+            .get("executionRef")
+            .and_then(Value::as_str)
+            .is_none()
+    {
+        return list_all_typed_shell_sessions(state, peer);
+    }
+    if method == "List" {
+        let target = typed_shell_execution_target(
+            request
+                .get("executionRef")
+                .and_then(Value::as_str)
+                .ok_or_else(shell_protocol_failed)?,
+        )?;
+        return list_typed_shell_sessions_for_target(state, peer, &target);
+    }
+    let target = resolve_typed_shell_session_target(
+        state,
+        peer,
+        resource.as_deref().ok_or_else(shell_protocol_failed)?,
+    )?;
+    let name = resource
+        .as_deref()
+        .map(typed_shell_resource_name)
+        .transpose()?;
+    let op = match method {
+        "Status" => ShellManagementOp::List { target },
+        "Detach" => ShellManagementOp::Detach {
+            target,
+            name: name.clone(),
+        },
+        "Kill" => ShellManagementOp::Kill {
+            target,
+            name: name.clone().ok_or_else(shell_protocol_failed)?,
+        },
+        _ => return Err(shell_protocol_failed()),
+    };
+    let result = dispatch_shell_management(state, peer, op)?;
+    if method == "Status" {
+        let name = name.ok_or_else(shell_protocol_failed)?;
+        return result
+            .get("sessions")
+            .and_then(Value::as_array)
+            .and_then(|sessions| {
+                sessions.iter().find(|session| {
+                    session.get("name").and_then(Value::as_str) == Some(name.as_str())
+                })
+            })
+            .cloned()
+            .ok_or_else(|| TypedError::WorkloadTargetNotFound {
+                target: resource.unwrap_or_default(),
+            });
+    }
+    Ok(result)
+}
+
+fn list_all_typed_shell_sessions(
+    state: &ServerState,
+    peer: &PeerIdentity,
+) -> Result<Value, TypedError> {
+    let listings = list_configured_typed_shell_targets(state, peer)?;
+    let default_name = listings
+        .first()
+        .map(|(_, result)| result.default_name.clone())
+        .unwrap_or_else(|| public_wire::ShellName::new("primary").expect("valid shell name"));
+    let sessions = listings
+        .into_iter()
+        .flat_map(|(_, result)| result.sessions)
+        .collect();
+    serde_json::to_value(public_wire::ShellListResult {
+        default_name,
+        sessions,
+    })
+    .map_err(|_| shell_protocol_failed())
 }
 
 fn resource_runtime_error_frame(error: resource_runtime::ResourceRuntimeError) -> Value {
@@ -3497,6 +3686,78 @@ fn resource_runtime_error_frame(error: resource_runtime::ResourceRuntimeError) -
             "retryClass": "never",
             "message": error.code(),
             "remediation": "inspect the Zone runtime readiness and retry after the authoritative resource plane is ready",
+        }
+    })
+}
+
+fn typed_shell_resource_error_frame(error: &TypedError) -> Value {
+    use crate::typed_error::{
+        GuestControlShellErrorKind as Guest, UnsafeLocalShellErrorKind as UnsafeHost,
+    };
+    use d2b_contracts::v3::ResourceErrorKind;
+
+    let kind = match error {
+        TypedError::AuthzNotAdmin { .. } => ResourceErrorKind::AuthorizationDenied,
+        TypedError::WorkloadTargetNotFound { .. }
+        | TypedError::GuestControlShellFailed {
+            kind: Guest::NotFound | Guest::StaleSession,
+        }
+        | TypedError::UnsafeLocalShellFailed {
+            kind: UnsafeHost::NotFound | UnsafeHost::StaleSession,
+        } => ResourceErrorKind::ResourceNotFound,
+        TypedError::GuestControlShellFailed {
+            kind: Guest::Capability,
+        }
+        | TypedError::UnsafeLocalShellFailed {
+            kind: UnsafeHost::ShellUnavailable,
+        } => ResourceErrorKind::UnsupportedCapability,
+        TypedError::RuntimeCapabilityUnsupported { .. } => ResourceErrorKind::UnsupportedCapability,
+        TypedError::GuestControlShellFailed {
+            kind: Guest::Transport,
+        }
+        | TypedError::UnsafeLocalShellFailed {
+            kind:
+                UnsafeHost::HelperUnavailable
+                | UnsafeHost::HelperStale
+                | UnsafeHost::UserManagerUnavailable
+                | UnsafeHost::EnvironmentInvalid
+                | UnsafeHost::ExecutableUnavailable
+                | UnsafeHost::ScopeCreateFailed
+                | UnsafeHost::ScopeIdentityMismatch
+                | UnsafeHost::GraphicalSessionInactive
+                | UnsafeHost::WaylandUnavailable
+                | UnsafeHost::ProxyUnavailable
+                | UnsafeHost::FirstClientTimeout,
+        } => ResourceErrorKind::ResourceProviderUnavailable,
+        TypedError::GuestControlShellFailed {
+            kind: Guest::Timeout,
+        }
+        | TypedError::UnsafeLocalShellFailed {
+            kind: UnsafeHost::Timeout,
+        } => ResourceErrorKind::Timeout,
+        TypedError::GuestControlShellFailed {
+            kind: Guest::Capacity,
+        }
+        | TypedError::UnsafeLocalShellFailed {
+            kind: UnsafeHost::QueueFull,
+        } => ResourceErrorKind::Backpressure,
+        TypedError::GuestControlShellFailed {
+            kind: Guest::AlreadyAttached,
+        }
+        | TypedError::UnsafeLocalShellFailed {
+            kind: UnsafeHost::AlreadyAttached | UnsafeHost::OperationConflict,
+        } => ResourceErrorKind::ResourceConflict,
+        TypedError::WorkloadAliasConflict { .. } => ResourceErrorKind::ResourceConflict,
+        _ => ResourceErrorKind::InternalIntegrityFailure,
+    };
+    json!({
+        "type": "error",
+        "error": {
+            "kind": kind.as_str(),
+            "errorClass": kind.as_str(),
+            "retryClass": "never",
+            "message": kind.as_str(),
+            "remediation": "inspect the ShellSession Provider state and retry after its authoritative runtime is ready",
         }
     })
 }
@@ -4178,6 +4439,7 @@ mod workload_observability_tests {
             public_status_read_model: Arc::new(PublicStatusReadModel::new()),
             provider_runtime: Arc::new(crate::provider_registry::ProviderRuntime::new()),
             resource_plane: Arc::new(Mutex::new(None)),
+            typed_shell_session_targets: new_typed_shell_session_targets(),
             zone_coordinator: new_zone_coordinator(),
             console_sessions: Arc::new(Mutex::new(console_session::ConsoleSessionTable::default())),
             security_key_sessions: Arc::new(parking_lot::Mutex::new(
@@ -8194,7 +8456,6 @@ fn dispatch_read_guest_config(
 const SHELL_MANAGEMENT_TIMEOUT: Duration = Duration::from_secs(12);
 const SHELL_POLL_CAP: Duration = Duration::from_secs(30);
 const SHELL_POLL_SLACK: Duration = Duration::from_secs(2);
-const SHELL_OWNER_INFLIGHT_CAP: usize = 64;
 const SHELL_METRIC: &str = "d2b_daemon_guest_control_shell_total";
 const SHELL_SUBSYSTEM: &str = "guest-control-shell";
 const SHELL_LIFECYCLE_METRIC: &str = "d2b_daemon_shell_lifecycle_total";
@@ -8348,7 +8609,6 @@ fn shell_error_kind_label(error: &TypedError) -> &'static str {
         TypedError::UnsafeLocalShellFailed { kind } => {
             use crate::typed_error::UnsafeLocalShellErrorKind as UnsafeKind;
             match kind {
-                UnsafeKind::FeatureUnavailable => "capability",
                 UnsafeKind::HelperUnavailable => "helper-unavailable",
                 UnsafeKind::HelperStale => "helper-stale",
                 UnsafeKind::QueueFull => "capacity",
@@ -8424,38 +8684,24 @@ fn shell_ref_digest(parts: &[&str]) -> String {
     format!("{:x}", hasher.finalize())[..16].to_owned()
 }
 
-fn unsafe_local_shell_feature_negotiated(capabilities: &[d2b_contracts::FeatureFlag]) -> bool {
-    capabilities
-        .iter()
-        .any(|feature| feature.known() == Some(KnownFeatureFlag::UnsafeLocalShellV1))
-}
-
-fn resolve_negotiated_unsafe_local_shell<'a>(
-    state: &ServerState,
-    op: &'a public_wire::ShellOp,
-) -> Option<(&'a str, &'static str, workload_dispatch::ResolvedShell)> {
-    use workload_dispatch::WorkloadRoute;
-
-    let (target, operation) = match op {
-        public_wire::ShellOp::Attach(args) => Some((args.vm.as_str(), "attach")),
-        public_wire::ShellOp::List(args) => Some((args.vm.as_str(), "list")),
-        public_wire::ShellOp::Detach(args) => Some((args.vm.as_str(), "detach")),
-        public_wire::ShellOp::Kill(args) => Some((args.vm.as_str(), "kill")),
-        public_wire::ShellOp::WriteStdin(_)
-        | public_wire::ShellOp::ReadOutput(_)
-        | public_wire::ShellOp::Resize(_)
-        | public_wire::ShellOp::Wait(_)
-        | public_wire::ShellOp::CloseStdin(_)
-        | public_wire::ShellOp::CloseAttach(_) => None,
-    }?;
-    let resolved = resolve_shell_target(state, target).ok()?;
-    matches!(resolved.route, WorkloadRoute::UnsafeLocal).then_some((target, operation, resolved))
+enum ShellManagementOp {
+    List {
+        target: String,
+    },
+    Detach {
+        target: String,
+        name: Option<public_wire::ShellName>,
+    },
+    Kill {
+        target: String,
+        name: public_wire::ShellName,
+    },
 }
 
 fn dispatch_shell_management(
     state: &ServerState,
     peer: &PeerIdentity,
-    op: public_wire::ShellOp,
+    op: ShellManagementOp,
 ) -> Result<Value, TypedError> {
     use d2b_contracts::unsafe_local_wire::{HelperShellRequest, HelperShellResponse};
     use workload_dispatch::WorkloadRoute;
@@ -8466,9 +8712,11 @@ fn dispatch_shell_management(
         });
     }
     let response = match op {
-        public_wire::ShellOp::List(args) => {
-            let resolved = resolve_shell_target(state, &args.vm).inspect_err(|error| {
-                record_unresolved_shell_failure(state, peer.uid, &args.vm, "list", error);
+        ShellManagementOp::List {
+            target: requested_target,
+        } => {
+            let resolved = resolve_shell_target(state, &requested_target).inspect_err(|error| {
+                record_unresolved_shell_failure(state, peer.uid, &requested_target, "list", error);
             })?;
             let (result, provider, target, operation_digest) = match resolved.route.clone() {
                 WorkloadRoute::LocalVm { vm } => {
@@ -8533,9 +8781,15 @@ fn dispatch_shell_management(
                     )
                 }
                 WorkloadRoute::CapabilityUnavailable { provider } => {
-                    let error = shell_route_capability_error(&args.vm, provider);
+                    let error = shell_route_capability_error(&requested_target, provider);
                     record_resolved_shell_failure(
-                        state, peer.uid, &resolved, &args.vm, "list", None, &error,
+                        state,
+                        peer.uid,
+                        &resolved,
+                        &requested_target,
+                        "list",
+                        None,
+                        &error,
                     );
                     return Err(error);
                 }
@@ -8554,10 +8808,12 @@ fn dispatch_shell_management(
                 },
             );
             shell_metric_for_provider(state, provider, "list", "management", "none");
-            public_wire::ShellOpResponse::List(result)
+            serde_json::to_value(result).map_err(|_| shell_protocol_failed())?
         }
-        public_wire::ShellOp::Detach(args) => {
-            let requested_target = args.vm.clone();
+        ShellManagementOp::Detach {
+            target: requested_target,
+            name,
+        } => {
             let resolved = resolve_shell_target(state, &requested_target).inspect_err(|error| {
                 record_unresolved_shell_failure(
                     state,
@@ -8572,7 +8828,7 @@ fn dispatch_shell_management(
                     let result = run_guest_shell_management(state, &vm, |client, metadata| {
                         let mut request = pb::ShellDetachRequest::new();
                         request.metadata = protobuf::MessageField::some(metadata);
-                        request.name = args.name.map(|name| name.as_str().to_owned());
+                        request.name = name.map(|name| name.as_str().to_owned());
                         async move {
                             let response: pb::ShellDetachResponse = client
                                 .unary_with_timeout(
@@ -8601,7 +8857,7 @@ fn dispatch_shell_management(
                 }
                 WorkloadRoute::UnsafeLocal => {
                     let (identity, policy) = unsafe_shell_request_parts(&resolved)?;
-                    let name = args.name.unwrap_or_else(|| policy.default_name.clone());
+                    let name = name.unwrap_or_else(|| policy.default_name.clone());
                     let operation_id = new_internal_shell_operation_id()?;
                     let operation_digest = shell_ref_digest(&[operation_id.as_str()]);
                     let target = identity.canonical_target.to_canonical();
@@ -8665,11 +8921,12 @@ fn dispatch_shell_management(
                 },
             );
             shell_metric_for_provider(state, provider, "detach", "management", "none");
-            public_wire::ShellOpResponse::Detach(result)
+            serde_json::to_value(result).map_err(|_| shell_protocol_failed())?
         }
-        public_wire::ShellOp::Kill(args) => {
-            let requested_target = args.vm.clone();
-            let requested_name = args.name;
+        ShellManagementOp::Kill {
+            target: requested_target,
+            name: requested_name,
+        } => {
             let resolved = resolve_shell_target(state, &requested_target).inspect_err(|error| {
                 record_unresolved_shell_failure(state, peer.uid, &requested_target, "kill", error);
             })?;
@@ -8767,17 +9024,10 @@ fn dispatch_shell_management(
                 },
             );
             shell_metric_for_provider(state, provider, "kill", "management", "none");
-            public_wire::ShellOpResponse::Kill(result)
+            serde_json::to_value(result).map_err(|_| shell_protocol_failed())?
         }
-        public_wire::ShellOp::Attach(_)
-        | public_wire::ShellOp::WriteStdin(_)
-        | public_wire::ShellOp::ReadOutput(_)
-        | public_wire::ShellOp::Resize(_)
-        | public_wire::ShellOp::Wait(_)
-        | public_wire::ShellOp::CloseStdin(_)
-        | public_wire::ShellOp::CloseAttach(_) => return Err(shell_protocol_failed()),
     };
-    Ok(wire::shell_response(&response))
+    Ok(response)
 }
 
 fn unsafe_shell_request_parts(
@@ -9029,63 +9279,518 @@ fn unresolved_shell_audit_target() -> &'static str {
     "unresolved"
 }
 
-fn run_shell_owner(
+fn typed_shell_request(request: &Value) -> bool {
+    matches!(
+        request.get("method").and_then(Value::as_str),
+        Some("Create" | "Attach")
+    ) && (request.get("resourceType").and_then(Value::as_str)
+        == Some("shell-terminal.d2bus.org.ShellSession")
+        || request
+            .get("resourceRef")
+            .and_then(Value::as_str)
+            .is_some_and(is_typed_shell_resource_ref))
+}
+
+fn is_typed_shell_resource_ref(value: &str) -> bool {
+    value.starts_with("shell-terminal.d2bus.org.ShellSession/")
+}
+
+fn typed_shell_resource_name(resource: &str) -> Result<public_wire::ShellName, TypedError> {
+    resource
+        .strip_prefix("shell-terminal.d2bus.org.ShellSession/")
+        .and_then(|name| public_wire::ShellName::new(name).ok())
+        .ok_or_else(shell_protocol_failed)
+}
+
+fn typed_shell_execution_target(value: &str) -> Result<String, TypedError> {
+    let execution_ref =
+        d2b_contracts::v3::ResourceRef::parse(value).map_err(|_| shell_protocol_failed())?;
+    match execution_ref.resource_type().as_str() {
+        "Host" => Ok(format!("{}.host.d2b", execution_ref.name().as_str())),
+        "Guest" => Ok(execution_ref.name().as_str().to_owned()),
+        _ => Err(shell_protocol_failed()),
+    }
+}
+
+fn configured_shell_targets(state: &ServerState) -> Result<Vec<String>, TypedError> {
+    let resolver = load_bundle_resolver(state)?;
+    let mut targets = std::collections::BTreeSet::new();
+    if let Some(private) = resolver.unsafe_local_workloads.as_ref() {
+        targets.extend(
+            private
+                .workloads
+                .iter()
+                .filter(|workload| workload.shell.is_some())
+                .map(|workload| workload.identity.canonical_target.to_canonical()),
+        );
+    }
+    targets.extend(
+        resolver
+            .manifest
+            .vms
+            .iter()
+            .filter(|(_, vm)| vm.shell.as_ref().is_some_and(|shell| shell.enabled))
+            .map(|(name, _)| name.clone()),
+    );
+    Ok(targets.into_iter().collect())
+}
+
+fn list_typed_shell_target(
+    state: &ServerState,
+    peer: &PeerIdentity,
+    target: String,
+) -> Result<public_wire::ShellListResult, TypedError> {
+    let value = dispatch_shell_management(state, peer, ShellManagementOp::List { target })?;
+    serde_json::from_value(value).map_err(|_| shell_protocol_failed())
+}
+
+fn list_configured_typed_shell_targets(
+    state: &ServerState,
+    peer: &PeerIdentity,
+) -> Result<Vec<(String, public_wire::ShellListResult)>, TypedError> {
+    let listings = configured_shell_targets(state)?
+        .into_iter()
+        .map(|target| {
+            let result = list_typed_shell_target(state, peer, target.clone())?;
+            Ok((target, result))
+        })
+        .collect::<Result<Vec<_>, TypedError>>()?;
+    let bindings = listings
+        .iter()
+        .flat_map(|(target, result)| {
+            result
+                .sessions
+                .iter()
+                .map(move |session| (session.name.clone(), target.clone()))
+        })
+        .collect::<Vec<_>>();
+    cache_unambiguous_typed_shell_session_targets(state, peer.uid, &bindings)?;
+    Ok(listings)
+}
+
+fn list_typed_shell_sessions_for_target(
+    state: &ServerState,
+    peer: &PeerIdentity,
+    target: &str,
+) -> Result<Value, TypedError> {
+    let result = list_typed_shell_target(state, peer, target.to_owned())?;
+    let bindings = result
+        .sessions
+        .iter()
+        .map(|session| (session.name.clone(), target.to_owned()))
+        .collect::<Vec<_>>();
+    cache_target_local_typed_shell_session_targets(state, peer.uid, &bindings)?;
+    serde_json::to_value(result).map_err(|_| shell_protocol_failed())
+}
+
+fn remember_typed_shell_session_target(
+    state: &ServerState,
+    peer_uid: u32,
+    name: &public_wire::ShellName,
+    target: &str,
+) {
+    if let Ok(mut sessions) = state.typed_shell_session_targets.lock() {
+        sessions.remember((peer_uid, name.as_str().to_owned()), target.to_owned());
+    }
+}
+
+fn forget_typed_shell_session_target(
+    state: &ServerState,
+    peer_uid: u32,
+    name: &public_wire::ShellName,
+) {
+    if let Ok(mut sessions) = state.typed_shell_session_targets.lock() {
+        sessions.forget(&(peer_uid, name.as_str().to_owned()));
+    }
+}
+
+fn cache_unambiguous_typed_shell_session_targets(
+    state: &ServerState,
+    peer_uid: u32,
+    bindings: &[(public_wire::ShellName, String)],
+) -> Result<(), TypedError> {
+    let mut unique = BTreeMap::new();
+    let mut conflicts = BTreeSet::new();
+    for (name, target) in bindings {
+        let name = name.as_str().to_owned();
+        if conflicts.contains(&name) {
+            continue;
+        }
+        if unique.insert(name.clone(), target.clone()).is_some() {
+            unique.remove(&name);
+            conflicts.insert(name);
+        }
+    }
+    if let Ok(mut sessions) = state.typed_shell_session_targets.lock() {
+        for name in &conflicts {
+            sessions.forget(&(peer_uid, name.clone()));
+        }
+        for (name, target) in unique {
+            sessions.remember((peer_uid, name), target);
+        }
+    }
+    if let Some(workload_id) = conflicts.into_iter().next() {
+        return Err(TypedError::WorkloadAliasConflict {
+            workload_id,
+            detail: "ShellSession name exists on more than one execution target".to_owned(),
+        });
+    }
+    Ok(())
+}
+
+fn cache_target_local_typed_shell_session_targets(
+    state: &ServerState,
+    peer_uid: u32,
+    bindings: &[(public_wire::ShellName, String)],
+) -> Result<(), TypedError> {
+    let mut names = BTreeSet::new();
+    for (name, _) in bindings {
+        if !names.insert(name.as_str().to_owned()) {
+            forget_typed_shell_session_target(state, peer_uid, name);
+            return Err(TypedError::WorkloadAliasConflict {
+                workload_id: name.as_str().to_owned(),
+                detail:
+                    "ShellSession name appears more than once on the requested execution target"
+                        .to_owned(),
+            });
+        }
+    }
+    for (name, target) in bindings {
+        remember_typed_shell_session_target(state, peer_uid, name, target);
+    }
+    Ok(())
+}
+
+fn cached_typed_shell_session_target(
+    state: &ServerState,
+    peer_uid: u32,
+    name: &public_wire::ShellName,
+) -> Option<String> {
+    state
+        .typed_shell_session_targets
+        .lock()
+        .ok()
+        .and_then(|mut sessions| sessions.cached(&(peer_uid, name.as_str().to_owned())))
+}
+
+fn reserve_typed_shell_session_create(
+    state: &ServerState,
+    peer_uid: u32,
+    name: &public_wire::ShellName,
+) -> Result<TypedShellSessionCreateReservation, TypedError> {
+    let key = (peer_uid, name.as_str().to_owned());
+    let mut cache = state
+        .typed_shell_session_targets
+        .lock()
+        .map_err(|_| shell_protocol_failed())?;
+    if !cache.create_reservations.insert(key.clone()) {
+        return Err(TypedError::WorkloadAliasConflict {
+            workload_id: name.as_str().to_owned(),
+            detail: "ShellSession name is already being created".to_owned(),
+        });
+    }
+    Ok(TypedShellSessionCreateReservation {
+        cache: Arc::clone(&state.typed_shell_session_targets),
+        key,
+    })
+}
+
+#[cfg(test)]
+fn typed_shell_session_target_cache_len(state: &ServerState) -> usize {
+    state
+        .typed_shell_session_targets
+        .lock()
+        .map(|sessions| sessions.entries.len())
+        .unwrap_or(0)
+}
+
+#[cfg(test)]
+fn typed_shell_session_target_cache_recency_len(state: &ServerState) -> usize {
+    state
+        .typed_shell_session_targets
+        .lock()
+        .map(|sessions| sessions.recency.len())
+        .unwrap_or(0)
+}
+
+fn find_typed_shell_session_target(
+    state: &ServerState,
+    peer: &PeerIdentity,
+    name: &public_wire::ShellName,
+) -> Result<Option<String>, TypedError> {
+    let listings = list_configured_typed_shell_targets(state, peer)?;
+    find_typed_shell_session_target_in_listings(state, peer.uid, name, &listings)
+}
+
+fn find_typed_shell_session_target_in_listings(
+    state: &ServerState,
+    peer_uid: u32,
+    name: &public_wire::ShellName,
+    listings: &[(String, public_wire::ShellListResult)],
+) -> Result<Option<String>, TypedError> {
+    let mut matched = None;
+    for (target, result) in listings {
+        if result.sessions.iter().any(|session| session.name == *name) {
+            if matched.is_some() {
+                // The complete listing helper validates this before returning.
+                // Keep this guard local so a future caller cannot accidentally
+                // route an ambiguous name if that helper changes.
+                forget_typed_shell_session_target(state, peer_uid, name);
+                return Err(TypedError::WorkloadAliasConflict {
+                    workload_id: name.as_str().to_owned(),
+                    detail: "ShellSession name exists on more than one execution target".to_owned(),
+                });
+            }
+            matched = Some(target.clone());
+        }
+    }
+    if let Some(target) = matched.as_deref() {
+        remember_typed_shell_session_target(state, peer_uid, name, target);
+    }
+    Ok(matched)
+}
+
+fn resolve_typed_shell_session_target(
+    state: &ServerState,
+    peer: &PeerIdentity,
+    resource: &str,
+) -> Result<String, TypedError> {
+    let name = typed_shell_resource_name(resource)?;
+    if let Some(target) = find_typed_shell_session_target(state, peer, &name)? {
+        return Ok(target);
+    }
+    if let Some(target) = cached_typed_shell_session_target(state, peer.uid, &name) {
+        return Ok(target);
+    }
+    Err(TypedError::WorkloadTargetNotFound {
+        target: resource.to_owned(),
+    })
+}
+
+fn spawn_typed_shell_owner(
     stream: Socket,
     state: ServerState,
     peer: PeerIdentity,
-    first_op_id: u64,
-    first_op: public_wire::ShellOp,
-    conn_permit: Option<concurrency::ConnPermit>,
+    request: Value,
+    permit: Option<concurrency::ConnPermit>,
+) -> io::Result<thread::JoinHandle<()>> {
+    thread::Builder::new()
+        .name("d2b-typed-shell-owner".to_owned())
+        .spawn(move || {
+            run_typed_shell_owner(stream, state, peer, request, permit);
+        })
+}
+
+fn run_typed_shell_owner(
+    stream: Socket,
+    state: ServerState,
+    peer: PeerIdentity,
+    request: Value,
+    // Admission permit held for the lifetime of the typed-shell owner
+    // connection so the in-flight slot is released only on owner exit.
+    _conn_permit: Option<concurrency::ConnPermit>,
 ) {
-    let stream = Arc::new(stream);
-    let public_wire::ShellOp::Attach(attach) = first_op else {
-        let _ = write_json_frame(
-            stream.as_ref(),
-            &wire::error_frame_with_id(first_op_id, &shell_protocol_failed()),
-        );
-        return;
-    };
-    let rt = match tokio::runtime::Builder::new_multi_thread()
-        .worker_threads(1)
+    #[cfg(test)]
+    {
+        if let Some(hook) = owner_connection_test_hook::active() {
+            hook();
+            drop(stream);
+            return;
+        }
+    }
+    let rt = match tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
     {
         Ok(rt) => rt,
         Err(_) => {
-            let error = shell_transport_failed();
             let _ = write_json_frame(
-                stream.as_ref(),
-                &wire::error_frame_with_id(first_op_id, &error),
+                &stream,
+                &typed_shell_resource_error_frame(&shell_transport_failed()),
             );
-            record_unresolved_shell_failure(&state, peer.uid, &attach.vm, "attach", &error);
             return;
         }
+    };
+    let method = request.get("method").and_then(Value::as_str).unwrap_or("");
+    let Some(resource) = request
+        .get("resourceRef")
+        .and_then(Value::as_str)
+        .map(str::to_owned)
+        .or_else(|| {
+            request
+                .get("name")
+                .and_then(Value::as_str)
+                .map(|name| format!("shell-terminal.d2bus.org.ShellSession/{name}"))
+        })
+    else {
+        let _ = write_json_frame(
+            &stream,
+            &typed_shell_resource_error_frame(&shell_protocol_failed()),
+        );
+        return;
+    };
+    let name = match typed_shell_resource_name(&resource) {
+        Ok(name) => name,
+        Err(error) => {
+            let _ = write_json_frame(&stream, &typed_shell_resource_error_frame(&error));
+            return;
+        }
+    };
+    let creating = method == "Create";
+    let (target, create_reservation) = if creating {
+        let Some(execution_ref) = request.get("executionRef").and_then(Value::as_str) else {
+            let _ = write_json_frame(
+                &stream,
+                &typed_shell_resource_error_frame(&shell_protocol_failed()),
+            );
+            return;
+        };
+        let target = match typed_shell_execution_target(execution_ref) {
+            Ok(target) => target,
+            Err(error) => {
+                let _ = write_json_frame(&stream, &typed_shell_resource_error_frame(&error));
+                return;
+            }
+        };
+        let create_reservation = match reserve_typed_shell_session_create(&state, peer.uid, &name) {
+            Ok(reservation) => reservation,
+            Err(error) => {
+                let _ = write_json_frame(&stream, &typed_shell_resource_error_frame(&error));
+                return;
+            }
+        };
+        match find_typed_shell_session_target(&state, &peer, &name) {
+            Ok(Some(existing_target)) if existing_target != target => {
+                let _ = write_json_frame(
+                    &stream,
+                    &typed_shell_resource_error_frame(&TypedError::WorkloadAliasConflict {
+                        workload_id: name.as_str().to_owned(),
+                        detail: "ShellSession name belongs to another execution target".to_owned(),
+                    }),
+                );
+                return;
+            }
+            Ok(_) => {}
+            Err(error) => {
+                let _ = write_json_frame(&stream, &typed_shell_resource_error_frame(&error));
+                return;
+            }
+        }
+        (target, Some(create_reservation))
+    } else {
+        let target = match resolve_typed_shell_session_target(&state, &peer, &resource) {
+            Ok(target) => target,
+            Err(error) => {
+                let _ = write_json_frame(&stream, &typed_shell_resource_error_frame(&error));
+                return;
+            }
+        };
+        (target, None)
+    };
+    let attach_stream = request
+        .get("attach")
+        .and_then(Value::as_bool)
+        .unwrap_or(true);
+    let size = request
+        .get("initialSize")
+        .cloned()
+        .and_then(|value| serde_json::from_value(value).ok())
+        .unwrap_or(d2b_contracts::terminal_wire::TerminalSize { rows: 24, cols: 80 });
+    let attach = public_wire::ShellAttachArgs {
+        vm: target.clone(),
+        name: Some(name.clone()),
+        force: request
+            .get("force")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+        initial_terminal_size: size,
     };
     let established = match rt.block_on(establish_shell_backend(&state, peer.uid, &attach)) {
         Ok(value) => value,
         Err(error) => {
-            let _ = write_json_frame(
-                stream.as_ref(),
-                &wire::error_frame_with_id(first_op_id, &error),
+            tracing::warn!(
+                operation = method,
+                error_kind = error.kind(),
+                "typed shell attachment refused"
             );
-            match resolve_shell_target(&state, &attach.vm) {
-                Ok(resolved) => record_resolved_shell_failure(
-                    &state, peer.uid, &resolved, &attach.vm, "attach", None, &error,
-                ),
-                Err(_) => {
-                    record_unresolved_shell_failure(&state, peer.uid, &attach.vm, "attach", &error);
-                }
-            }
+            let _ = write_json_frame(&stream, &typed_shell_resource_error_frame(&error));
             return;
         }
     };
-    let owner_resolved_name = established.attach.resolved_name.clone();
-    let owner_shell_ref_digest =
-        shell_ref_digest(&[&established.target, owner_resolved_name.as_str()]);
-    let public_attach_result = public_wire::ShellOpResponse::Attach(established.attach.clone());
+    remember_typed_shell_session_target(&state, peer.uid, &name, &target);
+    drop(create_reservation);
+    let session = established.attach.session.clone();
+    let owner_shell_ref_digest = shell_ref_digest(&[
+        &established.target,
+        established.attach.resolved_name.as_str(),
+    ]);
+    let resolved_name = established.attach.resolved_name.clone();
+    let is_default = resolved_name.as_str() == "primary";
+    let force_evicted = established.attach.force_evicted;
+    let attached_state = established.attach.state;
+    if !attach_stream {
+        emit_shell_attach_audit(
+            &state,
+            peer.uid,
+            &established,
+            &owner_shell_ref_digest,
+            attach.force,
+        );
+        shell_metric_for_provider(
+            &state,
+            established.provider,
+            "attach",
+            "established",
+            "none",
+        );
+        let mut control_sequence = established.initial_control_sequence;
+        let close_result = match established
+            .backend
+            .close_attachment(rt.handle(), &mut control_sequence)
+        {
+            Ok(_) => daemon_audit::ShellAuditResult::Closed,
+            Err(error) => {
+                let _ = write_json_frame(&stream, &typed_shell_resource_error_frame(&error));
+                return;
+            }
+        };
+        emit_shell_close_audit(
+            &state,
+            peer.uid,
+            &established,
+            close_result,
+            &owner_shell_ref_digest,
+        );
+        shell_metric_for_provider(&state, established.provider, "close", "closed", "none");
+        let _ = write_json_frame(
+            &stream,
+            &json!({
+                "attached": false,
+                "resourceRef": resource,
+                "status": {
+                    "name": resolved_name,
+                    "state": public_wire::ShellSessionState::Detached,
+                    "attached": false,
+                    "isDefault": is_default,
+                    "forceEvicted": force_evicted,
+                },
+            }),
+        );
+        return;
+    }
     if write_json_frame(
-        stream.as_ref(),
-        &wire::shell_response_with_id(first_op_id, &public_attach_result),
+        &stream,
+        &json!({
+            "attached": true,
+            "resourceRef": resource,
+            "status": {
+                "name": resolved_name,
+                "state": attached_state,
+                "attached": true,
+                "isDefault": is_default,
+                "forceEvicted": force_evicted,
+            },
+        }),
     )
     .is_err()
     {
@@ -9121,129 +9826,104 @@ fn run_shell_owner(
         "established",
         "none",
     );
-
-    let mut control_seq = established.initial_control_sequence;
-    let mut poll_tasks: Vec<std::thread::JoinHandle<()>> = Vec::new();
-    let mut attachment_closed = false;
-    while let Ok(frame) = read_frame(stream.as_ref()) {
-        poll_tasks.retain(|task| !task.is_finished());
-        let op_id = wire::shell_op_id(&frame);
-        let op = match wire::parse_shell_op(&frame) {
-            Ok((_, op)) => op,
-            Err(error) => {
-                if write_json_frame(stream.as_ref(), &wire::error_frame_with_id(op_id, &error))
-                    .is_err()
-                {
-                    break;
+    let mut control_sequence = established.initial_control_sequence;
+    let mut close_result = None;
+    while let Ok(frame) = read_frame(&stream) {
+        let value: Value = match serde_json::from_slice(&frame) {
+            Ok(value) => value,
+            Err(_) => break,
+        };
+        let kind = value.get("type").and_then(Value::as_str).unwrap_or("");
+        if matches!(kind, "namedStreamClose" | "namedStreamCancel") {
+            let result = established
+                .backend
+                .close_attachment(rt.handle(), &mut control_sequence);
+            match result {
+                Ok(_) => {
+                    close_result = Some(daemon_audit::ShellAuditResult::Closed);
+                    let _ = write_json_frame(&stream, &json!({"closed": true}));
                 }
+                Err(error) => {
+                    close_result = Some(daemon_audit::ShellAuditResult::Refused);
+                    let _ = write_json_frame(&stream, &typed_shell_resource_error_frame(&error));
+                }
+            }
+            break;
+        }
+        let op = match kind {
+            "namedStreamSend" => {
+                let data = value
+                    .get("dataBase64")
+                    .and_then(Value::as_str)
+                    .and_then(|data| d2b_core::base64_codec::decode(data).ok())
+                    .unwrap_or_default();
+                shell_backend::ShellTerminalOp::WriteStdin(
+                    d2b_contracts::terminal_wire::TerminalWriteStdin {
+                        session: session.clone(),
+                        offset: value.get("offset").and_then(Value::as_u64).unwrap_or(0),
+                        chunk_base64: d2b_core::base64_codec::encode(&data),
+                        eof: false,
+                    },
+                )
+            }
+            "namedStreamReceive" => shell_backend::ShellTerminalOp::ReadOutput(
+                d2b_contracts::terminal_wire::TerminalReadOutput {
+                    session: session.clone(),
+                    stream: d2b_contracts::terminal_wire::TerminalStream::Stdout,
+                    offset: value.get("offset").and_then(Value::as_u64).unwrap_or(0),
+                    max_len: value.get("maxLen").and_then(Value::as_u64).unwrap_or(65536),
+                    wait: true,
+                    timeout_ms: 50,
+                },
+            ),
+            "namedStreamResize" => shell_backend::ShellTerminalOp::Resize(
+                d2b_contracts::terminal_wire::TerminalResize {
+                    session: session.clone(),
+                    op_id: control_sequence.saturating_add(1),
+                    rows: value.get("rows").and_then(Value::as_u64).unwrap_or(24) as u32,
+                    cols: value.get("cols").and_then(Value::as_u64).unwrap_or(80) as u32,
+                },
+            ),
+            _ => {
+                let _ = write_json_frame(
+                    &stream,
+                    &typed_shell_resource_error_frame(&shell_protocol_failed()),
+                );
                 continue;
             }
         };
-        if matches!(
-            op,
-            public_wire::ShellOp::ReadOutput(_) | public_wire::ShellOp::Wait(_)
-        ) {
-            if poll_tasks.len() >= SHELL_OWNER_INFLIGHT_CAP {
-                if write_json_frame(
-                    stream.as_ref(),
-                    &wire::error_frame_with_id(
-                        op_id,
-                        &shell_failed(crate::typed_error::GuestControlShellErrorKind::Capacity),
-                    ),
-                )
-                .is_err()
-                {
-                    break;
-                }
-                continue;
-            }
-            let backend = Arc::clone(&established.backend);
-            let poll_stream = Arc::clone(&stream);
-            let rt_handle = rt.handle().clone();
-            let task = std::thread::Builder::new()
-                .name("d2b-shell-poll".to_owned())
-                .spawn(move || {
-                    let mut ignored_control_seq = 0;
-                    let value = match backend.handle_op(&rt_handle, &mut ignored_control_seq, op) {
-                        Ok(Some(response)) => wire::shell_response_with_id(op_id, &response),
-                        Ok(None) => return,
-                        Err(error) => wire::error_frame_with_id(op_id, &error),
-                    };
-                    let _ = write_json_frame(poll_stream.as_ref(), &value);
-                });
-            match task {
-                Ok(task) => poll_tasks.push(task),
-                Err(_) => {
-                    let _ = write_json_frame(
-                        stream.as_ref(),
-                        &wire::error_frame_with_id(op_id, &shell_transport_failed()),
-                    );
-                }
-            }
-            continue;
-        }
-        let closes_owner = matches!(op, public_wire::ShellOp::CloseAttach(_));
-        let response = established
+        match established
             .backend
-            .handle_op(rt.handle(), &mut control_seq, op);
-        match response {
-            Ok(Some(response)) => {
-                if write_json_frame(
-                    stream.as_ref(),
-                    &wire::shell_response_with_id(op_id, &response),
-                )
-                .is_err()
-                {
-                    break;
-                }
-                if closes_owner {
-                    attachment_closed = true;
-                    break;
-                }
+            .handle_op(rt.handle(), &mut control_sequence, op)
+        {
+            Ok(Some(shell_backend::ShellTerminalResponse::WriteStdin(result))) => {
+                let _ = write_json_frame(
+                    &stream,
+                    &serde_json::to_value(result).unwrap_or_else(|_| json!({})),
+                );
+            }
+            Ok(Some(shell_backend::ShellTerminalResponse::ReadOutput(result))) => {
+                let _ = write_json_frame(
+                    &stream,
+                    &serde_json::to_value(result).unwrap_or_else(|_| json!({})),
+                );
+            }
+            Ok(Some(_)) => {
+                let _ = write_json_frame(&stream, &json!({"delivered": true}));
             }
             Ok(None) => break,
             Err(error) => {
-                if closes_owner
-                    && matches!(
-                        shell_backend::best_effort_close(
-                            established.backend.as_ref(),
-                            rt.handle(),
-                            &mut control_seq
-                        ),
-                        daemon_audit::ShellAuditResult::Closed
-                    )
-                {
-                    let response = public_wire::ShellOpResponse::CloseAttach(
-                        synthetic_shell_close_attach_response(owner_resolved_name.clone()),
-                    );
-                    if write_json_frame(
-                        stream.as_ref(),
-                        &wire::shell_response_with_id(op_id, &response),
-                    )
-                    .is_err()
-                    {
-                        break;
-                    }
-                    attachment_closed = true;
-                    break;
-                }
-                if write_json_frame(stream.as_ref(), &wire::error_frame_with_id(op_id, &error))
-                    .is_err()
-                {
-                    break;
-                }
+                let _ = write_json_frame(&stream, &typed_shell_resource_error_frame(&error));
             }
         }
     }
-    let close_result = if attachment_closed {
-        daemon_audit::ShellAuditResult::Closed
-    } else {
+    let close_result = close_result.unwrap_or_else(|| {
         shell_backend::best_effort_close(
             established.backend.as_ref(),
             rt.handle(),
-            &mut control_seq,
+            &mut control_sequence,
         )
-    };
+    });
     emit_shell_close_audit(
         &state,
         peer.uid,
@@ -9252,24 +9932,6 @@ fn run_shell_owner(
         &owner_shell_ref_digest,
     );
     shell_metric_for_provider(&state, established.provider, "close", "closed", "none");
-    let _ = nix::sys::socket::shutdown(
-        stream.as_ref().as_raw_fd(),
-        nix::sys::socket::Shutdown::Both,
-    );
-    for task in poll_tasks {
-        let _ = task.join();
-    }
-    drop(conn_permit);
-}
-
-fn synthetic_shell_close_attach_response(
-    resolved_name: public_wire::ShellName,
-) -> public_wire::ShellDetachResult {
-    public_wire::ShellDetachResult {
-        resolved_name,
-        detached: true,
-        cause: Some(public_wire::ShellCloseCause::ClientDetach),
-    }
 }
 
 struct GuestShellBackend {
@@ -9294,8 +9956,8 @@ impl shell_backend::ShellBackend for GuestShellBackend {
         &self,
         runtime: &tokio::runtime::Handle,
         control_sequence: &mut u64,
-        op: public_wire::ShellOp,
-    ) -> Result<Option<public_wire::ShellOpResponse>, TypedError> {
+        op: shell_backend::ShellTerminalOp,
+    ) -> Result<Option<shell_backend::ShellTerminalResponse>, TypedError> {
         handle_shell_owner_op(
             runtime,
             self.client.as_ref(),
@@ -9664,10 +10326,6 @@ fn ensure_shell_owner_session(
     }
 }
 
-fn unsupported_shell_wait_error() -> TypedError {
-    shell_capability_failed()
-}
-
 fn handle_shell_owner_op(
     rt: &tokio::runtime::Handle,
     client: &guest_control_health::TtrpcGuestControlClient,
@@ -9675,11 +10333,11 @@ fn handle_shell_owner_op(
     session_id: &str,
     guest_boot_id: &str,
     control_seq: &mut u64,
-    op: public_wire::ShellOp,
-) -> Result<Option<public_wire::ShellOpResponse>, TypedError> {
+    op: shell_backend::ShellTerminalOp,
+) -> Result<Option<shell_backend::ShellTerminalResponse>, TypedError> {
     use d2b_contracts::terminal_wire as tw;
     match op {
-        public_wire::ShellOp::WriteStdin(args) => {
+        shell_backend::ShellTerminalOp::WriteStdin(args) => {
             ensure_shell_owner_session(&args.session, session_id)?;
             let data = d2b_core::base64_codec::decode(&args.chunk_base64)
                 .map_err(|_| shell_protocol_failed())?;
@@ -9708,7 +10366,7 @@ fn handle_shell_owner_op(
                 );
             }
             shell_error_to_typed(response.error.as_ref())?;
-            Ok(Some(public_wire::ShellOpResponse::WriteStdin(
+            Ok(Some(shell_backend::ShellTerminalResponse::WriteStdin(
                 tw::TerminalWriteStdinResult {
                     accepted_len: response.accepted_len,
                     next_offset: response.next_offset,
@@ -9722,7 +10380,7 @@ fn handle_shell_owner_op(
                 },
             )))
         }
-        public_wire::ShellOp::ReadOutput(args) => {
+        shell_backend::ShellTerminalOp::ReadOutput(args) => {
             ensure_shell_owner_session(&args.session, session_id)?;
             let mut request = pb::TerminalReadOutputRequest::new();
             request.metadata = protobuf::MessageField::some(shell_terminal_metadata(
@@ -9753,7 +10411,7 @@ fn handle_shell_owner_op(
                 );
             }
             shell_error_to_typed(response.error.as_ref())?;
-            Ok(Some(public_wire::ShellOpResponse::ReadOutput(
+            Ok(Some(shell_backend::ShellTerminalResponse::ReadOutput(
                 tw::TerminalReadOutputChunk {
                     data_base64: d2b_core::base64_codec::encode(&response.data),
                     next_offset: response.next_offset,
@@ -9764,7 +10422,7 @@ fn handle_shell_owner_op(
                 },
             )))
         }
-        public_wire::ShellOp::Resize(args) => {
+        shell_backend::ShellTerminalOp::Resize(args) => {
             ensure_shell_owner_session(&args.session, session_id)?;
             *control_seq = control_seq.saturating_add(1);
             let mut request = pb::TerminalTtyWinResizeRequest::new();
@@ -9784,44 +10442,8 @@ fn handle_shell_owner_op(
                 ))
                 .map_err(map_shell_health_error)?;
             shell_error_to_typed(response.error.as_ref())?;
-            Ok(Some(public_wire::ShellOpResponse::Resize(
-                tw::TerminalControlResult { delivered: true },
-            )))
+            Ok(Some(shell_backend::ShellTerminalResponse::Delivered))
         }
-        public_wire::ShellOp::CloseStdin(args) => {
-            ensure_shell_owner_session(&args.session, session_id)?;
-            let mut request = pb::TerminalCloseStdinRequest::new();
-            request.metadata = protobuf::MessageField::some(shell_terminal_metadata(
-                vm,
-                session_id,
-                guest_boot_id,
-            ));
-            let response: pb::CloseStdinResponse = rt
-                .block_on(client.unary_with_timeout(
-                    "TerminalCloseStdin",
-                    request,
-                    SHELL_MANAGEMENT_TIMEOUT,
-                ))
-                .map_err(map_shell_health_error)?;
-            shell_error_to_typed(response.error.as_ref())?;
-            Ok(Some(public_wire::ShellOpResponse::CloseStdin(
-                tw::TerminalCloseResult { stdin_closed: true },
-            )))
-        }
-        public_wire::ShellOp::CloseAttach(args) => {
-            ensure_shell_owner_session(&args.session, session_id)?;
-            let response =
-                shell_close_attach_with_runtime(rt, client, vm, session_id, guest_boot_id)?;
-            Ok(Some(public_wire::ShellOpResponse::CloseAttach(response)))
-        }
-        public_wire::ShellOp::Wait(args) => {
-            ensure_shell_owner_session(&args.session, session_id)?;
-            Err(unsupported_shell_wait_error())
-        }
-        public_wire::ShellOp::Attach(_)
-        | public_wire::ShellOp::List(_)
-        | public_wire::ShellOp::Detach(_)
-        | public_wire::ShellOp::Kill(_) => Err(shell_protocol_failed()),
     }
 }
 
@@ -10296,7 +10918,7 @@ fn run_exec_owner(
     // accept-loop thread, so its caller would never observe a prompt return.
     #[cfg(test)]
     {
-        if let Some(hook) = exec_owner_test_hook::active() {
+        if let Some(hook) = owner_connection_test_hook::active() {
             hook();
             drop(stream);
             return;
@@ -12235,6 +12857,10 @@ async fn open_resource_plane(
     }
     let mut plane = resource_runtime::ResourcePlane::new();
     let mut zones = BTreeSet::new();
+    zones.insert(
+        ZoneId::parse("local-root".to_owned())
+            .map_err(|_| resource_runtime::ResourceRuntimeError::ZoneStoreIdInvalid)?,
+    );
     for environment in &resolver.host.environments {
         let zone = ZoneId::parse(environment.env.clone())
             .map_err(|_| resource_runtime::ResourceRuntimeError::ZoneStoreIdInvalid)?;
@@ -20270,6 +20896,7 @@ mod public_status_tests {
             public_status_read_model: Arc::new(crate::PublicStatusReadModel::new()),
             provider_runtime: Arc::new(crate::provider_registry::ProviderRuntime::new()),
             resource_plane: Arc::new(Mutex::new(None)),
+            typed_shell_session_targets: new_typed_shell_session_targets(),
             zone_coordinator: new_zone_coordinator(),
             security_key_sessions: Arc::new(parking_lot::Mutex::new(
                 crate::security_key::SkSessionTable::default(),
@@ -23182,6 +23809,7 @@ mod detached_exec_routing_tests {
             public_status_read_model: Arc::new(crate::PublicStatusReadModel::new()),
             provider_runtime: Arc::new(crate::provider_registry::ProviderRuntime::new()),
             resource_plane: Arc::new(Mutex::new(None)),
+            typed_shell_session_targets: new_typed_shell_session_targets(),
             zone_coordinator: new_zone_coordinator(),
             security_key_sessions: Arc::new(parking_lot::Mutex::new(
                 crate::security_key::SkSessionTable::default(),
@@ -23899,6 +24527,7 @@ mod accept_loop_concurrency_tests {
             public_status_read_model: Arc::new(crate::PublicStatusReadModel::new()),
             provider_runtime: Arc::new(crate::provider_registry::ProviderRuntime::new()),
             resource_plane: Arc::new(Mutex::new(None)),
+            typed_shell_session_targets: new_typed_shell_session_targets(),
             zone_coordinator: new_zone_coordinator(),
             security_key_sessions: Arc::new(parking_lot::Mutex::new(
                 crate::security_key::SkSessionTable::default(),
@@ -24062,13 +24691,13 @@ mod accept_loop_concurrency_tests {
         struct HookGuard;
         impl Drop for HookGuard {
             fn drop(&mut self) {
-                exec_owner_test_hook::clear();
+                owner_connection_test_hook::clear();
             }
         }
         let _hook_guard = HookGuard;
 
         let hook_shared = Arc::clone(&shared);
-        let hook: exec_owner_test_hook::Hook = Arc::new(move || {
+        let hook: owner_connection_test_hook::Hook = Arc::new(move || {
             let (lock, cv) = &*hook_shared;
             {
                 let mut s = lock.lock().expect("hook state lock");
@@ -24083,7 +24712,7 @@ mod accept_loop_concurrency_tests {
             s.running = false;
             cv.notify_all();
         });
-        exec_owner_test_hook::set(hook);
+        owner_connection_test_hook::set(hook);
 
         // --- Connection A: opens a long-lived exec owner session. ---
         let (server_a, client_a) = seqpacket_pair();
@@ -24189,6 +24818,74 @@ mod accept_loop_concurrency_tests {
 
         // Connection A's owner session is torn down with its client end.
         drop(client_a);
+    }
+
+    #[test]
+    fn typed_shell_owner_keeps_admission_permit_until_owner_exits() {
+        use std::sync::Mutex;
+
+        // Serialize this process-global owner hook with the exec handoff test.
+        let _env = PeerOverrideEnv::admin();
+        let (mut state, _state_dir) = admin_exec_state();
+        state.conn_semaphore = crate::concurrency::ConnSemaphore::new(1);
+        let semaphore = state.conn_semaphore.clone();
+        let permit = semaphore.try_acquire().expect("cap admits owner permit");
+        let (entered_tx, entered_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let release_rx = Arc::new(Mutex::new(release_rx));
+
+        struct HookGuard;
+        impl Drop for HookGuard {
+            fn drop(&mut self) {
+                owner_connection_test_hook::clear();
+            }
+        }
+        let _hook_guard = HookGuard;
+
+        let hook_release_rx = Arc::clone(&release_rx);
+        let hook: owner_connection_test_hook::Hook = Arc::new(move || {
+            entered_tx
+                .send(())
+                .expect("typed shell owner entered receiver");
+            hook_release_rx
+                .lock()
+                .expect("typed shell owner release lock")
+                .recv()
+                .expect("typed shell owner release signal");
+        });
+        owner_connection_test_hook::set(hook);
+
+        let (server, _client) = seqpacket_pair();
+        let owner = spawn_typed_shell_owner(
+            server,
+            state,
+            admin_peer_identity(),
+            json!({}),
+            Some(permit),
+        )
+        .expect("spawn typed shell owner");
+
+        entered_rx
+            .recv_timeout(Duration::from_secs(10))
+            .expect("typed shell owner was not entered");
+
+        assert_eq!(
+            semaphore.in_flight(),
+            1,
+            "owner retains the connection permit while it is alive"
+        );
+        assert!(
+            semaphore.try_acquire().is_none(),
+            "the held owner permit keeps the connection cap saturated"
+        );
+
+        release_tx.send(()).expect("release typed shell owner");
+        owner.join().expect("typed shell owner joins");
+        assert_eq!(
+            semaphore.in_flight(),
+            0,
+            "owner permit releases when the owner exits"
+        );
     }
 
     /// fix2b: SO_PEERCRED authorization runs in `handle_connection` BEFORE the
@@ -24363,8 +25060,8 @@ mod broker_dispatch_tests {
     use d2b_contracts::guest_proto as pb;
     use d2b_contracts::public_wire::{
         ActivationRequest, GcRequest, HostDestroyRequest, HostInstallRequest, HostPrepareRequest,
-        KeysRotateRequest, MigrateRequest, MutationFlags, RotateKnownHostRequest, ShellCloseCause,
-        ShellName, ShellSessionState, StatusRequest, TrustRequest, VmLifecycleRequest,
+        KeysRotateRequest, MigrateRequest, MutationFlags, RotateKnownHostRequest,
+        ShellSessionState, StatusRequest, TrustRequest, VmLifecycleRequest,
     };
     use d2b_contracts::types::{RoleId, VmId};
     use d2b_core::bundle_resolver::BundleResolver;
@@ -24399,10 +25096,10 @@ mod broker_dispatch_tests {
         dispatch_broker_vm_start, dispatch_broker_vm_stop, dispatch_broker_vm_stop_with_timeout,
         dispatch_request, dispatch_status, force_shutdown_generation, map_shell_attach_response,
         map_shell_detach_response, map_shell_kill_response, map_shell_list_response,
-        new_zone_coordinator, note_force_shutdown_request, prove_role_cgroup_empty_or_escalate,
-        provider_shutdown, read_activation_marker, redact_broker_dispatch_failure_for_launcher,
-        redact_broker_error_for_launcher, resolve_store_view_intent_for_vm,
-        rollback_failed_vm_start, run_provider_graceful_shutdown,
+        new_typed_shell_session_targets, new_zone_coordinator, note_force_shutdown_request,
+        prove_role_cgroup_empty_or_escalate, provider_shutdown, read_activation_marker,
+        redact_broker_dispatch_failure_for_launcher, redact_broker_error_for_launcher,
+        resolve_store_view_intent_for_vm, rollback_failed_vm_start, run_provider_graceful_shutdown,
         same_vm_declared_usbip_start_claims_with_reader,
         same_vm_persisted_usbip_stop_claims_with_reader,
         stale_qemu_media_dependency_roles_from_entries, try_acquire_activation_lock,
@@ -24484,6 +25181,7 @@ mod broker_dispatch_tests {
             public_status_read_model: Arc::new(crate::PublicStatusReadModel::new()),
             provider_runtime: Arc::new(crate::provider_registry::ProviderRuntime::new()),
             resource_plane: Arc::new(Mutex::new(None)),
+            typed_shell_session_targets: new_typed_shell_session_targets(),
             zone_coordinator: new_zone_coordinator(),
             security_key_sessions: Arc::new(parking_lot::Mutex::new(
                 crate::security_key::SkSessionTable::default(),
@@ -24525,6 +25223,7 @@ mod broker_dispatch_tests {
             public_status_read_model: Arc::new(crate::PublicStatusReadModel::new()),
             provider_runtime: Arc::new(crate::provider_registry::ProviderRuntime::new()),
             resource_plane: Arc::new(Mutex::new(None)),
+            typed_shell_session_targets: new_typed_shell_session_targets(),
             zone_coordinator: new_zone_coordinator(),
             security_key_sessions: Arc::new(parking_lot::Mutex::new(
                 crate::security_key::SkSessionTable::default(),
@@ -26624,6 +27323,7 @@ mod broker_dispatch_tests {
             public_status_read_model: Arc::new(crate::PublicStatusReadModel::new()),
             provider_runtime: Arc::new(crate::provider_registry::ProviderRuntime::new()),
             resource_plane: Arc::new(Mutex::new(None)),
+            typed_shell_session_targets: new_typed_shell_session_targets(),
             zone_coordinator: new_zone_coordinator(),
             security_key_sessions: Arc::new(parking_lot::Mutex::new(
                 crate::security_key::SkSessionTable::default(),
@@ -26852,6 +27552,7 @@ mod broker_dispatch_tests {
             public_status_read_model: Arc::new(crate::PublicStatusReadModel::new()),
             provider_runtime: Arc::new(crate::provider_registry::ProviderRuntime::new()),
             resource_plane: Arc::new(Mutex::new(None)),
+            typed_shell_session_targets: new_typed_shell_session_targets(),
             zone_coordinator: new_zone_coordinator(),
             security_key_sessions: Arc::new(parking_lot::Mutex::new(
                 crate::security_key::SkSessionTable::default(),
@@ -27113,6 +27814,7 @@ mod broker_dispatch_tests {
             public_status_read_model: Arc::new(crate::PublicStatusReadModel::new()),
             provider_runtime: Arc::new(crate::provider_registry::ProviderRuntime::new()),
             resource_plane: Arc::new(Mutex::new(None)),
+            typed_shell_session_targets: new_typed_shell_session_targets(),
             zone_coordinator: new_zone_coordinator(),
             security_key_sessions: Arc::new(parking_lot::Mutex::new(
                 crate::security_key::SkSessionTable::default(),
@@ -29012,6 +29714,7 @@ mod broker_dispatch_tests {
             public_status_read_model: Arc::new(crate::PublicStatusReadModel::new()),
             provider_runtime: Arc::new(crate::provider_registry::ProviderRuntime::new()),
             resource_plane: Arc::new(Mutex::new(None)),
+            typed_shell_session_targets: new_typed_shell_session_targets(),
             zone_coordinator: new_zone_coordinator(),
             security_key_sessions: Arc::new(parking_lot::Mutex::new(
                 crate::security_key::SkSessionTable::default(),
@@ -29586,13 +30289,334 @@ mod broker_dispatch_tests {
     }
 
     #[test]
-    fn synthetic_shell_close_response_preserves_resolved_name() {
-        let response = super::synthetic_shell_close_attach_response(
-            ShellName::new("smoke").expect("valid shell name"),
+    fn typed_shell_runtime_capability_error_maps_to_closed_unsupported_capability() {
+        let frame = super::typed_shell_resource_error_frame(
+            &crate::typed_error::TypedError::RuntimeCapabilityUnsupported {
+                vm: "/private/workload.d2b".to_owned(),
+                runtime_kind: "unsafe-local".to_owned(),
+                capability: "persistent-shell".to_owned(),
+                verb: "shell".to_owned(),
+            },
         );
-        assert_eq!(response.resolved_name.as_str(), "smoke");
-        assert!(response.detached);
-        assert_eq!(response.cause, Some(ShellCloseCause::ClientDetach));
+        assert_eq!(
+            frame,
+            json!({
+                "type": "error",
+                "error": {
+                    "kind": "unsupported-capability",
+                    "errorClass": "unsupported-capability",
+                    "retryClass": "never",
+                    "message": "unsupported-capability",
+                    "remediation": "inspect the ShellSession Provider state and retry after its authoritative runtime is ready",
+                }
+            })
+        );
+    }
+
+    #[test]
+    fn typed_shell_alias_conflict_maps_to_closed_resource_conflict() {
+        let frame = super::typed_shell_resource_error_frame(
+            &crate::typed_error::TypedError::WorkloadAliasConflict {
+                workload_id: "private/workload".to_owned(),
+                detail: "matches workloads [/private/one, /private/two]".to_owned(),
+            },
+        );
+        assert_eq!(
+            frame,
+            json!({
+                "type": "error",
+                "error": {
+                    "kind": "resource-conflict",
+                    "errorClass": "resource-conflict",
+                    "retryClass": "never",
+                    "message": "resource-conflict",
+                    "remediation": "inspect the ShellSession Provider state and retry after its authoritative runtime is ready",
+                }
+            })
+        );
+    }
+
+    #[test]
+    fn typed_shell_execution_refs_map_only_host_and_guest_targets() {
+        assert_eq!(
+            super::typed_shell_execution_target("Host/tools").unwrap(),
+            "tools.host.d2b"
+        );
+        assert_eq!(
+            super::typed_shell_execution_target("Guest/work").unwrap(),
+            "work"
+        );
+        assert!(super::typed_shell_execution_target("Process/command").is_err());
+    }
+
+    #[test]
+    fn concurrent_typed_shell_creates_reserve_one_uid_name_and_release() {
+        use std::sync::Barrier;
+
+        let state =
+            test_state_with_broker_socket(unreachable_broker_socket_path("shell-create-reserve"));
+        let name = d2b_contracts::public_wire::ShellName::new("primary").unwrap();
+        let start = Arc::new(Barrier::new(2));
+        let release = Arc::new(Barrier::new(2));
+        let outcomes = Arc::new(Mutex::new(Vec::new()));
+
+        std::thread::scope(|scope| {
+            for _ in 0..2 {
+                let start = Arc::clone(&start);
+                let release = Arc::clone(&release);
+                let outcomes = Arc::clone(&outcomes);
+                let name = name.clone();
+                let state = &state;
+                scope.spawn(move || {
+                    start.wait();
+                    let reservation = super::reserve_typed_shell_session_create(state, 1000, &name);
+                    match reservation {
+                        Ok(reservation) => {
+                            outcomes.lock().unwrap().push(1u8);
+                            release.wait();
+                            drop(reservation);
+                        }
+                        Err(super::typed_error::TypedError::WorkloadAliasConflict { .. }) => {
+                            outcomes.lock().unwrap().push(0u8);
+                            release.wait();
+                        }
+                        Err(_) => {
+                            outcomes.lock().unwrap().push(2u8);
+                            release.wait();
+                        }
+                    }
+                });
+            }
+        });
+
+        let mut outcomes = outcomes.lock().unwrap().clone();
+        outcomes.sort_unstable();
+        assert_eq!(
+            outcomes,
+            vec![0, 1],
+            "one concurrent create must reserve the UID/name and the other must conflict"
+        );
+
+        let failed_create = super::reserve_typed_shell_session_create(&state, 1000, &name)
+            .expect("reservation must be released when create setup fails");
+        assert!(
+            super::cached_typed_shell_session_target(&state, 1000, &name).is_none(),
+            "an in-flight create must not become a normal binding"
+        );
+        drop(failed_create);
+
+        let committed_create = super::reserve_typed_shell_session_create(&state, 1000, &name)
+            .expect("released reservation must admit a retry");
+        super::remember_typed_shell_session_target(&state, 1000, &name, "work");
+        drop(committed_create);
+        assert_eq!(
+            super::cached_typed_shell_session_target(&state, 1000, &name).as_deref(),
+            Some("work"),
+            "the normal binding is installed only after creation succeeds"
+        );
+    }
+
+    #[test]
+    fn listed_typed_shell_bindings_are_cached_after_an_unambiguous_scan() {
+        let state =
+            test_state_with_broker_socket(unreachable_broker_socket_path("listed-shell-bindings"));
+        let name = d2b_contracts::public_wire::ShellName::new("primary").unwrap();
+        let other_name = d2b_contracts::public_wire::ShellName::new("other").unwrap();
+        super::cache_unambiguous_typed_shell_session_targets(
+            &state,
+            1000,
+            &[
+                (name.clone(), "tools.host.d2b".to_owned()),
+                (other_name, "work".to_owned()),
+            ],
+        )
+        .expect("unambiguous list must seed exact targets");
+        assert_eq!(
+            super::cached_typed_shell_session_target(&state, 1000, &name).as_deref(),
+            Some("tools.host.d2b")
+        );
+        assert_eq!(
+            super::cached_typed_shell_session_target(&state, 1001, &name),
+            None,
+            "a binding for one uid must never route another uid"
+        );
+
+        super::remember_typed_shell_session_target(&state, 1000, &name, "stale.target");
+        let unaffected = d2b_contracts::public_wire::ShellName::new("unaffected").unwrap();
+        super::remember_typed_shell_session_target(&state, 1000, &unaffected, "old.target");
+        let error = super::cache_unambiguous_typed_shell_session_targets(
+            &state,
+            1000,
+            &[
+                (name.clone(), "tools.host.d2b".to_owned()),
+                (unaffected.clone(), "new.target".to_owned()),
+                (name.clone(), "work".to_owned()),
+            ],
+        )
+        .expect_err("ambiguous names must fail closed");
+        assert!(matches!(
+            error,
+            super::typed_error::TypedError::WorkloadAliasConflict { .. }
+        ));
+        assert_eq!(
+            super::cached_typed_shell_session_target(&state, 1000, &name),
+            None,
+            "an ambiguous list must invalidate any stale cached target"
+        );
+        assert_eq!(
+            super::cached_typed_shell_session_target(&state, 1000, &unaffected).as_deref(),
+            Some("new.target"),
+            "unrelated unambiguous bindings remain cacheable after a conflict"
+        );
+    }
+
+    #[test]
+    fn targeted_typed_shell_bindings_wait_for_local_alias_validation() {
+        let state = test_state_with_broker_socket(unreachable_broker_socket_path(
+            "targeted-shell-bindings",
+        ));
+        let duplicate = d2b_contracts::public_wire::ShellName::new("primary").unwrap();
+        let unique = d2b_contracts::public_wire::ShellName::new("other").unwrap();
+        let error = super::cache_target_local_typed_shell_session_targets(
+            &state,
+            1000,
+            &[
+                (duplicate.clone(), "healthy".to_owned()),
+                (unique.clone(), "healthy".to_owned()),
+                (duplicate.clone(), "healthy".to_owned()),
+            ],
+        )
+        .expect_err("a target-local duplicate must fail closed");
+        assert!(matches!(
+            error,
+            super::typed_error::TypedError::WorkloadAliasConflict { .. }
+        ));
+        assert_eq!(
+            super::cached_typed_shell_session_target(&state, 1000, &duplicate),
+            None,
+            "a conflicting target-local result must invalidate the duplicate binding"
+        );
+        assert_eq!(
+            super::cached_typed_shell_session_target(&state, 1000, &unique),
+            None,
+            "a target-local result must not cache any session before validation"
+        );
+
+        super::cache_target_local_typed_shell_session_targets(
+            &state,
+            1000,
+            &[
+                (duplicate.clone(), "healthy".to_owned()),
+                (unique.clone(), "healthy".to_owned()),
+            ],
+        )
+        .expect("an unambiguous target-local result caches its sessions");
+        assert_eq!(
+            super::cached_typed_shell_session_target(&state, 1000, &duplicate).as_deref(),
+            Some("healthy")
+        );
+        assert_eq!(
+            super::cached_typed_shell_session_target(&state, 1000, &unique).as_deref(),
+            Some("healthy")
+        );
+    }
+
+    #[test]
+    fn live_typed_shell_match_refreshes_bounded_binding_recency() {
+        let state =
+            test_state_with_broker_socket(unreachable_broker_socket_path("live-shell-recency"));
+        let matched = d2b_contracts::public_wire::ShellName::new("retained").unwrap();
+        super::remember_typed_shell_session_target(&state, 1000, &matched, "healthy");
+        for index in 0..(super::MAX_TYPED_SHELL_SESSION_TARGETS - 1) {
+            let name =
+                d2b_contracts::public_wire::ShellName::new(format!("churn-{index:03}")).unwrap();
+            super::remember_typed_shell_session_target(&state, 1000, &name, "work");
+        }
+
+        let listings = vec![(
+            "healthy".to_owned(),
+            d2b_contracts::public_wire::ShellListResult {
+                default_name: d2b_contracts::public_wire::ShellName::new("primary").unwrap(),
+                sessions: vec![d2b_contracts::public_wire::ShellListEntry {
+                    name: matched.clone(),
+                    state: ShellSessionState::Detached,
+                    attached: false,
+                    is_default: true,
+                }],
+            },
+        )];
+        assert_eq!(
+            super::find_typed_shell_session_target_in_listings(&state, 1000, &matched, &listings)
+                .expect("live match resolves"),
+            Some("healthy".to_owned())
+        );
+
+        let newest = d2b_contracts::public_wire::ShellName::new("newest").unwrap();
+        super::remember_typed_shell_session_target(&state, 1000, &newest, "other");
+        assert_eq!(
+            super::cached_typed_shell_session_target(&state, 1000, &matched).as_deref(),
+            Some("healthy"),
+            "a live match must refresh its exact binding before bounded eviction"
+        );
+        let oldest =
+            d2b_contracts::public_wire::ShellName::new("churn-000").expect("valid churn name");
+        assert_eq!(
+            super::cached_typed_shell_session_target(&state, 1000, &oldest),
+            None,
+            "the refreshed live match makes the oldest unrelated binding evict first"
+        );
+    }
+
+    #[test]
+    fn typed_shell_target_cache_is_bounded_and_preserves_recent_exact_retries() {
+        let state =
+            test_state_with_broker_socket(unreachable_broker_socket_path("bounded-shell-bindings"));
+        let retained = d2b_contracts::public_wire::ShellName::new("retained").unwrap();
+        super::remember_typed_shell_session_target(&state, 1000, &retained, "tools.host.d2b");
+
+        for index in 0..super::MAX_TYPED_SHELL_SESSION_TARGETS {
+            assert_eq!(
+                super::cached_typed_shell_session_target(&state, 1000, &retained).as_deref(),
+                Some("tools.host.d2b"),
+                "a retry must refresh the exact target binding before churn"
+            );
+            let name =
+                d2b_contracts::public_wire::ShellName::new(format!("churn-{index:03}")).unwrap();
+            super::remember_typed_shell_session_target(&state, 1000, &name, "work");
+        }
+
+        assert_eq!(
+            super::typed_shell_session_target_cache_len(&state),
+            super::MAX_TYPED_SHELL_SESSION_TARGETS
+        );
+        assert_eq!(
+            super::typed_shell_session_target_cache_recency_len(&state),
+            super::MAX_TYPED_SHELL_SESSION_TARGETS,
+            "recency metadata must stay one-for-one with bounded entries"
+        );
+        assert_eq!(
+            super::cached_typed_shell_session_target(&state, 1000, &retained).as_deref(),
+            Some("tools.host.d2b"),
+            "recent exact-session retries must survive bounded eviction"
+        );
+        let evicted =
+            d2b_contracts::public_wire::ShellName::new("churn-000").expect("valid churn name");
+        assert_eq!(
+            super::cached_typed_shell_session_target(&state, 1000, &evicted),
+            None,
+            "eviction must be deterministic and remove the oldest binding"
+        );
+
+        super::remember_typed_shell_session_target(&state, 1001, &retained, "other.target");
+        assert_eq!(
+            super::cached_typed_shell_session_target(&state, 1000, &retained).as_deref(),
+            Some("tools.host.d2b")
+        );
+        assert_eq!(
+            super::cached_typed_shell_session_target(&state, 1001, &retained).as_deref(),
+            Some("other.target"),
+            "bounded eviction must retain UID scoping"
+        );
     }
 
     #[test]
@@ -29638,25 +30662,11 @@ mod broker_dispatch_tests {
     }
 
     #[test]
-    fn unsafe_local_shell_feature_gate_is_explicit() {
-        assert!(!super::unsafe_local_shell_feature_negotiated(&[]));
-        assert!(super::unsafe_local_shell_feature_negotiated(&[
-            d2b_contracts::KnownFeatureFlag::UnsafeLocalShellV1.wire_value()
-        ]));
-    }
-
-    #[test]
     fn unresolved_shell_audit_never_copies_public_target_text() {
         let canary = "private-target-canary.work.d2b";
         let target = super::unresolved_shell_audit_target();
         assert_eq!(target, "unresolved");
         assert!(!target.contains(canary));
-    }
-
-    #[test]
-    fn shell_wait_is_explicitly_unsupported() {
-        let err = super::unsupported_shell_wait_error();
-        assert_eq!(err.kind(), "guest-control-shell-capability-unavailable");
     }
 
     #[test]
@@ -29950,6 +30960,7 @@ mod broker_dispatch_tests {
             public_status_read_model: Arc::new(crate::PublicStatusReadModel::new()),
             provider_runtime: Arc::new(crate::provider_registry::ProviderRuntime::new()),
             resource_plane: Arc::new(Mutex::new(None)),
+            typed_shell_session_targets: new_typed_shell_session_targets(),
             zone_coordinator: new_zone_coordinator(),
             security_key_sessions: Arc::new(parking_lot::Mutex::new(
                 crate::security_key::SkSessionTable::default(),
@@ -30078,6 +31089,7 @@ mod broker_dispatch_tests {
             public_status_read_model: Arc::new(crate::PublicStatusReadModel::new()),
             provider_runtime: Arc::new(crate::provider_registry::ProviderRuntime::new()),
             resource_plane: Arc::new(Mutex::new(None)),
+            typed_shell_session_targets: new_typed_shell_session_targets(),
             zone_coordinator: new_zone_coordinator(),
             security_key_sessions: Arc::new(parking_lot::Mutex::new(
                 crate::security_key::SkSessionTable::default(),

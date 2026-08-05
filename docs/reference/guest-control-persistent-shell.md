@@ -34,27 +34,26 @@ TerminalRequestMetadata {
 The existing exec-named RPCs remain wire-compatible; persistent shells use the
 terminal-generic methods to avoid duplicating the streaming vocabulary.
 
-## Public wire mirror
+## Host Resource and stream mirror
 
-The public daemon wire exposes `PublicRequest::Shell(ShellOp)` and
-`PublicResponse::Shell(ShellOpResponse)`. Shell ops include:
+The host daemon exposes persistent shells as qualified
+`shell-terminal.d2bus.org.ShellSession` resources:
 
-- `Attach { vm, name?, force, initialTerminalSize }`;
-- terminal ops: `WriteStdin`, `ReadOutput`, `Resize`, `Wait`, `CloseStdin`,
-  `CloseAttach`;
-- management ops: `List`, `Detach`, `Kill`.
+- `Create` opens a named session for a `Host/<name>` or `Guest/<name>`
+  execution reference;
+- `Attach` opens the existing session's authenticated named stream;
+- `List`, `Status`, `Detach`, and `Kill` are Resource requests;
+- stdin, output, resize, cancellation, and close are named-stream messages.
 
-`Kill` requires a name. `Attach` and `Detach` may omit the name so the VM's
-configured default can be resolved by the daemon/guest.
+The retired `PublicRequest::Shell`, `ShellOp`, and `ShellOpResponse` socket
+family is rejected. Provider policy, uid, argv, environment, cwd, and host
+paths never enter the Resource request.
 
 ## Local discovery contract
 
 Local desktop clients such as `d2b-wlterm` do not need to scrape human CLI
-output. They discover candidate local VMs through the public `List` or `Status`
-response, preferring `runtime.operationCapabilities.guest.shell == true` when
-present and otherwise the legacy `runtimeCapabilities[]` entry `shell`. They
-then issue `ShellOp::List { vm }` over the same public socket for each candidate
-VM.
+output. They list ShellSession resources for an explicit Host or Guest
+execution reference and use the typed status projection for session state.
 
 The current stable list payload is intentionally minimal:
 
@@ -71,12 +70,10 @@ cwd. Those fields are reserved until they can be proven non-leaky and useful;
 clients should treat their absence as intentional rather than falling back to
 logs, metrics, audit records, or terminal output scraping.
 
-If `ShellOp::List` returns a typed shell error, clients should surface the
-closed wire `kind` (`guest-control-shell-capability-unavailable`,
-`guest-control-shell-transport-unavailable`, and so on) and avoid retry loops
-that would attach to or create a shell. Older daemons that do not understand the
-`shell` public-socket frame fail closed; the CLI maps that class to exit code
-`70`.
+If ShellSession list or attach returns an error, clients surface the closed
+Resource error class such as `unsupported-capability`,
+`resource-provider-unavailable`, `resource-not-found`, `backpressure`, or
+`timeout`. Clients do not retry into a different provider or transport.
 
 ## States and close causes
 
