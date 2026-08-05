@@ -10,12 +10,13 @@
   locks and keeps Cargo authoritative. ADR 0052 section 6 intentionally
   applies deny, audit, and yanked-state coverage to only three of those locks.
 - Scope: the committed generated broker splice workspace, its exact
-  relationship to the standalone broker workspace, library-only broker
-  variants, and graph-fidelity validation.
+  relationship to the standalone broker workspace, production and test
+  library variants, and graph-fidelity validation.
 - Non-scope: broker repin execution, writer serialization, locking,
   monitoring, process lifetime, bookkeeping, clean-worktree admission,
   scratch ownership, output publication, recovery, rc selection, diagnostics,
-  cleanup, implementation, and Spec 003 artifacts.
+  cleanup, implementation, and Spec 003 execution beyond mechanically parking
+  it at the unresolved broker lock.
 
 ## Context
 
@@ -95,6 +96,14 @@ worktree objects, ordinary untracked objects, and ignored objects, including
 object type, mode, bytes, and symlink target. Check mode creates no lock,
 temporary file, scratch path, cache entry, or bookkeeping state.
 
+The real-command test redirects the closed environment-root set `HOME`,
+`TMPDIR`, `TMP`, `TEMP`, `XDG_CACHE_HOME`, `CARGO_HOME`, `RUSTUP_HOME`,
+`CARGO_TARGET_DIR`, `BAZELISK_HOME`, and `TEST_TMPDIR` to empty observed
+directories. It snapshots those directories and the repository before and
+after both a passing and a failing run. An injected filesystem and process
+observer separately refuses any attempted mutation, including a path outside
+those roots. A repository-only snapshot is not evidence of read-only behavior.
+
 ### 3. Generate an exact resolution witness
 
 The generated workspace contains:
@@ -127,7 +136,8 @@ For every realized package, A and W record:
 - registry checksum;
 - canonical git URL, precise revision, and checksum when present;
 - exact resolved feature set; and
-- every applicable target identity and kind.
+- every applicable target identity, kind, normalized source, testability,
+  doctest setting, and required-feature set.
 
 For every realized dependency edge, A and W record:
 
@@ -152,6 +162,13 @@ Locked offline metadata over the generated root must succeed. The lock mirror
 is checked separately for byte equality so semantic equality cannot conceal
 lock drift.
 
+Target and source expectations are read independently from the authoritative
+Cargo manifests and locked offline metadata. They never come from generated
+manifests, generated `BUILD.bazel` files, or a generator-emitted expected map.
+The check refuses a generated manifest that omits or adds a target and an inert
+target whose source is substituted with another inert source, even when the
+generated output is internally self-consistent.
+
 ### 4. Account exactly for declarations outside realized metadata
 
 Declarations that Cargo metadata does not expose as realized fields enter one
@@ -168,32 +185,66 @@ is accepted only when the authoritative declaration census proves it empty.
 Every inert target matches the closed template and package census and is
 absent from first-party compilation inputs.
 
-### 5. Compile shared path dependencies as library-only broker variants
+### 5. Separate production features from broker-test features
 
-The five shared packages compile once for the main resolve and once as these
-broker-hub library variants:
+Authoritative locked metadata and `cargo tree` over normal/build edges versus
+normal/build/dev edges show two differing shared feature vectors:
 
-- `d2b-contracts-broker`;
-- `d2b-core-broker`;
-- `d2b-host-broker`;
-- `d2b-realm-core-broker`; and
-- `d2b-realm-provider-broker`.
+| Package | Production | Broker test |
+| --- | --- | --- |
+| `d2b-core` | no features | `test-support` |
+| `d2b-host` | `default` (empty) | `default,fake-backends` |
 
-The broker variants expose no `rust_test`, doctest, binary, example, benchmark,
-or other test target. Tests for those packages remain on their ordinary main
-variants. Broker-hub tests exist only for members of the standalone broker
-workspace.
+Those packages have exactly these distinct library targets:
+
+- `d2b-core-broker-production`;
+- `d2b-core-broker-test`;
+- `d2b-host-broker-production`; and
+- `d2b-host-broker-test`.
+
+The other shared packages have equal production and test feature vectors and
+remain single broker variants: `d2b-contracts-broker`,
+`d2b-realm-core-broker`, and `d2b-realm-provider-broker`. No equal context may
+be duplicated in anticipation of a future difference.
+
+All seven are library-only. They expose no `rust_test`, doctest, binary,
+example, benchmark, or other test target. Production broker member targets
+reach only the production variants; broker member test and doctest targets
+consume the two test variants. A production closure reaching `test-support` or
+`fake-backends`, or a broker test bypassing the matching test variant, fails.
+Tests for shared packages remain solely on their ordinary main variants.
 
 ### 6. Require exact first-party and spoke graph fidelity
 
-`F_expected` is the generator-derived complete first-party target inventory,
-including target identity, kind, source package, and hub owner. `F_actual`
-comes from real Bazel query.
+`F_expected` is independently derived from authoritative Cargo manifests and
+locked metadata plus the closed hand-written-fragment registry. It includes
+target identity, kind, normalized source, source package, compilation context,
+feature vector, and hub owner. It does not read generator output.
+`F_actual` comes from real Bazel query.
 
-`B_expected` contains exactly the five library variants above plus every
-generated target identity and kind for each broker workspace member, derived
-from authoritative locked metadata. `B_actual` is the queried set owned by the
-broker hub.
+`B_production_expected` is the five shared production/equal library variants
+plus every non-test broker member target derived from authoritative metadata.
+The measured current census is seven: five shared libraries, the broker
+library, and the broker binary. `B_test_expected` is the two test-only shared
+variants plus every broker member unit, integration, and doctest target derived
+from the same authority. The measured current census is eighteen: two shared
+test libraries, two member unit-test harnesses, thirteen integration tests,
+and one doctest. Counts are observations; the derivation is normative.
+
+Within `//packages/d2b-priv-broker`, the member labels are exactly
+`:broker-production-lib`, `:broker-production-bin`, `:broker-test-lib`,
+`:broker-test-bin`, `:broker-doctest-lib`, and
+`:broker-test-<cargo-target>` for each authoritative integration target, with
+Cargo `_` normalized to Bazel `-`. The current integration suffixes are
+`bridge-lifecycle`, `broker-export-audit`, `broker-protocol-compatibility`,
+`broker-socket-acl`, `bundle-tampered-broker`, `kernel-surface`,
+`persistent-tap-lifecycle`, `pidfd-handoff-scm-rights`,
+`pidfd-real-spawner`, `security-key-broker`, `socket-activation`,
+`w12-fd-passing-response`, and `w15-install-migrate`.
+
+`B_expected` is their disjoint union. `B_actual`,
+`B_production_actual`, and `B_test_actual` are queried sets owned by the broker
+hub and classified from actual features, edges, kinds, and sources.
 
 `M_expected` is exactly `F_expected - B_expected`, and `M_actual` is exactly
 `F_actual - B_actual`. M is never separately curated.
@@ -201,6 +252,8 @@ broker hub.
 Before checking edges:
 
 - expected and actual F, B, and M are symmetrically equal and nonempty;
+- expected and actual B production and test partitions are independently
+  symmetric, nonempty, and disjoint;
 - `B intersection M` is empty; and
 - `B union M == F`.
 
@@ -222,12 +275,14 @@ planted mutations:
 2. Passing and failing `gen-bazel --check` runs preserve the full `HEAD`,
    index, tracked, ordinary-untracked, and ignored state described above.
    Missing, extra, byte-different, and semantic generated outputs each fail
-   without state creation.
+   without state creation. Each controlled external root is also unchanged,
+   and the injected observer sees no mutation outside it.
 3. A, W, L, and R each have independent missing, extra, and empty package and
    edge mutations.
 4. Independent package mutations cover identity, source kind, source identity,
    checksum, precise git revision, resolved features, target identity, target
-   kind, and locked-offline metadata failure.
+   kind, target source, manifest target omission, manifest target addition,
+   inert-source substitution, and locked-offline metadata failure.
 5. Independent edge mutations cover destination, dependency kind, condition,
    alias, requested features, default-feature semantics, and realized
    edge-feature contribution.
@@ -238,12 +293,19 @@ planted mutations:
    actual `@broker` each have an identity mutation and independent
    source/checksum/revision/feature/target/alias/edge mutations while the
    witness and the other actual representation remain unchanged.
-8. F, B, and M have independent missing, extra, and empty mutations that fail
-   before edge isolation. Independent planted edges cover both first-party
-   cross-partition directions, B bound to `@main//`, and an ordinary M target
+8. F, B, B-production, B-test, and M have independent missing, extra, and
+   empty mutations that fail before edge isolation. Independent mutations swap
+   each production/test feature vector and target name. Independent planted
+   edges cover both first-party cross-partition directions, each broker
+   production/test direction, B bound to `@main//`, and an ordinary M target
    bound to `@broker//`.
 9. Real Bazel query and representative builds reproduce the target,
    repository, F, B, M, and spoke censuses from the committed witness.
+10. Three separate Layer-1 carriers reject: removing
+    `skip_cargo_lockfile_overwrite = True`; granting any second writer the
+    broker witness; and letting the pending broker-repin arm spawn its child,
+    vary its exact output, or attempt any write. These carriers do not share an
+    expected map or one mutation dispatcher.
 
 Each mutation changes one dimension and fails exactly once at its named guard,
 not at a shared parser or an earlier unrelated guard. Generated expected maps
@@ -255,19 +317,24 @@ ADR 0054 does not authorize, define, refine, or implement
 `cargo xtask bazel-repin --hub broker`. Until a separate accepted ADR defines
 its writer serialization, process lifetime, output publication, recovery,
 diagnostics, and cleanup contract, that command must perform no repin work and
-must fail with the stable path-free result:
+must return nonzero with empty stdout and exactly these two LF-terminated
+stderr lines:
 
 ```text
 broker-repin-architecture-pending
+broker repin is unavailable; no local recovery command exists; prerequisite is an accepted repin-lifecycle ADR plus amended/re-panelled Spec 003.
 ```
+
+The refusal happens before generic repin dispatch. It spawns no Bazel child
+and creates, removes, or changes no path. A sentinel child and a write-refusing
+filesystem prove both properties. The generic repin implementation accepts
+only `main`, `guest`, and `walker`, whose behavior remains exactly as ADR 0052
+defines it.
 
 This record selects no lock, monitor, process hierarchy, worktree admission
 rule, bookkeeping location, scratch layout, rc policy, publication mechanism,
 recovery command, diagnostic envelope, or cleanup behavior for broker repin.
 None may be inferred from an earlier ADR 0054 draft.
-
-The `main`, `guest`, and `walker` repin behavior remains exactly as ADR 0052
-defines it. This ADR changes none of those three paths.
 
 Spec 003 W0 remains parked at broker lock regeneration. After ADR 0054 merges,
 the required order is:
@@ -288,8 +355,9 @@ ADR alone, as completing W0.
   one remaining architectural decision.
 - Generated workspace drift and actual Bazel graph drift fail closed against
   Cargo authority.
-- The five shared libraries compile once per main and broker resolve, while
-  their tests remain single-owned.
+- Equal shared contexts compile once for the broker resolve; only `d2b-core`
+  and `d2b-host` split production from broker-test features. Shared package
+  tests remain single-owned.
 - Broker lock regeneration remains unavailable until its separate ADR is
   accepted and the Spec 003 artifacts are amended and re-panelled.
 
@@ -334,11 +402,12 @@ execution protocol.
    and exact package, source, revision, checksum, feature, target, alias, and
    edge semantics.
 5. The ledger is exact and the lock mirror is byte-identical.
-6. Library-only broker variants and actual F, B, M, `@broker`, and spokes
-   match their authoritative derivation.
+6. Library-only production/test broker variants and actual F, B production,
+   B test, M, `@broker`, and spokes match their authoritative derivation.
 7. ADR 0054 authorizes no broker repin execution or lifecycle contract.
-8. Broker repin remains blocked by `broker-repin-architecture-pending` until
-   a separate accepted ADR replaces that block.
+8. Broker repin remains a no-child, no-write exact refusal with
+   `broker-repin-architecture-pending` until a separate accepted ADR replaces
+   that block.
 9. Main, guest, and walker repin behavior remains exactly ADR 0052 behavior.
 10. Spec 003 W0 remains parked pending that ADR, amendment, and a new panel.
 

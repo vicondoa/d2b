@@ -23,9 +23,16 @@
   that witness, and `gen-bazel --check` is strictly read-only. ADR 0054 does
   not define, refine, or implement broker repin. Until a separate accepted ADR
   defines that lifecycle, `cargo xtask bazel-repin --hub broker` is blocked by
-  the stable path-free `broker-repin-architecture-pending` result. The
-  `main`, `guest`, and `walker` repin paths remain exactly as this ADR defines
-  them. Spec 003 W0 remains parked at broker lock regeneration.
+  the stable path-free `broker-repin-architecture-pending` result and the
+  fixed statement that broker repin is unavailable, no local recovery command
+  exists, and resumption requires an accepted repin-lifecycle ADR plus amended
+  and re-panelled Spec 003 artifacts. That arm spawns no Bazel child and
+  changes no path. The `main`, `guest`, and `walker` repin paths remain exactly
+  as this ADR defines them. Broker production compilation excludes
+  `d2b-core/test-support` and `d2b-host/fake-backends`; broker member tests use
+  distinct shared-library variants carrying those measured dev-dependency
+  features, while equal shared contexts remain single variants. Spec 003 W0
+  remains parked at broker lock regeneration.
 - Related: [ADR 0009](0009-rust-toolchain-msrv-and-supply-chain.md) (Rust
   toolchain, MSRV, and supply-chain policy), which keeps its authority
   unchanged and is not superseded;

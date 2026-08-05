@@ -5,6 +5,23 @@ wrong in ways that stay green: where startup options live, what the workspace
 boundary is, how the four dependency hubs are locked, and which tool
 acquisitions are permitted.
 
+## Execution status
+
+```text
+SPEC003_EXECUTION_STATUS=PARKED
+SPEC003_PARKED_AT=broker-lock-regeneration
+SPEC003_NEXT_REFUSED_TASK=T021
+SPEC003_RUNTIME_STATE_SOURCE=task-checkpoints
+SPEC003_RESUME_REQUIRES=accepted-repin-lifecycle-adr+amended-spec003+renewed-plan-panel
+```
+
+This machine-readable block is admission input only. The task checklist and
+checkpoints remain runtime state. Pre-W0 and resume admission MUST refuse T021
+while any matching status block in this contract, `plan.md`, or `tasks.md`
+says `PARKED`. ADR 0054 is not authority to regenerate the broker lock or close
+W0. After ADR 0054 merges, an accepted repin-lifecycle ADR, an amended Spec 003,
+and a renewed unanimous plan panel are prerequisites to changing this block.
+
 ## Startup options come from the wrapper
 
 `%workspace%` is expanded only for rc `import`/`try-import` paths and for a
@@ -22,15 +39,17 @@ small set of options the Java side resolves. `--output_user_root` and
 - The Make and Rust wrapper supplies every startup option as an absolute path
   derived from the worktree. From W2 there is exactly one construction that
   derives them, in `packages/d2b-bazel-support/src/startup.rs`, and the
-  wrapper, `cargo xtask bazel-repin`, and `cargo xtask bazel-module-refresh`
-  all call it. That module is in the neutral support crate rather than in the
+  wrapper, generic `cargo xtask bazel-repin --hub
+  <main|guest|walker>`, and `cargo xtask bazel-module-refresh` all call it.
+  The pending broker arm returns before this construction. That module is in
+  the neutral support crate rather than in the
   runner precisely so `xtask` can call it without an
   `xtask -> d2b-bazel-runner` dependency, which
   `tests/unit/meta/w0-dep-direction.sh` refuses.
 - The wrapper supplies **byte-identical** startup options to `build`, `test`,
   `query`, `info`, `shutdown`, and `clean`, and from W2 to the single child
-  each of `cargo xtask bazel-repin` and `cargo xtask bazel-module-refresh`
-  spawns. This is what makes "shut down with the same
+  each generic repin and `cargo xtask bazel-module-refresh` spawns. The broker
+  form spawns no child. This is what makes "shut down with the same
   startup options" enforceable: startup options select the server and
   output base, so a mismatched shutdown starts a second server and leaves the
   live one owning the tree.
@@ -127,6 +146,69 @@ directories. Therefore:
 - `packages/Cargo.guest.lock` is a generator input and a cache-key input. It is
   **not** a hub, because no Rust gate surface builds against it.
 
+The declarations do not make broker lock regeneration available. The
+`broker` lock is the parked W0 deliverable. The generic repin child accepts
+only `main`, `guest`, and `walker`; the broker form is the exact refusal below.
+
+## Broker production and test compilation contexts
+
+The independent authority is the committed Cargo manifests plus locked offline
+metadata over `packages/d2b-priv-broker/Cargo.toml`. A normal/build feature
+projection and a normal/build/dev projection establish exactly two differing
+shared package contexts:
+
+| Package | Production label and features | Broker-test label and features |
+| --- | --- | --- |
+| `d2b-core` | `d2b-core-broker-production`: none | `d2b-core-broker-test`: `test-support` |
+| `d2b-host` | `d2b-host-broker-production`: empty `default` | `d2b-host-broker-test`: `default,fake-backends` |
+
+The equal-context packages remain exactly one broker label each:
+`d2b-contracts-broker`, `d2b-realm-core-broker`, and
+`d2b-realm-provider-broker`. Creating a second label for any of those is an
+extra-target failure. All seven labels are library-only and emit no shared
+package test, doctest, binary, example, or benchmark.
+
+`B_production_expected` is those five production/equal libraries plus every
+authoritative broker member non-test target. The measured current value is
+seven: five libraries, the broker library, and the broker binary.
+`B_test_expected` is the two test-only libraries plus every authoritative
+broker member unit, integration, and doctest target. The measured current value
+is eighteen: two libraries, two unit-test harnesses, thirteen integration
+tests, and one doctest. These counts are observations, not literals the
+generator owns. `B_expected` is their disjoint union and `M_expected` is
+`F_expected - B_expected`.
+
+Within `//packages/d2b-priv-broker`, the exact member label rule is:
+`:broker-production-lib`, `:broker-production-bin`, `:broker-test-lib`,
+`:broker-test-bin`, `:broker-doctest-lib`, and
+`:broker-test-<cargo-target>` with `_` normalized to `-`. The current
+integration suffix census is `bridge-lifecycle`, `broker-export-audit`,
+`broker-protocol-compatibility`, `broker-socket-acl`,
+`bundle-tampered-broker`, `kernel-surface`, `persistent-tap-lifecycle`,
+`pidfd-handoff-scm-rights`, `pidfd-real-spawner`, `security-key-broker`,
+`socket-activation`, `w12-fd-passing-response`, and `w15-install-migrate`.
+The independent Cargo derivation must reproduce this observation; the
+generator does not read this paragraph as input.
+
+The verifier derives target identity, kind, normalized source, `test`,
+`doctest`, required features, and compilation context directly from
+authoritative manifests and metadata. It does not read a generated manifest,
+generated `BUILD.bazel`, or generator-emitted expected map. Actual labels,
+sources, features, and edges come from real Bazel query. Each expected/actual
+B partition must be symmetric, nonempty, and disjoint before edge checks.
+Production broker targets may not reach `test-support`, `fake-backends`, or a
+`-broker-test` label. Broker member unit, integration, and doctest targets must
+consume both test labels. Independent mutations cover a missing, extra, and
+empty production partition; a missing, extra, and empty test partition; each
+feature and target-name swap; and both production-to-test and test-to-production
+edge directions.
+
+The same independent authority defines generated witness target and source
+expectations. Separate mutations omit one generated manifest target, add one
+target, and substitute one inert source for another. Actual first-party compile
+sources come from query and may never resolve below
+`bazel/cargo/broker-workspace/`.
+
 ## Two lock mechanisms, kept separate
 
 - `MODULE.bazel.lock` under `common --lockfile_mode=error` pins the module
@@ -137,11 +219,14 @@ directories. Therefore:
   fails with a named remediation.
 
 Neither substitutes for the other. A drift mutation must be proven separately
-for each, and each has exactly one repository-owned regeneration command:
-`cargo xtask bazel-repin --hub <name>` for a hub lock and
-`cargo xtask bazel-module-refresh` for `MODULE.bazel.lock`. No committed lock
-has two supported regeneration paths, and neither command can regenerate the
-other's lock.
+for each. `main`, `guest`, and `walker` each have exactly one repository-owned
+regeneration command, `cargo xtask bazel-repin --hub
+<main|guest|walker>`, and
+`MODULE.bazel.lock` has `cargo xtask bazel-module-refresh`. Broker has no local
+regeneration or recovery command while this contract is `PARKED`; its command
+form is a refusal, not a fourth generic path. No committed lock has two
+supported regeneration paths, and neither available command can regenerate
+the other's lock.
 
 ## Forbidden controls
 
@@ -159,21 +244,21 @@ other's lock.
 
 ## The supported regeneration paths
 
-Forbidding the repin controls without naming a supported way to regenerate a
-committed lock is what produces `CARGO_BAZEL_REPIN=1 make ...` in somebody's
-shell history. Every committed lock this migration adds therefore has exactly
-one repository-owned regeneration command, and no lock has two.
+Forbidding repin controls without a repository-owned path is unsafe only when
+the lifecycle is settled. ADR 0052 settles `main`, `guest`, and `walker`. The
+broker lifecycle is not settled, so fail-closed refusal is safer than inventing
+local recovery in a planning contract.
 
-### Hub locks: `cargo xtask bazel-repin --hub <name>`
+### Generic hub locks: `cargo xtask bazel-repin --hub <name>`
 
 ```text
-cargo xtask bazel-repin --hub <main|broker|guest|walker>
+cargo xtask bazel-repin --hub <main|guest|walker>
 ```
 
 Its contract, all of it enforcing:
 
-- `--hub` is mandatory and must name one of exactly those four hubs. Anything
-  else is refused by name; there is no all-hubs mode.
+- `--hub` is mandatory. Generic dispatch accepts exactly `main`, `guest`, or
+  `walker`. Anything else is refused by name; there is no all-hubs mode.
 - The command refuses to start when the ambient environment already carries
   `CARGO_BAZEL_REPIN`, `REPIN`, or `CARGO_BAZEL_REPIN_ONLY`, so it cannot be
   used to launder a control a contributor exported.
@@ -216,6 +301,24 @@ changed" on the one run where a change is required, instead of succeeding
 quietly. The wave note records the invocation as a command shape with
 `<worktree>` placeholders, never as a real absolute path; see the note on wave
 notes below.
+
+### Broker lock: architectural refusal
+
+`cargo xtask bazel-repin --hub broker` is recognized before generic dispatch.
+It returns nonzero with empty stdout and exactly these two LF-terminated stderr
+lines:
+
+```text
+broker-repin-architecture-pending
+broker repin is unavailable; no local recovery command exists; prerequisite is an accepted repin-lifecycle ADR plus amended/re-panelled Spec 003.
+```
+
+It constructs no startup options, spawns no Bazel child, and creates, removes,
+or changes no path. There is no stale-lock recovery command to substitute. A
+separate accepted repin-lifecycle ADR must land, this Spec must be amended, and
+the amended plan must receive a renewed unanimous panel before the status block
+may change and T021 may run. Main, guest, and walker retain the generic
+behavior above.
 
 ### Module lock: `cargo xtask bazel-module-refresh`
 
@@ -365,6 +468,38 @@ offline check that follows is the verdict. The wave that commits the snapshot
 records that observation in its wave notes as a command shape and a revision,
 never as a live assertion the gate repeats.
 
+## Read-only generator check and independent Layer-1 guards
+
+`cargo xtask gen-bazel` is the sole writer of
+`bazel/cargo/broker-workspace/**`. A repin command, Bazel invocation, test,
+Make target, or workflow may read the tree but may not generate, repair,
+publish, or remove it. `bazel/cargo/broker.lock` is outside generator
+ownership.
+
+`cargo xtask gen-bazel --check` compares expected bytes and semantics without
+calling a writer. Its real-command pass and failure tests redirect the closed
+state-root set `HOME`, `TMPDIR`, `TMP`, `TEMP`, `XDG_CACHE_HOME`, `CARGO_HOME`,
+`RUSTUP_HOME`, `CARGO_TARGET_DIR`, `BAZELISK_HOME`, and `TEST_TMPDIR` to empty
+observed directories. Before/after snapshots cover each root plus repository
+HEAD, index, tracked, ordinary-untracked, ignored, file kind, mode, bytes, and
+symlink target. An injected filesystem/process observer separately refuses any
+mutation, including one outside those roots. Missing, extra, byte-different,
+and semantic-drift failures each run both checks; a passing run does too.
+
+Three independent existing Layer-1 carriers own the negative proof:
+
+1. `packages/xtask/tests/policy_ci.rs` under `make test-rust-main` removes
+   `skip_cargo_lockfile_overwrite = True` from one hub at a time.
+2. `packages/d2b-contract-tests/tests/policy_docs.rs` under
+   `D2B_ENABLE_FIXTURE_BUILD=1 make test-fixture-contracts` grants each
+   forbidden surface witness-writer ownership one at a time.
+3. `packages/xtask/src/bazel.rs` under `make test-rust-main` uses a sentinel
+   child and write-refusing filesystem for the broker refusal and independently
+   mutates child dispatch, the code line, the text line, and a write attempt.
+
+They share neither an expected generated map nor one mutation dispatcher. A
+failure at a common parser before the named guard does not count.
+
 ## Actionable failure contract
 
 Every row's text is the operator-facing recovery string the refusal must
@@ -373,9 +508,10 @@ observation about the strings is below the table.
 
 | Failure | Exact recovery text |
 | --- | --- |
-| Stale Bazel-side hub lock | Run `cargo xtask bazel-repin --hub <hub>`, review and commit the regenerated lock under `bazel/cargo/`, then rerun the failed command. |
-| `bazel-repin` changed tracked files other than the named hub's lock | Commit or restore the listed repository-relative paths, then run `cargo xtask bazel-repin --hub <hub>`. |
-| `bazel-repin` refused an ambient `CARGO_BAZEL_REPIN`, `REPIN`, or `CARGO_BAZEL_REPIN_ONLY` | Unset `CARGO_BAZEL_REPIN`, `REPIN`, and `CARGO_BAZEL_REPIN_ONLY`, then run `cargo xtask bazel-repin --hub <hub>`. |
+| Stale `main`, `guest`, or `walker` Bazel-side hub lock | Run `cargo xtask bazel-repin --hub <hub>`, review and commit the regenerated lock under `bazel/cargo/`, then rerun the failed command. |
+| Stale broker Bazel-side hub lock | broker repin is unavailable; no local recovery command exists; prerequisite is an accepted repin-lifecycle ADR plus amended/re-panelled Spec 003. |
+| Generic `bazel-repin` changed tracked files other than the named hub's lock | Commit or restore the listed repository-relative paths, then run `cargo xtask bazel-repin --hub <hub>`. |
+| Generic `bazel-repin` refused an ambient `CARGO_BAZEL_REPIN`, `REPIN`, or `CARGO_BAZEL_REPIN_ONLY` | Unset `CARGO_BAZEL_REPIN`, `REPIN`, and `CARGO_BAZEL_REPIN_ONLY`, then run `cargo xtask bazel-repin --hub <hub>`. |
 | `bazel-module-refresh` refused an ambient `CARGO_BAZEL_REPIN`, `REPIN`, or `CARGO_BAZEL_REPIN_ONLY` | Unset `CARGO_BAZEL_REPIN`, `REPIN`, and `CARGO_BAZEL_REPIN_ONLY`, then run `cargo xtask bazel-module-refresh`. |
 | Generated BUILD, governed-source, `.bazelignore`, harness-free or doctest census, or hermeticity-inventory drift | Run `cargo xtask gen-bazel`, review and commit the generated diff, then run `cargo xtask gen-bazel --check`. |
 | Module lock drift | Run `cargo xtask bazel-module-refresh`, review and commit `MODULE.bazel.lock`, then rerun the failed command. |
@@ -384,11 +520,9 @@ observation about the strings is below the table.
 
 Observations about that table, none of which belong in any string in it:
 
-- `<hub>` is the only substitution any of these strings takes, and it appears
-  only in the three rows whose remedy is `bazel-repin`. The refusal prints the
-  refused hub name in its place; the literal five characters never reach an
-  operator. No other row is a template: each names one command with the exact
-  arguments a contributor is meant to type.
+- `<hub>` is the only substitution any string takes, and it appears only in
+  the three generic rows, where its closed values are `main`, `guest`, and
+  `walker`. The broker row is fixed text and contains no command.
 - No refusal echoes an environment value. Each ambient-control row names the
   three variables because a contributor has to unset them by name; what they
   were set to is never printed. There are two such rows and not one because the
@@ -416,9 +550,11 @@ Observations about that table, none of which belong in any string in it:
 Tests follow the emitter, not the table:
 
 - `packages/xtask/src/bazel.rs` carries the table-driven message test for the
-  generator, stale-hub-lock, both ambient-control, and both unrelated-change
-  rows, because it emits those strings itself. It carries no test for a message
-  it does not emit.
+  generator, stale generic hub lock, stale broker lock, both ambient-control,
+  and both unrelated-change rows, because it emits those strings itself. The
+  broker test additionally asserts nonzero, empty stdout, and the stable code
+  plus fixed text as exactly two LF-terminated stderr lines. It carries no test
+  for a message it does not emit.
 - The module-lock row is proved by an integration test that plants real module
   drift, runs the pinned Bazel under `--lockfile_mode=error`, and asserts the
   repository's recovery line beside the real upstream diagnostic. Asserting
@@ -434,7 +570,8 @@ value to prove neither survives into the message.
 ## Wave notes record shapes, not local values
 
 W0 records two measured invocations in its wave notes: the one that repins
-exactly one hub, and the one that updates the module lock. Both are recorded as
+exactly one of `main`, `guest`, or `walker`, and the one that updates the module
+lock. There is no broker repin invocation to record. Both are recorded as
 command **shapes** with placeholders, for example
 `<worktree>/.scratch/bazel` for the output user root, and never as the real
 absolute path of the worktree the measurement happened to run in. A wave note
