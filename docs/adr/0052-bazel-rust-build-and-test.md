@@ -24,14 +24,18 @@
   preserves the baseline contract-crate clippy, policy, test, and fixture
   compilation surfaces. Broker and guest production inventories and
   root-dev-inclusive deny and audit inputs are generated separately for the
-  root flake's x86_64-linux and aarch64-linux systems, including target and
-  build dependencies, and reuse this record's pinned offline sources. Matching
-  Nix checks may read only their system's artifact. Product/walker repins and
-  policy generation/check enter `packages/` through `nix develop`, preserving
-  its pinned toolchain and Cargo configuration. A distinct seeded failure
-  covers every completeness, containment, source-integrity, policy, target,
-  and generated-drift refusal. If accepted, Spec 003 must be amended and
-  re-panelled before implementation resumes.
+  root flake's x86_64-linux and aarch64-linux systems. Broker artifacts use
+  matching GNU targets; static guest artifacts use matching musl targets.
+  Every Nix dependency and package check binds one exact system-and-target
+  artifact and has early wrong-system, wrong-target, and wrong-edge-kind
+  refusals. Product and walker repins and policy generation/check use the
+  repository shell-environment scrubber before pinned Cargo; hostile
+  `BASH_ENV` and exported Cargo-function probes enforce that boundary.
+  `main`, `broker`, and `guest` hub inputs are retired with exact replacement
+  diagnostics naming `product`; `walker` remains. The implementation adds all
+  eight per-system dependency/package installables, updates the flake matrix
+  pin, and rechecks them with aggregate deny/audit. If accepted, Spec 003 must
+  be amended and re-panelled before implementation resumes.
 - Related: [ADR 0009](0009-rust-toolchain-msrv-and-supply-chain.md) (Rust
   toolchain, MSRV, and supply-chain policy), which keeps its authority
   unchanged and is not superseded;
