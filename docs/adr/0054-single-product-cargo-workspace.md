@@ -66,7 +66,7 @@ generic test exclusion, `--exclude d2b-contract-tests`. Its generic clippy
 package-selection arguments are:
 
 ```text
-/usr/bin/env -u BASH_ENV -u ENV ./tests/tools/scrub-shell-environment -c 'exec nix develop --command env -C packages cargo clippy --locked --workspace --all-targets -- -D warnings'
+cargo clippy --locked --workspace --all-targets -- -D warnings
 ```
 
 There is no clippy exclusion; because `d2b-contract-tests` is a root member,
@@ -136,9 +136,8 @@ two counts are branch observations rather than a resolution mismatch.
 
 `MODULE.bazel` declared exactly `product` and `walker` hubs. The product hub
 used `packages/Cargo.toml` and `packages/Cargo.lock`; the walker remained
-independent. The pinned root command
-`/usr/bin/env -u BASH_ENV -u ENV ./tests/tools/scrub-shell-environment -c 'exec nix develop --command env -C packages cargo xtask gen-bazel --check'`
-and module-lock error mode passed. A full
+independent. The package-local `cargo xtask gen-bazel --check` command and
+module-lock error mode passed. A full
 `bazel query //... --output=label` returned 321 labels.
 
 The following native targets and representative tests passed:
@@ -161,19 +160,11 @@ feature contexts on the three broker libraries. `aquery` showed the matching
 `--cfg feature="layer1-bootstrap"` and `--cfg feature="fake-backends"` rustc
 arguments. The measured graph counts were:
 
-| Measurement | Count |
-| --- | ---: |
-| All first-party labels | 321 |
-| Broker context targets | 46 |
-| Broker production dependency labels | 7,721 |
-| Guest real-libshpool dependency labels | 10,332 |
-| Product lock crate records | 596 |
-| Product external labels | 297 |
-| Walker external labels | 9 |
-| Cargo identities: broker default/layer1/fake | 95 / 95 / 95 |
-| Cargo identities: guest real-libshpool | 135 |
-| Broker dependencies on guest runner | 0 |
-| Broker unexpected first-party sibling packages | 0 |
+321 first-party labels, 46 broker context targets, 7,721 broker production
+dependency labels, and 10,332 guest real-libshpool dependency labels. The
+product lock had 596 crate records and 297 external labels; walker had 9.
+Cargo selected 95 identities in each broker context and 135 for the guest.
+Broker reached zero guest-runner or unexpected first-party sibling packages.
 
 Every selected Cargo third-party identity for all four contexts was present in
 the product lock; every missing-identity count was zero. The product external
@@ -185,10 +176,10 @@ the guest manifest. A follow-up changed it to a normal dependency while
 leaving `real-libshpool` as the code feature, removed `crate.spec`, and passed
 offline root lock generation, locked checks, `gen-bazel`, production broker
 and guest builds, all four representative tests, and context queries. This
-standard pinned command then passed:
+package-local command then passed:
 
 ```text
-/usr/bin/env -u BASH_ENV -u ENV ./tests/tools/scrub-shell-environment -c 'exec nix develop --command env -C packages cargo xtask bazel-repin --hub product'
+cargo xtask bazel-repin --hub product
 ```
 
 It generated only `bazel/cargo/product.lock`. Production already always
@@ -200,14 +191,22 @@ manifest-driven hub resolution.
 
 ### Root command hardening
 
-Every root-runnable Cargo command starts with absolute
-`/usr/bin/env -u BASH_ENV -u ENV`, then enters existing
-`tests/tools/scrub-shell-environment` before any shell. This Make `SHELL`
-removes all `BASH_FUNC_*` entries before `/bin/sh`, which execs `nix develop`;
-`env -C packages` enters packages without another shell. No function shadows.
+Every root-runnable Cargo command uses this boundary, varying only the command inside the final single quotes:
 
-Policy generation/check and hub-repin probes seed hostile `BASH_ENV` and `BASH_FUNC_cargo%%`,
-require absent sentinels, prove pinned Cargo/`xtask` executes, and refuse failed removal.
+```text
+/usr/bin/env -i HOME="$HOME" USER="$USER" PATH=/nix/var/nix/profiles/default/bin:/run/current-system/sw/bin nix develop --ignore-environment --command bash --noprofile --norc -c 'cd packages && cargo xtask gen-package-policy-inputs --check'
+```
+
+`/usr/bin/env` is the measured portable absolute coreutils path. The fixed `PATH`
+covers the continuous-integration Nix installer and NixOS system profiles; it
+cannot resolve a function. `HOME` and `USER` are the only copied values.
+`env -i` removes every other entry before Nix starts, so no child shell can import
+a function first; `--ignore-environment` clears the allowlist before shell setup.
+
+The hostile test sets aborting `BASH_ENV` and `ENV` files and exports nonzero functions named `read`, `cargo`, `nix`, `bazel`, `cargo-bazel`, `git`,
+`cargo-deny`, and `cargo-audit`. Policy check and both repin arms must leave no
+sentinel, seeded ambient entry, or imported function and must complete with real pinned Cargo,
+`xtask`, and downstream tools. Import, shadowing, or no real execution fails.
 
 ### 1. Use one authoritative product workspace and lock
 
@@ -217,8 +216,8 @@ package's nested `[workspace]`, workspace-local `[profile.*]` tables, and
 `Cargo.lock`. Generate and verify the sole authoritative product lock with:
 
 ```text
-/usr/bin/env -u BASH_ENV -u ENV ./tests/tools/scrub-shell-environment -c 'exec nix develop --command env -C packages cargo generate-lockfile --offline'
-/usr/bin/env -u BASH_ENV -u ENV ./tests/tools/scrub-shell-environment -c 'exec nix develop --command env -C packages cargo metadata --locked --offline --format-version 1'
+/usr/bin/env -i HOME="$HOME" USER="$USER" PATH=/nix/var/nix/profiles/default/bin:/run/current-system/sw/bin nix develop --ignore-environment --command bash --noprofile --norc -c 'cd packages && cargo generate-lockfile --offline'
+/usr/bin/env -i HOME="$HOME" USER="$USER" PATH=/nix/var/nix/profiles/default/bin:/run/current-system/sw/bin nix develop --ignore-environment --command bash --noprofile --norc -c 'cd packages && cargo metadata --locked --offline --format-version 1'
 ```
 
 The packages keep `default = []` and their explicit dependencies. The guest
@@ -240,12 +239,12 @@ The existing `real-libshpool` code gates remain.
 The root-runnable package selectors are:
 
 ```text
-/usr/bin/env -u BASH_ENV -u ENV ./tests/tools/scrub-shell-environment -c 'exec nix develop --command env -C packages cargo test --locked -p d2b-priv-broker --no-default-features -- --test-threads 1'
-/usr/bin/env -u BASH_ENV -u ENV ./tests/tools/scrub-shell-environment -c 'exec nix develop --command env -C packages cargo test --locked -p d2b-priv-broker --no-default-features --features layer1-bootstrap -- --test-threads 1'
-/usr/bin/env -u BASH_ENV -u ENV ./tests/tools/scrub-shell-environment -c 'exec nix develop --command env -C packages cargo test --locked -p d2b-priv-broker --no-default-features --features fake-backends -- --test-threads 1'
-/usr/bin/env -u BASH_ENV -u ENV ./tests/tools/scrub-shell-environment -c 'exec nix develop --command env -C packages cargo fmt -p d2b-guest-shell-runner --check'
-/usr/bin/env -u BASH_ENV -u ENV ./tests/tools/scrub-shell-environment -c 'exec nix develop --command env -C packages cargo clippy --locked -p d2b-guest-shell-runner --no-default-features --features real-libshpool --all-targets -- -D warnings'
-/usr/bin/env -u BASH_ENV -u ENV ./tests/tools/scrub-shell-environment -c 'exec nix develop --command env -C packages cargo nextest run --locked -p d2b-guest-shell-runner --no-default-features --features real-libshpool'
+/usr/bin/env -i HOME="$HOME" USER="$USER" PATH=/nix/var/nix/profiles/default/bin:/run/current-system/sw/bin nix develop --ignore-environment --command bash --noprofile --norc -c 'cd packages && cargo test --locked -p d2b-priv-broker --no-default-features -- --test-threads 1'
+/usr/bin/env -i HOME="$HOME" USER="$USER" PATH=/nix/var/nix/profiles/default/bin:/run/current-system/sw/bin nix develop --ignore-environment --command bash --noprofile --norc -c 'cd packages && cargo test --locked -p d2b-priv-broker --no-default-features --features layer1-bootstrap -- --test-threads 1'
+/usr/bin/env -i HOME="$HOME" USER="$USER" PATH=/nix/var/nix/profiles/default/bin:/run/current-system/sw/bin nix develop --ignore-environment --command bash --noprofile --norc -c 'cd packages && cargo test --locked -p d2b-priv-broker --no-default-features --features fake-backends -- --test-threads 1'
+/usr/bin/env -i HOME="$HOME" USER="$USER" PATH=/nix/var/nix/profiles/default/bin:/run/current-system/sw/bin nix develop --ignore-environment --command bash --noprofile --norc -c 'cd packages && cargo fmt -p d2b-guest-shell-runner --check'
+/usr/bin/env -i HOME="$HOME" USER="$USER" PATH=/nix/var/nix/profiles/default/bin:/run/current-system/sw/bin nix develop --ignore-environment --command bash --noprofile --norc -c 'cd packages && cargo clippy --locked -p d2b-guest-shell-runner --no-default-features --features real-libshpool --all-targets -- -D warnings'
+/usr/bin/env -i HOME="$HOME" USER="$USER" PATH=/nix/var/nix/profiles/default/bin:/run/current-system/sw/bin nix develop --ignore-environment --command bash --noprofile --norc -c 'cd packages && cargo nextest run --locked -p d2b-guest-shell-runner --no-default-features --features real-libshpool'
 ```
 
 Broker lanes remain three serial `cargo test` processes in isolated target
@@ -256,8 +255,8 @@ default-feature, and `real-libshpool` selectors.
 The exact generic-main split is:
 
 ```text
-/usr/bin/env -u BASH_ENV -u ENV ./tests/tools/scrub-shell-environment -c 'exec nix develop --command env -C packages cargo clippy --locked --workspace --all-targets --exclude d2b-priv-broker --exclude d2b-guest-shell-runner -- -D warnings'
-/usr/bin/env -u BASH_ENV -u ENV ./tests/tools/scrub-shell-environment -c 'exec nix develop --command env -C packages cargo nextest run --locked --workspace --exclude d2b-contract-tests --exclude d2b-priv-broker --exclude d2b-guest-shell-runner'
+/usr/bin/env -i HOME="$HOME" USER="$USER" PATH=/nix/var/nix/profiles/default/bin:/run/current-system/sw/bin nix develop --ignore-environment --command bash --noprofile --norc -c 'cd packages && cargo clippy --locked --workspace --all-targets --exclude d2b-priv-broker --exclude d2b-guest-shell-runner -- -D warnings'
+/usr/bin/env -i HOME="$HOME" USER="$USER" PATH=/nix/var/nix/profiles/default/bin:/run/current-system/sw/bin nix develop --ignore-environment --command bash --noprofile --norc -c 'cd packages && cargo nextest run --locked --workspace --exclude d2b-contract-tests --exclude d2b-priv-broker --exclude d2b-guest-shell-runner'
 ```
 
 The generic doctest and harness-free companion discovery uses the nextest
@@ -317,8 +316,8 @@ The workspace merge regenerates only the product Bazel-side lock. The walker
 lock stays byte-identical. These are the only root-runnable repin commands:
 
 ```text
-/usr/bin/env -u BASH_ENV -u ENV ./tests/tools/scrub-shell-environment -c 'exec nix develop --command env -C packages cargo xtask bazel-repin --hub product'
-/usr/bin/env -u BASH_ENV -u ENV ./tests/tools/scrub-shell-environment -c 'exec nix develop --command env -C packages cargo xtask bazel-repin --hub walker'
+/usr/bin/env -i HOME="$HOME" USER="$USER" PATH=/nix/var/nix/profiles/default/bin:/run/current-system/sw/bin nix develop --ignore-environment --command bash --noprofile --norc -c 'cd packages && cargo xtask bazel-repin --hub product'
+/usr/bin/env -i HOME="$HOME" USER="$USER" PATH=/nix/var/nix/profiles/default/bin:/run/current-system/sw/bin nix develop --ignore-environment --command bash --noprofile --norc -c 'cd packages && cargo xtask bazel-repin --hub walker'
 ```
 
 `main`, `broker`, and `guest` are retired, not aliases. They fail before Bazel
@@ -327,9 +326,13 @@ and these exact diagnostics:
 
 | Refused hub | Exact diagnostic |
 | --- | --- |
-| `main` | `Hub 'main' is retired; run /usr/bin/env -u BASH_ENV -u ENV ./tests/tools/scrub-shell-environment -c 'exec nix develop --command env -C packages cargo xtask bazel-repin --hub product'.` |
-| `broker` | `Hub 'broker' is retired; run /usr/bin/env -u BASH_ENV -u ENV ./tests/tools/scrub-shell-environment -c 'exec nix develop --command env -C packages cargo xtask bazel-repin --hub product'.` |
-| `guest` | `Hub 'guest' is retired; run /usr/bin/env -u BASH_ENV -u ENV ./tests/tools/scrub-shell-environment -c 'exec nix develop --command env -C packages cargo xtask bazel-repin --hub product'.` |
+| `main` | `Hub 'main' is retired; run /usr/bin/env -i HOME="$HOME" USER="$USER" PATH=/nix/var/nix/profiles/default/bin:/run/current-system/sw/bin nix develop --ignore-environment --command bash --noprofile --norc -c 'cd packages && cargo xtask bazel-repin --hub product'` |
+| `broker` | `Hub 'broker' is retired; run /usr/bin/env -i HOME="$HOME" USER="$USER" PATH=/nix/var/nix/profiles/default/bin:/run/current-system/sw/bin nix develop --ignore-environment --command bash --noprofile --norc -c 'cd packages && cargo xtask bazel-repin --hub product'` |
+| `guest` | `Hub 'guest' is retired; run /usr/bin/env -i HOME="$HOME" USER="$USER" PATH=/nix/var/nix/profiles/default/bin:/run/current-system/sw/bin nix develop --ignore-environment --command bash --noprofile --norc -c 'cd packages && cargo xtask bazel-repin --hub product'` |
+
+The refusal test removes only the fixed prefix and line terminator. The captured bytes must equal the canonical product command, end in `0x27`, and
+execute without edits. Appended punctuation, normalized quoting, or a second
+remediation spelling fails.
 
 Changing the walker lock remains a separately reviewed change. Entering
 `packages/` is load-bearing: rustup discovers `rust-toolchain.toml` there and
@@ -368,8 +371,8 @@ wrong native edge or an inexact selected Cargo closure is not.
 The repository-owned generator has these exact root-runnable entry points:
 
 ```text
-/usr/bin/env -u BASH_ENV -u ENV ./tests/tools/scrub-shell-environment -c 'exec nix develop --command env -C packages cargo xtask gen-package-policy-inputs'
-/usr/bin/env -u BASH_ENV -u ENV ./tests/tools/scrub-shell-environment -c 'exec nix develop --command env -C packages cargo xtask gen-package-policy-inputs --check'
+/usr/bin/env -i HOME="$HOME" USER="$USER" PATH=/nix/var/nix/profiles/default/bin:/run/current-system/sw/bin nix develop --ignore-environment --command bash --noprofile --norc -c 'cd packages && cargo xtask gen-package-policy-inputs'
+/usr/bin/env -i HOME="$HOME" USER="$USER" PATH=/nix/var/nix/profiles/default/bin:/run/current-system/sw/bin nix develop --ignore-environment --command bash --noprofile --norc -c 'cd packages && cargo xtask gen-package-policy-inputs --check'
 ```
 
 The target set is exactly the root flake's `systems`, with distinct host and
@@ -409,9 +412,9 @@ root dev closure described above. Every drift diagnostic lists all stale paths
 repository-relative and ends with this remediation, in this order:
 
 ```text
-/usr/bin/env -u BASH_ENV -u ENV ./tests/tools/scrub-shell-environment -c 'exec nix develop --command env -C packages cargo xtask gen-package-policy-inputs'
+/usr/bin/env -i HOME="$HOME" USER="$USER" PATH=/nix/var/nix/profiles/default/bin:/run/current-system/sw/bin nix develop --ignore-environment --command bash --noprofile --norc -c 'cd packages && cargo xtask gen-package-policy-inputs'
 Review and commit the generated changes under packages/policy-inputs/.
-/usr/bin/env -u BASH_ENV -u ENV ./tests/tools/scrub-shell-environment -c 'exec nix develop --command env -C packages cargo xtask gen-package-policy-inputs --check'
+/usr/bin/env -i HOME="$HOME" USER="$USER" PATH=/nix/var/nix/profiles/default/bin:/run/current-system/sw/bin nix develop --ignore-environment --command bash --noprofile --norc -c 'cd packages && cargo xtask gen-package-policy-inputs --check'
 ```
 
 For each policy set, the implementation reuses ADR 0052's pinned offline source
@@ -438,6 +441,23 @@ All four exist for both systems; none falls back to x86_64. Each reads only its
 exact system-and-target path. Before root or graph work it checks embedded
 system, exact GNU or musl target, then every edge's authoritative kind. Each
 mismatch emits its own early diagnostic, never later policy or leakage output.
+
+Recurring enforcement stays in existing Layer-1 jobs:
+
+- `make test-rust-supply-chain` runs generated source census, deny, and pinned
+  offline audit logic for broker GNU and guest musl on x86_64 and aarch64.
+- `make test-drift` enforces generation `--check`, the eight-check inventory
+  and exact mapping, with missing-check, cross-system, and wrong-target plants.
+- `make test-flake` owns realization. `D2B_FLAKE_REALIZED_CHECKS` adds
+  `broker-production-dependency-policy`, `guest-shell-runner-static-dependency-policy`,
+  `broker-production-package-policy`, `guest-real-libshpool-package-policy`, and
+  `guest-static-elf`, retaining `video-binary-contract`. X86 shards build those
+  five checks. Existing job `test-flake-aarch64` retains its id and context,
+  moves to public `ubuntu-24.04-arm`, and runs the same target for the five
+  aarch64 checks; no top-level job is added.
+
+Implementation pins it as `flake-aarch64-realized` at 60 minutes in `tests/layer1-jobs.json`, regenerates the workflow and realized class, and makes
+`make flake-matrix-pin` regenerate both system inventories. Either stale pin fails drift, making aarch64 wiring and execution recurrent evidence.
 
 ### Seeded refusal matrix
 
@@ -493,9 +513,9 @@ package/license pairs. A blanket license expansion is not the remedy. The
 exact root-runnable remedy and recheck sequence is:
 
 ```text
-/usr/bin/env -u BASH_ENV -u ENV ./tests/tools/scrub-shell-environment -c 'exec nix develop --command env -C packages cargo xtask gen-package-policy-inputs'
+/usr/bin/env -i HOME="$HOME" USER="$USER" PATH=/nix/var/nix/profiles/default/bin:/run/current-system/sw/bin nix develop --ignore-environment --command bash --noprofile --norc -c 'cd packages && cargo xtask gen-package-policy-inputs'
 Review and commit packages/d2b-guest-shell-runner/deny.toml and the generated packages/policy-inputs/ changes.
-/usr/bin/env -u BASH_ENV -u ENV ./tests/tools/scrub-shell-environment -c 'exec nix develop --command env -C packages cargo xtask gen-package-policy-inputs --check'
+/usr/bin/env -i HOME="$HOME" USER="$USER" PATH=/nix/var/nix/profiles/default/bin:/run/current-system/sw/bin nix develop --ignore-environment --command bash --noprofile --norc -c 'cd packages && cargo xtask gen-package-policy-inputs --check'
 make flake-matrix-pin
 make test-drift
 nix build --no-link \
@@ -509,7 +529,9 @@ nix build --no-link \
   .#checks.aarch64-linux.guest-real-libshpool-package-policy
 make test-rust-supply-chain
 make test-policy
-nix build --no-link .#checks.x86_64-linux.guest-static-elf
+nix build --no-link \
+  .#checks.x86_64-linux.guest-static-elf \
+  .#checks.aarch64-linux.guest-static-elf
 nix build --no-link \
   .#checks.x86_64-linux.rust-deny \
   .#checks.aarch64-linux.rust-deny \
@@ -565,14 +587,13 @@ Rejected. It has a real tooling boundary and no product path dependency.
 3. Generic main clippy and tests exclude broker and guest; contract tests leave
    main tests, not clippy, policy, or fixture compilation.
 4. Broker default, layer 1, and fake lanes stay serial and target-isolated.
-5. Nix uses root source and lock without weakening dependency or ELF checks;
-   package checks bind exact system and GNU or musl target artifacts.
+5. Nix uses root source and lock without weakening checks; package policy and static ELF realization recur on both systems.
 6. Bazel has product and walker hubs; `main`, `broker`, and `guest` refuse.
 7. Every selected context proves one root and a nonempty exact census before
    predicates; native first-party contexts, not the product external union,
    define actual Bazel dependencies and features.
-8. Broker and guest inputs cover production and root-dev closure, drift, exact
-   sources, and hostile-shell refusal and are enforcing.
+8. Existing Layer-1 supply-chain, drift, and flake jobs enforce the four target
+   contexts, eight wrappers, hostile boundary, and dual-system pins.
 9. The guest license blocker is resolved by reviewed policy in the merge
    change, not waived or misreported.
 10. Spec 003 is amended and re-panelled after this ADR merges and before

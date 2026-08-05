@@ -28,14 +28,21 @@
   matching GNU targets; static guest artifacts use matching musl targets.
   Every Nix dependency and package check binds one exact system-and-target
   artifact and has early wrong-system, wrong-target, and wrong-edge-kind
-  refusals. Product and walker repins and policy generation/check use the
-  repository shell-environment scrubber before pinned Cargo; hostile
-  `BASH_ENV` and exported Cargo-function probes enforce that boundary.
+  refusals. Product and walker repins and policy generation/check start with
+  absolute `/usr/bin/env -i`, an allowlisted Nix lookup path, and
+  `nix develop --ignore-environment` before the first shell; hostile
+  `BASH_ENV`, `ENV`, and exported command-function probes enforce that boundary
+  and prove the pinned tools execute.
   `main`, `broker`, and `guest` hub inputs are retired with exact replacement
-  diagnostics naming `product`; `walker` remains. The implementation adds all
-  eight per-system dependency/package installables, updates the flake matrix
-  pin, and rechecks them with aggregate deny/audit. If accepted, Spec 003 must
-  be amended and re-panelled before implementation resumes.
+  diagnostics naming `product`; each replacement ends at the closing command
+  quote and is copy-verbatim tested. The implementation adds all eight
+  per-system dependency/package installables. Existing Layer-1 supply-chain,
+  drift, and flake targets respectively execute their shared checker logic,
+  enforce generated inventory and target mapping with planted refusals, and
+  realize all eight wrappers on native x86_64 and aarch64 runners. Both
+  architectures also realize `guest-static-elf`; the Layer-1, realized-class,
+  and dual-system matrix pins are regenerated. If accepted, Spec 003 must be
+  amended and re-panelled before implementation resumes.
 - Related: [ADR 0009](0009-rust-toolchain-msrv-and-supply-chain.md) (Rust
   toolchain, MSRV, and supply-chain policy), which keeps its authority
   unchanged and is not superseded;
