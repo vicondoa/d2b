@@ -775,7 +775,7 @@ mod tests {
     use super::*;
     use nix::unistd::{Gid as NixGid, Uid as NixUid};
     use std::fs::{self, OpenOptions};
-    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+    use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
     use std::process::Command;
     use tempfile::TempDir;
 
@@ -942,24 +942,37 @@ mod tests {
         let (_temp, row) = fixture();
         let opened = open_resolved_row(&row).expect("provision");
         let fd = opened.database_fd.as_raw_fd();
+        let database_stat = fstat(&opened.database_fd).expect("database stat");
         let mut child = Command::new("sleep").arg("2").spawn().expect("exec probe");
         let child_fd = format!("/proc/{}/fd/{fd}", child.id());
         let child_comm = format!("/proc/{}/comm", child.id());
-        let mut inherited = true;
+        let observation_deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
         let mut observed_exec = false;
-        for _ in 0..50 {
+        while std::time::Instant::now() < observation_deadline {
             if let Ok(comm) = fs::read_to_string(&child_comm)
                 && comm.trim() == "sleep"
             {
                 observed_exec = true;
-                inherited = std::path::Path::new(&child_fd).exists();
                 break;
             }
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
+        if !observed_exec {
+            let _ = child.kill();
+            let _ = child.wait();
+            panic!("exec probe did not reach sleep before timeout");
+        }
+        let child_database_identity = match fs::metadata(&child_fd) {
+            Ok(metadata) => Some((metadata.dev(), metadata.ino())),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+            Err(error) => panic!("inspect child database fd: {error}"),
+        };
         let _ = child.kill();
         let _ = child.wait();
-        assert!(observed_exec, "exec probe did not reach sleep");
-        assert!(!inherited, "database fd inherited across exec");
+        assert_ne!(
+            child_database_identity,
+            Some((database_stat.st_dev, database_stat.st_ino)),
+            "database object inherited across exec"
+        );
     }
 }
