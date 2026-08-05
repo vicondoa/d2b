@@ -19,14 +19,22 @@
   its first-party path dependencies are members of the separate main
   workspace. That record leaves the four-hub set, the three authoritative
   Cargo locks, `skip_cargo_lockfile_overwrite = True` and invariant 2
-  unchanged. It adds exactly one precondition to the section 3 repin command:
-  `cargo xtask bazel-repin --hub <name>` first checks that the generated
-  inputs the named hub reads are what `cargo xtask gen-bazel` would emit, and
-  refuses before spawning Bazel when they are not, because the post-run
-  changed-file rule is about what a run wrote and cannot see a stale input.
-  That command's required hub argument, its scoped child environment, its
-  single output base and the changed-file rule itself are unchanged; the
-  record reverses and supersedes nothing here.
+  unchanged. It refines the section 3 repin command in two narrow places.
+  `cargo xtask bazel-repin --hub broker` synchronizes the broker hub's
+  generated splice inputs itself before it spawns Bazel: it regenerates them
+  into scratch through the generator entry point `cargo xtask gen-bazel` calls,
+  validates them offline, refuses without writing when the subtree or the hub
+  lock already carries a local modification the command did not make, and then
+  writes only that subtree, so a dependency change is one command rather than
+  an ordered pair. And the changed-path rule becomes two rules: the single
+  Bazel child is still held to exactly one changed tracked file, that hub's
+  Bazel-side lock, and the command as a whole is held to that file plus the one
+  generated subtree it synchronized, failing and listing any other changed path
+  repository-relative. The required hub argument, the scoped child environment,
+  the single child process, the single output base, the exit-zero-when-current
+  behaviour and the absence from Make and continuous integration are unchanged,
+  and no gate or build entrypoint generates anything. That record reverses and
+  supersedes nothing here.
 - Related: [ADR 0009](0009-rust-toolchain-msrv-and-supply-chain.md) (Rust
   toolchain, MSRV, and supply-chain policy), which keeps its authority
   unchanged and is not superseded;
@@ -296,7 +304,8 @@ Concretely:
   `--locked` flag the gate passes today. Three of the four hubs read their
   authoritative `Cargo.toml` directly. The `broker` hub cannot, because its
   workspace path-depends on members of the main workspace and the splicer
-  refuses that shape; it reads a generated, drift-checked splice workspace
+  refuses that shape; it reads a generated, drift-checked splice workspace,
+  naming that workspace's root and stub manifests so they enter the hub digest,
   while its `cargo_lockfile` still names the authoritative broker lock. See
   [ADR 0054](0054-broker-hub-generated-splice-workspace.md).
 - The Rust toolchains registered in Bazel are exactly the channels named in

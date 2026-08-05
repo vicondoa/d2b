@@ -9,9 +9,10 @@
   generated, drift-checked stand-in workspace derived from what the broker's
   own dependency resolution actually contains, so an optional dependency the
   broker never turns on stays out of the privileged closure along with
-  everything it would pull in. Three independent checks prove the generated
-  tree still describes the authoritative lock, and each catches drift the
-  others cannot see.
+  everything it would pull in. Four independent checks prove the generated tree
+  still describes the authoritative lock and that the build-side lock was
+  produced from the tree the repository currently has, and each catches drift
+  the others cannot see.
 - Recorded that the shared first-party libraries the broker uses are built
   twice, once for each dependency set, while their tests continue to run once
   in the main workspace exactly as they do today, because the broker's lock
@@ -20,8 +21,15 @@
   privileged binary reaches a library built against the other dependency set,
   or the main build reaches one built against the broker's, so the audited
   closure cannot silently become a mixture of the two.
-- Recorded that regenerating the broker's build-side dependency lock refuses
-  outright when the generated stand-in workspace is out of date, before any
-  build-tool process starts, and names the command that brings it up to date.
-  Without that refusal the regeneration can record a dependency set the
-  repository no longer has, and every other check stays green afterwards.
+- Recorded that regenerating the broker's build-side dependency lock is one
+  contributor command that brings the generated stand-in workspace up to date
+  itself rather than refusing and asking for a second command. It regenerates
+  and validates those inputs offline before it starts the build tool, refuses
+  outright when the files it would rewrite already carry local changes it did
+  not make, and afterwards proves it changed nothing beyond the stand-in
+  workspace and that one build-side lock, naming any other changed path. If the
+  build tool then fails, the stand-in workspace stays current while the
+  build-side lock stays as it was; the command reports that state and re-running
+  it is the recovery, since nothing is rolled back and no local work is
+  overwritten. Build and gate entry points still generate nothing, and the
+  drift gate still refuses a stale committed tree.
