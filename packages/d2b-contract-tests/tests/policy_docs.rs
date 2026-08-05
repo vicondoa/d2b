@@ -1372,6 +1372,13 @@ fn execution_manifest_schema_and_prose_agree_with_non_empty_discovery() {
         "execution-manifest-policy: Nix-unit emitter must use the evaluation-only nix-eval-jobs surface"
     );
     assert!(
+        nix_driver.contains("nixUnitJobShards.${system}.${check}")
+            && nix_driver.contains("selected_jobs_file")
+            && nix_driver.contains("mapfile -t selected_jobs")
+            && nix_driver.contains("for job in \"${selected_jobs[@]}\"; do"),
+        "execution-manifest-policy: selected Nix-unit shards must evaluate partitioned jobs one at a time"
+    );
+    assert!(
         nix_jobs.contains("builtins.tryEval")
             && nix_jobs.contains("caseNamesFor")
             && nix_jobs.contains("mkAggregateCheck")

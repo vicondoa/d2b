@@ -204,21 +204,44 @@ if [ -n "${D2B_NIX_UNIT_CHECK:-}" ]; then
   fi
   check="$D2B_NIX_UNIT_CHECK"
   nix_unit_surface="$check"
-  log "--> nix eval --raw ${flake_label}#checks.${system}.${check}.drvPath (instantiate-only)"
-  if nix eval --raw "${flake_ref}#checks.${system}.${check}.drvPath" >/dev/null; then
-    nix_unit_command_succeeded=1
-    if ! publish_manifest_fragment "$check" passed; then
-      printf '%s\n' \
-        "test-nix-unit: required execution-manifest fragment publication failed after successful surface '$check'; evidence is incomplete; retry the target." \
-        >&2
-      exit 1
-    fi
-    nix_unit_surface=
-    ok "nix-unit check $check ($system)"
-  else
-    fail "nix-unit check $check ($system) failed" || true
+  selected_jobs_file="$check_dir/jobs"
+  log "--> nix eval --raw ${flake_label}#nixUnitJobShards.${system}.${check} (job discovery)"
+  if ! nix eval --raw "${flake_ref}#nixUnitJobShards.${system}.${check}" --apply '
+      jobs:
+        builtins.concatStringsSep "\n"
+          (builtins.sort builtins.lessThan (builtins.attrNames jobs))
+    ' >"$selected_jobs_file"; then
+    fail "nix-unit check $check ($system) job discovery failed" || true
     exit 1
   fi
+  mapfile -t selected_jobs <"$selected_jobs_file"
+  if [ "${#selected_jobs[@]}" -eq 0 ]; then
+    fail "nix-unit check $check ($system) discovered no jobs" || true
+    exit 1
+  fi
+  for job in "${selected_jobs[@]}"; do
+    case "$job" in
+      ""|*[!A-Za-z0-9._-]*)
+        fail "nix-unit check $check ($system) discovered unsafe job name: $job" || true
+        exit 1
+        ;;
+    esac
+    log "--> nix eval --raw ${flake_label}#nixUnitJobShards.${system}.${check}.${job}.drvPath (instantiate-only)"
+    if ! nix eval --raw \
+      "${flake_ref}#nixUnitJobShards.${system}.${check}.${job}.drvPath" >/dev/null; then
+      fail "nix-unit check $check job $job ($system) failed" || true
+      exit 1
+    fi
+  done
+  nix_unit_command_succeeded=1
+  if ! publish_manifest_fragment "$check" passed; then
+    printf '%s\n' \
+      "test-nix-unit: required execution-manifest fragment publication failed after successful surface '$check'; evidence is incomplete; retry the target." \
+      >&2
+    exit 1
+  fi
+  nix_unit_surface=
+  ok "nix-unit check $check ($system)"
   log "test-nix-unit OK (selected $check; duration: $((SECONDS - suite_started))s)"
   exit 0
 fi
