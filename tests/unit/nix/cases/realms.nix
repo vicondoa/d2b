@@ -1944,11 +1944,12 @@ let
       || lib.hasInfix "tombstone-" name then "workloads"
     else if lib.hasInfix "rejects-" name
       || lib.hasInfix "requires-" name then "rejections"
-    else if lib.hasInfix "allocator-" name
-      || lib.hasInfix "controller-" name
-      || lib.hasInfix "identity-" name
-      || lib.hasInfix "host-local-" name
-      || lib.hasInfix "examples-" name then "artifacts"
+    else if lib.hasInfix "allocator-artifact" name then "allocator"
+    else if lib.hasInfix "controller-config" name then "controller"
+    else if lib.hasInfix "identity-config" name
+      || lib.hasInfix "identity-key" name then "identity"
+    else if lib.hasInfix "host-local-" name then "host-local"
+    else if lib.hasInfix "examples-" name then "examples"
     else "index";
 in
 lib.filterAttrs
