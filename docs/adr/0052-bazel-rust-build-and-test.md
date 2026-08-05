@@ -12,6 +12,14 @@
   happens to find, and records the measured `crate_universe` repin controls
   that make a scoped, reviewed lock regeneration possible without a gate-path
   escape hatch. No decision here is reversed and nothing here is superseded.
+- Refined by: [ADR 0054](0054-broker-hub-generated-splice-workspace.md), which
+  decides how the `broker` hub of section 2 obtains a spliceable Cargo
+  workspace. Measured against the same substrate, `crate_universe` cannot
+  splice the standalone `packages/d2b-priv-broker` workspace directly, because
+  its first-party path dependencies are members of the separate main
+  workspace. That record leaves the four-hub set, the three authoritative
+  Cargo locks, `skip_cargo_lockfile_overwrite = True`, the repin contract and
+  invariant 2 unchanged; it reverses and supersedes nothing here.
 - Related: [ADR 0009](0009-rust-toolchain-msrv-and-supply-chain.md) (Rust
   toolchain, MSRV, and supply-chain policy), which keeps its authority
   unchanged and is not superseded;
@@ -278,7 +286,12 @@ Concretely:
   non-vendored mode with a committed Bazel-side lock per Cargo workspace. A
   repin drift check (section 5) fails closed when the Bazel-side lock does not
   match what the Cargo lock resolves to, which is the Bazel equivalent of the
-  `--locked` flag the gate passes today.
+  `--locked` flag the gate passes today. Three of the four hubs read their
+  authoritative `Cargo.toml` directly. The `broker` hub cannot, because its
+  workspace path-depends on members of the main workspace and the splicer
+  refuses that shape; it reads a generated, drift-checked splice workspace
+  while its `cargo_lockfile` still names the authoritative broker lock. See
+  [ADR 0054](0054-broker-hub-generated-splice-workspace.md).
 - The Rust toolchains registered in Bazel are exactly the channels named in
   `packages/rust-toolchain.toml` (1.97.0) and
   `packages/d2b-api-surface/rust-toolchain.toml` (nightly-2026-02-16). A guard
