@@ -47,7 +47,8 @@ critical-subsystems index? If yes, it is an ADR.
 
 ### 2. Draft
 
-Dispatch `d2b-architect` (`claude-opus-5`, `xhigh`, `long_context`). Number the
+Dispatch `d2b-architect` (`gpt-5.6-sol`, `xhigh`, `long_context` for the 1M
+context tier). Number the
 ADR one above the highest in `docs/adr/`. File name is
 `NNNN-kebab-case-title.md`. Structure follows the existing records:
 
@@ -97,8 +98,8 @@ name the wave or phase that produced a decision.
 ### 4. Panel
 
 An architectural decision earns the full roster. Run
-`/d2b-panel-round adr docs/adr/NNNN-*.md`. Ten lanes, `gemini-3.1-pro-preview`
-at `high`, read-only.
+`/d2b-panel-round adr docs/adr/NNNN-*.md`. Ten lanes, `gpt-5.6-sol` at
+`xhigh`, read-only.
 
 Panel prompts for an ADR review carry the draft, the records it supersedes or
 relates to, and the code the decision constrains. Reviewers judge whether the

@@ -4,7 +4,8 @@
 //! `panel-request` writes the candidate-bound request naming exactly the ten
 //! roles in [`PANEL_ROLES`] and the required provider, model, and reasoning
 //! effort from [`PANEL_PROVIDER_POLICY`], [`PANEL_MODEL_POLICY`], and
-//! [`PANEL_REASONING_EFFORT_POLICY`].
+//! [`PANEL_REASONING_EFFORT_POLICY`]. Existing request-record sets on the
+//! legacy Gemini/high pair remain readable for delivery-state compatibility.
 //!
 //! `panel-attest` validates a directory holding exactly one strict record per
 //! role, each bound to the same `candidate_id`, `content_id`, and
@@ -46,7 +47,8 @@ use super::{
     command::{CliOptions, WaveCommand, WorkflowOutput},
     model::{
         CandidateDigests, CandidateId, CandidateMaterial, ContentId,
-        PANEL_ATTESTATION_ARTIFACT_KIND, PANEL_MODEL_POLICY, PANEL_PROVIDER_POLICY,
+        PANEL_ATTESTATION_ARTIFACT_KIND, PANEL_LEGACY_MODEL_POLICY,
+        PANEL_LEGACY_REASONING_EFFORT_POLICY, PANEL_MODEL_POLICY, PANEL_PROVIDER_POLICY,
         PANEL_REASONING_EFFORT_POLICY, PANEL_REQUEST_ARTIFACT_KIND, PANEL_ROLES, PanelRole,
         SNAPSHOT_ARTIFACT_KIND, SnapshotSha256, ensure_schema, sha256_bytes,
         validate_bounded_string, validate_identifier, validate_program_wave, validate_sha256,
@@ -181,9 +183,9 @@ impl PanelRequest {
         (&self.candidate_id, &self.content_id)
     }
 
-    /// Rejects a request that no longer names the roster or the binding this
-    /// build enforces, so an old or hand-edited request cannot lower the bar
-    /// for the records attested against it.
+    /// Rejects a request that no longer names the roster or a supported
+    /// binding. New requests use the current policy; the legacy pair remains
+    /// valid only so existing delivery state can still be read and attested.
     pub fn validate(&self) -> Result<()> {
         ensure_artifact_kind(
             &self.artifact_kind,
@@ -198,7 +200,11 @@ impl PanelRequest {
         )?;
         ensure_schema(self.record_schema_version, "panel record")?;
         validate_program_wave(&self.program, &self.wave)?;
-        ensure_panel_binding(&self.provider, &self.model_version, &self.reasoning_effort)?;
+        ensure_supported_panel_binding(
+            &self.provider,
+            &self.model_version,
+            &self.reasoning_effort,
+        )?;
         if self.roles != PANEL_ROLES {
             return Err(DeliveryError::new(
                 "panel request must name exactly the ten-role default roster, in order",
@@ -252,8 +258,16 @@ impl PanelRecord {
             "panel record",
         )?;
         ensure_schema(self.schema_version, "panel record")?;
-        ensure_panel_binding(&self.provider, &self.model_version, &self.reasoning_effort)
+        ensure_supported_panel_binding(&self.provider, &self.model_version, &self.reasoning_effort)
             .map_err(|error| DeliveryError::new(format!("panel record {role}: {error}")))?;
+        if self.provider != request.provider
+            || self.model_version != request.model_version
+            || self.reasoning_effort != request.reasoning_effort
+        {
+            return Err(DeliveryError::new(format!(
+                "panel record {role} binding must exactly match the panel request binding"
+            )));
+        }
         if self.candidate_id != request.candidate_id
             || self.content_id != request.content_id
             || self.snapshot_sha256 != request.snapshot_sha256
@@ -698,14 +712,18 @@ pub(crate) fn ensure_artifact_kind(found: &str, expected: &str, label: &str) -> 
     Ok(())
 }
 
-fn ensure_panel_binding(provider: &str, model: &str, reasoning_effort: &str) -> Result<()> {
-    if provider != PANEL_PROVIDER_POLICY
-        || model != PANEL_MODEL_POLICY
-        || reasoning_effort != PANEL_REASONING_EFFORT_POLICY
-    {
+fn ensure_supported_panel_binding(
+    provider: &str,
+    model: &str,
+    reasoning_effort: &str,
+) -> Result<()> {
+    let current = model == PANEL_MODEL_POLICY && reasoning_effort == PANEL_REASONING_EFFORT_POLICY;
+    let legacy = model == PANEL_LEGACY_MODEL_POLICY
+        && reasoning_effort == PANEL_LEGACY_REASONING_EFFORT_POLICY;
+    if provider != PANEL_PROVIDER_POLICY || (!current && !legacy) {
         return Err(DeliveryError::new(
-            "panel binding must match the provider, model, and reasoning effort this wave's \
-             panel request pins",
+            "panel binding must match the current provider/model/effort policy or the exact \
+             legacy Gemini compatibility pair",
         ));
     }
     Ok(())
@@ -1032,6 +1050,37 @@ pub(crate) mod tests {
             .expect("unanimous set");
         assert_eq!(attestation.roles, PANEL_ROLES.to_vec());
         assert!(attestation.unanimous);
+    }
+
+    #[test]
+    fn a_legacy_gemini_request_and_record_set_remain_accepted() {
+        let scratch = Scratch::new("panel-legacy-gemini");
+        let (_state, candidate, snapshot) = candidate_with_snapshot(&scratch);
+        let mut request = PanelRequest::for_snapshot(&snapshot);
+        request.model_version = PANEL_LEGACY_MODEL_POLICY.to_owned();
+        request.reasoning_effort = PANEL_LEGACY_REASONING_EFFORT_POLICY.to_owned();
+        let mut files = record_files(&snapshot);
+        for role in PANEL_ROLES {
+            rewrite(&mut files, role, |record| {
+                record.model_version = PANEL_LEGACY_MODEL_POLICY.to_owned();
+                record.reasoning_effort = PANEL_LEGACY_REASONING_EFFORT_POLICY.to_owned();
+            });
+        }
+
+        let attestation = validate_record_set(&candidate, &request, &files)
+            .expect("legacy Gemini records remain compatible");
+        assert!(attestation.unanimous);
+    }
+
+    #[test]
+    fn a_record_binding_must_match_its_request_binding() {
+        let error = reject(|files, _| {
+            rewrite(files, PanelRole::Security, |record| {
+                record.model_version = PANEL_LEGACY_MODEL_POLICY.to_owned();
+                record.reasoning_effort = PANEL_LEGACY_REASONING_EFFORT_POLICY.to_owned();
+            });
+        });
+        assert!(error.message().contains("exactly match"), "{error}");
     }
 
     #[test]

@@ -52,8 +52,13 @@ pub const EVIDENCE_ARTIFACT_KIND: &str = "d2b-delivery/validation-evidence";
 /// attribution, so they are committed here for the attestation check to
 /// compare against.
 pub const PANEL_PROVIDER_POLICY: &str = "github-copilot";
-pub const PANEL_MODEL_POLICY: &str = "gemini-3.1-pro-preview";
-pub const PANEL_REASONING_EFFORT_POLICY: &str = "high";
+pub const PANEL_MODEL_POLICY: &str = "gpt-5.6-sol";
+pub const PANEL_REASONING_EFFORT_POLICY: &str = "xhigh";
+/// Historical panel records used this exact model and effort pair. Keep it
+/// readable so existing delivery state remains attestable after the policy
+/// moves forward; new panel requests always use the current constants above.
+pub const PANEL_LEGACY_MODEL_POLICY: &str = "gemini-3.1-pro-preview";
+pub const PANEL_LEGACY_REASONING_EFFORT_POLICY: &str = "high";
 
 pub const MAX_REPOSITORIES: usize = 16;
 /// Upper bound on the pull requests a single repository may bind, shared by the
@@ -1272,7 +1277,9 @@ mod tests {
     #[test]
     fn the_panel_binding_pins_provider_model_and_reasoning_effort() {
         assert_eq!(PANEL_PROVIDER_POLICY, "github-copilot");
-        assert_eq!(PANEL_MODEL_POLICY, "gemini-3.1-pro-preview");
-        assert_eq!(PANEL_REASONING_EFFORT_POLICY, "high");
+        assert_eq!(PANEL_MODEL_POLICY, "gpt-5.6-sol");
+        assert_eq!(PANEL_REASONING_EFFORT_POLICY, "xhigh");
+        assert_eq!(PANEL_LEGACY_MODEL_POLICY, "gemini-3.1-pro-preview");
+        assert_eq!(PANEL_LEGACY_REASONING_EFFORT_POLICY, "high");
     }
 }

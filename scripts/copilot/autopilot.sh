@@ -12,7 +12,7 @@
 #   scripts/copilot/autopilot.sh [--resume <id>] [--auto-merge] [-- <extra copilot args>]
 #
 # Environment overrides, all optional:
-#   D2B_AUTOPILOT_MODEL      session model      (default claude-opus-5)
+#   D2B_AUTOPILOT_MODEL      session model      (default gpt-5.6-sol)
 #   D2B_AUTOPILOT_EFFORT     session effort     (default xhigh)
 #   D2B_AUTOPILOT_CONTINUES  continuation cap   (default 40)
 #   D2B_AUTOPILOT_CREDITS    AI credit ceiling  (default 200)
@@ -23,7 +23,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$ROOT"
 
-MODEL="${D2B_AUTOPILOT_MODEL:-claude-opus-5}"
+MODEL="${D2B_AUTOPILOT_MODEL:-gpt-5.6-sol}"
 EFFORT="${D2B_AUTOPILOT_EFFORT:-xhigh}"
 CONTINUES="${D2B_AUTOPILOT_CONTINUES:-40}"
 CREDITS="${D2B_AUTOPILOT_CREDITS:-200}"

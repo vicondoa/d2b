@@ -27,8 +27,10 @@ const ROLES = [
   "rust", "product", "docs", "observability", "kernel",
 ];
 const PROVIDER_POLICY = "github-copilot";
-const MODEL_POLICY = "gemini-3.1-pro-preview";
-const EFFORT_POLICY = "high";
+const MODEL_POLICY = "gpt-5.6-sol";
+const EFFORT_POLICY = "xhigh";
+const LEGACY_MODEL_POLICY = "gemini-3.1-pro-preview";
+const LEGACY_EFFORT_POLICY = "high";
 const ARTIFACT_KIND = "d2b-delivery/panel-receipt";
 const SCHEMA_VERSION = 2;
 const MAX_RECOMMENDATIONS = 64;
@@ -177,17 +179,18 @@ for (const role of ROLES) {
   for (const k of ["model", "reasoning_effort", "run_id", "receipt_locator"]) {
     if (typeof o[k] !== "string" || !o[k]) fail(`observed.json ${role}: ${k} is required`);
   }
-  if (o.model !== MODEL_POLICY) {
+  const currentBinding =
+    o.model === MODEL_POLICY && o.reasoning_effort === EFFORT_POLICY;
+  const legacyBinding =
+    o.model === LEGACY_MODEL_POLICY &&
+    o.reasoning_effort === LEGACY_EFFORT_POLICY;
+  if (!currentBinding && !legacyBinding) {
     fail(
-      `observed.json ${role}: lane ran on "${o.model}" but policy pins "${MODEL_POLICY}". ` +
-      `Re-dispatch that seat; the record cannot be written.`,
-    );
-  }
-  if (o.reasoning_effort !== EFFORT_POLICY) {
-    fail(
-      `observed.json ${role}: lane ran at effort "${o.reasoning_effort}" but policy pins ` +
-      `"${EFFORT_POLICY}". This is the silent-downgrade case: the dispatch almost certainly ` +
-      `omitted reasoning_effort. Re-dispatch that seat with it set explicitly.`,
+      `observed.json ${role}: lane ran on "${o.model}" at effort ` +
+      `"${o.reasoning_effort}", but policy accepts only "${MODEL_POLICY}"/` +
+      `"${EFFORT_POLICY}" or the exact legacy "${LEGACY_MODEL_POLICY}"/` +
+      `"${LEGACY_EFFORT_POLICY}" compatibility pair. Re-dispatch that seat; ` +
+      `the record cannot be written.`,
     );
   }
   const provider = o.provider ?? PROVIDER_POLICY;

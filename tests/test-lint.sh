@@ -111,6 +111,25 @@ else
   exit 1
 fi
 
+# --- panel review request -------------------------------------------------
+# Reviewers have no shell and receive one generated request rather than a
+# hand-written summary. Exercise that request so incremental ranges, full
+# context, prior verdicts, evidence, and no-rerun instructions cannot silently
+# drop out of the integrator handoff.
+log "--> panel review request"
+if [ -f "$ROOT/scripts/copilot/test-stage-diffs.mjs" ]; then
+  if command -v node >/dev/null 2>&1; then
+    node "$ROOT/scripts/copilot/test-stage-diffs.mjs" >/dev/null
+    ok "panel review request"
+  else
+    fail "node not found; scripts/copilot/test-stage-diffs.mjs cannot run"
+    exit 1
+  fi
+else
+  fail "required gate is missing: scripts/copilot/test-stage-diffs.mjs"
+  exit 1
+fi
+
 # --- binding gate self-coverage -------------------------------------------
 # The seat-roster comparison inside check-bindings.mjs is enforced by parsing
 # source with a regex, and a regex guard can stop matching without anything

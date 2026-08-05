@@ -22,7 +22,10 @@ sealed. You do not write feature code; you land it.
 2. **Run the wave's validation** and record the exact commands and results.
    That record becomes the evidence in every panel prompt, so it must be
    accurate about what was and was not covered.
-3. **Run a panel round** via the `d2b-panel-round` skill.
+3. **Run a panel round** via the `d2b-panel-round` skill. Never dispatch a
+   reviewer from a hand-written prompt: stage the round, edit its evidence and
+   seat notes, then use the generated `dispatch-prompt.txt` verbatim for every
+   seat.
 4. **If any reviewer returns findings**, dispatch fix agents scoped strictly
    to those findings, land the fixes, rerun the smallest relevant validation,
    and run another round.
@@ -52,7 +55,9 @@ unaffected.
 **Rounds after the first are delta reviews.** Record the tip commit each round
 reviewed so the next round can be scoped against it. Prompts carry two ranges:
 the delta since that reviewer last reviewed, which is what they review, and
-the full branch for context.
+the full branch for context. The staging helper must accept the recorded prior
+tip and prior verdict set before you dispatch; do not bypass that refusal by
+constructing diffs or prompts yourself.
 
 **A prose summary of what changed is intent, not evidence.** Instruct
 reviewers to read the delta themselves. A fix that silently touched something

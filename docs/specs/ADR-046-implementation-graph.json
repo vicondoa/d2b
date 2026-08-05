@@ -14199,7 +14199,7 @@
       "destinations" : [
         "`packages/xtask/src/delivery/panel.rs`"
       ],
-      "detailedDesign" : "`panel-request` writes the candidate-bound request naming the exact ten roles and required model; `panel-attest` validates a directory of exactly ten strict 14-field records, rejecting wrong model/candidate binding, duplicate provider/run provenance, or inconsistent `signoff`/`recommendations`, per §12.3 Primary reuse disposition: `adapt`. Preserved source-plan detail: copy-unchanged, then adapt to bind the fixed `gemini-3.1-pro-preview` model at reasoning effort `high`/`github-copilot` provider pair and this repository's existing ten-role roster (§12.3).",
+      "detailedDesign" : "`panel-request` writes the candidate-bound request naming the exact ten roles and required model; `panel-attest` validates a directory of exactly ten strict 14-field records, rejecting wrong model/candidate binding, duplicate provider/run provenance, or inconsistent `signoff`/`recommendations`, per §12.3 Primary reuse disposition: `adapt`. Preserved source-plan detail: copy-unchanged, then adapt to bind the fixed `gpt-5.6-sol` model at reasoning effort `xhigh`/`github-copilot` provider pair and this repository's existing ten-role roster (§12.3), while retaining exact-pair compatibility for historical `gemini-3.1-pro-preview`/`high` request-record sets.",
       "entryContracts" : [
         "ADR-046-validation-and-delivery"
       ],
