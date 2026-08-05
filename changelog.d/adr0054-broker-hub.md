@@ -11,11 +11,13 @@
   complete authoritative Cargo-input and generated-output change together
   before broker repin; repin never generates in place.
 - Required broker repin to start from clean `HEAD`, index, tracked, untracked,
-  and ignored state outside existing bounded Bazel roots, share one
-  worktree-local OFD writer lock with the generator, run Bazel directly with
-  `--batch`, and accept only `broker.lock` or a no-op after exact Git and
-  semantic postchecks. Failure may leave that lock dirty and has one exact
-  restore command; no detached snapshot, namespace sandbox, candidate
+  and ignored state outside existing bounded build roots, share one stable
+  user-bookkeeping OFD writer lock with the generator and repository cleanup,
+  and delegate all direct `--batch` Bazel work to one descendant-reaping
+  monitor. Ambient rc discovery is disabled and only the committed `.bazelrc`
+  is loaded. Exact Git and semantic postchecks accept only `broker.lock` or a
+  no-op; failure may leave that lock dirty and requires one operator-run
+  restore command. No detached snapshot, namespace sandbox, candidate
   exchange, receipt, quarantine, or publication transaction is claimed.
 - Corrected the authoritative inventory to four hub/workspace Cargo locks,
   using stable tokens `main`, `broker`, `guest`, and `walker`, with

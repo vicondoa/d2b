@@ -25,10 +25,16 @@
   enforcing `--check` form is strictly read-only.
   `cargo xtask bazel-repin --hub broker` admits only a clean stable original
   with the complete Cargo-input and generated-output set committed at `HEAD`,
-  takes the generator's worktree-local OFD writer lock, and runs Bazel directly
-  in that worktree with `--batch`. Exact before and after Git censuses admit
-  only `bazel/cargo/broker.lock` or a successful no-op; failed or interrupted
-  runs restore that file from the required-clean `HEAD`. Stale or uncommitted
+  takes the generator's stable user-bookkeeping OFD writer lock, and delegates
+  every direct `--batch` Bazel invocation to one repository-owned monitor.
+  Exact before and after Git censuses admit only
+  `bazel/cargo/broker.lock` or a successful no-op. Failed or interrupted runs
+  may leave that lock dirty; the operator must restore it from the
+  required-clean `HEAD` with ADR 0054's exact command before rerunning. These
+  clean admission, monitor, rc, and external-lock protections are
+  broker-specific. The stable non-broker hub tokens remain `main`, `guest`, and
+  `walker`, and those handlers retain ADR 0052's identical wrapper-derived
+  startup paths and single-hub changed-path guards. Stale or uncommitted
   inputs require the explicit generate, review, commit-together, then repin
   workflow. The required hub argument, scoped child environment, and absence
   from Make and workflows are unchanged. Spec 003's plan, tasks, and contracts
@@ -362,12 +368,14 @@ ADR justified by measured prototypes, and this ADR authorizes no such move.
   root, output base, and symlink prefix the wrapper derives, so they cannot
   start a second server. ADR 0054 gives only `broker` a stronger and different
   protocol: required-clean current worktree and committed generated inputs, a
-  shared worktree-local OFD writer lock, direct `broker.lock` output,
-  `--batch`, process-group containment, and exact before and after Git
-  censuses. Broker failure may leave that one lock dirty and restores it from
-  the required-clean `HEAD`; there is no snapshot or publication transaction.
-  The other three hub handlers retain the original startup-path rule and their
-  single-hub changed-path guards; they do not inherit the broker protocol.
+  shared stable user-bookkeeping OFD writer lock, direct `broker.lock` output,
+  a repository-owned monitor for every `--batch` invocation, disabled ambient
+  rc discovery, and exact before and after Git censuses. Broker failure may
+  leave that one lock dirty; the operator restores it from the required-clean
+  `HEAD` before rerunning. There is no snapshot or publication transaction.
+  The other three hub handlers retain the original identical startup-path rule
+  and their single-hub changed-path guards; they do not inherit the broker
+  protocol.
 
   An already-current lock is exit zero with nothing changed rather than an
   error; the run that must report a change is the one after a Cargo workspace

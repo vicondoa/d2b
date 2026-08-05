@@ -168,22 +168,32 @@ separate exact declaration ledger. It covers:
 - target declarations not otherwise represented; and
 - synthesized inert targets.
 
-Each omitted declaration appears exactly once with the reason it is omitted.
-Each inert target matches the closed template and package census and is absent
-from first-party compilation inputs. The lock mirror is checked separately for
-byte equality. The generated root must pass:
+Each declaration has one class-specific reason from the closed set
+`inactive-optional`, `excluded-nonmember-dev`, `unrepresented-target`, and
+`synthesized-inert-target`. Each omitted declaration appears exactly once,
+with the reason for its class; no realized declaration may also appear in the
+ledger. Each inert target matches the closed template and package census and
+is absent from first-party compilation inputs. The lock mirror is checked
+separately for byte equality. The generated root must pass:
 
 ```text
 cargo metadata --manifest-path bazel/cargo/broker-workspace/Cargo.toml --locked --offline
 ```
 
-Independent negatives cover missing, extra, and empty metadata, source,
-checksum, git revision, package feature, target identity, target kind, alias,
-edge kind, edge condition, requested edge feature, default-feature semantics,
-realized edge-feature contribution, and offline metadata availability. A
-negative changes one dimension and must fail its named guard.
+For each of `A`, `W`, `L`, and `R`, independent one-axis negatives cover a
+missing, extra, and empty package projection and a missing, extra, and empty
+edge projection. Further one-axis negatives cover package identity, source,
+checksum, precise git revision, resolved feature, target identity, target
+kind, edge kind, condition, alias, requested feature, default-feature
+semantics, realized edge-feature contribution, locked-metadata failure, the
+actual `broker.lock` identity, and the actual `@broker` identity. Every
+declaration-ledger class independently covers missing, extra, duplicate, and
+wrong-reason rows, and an empty ledger is accepted only when the authoritative
+declaration census proves that class is empty. A negative changes one
+dimension and must fail exactly once at its named guard, not at a shared
+parser or an earlier unrelated guard.
 
-### 3. Keep two single-owner commands and one worktree-local lock
+### 3. Keep two single-owner commands and one stable bookkeeping lock
 
 `cargo xtask gen-bazel` alone writes
 `bazel/cargo/broker-workspace/**` and every other path in its exact generated
@@ -194,24 +204,43 @@ manifest. Broker repin writes only `bazel/cargo/broker.lock`.
 bytes, output census, `A`, `W`, and the declaration ledger without creating a
 lock, scratch directory, temporary file, cache entry, or transaction state. It
 fails on a missing, extra, byte-different, or semantically different output and
-never repairs drift.
+never repairs drift. Passing and failing tests take identical before and after
+snapshots of tracked worktree objects, staged objects, ordinary untracked
+objects, and ignored objects, including each object's type, mode, bytes, and
+symlink target. A clean fixture proves neither outcome creates bookkeeping or
+`.scratch/` state.
 
-Passing and failing tests take before and after snapshots of the complete
-tracked and ignored state. The snapshot includes path census, object kind,
-mode, bytes, and symlink target. The snapshots must be identical. A clean
-fixture separately proves that neither outcome creates a lock or any
-`.scratch/` entry.
+The mutating generator and the broker-repin monitor share one exclusive Linux
+OFD lock outside the reclaimable worktree:
 
-The mutating generator and broker repin share one exclusive worktree-local OFD
-lock in the existing `.scratch/bazel/` policy root. There is no new scratch
-namespace. The mutating process opens the lock with `O_CLOEXEC`; broker repin's
-parent retains the open file description through child termination, reap, and
-all postchecks. The Bazel child cannot inherit it. `gen-bazel --check` neither
-takes nor creates the lock.
+```text
+${D2B_BOOKKEEPING_DIR:-${TMPDIR:-/tmp}/d2b-bookkeeping}/bazel-repin/<worktree-id>.lock
+```
 
-Cooperating repository writers must take this lock. Contention refuses and
-tells the contributor to wait for the other repository mutation command to
-finish, then rerun the same command.
+`worktree-id` is the lowercase SHA-256 of a domain-separated tuple containing
+the canonical absolute Git common directory and canonical absolute worktree
+root. It distinguishes linked worktrees and is never printed. The configured
+bookkeeping root must be absolute. Resolution starts from an anchored
+descriptor, never follows a symlink or magic link, and verifies that the
+bookkeeping root and `bazel-repin` directory are owned by the effective user
+and mode `0700`; absent final directories are created at `0700`. The lock is
+created once at mode `0600`, must remain an effective-user-owned regular
+single-link file, and is never unlinked by repository tooling.
+
+Every open uses `O_NOFOLLOW|O_CLOEXEC`. After acquiring the OFD lock, the
+holder reopens the directory entry and requires its device and inode to equal
+the locked descriptor before every mutation and before release. Replacement,
+symlink, ownership, mode, type, or link-count drift refuses. The lock file
+persists across successful commands so all later writers reuse one inode.
+
+The mutating generator, the broker monitor, `make clean`, and every
+repository-owned Bazel shutdown or cleanup path acquire this same lock before
+mutating generated output, `packages/target/`, or `.scratch/bazel/`. Cleanup
+never removes the bookkeeping file. Contention refuses without mutation and
+tells the contributor to wait for the repository mutation command, then rerun.
+`gen-bazel --check` takes no lock and creates no bookkeeping state. Tests cover
+first creation, persistent inode reuse, all writer pairings, contention,
+cleanup refusal, symlink and replacement attempts, and interruption.
 
 ### 4. Require a clean committed generation boundary
 
@@ -228,29 +257,49 @@ The supported dependency-update flow is:
 Repin never invokes the mutating generator and never repairs, copies, stages,
 or publishes generated inputs.
 
-Before taking the OFD lock, broker repin records a full Git census. The census
-includes `HEAD`, index entries and staged state, tracked worktree state,
-untracked entries, and ignored entries. Only descendants of ADR 0052's exact
-pre-existing bounded Bazel output-user-root, action-cache, and repository-cache
-roots are excluded from path comparison. No other ignored path is excluded.
+Before the generic census, broker repin preflights
+`bazel/cargo/broker.lock`. Its `HEAD`, index, and worktree forms must name one
+tracked regular non-symlink, the worktree file must have `st_nlink == 1`, and
+index and worktree bytes must equal `HEAD`. Every missing, staged, dirty,
+symlinked, hard-linked, replaced, or non-regular state emits exactly:
+
+```text
+D2B-BAZEL-REPIN-BROKER-LOCK: broker lock is not the committed regular single-link file.
+git restore --source=HEAD --worktree --staged -- bazel/cargo/broker.lock
+cargo xtask bazel-repin --hub broker
+```
+
+The diagnostic sentence is fixed and path-free; the first command is the exact
+recovery and the second is the exact rerun. No generic dirty-tree advice may
+precede or replace it.
+
+Broker repin then records a full Git object census. It includes stable `HEAD`,
+tracked worktree objects, staged objects, ordinary untracked objects, and
+ignored objects, recording census membership, object type, mode, bytes, and
+symlink target. The only command-owned baselines are the exact roots that
+already exist when admission is sampled: `packages/target/` and ADR 0052's
+bounded Bazel output user root, disk/action cache, and repository/download
+cache under `.scratch/bazel/`. Their descendants may change. No other ignored
+root is created, excluded, or admitted.
 
 Admission requires:
 
 - `HEAD` is stable across two reads;
 - index and tracked worktree bytes equal `HEAD`;
-- there is no staged, unstaged, untracked, or ignored entry outside the exact
-  bounded Bazel roots;
+- there is no staged, unstaged, ordinary untracked, or ignored entry outside
+  the exact command-owned roots;
 - the complete authoritative input and generated-output change was committed
   together;
 - every governed input and output is a tracked regular non-symlink at `HEAD`;
   and
 - the generated ownership census is exact.
 
-After taking the OFD lock, repin repeats the census and `HEAD` checks, records
-the complete governed input set from `HEAD`, and runs the broker slice of
-`gen-bazel --check`. The check is read-only even though repin already holds the
-writer lock. Every governed input byte must equal its `HEAD` byte immediately
-before the child starts.
+The CLI passes a close-on-exec lifetime pipe to the repository-owned monitor.
+After the monitor takes the OFD lock, it repeats the broker-lock preflight,
+census, and `HEAD` checks, records the complete governed input set from
+`HEAD`, and runs the broker slice of `gen-bazel --check`. The check is
+read-only even though the monitor holds the writer lock. Every governed input
+byte must equal its `HEAD` byte immediately before the first Bazel invocation.
 
 A byte-current change in the index or worktree is still uncommitted and is
 refused. Required-input or generated-output drift uses this exact remedy:
@@ -259,66 +308,100 @@ refused. Required-input or generated-output drift uses this exact remedy:
 run `cargo xtask gen-bazel`, review it, commit the authoritative Cargo inputs and all generated outputs together, then rerun `cargo xtask bazel-repin --hub broker`
 ```
 
-An unrelated staged, unstaged, untracked, or ignored path uses this exact
-remedy:
+An unrelated staged, unstaged, ordinary untracked, or ignored object emits:
 
 ```text
-commit or move every listed unrelated path out of this worktree so HEAD, index, and worktree are clean, then rerun `cargo xtask bazel-repin --hub broker`
+D2B-BAZEL-REPIN-DIRTY: unrelated repository state blocks broker repin (<count> objects).
+git status --short --untracked-files=all --ignored
 ```
 
-The command lists repository-relative paths and spawns no Bazel child on
-either refusal.
+`<count>` is decimal through `99` and `100+` thereafter. The fixed diagnostic
+prints no object name or raw caller-controlled byte. The exact Git command is
+the operator-controlled local inspection surface; after inspecting, the
+operator commits or moves unrelated state and reruns the repin command.
+Adversarial filenames containing control bytes, terminal escapes, newlines,
+absolute-looking text, or non-UTF-8 bytes, and censuses on both sides of the
+cap, prove default output contains only the fixed message and capped count.
+Neither refusal spawns the monitor or Bazel.
 
-Before the child, `bazel/cargo/broker.lock` is opened without following a
-symlink and must be a regular file with `st_nlink == 1`. Its bytes must equal
-the file at `HEAD`. A missing file, symlink, hard link, non-regular object, or
-byte difference refuses before Bazel.
-
-### 5. Repin directly in the clean current worktree
+### 5. Give one monitor the complete direct batch session
 
 Broker repin runs Bazel only in the contributor's current worktree. It creates
 no detached worktree, snapshot, mount or PID namespace, fresh root, candidate
 file, receipt, quarantine, or publication transaction.
 
-The broker child alone uses `--batch`; no persistent Bazel server is started.
-Its ordinary output user root, output base, action cache, repository cache, and
-symlink prefix use ADR 0052's existing bounded `.scratch/` policy. Broker
-repin adds no output root and no scratch namespace.
+An internal repository-owned xtask monitor mode owns the whole broker-repin
+session. The CLI supplies a control pipe whose write end stays open for its
+lifetime and is never inherited by a worker. EOF, explicit cancellation, or
+CLI death starts teardown. The monitor, not the CLI or an individual Bazel
+leader, owns the OFD lock, Git snapshots, subprocesses, final census, and
+result.
 
-The parent constructs the child environment from an empty environment and
-adds only the fixed tool, locale, worktree, bounded-output, and repin-control
-values the invocation requires. Cache credentials, cloud credentials, proxy
-credentials, agent sockets, user rc selection, and inherited repin controls
-are absent. Non-stdio descriptors are closed. The repin controls exist only in
-this child and select exactly `broker`.
+The monitor becomes a Linux child subreaper and creates a dedicated worker
+process group outside its own group. A retained group anchor prevents group-id
+reuse. Every subprocess joins that group; the repin, query, representative
+build, and identity postcheck Bazel invocations run sequentially, and each
+must reach descendant-empty completion before the next starts. Recursive
+descendant discovery plus pidfds and `waitid` cover a leader that exits or is
+killed while a descendant survives; leader exit alone is never an empty-group
+proof.
 
-The child enters a dedicated process group and sets Linux
-`PR_SET_PDEATHSIG`, then verifies that its parent did not change while setting
-it. On a handled signal, timeout, or failure, the parent sends TERM to the
-group, waits a fixed bound, sends KILL to survivors, and reaps the child. The
-parent retains the OFD lock until reap and postchecks complete.
+Every Bazel invocation begins with these startup options:
+
+```text
+--batch --nosystem_rc --nohome_rc --noworkspace_rc --bazelrc=<worktree>/.bazelrc
+```
+
+Only the tracked regular `.bazelrc` whose bytes equal captured `HEAD` is
+loaded. The output user root, output base, action cache, repository cache, and
+symlink prefix retain ADR 0052's existing bounded `.scratch/` policy. The
+monitor constructs every child environment from empty and adds only fixed
+tool, locale, worktree, bounded-output, bookkeeping, and repin-control values.
+Cache, cloud, proxy, and agent credentials and inherited repin controls remain
+absent. The repin controls exist only for the repin invocation and select
+exactly `broker`.
+
+On control-pipe EOF, handled signal, timeout, or failure, the monitor sends
+TERM to the worker group, waits the committed fixed grace, sends KILL, and
+reaps every descendant before releasing the lock. A survivor after the KILL
+poll bound leaves the monitor alive and the lock held; it never turns a
+nonempty session into release. On normal completion the monitor closes and
+reaps the anchor, proves both the worker group and its subreaper child set
+empty, and only then performs the final Git census and releases the lock. No
+repository-owned child or descendant may outlive the monitor or the lock.
+Tests kill the CLI and, separately, a Bazel leader with a surviving
+descendant, prove the lock remains contended until that descendant is dead and
+reaped, and prove the next run then proceeds.
+
+Independent integrations plant rejecting directives in system, home, and
+ambient workspace rc sources and an accepting sentinel only in the explicitly
+named committed `.bazelrc`. The poison is never observed. Argument-shape tests
+also require all four rc options on every repin, query, build, and identity
+invocation, not only the first.
 
 This is process containment, not a host sandbox. There is no mount-namespace
 or fresh-root security claim. Bazel actions are trusted same-user contributor
 code and retain the ordinary host access current Cargo tooling has. A
 concurrent adversarial process under the same uid can race files and is outside
-the threat model. Cooperating repository writers are serialized by the OFD
-lock; accidental movement by other tools is caught by the before and after
+the threat model. Repository-owned writers and cleanup are serialized by the
+OFD lock; accidental movement by other tools is caught by the before and after
 checks.
+An adversarial same-uid process that does not use repository commands and
+mutates outside this protocol remains a non-goal.
 
 Bazel writes `bazel/cargo/broker.lock` directly. There is no rollback or
 second publication step.
 
 ### 6. Validate the direct result and leave failure recoverable
 
-After the Bazel child is terminated and reaped, while the parent still holds
-the OFD lock, repin requires:
+After every worker is terminated and reaped, while the monitor still holds the
+OFD lock, repin requires:
 
 - `HEAD` still equals the captured commit;
 - every governed input still equals its captured `HEAD` bytes;
-- the full Git census, including tracked, staged, untracked, and ignored
-  entries outside the exact bounded Bazel roots, differs from the prestate by
-  either no path or exactly `bazel/cargo/broker.lock`;
+- the full Git census, including tracked, staged, ordinary untracked, and
+  ignored objects, has no change outside the exact command-owned roots and
+  `bazel/cargo/broker.lock`;
 - `broker.lock` is again a regular non-symlink with `st_nlink == 1`;
 - the lock parses and the selected hub resolves;
 - locked offline metadata for the generated workspace succeeds;
@@ -326,19 +409,24 @@ the OFD lock, repin requires:
   and
 - `L` and `R` pass every exact comparison against `A` and each other.
 
-An empty changed-path set is a successful already-current no-op. A changed set
+After subtracting changes beneath the exact command-owned roots, an empty
+changed-object set is a successful already-current no-op. A singleton
 containing only `broker.lock` is successful only after all semantic checks
-pass. Any other path, index change, ignored entry, type change, link-count
-change, parse failure, or projection mismatch is failure.
+pass. No other singleton or set is accepted. Any other tracked, staged,
+ordinary untracked, or ignored creation, removal, byte change, type change,
+mode change, symlink-target change, index change, link-count change, parse
+failure, or projection mismatch is failure. Independent post-admission
+injections cover every object class and movement kind.
 
-Independent spoke mutations alter source, checksum, git revision, feature,
-target, alias, or edge semantics in actual `broker.lock` while `@broker` and
-the generated witness remain unchanged, and separately in actual `@broker`
-while `broker.lock` and the witness remain unchanged. Each side must fail its
-own authoritative comparison and the symmetric actual-to-actual comparison
-where the field is shared.
+Independent spoke mutations alter package identity, source, checksum, git
+revision, feature, target identity or kind, alias, edge kind, condition, or
+edge feature in actual `broker.lock` while `@broker` and the generated witness
+remain unchanged, and separately in actual `@broker` while `broker.lock` and
+the witness remain unchanged. Each side must fail its own authoritative
+comparison and the symmetric actual-to-actual comparison where the field is
+shared.
 
-A Bazel error, validation failure, handled termination, or killed parent may
+A Bazel error, validation failure, handled termination, or killed CLI may
 leave a dirty or partial `broker.lock`. Repin does not claim transactional
 publication and does not attempt automatic recovery. The exact recovery is:
 
@@ -409,14 +497,14 @@ then proves the spoke guard fails. `guest` and `walker` retain their own hubs.
 | Clean committed inputs and generated outputs; stale broker lock | Success only if `broker.lock` is the sole changed path and all projections pass |
 | Current or stale required input/output staged or unstaged | Refuse before Bazel with the commit-together remedy |
 | Unrelated tracked path staged or unstaged | Refuse before Bazel with the unrelated-path remedy |
-| Untracked path outside the exact bounded Bazel roots | Refuse before Bazel with the unrelated-path remedy |
-| Ignored path outside the exact bounded Bazel roots | Refuse before Bazel with the unrelated-path remedy |
-| State only inside the exact bounded Bazel roots | Permitted subject to ADR 0052's ownership and bounds |
+| Untracked path outside the exact command-owned roots | Refuse before Bazel with the unrelated-path remedy |
+| Ignored path outside the exact command-owned roots | Refuse before Bazel with the unrelated-path remedy |
+| State only inside the exact pre-existing command-owned roots | Permitted subject to ADR 0052's ownership and bounds |
 | `gen-bazel --check` fails | Refuse before Bazel; create no check state |
-| `broker.lock` is absent, linked, non-regular, or differs from `HEAD` | Refuse before Bazel |
+| `broker.lock` is absent, staged, dirty, linked, replaced, non-regular, or differs from `HEAD` | Emit the fixed broker-lock code, exact restore, and exact rerun before the generic census |
 | Writer lock is contended | Refuse; wait for the repository mutation command and rerun |
-| Child fails, is terminated, or a postcheck fails | Failure; broker lock may be partial and uses the exact restore command |
-| Parent is killed | No success claim; broker lock may be partial and uses the exact restore command |
+| CLI or Bazel leader dies while a descendant lives | Monitor kills and reaps the session while retaining the lock |
+| Child fails, is terminated, or a postcheck fails | Failure; broker lock may be partial and the operator uses the exact restore command |
 | `HEAD`, index, governed input, or another repository path moves | Failure; preserve evidence, restore only broker lock, resolve other movement, rerun |
 
 ## Required validation
@@ -427,38 +515,53 @@ Before amended Spec 003 W0 can close, enforcing carriers must prove:
    separate `packages/Cargo.guest.lock`, the three-lock supply-chain scope,
    and the complete cache-key input set are exact.
 2. `gen-bazel --check` has exact byte, census, projection,
-   declaration-ledger, and before/after tracked-plus-ignored identity on
-   passing and failing runs, with no lock or scratch creation.
-3. Independent missing, extra, empty, source, checksum, git revision, feature,
-   target identity, target kind, alias, edge kind, edge condition, edge
-   feature, and offline-metadata negatives fail their named guards.
-4. Byte-current and stale required states in the index or worktree refuse with
+   declaration-ledger, and before/after tracked, staged, ordinary-untracked,
+   and ignored identity on passing and failing runs, with no bookkeeping or
+   scratch creation.
+3. Each A, W, L, and R projection has independent missing, extra, and empty
+   package and edge negatives. Independent package identity, source, checksum,
+   git revision, feature, target identity and kind, alias, edge kind,
+   condition, feature, locked-metadata, actual-lock identity, actual-repository
+   identity, and direct cross-spoke negatives fail exactly once at their named
+   guards.
+4. Every declaration-ledger class has independent missing, extra, duplicate,
+   wrong-reason, and authoritative-empty coverage with exact-once enforcement.
+5. Byte-current and stale required states in the index or worktree refuse with
    the exact commit-together remedy and spawn no child.
-5. Unrelated staged, unstaged, untracked, and ignored states refuse with the
-   exact unrelated-path remedy and spawn no child.
-6. The worktree-local OFD lock serializes the mutating generator and repin,
-   is `O_CLOEXEC`, is not inherited, and remains held through termination,
-   reap, and postchecks; `gen-bazel --check` takes no lock.
-7. The broker lock's prestate and poststate regular-file, no-symlink,
-   single-link, and `HEAD`-byte requirements fail independently.
-8. Broker Bazel uses `--batch`, a closed allowlisted credential-free
-   environment, a dedicated process group, parent-death signal, bounded TERM
-   then KILL, and reap, without a namespace or fresh-root claim.
-9. HEAD and complete governed inputs remain stable, and the full tracked,
-   staged, untracked, and ignored census outside exact bounded roots changes
-   by only `broker.lock` or by nothing.
-10. Actual `broker.lock` and actual `@broker` each equal the authoritative
+6. Unrelated staged, unstaged, ordinary untracked, and ignored admission and
+   post-admission states refuse without a Bazel result. Empty state and state
+   confined to exact pre-existing command-owned roots succeed.
+7. Broker-lock preflight runs first and independently rejects every tracked,
+   type, symlink, link-count, replacement, index, worktree, and HEAD-byte
+   fault with the fixed code, exact restore, and exact rerun.
+8. The external OFD lock passes first-create, stable-reuse, writer-contention,
+   cleanup-refusal, symlink, replacement, and interruption tests; cleanup and
+   all repository writers share it, while check mode creates none.
+9. CLI-death and leader-death tests retain the lock through bounded TERM,
+   KILL, descendant death, and full reap; the next run proceeds only
+   afterwards. Every Bazel invocation is sequential under `--batch` in the
+   monitor-owned group.
+10. System, home, and workspace rc poison is ignored; only captured committed
+    `.bazelrc` loads. The closed environment contains no cache, cloud, proxy,
+    agent, or inherited repin credential.
+11. HEAD and complete governed inputs remain stable, and the full tracked,
+    staged, ordinary-untracked, and ignored census changes outside exact
+    command-owned roots by only `broker.lock` or by nothing.
+12. Actual `broker.lock` and actual `@broker` each equal the authoritative
     representable projection and each other symmetrically, with independent
     spoke mutations.
-11. Clean already-current repin succeeds as a no-op; child failure, handled
-    termination, killed parent, and every semantic postcheck failure leave no
+13. Clean already-current repin succeeds as a no-op; child failure, handled
+    termination, killed CLI, and every semantic postcheck failure leave no
     success claim and are recoverable by the exact restore command.
-12. Exact nonempty F, B, and M censuses fail independent missing, extra, and
+14. Refusals print only a stable code, fixed path-free message, capped count,
+    and exact local inspection command; adversarial names and counts cannot
+    enter default output.
+15. Exact nonempty F, B, and M censuses fail independent missing, extra, and
     empty mutations before both first-party cross-edge directions and both
     direct cross-spoke directions are checked.
-13. Real Bazel query and representative builds reproduce the target,
+16. Real Bazel query and representative builds reproduce the target,
     repository, F, B, and M censuses and consume the committed witness.
-14. ADR 0052's carrier map remains total and unambiguous, with planted missing
+17. ADR 0052's carrier map remains total and unambiguous, with planted missing
     and extra carrier mutations.
 
 Unit tests or generated expected maps alone do not close real Bazel query,
@@ -473,6 +576,10 @@ repository, build, process, census, or carrier items.
 - Broker repin is simpler: it runs in a required-clean current worktree and
   may leave one directly written lock dirty after failure.
 - The clean `HEAD` precondition makes one exact Git restore a safe recovery.
+- Stable user-owned bookkeeping survives worktree scratch reclamation; cleanup
+  now contends with generation and broker repin instead of replacing its lock.
+- A monitor process, rather than the invoking CLI or one Bazel leader, retains
+  exclusion until every repository-owned descendant is gone.
 - The same-user threat model matches current Cargo tooling instead of claiming
   a filesystem sandbox that is not provided.
 - The five shared libraries compile once for the main resolve and once for the
@@ -537,8 +644,8 @@ the result and recovery mechanically unambiguous.
 
 Rejected for this contributor tool. Preventing a same-uid process from
 mutating and restoring repository files would require a different security
-boundary. The worktree-local writer lock serializes cooperating repository
-writers, and exact before and after checks catch accidental movement.
+boundary. The stable bookkeeping lock serializes repository-owned writers and cleanup,
+and exact before and after checks catch accidental movement.
 
 ## Invariants this decision creates
 
@@ -551,13 +658,14 @@ writers, and exact before and after checks catch accidental movement.
    authoritative broker lock with overwrite disabled.
 5. `gen-bazel` alone writes generated Bazel inputs; broker repin alone writes
    `broker.lock`; `gen-bazel --check` is read-only and state-free.
-6. The two writers share one worktree-local OFD lock; the repin parent holds
-   it through child reap and postchecks.
+6. Repository writers and cleanup share one stable external OFD lock; the
+   broker monitor holds it through complete descendant reap and postchecks.
 7. Broker repin admits only clean `HEAD`, index, worktree, untracked, and
-   ignored state outside ADR 0052's exact bounded Bazel roots.
-8. Broker Bazel runs directly in that current worktree with `--batch`, a
-   closed credential-free environment, process-group containment, and no
-   namespace or fresh-root security claim.
+   ignored state outside the exact pre-existing command-owned roots.
+8. Every broker Bazel invocation runs directly and sequentially in that current
+   worktree with `--batch`, ambient rc discovery disabled, only committed
+   `.bazelrc`, a closed credential-free environment, and monitor-owned
+   process-group containment.
 9. Success changes only regular single-link `broker.lock` or changes nothing.
 10. Failure may leave `broker.lock` partial; clean `HEAD` makes the exact Git
     restore safe.
