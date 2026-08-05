@@ -225,6 +225,14 @@ bash .github/skills/d2b-panel-round/scripts/stage-diffs.sh <base> <prev-tip> <ro
 node .github/skills/d2b-panel-round/scripts/make-records.mjs .scratch/panel/<round>
 ```
 
+Staging also writes `review-request.md`, `dispatch-prompt.txt`, and
+`reviewer-notes/<seat>.md`. The integrator edits the evidence and any
+seat-specific rebuttal, then dispatches every reviewer with the exact generated
+prompt. Later reviews fail closed unless `<prev-tip>` matches the previous
+recorded tip and every seat's prior verdict is available, so the incremental
+range and prior-finding instructions cannot be replaced by a free-form
+summary.
+
 Ten separate reviewers is a deliberate cost. This repository's own history is
 the argument: an early panel returned zero sign-offs with eleven high findings
 that the static gate caught none of, and the five-seat council is documented

@@ -74,6 +74,15 @@ it. An unfounded finding drives a wrong change into the tree, so sustaining
 one to save face is worse than admitting the error; equally, a reviewer must
 not withdraw a valid finding merely because the integrator pushed back.
 
+The Copilot panel stages one canonical `review-request.md` for the whole
+roster and one `reviewer-notes/<seat>.md` file per reviewer. The request names
+the exact delta and full ranges, validation evidence, deliverable, finding
+threshold, no-rerun rule, and prior-verdict obligation. The integrator
+dispatches the exact generated `dispatch-prompt.txt` to every seat rather than
+reconstructing those instructions in ten free-form prompts. For a later
+review, staging fails unless the supplied previous tip matches the prior
+`address.json` and every seat's prior verdict is present.
+
 Any content change to the reviewed tree invalidates every prior sign-off in
 that phase, including sign-offs from reviewers whose focus the change did
 not touch. Those reviewers still re-report, but their prompt should scope
