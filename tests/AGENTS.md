@@ -327,7 +327,7 @@ The complete `test-nix-unit` and `test-flake` runners are protected by
 memory (and uses a baseline-adjusted cgroup reading only when the cgroup is
 dedicated), fails closed when no measurement is available, and reports the
 lane, observed peak, configured maximum, and the likely full-system/closure
-cause. The Nix-unit ceiling is 20,227,870 KiB (16,182,296 KiB repaired
+cause. The Nix-unit ceiling is 10,712,982 KiB (8,570,385 KiB repaired
 baseline plus 25% deterministic headroom); the flake ceiling is 17,819,065
 KiB (14,255,252 KiB repaired local-shard baseline plus 25%). These are fixed
 lane contracts, not operator overrides. Full flake evaluation uses the
