@@ -25,11 +25,32 @@
   contributor command that brings the generated stand-in workspace up to date
   itself rather than refusing and asking for a second command. It regenerates
   and validates those inputs offline before it starts the build tool, refuses
-  outright when the files it would rewrite already carry local changes it did
-  not make, and afterwards proves it changed nothing beyond the stand-in
-  workspace and that one build-side lock, naming any other changed path. If the
-  build tool then fails, the stand-in workspace stays current while the
-  build-side lock stays as it was; the command reports that state and re-running
-  it is the recovery, since nothing is rolled back and no local work is
-  overwritten. Build and gate entry points still generate nothing, and the
-  drift gate still refuses a stale committed tree.
+  outright when the stand-in workspace already carries local changes it did not
+  make, naming each one and a single reversible command that puts tracked and
+  untracked entries alike safely aside, and afterwards proves it changed
+  nothing beyond the stand-in workspace and that one build-side lock, naming
+  any other changed path. It accepts a stand-in workspace it wrote itself on an
+  earlier run whose result is not yet committed, so making two dependency
+  changes before committing works, and it still compares every file byte for
+  byte. It never asks anyone to delete a path recursively.
+- Recorded how that command replaces the generated directory: it writes the
+  validated files into a staging area beside the target, on the same
+  filesystem by construction, makes them durable, and swaps them into place in
+  a single step, so the directory is never absent, never half written, and
+  never assembled from a path that was checked once and resolved again to be
+  written. A filesystem that cannot perform that swap is refused before
+  anything is touched rather than worked around, an interrupted run is
+  recovered by comparing what is on disk rather than by trusting a flag it
+  could not have written reliably, the previous copy is deleted only when every
+  file in it is one the command itself measured, and two regeneration commands
+  cannot run over each other. Nothing here adds a privileged path or any state
+  outside the contributor's own working copy.
+- Recorded that the command takes an exact copy of the build-side lock before
+  it starts the build tool. If the build tool fails, that copy is put back, so
+  the lock is exactly what it was even if the tool had already begun rewriting
+  it, while the stand-in workspace stays current; the command reports both and
+  re-running it is the recovery. The command no longer demands that the
+  build-side lock match the last commit before it will run, which had made a
+  successful run refuse the next one and had left no way to regenerate a lock
+  that came out of a merge conflict. Build and gate entry points still generate
+  nothing, and the drift gate still refuses a stale committed tree.

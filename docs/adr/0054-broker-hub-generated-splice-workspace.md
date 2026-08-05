@@ -13,10 +13,15 @@
   `bazel/`; [ADR 0002](0002-non-root-daemon-and-privileged-broker.md) and
   [ADR 0015](0015-daemon-only-clean-break.md), which make
   `d2b-priv-broker` the audited privileged surface whose dependency closure
-  this record refuses to dissolve.
+  this record refuses to dissolve;
+  [ADR 0008](0008-supported-platforms-and-rejected-targets.md), whose kernel
+  floor of 6.6 already covers the `openat2` and `renameat2` primitives section
+  6's transaction uses, so this record raises no platform requirement.
 - Scope: how the `broker` `crate_universe` hub declared in `MODULE.bazel`
-  obtains a spliceable Cargo workspace, and what the repository-owned
-  generator must emit for it. Build-graph shape only.
+  obtains a spliceable Cargo workspace, what the repository-owned generator
+  must emit for it, and how the two contributor-invoked commands that write
+  that generated tree do so safely. Build-graph shape and the commands that
+  produce it.
 - Non-scope: the other three hubs, which are unchanged; the contents of the
   first-party `BUILD.bazel` files, which ADR 0052 section 4 already owns; any
   runtime, daemon, broker-op, or packaging behaviour. No entry in
@@ -232,6 +237,78 @@ generator must read. Constraint 12 fixes which targets a broker-hub first-party
 variant may carry. Constraint 13 fixes what the hub's `manifests` attribute has
 to name for generated-tree staleness to be catchable by the substrate at all.
 
+### Measured constraints on the replacement primitive
+
+Section 6 replaces a tracked directory that already exists with a directory of
+the same shape, so the primitive that does it is part of the decision rather
+than an implementation detail left to whoever writes the code. Measured on
+2026-08-04 on Linux 7.0.10 with the worktree on ext4, by direct syscall from a
+C probe rather than through a crate, so what follows is the kernel's answer and
+not a library's documentation. Every primitive named here is already on this
+repository's trusted path: `packages/d2b-host/src/hardlink_farm.rs` publishes a
+staged tree with `renameat_with(.., RenameFlags::EXCHANGE)` today, and
+`packages/d2b-host/src/bin/d2b-activation-helper.rs` resolves every untrusted
+component with `openat2` and `ResolveFlags`. Both syscalls are far below the
+ADR 0008 kernel floor of 6.6.
+
+14. **`renameat2(RENAME_EXCHANGE)` swaps two non-empty directories in one
+    step, and nothing else does.** Exchanging two non-empty directories
+    returned 0, and afterwards each name resolved to the other's contents.
+    `rename(2)` of a directory onto a non-empty directory returned
+    `ENOTEMPTY`; `rmdir(2)` and `unlinkat(AT_REMOVEDIR)` on a non-empty
+    directory returned `ENOTEMPTY`. So a path-based "remove the old tree, then
+    move the new one in" cannot be written without a recursive delete, and it
+    cannot avoid a window in which the tracked name is absent or half
+    populated. The exchange has no such window: the name resolves to a
+    complete tree before the call and to a complete tree after it. Measured on
+    tmpfs as well, which also returned 0.
+15. **The exchange is same-filesystem only, and cross-mount is `EXDEV`.**
+    Exchanging a directory on the worktree's ext4 with one on `/dev/shm`
+    returned `EXDEV` ("Invalid cross-device link"). A directory created by
+    `mkdirat` under a descriptor is on that descriptor's filesystem by
+    construction, which is why section 6 stages under `bazel/cargo/` and not
+    under `.scratch/`: nothing in the repository constrains what `.scratch/`
+    is mounted on, and a design whose atomicity depends on an unconstrained
+    path is a design that fails on someone else's machine.
+16. **The exchange refuses an absent destination, and `RENAME_NOREPLACE` is
+    its exact complement.** `RENAME_EXCHANGE` with the destination absent
+    returned `ENOENT`, and with the source absent returned `ENOENT`.
+    `RENAME_NOREPLACE` returned 0 onto an absent destination and `EEXIST` onto
+    an existing one. The two flags therefore cover the first-creation case and
+    the replacement case with no overlap, and neither can clobber: whichever
+    arm is wrong for the state on disk fails rather than removing something.
+17. **Anchored resolution covers every operation this needs, and one detail
+    bites.** `openat2` with
+    `RESOLVE_BENEATH | RESOLVE_NO_SYMLINKS | RESOLVE_NO_MAGICLINKS |
+    RESOLVE_NO_XDEV` opened a multi-component relative path under a directory
+    descriptor, refused a symlinked entry with `ELOOP`, and refused `../..`
+    with `EXDEV`. `renameat2` accepted two distinct directory descriptors as
+    its two anchors, and accepted `O_PATH` descriptors. But `fsync` on an
+    `O_PATH` descriptor returned `EBADF`, while `fsync` on the same directory
+    opened `O_RDONLY | O_DIRECTORY` returned 0, so the anchors section 6 makes
+    durable are opened `O_RDONLY | O_DIRECTORY | O_CLOEXEC` and never
+    `O_PATH`. `openat2` with `RESOLVE_NO_SYMLINKS` also refuses an absolute
+    path whose ancestor is a symlink, with `ELOOP`, and a contributor's
+    worktree legitimately sits under symlinked ancestors; so the worktree root
+    is opened once by ordinary `open` and everything inside it is resolved
+    beneath that descriptor.
+18. **An open file description write lock excludes a second process and
+    leaves nothing stale.** `F_OFD_SETLK` with `F_WRLCK` on a file opened
+    through the anchored chain returned 0 for the first holder, `EAGAIN`
+    ("Resource temporarily unavailable") for a second process while held, and
+    0 again for that second process after the holder released it. The lock
+    belongs to the open file description, so a killed writer leaves no lock
+    for anyone to have to break. `xtask` already depends on `nix` for
+    `F_OFD_SETLK` and on `rustix` for anchored opens, and
+    `packages/xtask/Cargo.toml` records why, so neither is a new
+    supply-chain edge.
+
+Constraints 14 through 18 fix the transaction shape: exchange rather than
+replace, stage as a sibling of the target rather than in `.scratch/`,
+`RENAME_NOREPLACE` for the first creation, `O_RDONLY | O_DIRECTORY` anchors for
+the descriptors that get fsynced, and one open file description lock for
+ownership.
+
 ### Drift noted, not corrected
 
 `bazel/cargo/README.md`, committed on `spec003-w0-planfix`, states that the
@@ -446,21 +523,90 @@ of this record enforced an order with a refusal, and an order that has to be
 enforced is an order someone will be told to satisfy by running the command the
 tool could have run itself.
 
+**One authorized sibling holds the transaction state.**
+`bazel/cargo/.broker-workspace.txn/` is the only path outside
+`bazel/cargo/broker-workspace/**` and `bazel/cargo/broker.lock` that this
+decision authorizes either writer to create. It is a sibling of the generated
+subtree under the same anchored parent, which is what makes it the same
+filesystem by construction rather than by hope (constraint 15), and it is
+transaction state rather than general scratch: nothing generates into it,
+nothing reads it as a build input, and between transactions it holds two files,
+`lock` and `published`. During a transaction it also holds `staged/`, the copy
+of the validated tree that will be exchanged in; `journal`, the durable record
+recovery reads; and `hub-lock.pre`, the exact prior bytes of
+`bazel/cargo/broker.lock`. `published` is the receipt of the last successful
+publication, the same digest set the journal carried, installed by renaming
+`journal` over it at teardown so one atomic operation both clears the recovery
+trigger and records what was published. A committed `.gitignore` entry keeps
+the directory out of
+`git status --porcelain`, without which step 1's snapshot and step 14's
+changed-path check would both trip over the command's own workspace, and a
+generated `.bazelignore` entry keeps Bazel from defining a package for a staged
+tree that carries its own `BUILD.bazel`. `cargo xtask gen-bazel --check`
+refuses when either entry is missing.
+
+Ordinary generation and validation still happen in the repository's ignored
+`.scratch/` root, which is where an unvalidated tree belongs. Bytes cross from
+there into the transaction directory by copy, once, after they are validated,
+because nothing in the repository constrains what `.scratch/` is mounted on and
+constraint 15 makes that the difference between an atomic publish and `EXDEV`.
+The transaction directory never holds an unvalidated tree.
+
+**One writer at a time.** Both writers of the generated subtree, this command
+and `cargo xtask gen-bazel`, take an `F_OFD_SETLK` write lock on
+`bazel/cargo/.broker-workspace.txn/lock` before touching it and hold it until
+they exit, so a generator and a repin, or two repins, cannot race the exchange.
+A second writer gets `EAGAIN` (constraint 18) and refuses, naming the lock path
+and the fact that another generator or repin holds it. The lock belongs to the
+open file description, so a killed writer leaves nothing stale to break, and it
+is a worktree file owned by the invoking user: this decision creates no
+persistent root surface, no daemon, no unit, and no state outside the
+worktree. `cargo xtask gen-bazel --check` is read-only and takes no lock;
+because the subtree is published by exchange it can never observe a partial
+tree, only the pre-write or the post-write one.
+
 **The closed sequence.** `cargo xtask bazel-repin --hub broker` performs
-exactly these steps, in this order, and fails closed at each. Steps 1 through 5
-write nothing outside the ignored scratch root.
+exactly these steps, in this order, and fails closed at each. Steps 1 through 9
+mutate no tracked path; they write only inside `.scratch/` and the transaction
+directory. Step 10 is the only step that writes the generated subtree, and
+`bazel/cargo/broker.lock` is written only by the child in step 12 and by step
+13's restore of the snapshot taken before it.
 
 1. **Snapshot.** Record the worktree state: `git status --porcelain` over the
-   repository plus a content hash for every path it names. Step 9 retakes the
+   repository plus a content hash for every path it names. Step 14 retakes the
    same snapshot and subtracts, so the command's own change set is separable
    from whatever the contributor already had in flight.
-2. **Generate into scratch.** Emit the broker splice workspace into a scratch
+2. **Anchor and lock.** Open the worktree root once with an ordinary
+   `open(O_RDONLY | O_DIRECTORY | O_CLOEXEC)`, because an absolute path whose
+   ancestors are outside the repository may legitimately contain symlinks
+   (constraint 17). Resolve `bazel/cargo` beneath it with `openat2` under
+   `RESOLVE_BENEATH | RESOLVE_NO_SYMLINKS | RESOLVE_NO_MAGICLINKS |
+   RESOLVE_NO_XDEV`, opened `O_RDONLY | O_DIRECTORY | O_CLOEXEC` so the same
+   descriptor can be a rename anchor and an fsync target. Every path this
+   command reads or writes under `bazel/cargo/` is resolved relative to that
+   descriptor under those flags, and no decision is ever taken from a `stat` on
+   a string path and then acted on by a second open of the same string: the
+   descriptor that answered the question is the descriptor that performs the
+   operation. Then `mkdirat` the transaction directory, tolerating `EEXIST`,
+   and take the write lock.
+3. **Prove the primitive before doing any work.** `mkdirat` two throwaway
+   directories inside the transaction directory and exchange them with
+   `renameat2(RENAME_EXCHANGE)`. `EINVAL`, `ENOSYS`, `EOPNOTSUPP` or `EPERM`
+   here means this worktree is on a filesystem that cannot publish the subtree
+   safely; the command exits nonzero naming the filesystem and the remedy,
+   having read no manifest and written nothing but two empty directories it
+   then removes. There is no recursive fallback, here or anywhere: the
+   alternative to the exchange is refusal.
+4. **Finish or refuse an interrupted transaction.** A `journal` present in the
+   transaction directory means a previous run did not reach its end. Recovery
+   is decided by content, never by a phase flag, and is stated in full below.
+5. **Generate into scratch.** Emit the broker splice workspace into a scratch
    directory under the repository's ignored `.scratch/` root, through the
    generator entry point of section 4, from
    `cargo metadata --manifest-path packages/d2b-priv-broker/Cargo.toml
    --locked` plus the authoritative lock's bytes. The tracked subtree is not an
    input to this step; it is only a destination.
-3. **Validate the scratch tree before it may become the tracked tree.**
+6. **Validate the scratch tree before its bytes may become the tracked tree.**
    Section 4's three named refusals run on it. Its `Cargo.lock` must be
    byte-identical to `packages/d2b-priv-broker/Cargo.lock`. And
    `cargo metadata --manifest-path <scratch>/Cargo.toml --locked --offline`
@@ -469,57 +615,194 @@ write nothing outside the ignored scratch root.
    anything is written and without a network or a Bazel process. Any failure
    names the reason and leaves the worktree byte-identical to how the command
    found it.
-4. **Refuse ambient work rather than overwrite it.** The command may write only
+7. **Refuse ambient work rather than overwrite it.** The command may write only
    `bazel/cargo/broker-workspace/**` and `bazel/cargo/broker.lock`, so it
-   inspects both before writing either. Every path under the generated subtree,
-   tracked or untracked, must be byte-identical either to its committed content
-   at `HEAD` or to what step 2 produced, and the subtree must hold no path
-   outside the union of those two file sets. `bazel/cargo/broker.lock` must be
-   byte-identical to its committed content at `HEAD`. Anything else is a local
-   modification this command did not make and would destroy: a hand edit of a
-   generated file, a half-applied patch, a conflicted merge, a lock left
-   uncommitted by an earlier run. The command exits nonzero, lists every
-   offending path repository-relative, names both remedies (`git restore` to
-   discard the local change, or commit or stash it to keep it), and spawns no
-   Bazel. The two permitted subtree states are exactly the two in which no
-   contributor work exists to lose: the committed tree, and the tree this run
-   would produce anyway. The authoritative broker manifest and lock are
-   deliberately outside this check. They are the inputs the contributor is
-   editing, and requiring them clean would refuse the case the command exists
-   to serve.
-5. **Refuse on the one input it may not write.** If the fresh generation
+   inspects the subtree before writing anything. That inspection is one pass
+   through the anchored descriptor chain: every directory and every file under
+   the subtree is opened with `openat2` under the four resolve flags of step 2
+   and hashed from the descriptor just opened, and that single pass produces
+   both the admission decision and the old-tree inventory step 11's removal is
+   bounded by, so the content the check approved is exactly the content the
+   removal is authorized against. Every path under the generated subtree,
+   tracked or untracked, must be a directory or a regular file whose bytes are
+   byte-identical to its committed content at `HEAD`, or to what step 5
+   produced, or to the digest the transaction directory's `published` receipt
+   records for that path, and the subtree must hold no path outside the union
+   of those three file sets. A symlink, a device node, a socket or a fifo is
+   refused outright:
+   the generator emits neither, so the command has no basis for deciding what
+   one means. Anything else is a local modification this command did not make
+   and would destroy: a hand edit of a generated file, a half-applied patch, a
+   conflicted merge, a stray scratch file someone dropped in the subtree. The
+   command exits nonzero, lists every offending path repository-relative,
+   prescribes the reversible remedy that covers tracked and untracked entries
+   alike, and spawns no Bazel. The three permitted subtree states are exactly
+   the three in which no contributor work exists to lose: bytes that are
+   already in git, bytes this run can reproduce, and bytes an earlier run of
+   this command recorded writing. The third exists because without it a second
+   dependency edit before the first is committed would be refused on a subtree
+   the command itself published, which is the same defect, in the same command,
+   that withdrawing the clean-at-`HEAD` rule on the hub lock removes. A missing
+   or unreadable receipt is not fatal and is not repaired silently; it collapses
+   the permitted set to the first two and the ordinary refusal names the paths.
+
+   The authoritative broker manifest and lock are deliberately outside this
+   check. They are the inputs the contributor is editing, and requiring them
+   clean would refuse the case the command exists to serve.
+   `bazel/cargo/broker.lock` is deliberately outside it too, for a different
+   reason given below: it is the generated artifact this command exists to
+   replace.
+8. **Refuse on the one input it may not write.** If the fresh generation
    implies a `manifests` list for the `broker` hub other than the one committed
    in `MODULE.bazel`, the command exits nonzero naming `MODULE.bazel` and
    `cargo xtask gen-bazel` as the remedy, still having written nothing. That
    list changes only when the broker's path-dependency closure gains or loses a
    package, which a version change and a feature change never do, so this
    refusal is off the ordinary path. It exists because `MODULE.bazel` is
-   outside the permitted final path set of step 9 and because rendering a hub
+   outside the permitted final path set of step 14 and because rendering a hub
    from a declaration the repository has since replaced is the failure this
    record spent round 1 refusing.
-6. **Synchronize the subtree.** Replace `bazel/cargo/broker-workspace/` with
-   the validated scratch result, including the lock mirror, so the tracked
-   subtree is byte-equal to what `cargo xtask gen-bazel` would emit. Nothing
-   under `packages/` is written, no other hub's inputs are written, and
-   `MODULE.bazel` is not written.
-7. **Spawn exactly one Bazel child.** ADR 0052 section 3's controls are
-   unchanged: one child process, `CARGO_BAZEL_REPIN` and
-   `CARGO_BAZEL_REPIN_ONLY=broker` set only in that child's environment and
-   never process-globally, and the same absolute output user root, output base
-   and symlink prefix the Make wrapper derives, so no second server starts.
-8. **Hold the child to one file.** After the child exits, the only tracked file
-   it changed, measured against the state step 6 left behind, must be
-   `bazel/cargo/broker.lock`. This is ADR 0052's rule
-   unweakened, and it keeps its own job: it is what catches a
-   `skip_cargo_lockfile_overwrite` regression rewriting an authoritative
-   `Cargo.lock` (constraint 5) or a second hub's lock moving.
-9. **Hold the command to its permitted set.** The command's own change set,
-   step 1's snapshot subtracted from the same snapshot retaken, must be a
-   subset of `bazel/cargo/broker-workspace/**` plus `bazel/cargo/broker.lock`.
-   Any other changed path fails the command and is listed repository-relative.
-   Steps 8 and 9 are different checks: step 8 bounds what Bazel wrote, step 9
-   bounds what the whole command wrote, and only step 9 sees a generator that
-   scribbled outside its own subtree.
+9. **Stage the validated bytes beside the target.** `mkdirat` `staged` inside
+   the transaction directory and reproduce the validated scratch tree into it
+   descriptor-relatively: `mkdirat` per directory, `openat2` with
+   `O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC` under the same four resolve flags
+   per file, write, `fsync` each file. Read every staged file back through the
+   descriptors just written and require its digest to equal the validated
+   scratch digest, so "the validated bytes" names the bytes that reached the
+   device and not the bytes that were offered to it. `fsync` the staged
+   directories bottom-up, then the transaction directory. Then write the
+   journal once, before anything tracked moves: a format version, the
+   repository-relative subtree path, the old-tree inventory step 7 measured,
+   and the staged tree's path and digest set, materialized as `journal.tmp`,
+   fsynced, `renameat`d over `journal`, with the transaction directory fsynced
+   after.
+10. **Exchange, once.** Re-read the live subtree through the same anchored
+    descriptors and require it to still equal the inventory step 7 recorded.
+    Then `renameat2(txn, "staged", cargo, "broker-workspace", RENAME_EXCHANGE)`
+    when the subtree exists, or the same call with `RENAME_NOREPLACE` when it
+    does not, and `fsync` the `bazel/cargo` descriptor. Constraint 16 makes the
+    two arms exclusive: whichever is wrong for the state on disk returns
+    `ENOENT` or `EEXIST` rather than removing anything. `EBUSY` means the
+    subtree is a mount point and is refused by name. `EXDEV` cannot arise,
+    because `staged` was created by `mkdirat` under a directory created by
+    `mkdirat` under the anchored parent. `bazel/cargo/broker-workspace`
+    resolves to a complete tree at every instant of this step: the old one
+    before the call, the new one after it, never a partial one and never
+    nothing. This is the first step that mutates a tracked path, and the only
+    one that touches the generated subtree; the sole other tracked path this
+    command can change is `bazel/cargo/broker.lock`, written by the child in
+    step 12 and possibly restored in step 13.
+11. **Snapshot the hub lock, then retire the old tree.** Read
+    `bazel/cargo/broker.lock` through the anchor, write its exact bytes to
+    `hub-lock.pre`, fsync it, and only then rewrite the journal to name it, so
+    a journal that names a snapshot is a journal whose snapshot exists; a lock
+    that is absent is recorded as absent and no snapshot file is written. Then
+    remove the old tree, which the exchange left at `staged`: walk it
+    descriptor-relatively and `unlinkat` bottom-up, requiring every entry to
+    appear in the journal's old-tree inventory with the same type and, for a
+    regular file, the same size and the same digest read back from the
+    descriptor. One entry that does not match aborts the removal, leaves the
+    tree in place, and reports that path: the only thing it can be is work that
+    arrived after step 7 measured the tree, and this command does not delete
+    what it cannot account for. `unlinkat(AT_REMOVEDIR)` refuses a non-empty
+    directory (constraint 14), so the removal cannot outrun its own bound even
+    if the bound is wrong.
+12. **Spawn exactly one Bazel child.** ADR 0052 section 3's controls are
+    unchanged: one child process, `CARGO_BAZEL_REPIN` and
+    `CARGO_BAZEL_REPIN_ONLY=broker` set only in that child's environment and
+    never process-globally, and the same absolute output user root, output base
+    and symlink prefix the Make wrapper derives, so no second server starts.
+13. **Hold the child to one file, and settle the hub lock.** After the child
+    exits, the only tracked file it changed, measured against the state step 11
+    left behind, must be `bazel/cargo/broker.lock`. This is ADR 0052's rule
+    unweakened, and it keeps its own job: it is what catches a
+    `skip_cargo_lockfile_overwrite` regression rewriting an authoritative
+    `Cargo.lock` (constraint 5) or a second hub's lock moving. On success the
+    generated lock is accepted, both digests are reported, and `hub-lock.pre`
+    is discarded. On failure the snapshot is restored exactly: materialize
+    `hub-lock.restore` from `hub-lock.pre`, fsync it, `renameat` it over
+    `bazel/cargo/broker.lock` through the anchor, fsync the anchor; or
+    `unlinkat` the lock when the record says it was absent. The restore is
+    reported with the digest the child left, so a child that half-wrote the
+    lock is visible rather than merely undone.
+14. **Hold the command to its permitted set, and tear the transaction down.**
+    The command's own change set, step 1's snapshot subtracted from the same
+    snapshot retaken, must be a subset of `bazel/cargo/broker-workspace/**`
+    plus `bazel/cargo/broker.lock`. Any other changed path fails the command
+    and is listed repository-relative. Steps 13 and 14 are different checks:
+    13 bounds what Bazel wrote, 14 bounds what the whole command wrote, and
+    only 14 sees a generator that scribbled outside its own subtree. Then
+    unlink `hub-lock.pre` and any `.tmp` residue, and last, `renameat` the
+    journal over `published`, one atomic operation that both clears the
+    recovery trigger and installs the receipt of what was published. A crash
+    before that rename leaves `journal` in place, so the next run re-enters
+    recovery and finds nothing left to do. `lock`, `published` and the
+    transaction directory stay; they are the ownership token and the receipt,
+    not transaction state.
+
+**Recovery is decided by content, not by a marker.** There is no way to write
+a marker atomically with `renameat2`, so a phase flag recovery could trust does
+not exist and one it cannot trust would only mislead a reader into thinking it
+does. Step 4 therefore reads the live subtree and `staged` through the anchor
+and decides against the two sets the journal already records, not against a
+fresh generation, so a manifest edited between the interrupted run and the
+recovering one changes nothing about the decision:
+
+- live subtree equal to the journal's old-tree inventory: the exchange had not
+  happened. Any `staged` is an unpublished staging area that no tracked work
+  has ever occupied, so it is removed bounded by the journal's staged path set,
+  and the run continues at step 5 with a fresh generation of its own.
+- live subtree equal to the journal's staged digest set: the exchange had
+  happened. Any `staged` must equal the journal's old-tree inventory and is
+  removed bounded by it; one that does not is left in place, named, and the
+  command exits nonzero without deleting it. Otherwise the run continues from
+  step 11, where the journal's hub-lock record decides whether a snapshot is
+  still to be settled, and then tears the transaction down. A journal that
+  names a `hub-lock.pre` which is absent means the previous run was already
+  tearing down, and the settlement is finished rather than redone.
+- live subtree equal to neither: refuse. List every path that matched neither
+  side, prescribe the reversible remedy, delete nothing, and exchange nothing.
+
+The two branches can both hold only when the old tree and the staged tree are
+byte-equal, in which case either continuation reaches the same end state, so
+the decision is total and unambiguous rather than merely usually right.
+
+**The window that cannot be closed, and what happens in it.** Step 10 re-reads
+the live subtree immediately before the exchange, which bounds the interval
+between measurement and publication to the microseconds between the last read
+and the `renameat2`. It does not eliminate it: no filesystem offers a
+compare-and-exchange over a directory tree, and claiming otherwise would be the
+kind of plausible assertion this record exists to replace with measurements. An
+edit that lands inside that window is not destroyed. The exchange still
+publishes atomically, the edited tree survives under `staged` in the
+transaction directory, step 11's inventory bound refuses to remove it, and the
+command reports that path and exits nonzero. That is a relocation, which this
+record otherwise argues against, and it is accepted here for one reason: the
+alternative in that window is deletion, and a named path a contributor can look
+at beats bytes that are gone.
+
+**Why `bazel/cargo/broker.lock` is outside the ambient check.** Round 2 of this
+record required it byte-identical to `HEAD` before the command would run, and
+that rule is withdrawn. It is wrong on its own terms: a successful run leaves
+that file modified against `HEAD`, so the very next invocation would refuse,
+and the same section claims re-running is always safe and never the wrong thing
+to do. Both cannot be true. It also refuses the two states a contributor most
+needs the command in: a second dependency edit before the first is committed,
+and a merge whose conflict landed in the generated hub lock, which is precisely
+the artifact an explicit repin exists to regenerate.
+
+The asymmetry with the subtree is principled rather than convenient. The
+subtree's content is a pure function of inputs this command has in hand, so
+"byte-equal to what I would produce" is a predicate the command can evaluate,
+and a path failing it is work the command cannot reproduce. The hub lock's
+content is produced by Bazel from a network-touching resolve; no offline
+predicate over it exists, so there is no state of that file the command could
+certify as safe to replace and no state it could certify as work to preserve.
+What replaces the refusal is an exact record: the prior bytes are snapshotted
+before the only writer that can touch them runs, restored exactly if that
+writer fails, and reported as a digest transition when it succeeds. The
+contributor who wants the prior bytes kept rather than reported takes the same
+targeted stash the ambient refusal prescribes, before running the command.
 
 **Nothing here generates on a gate or a build path.** `make`, every workflow,
 and every Bazel invocation on the gate path remain incapable of generating a
@@ -530,28 +813,50 @@ one explicit contributor mutation command that is not a Make target, that no
 workflow may invoke, and that is the only place the three repin environment
 names may appear as a process-environment assignment.
 
-**When the Bazel child fails after the subtree is synchronized.** Steps 1
-through 5 leave the worktree exactly as they found it, so every refusal above
-is total. After step 6 there is one state this command can leave behind that it
-did not find: `bazel/cargo/broker-workspace/**` current, and
-`bazel/cargo/broker.lock` still describing the previous inputs. A Bazel child
-that fails for its own reasons, a full disk, an interrupt, produces it. The
-command exits nonzero and says exactly that, naming both paths and their
-states.
+**When the Bazel child fails after the subtree is published.** Steps 1 through
+9 leave the worktree exactly as they found it, so every refusal before the
+exchange is total. After step 10 there is one state this command can leave
+behind that it did not find: `bazel/cargo/broker-workspace/**` current, and
+`bazel/cargo/broker.lock` byte-identical to the snapshot step 11 took before
+the child ran. A Bazel child that fails for its own reasons, a full disk, an
+interrupt, produces it. The command exits nonzero and says exactly that, naming
+both paths, their states, and the digest the child left on the lock before the
+snapshot was restored over it.
 
-It does not roll back. Rewriting the subtree it just proved correct would make
-a run that did real work indistinguishable from one that never happened, would
-discard the validated generation for no gain, and cannot be made safe against a
-concurrent edit. It does not silently retry either. The recovery is one line in
-the failure message: fix what the Bazel child reported and re-run
+That lock state is guaranteed rather than hoped for, and that is what step 13's
+restore buys. Round 2 could only report that the hub lock was "still describing
+the previous inputs", which is true of a child that wrote nothing and false of
+a child that wrote a partial or wrong lock and then failed. A single regular
+file whose exact prior bytes are on the device, whose only writer did not
+complete, and whose interval is covered by the transaction lock, is restorable
+exactly; so it is restored, and the partial state is one state rather than a
+family of them.
+
+The subtree is a different matter and is not rolled back. Rewriting the tree it
+just proved correct would make a run that did real work indistinguishable from
+one that never happened, would discard the validated generation for no gain,
+and would put a second tracked mutation after the failure the report is about.
+The command does not silently retry either. The recovery is one line in the
+failure message: fix what the Bazel child reported and re-run
 `cargo xtask bazel-repin --hub broker`. The second run regenerates the same
-bytes, because step 2 is deterministic; finds the subtree already equal to them,
-which is step 4's second permitted state, so step 4 passes and step 6 is a
-no-op; and spawns the child again. Re-running is therefore always safe and is
-never the wrong thing to do, which is the property a partial-failure recovery
-has to have. If instead the contributor wants the whole change gone, the
-recovery is the ordinary one, `git restore bazel/cargo/broker-workspace`, and
-the command is what told them the subtree is the only thing it touched.
+bytes, because step 5 is deterministic; finds the subtree already equal to
+them, which is step 7's second permitted state, so step 7 passes and step 10
+exchanges a tree for its own twin; and spawns the child again. Re-running is
+therefore always safe and is never the wrong thing to do, which is the property
+a partial-failure recovery has to have, and which round 2's clean-at-`HEAD`
+rule on the hub lock silently contradicted.
+
+If instead the contributor wants the whole change gone, the recovery is one
+reversible command that covers tracked and untracked entries alike,
+`git stash push --include-untracked -- bazel/cargo/broker-workspace/
+bazel/cargo/broker.lock`, and the command is what told them those are the only
+two paths it touched. Measured at git 2.54.0: with a modified stub, a deleted
+stub source file and an untracked extra file under the subtree, that invocation
+stashed all three, left the subtree byte-identical to `HEAD`, left an unrelated
+edit elsewhere in the worktree untouched, and `git stash pop` restored all
+three including the untracked file. `git restore` on the subtree is not the
+remedy and is not offered as one: measured on the same tree, it restored the
+modification and the deletion and left the untracked file exactly where it was.
 
 That residue is not invisible, which is the property round 1 bought with a
 refusal and this section has to buy some other way. Section 5's fourth gate
@@ -560,6 +865,27 @@ buys it: with the stub manifests named in the hub's `manifests` attribute, a
 replaced fails `determine_repin` at the next analysis of the hub, on the pull
 request, with the substrate's own repin-required message. Committing the
 residue does not get it past review.
+
+**What the command prescribes when it refuses, and what it never prescribes.**
+Step 7's refusal lists every offending path repository-relative and prescribes
+`git stash push --include-untracked -- bazel/cargo/broker-workspace/` followed
+by re-running the command, because that one command is reversible, is bounded
+to the pathspec, and covers the untracked case that is the common shape of this
+refusal: a stray file under a generated subtree is untracked far more often
+than it is a tracked hand edit. A contributor who would rather keep the entries
+in place moves the named paths somewhere they choose; the command lists them
+precisely so that is possible. Step 11's inventory refusal and step 4's
+recovery refusal prescribe the same remedy against the paths they name.
+
+Three remedies are never prescribed. `rm -rf` is not, because an ADR that tells
+a contributor to recursively delete a path under their worktree has externalized
+exactly the risk the rest of this section is spent removing. A broad
+`git clean` is not, because its blast radius is the worktree and the problem is
+one subtree. And `git restore` alone is not, because it does not remove
+untracked files, which is measured above and is the specific way round 2's
+wording was wrong: it named a remedy that leaves the refusal's most likely cause
+in place, so the contributor re-runs, is refused identically, and concludes the
+command is broken.
 
 **The ordering hazard is gone by construction, not by refusal.** Round 1
 described the dangerous sequence: repin first, so the hub renders from the
@@ -682,7 +1008,24 @@ makes a stale generator visible as a cache miss rather than a wrong hit.
 **Repository surface.** Fifteen new tracked files: one root manifest, six stub
 manifests, six empty `src/lib.rs` files, one lock mirror, one `BUILD.bazel`.
 Measured at 139 lines of manifest for the real closure. All generated, all
-drift-checked, none authored.
+drift-checked, none authored. Two tracked one-line additions carry the
+transaction directory: a `.gitignore` entry, which is committed and hand
+maintained, and a `.bazelignore` entry, which the generator emits.
+`cargo xtask gen-bazel --check` refuses when either is missing, because the
+first is what keeps `bazel/cargo/.broker-workspace.txn/` out of
+`git status --porcelain` and therefore out of both changed-path checks, and the
+second is what keeps Bazel from defining a package for a staged tree carrying
+its own `BUILD.bazel`.
+
+**Untracked surface, and it is one directory.**
+`bazel/cargo/.broker-workspace.txn/` exists in a contributor's worktree after
+the first generator or repin run and persists, holding one zero-byte `lock`
+file between transactions. It is authorized transaction state and nothing else:
+no gate reads it, no build input names it, it is owned by the invoking user,
+and this decision creates no root-owned path, no unit, and no state outside the
+worktree. Removing it by hand between runs is harmless; removing it during a
+run breaks that run's ownership lock, which is why it is named for what it is
+rather than looking like a cache.
 
 **Repin surface.** `cargo xtask bazel-repin --hub broker` keeps every property
 ADR 0052 section 3 gave it: an explicit hub from the closed four-hub set,
@@ -690,11 +1033,18 @@ exactly one Bazel child, `CARGO_BAZEL_REPIN` and `CARGO_BAZEL_REPIN_ONLY`
 scoped to that child's environment and forbidden everywhere else, the wrapper's
 derived output user root and output base so no second server starts, no Make
 target and no workflow reachability, and exit zero with nothing changed when
-the lock is already current. Two things change, both narrow.
+the lock is already current. Three things change, all narrow.
 
 It generates and validates the broker splice inputs itself instead of reading
 them, so the mutation is one command rather than an ordered pair, and the
 generated tree is not an input the contributor has to have gotten right first.
+
+It publishes the subtree by exchanging a staged sibling with the live name
+under `renameat2(RENAME_EXCHANGE)`, holding an open file description lock that
+excludes the other writer, and it takes an exact snapshot of the hub lock
+before the Bazel child runs so that a failing child leaves that file
+byte-identical to what the child was handed. The whole transaction lives in one
+ignored sibling directory under `bazel/cargo/`.
 
 And the post-run rule becomes two rules. The Bazel child is still held to
 exactly one changed tracked file, the hub's Bazel-side lock; that rule is not
@@ -704,14 +1054,37 @@ synchronized, `bazel/cargo/broker-workspace/**`, and it fails listing any other
 changed path repository-relative. Nothing else in ADR 0052 section 3 moves.
 
 **A partial state this command can leave behind.** If the Bazel child fails
-after step 6, the generated subtree is current and `bazel/cargo/broker.lock` is
-not. The command reports it, does not roll back, and does not overwrite work it
-did not make; recovery is to fix the reported Bazel failure and re-run the same
-command, which is idempotent, or `git restore bazel/cargo/broker-workspace` to
-drop the change entirely. The residue cannot merge quietly, because section 5's
-fourth gate fails the hub's next analysis with the substrate's repin-required
-message. This is a deliberate trade: round 1 had no such residue and paid for
-it with a refusal that made the ordinary mutation a two-command ritual.
+after step 10, the generated subtree is current and `bazel/cargo/broker.lock`
+is byte-identical to the snapshot taken before the child ran. The command
+reports both, restores that snapshot rather than leaving whatever the child
+left, does not roll the subtree back, and does not overwrite work it did not
+make; recovery is to fix the reported Bazel failure and re-run the same
+command, which is idempotent, or
+`git stash push --include-untracked -- bazel/cargo/broker-workspace/
+bazel/cargo/broker.lock` to drop the change entirely. The residue cannot merge
+quietly, because section 5's fourth gate fails the hub's next analysis with the
+substrate's repin-required message. This is a deliberate trade: round 1 had no
+such residue and paid for it with a refusal that made the ordinary mutation a
+two-command ritual.
+
+**Idempotence is now unconditional, and it was not.** Round 2 required
+`bazel/cargo/broker.lock` clean at `HEAD` before the command would run, which
+made a successful run poison the next one: the file it had just legitimately
+written was the state its own precondition refused. That rule is withdrawn, and
+the same defect in the subtree check is closed the other way, by permitting the
+bytes an earlier run recorded publishing alongside the committed bytes and the
+reproducible ones. Re-running after a success, after a partial failure, after a
+second dependency edit with the first still uncommitted, or on a merge whose
+conflict landed in the generated hub lock all reach the same end state, and the
+only file whose prior bytes matter is snapshotted and reported rather than
+defended by a refusal.
+
+The cost is one small receipt file in the transaction directory, and the
+failure it makes possible is worth naming: a receipt that disagrees with what
+is actually in the subtree would widen what the command may overwrite. It
+cannot, because the receipt is a digest set rather than a permission and every
+permitted path is still compared byte for byte; a stale receipt matches nothing
+and simply drops back to the two-state rule.
 
 **A stub change now makes the hub demand a repin.** With the stubs inside the
 hub digest, a broker dependency change makes the next Bazel analysis of the
@@ -733,11 +1106,13 @@ here.
 
 **Discoverability cost, and it is real.** There is now a directory that looks
 like a Cargo workspace, resolves like the broker workspace, and is not the
-broker workspace. Someone will run `cargo build` in it and it will succeed,
-because empty stubs compile. Mitigations: the generated marker on line one of
-the root manifest, a generated `.bazelignore` entry for
-`bazel/cargo/broker-workspace/target/`, and `gen-bazel --check` refusing when
-the marker is absent.
+broker workspace, and beside it a dot-directory that is neither. Someone will
+run `cargo build` in the first and it will succeed, because empty stubs
+compile. Mitigations: the generated marker on line one of the root manifest, a
+generated `.bazelignore` entry for `bazel/cargo/broker-workspace/target/` and
+for `bazel/cargo/.broker-workspace.txn/`, a committed `.gitignore` entry for
+the transaction directory, and `gen-bazel --check` refusing when the marker or
+either ignore entry is absent.
 
 **ADR 0052.** Nothing is reversed and nothing is superseded. Invariant 2 holds
 unchanged: `Cargo.toml`, the three `Cargo.lock` files and the two
@@ -751,14 +1126,20 @@ the `from_specs` prohibition is untouched. The four-hub set, the three
 authoritative locks, and the ban on the source bootstrap and the repin
 environment controls are all unchanged.
 
-The section 3 repin command is refined in exactly two places, both narrow and
-both stated in full in the repin-surface consequence above: it synchronizes the
-broker hub's generated splice inputs before it spawns Bazel, and its
+The section 3 repin command is refined in exactly three places, all narrow and
+all stated in full in the repin-surface consequence above: it synchronizes the
+broker hub's generated splice inputs before it spawns Bazel; it publishes that
+subtree as a transaction, exchanging a validated staged sibling with the live
+name under an ownership lock and snapshotting the hub lock before the child
+runs so a failing child leaves that file exactly as the child found it; and its
 changed-path rule splits into a child-scoped rule, unchanged from ADR 0052, and
 a command-scoped rule permitting that one file plus the one subtree the command
 synchronized. Its required hub argument, its scoped child environment, its
 single output base, its single child process, its exit-zero-when-current
 behaviour and its absence from Make and continuous integration are unchanged.
+Nothing in ADR 0052 required the hub's Bazel-side lock to be clean at `HEAD`
+before a repin; round 2 of this record added that and round 3 withdraws it, so
+this is a correction inside this record and not a change to ADR 0052.
 
 ### The specific failures this design makes possible
 
@@ -817,16 +1198,64 @@ repin is now a writer, and a writer that runs `cargo xtask gen-bazel`'s
 emission over a subtree can silently discard whatever was already there. The
 realistic shapes are a contributor mid-review with a hand edit under
 `bazel/cargo/broker-workspace/` they were about to revert, a half-applied patch
-or a conflicted merge in that subtree, and an uncommitted
-`bazel/cargo/broker.lock` from an earlier run being replaced by a run whose
-result nobody has looked at. The guard is section 6 step 4, which reads before
-it writes and permits exactly two states per path, the committed content and
-the content this run would produce, so the only bytes the command can replace
-are bytes it can reproduce or bytes that are already in git. Everything else is
-listed repository-relative and refused. The reason it is a refusal rather than
-a stash or a backup copy is that a command with one output set and no hidden
-state is reviewable; a command that relocates a contributor's work somewhere is
-one more place to look when something goes missing.
+or a conflicted merge in that subtree, and an untracked file someone dropped
+under a generated directory. The guard is section 6 step 7, which reads before
+it writes, through the anchored descriptor chain, and permits exactly three
+states per path, the committed content, the content this run would produce, and
+the content an earlier run of this command recorded publishing, so the only
+bytes the command can replace are bytes already in git, bytes it can reproduce,
+or bytes it wrote itself. Everything else is listed repository-relative and
+refused, with the reversible targeted stash as the prescribed remedy because
+the untracked case is the common one and is the case `git restore` does not
+cover. The reason it is a refusal rather than an automatic stash or a backup
+copy is that a command with one output set and no hidden state is reviewable; a
+command that relocates a contributor's work on its own initiative is one more
+place to look when something goes missing.
+
+**A replacement that leaves the tracked subtree absent, mixed, or refused mid
+way.** This is what a path-based "check the tree, then swap the directory in
+from `.scratch/`" produces, and every part of it is measured rather than
+theoretical. The move fails with `EXDEV` when `.scratch/` is on a different
+filesystem, which nothing in the repository forbids (constraint 15). Moving
+onto the existing directory fails with `ENOTEMPTY` (constraint 14), so the
+implementation grows a recursive delete of a tracked tree, and between that
+delete and the move `bazel/cargo/broker-workspace/` does not exist: a
+concurrent `gen-bazel --check`, a concurrent Bazel analysis, or an interrupt
+lands in that window and sees an absent or half-populated tracked directory.
+And a check that resolves a string path and then a write that resolves the same
+string path again is two resolutions of one name, so a symlink swapped in
+between them redirects the write out of the subtree entirely. The guards are
+structural: descriptor-anchored resolution under
+`RESOLVE_BENEATH | RESOLVE_NO_SYMLINKS | RESOLVE_NO_MAGICLINKS |
+RESOLVE_NO_XDEV` so the descriptor that answered the question performs the
+operation; a staged sibling created by `mkdirat` under the anchored parent so
+the filesystem is the same by construction; `RENAME_EXCHANGE` so there is no
+window of absence and no recursive delete on the publish path; the support
+probe of step 3 so an unsupported filesystem refuses before any tracked
+mutation; and the inventory bound of step 11 so the only recursive removal in
+the design is confined to entries the command measured itself.
+
+**A Bazel child that half-writes the hub lock and then fails.** `cargo-bazel`
+renders `bazel/cargo/broker.lock` from a resolve that touches the network; a
+child killed or failed partway can leave that file truncated, or complete but
+rendered from an incomplete fetch. Round 2's report told the contributor the
+lock was "still describing the previous inputs", which is a claim about a file
+the command did not look at after the child touched it. The guard is section 6
+step 11's snapshot and step 13's restore: the exact prior bytes are on the
+device before the child starts, the restore is a single-file `renameat` through
+the same anchor, and the digest the child left is reported rather than
+discarded, so the failure is legible and the end state is one state.
+
+**Two writers racing the exchange.** `cargo xtask gen-bazel` and
+`cargo xtask bazel-repin --hub broker` both write the generated subtree, and
+nothing stops a contributor from running them in two terminals, or a repin
+twice. Without exclusion, two exchanges interleave and the surviving live tree
+is one run's while the retired tree the other run is about to delete is the
+first run's staged copy. The guard is the open file description write lock both
+writers take on `bazel/cargo/.broker-workspace.txn/lock`, measured to return
+`EAGAIN` to the second holder and to release with the process (constraint 18),
+plus step 11's inventory bound, which refuses to remove a tree it did not
+measure even if the lock were somehow bypassed.
 
 **The privileged binary linking a library the broker lock never described.**
 Bind `//packages/d2b-priv-broker:d2b-priv-broker` to
@@ -985,15 +1414,79 @@ inputs makes the state it should have refused unobservable, is answered by
 bounding what may be replaced to bytes the run can reproduce or bytes already
 in git, not by refusing to write.
 
-**Roll back the synchronized subtree when the Bazel child fails.** Rejected.
+**Roll back the published subtree when the Bazel child fails.** Rejected.
 It would rewrite a tree the command just proved correct against the
 authoritative lock, in order to restore a tree it proved stale. It makes a run
 that did real work indistinguishable from one that never started, which is the
 opposite of what a failure report should leave behind. It cannot be made safe
-against a concurrent edit arriving between the synchronization and the
+against a concurrent edit arriving between the publication and the
 rollback, and the rollback itself is a write the changed-path check would then
 have to be taught to permit. The recorded consequence plus an idempotent
 re-run is smaller and honest.
+
+The single-file restore of `bazel/cargo/broker.lock` is not the same decision
+and is adopted. That file is one regular file, its exact prior bytes are on the
+device before the child starts, its only writer did not complete, and the
+transaction lock covers the whole interval, so the restore is exact rather than
+a reconstruction. The subtree has none of those properties: it is fifteen files
+whose prior state the command deliberately proved stale, and restoring it would
+mean performing a second tracked mutation to undo a first one that succeeded.
+
+**Replace the subtree by checking the path, then moving the generated tree in
+from `.scratch/`.** Rejected on measurement, not on taste. `rename` of a
+directory onto a non-empty directory returns `ENOTEMPTY` and `rmdir` on a
+non-empty directory returns `ENOTEMPTY` (constraint 14), so this shape requires
+a recursive delete of a tracked tree followed by a move, which leaves a window
+in which `bazel/cargo/broker-workspace/` is absent or half populated. The move
+itself returns `EXDEV` whenever `.scratch/` is on a different filesystem
+(constraint 15), which nothing in the repository forbids and which a contributor
+can create by pointing `.scratch/` at tmpfs for speed. And resolving the path
+once to check it and again to write it is two resolutions of one string, so a
+symlink swapped in between them redirects the write. `RENAME_EXCHANGE` from a
+staged sibling has none of the four problems and needs no fallback, so no
+fallback is authorized: an unsupported filesystem refuses.
+
+**Require `bazel/cargo/broker.lock` byte-identical to `HEAD` before the command
+will run.** This was round 2 of this record and it is withdrawn. It is
+self-contradictory: the same section calls re-running always safe, while a
+successful run leaves that file modified against `HEAD` and so makes the next
+run refuse. It also refuses the two states the command is most needed in, a
+second dependency edit before the first is committed and a merge conflict in
+the generated hub lock, and the second of those is exactly the artifact an
+explicit repin exists to regenerate. What round 2 was right about is that a
+writer must not silently replace bytes nobody has looked at; what it got wrong
+is the instrument. A refusal is the right instrument for the generated subtree,
+whose content the command can reproduce and therefore certify; for a file
+produced by a network-touching Bazel resolve, no offline predicate exists, and
+the honest instrument is an exact snapshot taken before the writer runs,
+restored exactly if it fails, and reported as a digest transition if it
+succeeds.
+
+**Recover a conflicted subtree by deleting it, and say so in the error.**
+Rejected in all three of its usual spellings. `rm -rf` under a contributor's
+worktree, printed by a tool, is the tool externalizing the risk the rest of
+this design spends its complexity removing. `git clean -fd` has the worktree as
+its blast radius when the problem is one subtree. And `git restore` on the
+subtree, which round 2 named, does not remove untracked files at all: measured
+at git 2.54.0 on a subtree carrying a modified stub, a deleted stub source file
+and an untracked extra, it restored the first two and left the third exactly
+where it was, so a contributor following that remedy is refused a second time
+by the same path and reasonably concludes the command is broken. What is
+prescribed instead is
+`git stash push --include-untracked -- bazel/cargo/broker-workspace/`, measured
+on the same tree to take all three, to leave the subtree byte-identical to
+`HEAD`, to leave an unrelated edit elsewhere untouched, and to be reversed
+exactly by `git stash pop`. Reversible, bounded to a pathspec, and it is a
+command a contributor can read before running.
+
+**Let the command stash or move the conflicting entries itself.** Rejected, and
+this is the boundary between it and the previous entry. Prescribing a
+reversible command the contributor runs keeps the command's output set at two
+paths and keeps its behaviour reviewable; performing the stash makes the
+command a thing that relocates work, which is one more place to look when
+something goes missing and one more state a failed run can leave. The one place
+this record accepts a relocation is the interrupt window of step 10, where the
+alternative is deletion rather than a prompt.
 
 **Let a gate or the Make wrapper regenerate when it finds the tree stale.**
 Rejected, and it is the shape this repository has refused before. A gate that
@@ -1045,48 +1538,106 @@ integration can reach.
    main-workspace variants under `rust-main-workspace-tests`. Both library
    variants appear in the ADR 0052 section 5 coverage map.
 8. `cargo xtask bazel-repin --hub broker` is a closed mutation that
-   synchronizes its own generated inputs. In order, and writing nothing outside
-   an ignored scratch root until the synchronization step: it regenerates the
-   broker splice workspace into scratch through the same generator entry point
-   `cargo xtask gen-bazel` calls, never reading the tracked subtree as an
-   input; it validates that
+   synchronizes its own generated inputs. In order, and mutating no tracked
+   path until the exchange: it anchors on the worktree root and resolves
+   `bazel/cargo` beneath it with `openat2` under
+   `RESOLVE_BENEATH | RESOLVE_NO_SYMLINKS | RESOLVE_NO_MAGICLINKS |
+   RESOLVE_NO_XDEV`, and every path it reads or writes under that directory is
+   resolved relative to that descriptor under those flags, with no decision
+   taken from a `stat` on a string path and acted on by a second open of the
+   same string; it takes an `F_OFD_SETLK` write lock on
+   `bazel/cargo/.broker-workspace.txn/lock`, refusing when another writer holds
+   it; it proves `RENAME_EXCHANGE` works on that filesystem before doing any
+   other work and refuses with the filesystem and the remedy named when it does
+   not; it finishes or refuses an interrupted transaction; it regenerates the
+   broker splice workspace into an ignored scratch root through the same
+   generator entry point `cargo xtask gen-bazel` calls, never reading the
+   tracked subtree as an input; it validates that
    scratch tree, requiring section 4's refusals to pass, its lock mirror to be
    byte-identical to `packages/d2b-priv-broker/Cargo.lock`, and
    `cargo metadata --locked --offline` on it to exit zero; it refuses when any
-   path under `bazel/cargo/broker-workspace/`, tracked or untracked, is neither
-   its committed `HEAD` content nor the freshly generated content, or when the
-   subtree holds a path outside the union of those two file sets, or when
-   `bazel/cargo/broker.lock` differs from its committed `HEAD` content; it
-   refuses when the committed `manifests` list for the hub is not what the
-   fresh generation implies, naming `MODULE.bazel` and
-   `cargo xtask gen-bazel`; and it then synchronizes only
-   `bazel/cargo/broker-workspace/**` from the validated result. It writes
-   nothing under `packages/`, no other hub's inputs, and not `MODULE.bazel`.
-   Every refusal above names every offending path repository-relative and
+   path under `bazel/cargo/broker-workspace/`, tracked or untracked, is none of
+   its committed `HEAD` content, the freshly generated content, and the content
+   the transaction directory's publication receipt records, or when the subtree
+   holds a path outside the union of those three file sets, or when it
+   holds any entry that is not a directory or a regular file; it refuses when
+   the committed `manifests` list for the hub is not what the fresh generation
+   implies, naming `MODULE.bazel` and `cargo xtask gen-bazel`; and it then
+   publishes only `bazel/cargo/broker-workspace/**` from the validated result.
+   It writes nothing under `packages/`, no other hub's inputs, and not
+   `MODULE.bazel`. `bazel/cargo/broker.lock` is not required clean at `HEAD`
+   and never has been by ADR 0052; requiring it would make a successful run
+   refuse the next one.
+   Every refusal above names every offending path repository-relative,
+   prescribes a reversible remedy that covers untracked entries, and
    spawns no Bazel process, creates no output base, and places
    `CARGO_BAZEL_REPIN` and `CARGO_BAZEL_REPIN_ONLY` in no child environment.
-9. That command then spawns exactly one Bazel child under ADR 0052 section 3's
-   scoped controls and derived output root. Two changed-path rules bound the
-   result. The child may change only `bazel/cargo/broker.lock`, which is ADR
-   0052's rule unweakened. The command's own change set, computed by
-   subtracting a pre-run worktree snapshot from the same snapshot retaken, must
-   be a subset of `bazel/cargo/broker-workspace/**` plus
-   `bazel/cargo/broker.lock`; any other changed path fails the command and is
-   listed repository-relative. When the child fails after synchronization the
-   command reports the resulting state, subtree current and hub lock unchanged,
-   and never rolls the subtree back and never overwrites a modification it did
-   not make; re-running the same command is the recovery and is idempotent.
-10. This decision adds no Make target, no Layer-1 job, no required
+9. The publication is a transaction with no window of absence and no
+   unbounded deletion. The validated bytes are copied into
+   `bazel/cargo/.broker-workspace.txn/staged`, a directory created by `mkdirat`
+   under the anchored `bazel/cargo` descriptor and therefore on the same
+   filesystem by construction; every staged file is fsynced and read back
+   through the descriptor that wrote it; a journal recording the measured
+   old-tree inventory and the staged digest set is made durable first; and the
+   subtree is then published by one
+   `renameat2(.., RENAME_EXCHANGE)` when it exists or one
+   `renameat2(.., RENAME_NOREPLACE)` when it does not, followed by an `fsync`
+   of the anchor. There is no recursive-delete fallback and no path-based
+   replacement; an unsupported primitive refuses before any tracked mutation.
+   After the exchange the old tree sits at the transaction name and is removed
+   descriptor-relatively only if every entry matches the journal's old-tree
+   inventory by path, type, size and digest; one entry that does not aborts the
+   removal, leaves the tree in place, and reports that path. Recovery from an
+   interruption is decided by comparing the live subtree's content to the two
+   sets the journal already recorded, its old-tree inventory and its staged
+   digest set, never by a phase marker and never against a fresh generation
+   that a later manifest edit could have moved, and refuses without deleting or
+   exchanging anything when the live subtree matches neither.
+10. That command then spawns exactly one Bazel child under ADR 0052 section 3's
+    scoped controls and derived output root. Two changed-path rules bound the
+    result. The child may change only `bazel/cargo/broker.lock`, which is ADR
+    0052's rule unweakened. The command's own change set, computed by
+    subtracting a pre-run worktree snapshot from the same snapshot retaken, must
+    be a subset of `bazel/cargo/broker-workspace/**` plus
+    `bazel/cargo/broker.lock`; any other changed path fails the command and is
+    listed repository-relative. The exact bytes of `bazel/cargo/broker.lock`,
+    or the fact of its absence, are captured before the child starts; on child
+    failure they are restored exactly by a single-file `renameat` through the
+    anchor, or by `unlinkat` when the record says absent, and the digest the
+    child left is reported; on child success the rendered lock is accepted, the
+    digest transition is reported, and the snapshot is discarded. When the child
+    fails after publication the command reports the resulting state, subtree
+    current and hub lock byte-identical to its pre-child bytes, never rolls the
+    subtree back and never overwrites a modification it did not make;
+    re-running the same command is the recovery and is idempotent from every
+    state this command can leave, including one in which
+    `bazel/cargo/broker.lock` differs from `HEAD`.
+11. This decision adds no Make target, no Layer-1 job, no required
     continuous-integration context, and no top-level shell gate. Its checks
     extend `test-drift`, which already exists for this class of staleness. No
     gate, Make target, workflow, or Bazel invocation on the gate path generates
     a tracked artifact. The only writers of
     `bazel/cargo/broker-workspace/**` are `cargo xtask gen-bazel` and, for that
     subtree alone, `cargo xtask bazel-repin --hub broker`; both are
-    contributor-invoked and neither is reachable from Make or continuous
+    contributor-invoked, both take the same write lock before writing, and
+    neither is reachable from Make or continuous
     integration. `cargo xtask gen-bazel --check` in `test-drift` stays
-    read-only and remains the fail-closed gate for a stale tracked tree.
-11. Let B be every target of a broker Cargo workspace member plus every
+    read-only, takes no lock, and remains the fail-closed gate for a stale
+    tracked tree.
+12. `bazel/cargo/.broker-workspace.txn/` is the only path outside
+    `bazel/cargo/broker-workspace/**` and `bazel/cargo/broker.lock` that either
+    writer may create. It is transaction state, not general scratch: no gate,
+    build, or hub declaration reads it, it holds only the ownership lock and
+    the publication receipt between transactions, it is owned by the invoking
+    user, and this decision creates no
+    root-owned path, no systemd unit, and no state outside the worktree. It is
+    named in a committed `.gitignore` entry and in a generated `.bazelignore`
+    entry, and `cargo xtask gen-bazel --check` refuses when either is missing.
+    Unvalidated generation stays in `.scratch/`, whose filesystem this decision
+    does not constrain and does not depend on. The receipt widens no
+    permission: every path it names is still compared byte for byte, so a
+    stale or absent receipt narrows the permitted set rather than opening one.
+13. Let B be every target of a broker Cargo workspace member plus every
     `-broker` variant, and M every other first-party Rust target. Over Rust
     compile and link edges, the `deps` and `proc_macro_deps` closure, the
     first-party portion of `deps(B)` is a subset of B and the first-party
@@ -1105,6 +1656,13 @@ record merges. Each is a command and a verdict.
 1. `cargo xtask gen-bazel` on a clean tree, then `git status --short`, lists
    only `MODULE.bazel`, `bazel/cargo/broker-workspace/**`, `.bazelignore`, and
    the first-party `BUILD.bazel` files the generator already owns.
+   `bazel/cargo/.broker-workspace.txn/` exists on disk afterwards and appears
+   in neither `git status --short` nor `git status --porcelain`, which is the
+   evidence that the committed `.gitignore` entry is present and that neither
+   changed-path check can trip over the command's own workspace. Removing
+   either the `.gitignore` or the `.bazelignore` entry makes
+   `cargo xtask gen-bazel --check` exit nonzero naming the missing entry;
+   reverted.
 2. `cargo xtask gen-bazel --check` exits zero on the committed tree, and exits
    nonzero naming the file for each of these planted mutations, reverted after
    each: a version bump in a stub manifest, a removed `[features]` entry, a
@@ -1139,16 +1697,36 @@ record merges. Each is a command and a verdict.
    modification, which is the evidence that the repin's emission and the
    generator's emission are the same bytes. Running `cargo xtask gen-bazel`
    first and then the repin leaves the subtree byte-identical to the
-   repin-first result.
-8. The command refuses ambient work instead of overwriting it, and refuses
-   before Bazel. For each of these planted pre-states, reverted after each,
+   repin-first result. Re-running the repin immediately after that success,
+   with `bazel/cargo/broker.lock` now differing from `HEAD`, exits zero rather
+   than refusing, which is the check round 2's clean-at-`HEAD` rule would have
+   failed; so does a run started from a worktree in which
+   `bazel/cargo/broker.lock` carries conflict markers from a merge, which ends
+   with that file replaced by a freshly rendered lock and no marker left. And
+   so does a second deliberate broker dependency change made with the first
+   still uncommitted: the run finds the subtree matching neither `HEAD` nor its
+   own fresh generation, accepts it against the publication receipt, and exits
+   zero. Deleting the receipt first makes that same run refuse and name the
+   subtree paths, which is the evidence that the receipt is what admitted them
+   and that its absence fails closed. Reverted.
+8. The command refuses ambient work instead of overwriting it, refuses before
+   Bazel, and prescribes a remedy that actually clears the refusal. For each of
+   these planted pre-states, reverted after each,
    `cargo xtask bazel-repin --hub broker` exits nonzero, lists the offending
-   path repository-relative, names both remedies, and leaves every path under
-   `bazel/cargo/broker-workspace/` and `bazel/cargo/broker.lock`
-   byte-unchanged: a hand edit to a stub manifest that a fresh generation would
-   not produce; an untracked extra file under the subtree; a deleted stub
-   `src/lib.rs`; and an uncommitted one-byte change to
-   `bazel/cargo/broker.lock`. Each refusal is also produced identically with
+   path repository-relative, and leaves every path under
+   `bazel/cargo/broker-workspace/` byte-unchanged with no path added or
+   removed: a hand edit to a stub manifest that a fresh generation would not
+   produce; an untracked extra file under the subtree; a deleted stub
+   `src/lib.rs`; and a symlink placed under the subtree. For each, running the
+   prescribed
+   `git stash push --include-untracked -- bazel/cargo/broker-workspace/` and
+   re-running the command then exits zero, and `git stash pop` restores the
+   planted state exactly, which is what makes the remedy reversible rather than
+   merely effective. The message contains no `rm -rf`, no `git clean`, and no
+   bare `git restore` offered as a way to remove an untracked entry. An
+   uncommitted one-byte change to `bazel/cargo/broker.lock` is explicitly not
+   in this set: that pre-state must exit zero and end with the file replaced by
+   the rendered lock. Each refusal is also produced identically with
    the Bazel binary absent from the command's `PATH`, which is the evidence
    that the refusal precedes the Bazel spawn rather than following it; the
    control is that the same run on a clean tree fails instead on the missing
@@ -1170,11 +1748,66 @@ record merges. Each is a command and a verdict.
     Bazel child forced to fail, for example through an injected failing wrapper
     on the command's `PATH`, the command exits nonzero, the subtree is
     byte-equal to a fresh `cargo xtask gen-bazel` emission,
-    `bazel/cargo/broker.lock` is byte-unchanged, and the message names both
-    paths and names re-running the same command as the recovery. Re-running it
-    with the real binary then exits zero and reports `bazel/cargo/broker.lock`
-    as the only further change.
-11. The digest net fires. On a tree whose subtree and hub lock are both
+    `bazel/cargo/broker.lock` is byte-identical to its pre-child bytes, and the
+    message names both paths and names re-running the same command as the
+    recovery. Re-running it with the real binary then exits zero and reports
+    `bazel/cargo/broker.lock` as the only further change.
+11. The hub-lock snapshot is restored exactly, and the restore is demonstrated
+    against a child that wrote. With an injected wrapper that truncates
+    `bazel/cargo/broker.lock` to zero bytes and then exits nonzero, the command
+    exits nonzero, `bazel/cargo/broker.lock` is byte-identical to its pre-run
+    bytes under `cmp`, and the report names the zero-length digest the child
+    left. With an injected wrapper that appends a byte and exits zero, the
+    command holds the child to that one file and accepts the result, reporting
+    both digests. With `bazel/cargo/broker.lock` deleted before the run and an
+    injected failing wrapper, the file is absent afterwards rather than
+    resurrected. All three reverted.
+12. The publication is atomic and the primitive is proved before any tracked
+    mutation. During a run, a concurrent reader looping on
+    `test -f bazel/cargo/broker-workspace/Cargo.toml` never observes the path
+    absent, and no run leaves a `.tmp` or partially populated directory at
+    `bazel/cargo/broker-workspace/`. The subtree's directory inode number
+    changes across a run that publishes new content and is unchanged across a
+    run that publishes nothing, which is the observable signature of an
+    exchange rather than an in-place rewrite. With `renameat2(RENAME_EXCHANGE)`
+    forced to fail, for example by running the command against a worktree on a
+    filesystem that does not implement it, the command exits nonzero naming the
+    filesystem and the remedy, `git status --porcelain` is identical before and
+    after, and no Bazel process is spawned. No code path in the implementation
+    calls a recursive remove against `bazel/cargo/broker-workspace/`; the only
+    recursive remove is the inventory-bounded one against the transaction
+    directory, and a grep for an unbounded recursive remove over the subtree
+    path returns nothing.
+13. Recovery from an interruption is exact and bounded. For each of these
+    injected abort points, with the process killed rather than allowed to
+    unwind, re-running `cargo xtask bazel-repin --hub broker` reaches the same
+    end state as an uninterrupted run and reports what it recovered: after the
+    staged tree is written but before the journal is durable; after the journal
+    is durable but before the exchange; after the exchange but before the
+    hub-lock snapshot; after the snapshot but before the old tree is
+    retired; and after retirement but before the journal is renamed over the
+    receipt. In the third, fourth and fifth cases the recovering run must not
+    re-exchange, which is checked by the subtree's inode number being unchanged
+    across the recovery. Editing a broker manifest between the interrupted run
+    and the recovering one changes none of those outcomes, which is the
+    evidence that recovery decides against the journal's recorded sets and not
+    against a fresh generation. With the retired tree seeded with one extra
+    file that the journal's inventory does not name, the recovering run leaves
+    that directory in place, reports its path, and exits nonzero rather than
+    removing it. With the live subtree replaced by content matching neither the
+    journal's inventory nor the journal's staged digest set, the recovering run
+    refuses, names the paths, deletes nothing, and exchanges nothing.
+14. Two writers cannot race the publication. With one
+    `cargo xtask bazel-repin --hub broker` held at an injected pause inside its
+    transaction, a second invocation of the repin and an invocation of
+    `cargo xtask gen-bazel` each exit nonzero naming
+    `bazel/cargo/.broker-workspace.txn/lock` and the writer that holds it,
+    within the pause window, and leave the subtree byte-unchanged. Killing the
+    first process releases the lock with no manual cleanup, and the next
+    invocation proceeds. `cargo xtask gen-bazel --check` run inside the same
+    window exits with a verdict about a complete tree, never about a partial
+    one.
+15. The digest net fires. On a tree whose subtree and hub lock are both
     current, plant a one-byte change in one stub manifest and run an ordinary
     Bazel build of a `broker` hub target with no repin control anywhere in the
     environment: it fails closed with the substrate's repin-required message
@@ -1183,7 +1816,7 @@ record merges. Each is a command and a verdict.
     `bazel query 'labels(srcs, //bazel/cargo/broker-workspace:all)'` resolves
     the seven manifest labels the `manifests` attribute names, all within the
     single generated `BUILD.bazel` package.
-12. No `-broker` test target exists, and the check that says so refuses one.
+16. No `-broker` test target exists, and the check that says so refuses one.
     `bazel query 'kind(".*_test rule", <emitted broker target set>)'` names
     only targets of `//packages/d2b-priv-broker`, and the full first-party
     test target set, `bazel query 'kind(".*_test rule", //packages/...)'`, is
@@ -1193,7 +1826,7 @@ record merges. Each is a command and a verdict.
     `-broker` variant, regenerating and re-running the query fails and names
     that target. Reverted after. A check that has never been seen to fail is
     not evidence that the property holds.
-13. The two set conditions of invariant 11 hold. The primary evaluation is
+17. The two set conditions of invariant 13 hold. The primary evaluation is
     over the generator's emitted compile-edge map, `deps` and
     `proc_macro_deps`, and reports empty for both directions: first-party
     edges out of B that land outside B, and first-party edges out of M that
@@ -1207,11 +1840,11 @@ record merges. Each is a command and a verdict.
     to a `-broker` variant, and require the check to fail naming that edge. The
     supplemental `@main//` and `@broker//` spoke assertion is present and is
     not the only check.
-14. The Bazel-side hub lock's registry `(name, version)` key set equals the
+18. The Bazel-side hub lock's registry `(name, version)` key set equals the
     registry `(name, version)` key set of
     `packages/d2b-priv-broker/Cargo.lock`, checked offline, with 111 entries
     today.
-15. `bazel query '@broker//:all'` names only crates present in
+19. `bazel query '@broker//:all'` names only crates present in
     `packages/d2b-priv-broker/Cargo.lock`, and `bazel build` of two of them
     succeeds. Two pieces of this are already measured. On the reproduction of
     this repository's workspace shape, the hub's rendered set matched the
@@ -1222,12 +1855,12 @@ record merges. Each is a command and a verdict.
     from the resolve satisfies `cargo metadata --locked --offline` against a
     byte-identical copy of the authoritative broker lock. What remains for the
     implementer is running the real hub through Bazel end to end.
-16. A planted `build = "build.rs"` key on a closure package, a planted
+20. A planted `build = "build.rs"` key on a closure package, a planted
     directory-name mismatch, and a planted first-party path dependency in
     `packages/d2b-guest-shell-runner/Cargo.toml` each make
     `cargo xtask gen-bazel` exit nonzero with its own named refusal and its own
     remedy; all three are reverted.
-17. `tests/unit/meta/adr-index-coverage.sh` passes with this record indexed.
+21. `tests/unit/meta/adr-index-coverage.sh` passes with this record indexed.
 
 ## References
 
@@ -1263,5 +1896,25 @@ record merges. Each is a command and a verdict.
   invariants 2, 9 and 14
 - [ADR 0009](0009-rust-toolchain-msrv-and-supply-chain.md), the per-lock
   supply-chain policy this record preserves
+- [ADR 0008](0008-supported-platforms-and-rejected-targets.md), whose kernel
+  floor of 6.6 already exceeds what `openat2` and `renameat2` require, so
+  constraints 14 through 18 raise no platform requirement
+- `packages/d2b-host/src/hardlink_farm.rs`, which publishes a staged tree with
+  `renameat_with(CWD, .., RenameFlags::EXCHANGE)` after fsyncing the tree
+  bottom-up and the directory, then removes the retired copy: the same shape
+  section 6 uses, already on this repository's trusted path
+- `packages/d2b-host/src/bin/d2b-activation-helper.rs` and
+  `packages/d2b-host/src/cgroup.rs`, the existing `openat2` plus `ResolveFlags`
+  anchored-resolution surfaces, and `packages/xtask/Cargo.toml`, whose
+  `rustix` and `nix` entries already carry the anchored-open and `F_OFD_SETLK`
+  rationale in comments
+- Constraints 14 through 18: a C probe issuing `renameat2`, `openat2`,
+  `fsync`, `unlinkat` and `fcntl(F_OFD_SETLK)` directly, run 2026-08-04 on
+  Linux 7.0.10 with the worktree on ext4 and a cross-mount arm on tmpfs; and
+  the `git stash push --include-untracked -- <pathspec>` and `git restore`
+  behaviour quoted in section 6 and in the alternatives, measured at git
+  2.54.0 on a throwaway repository carrying a modified stub, a deleted stub
+  source file, an untracked extra file under the subtree and one unrelated
+  edit outside it
 - `specs/003-adr052-bazel-rust/contracts/workspace-and-tool-pinning.md`, the
   hub and repin contract this record leaves intact
