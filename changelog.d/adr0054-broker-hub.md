@@ -2,20 +2,22 @@
 
 - Recorded that the privileged broker remains a standalone Cargo workspace
   with its own authoritative lock while its Bazel dependency hub reads a
-  committed generated workspace that exactly represents the realized
-  path-dependency closure. The generated fidelity check covers source
-  identity, checksums, features, target kinds, and dependency edges, retains a
-  byte-identical broker lock mirror, and requires locked offline Cargo
-  metadata to succeed.
+  committed generated witness of the realized path-dependency closure. Exact
+  authoritative and witness projections compare package, source, checksum,
+  feature, target, and dependency-edge identity, while separate checks cover
+  intentionally omitted declarations and inert generated targets.
 - Assigned generated Bazel inputs solely to `cargo xtask gen-bazel`, whose
-  `--check` form is a strictly read-only exact byte-and-census gate. Broker
-  repin first refuses stale generated inputs with the generate, review,
-  commit, then repin remedy and then writes only
-  `bazel/cargo/broker.lock`. The explicit two-command workflow keeps
-  single-writer ownership and the repin output set lock-only.
+  `--check` form is strictly read-only and creates no state. The dependency
+  workflow commits all changed authoritative Cargo inputs and generated
+  outputs together before broker repin runs Bazel in a bounded isolated
+  detached worktree at exact `HEAD`.
+- Required broker repin to validate actual Bazel lock and repository source
+  identity in the snapshot, contain batch children with process and namespace
+  controls, and publish only `bazel/cargo/broker.lock` through anchored
+  no-symlink exchange with preallocation, crash recovery, and shared
+  generator/repin exclusion.
 - Corrected the authoritative inventory to four hub/workspace Cargo locks,
   with `packages/Cargo.guest.lock` retained separately as a generated and
-  cache-key input. Broker path-dependency variants remain library-only, their
-  tests remain main-owned, and exact target censuses and independent
-  first-party and third-party-spoke isolation checks fail closed before the
-  Bazel migration can proceed.
+  cache-key input. Broker variants remain library-only, exact B and M
+  censuses precede edge checks, and independent first-party and direct-spoke
+  mutations fail closed before the Bazel migration can proceed.
