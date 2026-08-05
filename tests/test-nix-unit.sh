@@ -490,12 +490,13 @@ harvest_nix_unit_shard() {
 }
 
 settle_nix_unit_process_group() {
-  local process_group="$1" attempt
-  for attempt in $(seq 1 50); do
+  local process_group="$1" attempt=1
+  while [ "$attempt" -le 50 ]; do
     if ! kill -0 -- "-$process_group" 2>/dev/null; then
       return 0
     fi
     sleep 0.1
+    attempt=$((attempt + 1))
   done
   fail "nix-unit shard process group $process_group did not exit; refusing to start the next shard"
   return 1
