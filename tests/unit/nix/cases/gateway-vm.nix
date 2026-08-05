@@ -1,5 +1,12 @@
 # Eval coverage for realm gateway declarations.
-{ lib, mkEval, flakeRoot, casePartition ? "core", ... }:
+{ lib
+, mkEval
+, flakeRoot
+, casePartition ? "core"
+, caseBucket ? 0
+, caseBucketCount ? 4
+, ...
+}:
 
 let
   hostSchemaBase = {
@@ -847,9 +854,16 @@ let
     "gateway-vm/source-host-tools-opt-out-selects-source-daemon"
     "gateway-vm/reuses-standard-host-tool-package-plumbing"
   ];
+  caseIndex = lib.listToAttrs
+    (lib.imap0
+      (index: name: lib.nameValuePair name index)
+      (builtins.attrNames allCases));
 in
 lib.filterAttrs
   (name: _:
-    if casePartition == "guest" then builtins.elem name guestCases
-    else !(builtins.elem name guestCases))
+    if casePartition == "guest" then
+      builtins.elem name guestCases
+    else
+      !(builtins.elem name guestCases)
+      && lib.mod caseIndex.${name} caseBucketCount == caseBucket)
   allCases

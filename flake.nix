@@ -135,6 +135,9 @@
           "daemon-autostart.nix"
           "daemon-default-compat.nix"
           "gateway-vm.nix"
+          "gateway-vm-1.nix"
+          "gateway-vm-2.nix"
+          "gateway-vm-3.nix"
           "gateway-vm-guest.nix"
           "d2bd-startup-smoke.nix"
         ];
