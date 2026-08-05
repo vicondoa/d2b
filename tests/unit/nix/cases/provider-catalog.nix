@@ -77,7 +77,8 @@ let
     classification = "contractPrivateNonSecret";
     sensitivity = "nonSecret";
   };
-  catalogOverride = { ... }: {
+  catalogOverride = { lib, ... }: {
+    d2b._nixUnitCatalogFixture = lib.mkForce false;
     d2b._artifactCatalogV3 = lib.mkForce catalogFixtureProjection;
     d2b._bundle.extraArtifacts.artifactCatalog =
       lib.mkOverride 0 catalogFixtureArtifact;

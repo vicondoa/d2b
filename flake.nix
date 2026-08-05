@@ -41,6 +41,59 @@
           cp ${./tests/fixtures/guest-rust-workspace/Cargo.toml} \
             $out/packages/Cargo.toml
         '';
+      # Eval-only Nix-unit configurations do not need the production
+      # artifact-catalog IFD. Keep an explicit escape for the catalog contract
+      # case, which supplies its own non-empty fixture and source assertions.
+      nixUnitCatalogFixtureFor = pkgs:
+        { config, lib, ... }:
+        let
+          data = {
+            schemaVersion = 3;
+            entries = [ ];
+          };
+          preimageJson = builtins.toJSON data;
+          digest = "sha256:${builtins.hashString
+            "sha256"
+            (builtins.toJSON {
+              domain = "d2b:v3:artifact-catalog";
+              framing = "d2b-digest/v1";
+              payload = preimageJson;
+            })}";
+          document = data // { catalogDigest = digest; };
+          json = builtins.toJSON document;
+          path = pkgs.writeText "d2b-artifact-catalog-nix-unit-fixture"
+            "${json}\n";
+        in
+        {
+          options.d2b._nixUnitCatalogFixture = lib.mkOption {
+            type = lib.types.bool;
+            default = true;
+            internal = true;
+            visible = false;
+          };
+          config = lib.mkIf config.d2b._nixUnitCatalogFixture {
+            d2b._artifactCatalogV3 = lib.mkForce {
+              ids = [ ];
+              artifactRows = [ ];
+              preimage = data;
+              inherit preimageJson;
+              catalogDigest = digest;
+              catalogData = document;
+              catalogJson = json;
+              inherit path;
+              publicEntries = [ ];
+            };
+            d2b._bundle.extraArtifacts.artifactCatalog =
+              lib.mkOverride 0 {
+                inherit data path;
+                jsonText = json;
+                installFileName = "artifact-catalog.json";
+                classification = "contractPrivateNonSecret";
+                sensitivity = "nonSecret";
+              };
+          };
+        };
+
       # The Nix-unit corpus is shared by the topical flake checks, the
       # per-file nix-eval-jobs surface, and the locked inventory. Keep the
       # evaluator context in one constructor so those surfaces cannot drift.
@@ -56,6 +109,7 @@
                 d2b.site.usePrebuiltHostTools =
                   lib.mkDefault (system == "x86_64-linux");
               })
+              (nixUnitCatalogFixtureFor pkgs)
             ] ++ modules;
           };
         in
