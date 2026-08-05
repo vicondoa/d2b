@@ -983,13 +983,26 @@ let
     "obs-stability"
     "obs-graphics-runner-wiring"
   ];
+  hostCollectorCases = [
+    "obs-host-collector-default-off"
+    "obs-host-collector-journal"
+    "obs-host-collector-otlp"
+    "obs-host-collector-both-processor-split"
+    "obs-host-identity-override"
+    "obs-host-otlp-client-group-umask"
+    "obs-host-flags-require-enable"
+  ];
   renderedCases = lib.mapAttrs'
     (name: result: lib.nameValuePair "observability/${name}" (mkCase name result))
     evaluated;
   partitionMatches = name:
     if casePartition == "all" then true
     else if casePartition == "guest" then builtins.elem name guestCases
-    else !(builtins.elem name guestCases);
+    else if casePartition == "host-collector" then
+      builtins.elem name hostCollectorCases
+    else
+      !(builtins.elem name guestCases
+        || builtins.elem name hostCollectorCases);
 in
 lib.filterAttrs
   (name: _: partitionMatches (lib.removePrefix "observability/" name))

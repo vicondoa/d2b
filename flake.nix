@@ -905,6 +905,7 @@
             "ifname-nix-rust-parity.nix"
             "observability.nix"
             "observability-guest.nix"
+            "observability-host-collector.nix"
             "provider-catalog.nix"
             "provider-elf-shim.nix"
             "provider-projection-exportability.nix"
