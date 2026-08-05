@@ -83,13 +83,32 @@
   immediately before it acts, that the name it is about to move still refers
   to the exact directory whose token it holds, and starts over from the
   beginning a small fixed number of times when it does not, stopping with its
-  own distinct message rather than moving anything. A rename by something that
+  own distinct message rather than moving anything. It releases that token and
+  closes its handles before each of those fresh attempts, including the one it
+  makes when the state disappears from under the move itself, because an
+  attempt that kept the token would be refused by its own earlier attempt and
+  would then report a conflicting command that is not running, which no re-run
+  and no waiting could ever clear. A rename by something that
   takes no token at all cannot be prevented by any means the system offers, so
   it is caught immediately afterwards instead: the recovery confirms that what
   landed in the set-aside place is what it had claimed, and where it is not it
   says so and names both places rather than trying to put anything back, since
   putting it back would repeat the same defect against a name it has just been
-  shown it cannot predict. The recovery also applies only to the one
+  shown it cannot predict. Something at that name that is not a directory at
+  all is a separate refusal from any of that, with its own message and its own
+  remedy, because nothing here ever creates one and no amount of waiting
+  removes one: the command names the kind of object it found, determined
+  without following a link so that a link is never reported as the thing it
+  points at, and prints the one bounded command measured to clear that kind,
+  setting the object aside under version control for the kinds version control
+  can hold and removing it precisely for the kinds it cannot, which were
+  measured to survive the setting-aside untouched. The ordinary regeneration
+  command carries the same refusal, because that is where a contributor
+  actually meets it. Neither command removes anything itself; the removal it
+  prints names the single path, is not recursive, and was measured to refuse a
+  directory outright, so bookkeeping recreated at that name in the meantime
+  survives it rather than being destroyed by it. The recovery also applies
+  only to the one
   dependency set that has bookkeeping at all, and it decides that from its own
   arguments before it opens anything in the working copy, because there is
   only one such directory in the repository and a request naming a different
@@ -97,8 +116,12 @@
   the state, so it stays readable in place, and
   says to run the ordinary regeneration again. There is a small fixed number
   of places it will put state aside; once they are full it stops and says so
-  rather than choosing for the contributor, and it never deletes anything or
-  tells anyone else to. Unrelated changes elsewhere in the working copy,
+  rather than choosing for the contributor, and that refusal carries its own
+  distinct message, separate from the one for a name that kept changing under
+  it, because reading and clearing the collected state is the only thing that
+  resolves it and waiting for a command that is not running is not. It
+  deletes nothing itself in any of its refusals.
+  Unrelated changes elsewhere in the working copy,
   staged or not,
   tracked or ignored, are left alone by all of it. The token that keeps them apart is held only
   while a regeneration is actually running: it is closed automatically when the

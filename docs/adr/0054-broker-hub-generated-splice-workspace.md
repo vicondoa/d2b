@@ -630,7 +630,20 @@ directory. Step 10 is the only step that writes the generated subtree, and
    and take the write lock: resolve `lock` beneath the transaction directory's
    descriptor with `openat2` under the same four flags, opened
    `O_RDWR | O_CREAT | O_CLOEXEC` at mode 0600, and `fcntl(F_OFD_SETLK)` with
-   `F_WRLCK` on it. Every descriptor this command opens against a worktree path
+   `F_WRLCK` on it. `EEXIST` from that `mkdirat` is tolerated because the
+   directory ordinarily already exists, and it is not evidence that the name
+   denotes a directory: when the resolve of the transaction directory that
+   follows returns `ELOOP` or `ENOTDIR`, this command classifies the entry by
+   `fstatat` with `AT_SYMLINK_NOFOLLOW` and refuses with `D2B-BZLTXN-NOTDIR`,
+   naming the observed type and the remedy for that type, before the sweep,
+   before the probe and before anything is staged. That refusal is here and
+   not only in the quarantine mode because this is where a contributor meets
+   it: the three refusals that print the quarantine are all raised from inside
+   a transaction directory that opened, so the ordinary repin and the
+   generator are what meet a non-directory at that name first, and the
+   quarantine mode's own copy of this refusal is reached only by a contributor
+   who invokes that mode directly. Every descriptor this command opens against
+   a worktree path
    carries `O_CLOEXEC`,
    including the two anchors, the transaction directory, every staged file of
    step 9, and the lock; the lock is the one where the flag is load bearing
@@ -1165,7 +1178,12 @@ concludes the command is broken. And a list of per-entry removals over names
 the command read off the disk is not, because its length, its depth and its
 quoting are all decided by bytes nobody chose, and because a removal is the
 wrong instrument for state a refusal exists to surface; the transaction-state
-refusals below prescribe a rename this command performs itself instead.
+refusals below prescribe a rename this command performs itself instead. The
+one removal this record does print is the exception these four define rather
+than a breach of them: it is non-recursive, it names one path this record
+fixes in advance rather than any name read from disk, and it is reached only
+for the object types git was measured to be unable to hold at all, where
+setting aside is not on offer and the alternative is a refusal with no remedy.
 
 **The three transaction-directory refusals prescribe one built-in recovery.**
 The unparseable `journal`, the unrecognized entry and the recorded-but-missing
@@ -1218,9 +1236,15 @@ swapped between the observation and the act. Then, at most three times:
 1. Resolve `.broker-workspace.txn` beneath that descriptor under the same four
    flags, opened `O_RDONLY | O_DIRECTORY | O_CLOEXEC`. `ENOENT` is success and
    the command exits zero having written nothing, because it names a goal
-   state and not an action. `ELOOP` or `ENOTDIR` means the name does not
-   denote a directory this command can bind; it refuses with
-   `D2B-BZLTXN-CONCURRENT` having moved and created nothing.
+   state and not an action. `ELOOP` or `ENOTDIR` means the name denotes
+   something that is not a directory, which is a different refusal from
+   concurrency and carries a different code: the command `fstatat`s the same
+   single component through the same anchor with `AT_SYMLINK_NOFOLLOW` and,
+   on a type that is not a directory, exits nonzero with
+   `D2B-BZLTXN-NOTDIR`, naming that type and the remedy for that type, having
+   moved and created nothing. When that `fstatat` instead reports a directory
+   or `ENOENT`, the entry changed between the two calls, which is concurrency
+   and nothing else; it consumes an attempt and re-resolves.
 2. Resolve `lock` beneath *that directory descriptor*, not by a two-component
    path from the parent, opened `O_RDWR | O_CREAT | O_CLOEXEC` at mode 0600,
    and take `F_OFD_SETLK` with `F_WRLCK`. `EAGAIN` means a generator or a
@@ -1231,8 +1255,13 @@ swapped between the observation and the act. Then, at most three times:
    witness. That is the identity of the directory whose lock is now held.
 4. `fstatat` the single component `.broker-workspace.txn` relative to the
    anchored `bazel/cargo` descriptor with `AT_SYMLINK_NOFOLLOW`, and require
-   the same `st_dev`, the same `st_ino` and `S_ISDIR`. `ENOENT`, a different
-   identity, or a type that is not a directory is a mismatch.
+   the same `st_dev`, the same `st_ino` and `S_ISDIR`. `ENOENT` or a
+   different identity is a mismatch. A type that is not a directory is not a
+   mismatch and is not retried: it is the same object step 1 classifies, and
+   no attempt of this sequence converges on it. The command releases the lock
+   by closing its only descriptor, closes the directory descriptor, and exits
+   nonzero with `D2B-BZLTXN-NOTDIR` naming that type and the remedy for that
+   type.
 5. On a mismatch, close the lock descriptor, which releases the lock because
    it is the only descriptor on that open file description, close the
    directory descriptor, and start again at 1. What changed is which inode the
@@ -1245,11 +1274,14 @@ swapped between the observation and the act. Then, at most three times:
    the identity check of 4 first, so the observation is always the syscall
    immediately preceding the rename it authorizes rather than merely the
    first of the four. All four occupied is a terminal refusal and not a retry
-   trigger: the command lists the four slots repository-relative, leaves the
-   transaction directory where it is, and stops. `ENOENT` from the rename can
-   only be a source that vanished inside that window, since both anchors are
-   descriptors this command holds open; it consumes an attempt and returns
-   to 1.
+   trigger: the command exits nonzero with `D2B-BZLTXN-EXHAUSTED`, lists the
+   four slots repository-relative, leaves the transaction directory where it
+   is, and stops. `ENOENT` from the rename can only be a source that vanished
+   inside that window, since both anchors are descriptors this command holds
+   open; before it consumes an attempt and returns to 1 it performs step 5's
+   release in full, closing the lock descriptor first so that the open file
+   description lock is gone, then the transaction directory descriptor, so
+   the next attempt resolves and locks holding nothing from this one.
 
 Then the postcondition below, then one `fsync` of the anchor, which is one
 call rather than two because the source and the destination sit in the same
@@ -1257,17 +1289,43 @@ directory, then the lock descriptor closes with the process. Three attempts is
 the exact bound. One would turn a single benign interleaving into a refusal;
 no bound at all would turn a wedged script that keeps recreating the name into
 a hang, and a hang is the one failure a contributor cannot diagnose from a
-message. Three absorbs two interleavings and terminates. On exhaustion the
-command exits nonzero with `D2B-BZLTXN-CONCURRENT`, names
+message. Three absorbs two interleavings and terminates. When the bound is
+spent the command exits nonzero with `D2B-BZLTXN-CONCURRENT`, names
 `bazel/cargo/.broker-workspace.txn` repository-relative, states that the entry
-at that name changed under it, and has moved nothing and created nothing. It
-never renames on a mismatch, and no flag makes it. Otherwise the
+at that name changed under it, and has moved nothing and created nothing. That
+is a different exhaustion from four occupied quarantine slots and carries a
+different code, because one is a name that will not hold still and the other
+is a shelf that is full. It never renames on a mismatch, and no flag makes it.
+Otherwise the
 mode is what it was: it reads no
 manifest, no lock, no tracked path and no entry inside the directory it moves;
 it spawns no process at all and therefore no Bazel child; it sets none of the
 three repin environment names; it is not a Make target and no workflow, gate
 or build path may invoke it. It deletes nothing, ever, and there is no flag
 that makes it.
+
+**Every retry releases before it re-resolves, and that is not bookkeeping.**
+Both paths that return to 1, the identity mismatch of 5 and the `ENOENT` from
+the rename in 6, close the lock descriptor first and the transaction directory
+descriptor second, so an attempt that ends owns nothing when the next one
+begins. Skipping that on the `ENOENT` path is not a leak that costs two
+descriptors and nothing else: it makes the command refuse itself and blame a
+writer that does not exist. Measured 2026-08-04 on Linux 7.0.10 with the
+worktree on ext4, unprivileged, by direct syscall from the same C probe shape
+constraints 14 through 19 use: `F_OFD_SETLK` with `F_WRLCK` taken through one
+open file description and then requested through a second on the same file, in
+the same process, returned `EAGAIN`, and after the first descriptor closed a
+third returned 0. So in the interleaving the `ENOENT` retry exists for, where
+the name is moved away and back and the re-resolution lands on the inode the
+previous attempt had locked, an attempt still holding its lock descriptor
+opens `lock` beneath the re-resolved directory, is refused `EAGAIN` by itself,
+and prints step 2's message naming another generator or repin as the holder.
+That message would be false, the state it reports would be the command's own,
+and no re-run and no waiting would clear it. The same probe counted
+`/proc/self/fd`: three attempts that each opened the directory and its lock
+without closing left six descriptors open where the release leaves none, and
+that count is the observable the check asserts on rather than an assertion
+about the source.
 
 **Why the lock was never the binding.** An open file description lock names an
 inode, not a name, and the same measurement that makes the recovery work makes
@@ -1363,21 +1421,137 @@ and refusing is the fail-closed answer, and this postcondition is the
 difference between a corruption that is silent and one that is on the
 operator's screen with both paths in it.
 
-**Three stable codes, each naming only its own steps.** ADR 0052's rule that
+**Five stable codes, each naming only its own steps.** ADR 0052's rule that
 one generic remedy is wrong for at least one member of a refusal set applies
-here, so this mode refuses under exactly three static codes.
+here, so this mode refuses under exactly five static codes.
 `D2B-BZLTXN-HUB`: the flag was given with a hub other than `broker`; nothing
 was opened; re-run with `--hub broker`. `D2B-BZLTXN-CONCURRENT`: the entry at
-`bazel/cargo/.broker-workspace.txn` could not be bound to the directory this
-command locked within its three attempts, or does not denote a directory at
-all; nothing was moved and nothing was created; inspect that entry and re-run
-once no generator or repin is running. `D2B-BZLTXN-DISPLACED`: the rename
-returned 0 and the slot does not hold the witnessed directory; both paths are
-named and the operator inspects them before running anything else. The
-`EAGAIN` contention refusal is unchanged and keeps naming the lock path and
-the writer that holds it. None of the four prints an absolute path, a user
-identifier, a process identifier, or any byte read from inside the directory
-it refused over.
+`bazel/cargo/.broker-workspace.txn` is a directory that could not be bound to
+the one this command locked within its three attempts; nothing was moved and
+nothing was created; inspect that entry and re-run once no generator or repin
+is running. `D2B-BZLTXN-NOTDIR`: the entry at that name is not a directory;
+the observed type is named; nothing was moved and nothing was created; the
+remedy is the one for that type below, and it is never to wait, because
+nothing this decision authorizes will ever turn that object into a directory.
+`D2B-BZLTXN-DISPLACED`: the rename returned 0 and the slot does not hold the
+witnessed directory; both paths are named and the operator inspects them
+before running anything else. `D2B-BZLTXN-EXHAUSTED`: all four quarantine
+slots are occupied; the four are listed repository-relative, the transaction
+directory is exactly where it was, and the contributor reads what they have
+collected and clears what they no longer want; no command is printed for that,
+because by then those directories are inert evidence that no command reads and
+no gate sees. The `EAGAIN` contention refusal is unchanged and keeps naming the
+lock path and the writer that holds it. None of the six prints an absolute
+path, a user identifier, a process identifier, or any byte read from inside
+the directory it refused over.
+
+The two exhaustions are deliberately not one code. A spent attempt bound and a
+full quarantine shelf share the word and share nothing else: the first says the
+name would not hold still and its remedy is to run again when no writer is
+running, the second says the name has not moved at all and running again cannot
+help until four directories the contributor owns are read and cleared. A
+contributor who receives the first message for the second state waits for a
+writer that is not there.
+
+**A non-directory at that name is a different refusal, and waiting is never
+its remedy.** `D2B-BZLTXN-CONCURRENT` says the entry changed under the command,
+and its remedy, look and run again once no writer is running, is a remedy that
+ends, because the writer it names does finish. A regular file, a symlink, a
+fifo, a socket or a device node at `bazel/cargo/.broker-workspace.txn` ends
+nothing. No writer this decision authorizes ever creates a non-directory at
+that name: the ordinary repin and `cargo xtask gen-bazel` create it with
+`mkdirat` and this mode only renames it. So the object is not a transient of
+anybody's run, it is a state that will still be there on the tenth re-run, and
+folding it under the concurrency code prescribes waiting for a condition no
+amount of waiting changes. That is why it has its own code, and why the
+message it carries names a file type and a command rather than a writer.
+
+The classification is a measured `fstatat` and not the `errno`. Measured
+2026-08-04 on Linux 7.0.10 with the worktree on ext4, unprivileged, by direct
+syscall from the same C probe shape constraints 14 through 19 use: `openat2`
+under the four resolve flags with `O_RDONLY | O_DIRECTORY | O_CLOEXEC`
+returned `ELOOP` for a symlink to a directory, a symlink to a regular file and
+a dangling symlink alike, and `ENOTDIR` for a regular file, a fifo and a
+socket, so the `errno` separates symlinks from everything else and separates
+nothing else. `fstatat` on the same single component through the same anchor
+with `AT_SYMLINK_NOFOLLOW` reported symlink, regular file, fifo and socket
+exactly; without the flag it reported the symlink to a directory as a
+directory, the symlink to a regular file as a regular file, and the dangling
+one as `ENOENT`. `AT_SYMLINK_NOFOLLOW` is therefore what makes the
+classification true of the entry rather than of whatever the entry points at,
+which is the same reason step 4 carries it, and a message that named a
+directory while refusing over a symlink would send the contributor to look at
+the wrong object entirely. The fifo is the shape worth naming: `O_DIRECTORY`
+is refused before the fifo is opened, so `openat2` returned `ENOTDIR`
+immediately rather than blocking for a writer, measured under a three-second
+alarm that did not fire, which is what keeps a planted fifo from hanging the
+command instead of refusing it. A character device could not be planted,
+`mknodat` for one returning `EPERM` unprivileged, so this record claims no
+measurement of that arm; it is classified by the same `fstatat` and carries
+the same remedy as the fifo and the socket.
+
+**The remedy is chosen by type, is one path this record fixes in advance, and
+was measured to clear the state.** For a regular file or a symlink the message
+prints `git stash push --all -- bazel/cargo/.broker-workspace.txn`, the same
+bounded reversible instrument step 7 prescribes for the generated subtree, with
+no trailing slash because the path is not a directory. Measured at git 2.54.0
+on a fixture carrying the committed `.broker-*/` rule and the four unrelated
+states, a modified tracked file, an untracked file, an ignored `target/`
+output and a staged modification: with a regular file planted at that name the
+stash exited 0, the entry was gone afterwards, all four unrelated states were
+byte-identical, `git status --porcelain` differed only by the line for the
+planted path, and `git stash pop` restored the file. A symlink to a directory
+and a dangling symlink behaved identically, each restored as a symlink by the
+pop, with the symlink's target directory untouched throughout. It held whether
+the path was untracked or ignored, which matters because `.broker-*/` is a
+directory-only rule and does not match a regular file at that name, while a
+`.gitignore` entry without a trailing slash does; `--all` covers both, so the
+printed remedy does not depend on which entry the repository carries and does
+not have to be revisited if that entry is rewritten.
+
+One case the stash cannot clear, and the message says so rather than leaving
+the contributor to find out. Measured on the same fixture with the entry
+committed rather than untracked, `git stash push --all --` on that path exited
+0 reporting `No local changes to save` and left the regular file exactly where
+it was; with that committed entry additionally modified it exited 0, took the
+modification, and left the file at its `HEAD` content, still a regular file, so
+the refusal reproduces either way. This mode cannot tell tracked from
+untracked, because it runs no git and spawns no process at all, so it prints
+the discriminator instead of guessing: if the stash exits 0 reporting
+`No local changes to save`, git tracks that path, and
+`git rm -- bazel/cargo/.broker-workspace.txn` is the bounded form, measured to
+exit 0 and remove the entry, with
+`git checkout HEAD -- bazel/cargo/.broker-workspace.txn` measured to exit 0 and
+put it back exactly. That reversal is stronger than the stash's, not weaker,
+because the content is in `HEAD` by definition.
+
+For a fifo, a socket or a device node git is not the instrument at all.
+Measured on the same fixture, a planted fifo appeared nowhere in
+`git status --porcelain`, and `git stash push --all --` on that path exited 0
+reporting `No local changes to save` with the fifo still on disk; the socket
+behaved identically. Printing the stash for those types would be the defect
+this record has already corrected twice, a remedy that exits 0 and clears
+nothing, so the message prints `rm -- bazel/cargo/.broker-workspace.txn`
+instead: non-recursive, no `-r`, no `-f`, one path, and printed only in a
+message that names the type the command observed, only as the command exits,
+holding no lock and no descriptor, so nothing the contributor pastes can race
+a sequence of this command's own. That removal is fail-closed in the one way
+that matters here. Measured, `rm --` removed a fifo, a socket, a symlink and a
+regular file and exited 0, removed the symlink rather than its target, and
+refused a directory whether empty or not, exiting 1 with `Is a directory`. So
+if a repin has recreated a live transaction directory at that name between the
+refusal and the paste, the pasted command refuses instead of destroying it,
+which is the property that makes a removal printable here and nowhere else in
+this section. The command itself still deletes nothing, ever: the removal is a
+sentence in a refusal, not an act, and no flag makes this mode perform one.
+
+This does not reopen the classified removal this section refuses below. What is
+refused there is a list of removals over names the command read off a disk,
+whose length, whose depth and whose quoting are decided by bytes nobody chose.
+This is one command over one path this ADR, the `.gitignore` and the message
+all spell the same way, at zero depth, because a fifo has no entries and a
+symlink has no children. The two cases differ in exactly the property that
+made the rename necessary for the other one.
 
 **Why a rename rather than a stash or a classified removal.** The state these
 three refusals dispute is arbitrary: an unrecognized name can be any entry a
@@ -1438,17 +1612,23 @@ refusal rather than a corrupted transaction. That is also why this recovery
 could not be a line of shell in the refusal text however carefully quoted: the
 safety here is the lock, and no shell command can take it.
 
-**Collision is bounded and exhaustion is a refusal.** The four slots are tried
+**Collision is bounded and exhaustion is a refusal with a code of its own.**
+The four slots are tried
 in ascending order and the first `RENAME_NOREPLACE` that returns 0 wins;
 `EEXIST` advances to the next. Measured, `RENAME_NOREPLACE` onto an occupied
 slot returned `EEXIST` and left the transaction directory exactly where it
 was, so an occupied slot costs nothing and clobbers nothing, which is
 constraint 16's complement doing the work it was measured for. With all four
-occupied the command exits nonzero, lists the four quarantine paths
+occupied the command exits nonzero with `D2B-BZLTXN-EXHAUSTED`, lists the four
+quarantine paths
 repository-relative, moves nothing, and tells the contributor to read what
 they have collected and clear what they no longer want. It prints no command
 for that, because by then those directories are inert evidence that no command
-reads and no gate sees. Four is chosen so that the second, third and fourth
+reads and no gate sees. The code is stable and is not shared with the
+attempt-bound refusal, because a contributor who reads
+`D2B-BZLTXN-CONCURRENT` for this state waits for a writer that is not running
+and never reads the four paths that are the actual remedy. Four is chosen so
+that the second, third and fourth
 occurrence of the same corruption still recover with no manual step, and so
 that a fifth
 is a signal that something is producing corrupt transaction state faster than
@@ -2006,6 +2186,28 @@ under the transaction lock: it does not enumerate what it moves, so no nested
 shape can outlast it, and it removes nothing, so the state stays readable
 where the contributor can see it.
 
+**A remedy that says wait, against an object that will never move.** This is
+the same failure one layer out and it is the one round 5 found. Plant a
+regular file, a symlink, a fifo or a socket at
+`bazel/cargo/.broker-workspace.txn`, which a stray shell redirection, an
+interrupted archive extraction or a debugging session is enough to do. Nothing
+this decision authorizes will ever replace that object with a directory, so
+the state is permanent, and a refusal that folds it into the concurrency code
+prescribes running again once no generator or repin is running: a contributor
+follows it, waits, re-runs, is refused identically, and has been handed a loop
+by a record whose whole argument is that refusals must end. The guard is that
+the type is classified rather than inferred from `errno`, by `fstatat` with
+`AT_SYMLINK_NOFOLLOW` so a symlink is reported as a symlink and not as
+whatever it points at, and refused under `D2B-BZLTXN-NOTDIR` with the remedy
+that type was measured to need:
+`git stash push --all -- bazel/cargo/.broker-workspace.txn` for a regular file
+or a symlink, `git rm --` on the same path when the stash reports
+`No local changes to save` because git tracks it, and a non-recursive
+`rm --` on the same path for the fifo, socket and device shapes git was
+measured to leave exactly where they are. Every arm was run before it was
+written down, and the negative arms, the stash against a fifo and against a
+tracked entry, are kept as tests that must keep failing to clear the state.
+
 **A Bazel child that half-writes the hub lock and then fails.** `cargo-bazel`
 renders `bazel/cargo/broker.lock` from a resolve that touches the network; a
 child killed or failed partway can leave that file truncated, or complete but
@@ -2080,6 +2282,30 @@ source to an inode; that residue is caught after the fact by the postcondition
 `fstatat` on the slot, which requires the witness identity and refuses with
 `D2B-BZLTXN-DISPLACED` naming both paths rather than attempting a restore that
 would repeat the defect.
+
+**A retry that keeps the lock it is retrying past.** This is the failure the
+retry mechanism itself makes possible, and it is invisible because it looks
+like the refusal the mechanism exists to produce. The `renameat2` in step 6
+can return `ENOENT` only if the source name vanished inside the window between
+the identity check and the call, so the attempt is consumed and the sequence
+re-resolves. Let the entry have been moved away and back, by an editor's
+atomic save or a contributor's `mv`, so that the re-resolution lands on the
+same inode the spent attempt locked. An implementation that returns to step 1
+without closing what it holds then opens `lock` beneath that directory a
+second time, and is refused: measured, `F_OFD_SETLK` with `F_WRLCK` requested
+through a second open file description on a file the same process already
+locked through a first returns `EAGAIN`, and returns 0 once the first
+descriptor is closed. The command therefore prints step 2's message, names
+another generator or repin as the holder of a lock it holds itself, and no
+amount of waiting or re-running clears it, because the writer named in the
+message is the process that just exited. The descriptors leak on the same
+path, two per attempt, measured as six open where the release leaves none. The
+guard is that both retry paths perform the same release in the same order,
+lock descriptor first so the open file description is destroyed and then the
+transaction directory descriptor, and the check for it is a descriptor
+inventory across the injected retries rather than an assertion about the
+source, with the non-releasing build as the control that proves the inventory
+can fail.
 
 **The privileged binary linking a library the broker lock never described.**
 Bind `//packages/d2b-priv-broker:d2b-priv-broker` to
@@ -2506,6 +2732,15 @@ integration can reach.
    destroys nothing and that can be undone, and
    spawns no Bazel process, creates no output base, and places
    `CARGO_BAZEL_REPIN` and `CARGO_BAZEL_REPIN_ONLY` in no child environment.
+   The one refusal in this decision whose remedy removes rather than sets
+   aside is the non-directory refusal of invariant 9, and it is bounded the
+   other way: git has no representation for a fifo, a socket or a device node
+   and was measured to leave one exactly where it is, the removal is
+   non-recursive over the single path this record spells out rather than over
+   any name read from disk, `rm` without `-r` was measured to refuse a
+   directory so a transaction directory recreated in the meantime survives the
+   paste, and the object removed is one no writer this decision authorizes
+   ever created.
    The remedy is classified by path state rather than printed uniformly:
    `git stash push --all` on the named pathspec for tracked, untracked and
    ignored entries under the generated subtree, never `--include-untracked`,
@@ -2580,21 +2815,46 @@ integration can reach.
    `fstatat` the single component `.broker-workspace.txn` relative to the
    anchored parent with `AT_SYMLINK_NOFOLLOW` and require the same `st_dev`,
    the same `st_ino` and a directory type immediately before the rename. An
-   absent name, a differing identity or a non-directory type releases the lock
-   by closing its only descriptor and retries from resolution, at most three
-   resolution attempts in total, after which the command exits nonzero with
-   `D2B-BZLTXN-CONCURRENT` having moved and created nothing; a name that does
-   not resolve to a directory at all refuses under the same code. Only on a
-   match does it rename the whole transaction
+   absent name or a differing identity releases the lock
+   by closing its only descriptor, closes the transaction directory
+   descriptor, and retries from resolution, at most three resolution attempts
+   in total, after which the command exits nonzero with
+   `D2B-BZLTXN-CONCURRENT` having moved and created nothing. A name that does
+   not denote a directory is not that refusal and is never retried: `ELOOP` or
+   `ENOTDIR` from the resolve, or a non-directory type from that `fstatat`, is
+   classified by `fstatat` with `AT_SYMLINK_NOFOLLOW`, so a symlink is
+   reported as a symlink rather than as its target, and refused with
+   `D2B-BZLTXN-NOTDIR` naming the observed type and the remedy measured to
+   clear that type:
+   `git stash push --all -- bazel/cargo/.broker-workspace.txn` for a regular
+   file or a symlink, `git rm --` on the same path when git tracks it, which
+   the stash reports by exiting 0 with `No local changes to save`, and a
+   non-recursive `rm --` on the same path for a fifo, a socket or a device
+   node, which git is measured to leave in place. No refusal under that code
+   prescribes waiting or re-running as its remedy, because no writer this
+   decision authorizes creates a non-directory at that name and no passage of
+   time removes one. The same classification and the same remedy govern
+   `cargo xtask bazel-repin --hub broker` and `cargo xtask gen-bazel` when
+   their own `mkdirat` of the transaction directory returns `EEXIST` and the
+   resolve that follows returns `ELOOP` or `ENOTDIR`: both refuse with
+   `D2B-BZLTXN-NOTDIR` before the sweep, the probe and any staging, rather
+   than reporting a bare errno. Only on a match does it rename the whole
+   transaction
    directory onto the first free one of the four fixed sibling names
    `bazel/cargo/.broker-workspace.txn.quarantine.0` through
    `bazel/cargo/.broker-workspace.txn.quarantine.3` with
    `renameat2(RENAME_NOREPLACE)`, re-taking that identity check before each
    slot attempt so the observation is always the syscall immediately preceding
    the rename it authorizes, treating all four slots occupied as a terminal
-   refusal rather than a retry trigger, and treating `ENOENT` from that call
-   as an attempt consumed and a return to resolution. After a rename returns 0
-   it `fstatat`s the
+   refusal rather than a retry trigger, under the distinct stable code
+   `D2B-BZLTXN-EXHAUSTED` which lists the four slots repository-relative and
+   prints no removal command for them, and treating `ENOENT` from that call
+   as an attempt consumed and a return to resolution. Both retry paths, the
+   identity mismatch and that `ENOENT`, release before they re-resolve, in
+   that order: the lock descriptor closes first so the open file description
+   lock is destroyed, then the transaction directory descriptor, so no attempt
+   holds a descriptor or a lock from an attempt that ended. After a rename
+   returns 0 it `fstatat`s the
    slot through the same anchor with `AT_SYMLINK_NOFOLLOW` and requires the
    witness identity and a directory type; on any difference it exits nonzero
    with `D2B-BZLTXN-DISPLACED`, names the slot and the transaction path
@@ -2607,9 +2867,11 @@ integration can reach.
    `bazel/cargo/broker.lock` or any Cargo manifest or lock, exits zero without
    writing when the transaction directory is absent, and refuses without
    moving anything when all four slots are occupied. Its refusals carry
-   exactly the codes `D2B-BZLTXN-HUB`, `D2B-BZLTXN-CONCURRENT` and
-   `D2B-BZLTXN-DISPLACED` beside the unchanged `EAGAIN` contention refusal,
-   each naming only its own remedy, and none prints an absolute path, a user
+   exactly the codes `D2B-BZLTXN-HUB`, `D2B-BZLTXN-CONCURRENT`,
+   `D2B-BZLTXN-NOTDIR`, `D2B-BZLTXN-DISPLACED` and `D2B-BZLTXN-EXHAUSTED`
+   beside the unchanged `EAGAIN` contention refusal,
+   each naming only its own remedy, no two of them sharing one, and none
+   prints an absolute path, a user
    identifier, a process identifier, or any byte read from inside the
    directory it refused over.
 10. That command then spawns exactly one Bazel child under ADR 0052 section 3's
@@ -2646,7 +2908,8 @@ integration can reach.
     continuous-integration context, and no top-level shell gate. Its drift
     checks extend `test-drift`, which already exists for this class of
     staleness, and its transaction, recovery, residue, quarantine,
-    quarantine-identity, hub-guard,
+    quarantine-identity, non-directory-classification, retry-release,
+    hub-guard,
     changed-path and lock-descriptor negatives
     are `#[test]`s in `packages/xtask`, running under the existing
     `rust-main-workspace-tests` surface against throwaway fixture repositories
@@ -3031,9 +3294,18 @@ record merges. Each is a command and a verdict.
     present, the next quarantine lands in `.quarantine.1` and `.quarantine.0`
     is byte-unchanged, which is the collision arm and is asserted against that
     exact slot rather than against any free one. With all four slots occupied
-    the mode exits nonzero, lists all four repository-relative, leaves the
+    the mode exits nonzero with `D2B-BZLTXN-EXHAUSTED` and with no other code
+    in the message, lists all four repository-relative, leaves the
     transaction directory in place, prints no removal command of any kind, and
-    leaves `git status --porcelain` unchanged. Run twice in a row it exits
+    leaves `git status --porcelain` unchanged. That code assertion is the
+    point of the arm rather than a detail of it: the same fixture is run
+    against a build whose slot loop falls through to the attempt-bound
+    refusal, which must produce `D2B-BZLTXN-CONCURRENT` and fail this check,
+    so a later edit cannot quietly collapse the two exhaustions back into one
+    code; reverted. The message is asserted to contain none of
+    `D2B-BZLTXN-CONCURRENT`, `D2B-BZLTXN-NOTDIR` and `D2B-BZLTXN-DISPLACED`,
+    and to name each of the four slot paths exactly once. Run twice in a row it
+    exits
     zero both times, the second run having found no transaction directory and
     written nothing. After any successful quarantine an ordinary
     `cargo xtask bazel-repin --hub broker` creates a fresh transaction
@@ -3046,6 +3318,69 @@ record merges. Each is a command and a verdict.
     `packages/d2b-priv-broker/Cargo.lock` are byte-identical before and after
     every one of them.
 
+    A non-directory at the transaction name is classified by type, refused
+    under its own code, and cleared by the exact command the refusal printed.
+    These are `#[test]`s in `packages/xtask` on the same throwaway fixture
+    repositories carrying the same four unrelated states. One arm per shape:
+    a regular file, a symlink to a directory, a symlink to a regular file, a
+    dangling symlink, a fifo, and a unix socket, plus a character device that
+    is skipped with a recorded reason because `mknodat` for one returns
+    `EPERM` unprivileged. In every arm both
+    `cargo xtask bazel-repin --hub broker` and
+    `cargo xtask bazel-repin --hub broker --quarantine-transaction-state` exit
+    nonzero with `D2B-BZLTXN-NOTDIR`, name
+    `bazel/cargo/.broker-workspace.txn` repository-relative, name the type in
+    words, create no quarantine slot, spawn no Bazel process, leave the
+    planted object byte-identical and inode-identical, and leave
+    `bazel/cargo/broker-workspace/**` and `bazel/cargo/broker.lock`
+    byte-unchanged. The three symlink arms are what prove the classification
+    is taken with `AT_SYMLINK_NOFOLLOW`: the message must say symlink in all
+    three, never directory for the one pointing at a directory, never regular
+    file for the one pointing at a regular file, and the symlink's target must
+    be present and byte-identical afterwards, which is how the check proves
+    nothing followed the link. A build whose classification drops the flag
+    fails the first of those three by reporting a directory, and fails it
+    before it reports anything else; reverted.
+
+    The remedy each of those refusals prints is executed rather than
+    string-matched, and its negative is executed too. For the regular-file and
+    symlink arms the printed
+    `git stash push --all -- bazel/cargo/.broker-workspace.txn` is run: it
+    exits 0, the entry is gone, the four unrelated states are byte-identical,
+    `git status --porcelain` differs from its pre-remedy value only by the
+    line for the planted path, `git stash pop` restores the entry with its
+    type, and the re-run of `cargo xtask bazel-repin --hub broker` no longer
+    raises `D2B-BZLTXN-NOTDIR`, asserted against the refusal identity rather
+    than exit status alone. For the fifo and socket arms the same stash is run
+    as a negative and must fail to clear: it exits 0 reporting
+    `No local changes to save` and the object is still there with its type, and
+    the printed `rm -- bazel/cargo/.broker-workspace.txn` is then run and
+    exits 0, removes it, leaves every unrelated state byte-identical, and the
+    re-run proceeds. A seventh fixture commits a regular file at that name:
+    the stash exits 0 reporting `No local changes to save` and clears nothing,
+    which is the state the printed message names, and the printed
+    `git rm -- bazel/cargo/.broker-workspace.txn` then exits 0 and clears it
+    while `git checkout HEAD -- bazel/cargo/.broker-workspace.txn` restores it
+    exactly. Two message negatives run against every one of these arms: the
+    refusal contains no `-r` and no `-rf` in any command it prints, and it
+    contains neither the substring `re-run once no generator or repin is
+    running` nor any other instruction to wait, which is what keeps a later
+    edit from folding this code's remedy back onto the concurrency one. The
+    `rm` form is asserted to appear only in the fifo, socket and device arms,
+    and the stash form only in the regular-file and symlink arms.
+
+    The type refusals are proved distinct from the concurrency refusal rather
+    than merely spelled differently. On each planted shape the refusal must
+    contain `D2B-BZLTXN-NOTDIR` and must not contain
+    `D2B-BZLTXN-CONCURRENT`, and the observation point that counts resolution
+    attempts must report exactly one, since a non-directory is never retried;
+    a build that routes these shapes through the retry reports three and fails
+    both assertions. The fifo arm additionally bounds the wall clock: the run
+    returns within the test's ordinary timeout rather than blocking on a fifo
+    open, which is the behaviour the `O_DIRECTORY` refusal was measured to
+    give and the one shape where a wrong implementation hangs instead of
+    exiting.
+
     The identity binding is exercised at each fault point it exists for, and
     the injection surface does not ship. These are in-crate `#[test]`s in
     `packages/xtask` on the same throwaway fixture repositories, driving the
@@ -3053,14 +3388,15 @@ record merges. Each is a command and a verdict.
     `#[cfg(test)]`-gated parameter, so the release build of `xtask` carries no
     injection surface at all; a grep of the non-`cfg(test)` build for that
     parameter type returns nothing, and the release CLI path constructs none.
-    Six arms, each planting at a different point in the sequence and each
+    Seven arms, each planting at a different point in the sequence and each
     asserting a different outcome, with every identity assertion made on
     `st_dev` and `st_ino` rather than on path strings.
 
     Before the transaction directory is opened, the entry at
     `bazel/cargo/.broker-workspace.txn` is replaced. With a symlink to a
     directory, and with a regular file, the run exits nonzero with
-    `D2B-BZLTXN-CONCURRENT`, creates no quarantine slot, and leaves the
+    `D2B-BZLTXN-NOTDIR`, names that type, creates no quarantine slot, makes no
+    second resolution attempt, and leaves the
     planted entry exactly where it is; the control is the third shape, an
     unrelated directory, which is legitimately what the name denotes, so the
     run quarantines it, the postcondition passes against that directory's own
@@ -3083,6 +3419,29 @@ record merges. Each is a command and a verdict.
     attempts, counted by the observation point rather than inferred, moves
     nothing, creates no slot, and leaves `git status --porcelain` unchanged.
     A bound that is not three fails this check in either direction.
+
+    A source that vanishes between the identity check and the rename consumes
+    an attempt and leaves nothing behind it, and the descriptors are the
+    evidence. With the test unlinking and recreating the transaction directory
+    at that exact point so `renameat2` returns `ENOENT`, three assertions run
+    at the observation point that begins the next attempt. `/proc/self/fd`
+    holds the same number of entries as it did before the first attempt, and
+    no entry under it `readlink`s to a path ending in
+    `bazel/cargo/.broker-workspace.txn` or in
+    `bazel/cargo/.broker-workspace.txn/lock`, which is the no-accumulation
+    half and is counted rather than assumed. A second process takes
+    `F_OFD_SETLK` with `F_WRLCK` on the abandoned directory's `lock`, reached
+    through the descriptor it still holds on it, and gets 0, which is the
+    no-stale-lock half. And in the arm where the test recreates the name by
+    moving the same directory back rather than making a new one, so the
+    re-resolution lands on the inode the spent attempt had locked, the run
+    takes the lock, matches the identity and quarantines it, exiting zero.
+    That last arm is the one a non-releasing build fails: it must instead exit
+    nonzero naming `bazel/cargo/.broker-workspace.txn/lock` as held by another
+    generator or repin, which is the command refusing itself, and the fd count
+    must be two higher per attempt; reverted. The four unrelated states and
+    `git status --porcelain` are unchanged across all of it, and no arm spawns
+    a Bazel process.
 
     A replacement landing after the identity check and before `renameat2` is
     the only arm the postcondition exists for and it must fail loudly rather
@@ -3373,5 +3732,34 @@ record merges. Each is a command and a verdict.
   defined set, an undefined flag bit returned `EINVAL` and
   `RENAME_NOREPLACE | RENAME_EXCHANGE` returned `EINVAL`, so no form of the
   call binds the source to an inode
+- The type-classification and retry-release measurements of section 6: a
+  fourth C probe run 2026-08-04 on Linux 7.0.10, unprivileged, with the
+  worktree on ext4, issuing `openat2` under the four resolve flags with
+  `O_RDONLY | O_DIRECTORY | O_CLOEXEC` against a directory, a symlink to a
+  directory, a symlink to a regular file, a dangling symlink, a regular file,
+  a fifo and a unix socket, each under a three-second `alarm` that never
+  fired, with `mknodat` for a character device returning `EPERM` and that
+  shape therefore left unmeasured, and `fstatat` with and without
+  `AT_SYMLINK_NOFOLLOW` on each; plus its lock arms, where `F_OFD_SETLK` with
+  `F_WRLCK` requested through a second open file description on a file the
+  same process had already locked through a first returned `EAGAIN` and
+  returned 0 once that first descriptor was closed, and where
+  `/proc/self/fd` counted six descriptors open across three attempts that
+  opened a transaction directory and its lock without closing them and none
+  across three that closed both. And a git 2.54.0 fixture carrying the
+  committed `.broker-*/` rule, a modified tracked file, an untracked file, an
+  ignored `target/` output and a staged modification, with a regular file, a
+  symlink to a directory, a dangling symlink, a fifo, a unix socket and a
+  committed regular file planted in turn at
+  `bazel/cargo/.broker-workspace.txn`, on which
+  `git stash push --all -- bazel/cargo/.broker-workspace.txn` cleared the
+  first three and `git stash pop` restored each with its type, exited 0
+  reporting `No local changes to save` against the fifo, the socket and the
+  committed file and cleared none of them, `git rm --` and
+  `git checkout HEAD --` cleared and restored the committed file, the
+  directory-only `.broker-*/` rule did not match a non-directory at that name
+  while an entry without a trailing slash did, and `rm --` removed a fifo, a
+  socket, a symlink and a regular file while refusing an empty and a
+  non-empty directory with `Is a directory`
 - `specs/003-adr052-bazel-rust/contracts/workspace-and-tool-pinning.md`, the
   hub and repin contract this record leaves intact
