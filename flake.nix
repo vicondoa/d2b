@@ -904,6 +904,7 @@
             "examples-with-observability.nix"
             "ifname-nix-rust-parity.nix"
             "observability.nix"
+            "observability-guest.nix"
             "provider-catalog.nix"
             "provider-elf-shim.nix"
             "provider-projection-exportability.nix"

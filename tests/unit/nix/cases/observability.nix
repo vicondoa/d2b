@@ -24,7 +24,13 @@
 #     minijail profiles expose `caps`, not the old `capabilities` key.
 #   * The observability dashboards directory is no longer retired/empty: the
 #     current SigNoz surface ships six dashboards.
-{ lib, flakeRoot, nixpkgsFlake, d2bModule, ... }:
+{ lib
+, flakeRoot
+, nixpkgsFlake
+, d2bModule
+, casePartition ? "host"
+, ...
+}:
 
 let
   shared = import ../eval-cases/shared.nix {
@@ -963,5 +969,28 @@ let
 
   mkCase = _name: result:
     if result.kind == "expect-failure" then mkFailureCase result else mkSuccessCase result;
+  guestCases = [
+    "obs-relay-acl-surface"
+    "obs-stack-vm-guest-surface"
+    "obs-alerting-surface"
+    "obs-journal-default-on"
+    "obs-journal-execstart-enabled-deep-force"
+    "obs-journal-execstart-disabled-deep-force"
+    "obs-audit-surface"
+    "obs-rules-promtool"
+    "obs-metric-references"
+    "obs-scrape-job-stability"
+    "obs-stability"
+    "obs-graphics-runner-wiring"
+  ];
+  renderedCases = lib.mapAttrs'
+    (name: result: lib.nameValuePair "observability/${name}" (mkCase name result))
+    evaluated;
+  partitionMatches = name:
+    if casePartition == "all" then true
+    else if casePartition == "guest" then builtins.elem name guestCases
+    else !(builtins.elem name guestCases);
 in
-lib.mapAttrs' (name: result: lib.nameValuePair "observability/${name}" (mkCase name result)) evaluated
+lib.filterAttrs
+  (name: _: partitionMatches (lib.removePrefix "observability/" name))
+  renderedCases
