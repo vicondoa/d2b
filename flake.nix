@@ -124,6 +124,10 @@
           "net-vm-network.nix"
           "realm-workloads.nix"
           "realms.nix"
+          "realms-artifacts.nix"
+          "realms-rejections.nix"
+          "realms-workloads.nix"
+          "realms-zone-control.nix"
           "usbip-gating.nix"
         ];
         nix-unit-runtime = [
@@ -1501,6 +1505,10 @@
             "observability-host-collector-flags.nix"
             "realm-workloads.nix"
             "realms.nix"
+            "realms-artifacts.nix"
+            "realms-rejections.nix"
+            "realms-workloads.nix"
+            "realms-zone-control.nix"
             "usb-security-key.nix"
           ];
           lightGroups = pkgs.lib.filterAttrs

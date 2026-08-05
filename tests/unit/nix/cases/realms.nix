@@ -1,6 +1,6 @@
 # nix-unit coverage for realm option/schema foundations and Zone-control
 # compiler constraints.
-{ mkEval, lib, flakeRoot, pkgs, ... }:
+{ mkEval, lib, flakeRoot, pkgs, casePartition ? "index", ... }:
 
 let
   digestHelpers =
@@ -564,7 +564,8 @@ let
     })
   ]).config;
 in
-{
+let
+  allCases = {
   "realms/valid-home-dev-work-keeps-env-substrate-active" = {
     expr = {
       assertionsPass = lib.all (a: a.assertion) cfg.assertions;
@@ -1936,4 +1937,20 @@ in
       depth = true;
     };
   };
-}
+};
+  partitionFor = name:
+    if lib.hasInfix "zone-control-" name then "zone-control"
+    else if lib.hasInfix "accepted-" name
+      || lib.hasInfix "tombstone-" name then "workloads"
+    else if lib.hasInfix "rejects-" name
+      || lib.hasInfix "requires-" name then "rejections"
+    else if lib.hasInfix "allocator-" name
+      || lib.hasInfix "controller-" name
+      || lib.hasInfix "identity-" name
+      || lib.hasInfix "host-local-" name
+      || lib.hasInfix "examples-" name then "artifacts"
+    else "index";
+in
+lib.filterAttrs
+  (name: _: partitionFor name == casePartition)
+  allCases
