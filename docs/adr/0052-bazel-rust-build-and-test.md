@@ -12,10 +12,11 @@
   happens to find, and records the measured `crate_universe` repin controls
   that make a scoped, reviewed lock regeneration possible without a gate-path
   escape hatch. No decision here is reversed and nothing here is superseded.
-- Proposed refinement: [ADR 0054](0054-broker-hub-generated-splice-workspace.md)
-  decides only the generated splice workspace and graph-fidelity contract for
-  the standalone `broker` hub. It does not authorize broker repin; that
-  lifecycle requires a separate accepted ADR.
+- Proposed amendment (2026-08-05):
+  [ADR 0054](0054-single-product-cargo-workspace.md) replaces this record's
+  three-workspace and four-hub lock inventory with one product Cargo
+  workspace and one separate walker tool workspace. It leaves the distinct
+  broker, guest, and test-context execution surfaces unchanged.
 - Related: [ADR 0009](0009-rust-toolchain-msrv-and-supply-chain.md) (Rust
   toolchain, MSRV, and supply-chain policy), which keeps its authority
   unchanged and is not superseded;
@@ -270,13 +271,10 @@ settled them.
 
 ### 2. Cargo stays the authoritative dependency and toolchain input
 
-The Cargo manifests, the four authoritative hub/workspace locks for `main`,
-`broker`, `guest`, and `walker`, `packages/deny.toml`, and the two
-`rust-toolchain.toml` files remain the single source of truth for dependency
-resolution, feature selection and compiler version. `packages/Cargo.guest.lock`
-is a separate generated guest-workspace and cache-key input, not a fifth hub.
-Bazel consumes these inputs; it never becomes the place a dependency is
-declared.
+`packages/Cargo.toml`, the three `Cargo.lock` files, `packages/deny.toml` and
+the two `rust-toolchain.toml` files remain the single source of truth for
+dependency resolution, feature selection and compiler version. Bazel consumes
+them; it never becomes the place a dependency is declared.
 
 Concretely:
 
@@ -285,9 +283,7 @@ Concretely:
   non-vendored mode with a committed Bazel-side lock per Cargo workspace. A
   repin drift check (section 5) fails closed when the Bazel-side lock does not
   match what the Cargo lock resolves to, which is the Bazel equivalent of the
-  `--locked` flag the gate passes today. The `broker` hub consumes the
-  generated splice workspace decided by ADR 0054 while retaining its
-  authoritative standalone Cargo lock.
+  `--locked` flag the gate passes today.
 - The Rust toolchains registered in Bazel are exactly the channels named in
   `packages/rust-toolchain.toml` (1.97.0) and
   `packages/d2b-api-surface/rust-toolchain.toml` (nightly-2026-02-16). A guard
@@ -328,11 +324,8 @@ ADR justified by measured prototypes, and this ADR authorizes no such move.
   `CARGO_BAZEL_REPIN=1 make ...` under deadline. Regeneration is therefore a
   repository-owned command, `cargo xtask bazel-repin --hub <name>`, and it is
   the only place in the repository those three names may appear as a
-  process-environment assignment. This authorization applies to `main`,
-  `guest`, and `walker`. `broker` remains part of the four-hub inventory, but
-  no broker repin path is authorized by ADR 0054 or this paragraph; that
-  requires a separate accepted ADR. For an authorized hub, the command sets
-  `CARGO_BAZEL_REPIN` and `CARGO_BAZEL_REPIN_ONLY=<hub>`
+  process-environment assignment. It requires an explicit hub from the closed
+  four-hub set, sets `CARGO_BAZEL_REPIN` and `CARGO_BAZEL_REPIN_ONLY=<hub>`
   only in the environment of the single Bazel child process it spawns, never
   process-globally, uses the same absolute output user root, output base and
   symlink prefix the wrapper derives, so it cannot start a second server, and
