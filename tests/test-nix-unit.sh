@@ -205,12 +205,13 @@ if [ -n "${D2B_NIX_UNIT_CHECK:-}" ]; then
   check="$D2B_NIX_UNIT_CHECK"
   nix_unit_surface="$check"
   selected_jobs_file="$check_dir/jobs"
-  log "--> nix eval --raw ${flake_label}#nixUnitJobShards.${system}.${check} (job discovery)"
-  if ! nix eval --raw "${flake_ref}#nixUnitJobShards.${system}.${check}" --apply '
-      jobs:
-        builtins.concatStringsSep "\n"
+  log "--> nix eval --raw ${flake_label}#nixUnitJobShards.${system} (job discovery: $check)"
+  if ! nix eval --raw "${flake_ref}#nixUnitJobShards.${system}" --apply "
+      shards:
+        let jobs = builtins.getAttr \"${check}\" shards;
+        in builtins.concatStringsSep \"\\n\"
           (builtins.sort builtins.lessThan (builtins.attrNames jobs))
-    ' >"$selected_jobs_file"; then
+    " >"$selected_jobs_file"; then
     fail "nix-unit check $check ($system) job discovery failed" || true
     exit 1
   fi
@@ -226,9 +227,13 @@ if [ -n "${D2B_NIX_UNIT_CHECK:-}" ]; then
         exit 1
         ;;
     esac
-    log "--> nix eval --raw ${flake_label}#nixUnitJobShards.${system}.${check}.${job}.drvPath (instantiate-only)"
+    log "--> nix eval --raw ${flake_label}#nixUnitJobShards.${system} (job: $check/$job; instantiate-only)"
     if ! nix eval --raw \
-      "${flake_ref}#nixUnitJobShards.${system}.${check}.${job}.drvPath" >/dev/null; then
+      "${flake_ref}#nixUnitJobShards.${system}" \
+      --apply "
+        shards:
+          (builtins.getAttr \"${job}\" (builtins.getAttr \"${check}\" shards)).drvPath
+      " >/dev/null; then
       fail "nix-unit check $check job $job ($system) failed" || true
       exit 1
     fi
