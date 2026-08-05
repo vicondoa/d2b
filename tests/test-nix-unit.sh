@@ -305,7 +305,12 @@ workers=$requested_workers
 [ "$workers" -le "$cpu_cap" ] || workers=$cpu_cap
 [ "$workers" -le "$memory_cap" ] || workers=$memory_cap
 [ "$workers" -ge 1 ] || workers=1
-log "  nix-eval-jobs workers: requested $requested_workers, effective $workers (CPU cap $cpu_cap, memory cap $memory_cap, $memory_mb MiB evaluator limit plus 2048 MiB overhead per worker)"
+# Heavy file jobs are isolated into their own evaluator processes below. Keep
+# at most two such processes resident at once; this is a stable pressure cap,
+# not a substitute for narrowing a full-system fixture.
+shard_workers=$workers
+[ "$shard_workers" -le 2 ] || shard_workers=2
+log "  nix-eval-jobs workers: requested $requested_workers, effective $shard_workers (CPU cap $cpu_cap, memory cap $memory_cap, $memory_mb MiB evaluator limit plus 2048 MiB overhead per worker)"
 
 if ! command -v nix-eval-jobs >/dev/null 2>&1; then
   fail "nix-eval-jobs is required for local corpus evaluation; the locked nix-unit shell should provide it" || true
@@ -409,7 +414,7 @@ if ! jq -e '
   exit 1
 fi
 
-log "--> nix-eval-jobs topical shards (${#nix_unit_shards[@]}) --workers $workers --max-memory-size $memory_mb"
+log "--> nix-eval-jobs isolated Nix-unit shards (${#nix_unit_shards[@]}) --workers $shard_workers --max-memory-size $memory_mb"
 shard_pids=()
 shard_statuses=()
 shard_status=0
@@ -425,7 +430,7 @@ harvest_nix_unit_shard() {
 }
 
 for shard in "${nix_unit_shards[@]}"; do
-  while [ "${#shard_pids[@]}" -ge "$workers" ]; do
+  while [ "${#shard_pids[@]}" -ge "$shard_workers" ]; do
     harvest_nix_unit_shard "${shard_pids[0]}" "${shard_statuses[0]}"
     shard_pids=("${shard_pids[@]:1}")
     shard_statuses=("${shard_statuses[@]:1}")
@@ -659,4 +664,4 @@ for leaf in "${nix_unit_baseline_leaves[@]}"; do
   fi
 done
 nix_unit_surface=
-log "test-nix-unit OK ($result_count attributes, $workers workers, ${memory_mb}MiB per worker; duration: $((SECONDS - suite_started))s)"
+log "test-nix-unit OK ($result_count attributes, $shard_workers shard workers, ${memory_mb}MiB per evaluator; duration: $((SECONDS - suite_started))s)"

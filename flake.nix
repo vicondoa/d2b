@@ -1483,8 +1483,42 @@
                   "${pkgs.lib.removePrefix "case-" jobName}.nix"
                   files)
               nixUnitCorpus.fileJobs;
+          heavyCaseFiles = [
+            "assertions.nix"
+            "external-vm-kind.nix"
+            "gateway-vm.nix"
+            "guest-config-containment.nix"
+            "guest-control-auth.nix"
+            "guest-control-vsock.nix"
+            "guest-exec-policy.nix"
+            "guest-shell-policy.nix"
+            "observability-host-collector.nix"
+            "observability-host-collector-extra.nix"
+            "observability-host-collector-otlp.nix"
+            "observability-host-collector-processor-split.nix"
+            "observability-host-collector-identity.nix"
+            "observability-host-collector-umask.nix"
+            "observability-host-collector-flags.nix"
+            "realm-workloads.nix"
+            "realms.nix"
+            "usb-security-key.nix"
+          ];
+          lightGroups = pkgs.lib.filterAttrs
+            (_: jobs: jobs != { })
+            (pkgs.lib.mapAttrs
+              (_: files:
+                jobsFor (pkgs.lib.filter
+                  (file: !(builtins.elem file heavyCaseFiles))
+                  files))
+              nixUnitShardCaseFiles);
+          heavyGroups = pkgs.lib.listToAttrs (map
+            (file: {
+              name = "case-${pkgs.lib.removeSuffix ".nix" file}";
+              value = jobsFor [ file ];
+            })
+            heavyCaseFiles);
         in
-        (pkgs.lib.mapAttrs (_: jobsFor) nixUnitShardCaseFiles) // {
+        lightGroups // heavyGroups // {
           integrity = {
             nix-unit = self.checks.${system}.nix-unit;
           };
