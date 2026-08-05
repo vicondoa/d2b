@@ -1511,7 +1511,8 @@ fn execution_manifest_schema_and_prose_agree_with_non_empty_discovery() {
         "execution-manifest-policy: Nix-unit full runs must not dump raw JSONL results"
     );
     assert!(
-        nix_driver.contains("2>\"$tool_stderr\"")
+        nix_driver.contains("2>\"$shard_stderr\"")
+            && nix_driver.contains("cat \"$shard_dir/$shard.stderr\" >>\"$tool_stderr\"")
             && nix_driver.contains("emit_sanitized_tool_stderr()")
             && nix_driver.contains("while IFS= read -r line || [ -n \"$line\" ]; do")
             && nix_driver.contains("sanitize_observable_line()")
