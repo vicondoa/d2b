@@ -1368,7 +1368,7 @@ fn execution_manifest_schema_and_prose_agree_with_non_empty_discovery() {
     assert!(
         nix_driver.contains("nix-eval-jobs")
             && nix_driver.contains("--no-instantiate")
-            && nix_driver.contains("nixUnitJobs"),
+            && nix_driver.contains("nixUnitJobShards"),
         "execution-manifest-policy: Nix-unit emitter must use the evaluation-only nix-eval-jobs surface"
     );
     assert!(
