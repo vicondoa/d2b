@@ -37,10 +37,14 @@ required same-commit verdict for its fixture-independent binaries, including
 two fixture-dependent surfaces outside this migration; that verdict is never
 cited as policy-doc execution.
 
+Qualification requires both same-commit policy and fixture verdicts to pass; missing or failed either disqualifies the record and resets the streak.
+
 ### Streak arithmetic
 
-- Matching verdicts with a passing fixture verdict extend the streak.
+- Matching verdicts extend the streak only when same-commit `make test-policy`
+  and `D2B_ENABLE_FIXTURE_BUILD=1 make test-fixture-contracts` both pass.
 - Differing verdicts reset the streak to zero.
+- A missing or failed policy or fixture verdict resets the streak to zero.
 - A Bazel run that reaches no verdict while its paired Cargo run reaches one is
   a mismatch and resets the streak, because otherwise cancelling a run about to
   go red would launder the streak.
@@ -50,10 +54,10 @@ cited as policy-doc execution.
 ### Cold-sample qualification
 
 A record supplies a cold continuous-integration measurement only when no Bazel
-cache of any kind was restored and all four slice jobs ran to completion with a
-recorded duration. Its scalar record duration is the maximum of those four
-slice durations, matching the workflow critical path. During the shadow stage
-every run is cold by construction,
+cache of any kind was restored, all four slice jobs ran to completion with a
+recorded duration, and both same-commit policy and fixture verdicts passed. Its
+scalar record duration is the maximum of those four slice durations, matching
+the workflow critical path. During the shadow stage every run is cold by construction,
 because nothing is published or restored, so the qualifier excludes runs that
 produced no measurement rather than selecting among warm and cold runs.
 
@@ -64,7 +68,8 @@ produced no measurement rather than selecting among warm and cold runs.
 1. both halves of the coverage guard passing for exactly eighteen rows, the
    analysis-time half and the out-of-test completeness half;
 2. ten consecutive matching qualification records, each with one shared head
-   commit and a passing fixture-contract verdict;
+   commit, a passing same-commit `make test-policy` verdict, and a passing
+   same-commit fixture-contract verdict;
 3. eighteen seeded failure records, each failing only its owning surface;
 4. exact generator-derived test, ignored, doctest, harness-free, API, schema,
    scanner, and pinned-test censuses, with every out-of-census entry recorded

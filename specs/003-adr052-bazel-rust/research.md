@@ -995,7 +995,10 @@ verdicts differ resets the streak. A shadow run that reaches no verdict while
 its paired Cargo run reaches one counts as a mismatch and also resets, because
 otherwise cancelling a run about to go red would launder the streak. A push
 where neither side reached a verdict is not a record and neither extends nor
-resets.
+resets. A missing or failed same-commit `make test-policy` or fixture-contract
+verdict disqualifies the record and resets the streak.
+
+Qualification requires both same-commit policy and fixture verdicts to pass; missing or failed either disqualifies the record and resets the streak.
 
 At promotion, action and download snapshots become separate 4/1 GiB entries.
 The output base is never cached. Keys bind, at minimum: `.bazelversion`,
@@ -1032,9 +1035,10 @@ worse than no cache.
 and no sample exceeds 1.2 times it. Local sets contain three consecutive runs;
 the continuous-integration set is the five most recent qualifying cold
 qualification records, where qualifying means no Bazel cache was restored and
-all four slice jobs completed with a recorded duration. During the shadow stage
-every run is cold by construction, so the qualifier excludes runs that produced
-no measurement rather than selecting among warm and cold runs. Scheduled,
+all four slice jobs completed with a recorded duration, and the same-commit
+policy and fixture-contract verdicts both passed. During the shadow stage every
+run is cold by construction, so the qualifier excludes runs that produced no
+measurement rather than selecting among warm and cold runs. Scheduled,
 dispatched, and `main`-push runs are liveness probes and never enter the set.
 
 **A feasibility gate precedes the binding cold-CI ceiling.** The 15-minute
@@ -1103,9 +1107,10 @@ boundaries, and an untestable boundary is where the off-by-one lives.
 
 **Decision**: Cargo remains authoritative through the shadow stage and W4
 evidence. Promotion requires exact coverage, census, and topology, ten matching
-qualification records, an eighteen-case isolated failure matrix, twenty broker
-repetitions, all performance sets, supply-chain equivalence including the
-yanked outcome, and cache-policy evidence.
+qualification records with passing same-commit policy and fixture-contract
+verdicts, an eighteen-case isolated failure matrix, twenty broker repetitions,
+all performance sets, supply-chain equivalence including the yanked outcome,
+and cache-policy evidence.
 
 W4 commits one immutable qualification record set. W5 writes a separate
 promotion record after the ordered protected-`v3` maintenance and save run.

@@ -63,13 +63,17 @@ not authorize broker repin.
   -> A: A passing `D2B_SKIP_FIXTURE_BUILD=1` Rust rollup equivalence result for
   both executors, a passing same-commit `make test-policy` verdict for
   fixture-independent policy binaries including `policy_docs`, and a passing
-  same-commit fixture-contract companion verdict for the actual
-  fixture-dependent contract and CLI surfaces. Both stay outside the Bazel
-  comparison, but neither may regress invisibly behind a qualifying record.
+  same-commit
+  `D2B_ENABLE_FIXTURE_BUILD=1 make test-fixture-contracts` companion verdict
+  for the actual fixture-dependent contract and CLI surfaces. Both stay
+  outside the Bazel comparison, but neither may regress invisibly behind a
+  qualifying record.
 - Q: How does the streak treat a run that reaches no verdict?
   -> A: A Bazel run that reaches no verdict while its paired Cargo run reaches
   one counts as a mismatch and resets the streak. A push where neither side
-  reaches a verdict is not a record and neither extends nor resets.
+  reaches a verdict is not a record and neither extends nor resets. When the
+  compared runs reach a verdict, a missing or failed same-commit policy or
+  fixture verdict disqualifies that record and resets the streak.
 - Q: Are the migration's exact censuses committed literals?
   -> A: No. Every census is derived by the repository-owned generator from the
   same selector the current Cargo gate uses, committed as a generated artifact,
@@ -124,15 +128,20 @@ not authorize broker repin.
 - Q: What mechanically admits T021 after the missing lifecycle decision lands?
   -> A: Exactly one marked execution-status block in each of `plan.md`,
   `tasks.md`, and `contracts/workspace-and-tool-pinning.md`, for exactly three
-  blocks total. Only three `READY` blocks with the closed five-key schema and
-  identical values admit. Missing, duplicate, empty, unknown, misnamed, or
-  disagreeing input refuses before T021, any child, or any write.
+  blocks total. Only three blocks with one BEGIN followed by one END, the
+  closed ordered five-key schema, one exact `status: READY` line each, and
+  identical values admit. Prefix, substring, misplaced status token, missing,
+  duplicate, empty, unknown, misnamed, reversed, nested, extraction-failed, or
+  disagreeing input emits the fixed architecture-pending result and remedy and
+  refuses before T021, any child, or any write.
 - Q: What makes two broker compilation variants equal?
   -> A: Equality of the full configured dependency graph, not direct feature
   equality. Current unit graphs split `d2b-core`, `d2b-contracts`, and
   `d2b-host` between production and tests. The broker default,
   layer1-bootstrap, and fake-backends carriers retain independent local
   feature, edge, target, and case censuses.
+
+Qualification requires both same-commit policy and fixture verdicts to pass; missing or failed either disqualifies the record and resets the streak.
 
 ## User Scenarios & Testing *(mandatory)*
 
@@ -380,8 +389,9 @@ produced by merged pull requests yield qualification records.
 6. **Given** a push to protected `v3` produced by a merged pull request,
    **When** both the Cargo and Bazel workflows run, **Then** both are
    identified by the same head commit, both verdicts and the same-commit
-   fixture-contract verdict are recorded as one qualification record, and a
-   pull-request run produces no record at all.
+   `make test-policy` and fixture-contract verdicts are recorded as one
+   qualification record, both companion verdicts must pass for it to qualify,
+   and a pull-request run produces no record at all.
 
 ---
 
@@ -402,7 +412,8 @@ retirement conditions independently block premature deletion.
 
 **Acceptance Scenarios**:
 
-1. **Given** fewer than ten consecutive matching qualification records, an
+1. **Given** fewer than ten consecutive matching qualification records, any
+   record with a missing or failed same-commit policy or fixture verdict, an
    incomplete seeded-failure matrix, a missed performance ceiling, or any
    failed census or topology proof, **When** promotion is evaluated, **Then**
    promotion is blocked.
@@ -466,6 +477,8 @@ retirement conditions independently block premature deletion.
   post-step or inherited permission.
 - A qualification streak is inflated by pairing runs that tested different
   trees, or by cancelling a run that was about to fail.
+- A missing or failed same-commit policy or fixture verdict is ignored while
+  the two compared Rust verdicts still extend the qualification streak.
 - A dependency policy check runs against a materialized tree that is quietly
   short a package, so it reports fewer findings and exits zero.
 - The migration comparison finds no yanked crate today, so no yanked detection
@@ -756,14 +769,16 @@ retirement conditions independently block premature deletion.
 - **FR-045**: Promotion MUST be blocked until all coverage, census, topology,
   supply-chain, cache, and performance requirements pass, ten consecutive
   qualification records show matching Bazel and Cargo rollup verdicts at the
-  same head commit with a passing same-commit fixture-contract companion, and
-  an eighteen-surface seeded-failure matrix proves each carrier fails
-  independently. A qualification record MUST be a push event on protected `v3`
-  produced by a merged pull request; pull-request, other-branch, scheduled, and
-  manually dispatched runs are diagnostic and MUST NOT enter a streak or a
-  measurement set. A differing verdict MUST reset the streak, a Bazel run that
-  reaches no verdict while its paired Cargo run does MUST reset the streak, and
-  a push where neither side reaches a verdict MUST NOT be a record.
+  same head commit with both a passing same-commit `make test-policy` verdict
+  and a passing same-commit fixture-contract companion, and an
+  eighteen-surface seeded-failure matrix proves each carrier fails
+  independently. A qualification record MUST be a push event on protected
+  `v3` produced by a merged pull request; pull-request, other-branch,
+  scheduled, and manually dispatched runs are diagnostic and MUST NOT enter a
+  streak or a measurement set. A differing verdict, or a missing or failed
+  policy or fixture verdict, MUST reset the streak. A Bazel run that reaches
+  no verdict while its paired Cargo run does MUST reset the streak, and a push
+  where neither side reaches a verdict MUST NOT be a record.
 - **FR-046**: Promotion MUST preserve the required context name `test-rust`,
   route the eighteen baseline surfaces through Bazel, and leave the two
   fixture-backed contract surfaces on their existing path.
@@ -860,8 +875,10 @@ retirement conditions independently block premature deletion.
   migration with the reason.
 - **Qualification Record**: One push event on protected `v3` produced by a
   merged pull request, carrying the head commit, both workflow run
-  identifiers, both rollup verdicts, the same-commit fixture-contract verdict,
-  and, for a cold sample, the four slice durations.
+  identifiers, both rollup verdicts, the same-commit `make test-policy`
+  verdict, the same-commit fixture-contract verdict, and, for a cold sample,
+  the four slice durations. Both companion verdicts must pass for the record
+  to qualify.
 - **Performance Profile**: A reproducible warm local, cold local, or cold
   continuous-integration measurement with a defined host, cache state, start,
   stop, and ceiling.
@@ -883,7 +900,9 @@ retirement conditions independently block premature deletion.
   process topologies, exact censuses, or hand-written fragments.
 - **SC-002**: Ten consecutive qualification records produce the same pass or
   fail verdict from the Bazel and Cargo Rust rollups at the same head commit,
-  each with a passing same-commit fixture-contract companion verdict.
+  each with a passing same-commit `make test-policy` verdict and a passing
+  same-commit fixture-contract companion verdict. A missing or failed
+  companion resets the streak.
 - **SC-003**: An 18-case seeded-failure matrix causes the intended carrier to
   fail in all 18 cases and causes zero unrelated Rust surfaces to fail.
 - **SC-004**: The Bazel and Cargo paths report identical test-case,
@@ -899,9 +918,10 @@ retirement conditions independently block premature deletion.
   minutes and a maximum of at most 18 minutes.
 - **SC-008**: A recorded feasibility measurement on the real runner class
   exists, and the five most recent qualifying cold Bazel qualification records
-  each define their record duration as the maximum of the four slice job
-  durations; those five record durations have a median of at most 15 minutes
-  and no record duration above 18 minutes.
+  each have passing same-commit policy and fixture verdicts and define their
+  record duration as the maximum of the four slice job durations; those five
+  record durations have a median of at most 15 minutes and no record duration
+  above 18 minutes.
 - **SC-009**: The shadow stage creates zero shared Bazel cache entries, and
   pull-request-reachable jobs create zero cache writes and request zero
   `actions: write` permissions.

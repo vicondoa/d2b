@@ -439,11 +439,15 @@ Exactly three marked `ExecutionStatusBlock` records exist, one each in
 | `runtime_state_source` | Required nonempty token. |
 | `resume_requires` | Required nonempty prerequisite expression. |
 
-The parser requires exactly one begin marker, one end marker, and one instance
-of each of the five keys per source. Only exactly three `READY` records with
-byte-identical field values produce `Admitted`. Missing, duplicate, empty,
-unknown, misnamed, or disagreeing input produces `Refused` before T021, any
-child, or any write. The current records are all `PARKED`.
+The parser requires exactly one begin marker followed by exactly one end
+marker and one instance of each of the five ordered keys per source. The
+status line is exactly `status: READY` or `status: PARKED`; a prefix,
+substring, suffix, or status token elsewhere is not a value. Only exactly
+three READY values in byte-identical blocks produce `Admitted`. Prefix,
+substring, misplaced token, missing, duplicate, empty, unknown, misnamed,
+reordered, reversed, nested, extraction-failed, or disagreeing input produces
+the fixed architecture-pending result and remedy and `Refused` before T021,
+any child, or any write. The current records are all `PARKED`.
 
 ## Hub and Broker Compilation Contexts
 
@@ -565,7 +569,11 @@ Records are ordered by `v3` push completion. The promotion streak is ten
 consecutive records whose two compared verdicts match with a passing
 `policy_verdict` and `fixture_verdict`. Streak arithmetic is fail-closed:
 
+Qualification requires both same-commit policy and fixture verdicts to pass; missing or failed either disqualifies the record and resets the streak.
+
 - differing verdicts reset the streak to zero;
+- a missing or failed `policy_verdict` or `fixture_verdict` resets the streak
+  to zero;
 - a Bazel run that reaches no verdict while its paired Cargo run reaches one
   counts as a mismatch and resets the streak;
 - a push where neither side reaches a verdict is not a record and neither
@@ -603,7 +611,7 @@ if an unrelated surface fails.
 | `cache_state` | Exact ADR profile; warm records the edit and live server, cold local retains only the repository cache, cold CI restores nothing. |
 | `invocation_flags` | The exact flags each sample ran under; `--test_output=streamed` invalidates the sample. |
 | `samples_seconds` | Three local samples, or the five most recent qualifying cold qualification records. |
-| `qualifying_rule` | A cold-CI sample qualifies only when no Bazel cache was restored and all four slice jobs completed with a recorded duration. |
+| `qualifying_rule` | A cold-CI sample qualifies only when the record has passing same-commit `policy_verdict` and `fixture_verdict`, no Bazel cache was restored, and all four slice jobs completed with a recorded duration. |
 | `record_duration_seconds` | For `cold-ci`, the maximum of the record's four complete slice job durations. Local profiles use the measured aggregate duration. |
 | `ceiling_seconds` | 600 warm; 900 cold local and cold CI. |
 | `feasibility_ref` | Required for `cold-ci`: the W3 feasibility measurement that made the ceiling binding, or the pre-authorized remedy taken instead. |
@@ -675,7 +683,7 @@ Promotion Evidence Set before executor authority changes.
 | --- | --- |
 | `candidate_commit` | One immutable integrated commit. |
 | `coverage_map_digest` | Both guard halves pass for all eighteen. |
-| `qualification_records` | Ten consecutive matching push-to-`v3` records, each with one shared `head_sha`, both run IDs, and passing policy and fixture-contract verdicts. |
+| `qualification_records` | Ten consecutive matching push-to-`v3` records, each with one shared `head_sha`, both run IDs, a passing same-commit `make test-policy` verdict, and a passing same-commit fixture-contract verdict. Missing or failed either resets the sequence. |
 | `seeded_failures` | Exact eighteen-record set. |
 | `topology_proofs` | Main, guest, and three broker suites; exact generator-derived censuses and ignored counts, plus per-case result publication. |
 | `locator_migration_proof` | Every enumerated file migrated or recorded as needing none, plus the passing injected stale-provider negative in which the `FileSystem` fake reports an out-of-date, wrong-digest executable at the Cargo path while the `RunfilesView` fake reports the entry missing, plus the passing injected post-open path-rebind negative, plus the host-backed `execveat` conformance result. |

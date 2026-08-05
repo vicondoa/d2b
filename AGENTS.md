@@ -376,8 +376,12 @@ is a warning, not the contract.
   `d2bd`'s DAG executor with privileged side effects routed
   through a typed `d2b-priv-broker` op (ADR 0015). Policy coverage
   lives in `packages/d2b-contract-tests/tests/policy_units.rs` and
-  `policy_docs.rs`; run the enabled fixture-contract lane because
-  those checks are not part of `test-rust`.
+  `policy_docs.rs`. Committed `tests/lib.sh` makes `policy_docs`
+  fixture-independent and runs it under enforcing `make test-policy`;
+  the fixture-contract lane excludes it. Fixture-dependent policies such as
+  `policy_units.rs` and `policy_broker_schema.rs` remain in enforcing
+  `make test-fixture-contracts`. Run and cite the lane that owns the changed
+  surface rather than attributing one lane's result to the other.
 - **Don't reintroduce a bash CLI fallback or env-knob escape
   hatch.** The Rust CLI is the only operator surface;
   `D2B_LEGACY_BASH_OPT_IN`, `D2B_LEGACY_CLI`, and
@@ -514,12 +518,14 @@ contract:
 
 ### Verification gates
 
-- `packages/d2b-contract-tests/tests/policy_units.rs` denies retired
-  unit names, while `policy_lints.rs` checks the ADR header and
-  cross-references and `policy_docs.rs` checks this file's daemon-only
-  wording. These fixture-dependent policies are not enforcing
-  pull-request evidence until `test-fixture-contracts` is enabled and
-  promoted.
+- `packages/d2b-contract-tests/tests/policy_docs.rs` checks this file's
+  daemon-only wording. It is selected by
+  `D2B_FIXTURE_INDEPENDENT_POLICY_BINARIES`, executes under enforcing
+  `make test-policy`, and is excluded from `make test-fixture-contracts`.
+  Fixture-dependent policies such as `policy_units.rs`, which denies retired
+  unit names, and `policy_broker_schema.rs` execute in the separate enforcing
+  fixture-contract lane. `policy_lints.rs` also remains outside the
+  fixture-independent list. Neither lane substitutes for the other.
 - Host exit criterion: on a deployed host,
   `systemctl list-units --no-pager --all | grep -E '^(d2b|microvm)' | wc -l`
   returns `3`.

@@ -8,25 +8,26 @@ acquisitions are permitted.
 ## Execution status
 
 <!-- BEGIN SPEC003-EXECUTION-STATUS -->
-```text
-SPEC003_EXECUTION_STATUS=PARKED
-SPEC003_PARKED_AT=broker-lock-regeneration
-SPEC003_NEXT_REFUSED_TASK=T021
-SPEC003_RUNTIME_STATE_SOURCE=task-checkpoints
-SPEC003_RESUME_REQUIRES=accepted-repin-lifecycle-adr+amended-spec003+renewed-plan-panel
-```
+status: PARKED
+parked_at: broker-lock-regeneration
+next_refused_task: T021
+runtime_state_source: task-checkpoints
+resume_requires: accepted-repin-lifecycle-adr+amended-spec003+renewed-plan-panel
 <!-- END SPEC003-EXECUTION-STATUS -->
 
 This machine-readable block is admission input only. The task checklist and
 checkpoints remain runtime state. Pre-W0 and resume admission MUST find exactly
 one marked block in this contract, `plan.md`, and `tasks.md`. The parser accepts
-only the five keys shown above and the known status values `PARKED` and
-`READY`; all three blocks must be byte-identical. Only exactly three `READY`
-blocks admit T021. A missing, duplicate, empty, unknown, misnamed, or
-disagreeing block refuses before T021, any child, or any write. ADR 0054 is not
-authority to regenerate the broker lock or close W0. After ADR 0054 merges, an
-accepted repin-lifecycle ADR, an amended Spec 003, and a renewed unanimous plan
-panel are prerequisites to changing all three blocks atomically.
+only the five ordered keys shown above, one exact BEGIN followed by one exact
+END, and one exact `status: PARKED` or `status: READY` line; all three blocks
+must be byte-identical. Only exactly three READY values admit T021. A prefix,
+substring, misplaced status token, missing, duplicate, empty, unknown,
+misnamed, reversed, nested, extraction-failed, or disagreeing input emits the
+fixed architecture-pending result and remedy and refuses before T021, any
+child, or any write. ADR 0054 is not authority to regenerate the broker lock
+or close W0. After ADR 0054 merges, an accepted repin-lifecycle ADR, an amended
+Spec 003, and a renewed unanimous plan panel are prerequisites to changing all
+three blocks atomically.
 
 ## Startup options come from the wrapper
 
@@ -237,12 +238,24 @@ before edge isolation.
 Production may reach only production/shared libraries and no test-only
 feature. Each test carrier reaches its exact broker-local context and
 test/shared libraries, never another carrier's member target. Independent
-mutations cover missing, extra, empty, and misnamed entries for F, B, M, and
-each B context; carrier-local feature, target, edge, and case changes;
-production/test contracts edges to the wrong core; production/test host edges
-to the wrong core or contracts; each production-to-test direction; each test
-carrier to production or another carrier; B bound to `@main//`; and M bound to
-`@broker//`.
+mutations cover missing, extra, empty, and misnamed entries for F, B, M, each
+B context, and every deterministic label within that context. The persistent
+matrix ranges over every authoritative target, source, configured edge, and
+exact case row, plus one unexpected row and an empty census per context.
+Carrier-local feature and cfg changes, permitted-overlap removal, and
+forbidden-overlap addition are independent. Cross-context rows cover each
+production-to-test direction; each test carrier to production or another
+carrier; `d2b-core` split collapse, swap, and feature drift;
+production/test contracts edges to the wrong core; every production/test host
+edge to the wrong core or contracts context plus host feature, collapse, and
+swap errors; each realm shared context missing, extra, empty, misnamed,
+duplicated, privately routed, or made one-sided by a feature or edge
+difference; B bound to `@main//`; and M bound to `@broker//`.
+
+`make test-rust-main` is the enforcing carrier for this complete matrix. T022
+retains its exit-zero result and emitted test-name inventory and refuses
+completion if any row is absent; the broader Cargo aggregate is not substitute
+evidence.
 
 Target and source expectations are independently authoritative. Separate
 mutations omit and add a manifest target and substitute one inert source for

@@ -9,13 +9,11 @@ directory.
 ## Execution Status
 
 <!-- BEGIN SPEC003-EXECUTION-STATUS -->
-```text
-SPEC003_EXECUTION_STATUS=PARKED
-SPEC003_PARKED_AT=broker-lock-regeneration
-SPEC003_NEXT_REFUSED_TASK=T021
-SPEC003_RUNTIME_STATE_SOURCE=task-checkpoints
-SPEC003_RESUME_REQUIRES=accepted-repin-lifecycle-adr+amended-spec003+renewed-plan-panel
-```
+status: PARKED
+parked_at: broker-lock-regeneration
+next_refused_task: T021
+runtime_state_source: task-checkpoints
+resume_requires: accepted-repin-lifecycle-adr+amended-spec003+renewed-plan-panel
 <!-- END SPEC003-EXECUTION-STATUS -->
 
 This is a binding admission status, not a completed-task record. The task
@@ -23,12 +21,15 @@ checkboxes and checkpoints remain the runtime state and none is changed by
 this amendment. Pre-W0 and resume admission MUST find exactly one marked block
 in each of this file, `tasks.md`, and
 `contracts/workspace-and-tool-pinning.md`. Only exactly three `READY` blocks
-with the closed five-key schema and byte-identical values admit T021. A
-missing, duplicate, empty, unknown, misnamed, or disagreeing block refuses
-before T021, any child, or any write. The present three `PARKED` blocks
-therefore refuse. ADR 0054 does not close W0. After ADR 0054 merges, a separate
-accepted repin-lifecycle ADR, a surgical Spec 003 amendment, and a renewed
-unanimous plan panel are required before this status may change.
+with one BEGIN followed by one END, the closed ordered five-key schema, one
+exact `status: READY` line, and byte-identical values admit T021. A prefix,
+substring, misplaced status token, missing, duplicate, empty, unknown,
+misnamed, reversed, nested, extraction-failed, or disagreeing input emits the
+fixed architecture-pending result and remedy and refuses before T021, any
+child, or any write. The present three exact `status: PARKED` lines therefore
+refuse. ADR 0054 does not close W0. After ADR 0054 merges, a separate accepted
+repin-lifecycle ADR, a surgical Spec 003 amendment, and a renewed unanimous
+plan panel are required before this status may change.
 
 The exact result below belongs to an already-built `xtask` process invoked as
 `bazel-repin --hub broker`. That process returns nonzero with empty stdout,
@@ -112,16 +113,20 @@ release contract changes.
 **Promotion Lineage**: Protected `v3`, settled by the merged ADR amendment. A
 qualification record is a push event on `refs/heads/v3` produced by a merged
 pull request, carrying the head commit, both workflow run identifiers, both
-rollup verdicts, the same-commit `make test-policy` verdict, the separate
-fixture-contract companion verdict, and, for a cold sample, the four slice
-durations. Pull-request runs are diagnostic and
+rollup verdicts, a passing same-commit `make test-policy` verdict, a passing
+same-commit fixture-contract companion verdict, and, for a cold sample, the
+four slice durations. Pull-request runs are diagnostic and
 stay path-filtered. W0 verifies the amended ADR commit is present in its base
 and refuses to proceed otherwise; no task in this feature amends the ADR.
+
+Qualification requires both same-commit policy and fixture verdicts to pass; missing or failed either disqualifies the record and resets the streak.
 
 **Performance Goals**: Three warm local runs: median at most 10 minutes and
 maximum at most 12. Three cold local runs: median at most 15 and maximum at
 most 18. Five most recent qualifying cold qualification records: median at most
-15 and none above 18. The cold continuous-integration ceiling does not become
+15 and none above 18. Such a record qualifies only with passing same-commit
+policy and fixture verdicts, zero restored Bazel cache, and all four slice
+durations present. The cold continuous-integration ceiling does not become
 binding until the W3 feasibility measurement records it as attainable on the
 real runner class; the only pre-authorized answers to a shortfall are a larger
 runner class or a further disjoint slice split. A promoted job has a 15-minute
@@ -345,10 +350,15 @@ from authoritative Cargo manifests, locked metadata, unit graphs, and case
 listing. Actual unconfigured identity comes from Bazel `query`; configured
 identity and edges come from `cquery` plus an aspect over actual providers.
 Missing, extra, empty, and misnamed mutations apply independently to F, B, M,
-and every B context. Cross-context mutations independently cover wrong
-broker-local features, member targets, cases, core/contracts/host destinations,
+every B context, and every deterministic label within that context. The
+persistent table is parameterized over every authoritative target, source,
+configured edge, and exact case row rather than one representative row.
+Cross-context mutations independently cover wrong broker-local features,
+member targets, cases, permitted-overlap removal, forbidden-overlap addition,
+core/contracts/host collapse, swap, and destination errors,
 production-to-test edges, each test carrier to production or another carrier,
-and both B/M hub-isolation directions.
+both realm contexts incorrectly split or made one-sided, and both B/M
+hub-isolation directions.
 
 Target/source guards plant a generated-manifest target omission, a target
 addition, and an inert-source substitution independently. They also query the
@@ -875,14 +885,15 @@ No W0 scope owns a file under `packages/d2b-bazel-support/`, for the same
 reason no W1 scope does. If a scope finds the boundary short an operation it
 lands in a second prep commit and nowhere else.
 
-**Validation**: `make check-tier0`, `make test-lint`, `make test-rust-schema`,
-`make test-rust-inventory`, `make test-drift`, `make test-policy`,
+**Validation**: `make check-tier0`, `make test-lint`, `make test-rust-main`,
+`make test-rust-schema`, `make test-rust-inventory`, `make test-drift`,
+`make test-policy`,
 `D2B_ENABLE_FIXTURE_BUILD=1 make test-fixture-contracts` for the actual
 fixture-dependent contract and CLI surfaces, and a Cargo-authoritative
 `D2B_SKIP_FIXTURE_BUILD=1 make test-rust`.
 
 **Done when**: this condition is intentionally unreachable while
-`SPEC003_EXECUTION_STATUS=PARKED`; T021 admission refuses before integration.
+`status: PARKED`; T021 admission refuses before integration.
 After the required ADR, amendment, and renewed panel change that status, the
 amended ADR commit is an ancestor of the W0 base; Bazel is
 8.6.0; module lock mode is `error` and direct-dependency checking is `error`;
@@ -914,8 +925,10 @@ the injected observer records no mutation elsewhere; the independently
 Cargo-derived target/source census, F/B/M and B-prod/default/layer1/fake
 contexts, and actual query/cquery/aspect graph agree, with missing, extra,
 empty, misnamed, manifest omission/addition, inert-source substitution,
-per-carrier feature/edge/target/case, and cross-context mutations observed
-failing; `bazel-yanked-refresh`
+per-context label, per-authoritative-row feature/edge/target/source/case,
+overlap, cross-context, core/contracts/host split, realm-shared-context, and
+hub-isolation mutations observed failing under `make test-rust-main`, with
+the complete emitted test-name inventory retained for T022; `bazel-yanked-refresh`
 reaches the index only through the `YankedIndex` boundary, every one of its unit
 tests supplies a fake response and none opens a socket, and `IndexClient` is the
 one site that may; both schema generations report the exact generated nonempty
@@ -1158,11 +1171,11 @@ jobs call approved Make targets only; PR reachability has only
 `contents: read`, no writer, and no `actions: write`; shadow publishes nothing;
 policy fixtures pass; push events on protected `v3` produce complete
 qualification records carrying both run identifiers, the shared head commit,
-both verdicts, same-commit policy and fixture-contract verdicts, and the four
-slice durations, while pull-request runs produce none; the cold-CI feasibility
-measurement is recorded with its four slice durations and either clears the
-ceiling or names which pre-authorized remedy is being taken; panel and PR are
-sealed and merged.
+both verdicts, passing same-commit policy and fixture-contract verdicts, and
+the four slice durations, while pull-request runs produce none and a missing
+or failed companion resets the streak; the cold-CI feasibility measurement is
+recorded with its four slice durations and either clears the ceiling or names
+which pre-authorized remedy is being taken; panel and PR are sealed and merged.
 
 ### W4 - Evidence qualification
 
@@ -1315,7 +1328,7 @@ possible, each with the guard that catches it.
 | Graph discovery traverses `.scratch/` or a Cargo output directory and either fails or absorbs generated files. | Generated drift-checked `.bazelignore` plus an absolute `--symlink_prefix` beneath `.scratch/`, with a mutation that removes a directory from the list failing closed. | Regenerate `.bazelignore`; the wrapper refuses to run without it. |
 | A third-party build script probes the host, diverges from Cargo behavior, or fails under sandboxing. | W0 enumerates every build-script-producing crate per hub, records required annotations, and pins a minimal action-environment allowlist that is itself a cache-key input. | Fix declared inputs and annotations, or stop the migration at W0. |
 | A `--test_output=streamed` run silently serializes every test and produces a measurement that means nothing. | The profile invalidation list forbids it, and every recorded sample carries the flags it ran under. | Invalidate and replace the sample. |
-| The equivalence streak is laundered by pairing runs that tested different trees, or by cancelling a run about to go red. | Records are push events on `v3` with a shared head commit; a Bazel run reaching no verdict while its paired Cargo run does is a mismatch that resets the streak. | Reset the streak; a double cancellation produces no record and buys nothing. |
+| The equivalence streak is laundered by pairing runs that tested different trees, cancelling a run about to go red, or ignoring a failed policy or fixture companion. | Records are push events on `v3` with a shared head commit; a Bazel run reaching no verdict while its paired Cargo run does is a mismatch, and a missing or failed same-commit policy or fixture verdict disqualifies the record. Both reset the streak. | Reset the streak; a double cancellation produces no record and buys nothing, while either failed companion remains a recorded reset. |
 | Cleanup follows a replacement or leaks descriptors. | Descriptor-relative removal, forced fallback route with the strict policy's leaf `O_NOFOLLOW` asserted on that route, exec-leak and decoy race tests. | Revert W2; never use raw recursive removal. |
 | A timeout kills the caller or leaves descendants alive. | Dedicated-group escalation order with real sibling and descendant tests. | Revert W5 to Cargo. |
 | Retirement deletes a public entry point along with its Cargo implementation. | The retirement inventory proves only the eighteen implementations disappeared and that `make test-rust` plus all eight leaf names still resolve to Bazel carriers. | Revert W7; W6 and W5 are unaffected. |

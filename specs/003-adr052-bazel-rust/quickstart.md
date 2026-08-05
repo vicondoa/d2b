@@ -38,57 +38,139 @@ blocks: `plan.md`, `tasks.md`, and
 or any command that can spawn or write:
 
 ```bash
-set -e
+set -euo pipefail
 
-status_files=(
+readonly pending_code=broker-repin-architecture-pending
+readonly pending_remedy='broker repin is unavailable; no local recovery command exists; prerequisite is an accepted repin-lifecycle ADR plus amended/re-panelled Spec 003.'
+readonly begin_marker='<!-- BEGIN SPEC003-EXECUTION-STATUS -->'
+readonly end_marker='<!-- END SPEC003-EXECUTION-STATUS -->'
+readonly -a status_files=(
   specs/003-adr052-bazel-rust/plan.md
   specs/003-adr052-bazel-rust/tasks.md
   specs/003-adr052-bazel-rust/contracts/workspace-and-tool-pinning.md
 )
-expected_keys=$(
-  printf '%s\n' \
-    SPEC003_EXECUTION_STATUS \
-    SPEC003_NEXT_REFUSED_TASK \
-    SPEC003_PARKED_AT \
-    SPEC003_RESUME_REQUIRES \
-    SPEC003_RUNTIME_STATE_SOURCE
-)
-blocks=()
-for file in "${status_files[@]}"; do
-  test "$(grep -c '^<!-- BEGIN SPEC003-EXECUTION-STATUS -->$' "$file")" -eq 1
-  test "$(grep -c '^<!-- END SPEC003-EXECUTION-STATUS -->$' "$file")" -eq 1
-  block=$(
-    sed -n \
-      '/^<!-- BEGIN SPEC003-EXECUTION-STATUS -->$/,/^<!-- END SPEC003-EXECUTION-STATUS -->$/p' \
-      "$file" | grep '^SPEC003_'
-  )
-  test "$(printf '%s\n' "$block" | wc -l)" -eq 5
-  keys=$(printf '%s\n' "$block" | sed 's/=.*//' | sort)
-  test "$keys" = "$expected_keys"
-  test -z "$(printf '%s\n' "$block" | sed -n '/=$/p')"
-  blocks+=("$block")
-done
-test "${blocks[0]}" = "${blocks[1]}"
-test "${blocks[1]}" = "${blocks[2]}"
 
-case "${blocks[0]}" in
-  *'SPEC003_EXECUTION_STATUS=READY'*) exit 0 ;;
-  *'SPEC003_EXECUTION_STATUS=PARKED'*)
-    printf '%s\n' \
-      broker-repin-architecture-pending \
-      'broker repin is unavailable; no local recovery command exists; prerequisite is an accepted repin-lifecycle ADR plus amended/re-panelled Spec 003.' >&2
-    exit 10
-    ;;
-  *) exit 20 ;;
-esac
+architecture_pending() {
+  printf '%s\n' "$pending_code" "$pending_remedy" >&2
+  return 10
+}
+
+PARSED_STATUS=
+PARSED_BLOCK=
+parse_status_block() {
+  local file=$1 state=before line
+  local begin_count=0 end_count=0
+  local -a lines=() payload=()
+
+  if [[ ! -f $file || ! -r $file ]]; then
+    return 1
+  fi
+  if ! mapfile -t lines < "$file"; then
+    return 1
+  fi
+
+  for line in "${lines[@]}"; do
+    if [[ $line == "$begin_marker" ]]; then
+      ((begin_count += 1))
+      if [[ $state != before || $begin_count -ne 1 ]]; then
+        return 1
+      fi
+      state=inside
+      continue
+    fi
+    if [[ $line == "$end_marker" ]]; then
+      ((end_count += 1))
+      if [[ $state != inside || $end_count -ne 1 ]]; then
+        return 1
+      fi
+      state=after
+      continue
+    fi
+    if [[ $state == inside ]]; then
+      payload+=("$line")
+    fi
+  done
+
+  if [[ $state != after || $begin_count -ne 1 || $end_count -ne 1 ]]; then
+    return 1
+  fi
+  if [[ ${#payload[@]} -ne 5 ]]; then
+    return 1
+  fi
+  case "${payload[0]}" in
+    'status: READY') PARSED_STATUS=READY ;;
+    'status: PARKED') PARSED_STATUS=PARKED ;;
+    *) return 1 ;;
+  esac
+  [[ ${payload[1]} == 'parked_at: broker-lock-regeneration' ]] || return 1
+  [[ ${payload[2]} == 'next_refused_task: T021' ]] || return 1
+  [[ ${payload[3]} == 'runtime_state_source: task-checkpoints' ]] || return 1
+  [[ ${payload[4]} == 'resume_requires: accepted-repin-lifecycle-adr+amended-spec003+renewed-plan-panel' ]] || return 1
+
+  printf -v PARSED_BLOCK '%s\n' "${payload[@]}"
+  PARSED_BLOCK=${PARSED_BLOCK%$'\n'}
+}
+
+check_admission() {
+  local file
+  local -a statuses=() blocks=()
+
+  if [[ $# -ne 3 ]]; then
+    architecture_pending
+    return
+  fi
+  for file in "$@"; do
+    if ! parse_status_block "$file"; then
+      architecture_pending
+      return
+    fi
+    statuses+=("$PARSED_STATUS")
+    blocks+=("$PARSED_BLOCK")
+  done
+  if [[ ${blocks[0]} != "${blocks[1]}" ||
+        ${blocks[1]} != "${blocks[2]}" ]]; then
+    architecture_pending
+    return
+  fi
+  if [[ ${statuses[0]} != READY ||
+        ${statuses[1]} != READY ||
+        ${statuses[2]} != READY ]]; then
+    architecture_pending
+    return
+  fi
+}
+
+if check_admission "${status_files[@]}"; then
+  exit 0
+else
+  rc=$?
+  exit "$rc"
+fi
 ```
 
-On the current tree, exit 10 is the required result. Exit 0 is valid only after
-all three blocks are atomically changed to identical `READY` records by the
-accepted lifecycle follow-up. The enforcing admission tests additionally
-inject missing source/block/key, duplicate block/key, empty value, unknown or
-misnamed key/value, PARKED, and disagreement states and prove every one
-refuses before task, child, and write callbacks.
+The parser uses Bash builtins for file extraction and performs no task
+callback, child spawn, or write. On the current tree, exit 10 with exactly the
+two fixed architecture-pending lines is required. Exit 0 is valid only when
+all three blocks are atomically changed to byte-identical records whose first
+line is exactly `status: READY`. A prefix, suffix, substring, or `READY` token
+anywhere else in an extracted block is not a status value.
+
+The persistent admission suite plants every row below independently. Every
+rejecting row must return 10, emit only the fixed two-line result and remedy,
+and leave the task, child, and write activity record empty.
+
+| Planted case | Required result |
+| --- | --- |
+| Three byte-identical blocks with exactly `status: READY` | Admit. |
+| Any exact `status: PARKED`, including the current three-block state | Reject. |
+| `xstatus: READY`, `status: XREADY`, or `status: READY-extra` | Reject prefix or substring. |
+| `READY`, `note: READY`, or a second status token elsewhere in the block | Reject misplaced token. |
+| Missing, duplicated, empty, misnamed, or unknown status key/value | Reject. |
+| Missing source or source extraction error | Reject. |
+| Missing, duplicated, reversed, or nested BEGIN/END marker | Reject. |
+| A BEGIN or END marker in any order other than one BEGIN followed by one END | Reject. |
+| Any missing, duplicated, reordered, unknown, empty, or changed non-status schema line | Reject. |
+| Any byte disagreement among the three extracted blocks | Reject. |
 
 ## Assertion helpers
 
@@ -1228,6 +1310,8 @@ jq -e '
     (.feasibility_ref | length) > 0 and
     all(.sample_refs[];
       .source_event == "push" and .branch == "v3" and
+      .policy_verdict == "passed" and
+      .fixture_verdict == "passed" and
       .cache_restored == 0))
 ' specs/003-adr052-bazel-rust/evidence/qualification.json
 ```
@@ -1258,6 +1342,49 @@ required Cargo run carry the same head commit. A pull-request run is
 diagnostic and produces no record, because its merge ref is recomputed against
 a moving base and its path filter excludes exactly the changes a divergence
 would appear in.
+
+Qualification requires both same-commit policy and fixture verdicts to pass; missing or failed either disqualifies the record and resets the streak.
+
+Validate that exact invariant across the contract, specification, entities,
+research, plan, tasks, and this quickstart before auditing evidence:
+
+```bash
+set -euo pipefail
+perl -Mstrict -Mwarnings -e '
+  my $root = "specs/003-adr052-bazel-rust";
+  my @artifacts = (
+    "$root/contracts/shadow-promotion-evidence.md",
+    "$root/spec.md",
+    "$root/data-model.md",
+    "$root/research.md",
+    "$root/plan.md",
+    "$root/tasks.md",
+    "$root/quickstart.md",
+  );
+  my $invariant =
+    "Qualification requires both same-commit policy and fixture verdicts " .
+    "to pass; missing or failed either disqualifies the record and resets " .
+    "the streak.";
+  my @commands = ("make test-policy", "make test-fixture-contracts");
+
+  for my $artifact (@artifacts) {
+    open my $handle, "<:encoding(ASCII)", $artifact
+      or die "$artifact: cannot read: $!\n";
+    local $/;
+    my $text = <$handle>;
+    close $handle or die "$artifact: cannot close: $!\n";
+    my $count = () = $text =~ /\Q$invariant\E/g;
+    die "$artifact: qualification invariant must appear exactly once\n"
+      unless $count == 1;
+    for my $command (@commands) {
+      die "$artifact: qualification command missing: $command\n"
+        unless index($text, $command) >= 0;
+    }
+  }
+
+  print "qualification cross-artifact consistency: PASS\n";
+'
+```
 
 Before the cold ceiling binds, record the W3 feasibility measurement with all
 four slice durations and derive that record's duration as their maximum. A
@@ -1291,6 +1418,10 @@ jq -e '
   .coverage.carriers_claimed_more_than_once == 0 and
   .coverage.analysis_time_label_check_passed and
   .coverage.out_of_test_completeness_check_passed and
+  (.qualification_records | length) >= 10 and
+  all(.qualification_records[-10:][];
+    .policy_verdict == "passed" and
+    .fixture_verdict == "passed") and
   .supply_chain.differing_enforcing_outcomes == 0 and
   .supply_chain.yanked_carrier_landed and
   .supply_chain.yanked_snapshot_key_set_matches_all_three_locks and
