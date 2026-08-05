@@ -12,34 +12,20 @@
   happens to find, and records the measured `crate_universe` repin controls
   that make a scoped, reviewed lock regeneration possible without a gate-path
   escape hatch. No decision here is reversed and nothing here is superseded.
-- Refined and factually corrected by:
-  [ADR 0054](0054-broker-hub-generated-splice-workspace.md), which decides how
-  the `broker` hub obtains a spliceable Cargo workspace without merging the
-  standalone broker into the main workspace. The authoritative set is four
-  hub/workspace Cargo locks, for `main`, `broker`, `guest`, and `walker`;
-  `packages/Cargo.guest.lock` is a separate generated and cache-key input, not
-  a hub. The broker hub reads a committed generated resolution witness while
-  its independent Cargo lock remains authoritative and
-  `skip_cargo_lockfile_overwrite = True` remains required.
-  `cargo xtask gen-bazel` alone writes generated Bazel inputs, and its
-  enforcing `--check` form is strictly read-only.
-  `cargo xtask bazel-repin --hub broker` admits only a clean stable original
-  with the complete Cargo-input and generated-output set committed at `HEAD`,
-  takes the generator's stable user-bookkeeping OFD writer lock, and delegates
-  every direct `--batch` Bazel invocation to one repository-owned monitor.
-  Exact before and after Git censuses admit only
-  `bazel/cargo/broker.lock` or a successful no-op. Failed or interrupted runs
-  may leave that lock dirty; the operator must restore it from the
-  required-clean `HEAD` with ADR 0054's exact command before rerunning. These
-  clean admission, monitor, rc, and external-lock protections are
-  broker-specific. The stable non-broker hub tokens remain `main`, `guest`, and
-  `walker`, and those handlers retain ADR 0052's identical wrapper-derived
-  startup paths and single-hub changed-path guards. Stale or uncommitted
-  inputs require the explicit generate, review, commit-together, then repin
-  workflow. The required hub argument, scoped child environment, and absence
-  from Make and workflows are unchanged. Spec 003's plan, tasks, and contracts
-  require amendment before implementation resumes. This refinement reverses
-  and supersedes no decision here.
+- Proposed broker graph refinement:
+  [ADR 0054](0054-broker-hub-generated-splice-workspace.md) is limited to the
+  committed generated splice workspace and exact graph fidelity for the
+  standalone `broker` workspace. The authoritative set remains the four
+  hub/workspace Cargo locks for `main`, `broker`, `guest`, and `walker`;
+  `packages/Cargo.guest.lock` remains a separate generated and cache-key input,
+  not a hub. The broker witness preserves the authoritative broker lock and
+  `skip_cargo_lockfile_overwrite = True`. `cargo xtask gen-bazel` alone writes
+  that witness, and `gen-bazel --check` is strictly read-only. ADR 0054 does
+  not define, refine, or implement broker repin. Until a separate accepted ADR
+  defines that lifecycle, `cargo xtask bazel-repin --hub broker` is blocked by
+  the stable path-free `broker-repin-architecture-pending` result. The
+  `main`, `guest`, and `walker` repin paths remain exactly as this ADR defines
+  them. Spec 003 W0 remains parked at broker lock regeneration.
 - Related: [ADR 0009](0009-rust-toolchain-msrv-and-supply-chain.md) (Rust
   toolchain, MSRV, and supply-chain policy), which keeps its authority
   unchanged and is not superseded;
@@ -355,40 +341,40 @@ ADR justified by measured prototypes, and this ADR authorizes no such move.
   integration.
 - A committed lock still has to be regenerable, and forbidding the environment
   controls without naming a supported path is what pushes a contributor into
-  `CARGO_BAZEL_REPIN=1 make ...` under deadline. Regeneration is therefore a
-  repository-owned command, `cargo xtask bazel-repin --hub <name>`, and it is
-  the only place in the repository those three names may appear as a
-  process-environment assignment. It requires an explicit hub from the closed
-  set `main`, `broker`, `guest`, and `walker`, sets `CARGO_BAZEL_REPIN` and
-  `CARGO_BAZEL_REPIN_ONLY=<hub>` only in the environment of its Bazel child,
-  never process-globally, and admits exactly the selected hub's Bazel-side lock
-  as output. `guest-shell` is not a hub token.
+  `CARGO_BAZEL_REPIN=1 make ...` under deadline. Regeneration for `main`,
+  `guest`, and `walker` is therefore the repository-owned command
+  `cargo xtask bazel-repin --hub <name>`, and it is the only place in the
+  repository those three environment names may appear as a process-environment
+  assignment. The command requires an explicit token from the closed set
+  `main`, `broker`, `guest`, and `walker`. For `main`, `guest`, and `walker`,
+  it sets `CARGO_BAZEL_REPIN` and `CARGO_BAZEL_REPIN_ONLY=<hub>` only in the
+  environment of its Bazel child, never process-globally, and admits exactly
+  the selected hub's Bazel-side lock as output. `guest-shell` is not a hub
+  token.
 
-  The `main`, `guest`, and `walker` forms use the same absolute output user
+  `broker` remains an inventory token but is not an enabled repin path. Until
+  a separate accepted ADR defines its writer serialization, process lifetime,
+  output publication, recovery, diagnostics, and cleanup contract,
+  `cargo xtask bazel-repin --hub broker` runs no Bazel child and fails with the
+  stable path-free result `broker-repin-architecture-pending`. ADR 0054 settles
+  only the broker's generated splice workspace and graph fidelity.
+
+  The `main`, `guest`, and `walker` forms retain the same absolute output user
   root, output base, and symlink prefix the wrapper derives, so they cannot
-  start a second server. ADR 0054 gives only `broker` a stronger and different
-  protocol: required-clean current worktree and committed generated inputs, a
-  shared stable user-bookkeeping OFD writer lock, direct `broker.lock` output,
-  a repository-owned monitor for every `--batch` invocation, disabled ambient
-  rc discovery, and exact before and after Git censuses. Broker failure may
-  leave that one lock dirty; the operator restores it from the required-clean
-  `HEAD` before rerunning. There is no snapshot or publication transaction.
-  The other three hub handlers retain the original identical startup-path rule
-  and their single-hub changed-path guards; they do not inherit the broker
-  protocol.
-
+  start a second server. Their single-hub changed-path guards are unchanged.
   An already-current lock is exit zero with nothing changed rather than an
   error; the run that must report a change is the one after a Cargo workspace
-  change, which is where a wrong invocation shows up. It is not a Make target
-  and no workflow may invoke it. Measured at `rules_rust` 0.73.0:
+  change, which is where a wrong invocation shows up. The command is not a
+  Make target and no workflow may invoke it. Measured at `rules_rust` 0.73.0:
   `CARGO_BAZEL_REPIN_ONLY` is a comma-delimited allowlist compared by exact
-  hub name in `determine_repin`, so single-hub scoping is a substrate
-  property rather than a convention, and `skip_cargo_lockfile_overwrite`
-  defaults to `false`, so every hub must set it to `true` or a repin silently
-  rewrites the authoritative `Cargo.lock` this section just froze. For the same
-  reason every hub sets both `lockfile` and `cargo_lockfile`: the extension
-  reports itself reproducible only when both are present, and
-  `--lockfile_mode=error` is only meaningful for a reproducible extension.
+  hub name in `determine_repin`, so single-hub scoping is a substrate property
+  rather than a convention. `skip_cargo_lockfile_overwrite` defaults to
+  `false`, so every hub configuration must set it to `true` or an enabled
+  repin could silently rewrite the authoritative `Cargo.lock` this section
+  just froze. For the same reason every hub sets both `lockfile` and
+  `cargo_lockfile`: the extension reports itself reproducible only when both
+  are present, and `--lockfile_mode=error` is only meaningful for a
+  reproducible extension.
 - `rules_rust` is pinned to a single explicit version in `MODULE.bazel` (0.73.0
   is the newest release on the Bazel Central Registry as of this date; the
   implementer pins whatever is newest and compatible with Bazel 8.6.0 at
