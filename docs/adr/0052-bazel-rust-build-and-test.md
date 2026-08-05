@@ -14,9 +14,13 @@
   escape hatch. No decision here is reversed and nothing here is superseded.
 - Proposed amendment (2026-08-05):
   [ADR 0054](0054-single-product-cargo-workspace.md) replaces this record's
-  three-workspace and four-hub lock inventory with one product Cargo
-  workspace and one separate walker tool workspace. It leaves the distinct
-  broker, guest, and test-context execution surfaces unchanged.
+  three-workspace and four-hub lock inventory with one product Cargo workspace
+  and hub plus one separate walker workspace and hub. It leaves distinct
+  broker, guest, and test-context execution surfaces unchanged, accepts the
+  shared product lock's dependency union, and makes package-selected builds,
+  native first-party target edges, and package-scoped selected-closure policy
+  the broker and guest dependency authorities. If accepted, Spec 003 must be
+  amended and re-panelled before implementation resumes.
 - Related: [ADR 0009](0009-rust-toolchain-msrv-and-supply-chain.md) (Rust
   toolchain, MSRV, and supply-chain policy), which keeps its authority
   unchanged and is not superseded;

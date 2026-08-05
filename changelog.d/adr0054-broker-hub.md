@@ -2,6 +2,9 @@
 
 - Proposed ADR 0054, selecting one Cargo workspace and dependency hub for d2b
   product packages while retaining the no-bash walker as a separate tooling
-  workspace. Targeted broker and guest builds remain separate, and generated
-  package-scoped closure inventories preserve privileged and static dependency
-  minimality under the shared product lock.
+  workspace. The decision accepts the shared lock's dependency union and
+  enforces privileged and static minimality through package-selected Cargo and
+  Nix builds, native Bazel target edges, and generated package-scoped deny and
+  audit inputs. It records the guest real-libshpool policy's six existing
+  license findings as an implementation blocker requiring a reviewed policy
+  update.

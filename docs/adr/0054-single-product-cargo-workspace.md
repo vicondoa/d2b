@@ -3,331 +3,441 @@
 - Status: Proposed
 - Date: 2026-08-05
 - Amends: [ADR 0052](0052-bazel-rust-build-and-test.md), replacing its
-  workspace, dependency-hub, and lock inventory when this ADR is accepted.
-- Scope: Cargo workspace membership and locks for product packages, the
-  `crate_universe` hub boundary, targeted Cargo and Nix builds, configured
-  first-party Bazel variants, and package-scoped supply-chain evidence.
-- Non-scope: implementing the workspace merge, changing Rust package contents,
-  rewriting Spec 003 in this PR, or changing static and ELF acceptance checks.
+  product-workspace, dependency-hub, and lock inventory if this ADR is
+  accepted.
+- Scope: Cargo workspace membership and locks for product packages, Cargo and
+  Nix package selection, Bazel dependency hubs and configured first-party
+  targets, and package-scoped supply-chain enforcement.
+- Non-scope: implementing the merge, changing Rust behavior, amending Spec 003
+  in this PR, moving the no-bash walker, or weakening static and ELF checks.
 
 ## Context
 
-At v3 commit `9bd6e2ac`, `packages/Cargo.toml` is a resolver-v2 workspace that
-explicitly excludes `d2b-priv-broker` and `d2b-guest-shell-runner`. Each
-excluded package declares a nested `[workspace]` root and has a standalone
-authoritative lock. The broker nevertheless has path dependencies on product
-packages in the parent tree.
+At v3 commit `9bd6e2ac`, `packages/Cargo.toml` excludes
+`d2b-priv-broker` and `d2b-guest-shell-runner`. Each excluded package is a
+nested workspace with its own authoritative lock. ADR 0052 consequently
+planned separate `main`, `broker`, `guest`, and `walker` `crate_universe`
+hubs.
 
-ADR 0052 planned a separate `crate_universe` hub for each of `main`, `broker`,
-`guest`, and `walker`. A prior draft of this ADR added a generated synthetic
-workspace because `crate_universe` could not splice the broker workspace and
-its cross-workspace path dependencies directly.
+The workspace split was partly intended to prevent an accidental dependency
+from privileged broker code or static guest code into unrelated product code.
+It also kept binary closure and size review local to each package. A shared
+lock resolves the union of workspace dependencies and therefore no longer
+provides that visual or update boundary.
 
-That solves a boundary d2b does not need. The broker and guest runner were
-separate workspaces to control binary dependency closure and size, not because
-their locks form a required trust boundary. Cargo package selection controls
-what is built. Cargo workspace membership controls shared resolution and
-metadata; it does not create a dependency between sibling packages.
+This decision accepts that tradeoff. A lock entry is not a build dependency.
+The security boundaries are package-selected Cargo and Nix builds, explicit
+native Bazel target dependencies, and enforcing policy over each selected
+production closure. An unrelated package appearing only in the shared lock is
+not a security defect. A new edge that connects that package to the broker or
+guest selected closure is.
 
 The no-bash AST walker is different. It is closed gate plumbing under
 `tests/tools/`, outside the product package tree, and has no path dependency
-into `packages/`. Keeping that tool separate preserves a real repository
-boundary without making the product graph harder to represent.
+into `packages/`. It remains a separate workspace and dependency hub.
 
 ## Evidence
 
-### Cargo and rules_rust behavior
+### Full Cargo and Nix integration spike
 
-The upstream-supported behavior is sufficient:
+The completed spike at commit `98ba0f9f` added the broker and guest runner to
+the root workspace, removed both nested locks and workspace tables, and
+regenerated the root lock offline. The standalone baseline had 54 members and
+544 lock packages. The integrated workspace had 56 members and 608 lock
+packages. Locked, offline `cargo tree` selection from the root showed no guest
+runner in the broker closure and no broker in the guest closure.
 
-- The Cargo [workspace reference](https://doc.rust-lang.org/cargo/reference/workspaces.html)
-  states that members share one `Cargo.lock` and output directory. Its
-  [package selection](https://doc.rust-lang.org/cargo/reference/workspaces.html#package-selection)
-  section says `-p` selects packages while `--workspace` selects the workspace.
-  The [`workspace.dependencies` section](https://doc.rust-lang.org/cargo/reference/workspaces.html#the-dependencies-table)
-  requires each member to inherit a dependency explicitly. Membership alone
-  does not link sibling code.
-- [`cargo build` package selection](https://doc.rust-lang.org/cargo/commands/cargo-build.html#package-selection)
-  says `-p` builds only the specified packages and `--workspace` builds all
-  members. Therefore `cargo build -p d2b-priv-broker` selects the broker and
-  its dependency closure, not the guest runner.
-- Cargo's [feature-unification reference](https://doc.rust-lang.org/cargo/reference/features.html#feature-unification)
-  and [resolver-v2 command-line rules](https://doc.rust-lang.org/cargo/reference/features.html#resolver-version-2-command-line-flags)
-  apply features to the packages selected by `-p` or `--workspace`. Features
-  are unified where the selected build graph uses the same dependency. A
-  broad workspace build can therefore unify across all selected packages; a
-  targeted package build does not select an unrelated sibling.
-- The official `rules_rust` 0.73.0
-  [Cargo workspace integration example](https://github.com/bazelbuild/rules_rust/tree/0.73.0/crate_universe/tests/integration/cargo_workspace)
-  gives the root workspace manifest to `crate.from_cargo`, then declares
-  first-party `rust_library`, `rust_binary`, and `rust_test` targets natively.
-  Its `number_printer` target depends on first-party `//printer` directly and
-  receives third-party dependencies from the generated crate repository.
-  This is the product-hub shape selected here.
+Standalone and unified `cargo test -- --list` censuses were identical:
 
-Cross-workspace splicing remains the less reliable path. Upstream issues
-[#1525](https://github.com/bazelbuild/rules_rust/issues/1525) and
-[#3571](https://github.com/bazelbuild/rules_rust/issues/3571) remained open on
-2026-08-05. Issue
-[#1773](https://github.com/bazelbuild/rules_rust/issues/1773) was closed after
-upstream changes, but its follow-up still records absolute-path lock output
-for packages outside the top-level workspace. These issues cover different
-shapes; they do not establish that every cross-workspace case fails. They do
-show that a synthetic projection or fork would depend on a shape-sensitive
-surface that the supported single-workspace example avoids.
+| Context | Root selector after merge | Cases |
+| --- | --- | ---: |
+| Broker default | `-p d2b-priv-broker --no-default-features` | 557 |
+| Broker layer 1 | `-p d2b-priv-broker --no-default-features --features layer1-bootstrap` | 492 |
+| Broker fake | `-p d2b-priv-broker --no-default-features --features fake-backends` | 559 |
+| Guest production | `-p d2b-guest-shell-runner --no-default-features --features real-libshpool` | 11 |
 
-`rules_rust` 0.73.0, published 2026-07-31, was still the
-[latest release](https://github.com/bazelbuild/rules_rust/releases/tag/0.73.0)
-and the latest Bazel Central Registry version on 2026-08-05. There was no
-newer release to measure for this decision.
+The final dedicated broker gate passed all three serial, isolated Cargo test
+streams. The guest gate passed 11 of 11. The generic main lane passed 5,114 of
+5,114 with 6 skipped after both packages, and the fixture-specific contract
+crate, were explicitly excluded from generic clippy and test selection.
 
-### Local product-workspace spike
+Release artifacts from isolated target directories were:
 
-The spike used two detached checkouts of v3 commit `9bd6e2ac` in the
-repository's pinned development environment. `<worktree>` is an operator-owned
-scratch parent:
+| Binary | Standalone raw | Unified raw | Standalone stripped | Unified stripped |
+| --- | ---: | ---: | ---: | ---: |
+| Broker | 10,262,496 | 10,240,368 | 7,420,096 | 7,393,864 |
+| Guest runner | 5,869,600 | 5,869,744 | 4,107,416 | 4,110,152 |
+
+The actual Nix broker derivation and actual Nix static guest derivation both
+built. The Nix broker was 8,635,480 bytes and remained the expected dynamically
+linked host binary. The Nix guest was 5,313,928 bytes, static PIE, had no ELF
+interpreter, and had no `NEEDED` entries. The existing guest selected-dependency
+check, static ELF check, root deny and audit checks, flake no-build evaluation,
+and `make test-policy` passed.
+
+The Nix fixes were mechanical consequences of the workspace root: use the
+root source and lock, select the package and features, and run the static
+dependency query from the root. No static or ELF acceptance criterion changed.
+
+### Package-closure policy spike
+
+A disposable generator started from locked, offline root metadata, selected
+normal and build edges for one production context, and emitted cargo-deny
+metadata plus a dependency-pruned audit lock.
+
+- Broker production contained 108 packages; its dev-inclusive deny metadata
+  contained 153. The existing broker deny configuration and its audit with no
+  ignore passed.
+- Guest `real-libshpool` production contained 171 packages; its dev-inclusive
+  deny metadata contained 181. Its audit passed with exactly
+  `--ignore RUSTSEC-2024-0384`.
+- The guest's current deny configuration did not pass. It reported six
+  pre-existing license findings: BSD-3-Clause for `bindgen` and `instant`, ISC
+  for `inotify`, `inotify-sys`, and `libloading`, and CC0-1.0 for `notify`.
+  The same findings occur against the standalone guest lock.
+
+A disconnected GPL canary left the broker verdict at exit 0. Connecting the
+same canary to the broker closure made cargo-deny reject it at exit 4. The full
+root graph also contains the main-only `wl-proxy` git source, which the broker
+source policy rejects if the whole union is presented as the broker closure;
+the actual broker closure excludes it and passes. These probes establish the
+required property: unrelated main-only dependencies do not affect a
+package-closure verdict, while a newly connected dependency does.
+
+The six guest license findings are an implementation blocker, not evidence
+against the workspace shape. The workspace-merge change must resolve them by a
+reviewed update to the guest policy. It must not hide them by dropping the
+selected dependency, weakening enforcement, or claiming that all policy
+checks already pass.
+
+### Unified Bazel spike
+
+The Spec 003 W0 spike used Bazel 8.6.0, `rules_rust` 0.73.0,
+`cargo-bazel` 0.18.0, and Cargo/rustc 1.97.0. Offline root lock generation
+reported 553 packages on that branch. The full integration spike's 608 count
+comes from a later branch with different product dependency contents, so the
+two counts are branch observations rather than a resolution mismatch.
+
+`MODULE.bazel` declared exactly `product` and `walker` hubs. The product hub
+used `packages/Cargo.toml` and `packages/Cargo.lock`; the walker remained
+independent. `cargo xtask gen-bazel --check` and module-lock error mode passed.
+A full `bazel query //... --output=label` returned 321 labels.
+
+The following native targets and representative tests passed:
 
 ```text
-git worktree add --detach <worktree>/standalone 9bd6e2ac
-git worktree add --detach <worktree>/unified 9bd6e2ac
+bazel build //packages/d2b-priv-broker:d2b-priv-broker
+bazel build //packages/d2b-guest-shell-runner:d2b-guest-shell-runner-real-libshpool
+bazel test //packages/d2b-priv-broker:bridge_lifecycle_default
+bazel test //packages/d2b-priv-broker:bridge_lifecycle_layer1_bootstrap
+bazel test //packages/d2b-priv-broker:bridge_lifecycle_fake_backends
+bazel test //packages/d2b-guest-shell-runner:tests
 ```
 
-In `<worktree>/unified`, the spike added both packages to the root `members`,
-removed them from `exclude`, removed only their nested `[workspace]` and
-workspace-local profile tables, and removed their standalone lock files. It
-then regenerated the root lock offline. Standalone baselines and unified
-builds used distinct target directories:
+The final guest test label was named `cli` in the follow-up probe and also
+passed. The spike does not claim the full broker suite: one test still needs
+declared fixtures and another invokes `sh`, which the hermetic sandbox omits.
+
+`cquery --output=build` showed empty, `layer1-bootstrap`, and `fake-backends`
+feature contexts on the three broker libraries. `aquery` showed the matching
+`--cfg feature="layer1-bootstrap"` and `--cfg feature="fake-backends"` rustc
+arguments. The measured graph counts were:
+
+| Measurement | Count |
+| --- | ---: |
+| All first-party labels | 321 |
+| Broker context targets | 46 |
+| Broker production dependency labels | 7,721 |
+| Guest real-libshpool dependency labels | 10,332 |
+| Product lock crate records | 596 |
+| Product external labels | 297 |
+| Walker external labels | 9 |
+| Cargo identities: broker default/layer1/fake | 95 / 95 / 95 |
+| Cargo identities: guest real-libshpool | 135 |
+| Broker dependencies on guest runner | 0 |
+| Broker unexpected first-party sibling packages | 0 |
+
+Every selected Cargo third-party identity for all four contexts was present in
+the product lock; every missing-identity count was zero. The recorded snapshot
+SHA-256 values were:
+
+| Input | SHA-256 |
+| --- | --- |
+| `packages/Cargo.lock` | `cd3aac7115975773e1a7fb871e6ac62b89fbf0f4acd0e0c96fc3349c8d119ec7` |
+| `MODULE.bazel` | `82690d20050bde08d67cc93b1bf014398d2a536708ebf5a58a7b006c25995b14` |
+| `MODULE.bazel.lock` | `d82248dd3dffe70763bf833ee46eab9750c77ea29a926f2d39c5b013039d78e1` |
+| `bazel/cargo/product.lock` | `f6f32ed08ebf53eb17fdcedb94cec24d9e2bbd9f034974fe9622929bdba83db3` |
+| `bazel/cargo/walker.lock` | `8ef6692bfaedfbcd8d504edc9604e923ed9aefb2e8982c2c4d46308a3e435340` |
+| Hermeticity inventory | `8f147e259d08f8396251bf40a4ec236ec5bab40f338ea602a5f76a298895fd33` |
+| Broker `BUILD.bazel` | `72413c55a057cbe428a6ef13f407a46255950ee92e1e80e582e7d157e52d1a09` |
+| Guest `BUILD.bazel` | `8852ca41a35016375e7243c33b1161c5438f578ccbd0b1540676cd792bf60bfc` |
+| Bazel generator | `14f8a65f0dd7f7de7ed81fa72b2fcf700df4959b91e0a44d89746bb8b5ea04c8` |
+| Coverage inventory | `4aa7d753aa1d82677cb2522c534e89b08ee001caf0df800767431de309d7b3a2` |
+
+The product external repository is a superset by design: the 596-record hub is
+not expected to equal any selected 95- or 135-identity context. Native
+first-party targets select actual dependencies and features.
+
+The initial spike needed `crate.spec` only because `libshpool` was optional in
+the guest manifest. A follow-up changed it to a normal dependency while
+leaving `real-libshpool` as the code feature, removed `crate.spec`, and passed
+offline root lock generation, locked checks, `gen-bazel`, production broker
+and guest builds, all four representative tests, and context queries. This
+standard pinned command then passed:
 
 ```text
-cd <worktree>/standalone
-CARGO_TARGET_DIR=<worktree>/target/broker-standalone cargo build \
-  --locked --release --manifest-path packages/d2b-priv-broker/Cargo.toml \
-  --no-default-features
-CARGO_TARGET_DIR=<worktree>/target/guest-standalone cargo build \
-  --locked --release \
-  --manifest-path packages/d2b-guest-shell-runner/Cargo.toml \
-  --no-default-features --features real-libshpool
-grep -c '^\[\[package\]\]' packages/Cargo.lock
-
-cd <worktree>/unified
-cargo generate-lockfile --offline --manifest-path packages/Cargo.toml
-CARGO_TARGET_DIR=<worktree>/target/broker-unified cargo build \
-  --locked --offline --release --manifest-path packages/Cargo.toml \
-  -p d2b-priv-broker --no-default-features
-CARGO_TARGET_DIR=<worktree>/target/guest-unified cargo build \
-  --locked --offline --release --manifest-path packages/Cargo.toml \
-  -p d2b-guest-shell-runner --no-default-features \
-  --features real-libshpool
-cargo tree --locked --offline --manifest-path packages/Cargo.toml \
-  -p d2b-priv-broker
-cargo tree --locked --offline --manifest-path packages/Cargo.toml \
-  -p d2b-guest-shell-runner --features real-libshpool
-grep -c '^\[\[package\]\]' packages/Cargo.lock
-
-mkdir -p <worktree>/stripped
-stat -c '%n %s' \
-  <worktree>/target/broker-standalone/release/d2b-priv-broker \
-  <worktree>/target/guest-standalone/release/d2b-guest-shell-runner \
-  <worktree>/target/broker-unified/release/d2b-priv-broker \
-  <worktree>/target/guest-unified/release/d2b-guest-shell-runner
-strip -s -o <worktree>/stripped/broker-standalone \
-  <worktree>/target/broker-standalone/release/d2b-priv-broker
-strip -s -o <worktree>/stripped/guest-standalone \
-  <worktree>/target/guest-standalone/release/d2b-guest-shell-runner
-strip -s -o <worktree>/stripped/broker-unified \
-  <worktree>/target/broker-unified/release/d2b-priv-broker
-strip -s -o <worktree>/stripped/guest-unified \
-  <worktree>/target/guest-unified/release/d2b-guest-shell-runner
-stat -c '%n %s' <worktree>/stripped/*
+nix develop --command cargo xtask bazel-repin --hub product
 ```
 
-Unstripped sizes were recorded with `stat -c %s`. Stripped comparison copies
-were produced with the same `strip -s` tool. The results were:
-
-| Binary | Standalone stripped | Unified stripped | Change |
-| --- | ---: | ---: | ---: |
-| `d2b-priv-broker` | 7,419,824 | 7,423,752 | +3,928 (+0.053%) |
-| `d2b-guest-shell-runner` | 4,107,416 | 4,107,016 | -400 (-0.010%) |
-
-The unstripped broker changed by +0.060% and the unstripped guest runner by
--0.030%. The root lock grew from 544 to 601 packages. Targeted `cargo tree`
-output contained only each selected package's dependency closure. Version
-shifts in those trees came from resolving one shared lock, not from linking
-the unrelated sibling package.
-
-The measurement does not claim byte identity. It demonstrates that workspace
-membership does not defeat the binary-size purpose of the current targeted
-builds.
+It generated only `bazel/cargo/product.lock`. Production already always
+enables `real-libshpool`; default code remains feature-gated. Compiling the
+normal dependency in a non-production guest context is an accepted cost of
+manifest-driven hub resolution.
 
 ## Decision
 
-### 1. Use one Cargo workspace for product packages
+### 1. Use one authoritative product workspace and lock
 
-`packages/d2b-priv-broker` and `packages/d2b-guest-shell-runner` become members
-of the existing resolver-v2 workspace rooted at `packages/Cargo.toml`.
-Implementation removes their nested `[workspace]` roots and their standalone
-authoritative lock roles. `packages/Cargo.lock` is the sole authoritative
-Cargo lock for product packages.
+Add `d2b-priv-broker` and `d2b-guest-shell-runner` to
+`packages/Cargo.toml` members and remove them from `exclude`. Remove each
+package's nested `[workspace]`, workspace-local `[profile.*]` tables, and
+`Cargo.lock`. Generate and verify the sole authoritative product lock with:
 
-The broker and guest runner remain separate packages. Both retain
-`default = []`, explicit package-local dependencies, and only the features
-their own targets require. Workspace dependencies may centralize a version,
-but each package must still opt into every dependency it uses.
+```text
+cargo generate-lockfile --offline --manifest-path packages/Cargo.toml
+cargo metadata --locked --offline --manifest-path packages/Cargo.toml \
+  --format-version 1
+```
 
-### 2. Keep two crate_universe hubs
+The packages keep `default = []` and their explicit dependencies. The guest
+manifest has this shape:
 
-`crate_universe` has exactly two dependency hubs:
+```toml
+[features]
+default = []
+real-libshpool = []
 
-1. the product hub, derived from `packages/Cargo.toml` and
-   `packages/Cargo.lock`; and
-2. the walker tool hub, derived from
-   `tests/tools/no-bash-ast-walker/Cargo.toml` and its lock.
+[dependencies]
+libshpool = "0.11.0"
+```
 
-The walker remains a separate tooling workspace because it is closed gate
-plumbing outside `packages/` and has no cross-workspace path dependencies.
+The existing `real-libshpool` code gates remain.
 
-`packages/Cargo.guest.lock` remains the existing generated static-guest
-closure input. It is neither a Cargo workspace authority nor a
-`crate_universe` hub lock.
+### 2. Select every Cargo and Nix context explicitly
 
-### 3. Keep package builds and test contexts separate
+All broker and guest Cargo gate selectors use
+`--manifest-path packages/Cargo.toml` and `-p <package>`. Dependency-resolving
+commands also use `--locked`, `--no-default-features`, and the context's
+explicit features. This includes clippy, tests, doctest or harness companions,
+tree checks, and builds.
 
-One workspace does not mean one build or test invocation.
-
-Release and Nix builds select one package at a time with `--locked --release`,
-`-p <package>`, and explicit feature flags. Broker production remains an empty
-default-feature build. Guest runner production explicitly enables
+The three broker test lanes remain separate `cargo test` invocations for
+default, `layer1-bootstrap`, and `fake-backends`. They remain serial and use
+three isolated target directories because their tests mutate process-global
+signal and reap state. The guest clippy and test lanes select
 `real-libshpool`.
 
-The dedicated broker default, `layer1-bootstrap`, and `fake-backends` test
-invocations remain separate. The guest runner's `real-libshpool` invocation
-also remains separate. Broad main-workspace test and clippy lanes exclude the
-broker and guest runner where necessary so those contexts are not compiled or
-run twice. Formatting or another operation that is intentionally global need
-not invent an exclusion.
+The gate selectors are:
 
-### 4. Use native first-party Bazel targets
+```text
+cargo test --locked --manifest-path packages/Cargo.toml \
+  -p d2b-priv-broker --no-default-features \
+  -- --test-threads "$D2B_RUST_NEXTEST_THREADS"
+cargo test --locked --manifest-path packages/Cargo.toml \
+  -p d2b-priv-broker --no-default-features \
+  --features layer1-bootstrap \
+  -- --test-threads "$D2B_RUST_NEXTEST_THREADS"
+cargo test --locked --manifest-path packages/Cargo.toml \
+  -p d2b-priv-broker --no-default-features \
+  --features fake-backends \
+  -- --test-threads "$D2B_RUST_NEXTEST_THREADS"
+cargo fmt --manifest-path packages/Cargo.toml \
+  -p d2b-guest-shell-runner --check
+cargo clippy --locked --manifest-path packages/Cargo.toml \
+  -p d2b-guest-shell-runner --no-default-features \
+  --features real-libshpool --all-targets -- -D warnings
+cargo nextest run --locked --manifest-path packages/Cargo.toml \
+  -p d2b-guest-shell-runner --no-default-features \
+  --features real-libshpool
+```
 
-The product `crate_universe` hub supplies third-party dependencies. Product
-packages, including broker and guest runner, are native first-party Bazel
-targets. There is no generated splice workspace and no broker-specific
-dependency hub.
+Generic main clippy, nextest, and companion test selectors use `--workspace`
+but explicitly pass:
 
-First-party variants are keyed by configured context where their feature or
-dependency graphs differ. Broker production, default test,
-`layer1-bootstrap`, and `fake-backends` contexts remain independently checked.
-Sharing the third-party hub does not permit one context's features, targets,
-or test census to stand in for another's.
+```text
+--exclude d2b-contract-tests
+--exclude d2b-priv-broker
+--exclude d2b-guest-shell-runner
+```
 
-### 5. Build Nix packages from the workspace root
+The generic clippy and nextest selectors append those exclusions to:
 
-Nix broker and guest-runner derivations use the root `packages/` source and
-root `packages/Cargo.lock`. Each derivation passes an explicit `--package`
-selection and explicit feature flags. Existing static-link, ELF interpreter,
-dynamic dependency, and release-artifact checks remain unchanged.
+```text
+cargo clippy --locked --manifest-path packages/Cargo.toml \
+  --workspace --all-targets <exclusions> -- -D warnings
+cargo nextest run --locked --manifest-path packages/Cargo.toml \
+  --workspace <exclusions>
+```
 
-### 6. Preserve package-scoped supply-chain evidence
+Global formatting may remain global.
 
-Cargo deny and audit run over the root product lock. This is at least as
-enforcing for known packages and advisories because the root lock contains
-the union resolved for all product members.
+The broker and static guest Nix derivations use the root `packages/` source,
+`packages/Cargo.lock`, the existing locked git output hash, and respectively:
 
-The shared lock does not by itself prove a privileged or static binary's
-minimal selected closure. A repository-owned generator therefore derives and
-commits two package-scoped closure inventories from locked metadata:
+```text
+--package d2b-priv-broker --bin d2b-priv-broker --no-default-features
+--package d2b-guest-shell-runner --bin d2b-guest-shell-runner \
+  --no-default-features --features real-libshpool
+```
+
+The existing broker build, guest static selected-dependency policy, static PIE,
+ELF interpreter, `NEEDED`, deny, audit, and release checks remain enforcing.
+
+### 3. Use one product Bazel hub and one walker hub
+
+`crate_universe` has exactly `product` from the root product manifest and lock,
+and `walker` from the no-bash walker's manifest and lock.
+`packages/Cargo.guest.lock` remains a generated static-guest and cache input,
+not a Cargo authority or hub.
+
+Product code is represented by native first-party targets. Each broker and
+guest configured context declares its own direct first-party and `@product`
+dependencies and feature flags. The product external repository is allowed to
+contain the workspace union; exact equality between the entire repository and
+each context is not required.
+
+The drift gate must prove selected target dependency identity containment in
+the product lock, reject an unrelated first-party sibling in a selected
+closure, require zero guest-runner dependencies in broker production, and
+check each context's cfg through `cquery` and `aquery`. External union is
+accepted; configured first-party leakage is not.
+
+### 4. Enforce package-scoped selected-closure policy
+
+The repository-owned generator has exactly these entry points:
+
+```text
+cargo xtask gen-package-policy-inputs
+cargo xtask gen-package-policy-inputs --check
+```
+
+It deterministically derives, from locked offline root metadata, tracked
+closure-specific cargo-deny metadata and dependency-pruned audit locks for:
 
 - broker production with default features disabled; and
-- guest runner production with `real-libshpool`.
+- guest production with `real-libshpool`.
 
-Each inventory binds the exact package closure, dependency edges, normalized
-sources and checksums, and resolved features for its context. Policy checks
-also reject the package-specific forbidden dependency classes, including the
-guest runner's existing dynamic, PAM, and systemd exclusions. Check mode
-regenerates from the authoritative root manifest and lock and fails on missing,
-extra, or changed packages, sources, edges, features, or forbidden classes.
-The generator output is evidence, not dependency authority.
+The tracked outputs are:
 
-Independent broker and guest lock-update cadence is lost. This is accepted.
-The prior separation controlled binary size; it was not a required trust
-boundary. The package-scoped inventories preserve independent drift review
-without pretending the root lock is smaller than it is.
+```text
+packages/policy-inputs/broker-production/metadata.json
+packages/policy-inputs/broker-production/Cargo.lock
+packages/policy-inputs/guest-real-libshpool/metadata.json
+packages/policy-inputs/guest-real-libshpool/Cargo.lock
+```
 
-## Spec 003 consequence
+The metadata preserves dependency kind so cargo-deny can exclude dev-only
+edges. The lock retains only packages and dependency arrays reachable in the
+selected normal and build closure. Both outputs bind package identity,
+version, source, checksum, edges, and resolved features. Paths in tracked
+metadata are normalized relative to the repository root.
 
-The current Spec 003 four-hub plan conflicts with this decision. After this
-ADR merges, Spec 003 must be amended to the two-hub model and re-panelled
-before implementation resumes. This ADR PR makes no Spec 003 or code edit.
+Drift is a hard error. Its diagnostic prints these commands in this order:
 
-The broker uses the ordinary product-hub update path. No broker-specific repin
-lifecycle ADR or pending broker-repin mechanism is required.
+```text
+cargo xtask gen-package-policy-inputs
+cargo xtask gen-package-policy-inputs --check
+```
+
+The enforcing package checks run the existing broker and guest `deny.toml`
+files over the matching generated metadata with `--exclude-dev` for bans,
+licenses, and sources. Broker advisory audit runs over its pruned lock with no
+ignore. Guest advisory audit runs over its pruned lock with exactly
+`--ignore RUSTSEC-2024-0384`.
+
+The commands are:
+
+```text
+cargo deny check \
+  --metadata-path packages/policy-inputs/broker-production/metadata.json \
+  --config packages/d2b-priv-broker/deny.toml --exclude-dev \
+  bans licenses sources
+cargo deny check \
+  --metadata-path packages/policy-inputs/guest-real-libshpool/metadata.json \
+  --config packages/d2b-guest-shell-runner/deny.toml --exclude-dev \
+  bans licenses sources
+cargo audit --file packages/policy-inputs/broker-production/Cargo.lock
+cargo audit \
+  --file packages/policy-inputs/guest-real-libshpool/Cargo.lock \
+  --ignore RUSTSEC-2024-0384
+```
+
+The existing aggregate root deny and root audit checks remain. The root audit
+retains exactly `RUSTSEC-2026-0194` and `RUSTSEC-2026-0195`; the separate
+generated `packages/Cargo.guest.lock` audit retains no ignore. Aggregate and
+package-scoped checks may each block the change.
+
+Source, license, ban, and advisory failures are enforcing. A main-only
+dependency must not alter a broker or guest closure verdict. Adding an edge
+that makes it reachable must alter the generated input and subject it to that
+package's policy. Shared-lock union alone is not a security failure.
+
+### 5. Amend Spec 003 after merge
+
+Spec 003 currently requires four hubs and three product workspace authorities.
+After this ADR merges, Spec 003 must be amended to this two-hub model and
+re-panelled before implementation resumes. This ADR PR makes no Spec 003 or
+code edit. The no-bash walker remains separate.
 
 ## Consequences
 
-- Product packages have one shared resolution and update policy.
-- The aggregate lock is larger: the spike grew it from 544 to 601 packages.
-- Targeted builds, not nested workspaces, remain the binary-size control.
-- Broker and guest closure changes remain separately reviewable through
-  generator-derived inventories.
-- Bazel follows the upstream workspace example and deletes the synthetic
-  projection, broker hub, and their fidelity machinery from the plan.
-- The walker retains an honestly separate tool boundary.
+- Product packages share one dependency resolution and update event.
+- Independent broker and guest lock-update cadence and lock-level visual
+  isolation are lost. This is the accepted tradeoff.
+- Package selection, native target edges, and closure policy become the
+  security authorities for privileged and static dependency minimality.
+- A normal `libshpool` dependency may compile in non-production guest contexts
+  even while its code is feature-gated.
+- The synthetic splice workspace, broker hub, guest hub, and broker-specific
+  repin exception are unnecessary.
 
 ## Alternatives considered
 
-### Keep the generated splice projection
+### Keep separate product workspaces and generated splices
 
-Rejected. It duplicates Cargo workspace structure and requires extensive
-fidelity checks only to preserve a workspace boundary with no required trust
-property.
+Rejected. They duplicate workspace structure and lock lifecycle. The measured
+package-selected build, native target, and closure-policy controls enforce the
+property that matters without treating lock union as code reachability.
 
-### Fork cargo-bazel
+### Require each Bazel external repository to equal one Cargo closure
 
-Rejected. A fork adds a trusted build-system maintenance surface while the
-upstream-supported single-workspace path already represents the product.
+Rejected. It recreates per-context hubs and makes the external repository an
+authority it is not. Selected native dependency and cfg checks catch leakage.
 
-### Use from_specs or a manually maintained third-party graph
+### Keep libshpool optional and add crate.spec
 
-Rejected. Either shape duplicates dependency declarations outside Cargo and
-weakens the root manifest and lock as the single authority.
+Rejected. The standard product repin failed on that exceptional shape and
+succeeded when the production dependency was manifest-visible. The small
+extra compilation cost is preferred to a second dependency declaration.
 
-### Keep separate workspaces for binary size
+### Merge the no-bash walker
 
-Rejected. The measured targeted builds preserve the size property. A separate
-workspace is not a substitute for selecting the package and features being
-built.
-
-### Merge the no-bash walker into the product workspace
-
-Rejected for this decision. The walker has a real tooling boundary and no
-cross-workspace path dependency. Merging it requires separate evidence and
-justification.
+Rejected. It has a real tooling boundary and no product path dependency.
 
 ## Invariants this decision creates
 
 1. `packages/Cargo.lock` is the only authoritative product Cargo lock.
-2. Broker and guest runner remain separate packages with empty default
-   features and minimal explicit dependencies.
-3. Release, Nix, broker test-context, and guest test-context invocations remain
-   explicitly package and feature selected.
-4. `crate_universe` has one product hub and one walker tool hub.
-5. `packages/Cargo.guest.lock` is a generated static-guest input, not a hub.
-6. First-party Bazel code is native, and broker's four configured contexts are
-   checked independently.
-7. Nix builds use root source and lock while existing static and ELF checks
-   remain enforcing.
-8. Root-lock deny and audit are paired with generated broker-production and
-   guest-real-libshpool closure inventories.
-9. No generated splice workspace, broker-specific hub, or broker-specific
-   repin lifecycle may be reintroduced without a new measured decision.
-
-## References
-
-- [Cargo workspaces](https://doc.rust-lang.org/cargo/reference/workspaces.html)
-- [`cargo build` package selection](https://doc.rust-lang.org/cargo/commands/cargo-build.html#package-selection)
-- [Cargo feature unification](https://doc.rust-lang.org/cargo/reference/features.html#feature-unification)
-- [`rules_rust` 0.73.0 Cargo workspace example](https://github.com/bazelbuild/rules_rust/tree/0.73.0/crate_universe/tests/integration/cargo_workspace)
-- [`rules_rust` issues #1525](https://github.com/bazelbuild/rules_rust/issues/1525),
-  [#1773](https://github.com/bazelbuild/rules_rust/issues/1773), and
-  [#3571](https://github.com/bazelbuild/rules_rust/issues/3571)
-- [ADR 0009](0009-rust-toolchain-msrv-and-supply-chain.md)
-- [ADR 0052](0052-bazel-rust-build-and-test.md)
+2. Broker and guest production are always package and feature selected.
+3. Generic main clippy and tests exclude broker and guest.
+4. Broker default, layer 1, and fake lanes stay serial and target-isolated.
+5. Nix uses root source and lock without weakening selected-dependency or ELF
+   checks.
+6. Bazel has one product hub and one separate walker hub.
+7. Native first-party contexts, not the product external union, define actual
+   Bazel dependency and feature selection.
+8. Broker and guest package-closure deny and audit inputs are generated,
+   checked for drift, and enforcing.
+9. The guest license blocker is resolved by reviewed policy in the merge
+   change, not waived or misreported.
+10. Spec 003 is amended and re-panelled after this ADR merges and before
+    implementation resumes.
