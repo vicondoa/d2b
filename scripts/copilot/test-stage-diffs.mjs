@@ -177,8 +177,8 @@ try {
     secondRequest.includes(
       join(firstDir, "verdicts", "<your-seat>.json"),
     ) &&
-      secondRequest.includes(
-        "Any content change invalidated every prior sign-off",
+      /Any content change invalidated every prior\s+sign-off/.test(
+        secondRequest,
       ),
   );
   check(
