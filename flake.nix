@@ -68,6 +68,80 @@
           nixpkgsFlake = nixpkgs;
           inherit d2bModule;
         };
+      nixUnitShardCaseFiles = {
+        nix-unit-daemon = [
+          "activation-runtime-tmpfiles.nix"
+          "broker-bundle-path.nix"
+          "broker-caps.nix"
+          "broker-service-posture.nix"
+          "broker-socket-activation.nix"
+          "bundle-artifacts-compiler.nix"
+          "bundle-artifacts-digest.nix"
+          "bundle-artifacts-envelope.nix"
+          "daemon-autostart.nix"
+          "daemon-default-compat.nix"
+          "gateway-vm.nix"
+          "d2bd-startup-smoke.nix"
+        ];
+        nix-unit-guest = [
+          "guest-config-containment.nix"
+          "guest-control-auth.nix"
+          "guest-control-vsock.nix"
+          "guest-exec-policy.nix"
+          "guest-shell-policy.nix"
+        ];
+        nix-unit-misc = [
+          "assertions.nix"
+          "autostart-wiring.nix"
+          "examples-with-observability.nix"
+          "ifname-nix-rust-parity.nix"
+          "observability.nix"
+          "observability-guest.nix"
+          "observability-host-collector.nix"
+          "observability-host-collector-extra.nix"
+          "observability-host-collector-otlp.nix"
+          "observability-host-collector-processor-split.nix"
+          "observability-host-collector-identity.nix"
+          "observability-host-collector-umask.nix"
+          "observability-host-collector-flags.nix"
+          "provider-catalog.nix"
+          "provider-elf-shim.nix"
+          "provider-projection-exportability.nix"
+          "provider-projection-fields.nix"
+          "readiness-waves.nix"
+          "resource-sharing.nix"
+          "resources-bundle-telemetry.nix"
+          "restart-policy.nix"
+          "test-infrastructure.nix"
+          "usb-security-key.nix"
+          "vm-eval-overlays.nix"
+        ];
+        nix-unit-network = [
+          "bridge-ipv6-boot-sysctl.nix"
+          "generation-cleanup-absent-network.nix"
+          "index.nix"
+          "multi-env-daemon-backed.nix"
+          "net-vm-network.nix"
+          "realm-workloads.nix"
+          "realms.nix"
+          "usbip-gating.nix"
+        ];
+        nix-unit-runtime = [
+          "clipboard.nix"
+          "external-vm-kind.nix"
+          "niri-vm-borders.nix"
+          "requested-vm-config.nix"
+          "security-key-gating.nix"
+          "video-contract.nix"
+        ];
+        nix-unit-state = [
+          "per-vm-state-ownership.nix"
+          "principal-uid-collision.nix"
+          "store-overlay-emit.nix"
+          "umask-roundtrip.nix"
+          "volume-mounts.nix"
+        ];
+      };
     in
     {
       # The public surface area - populated incrementally by the
@@ -870,86 +944,6 @@
             commit -q -m 'advisory-db snapshot'
         '';
 
-        # --- W2 nix-unit layer -------------------------------------------
-        # Hermetic pure-eval comparison runner over the tests/unit/nix
-        # corpus ({ expr; expected; } / { expr; expectedError; } cases).
-        # NO recursive-nix / IFD: each case is compared at flake-eval time
-        # and the verdict baked into a tiny runCommand. The same corpus is
-        # CLI-compatible with upstream `nix-unit` for local iteration.
-        nixUnitShardCaseFiles = {
-          nix-unit-daemon = [
-            "activation-runtime-tmpfiles.nix"
-            "broker-bundle-path.nix"
-            "broker-caps.nix"
-            "broker-service-posture.nix"
-            "broker-socket-activation.nix"
-            "bundle-artifacts-compiler.nix"
-            "bundle-artifacts-digest.nix"
-            "bundle-artifacts-envelope.nix"
-            "daemon-autostart.nix"
-            "daemon-default-compat.nix"
-            "gateway-vm.nix"
-            "d2bd-startup-smoke.nix"
-          ];
-          nix-unit-guest = [
-            "guest-config-containment.nix"
-            "guest-control-auth.nix"
-            "guest-control-vsock.nix"
-            "guest-exec-policy.nix"
-            "guest-shell-policy.nix"
-          ];
-          nix-unit-misc = [
-            "assertions.nix"
-            "autostart-wiring.nix"
-            "examples-with-observability.nix"
-            "ifname-nix-rust-parity.nix"
-            "observability.nix"
-            "observability-guest.nix"
-            "observability-host-collector.nix"
-            "observability-host-collector-extra.nix"
-            "observability-host-collector-otlp.nix"
-            "observability-host-collector-processor-split.nix"
-            "observability-host-collector-identity.nix"
-            "observability-host-collector-umask.nix"
-            "observability-host-collector-flags.nix"
-            "provider-catalog.nix"
-            "provider-elf-shim.nix"
-            "provider-projection-exportability.nix"
-            "provider-projection-fields.nix"
-            "readiness-waves.nix"
-            "resource-sharing.nix"
-            "resources-bundle-telemetry.nix"
-            "restart-policy.nix"
-            "test-infrastructure.nix"
-            "usb-security-key.nix"
-            "vm-eval-overlays.nix"
-          ];
-          nix-unit-network = [
-            "bridge-ipv6-boot-sysctl.nix"
-            "generation-cleanup-absent-network.nix"
-            "index.nix"
-            "multi-env-daemon-backed.nix"
-            "net-vm-network.nix"
-            "realm-workloads.nix"
-            "realms.nix"
-            "usbip-gating.nix"
-          ];
-          nix-unit-runtime = [
-            "clipboard.nix"
-            "external-vm-kind.nix"
-            "niri-vm-borders.nix"
-            "requested-vm-config.nix"
-            "security-key-gating.nix"
-            "video-contract.nix"
-          ];
-          nix-unit-state = [
-            "per-vm-state-ownership.nix"
-            "principal-uid-collision.nix"
-            "store-overlay-emit.nix"
-            "umask-roundtrip.nix"
-            "volume-mounts.nix"
-          ];
-        };
         nixUnitCaseFileNames = nixUnitCorpus.caseFileNames;
         nixUnitShardFiles = pkgs.lib.concatLists (pkgs.lib.attrValues nixUnitShardCaseFiles);
         nixUnitShardMissingFiles =
@@ -1471,6 +1465,29 @@
         in
         nixUnitCorpus.fileJobs // {
           nix-unit = self.checks.${system}.nix-unit;
+        }
+      );
+
+      # Evaluate file jobs in existing topical shard processes. This keeps
+      # coverage and the locked file-job inventory unchanged while preventing
+      # one nix-eval-jobs worker from retaining every large scenario graph for
+      # the entire corpus.
+      nixUnitJobShards = forAllSystems (system:
+        let
+          pkgs = nixpkgsFor.${system};
+          nixUnitCorpus = nixUnitCorpusFor system;
+          jobsFor = files:
+            pkgs.lib.filterAttrs
+              (jobName: _:
+                builtins.elem
+                  "${pkgs.lib.removePrefix "case-" jobName}.nix"
+                  files)
+              nixUnitCorpus.fileJobs;
+        in
+        (pkgs.lib.mapAttrs (_: jobsFor) nixUnitShardCaseFiles) // {
+          integrity = {
+            nix-unit = self.checks.${system}.nix-unit;
+          };
         }
       );
 

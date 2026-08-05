@@ -323,6 +323,8 @@ nix_unit_surface=nix-unit
 result_dir=$(d2b_mktemp ".d2b-nix-eval-jobs.XXXXXX")
 result_file="$result_dir/results.jsonl"
 tool_stderr="$result_dir/stderr"
+shard_dir="$result_dir/shards"
+mkdir -p "$shard_dir"
 
 sanitize_observable_line() {
   local value="$1" store_hash
@@ -348,6 +350,36 @@ sanitize_stderr_file() {
 emit_sanitized_tool_stderr() {
   sanitize_stderr_file "$tool_stderr"
 }
+
+shard_list="$result_dir/shard-names"
+if ! nix eval \
+  --impure \
+  --quiet \
+  --no-warn-dirty \
+  --raw \
+  "${flake_ref}#nixUnitJobShards.${system}" \
+  --apply '
+    shards:
+      builtins.concatStringsSep "\n"
+        (builtins.sort builtins.lessThan (builtins.attrNames shards))
+  ' >"$shard_list" 2>"$result_dir/shards.stderr"; then
+  sanitize_stderr_file "$result_dir/shards.stderr"
+  fail "nix-unit shard discovery ($system): evaluation failed" || true
+  exit 1
+fi
+mapfile -t nix_unit_shards <"$shard_list"
+if [ "${#nix_unit_shards[@]}" -eq 0 ]; then
+  fail "nix-unit shard discovery ($system): no shard jobs found"
+  exit 1
+fi
+for shard in "${nix_unit_shards[@]}"; do
+  case "$shard" in
+    ""|*[!A-Za-z0-9._-]*)
+      fail "nix-unit shard discovery returned unsafe shard name: $shard"
+      exit 1
+      ;;
+  esac
+done
 
 inventory_file="$result_dir/inventory.json"
 inventory_stderr="$result_dir/inventory.stderr"
@@ -377,17 +409,55 @@ if ! jq -e '
   exit 1
 fi
 
-log "--> nix-eval-jobs --no-instantiate --flake ${flake_label}#nixUnitJobs.${system} --workers $workers --max-memory-size $memory_mb"
-if nix-eval-jobs \
-  --no-instantiate \
-  --flake "${flake_ref}#nixUnitJobs.${system}" \
-  --workers "$workers" \
-  --max-memory-size "$memory_mb" \
-  --show-trace >"$result_file" 2>"$tool_stderr"; then
-  tool_status=0
-else
-  tool_status=$?
-fi
+log "--> nix-eval-jobs topical shards (${#nix_unit_shards[@]}) --workers $workers --max-memory-size $memory_mb"
+shard_pids=()
+shard_statuses=()
+shard_status=0
+
+harvest_nix_unit_shard() {
+  local pid="$1" status_file="$2"
+  set +e
+  wait "$pid"
+  local rc=$?
+  set -e
+  printf '%s\n' "$rc" >"$status_file"
+  [ "$rc" -eq 0 ] || shard_status=1
+}
+
+for shard in "${nix_unit_shards[@]}"; do
+  while [ "${#shard_pids[@]}" -ge "$workers" ]; do
+    harvest_nix_unit_shard "${shard_pids[0]}" "${shard_statuses[0]}"
+    shard_pids=("${shard_pids[@]:1}")
+    shard_statuses=("${shard_statuses[@]:1}")
+  done
+  shard_result="$shard_dir/$shard.jsonl"
+  shard_stderr="$shard_dir/$shard.stderr"
+  shard_status_file="$shard_dir/$shard.status"
+  rm -f -- "$shard_result" "$shard_stderr" "$shard_status_file"
+  (
+    nix-eval-jobs \
+      --no-instantiate \
+      --flake "${flake_ref}#nixUnitJobShards.${system}.${shard}" \
+      --workers 1 \
+      --max-memory-size "$memory_mb" \
+      --show-trace >"$shard_result" 2>"$shard_stderr"
+  ) &
+  shard_pids+=("$!")
+  shard_statuses+=("$shard_status_file")
+done
+while [ "${#shard_pids[@]}" -gt 0 ]; do
+  harvest_nix_unit_shard "${shard_pids[0]}" "${shard_statuses[0]}"
+  shard_pids=("${shard_pids[@]:1}")
+  shard_statuses=("${shard_statuses[@]:1}")
+done
+
+: >"$result_file"
+: >"$tool_stderr"
+for shard in "${nix_unit_shards[@]}"; do
+  cat "$shard_dir/$shard.jsonl" >>"$result_file" 2>/dev/null || true
+  cat "$shard_dir/$shard.stderr" >>"$tool_stderr" 2>/dev/null || true
+done
+tool_status="$shard_status"
 
 if [ ! -s "$result_file" ] || ! jq -s -e '
   length > 0
