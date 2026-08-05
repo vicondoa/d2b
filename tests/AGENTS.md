@@ -340,6 +340,20 @@ equivalent VM closure, or an overly broad deep evaluation; narrow the
 attr-local fixture, share an evaluated scenario, or stub the evaluation
 boundary instead.
 
+The refreshed `origin/v3` comparison was measured on the same host and
+resident-memory harness. With one Nix-unit worker, v3 completed 46 attributes
+at 18,181,990 KiB in 777 seconds; its default four-worker run crossed a
+30,000,000 KiB protective cap and was terminated. That exceeds the supported
+16 GiB CI envelope and is a mechanical v3 baseline blocker, not acceptable
+growth to normalize. v3's complete monolithic flake run measured 14,583,722
+KiB in 605 seconds. The refreshed Wave 5 run evaluates 83 attributes and 32
+flake checks plus outputs: its Nix-unit peak is 8,563,111 KiB and its flake
+peak is 11,775,682 KiB. Thus the final flake ceiling is only 0.56% above the
+measured v3 flake baseline despite the added checks, while the Nix-unit
+ceiling remains well below the 16 GiB envelope because the repaired graph is
+smaller than the v3 baseline. Added case count is not permission to force VM
+closures.
+
 Tests that shell out to `cargo` cache their scratch trees between runs under
 `.scratch/rust-test-cache/`, keyed on `rustc -vV`, because compiled artifacts
 are not portable across compiler versions. CI restores that directory as one
