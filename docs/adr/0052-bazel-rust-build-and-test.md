@@ -28,25 +28,28 @@
   matching GNU targets; static guest artifacts use matching musl targets.
   Every Nix dependency and package check binds one exact system-and-target
   artifact and has early wrong-system, wrong-target, and wrong-edge-kind
-  refusals. Product and walker repins and policy generation/check use the
-  compiled repository-root `./d2b-nix` launcher. It ignores caller `HOME`,
-  `NIX_BIN`, and `PATH`; accepts only system, root, or passwd-home per-user Nix
-  profile entries whose opened executable canonicalizes to
-  `/nix/store/.../bin/nix`; and runs `nix develop --ignore-environment` with
-  empty private `HOME` and `XDG_CONFIG_HOME`. Hostile user `nix.conf`,
-  `plugin-files`, startup files, command functions, and symlink targets are
-  refusal fixtures rather than ambient inputs.
-  `main`, `broker`, and `guest` hub inputs are retired with exact replacement
-  diagnostics naming `product`; each replacement ends at the closing command
-  quote and is copy-verbatim tested. The implementation adds all eight
+  refusals. Contributor-only repin and policy mutations follow existing
+  repository practice: from the repository root the trusted operator enters
+  `nix develop`, then runs `cd packages` and the named `cargo xtask` command.
+  They are unreachable from workflows and Make targets and are not a
+  credential or sandbox boundary; local `HOME`, startup configuration, and
+  shell functions are outside the security model. Gates call approved Make
+  targets in controlled environments, while package policy remains hermetic
+  through vendored sources and the pinned advisory database. `main`, `broker`,
+  and `guest` hub inputs are retired with fixed diagnostics that say to enter
+  `nix develop`, then run
+  `cd packages && cargo xtask bazel-repin --hub product`. The diagnostic is
+  actionable text, not a copy-executable one-line command or final-byte
+  contract. The implementation adds all eight
   per-system dependency/package installables. Existing Layer-1 supply-chain,
-  drift, and flake targets execute their shared checker logic, enforce generated
-  inventory and target mapping with planted refusals, and realize each system's
-  four wrappers plus `guest-static-elf` on separate native x86_64 and aarch64
-  runners. Neither native block uses a foreign system or remote builder; common
-  cross-system configuration pins and drift remain one step. The Layer-1,
-  realized-class, and dual-system matrix pins are regenerated. If accepted,
-  Spec 003 must be amended and re-panelled before implementation resumes.
+  drift, and flake targets execute their shared checker logic, enforce
+  generated inventory and target mapping with wrong-runner, wrong-system, and
+  remote-builder refusals, and realize each system's four wrappers plus
+  `guest-static-elf` on separate native x86_64 and aarch64 runners. Neither
+  native block uses a foreign system or remote builder; common cross-system
+  configuration pins and drift remain one step. The Layer-1, realized-class,
+  and dual-system matrix pins are regenerated. If accepted, Spec 003 must be
+  amended and re-panelled before implementation resumes.
 - Related: [ADR 0009](0009-rust-toolchain-msrv-and-supply-chain.md) (Rust
   toolchain, MSRV, and supply-chain policy), which keeps its authority
   unchanged and is not superseded;
