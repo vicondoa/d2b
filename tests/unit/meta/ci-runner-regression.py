@@ -1237,6 +1237,47 @@ printf '%s\n' "$sanitized_line"
             for phrase in common_cause:
                 self.assertIn(phrase, failed.stderr)
 
+            active_code = (
+                "import os, signal, time; "
+                "signal.signal(signal.SIGTERM, signal.SIG_IGN); "
+                "child = os.fork(); "
+                "signal.signal(signal.SIGTERM, signal.SIG_IGN); "
+                "print(child, flush=True); time.sleep(30)"
+            )
+            started = time.monotonic()
+            active = subprocess.run(
+                [
+                    sys.executable,
+                    str(helper),
+                    "--lane",
+                    lane,
+                    "--max-kib",
+                    "1",
+                    "--",
+                    sys.executable,
+                    "-c",
+                    active_code,
+                ],
+                cwd=ROOT,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(
+                active.returncode,
+                125,
+                msg=f"{lane} active-termination guard unexpectedly passed:\n"
+                f"{active.stderr}",
+            )
+            self.assertLess(
+                time.monotonic() - started,
+                5,
+                msg=f"{lane} guard did not actively terminate promptly:\n"
+                f"{active.stderr}",
+            )
+            self.assertIn(f"{lane} peak RSS guard failed", active.stderr)
+
             passed = subprocess.run(
                 [
                     sys.executable,

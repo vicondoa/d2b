@@ -136,19 +136,42 @@ def cgroup_current_kib(pid: int) -> int | None:
         return None
 
 
-def kill_group(process: subprocess.Popen[bytes]) -> None:
+def process_group_exists(pgid: int) -> bool:
+    try:
+        os.killpg(pgid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def kill_group(process: subprocess.Popen[bytes]) -> bool:
     try:
         os.killpg(process.pid, signal.SIGTERM)
     except ProcessLookupError:
-        return
+        return True
     try:
         process.wait(timeout=2)
     except subprocess.TimeoutExpired:
-        try:
-            os.killpg(process.pid, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
-        process.wait()
+        pass
+    # The leader can exit after SIGTERM while evaluator descendants ignore it.
+    # Always follow the grace period with SIGKILL against the process group;
+    # waiting only for the leader allows exactly the OOM race this guard exists
+    # to prevent.
+    try:
+        os.killpg(process.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        return True
+    try:
+        process.wait(timeout=2)
+    except subprocess.TimeoutExpired:
+        pass
+    for _ in range(40):
+        if not process_group_exists(process.pid):
+            return True
+        time.sleep(POLL_SECONDS)
+    return False
 
 
 def format_kib(value: int) -> str:
@@ -203,6 +226,7 @@ def main() -> int:
     peak_tree: int | None = None
     peak_cgroup_delta: int | None = None
     exceeded = False
+    group_terminated = True
     while process.poll() is None:
         tree = process_rss_kib(process.pid)
         if tree is not None:
@@ -216,7 +240,7 @@ def main() -> int:
         observed = max(peak_tree or 0, peak_cgroup_delta or 0)
         if observed > args.max_kib:
             exceeded = True
-            kill_group(process)
+            group_terminated = kill_group(process)
             break
         time.sleep(POLL_SECONDS)
 
@@ -225,10 +249,8 @@ def main() -> int:
     # A worker launcher can leave a short-lived descendant behind after its
     # parent exits. Reap the process group before the outer runner starts its
     # next shard, otherwise a later aggregate tree would retain that worker.
-    try:
-        os.killpg(process.pid, signal.SIGTERM)
-    except ProcessLookupError:
-        pass
+    if group_terminated:
+        group_terminated = kill_group(process)
     final_tree = process_rss_kib(process.pid)
     if final_tree is not None:
         peak_tree = max(peak_tree or 0, final_tree)
@@ -252,6 +274,14 @@ def main() -> int:
         file=sys.stderr,
     )
     if exceeded or observed > args.max_kib:
+        if not group_terminated:
+            print(
+                f"{args.lane} peak RSS guard failed to terminate the process "
+                f"group after observing {format_kib(observed)} against "
+                f"maximum {format_kib(args.max_kib)}. {CAUSE}",
+                file=sys.stderr,
+            )
+            return 125
         print(
             f"{args.lane} peak RSS guard failed: observed {format_kib(observed)} "
             f"> maximum {format_kib(args.max_kib)}. {CAUSE}",
