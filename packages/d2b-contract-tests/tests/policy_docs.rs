@@ -1421,10 +1421,13 @@ fn execution_manifest_schema_and_prose_agree_with_non_empty_discovery() {
             && !jobs_block.contains("jobsFor"),
         "execution-manifest-policy: Nix-unit jobs must expose per-file fileJobs, not seven self.checks-only attrs"
     );
-    let shard_block = jobs_region
+    let shard_region = jobs_region
         .split("nixUnitJobShards = forAllSystems")
         .nth(1)
-        .and_then(|region| region.split("nixUnitInventory = forAllSystems").next())
+        .expect("execution-manifest-policy: Nix-unit shard jobs block is missing");
+    let shard_block = shard_region
+        .split("nixUnitCheckJobShards = forAllSystems")
+        .next()
         .expect("execution-manifest-policy: Nix-unit shard jobs block is missing");
     assert!(
         shard_block.contains("jobsFor")
@@ -1434,6 +1437,18 @@ fn execution_manifest_schema_and_prose_agree_with_non_empty_discovery() {
             && shard_block.matches("self.checks").count() == 1
             && !shard_block.contains("nixUnitCorpus.jobs"),
         "execution-manifest-policy: Nix-unit shard jobs must partition fileJobs and retain integrity"
+    );
+    let topical_shard_block = shard_region
+        .split("nixUnitCheckJobShards = forAllSystems")
+        .nth(1)
+        .and_then(|region| region.split("nixUnitInventory = forAllSystems").next())
+        .expect("execution-manifest-policy: topical Nix-unit shard jobs block is missing");
+    assert!(
+        topical_shard_block.contains("mapAttrs")
+            && topical_shard_block.contains("nixUnitShardCaseFiles")
+            && topical_shard_block.contains("nix-unit")
+            && topical_shard_block.contains("integrity"),
+        "execution-manifest-policy: topical Nix-unit shard mapping must cover the rollup"
     );
     for marker in [
         "nix-eval-jobs",

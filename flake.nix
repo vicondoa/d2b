@@ -1588,7 +1588,11 @@
                   files)
               nixUnitCorpus.fileJobs;
         in
-        pkgs.lib.mapAttrs (_check: files: jobsFor files) nixUnitShardCaseFiles
+        (pkgs.lib.mapAttrs (_check: files: jobsFor files) nixUnitShardCaseFiles) // {
+          nix-unit = {
+            integrity = self.checks.${system}.nix-unit;
+          };
+        }
       );
 
       # One locked, evaluation-only inventory keeps both exact source case
