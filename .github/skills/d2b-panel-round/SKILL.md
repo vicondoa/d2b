@@ -69,7 +69,13 @@ bash .github/skills/d2b-panel-round/scripts/stage-diffs.sh <base> <prev-tip> <RO
 `<base>` is the branch base, `<prev-tip>` is the commit the previous round
 reviewed, or the base again for round 1. This writes
 `.scratch/panel/<ROUND>/` containing `delta.diff`, `full.diff`,
-`evidence.md`, and `address.json`.
+`evidence.md`, `address.json`, `review-request.md`,
+`dispatch-prompt.txt`, and one file per seat under `reviewer-notes/`.
+
+For a later round, the script fails unless `<prev-tip>` is the tip recorded by
+the immediately previous round and every seat has a prior verdict. That check
+is what makes `delta.diff` incremental evidence rather than a caller-supplied
+claim about the range.
 
 The reviewers have no shell. Staging is what lets ten independent lanes see
 byte-identical evidence, and it is what keeps them off the shared Nix store,
@@ -81,28 +87,22 @@ dispatching: the exact commands run and their pass or fail results. State what
 was **not** covered too. A reviewer who cannot tell whether the change was
 validated is required to raise that as a finding.
 
+Edit `reviewer-notes/<seat>.md` only when that seat needs an integrator
+rebuttal or an explicit reviewer-specific validation request. Do not put a
+change summary there.
+
 ### 3. Dispatch all ten seats in one batch
 
 Dispatch every row of the table in a single response so the lanes run in
-parallel. Each lane's prompt carries:
+parallel. Use the exact contents of
+`.scratch/panel/<ROUND>/dispatch-prompt.txt` as every task prompt. Do not
+hand-author, summarize, shorten, or supplement reviewer prompts.
 
-- the paths `.scratch/panel/<ROUND>/delta.diff` and `full.diff`, and the
-  instruction to read them with `view`;
-- `.scratch/panel/<ROUND>/evidence.md`;
-- for a round after the first, the commit that reviewer last reviewed and the
-  instruction that **the delta is what they review**, with the full branch for
-  context only;
-- the phase deliverable, so findings stay confined to defects in the delta;
-- a restatement of the shared bar: a finding is a defect that would cause
-  incorrect behaviour, mask a regression, or weaken a stated invariant, and
-  everything else is a summary observation. Each seat carries this bar in its
-  own agent file, byte-identical and gate-enforced, but restating it in the
-  prompt costs one line and makes the threshold explicit for the round;
-- any integrator rebuttal of a prior finding, stated with its evidence, and an
-  explicit statement that the reviewer may withdraw an incorrect finding and is
-  not required to withdraw a correct one;
-- the instruction not to rerun tests, builds, evals, or long validations
-  unless this specific reviewer is explicitly asked to.
+The generated `review-request.md` is the complete shared instruction source.
+It names the exact delta and full ranges, the validation evidence, the phase
+deliverable, the seat-specific notes, the finding bar, the no-rerun rule, and,
+after the first round, the prior verdict each seat must verify. The task prompt
+has one job: direct the reviewer to that complete request.
 
 Do not summarise the change and ask reviewers to trust the summary. A prose
 summary is a statement of intent. A fix that silently touched something the
