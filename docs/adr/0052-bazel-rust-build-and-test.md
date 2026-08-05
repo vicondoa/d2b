@@ -19,10 +19,14 @@
   broker, guest, and test-context execution surfaces unchanged, accepts the
   repository-owner-approved shared product external repository's feature and
   package union without requiring per-context third-party feature parity, and
-  makes package-selected builds, native first-party target edges, production
-  closure inventories, and dev-inclusive package deny and audit inputs the
-  broker and guest dependency authorities. If accepted, Spec 003 must be
-  amended and re-panelled before implementation resumes.
+  makes selected Cargo closure policy the security authority while exact native
+  first-party context censuses still refuse unrelated sibling leakage. It
+  preserves the baseline contract-crate clippy, policy, test, and fixture
+  compilation surfaces. Broker and guest production inventories and
+  dev-inclusive deny and audit inputs reuse this record's pinned offline source
+  materialization with exact source-set, count, readability, and checksum
+  checks before policy runs. If accepted, Spec 003 must be amended and
+  re-panelled before implementation resumes.
 - Related: [ADR 0009](0009-rust-toolchain-msrv-and-supply-chain.md) (Rust
   toolchain, MSRV, and supply-chain policy), which keeps its authority
   unchanged and is not superseded;
