@@ -33,11 +33,14 @@
   change created. Three earlier statements are **withdrawn**: that `PanelRecord`,
   `PanelRequest` and `validate_record_set` are preserved byte-identical, that
   the roster is a closed ten-role set, and, from an earlier revision of this
-  same amendment, that `rust` remains an optional depth seat. Four statements
+  same amendment, that `rust` remains an optional depth seat. Six statements
   from earlier revisions **of this amendment** are corrected in place: that
   content rules evaluate added lines only, that a shebang is a content rule,
   that an over-bound change surface is simultaneously a refusal and a fallback,
-  and that `recommendations` is the only structured channel the record needs.
+  that `recommendations` is the only structured channel the record needs, that
+  the two wire positions required for an unresolved prior finding are duplicate
+  judgements, and that the internal verdict may store resolved and superseding
+  dispositions in independent collections.
   Every other decision in this record
   stands unchanged, and nothing here is superseded. None of this is implemented
   yet; the committed code still carries the ten-role roster, `PanelRole::Rust`
@@ -2152,7 +2155,8 @@ prior finding identifiers the controller issued to this seat in this candidate
 lineage and `state` is the closed enum `resolved | not_resolved`. There is no
 text field, no severity, no free-form note; the observation channel is still
 the summary and the blocking channel is still `recommendations`. One existing
-shape widens by one optional member as a consequence: a `recommendation` may
+wire shape widens by one optional member as a consequence: a `recommendation`
+may
 carry `supersedes`, a single `finding_id`, which is how a `not_resolved` entry
 is tied to the finding that replaces it. That is a link, not a third field with
 semantics of its own, and it is named here so the count is honest.
@@ -2200,56 +2204,140 @@ one: admission parses the DTO into an **internal verdict type that cannot
 represent an inconsistent combination**, shaped as
 
 ```
-Pass     { declared: Relevant | NotRelevant, resolved: Set<FindingId> }
-Blocking { recommendations: NonEmpty<Recommendation>, resolved: Set<FindingId> }
+Recommendation { severity, where, what, why, fix }
 
-Recommendation { severity, where, what, why, fix, supersedes: Option<FindingId> }
+Resolved                                   // no payload
+Disposition       = Resolved | Superseded(Recommendation)
+PriorPartition<D> = Map<FindingId, D>      // one key per open finding
+SupersedingPartition                       // private newtype over
+                                           // PriorPartition<Disposition>,
+                                           // at least one Superseded value
+
+Pass = { declared: Relevant | NotRelevant,
+         priors: PriorPartition<Resolved> }
+
+Blocking =
+  | NewOnly     { priors: PriorPartition<Resolved>,
+                  new_recommendations: NonEmpty<Recommendation> }
+  | Superseding { priors: SupersedingPartition,
+                  new_recommendations: List<Recommendation> }
 ```
 
-`Blocking` carries no `declared` member, because `relevant: false` forces an
-empty recommendation set, so a blocking verdict is relevant by construction
-rather than by a field that could disagree with itself.
+**One map is the partition, and the map is the whole of the fix.**
+Prior-finding disposition is a single `Map<FindingId, Disposition>` whose key
+set **is** the seat's open set. Totality and disjointness stop being two rules
+a reader has to trust and become one property of a map: an open identifier is
+exactly one key, and its value says which way it went.
 
-**There is no internal `not_resolved` value, and that is the whole of the
-fix.** An earlier revision of this amendment gave both variants a shared
-`ResolutionSet` carrying the wire enum, which reproduced the forbidden state
-inside the type whose job was to forbid it: a `Pass` could hold a
+- **The value chooses, and it cannot choose both.** `Resolved` carries
+  nothing. `Superseded` **owns** the recommendation that replaces the finding,
+  so the link the wire spells as a `finding_id` on a recommendation is spelled
+  internally as the key that owns it. There is no internal `not_resolved`
+  value, no internal `supersedes` field, and therefore no dangling, doubled or
+  self-contradicting link.
+- **A new recommendation cannot masquerade as a prior resolution.** The
+  internal `Recommendation` has no optional identifier at all, so a member of
+  `new_recommendations` has no way to claim it closes a prior finding. The only
+  way a recommendation attaches to a prior identifier is to be that
+  identifier's `Superseded` payload.
+- **`Pass` is all-`Resolved` by its type parameter rather than by a check.**
+  `PriorPartition<Resolved>` has nowhere to put a recommendation and `Pass` has
+  no `new_recommendations` member, so a `Pass` that leaves a prior finding
+  open, or that carries a recommendation, is not a value that exists.
+- **`Blocking` blocks for exactly one of two reasons and says which.**
+  `NewOnly` carries an all-`Resolved` partition beside a non-empty new set;
+  `Superseding` carries a partition holding at least one `Superseded` beside
+  any number of new recommendations, including none. The two are disjoint and
+  exhaustive over the blocking space, so `signoff` is the discriminant between
+  `Pass` and `Blocking` rather than a field, and a blocking verdict with no
+  recommendation anywhere is excluded by `NewOnly`'s `NonEmpty` and by the one
+  refinement named below. `Blocking` carries no
+  `declared` member, because `relevant: false` forces an empty recommendation
+  set, so a blocking verdict is relevant by construction rather than by a field
+  that could disagree with itself.
+
+**Two earlier revisions of this type were wrong, and both corrections are
+recorded here rather than quietly applied.** The first gave both variants a
+shared `ResolutionSet` carrying the wire enum, which reproduced the forbidden
+state inside the type whose job was to forbid it: a `Pass` could hold a
 `not_resolved` entry with no recommendation anywhere in the record to supersede
-it, which is exactly the combination the DTO rules reject. The corrected type
-keeps only the **resolved** identifiers, as a set, and represents an unresolved
-prior finding **solely** as a `Recommendation` whose closed optional
-`supersedes` names the prior identifier. A `Pass` has no recommendations, so it
-has nowhere to put an unresolved finding, so a `Pass` that leaves one open is
-not a value that exists.
+it, which is exactly the combination the DTO rules reject. The second fixed
+that by keeping only the **resolved** identifiers, as a set, and representing
+an unresolved finding solely as a `Recommendation` with an optional
+`supersedes`. That closed the `Pass` hole and left a subtler one: the partition
+was then spread across two collections keyed by the same identifiers with
+nothing structural keeping them total or disjoint, so an identifier could sit
+in `resolved` **and** be superseded by a recommendation in the same value, or
+in neither. The constructor refused both, which is precisely the complaint: a
+consumer had to trust that validation instead of reading the guarantee off the
+type, and removing that obligation is the only reason the internal type exists.
+One map removes it.
+
+**One refinement is not structural, and it is named rather than glossed.**
+`SupersedingPartition` is a private newtype over `PriorPartition<Disposition>`
+whose constructor refuses an all-`Resolved` map. "At least one value of this
+variant" is a cardinality claim over a keyed total map, which Rust has no way
+to state in a type, exactly as `NonEmpty` has no way to state its own invariant
+without a private constructor. It is the same class of guarantee as
+`NonEmpty`, it lives in one place whose only job is that, and the one value it
+excludes rather than the type - a `Superseding` whose map is all-`Resolved`,
+which would be a blocking verdict carrying no recommendation at all - is a
+useless value rather than a contradictory one, refused in that constructor and
+asserted there by M35. The shape that would
+make it structural - carrying the first superseded pair out of line as a
+`(FindingId, Recommendation)` head beside the rest of the map - is
+**rejected**, because it puts one open identifier outside the map and so
+reintroduces the second place to look that the map exists to abolish.
 
 The constructor is fallible, takes the seat's open-identifier set as its other
 input, and is the only way to obtain the internal type. It **consumes the DTO
 pair**: a `not_resolved` entry and the one recommendation whose `supersedes`
-names that identifier arrive as two wire positions and leave as that single
-recommendation, so no `not_resolved` value survives the boundary and the rules
-below count identifiers rather than wire positions. It verifies an **exact
-partition** of that set:
+names that identifier arrive as two wire positions and leave as that
+identifier's single `Superseded` value, so neither a `not_resolved` value nor a
+`supersedes` field survives the boundary and the rules below count identifiers
+rather than wire positions. It verifies an **exact partition** of that set
+before it builds the map:
 
-- every identifier in `resolved`, and every `supersedes` value, is a member of
-  the seat's open set, so an unknown identifier cannot enter either side;
-- no identifier appears twice - not twice in `resolved`, not in `resolved` and
-  as a `supersedes` value, and not as the `supersedes` value of two
-  recommendations;
-- every open identifier appears exactly once, in `resolved` or as the
-  `supersedes` value of exactly one recommendation, so under-coverage is a
-  refusal rather than a smaller obligation;
-- `Pass` therefore carries `resolved` equal to the whole open set, and
-  `Blocking` carries `resolved` plus one superseding recommendation for each
-  remaining identifier.
+- every identifier in `prior_resolutions`, and every `supersedes` value, is a
+  member of the seat's open set, so an unknown identifier cannot become a key;
+- no identifier is carried twice on one channel - not two `prior_resolutions`
+  entries for it, and not two recommendations superseding it - so every
+  insertion into the map is into a vacant key;
+- every open identifier carries exactly one `prior_resolutions` entry, so
+  under-coverage is a refusal rather than a smaller obligation and the finished
+  key set equals the open set;
+- each entry's `state` agrees with the recommendation channel: `not_resolved`
+  becomes `Superseded` owning the one recommendation naming it, and `resolved`
+  becomes `Resolved` and forbids one;
+- every recommendation whose `supersedes` is absent becomes a member of
+  `new_recommendations` and every recommendation whose `supersedes` is present
+  is moved into the map, so each wire recommendation lands in exactly one place
+  and none is dropped;
+- the variant then follows from the result rather than from the record: no
+  recommendation anywhere is `Pass`, an all-`Resolved` map beside a non-empty
+  new set is `NewOnly`, and any `Superseded` is `Superseding`.
 
 So `relevant: false` beside a recommendation, `signoff: true` beside a
 recommendation, an unresolved prior finding with no superseding recommendation,
-an identifier that is both resolved and superseded, and a partial or unknown
+an identifier that is both resolved and superseded, a recommendation linked to
+a prior identifier it is not the disposition of, and a partial or unknown
 coverage of the open set are all **unrepresentable after admission** rather
 than merely rejected during it. `EffectiveRelevance` is a separate
 controller-owned type that no producer record can construct, which is what
 stops the derived value from being confused with the claimed one three call
 sites later.
+
+**Rendering back to the wire is total and canonical.** The internal value
+renders to a DTO by walking the partition in issued-identifier order -
+`Resolved` to a `resolved` entry, and `Superseded` to a `not_resolved` entry
+plus its owned recommendation carrying that key as `supersedes` - and then
+appending `new_recommendations` in submitted order. Re-admitting that rendering
+returns an equal internal value, so the verdict itself round-trips exactly.
+What does not survive is the producer's interleaving of superseding and new
+recommendations within one wire list, which is the stated normalization M9
+already allows for and which nothing reads. The submitted record is retained as
+bytes, so the normalization is a property of re-rendering and never a rewrite
+of the artifact.
 
 `relevant: false` is a **pass, not an abstention**. Unanimity is therefore
 unchanged as a predicate: every seat on the roster signed off. What changes is
@@ -3749,16 +3837,52 @@ The eight items below are added by the 2026-08-04 amendment and belong to D21.
   that pair is the only legal way for a seat to report an unresolved prior
   finding and a duplicate rule that counted the two channels as two judgements
   would make every honest unresolved report unfileable. The same test asserts
-  the constructor's consumption: the admitted internal value is `Blocking`
-  whose `resolved` set omits that identifier and whose recommendation carries
-  it as `supersedes`, so no `not_resolved` value exists past admission. A
+  the constructor's consumption: the admitted internal value is a
+  `Superseding` blocking verdict whose partition maps that identifier to
+  `Superseded` owning that recommendation, whose every other key is `Resolved`,
+  and whose `new_recommendations` list is empty, so neither a `not_resolved`
+  value nor a `supersedes` field exists past admission. A
   planted implementation that rejects the pair as a duplicate fails this item,
   and so does one that admits the pair while retaining a `not_resolved` value
-  internally. An earlier revision of this amendment stated the duplicate rule
+  internally or leaving that recommendation in `new_recommendations`. An
+  earlier revision of this amendment stated the duplicate rule
   as "either an entry or a `supersedes` value, never both", which forbade the
   shape the DTO requires and whose only remedy was a record the coverage rule
   then refused; that was wrong and the correction is recorded here rather than
   quietly applied.
+
+  **Contradictory admitted state is sealed at compile time, not asserted at
+  run time.** A runtime assertion that the constructor refused a bad value
+  proves only that this caller refused it, and the claim D21 makes is that no
+  caller can hold one. The item is therefore satisfied only by `compile_fail`
+  doctests, the capability-seal idiom this repo already uses, run in the
+  doctest companion lane because doctests are not a nextest surface. Five
+  seals, each a construction an external consumer might reach for and each
+  required to fail to compile: reading a `supersedes` field off an internal
+  `Recommendation`, which has no such field, so a new recommendation cannot
+  carry a prior-finding link; a struct-literal construction of any verdict
+  variant from outside its module, whose fields are private, so the fallible
+  constructor cannot be bypassed; a mutation of an admitted partition, for
+  which no `&mut` accessor and no insertion path is exposed, so the exact
+  partition cannot be broken after admission; matching a `Pass`
+  partition value against a `Superseded` pattern, which its
+  `PriorPartition<Resolved>` parameter makes a type error, so an all-`Resolved`
+  `Pass` is a compile-time fact; and a `serde` deserialization **directly**
+  into the internal type, for which no `Deserialize` implementation exists, so
+  the wire DTO plus the fallible constructor is the only entry. A planted
+  implementation that derives `Deserialize` on the internal type fails this
+  item even when every runtime refusal still passes. The one property no seal
+  can carry is `SupersedingPartition`'s non-emptiness, which is a cardinality
+  refinement of the same class as `NonEmpty`; it is asserted instead by an
+  in-crate unit test that its private constructor refuses an all-`Resolved`
+  map, and D21 names it as the single guarantee the type system does not hold.
+
+  **Round-trip preserves the verdict.** For every record this item admits,
+  rendering the internal value back to a wire DTO and re-admitting it is
+  asserted to yield an equal internal value, and the rendered DTO is asserted
+  equal to the submitted one under the stated ordering normalization. A planted
+  renderer that drops a `supersedes` link, emits a `resolved` entry for a
+  superseded identifier, or loses a new recommendation fails this item.
 
   The pivotal control is the pair that proves the coverage rule and the
   relevance rule are different rules. A round-two record from that seat
