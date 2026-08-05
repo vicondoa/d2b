@@ -59,8 +59,8 @@ function buildRound(mutate) {
       wave: "spec001w1",
     },
     observed: Object.fromEntries(ROLES.map((r, i) => [r, {
-      model: "gemini-3.1-pro-preview",
-      reasoning_effort: "high",
+      model: "gpt-5.6-sol",
+      reasoning_effort: "xhigh",
       run_id: `run-${i}`,
       receipt_locator: `github-copilot://receipt/${i}`,
     }])),
@@ -119,7 +119,7 @@ console.log("make-records: the happy path");
     check("no temp file survives the write", !ROLES.some((x) => existsSync(join(recordsDir, `${x}.json.tmp`))));
     if (existsSync(join(recordsDir, "security.json"))) {
       const rec = JSON.parse(readFileSync(join(recordsDir, "security.json"), "utf8"));
-      check("the record carries the observed effort", rec.reasoning_effort === "high", JSON.stringify(rec.reasoning_effort));
+      check("the record carries the observed effort", rec.reasoning_effort === "xhigh", JSON.stringify(rec.reasoning_effort));
       check("the record carries the candidate address", rec.candidate_id === "cand-0001");
       check("the record digests the verdict", typeof rec.output_sha256 === "string" && rec.output_sha256.length === 64);
     }
@@ -176,6 +176,25 @@ console.log("make-records: a structured finding reaches the seal as a string");
   }
 }
 
+console.log("make-records: legacy Gemini compatibility");
+{
+  const dir = buildRound((s) => {
+    for (const observed of Object.values(s.observed)) {
+      observed.model = "gemini-3.1-pro-preview";
+      observed.reasoning_effort = "high";
+    }
+  });
+  try {
+    const r = run(dir);
+    check("a complete legacy Gemini round is accepted", r.code === 0, `${r.err}`);
+    const rec = JSON.parse(readFileSync(join(dir, "records", "security.json"), "utf8"));
+    check("the legacy record keeps its observed model", rec.model_version === "gemini-3.1-pro-preview");
+    check("the legacy record keeps its observed effort", rec.reasoning_effort === "high");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
 console.log("make-records: attestation integrity, which is why this script exists");
 rejects(
   "a lane that ran at the wrong effort cannot be attested",
@@ -186,6 +205,14 @@ rejects(
   "a lane that ran on the wrong model cannot be attested",
   (s) => { s.observed.rust.model = "claude-opus-5"; },
   /claude-opus-5|policy pins/i,
+);
+rejects(
+  "legacy model and current effort cannot be mixed",
+  (s) => {
+    s.observed.rust.model = "gemini-3.1-pro-preview";
+    s.observed.rust.reasoning_effort = "xhigh";
+  },
+  /legacy|compatibility pair|xhigh/i,
 );
 rejects(
   "a seat with no observed binding cannot be attested",

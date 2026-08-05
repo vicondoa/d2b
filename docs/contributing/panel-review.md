@@ -74,6 +74,15 @@ it. An unfounded finding drives a wrong change into the tree, so sustaining
 one to save face is worse than admitting the error; equally, a reviewer must
 not withdraw a valid finding merely because the integrator pushed back.
 
+The Copilot panel stages one canonical `review-request.md` for the whole
+roster and one `reviewer-notes/<seat>.md` file per reviewer. The request names
+the exact delta and full ranges, validation evidence, deliverable, finding
+threshold, no-rerun rule, and prior-verdict obligation. The integrator
+dispatches the exact generated `dispatch-prompt.txt` to every seat rather than
+reconstructing those instructions in ten free-form prompts. For a later
+review, staging fails unless the supplied previous tip matches the prior
+`address.json` and every seat's prior verdict is present.
+
 Any content change to the reviewed tree invalidates every prior sign-off in
 that phase, including sign-offs from reviewers whose focus the change did
 not touch. Those reviewers still re-report, but their prompt should scope
@@ -258,10 +267,11 @@ ranked. Read this ordering before wiring any harness.
    unanimous ten of ten, every record bound to the same
    `candidate_id`/`content_id`/`snapshot_sha256`, and provider/model/
    reasoning effort pinned to `github-copilot` /
-   `gemini-3.1-pro-preview` / `high`. The panel model is deliberately
+   `gpt-5.6-sol` / `xhigh`. The panel model is deliberately
    not the coding model, so a lane cannot both author a change and
    attest to it. There is no override, no force flag, and no partial
-   pass.
+   pass. Historical `gemini-3.1-pro-preview` / `high` request-record
+   sets remain accepted only as an exact compatibility pair.
    See [`docs/specs/ADR-046-validation-and-delivery.md`](../specs/ADR-046-validation-and-delivery.md)
    section 12.3.
 2. **The per-round phase panel** - the [Phase gate](#phase-gate) rule
@@ -293,8 +303,8 @@ onto a `panel-attest` record.
 
 To keep those records attestable, the reviewing agents must use the binding
 table in `.github/skills/d2b-panel-round/SKILL.md`. It pins each read-only
-lane to provider `github-copilot`, model `gemini-3.1-pro-preview`, reasoning
-effort `high`, and context tier `default`; the panel agent frontmatter also
+lane to provider `github-copilot`, model `gpt-5.6-sol`, reasoning effort
+`xhigh`, and context tier `default`; the panel agent frontmatter also
 restricts each seat to `view`, `grep`, and `glob`. A lane on any other
 binding produces a record `panel-attest` will reject, so do not let model or
 effort fallback silently downgrade a panel lane.

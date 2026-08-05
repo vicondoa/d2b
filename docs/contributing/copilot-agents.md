@@ -59,8 +59,8 @@ Iterate on the plan until the panel is unanimous. **That gate is what makes
 the next step safe to leave alone.**
 
 The `/speckit-*` steps run in the parent session. When that session is bound
-to `claude-opus-5` at `xhigh` with `long_context`, it already carries the
-architect binding and no dispatch is needed. When it is not, dispatch
+to `gpt-5.6-sol` at `xhigh` with the 1M `long_context` tier, it already carries
+the architect binding and no dispatch is needed. When it is not, dispatch
 `d2b-architect` explicitly for `specify` and `plan`.
 
 ## Executing it
@@ -161,14 +161,14 @@ sufficient with no `subagents` block in either scope.
 
 **Frontmatter `model` is kept even though the tables always pass it**, because
 the fallback behaviours differ and one is dangerous. An agent that omits
-`model` and is hand-invoked inherits the caller's model, so a panel seat would
-run on the architect's model and be attested as Gemini. An agent that pins it
-still runs Gemini and only loses the effort, which the record helper catches.
-One line per agent converts a false model attestation into something requiring
-two independent mistakes.
+`model` and is hand-invoked inherits the caller's model, so a panel seat could
+run on an unrelated parent binding. An agent that pins it still runs the panel
+model and only loses the effort, which the record helper catches. One line per
+agent converts a false model attestation into something requiring two
+independent mistakes.
 
 **The residual risk is the silent downgrade.** An unpinned panel lane runs at
-Gemini's default `medium` while a record attests `high`. That produces a
+the model default while a record attests `xhigh`. That produces a
 plausible-looking artifact rather than an error, which is the worst shape a
 failure can take on an attestation gate. Three layers defend it:
 
@@ -178,8 +178,9 @@ failure can take on an attestation gate. Three layers defend it:
 3. the record helper, which takes the **observed** effort as input and fails
    closed rather than defaulting to the policy string.
 
-`gemini-3.1-pro-preview` supports `low`, `medium` and `high` only, so `high`
-is both the policy and the ceiling for the panel.
+New panel work uses `gpt-5.6-sol` at `xhigh`. Existing
+`gemini-3.1-pro-preview` records at `high` remain readable as one exact
+compatibility pair; mixed model and effort pairs are rejected.
 
 ### Running check-bindings
 
@@ -224,6 +225,14 @@ byte-identical bytes:
 bash .github/skills/d2b-panel-round/scripts/stage-diffs.sh <base> <prev-tip> <round>
 node .github/skills/d2b-panel-round/scripts/make-records.mjs .scratch/panel/<round>
 ```
+
+Staging also writes `review-request.md`, `dispatch-prompt.txt`, and
+`reviewer-notes/<seat>.md`. The integrator edits the evidence and any
+seat-specific rebuttal, then dispatches every reviewer with the exact generated
+prompt. Later reviews fail closed unless `<prev-tip>` matches the previous
+recorded tip and every seat's prior verdict is available, so the incremental
+range and prior-finding instructions cannot be replaced by a free-form
+summary.
 
 Ten separate reviewers is a deliberate cost. This repository's own history is
 the argument: an early panel returned zero sign-offs with eleven high findings
