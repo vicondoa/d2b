@@ -1182,30 +1182,202 @@ sibling names, `bazel/cargo/.broker-workspace.txn.quarantine.0` through
 repository-relative, tells the contributor to re-run
 `cargo xtask bazel-repin --hub broker`, and does nothing else whatever.
 
+**The hub guard is argument validation and runs before anything is opened.**
+`--quarantine-transaction-state` is accepted only with `--hub broker`. Given
+any other member of ADR 0052's closed four-hub set, `main`, `guest` or
+`walker`, the command exits nonzero with the stable code `D2B-BZLTXN-HUB`,
+states that the flag is broker-only because no other hub has a transaction
+directory, and names
+`cargo xtask bazel-repin --hub broker --quarantine-transaction-state` as the
+only accepted form. That refusal is decided from the parsed arguments alone,
+strictly before the worktree root is opened, before `bazel/cargo` is resolved,
+before `.broker-workspace.txn` is resolved and before `lock` is opened. The
+ordering is the guard, not tidiness around it. There is exactly one
+transaction directory in this repository and it is the broker's, so a hub
+argument read after the sequence has begun does not select a different
+directory to quarantine, it quarantines the broker's; the lock is opened
+`O_RDWR | O_CREAT`, so a guard placed after that open creates
+`bazel/cargo/.broker-workspace.txn/lock` on a run that was never authorized to
+write anything; and a guard placed after the transaction directory is resolved
+is worse in the ordinary case than in the pathological one, because `ENOENT`
+on that name exits zero, so
+`cargo xtask bazel-repin --hub main --quarantine-transaction-state` would
+report success for a hub the flag is meaningless for. The guard is therefore
+the first thing this mode does, and the check that says so asserts against a
+fixture where a late guard would leave a trace.
+
 **Stated as the closed sequence it is.** Open the worktree root by ordinary
 `open`, because a contributor's worktree legitimately sits under symlinked
 ancestors (constraint 17). Resolve `bazel/cargo` beneath it with `openat2`
 under `RESOLVE_BENEATH | RESOLVE_NO_SYMLINKS | RESOLVE_NO_MAGICLINKS |
 RESOLVE_NO_XDEV`, opened `O_RDONLY | O_DIRECTORY | O_CLOEXEC` so that one
-descriptor is both the rename anchor and the fsync target. Resolve
-`.broker-workspace.txn` beneath it under the same four flags; `ENOENT` there
-is success and the command exits zero having written nothing, because it names
-a goal state and not an action. Resolve `lock` beneath the transaction
-directory, `O_RDWR | O_CREAT | O_CLOEXEC` at mode 0600, and take
-`F_OFD_SETLK` with `F_WRLCK`; `EAGAIN` means a generator or a repin is
-running, and the command names that lock path and the fact that another
-generator or repin holds it, and exits nonzero having touched nothing. Then
-`renameat2(RENAME_NOREPLACE)` from that anchor to that same anchor, at most
-four times and stopping at the first that returns 0, one
-`fsync` of it, which is one call rather than two because the source and the
-destination sit in the same directory, and the lock descriptor closes with the
-process. That is the whole of it. The flag is accepted only with
-`--hub broker`, since no other hub has a transaction directory. It reads no
+descriptor is the `fstatat` anchor, both rename anchors and the fsync target;
+using the one descriptor for all four is what keeps the parent from being
+swapped between the observation and the act. Then, at most three times:
+
+1. Resolve `.broker-workspace.txn` beneath that descriptor under the same four
+   flags, opened `O_RDONLY | O_DIRECTORY | O_CLOEXEC`. `ENOENT` is success and
+   the command exits zero having written nothing, because it names a goal
+   state and not an action. `ELOOP` or `ENOTDIR` means the name does not
+   denote a directory this command can bind; it refuses with
+   `D2B-BZLTXN-CONCURRENT` having moved and created nothing.
+2. Resolve `lock` beneath *that directory descriptor*, not by a two-component
+   path from the parent, opened `O_RDWR | O_CREAT | O_CLOEXEC` at mode 0600,
+   and take `F_OFD_SETLK` with `F_WRLCK`. `EAGAIN` means a generator or a
+   repin is running, and the command names that lock path repository-relative
+   and the fact that another generator or repin holds it, and exits nonzero
+   having touched nothing.
+3. `fstat` the directory descriptor and keep its `st_dev` and `st_ino` as the
+   witness. That is the identity of the directory whose lock is now held.
+4. `fstatat` the single component `.broker-workspace.txn` relative to the
+   anchored `bazel/cargo` descriptor with `AT_SYMLINK_NOFOLLOW`, and require
+   the same `st_dev`, the same `st_ino` and `S_ISDIR`. `ENOENT`, a different
+   identity, or a type that is not a directory is a mismatch.
+5. On a mismatch, close the lock descriptor, which releases the lock because
+   it is the only descriptor on that open file description, close the
+   directory descriptor, and start again at 1. What changed is which inode the
+   name denotes, so re-examining descriptors already held would re-derive the
+   same wrong answer; only a re-resolution converges.
+6. On a match, with no syscall between that `fstatat` and the rename other
+   than the rename itself, `renameat2(RENAME_NOREPLACE)` from that anchor to
+   that same anchor, over the four slots in ascending order and stopping at
+   the first that returns 0. `EEXIST` advances to the next slot and re-takes
+   the identity check of 4 first, so the observation is always the syscall
+   immediately preceding the rename it authorizes rather than merely the
+   first of the four. All four occupied is a terminal refusal and not a retry
+   trigger: the command lists the four slots repository-relative, leaves the
+   transaction directory where it is, and stops. `ENOENT` from the rename can
+   only be a source that vanished inside that window, since both anchors are
+   descriptors this command holds open; it consumes an attempt and returns
+   to 1.
+
+Then the postcondition below, then one `fsync` of the anchor, which is one
+call rather than two because the source and the destination sit in the same
+directory, then the lock descriptor closes with the process. Three attempts is
+the exact bound. One would turn a single benign interleaving into a refusal;
+no bound at all would turn a wedged script that keeps recreating the name into
+a hang, and a hang is the one failure a contributor cannot diagnose from a
+message. Three absorbs two interleavings and terminates. On exhaustion the
+command exits nonzero with `D2B-BZLTXN-CONCURRENT`, names
+`bazel/cargo/.broker-workspace.txn` repository-relative, states that the entry
+at that name changed under it, and has moved nothing and created nothing. It
+never renames on a mismatch, and no flag makes it. Otherwise the
+mode is what it was: it reads no
 manifest, no lock, no tracked path and no entry inside the directory it moves;
 it spawns no process at all and therefore no Bazel child; it sets none of the
 three repin environment names; it is not a Make target and no workflow, gate
 or build path may invoke it. It deletes nothing, ever, and there is no flag
 that makes it.
+
+**Why the lock was never the binding.** An open file description lock names an
+inode, not a name, and the same measurement that makes the recovery work makes
+an unchecked rename unsafe. Measured 2026-08-04 on Linux 7.0.10 with the
+worktree on ext4, unprivileged, by direct syscall from the same C probe shape
+constraints 14 through 19 use: a directory freshly created at
+`.broker-workspace.txn` after the previous one had been renamed onto a
+quarantine slot carried a different inode, and its own `lock` was a different
+file on which `F_OFD_SETLK` with `F_WRLCK` returned 0 while the lock on the
+moved directory's `lock` was still held by the same process; and
+`F_OFD_SETLK` on that moved directory's `lock`, reached through its new name,
+returned `EAGAIN`, which is the same lock reached by a different path. So a
+sequence that locks the transaction directory it resolved and then renames by
+name would, in the interleaving where its directory was quarantined by someone
+else and a repin then created a fresh one, rename the live transaction
+directory of a running repin that legitimately holds its own lock. That repin's
+`staged` tree, its journal and its hub-lock snapshot all leave the name its
+descriptors were opened against, its teardown installs the receipt inside a
+quarantine nothing reads, and the next ordinary run finds neither journal nor
+receipt. That is the failure this check exists for, and it is why the lock is
+necessary and not sufficient.
+
+The identity check is cheap and exact. Measured on the same probe: `fstat` on
+the directory descriptor and `fstatat` on the name with `AT_SYMLINK_NOFOLLOW`
+reported the same `st_dev` and `st_ino` while the name still denoted the
+locked directory; the descriptor's `fstat` reported that identity unchanged
+after the directory had been renamed, so the witness survives the very
+operation it is taken for; and `fstatat` on the old name afterwards returned
+`ENOENT`. `AT_SYMLINK_NOFOLLOW` is load bearing rather than hygienic: with a
+symlink to a directory planted at the name, `fstatat` with the flag reported a
+symlink and without it reported a directory, so the type half of the check
+means nothing without it. A regular file planted at the name reported a
+regular file. And the check has to exist at all because `renameat2` refuses
+none of those shapes: with that symlink planted,
+`renameat2(RENAME_NOREPLACE)` on the name returned 0 and moved the symlink
+itself rather than following it, so an unchecked rename files a symlink into a
+quarantine slot and prints success while the transaction directory is still
+wherever it was.
+
+This is not the stat-then-open pattern step 2 forbids. That rule forbids
+taking a decision from a name and then acting through a second resolution of
+the same name. Here the decision is taken from the descriptor that holds the
+lock, the `fstatat` is the last observation before the act rather than the
+thing the act trusts, and its only use is to refuse. It is also the smallest
+observation available: the name is a single component and the anchor is a
+descriptor, so there is no path walk for a symlinked ancestor to subvert, and
+opening the name a second time would buy nothing, because `renameat2` takes a
+directory descriptor and a name and has no form that takes the source as a
+descriptor.
+
+**After the identity match a cooperating writer cannot move it, and a
+non-cooperating one is bounded after the fact.** Every writer this decision
+authorizes takes `F_OFD_SETLK` with `F_WRLCK` on `lock` inside the transaction
+directory before touching it, and the only one of them that ever renames that
+directory is this quarantine mode. The ordinary repin and
+`cargo xtask gen-bazel` create the directory with `mkdirat` tolerating
+`EEXIST` and write inside it; neither moves it. So a second quarantine that
+resolved the inode this one witnessed must take the same lock on the same file
+and is refused `EAGAIN`, measured above through a second name for that same
+inode, and a second quarantine that resolved a different inode is not talking
+about this directory at all. That is the whole cooperating set, and after the
+match it is closed.
+
+A non-cooperating rename is a different matter and this record does not
+pretend to prevent it. A contributor's own `mv`, a backup tool, an editor
+performing an atomic save, or any process that honours no advisory lock, and
+git was already measured to be one, can replace the entry between the
+`fstatat` and the `renameat2`. No syscall closes that window. Measured on the
+same probe, `renameat2`'s flag set is exactly `RENAME_NOREPLACE`,
+`RENAME_EXCHANGE` and `RENAME_WHITEOUT`; an undefined flag bit returned
+`EINVAL`, and `RENAME_NOREPLACE | RENAME_EXCHANGE` returned `EINVAL`, so there
+is no form of the call that binds the source to an inode. A second lock one
+level up, on `bazel/cargo` itself, is rejected for the same reason rather than
+adopted: it would move the identical window one level up without removing it,
+because the writer this window is about is precisely the one that takes no
+lock, and it would add a persistent path outside the set invariant 12 closes.
+The window is therefore bounded after the fact rather than claimed away.
+
+Immediately after a `renameat2` that returns 0, the command `fstatat`s the
+slot it just wrote, relative to that same anchored `bazel/cargo` descriptor,
+with `AT_SYMLINK_NOFOLLOW`, and requires `st_dev`, `st_ino` and `S_ISDIR` to
+equal the witness. Measured, after a legitimate quarantine that check reported
+the witness identity exactly. When it does not, something other than the
+directory this command locked has been moved into the slot: the command exits
+nonzero with the stable code `D2B-BZLTXN-DISPLACED`, names the slot and
+`bazel/cargo/.broker-workspace.txn` repository-relative, reports that what it
+moved is not what it locked, and stops. It does not move it back. A restore
+would be a second unsynchronized rename with the identical defect, against a
+name whose content the command has just been shown it cannot predict; it would
+either succeed, putting back a directory the command has no evidence belongs
+there, or return `EEXIST` and leave two names and no report. Naming both paths
+and refusing is the fail-closed answer, and this postcondition is the
+difference between a corruption that is silent and one that is on the
+operator's screen with both paths in it.
+
+**Three stable codes, each naming only its own steps.** ADR 0052's rule that
+one generic remedy is wrong for at least one member of a refusal set applies
+here, so this mode refuses under exactly three static codes.
+`D2B-BZLTXN-HUB`: the flag was given with a hub other than `broker`; nothing
+was opened; re-run with `--hub broker`. `D2B-BZLTXN-CONCURRENT`: the entry at
+`bazel/cargo/.broker-workspace.txn` could not be bound to the directory this
+command locked within its three attempts, or does not denote a directory at
+all; nothing was moved and nothing was created; inspect that entry and re-run
+once no generator or repin is running. `D2B-BZLTXN-DISPLACED`: the rename
+returned 0 and the slot does not hold the witnessed directory; both paths are
+named and the operator inspects them before running anything else. The
+`EAGAIN` contention refusal is unchanged and keeps naming the lock path and
+the writer that holds it. None of the four prints an absolute path, a user
+identifier, a process identifier, or any byte read from inside the directory
+it refused over.
 
 **Why a rename rather than a stash or a classified removal.** The state these
 three refusals dispute is arbitrary: an unrecognized name can be any entry a
@@ -1878,6 +2050,37 @@ build as the control that proves the inventory can fail. The alternative guards
 are all worse: a stale-lock timeout guesses, a `--force` flag reopens the race,
 and a lock file carrying a pid is a lie as soon as the pid is reused.
 
+**A recovery that quarantines a live transaction.** This is the failure the
+quarantine mode itself makes possible, and it is the one the lock does not
+catch, because an open file description lock names an inode and the rename
+that files the directory away names a name. Run the quarantine, and in the
+window between it resolving `.broker-workspace.txn` and renaming it, let a
+second quarantine complete over the same directory and an ordinary repin
+create a fresh transaction directory at the vacated name. Measured, that fresh
+directory carries a different inode and a different `lock` file on which
+`F_OFD_SETLK` returned 0 while the first run's lock on the moved directory was
+still held, so the first run still believes it owns the name, and the rename
+it then issues moves the running repin's live transaction: its `staged` tree,
+its journal and its hub-lock snapshot all leave the name its descriptors were
+opened against, its teardown installs the receipt inside a quarantine nothing
+reads, and the contributor's next run finds neither journal nor receipt on a
+subtree that may already have been exchanged. Nothing else in this record
+would notice. The guard is the identity binding: `fstat` on the locked
+directory's descriptor for a witness, `fstatat` on the single-component name
+through the anchored parent with `AT_SYMLINK_NOFOLLOW` immediately before the
+rename, the same `st_dev`, the same `st_ino` and a directory type required, a
+mismatch releasing the lock and re-resolving within a bound of three attempts,
+and `D2B-BZLTXN-CONCURRENT` rather than a rename when the bound is spent. In
+the interleaving above the re-resolution lands on the live directory and is
+then correctly refused `EAGAIN` by the repin that holds its lock. What the
+binding cannot prevent is a rename by something that takes no lock, because
+measured on this kernel `renameat2`'s whole flag set is `RENAME_NOREPLACE`,
+`RENAME_EXCHANGE` and `RENAME_WHITEOUT` and no form of the call binds the
+source to an inode; that residue is caught after the fact by the postcondition
+`fstatat` on the slot, which requires the witness identity and refuses with
+`D2B-BZLTXN-DISPLACED` naming both paths rather than attempting a restore that
+would repeat the defect.
+
 **The privileged binary linking a library the broker lock never described.**
 Bind `//packages/d2b-priv-broker:d2b-priv-broker` to
 `//packages/d2b-contracts:d2b-contracts` instead of to its `-broker` variant,
@@ -2359,20 +2562,56 @@ integration can reach.
    that command alone, never the generated subtree, never
    `bazel/cargo/broker.lock`, and never a git command. That mode is the only
    recovery for transaction state and is bounded by what it does not do. It
-   resolves `bazel/cargo` and everything under it descriptor-relatively under
-   the four resolve flags, opens the transaction lock
-   `O_RDWR | O_CREAT | O_CLOEXEC` and refuses with the lock path named when
-   `F_OFD_SETLK` returns `EAGAIN`; it then renames the whole transaction
+   is accepted only with `--hub broker`, and that guard is decided from the
+   parsed arguments alone before the worktree root is opened, before
+   `bazel/cargo` or the transaction directory is resolved and before the lock
+   is opened, so an invocation naming `main`, `guest` or `walker` exits
+   nonzero with `D2B-BZLTXN-HUB` having created nothing, moved nothing and
+   opened nothing under the worktree. It resolves `bazel/cargo` and everything
+   under it descriptor-relatively under the four resolve flags through one
+   descriptor that is the `fstatat` anchor, both rename anchors and the fsync
+   target. It then binds the entry it is about to move to the directory it
+   holds the lock on, and never renames without that binding: resolve
+   `.broker-workspace.txn` beneath that descriptor
+   `O_RDONLY | O_DIRECTORY | O_CLOEXEC`; open the transaction lock
+   `O_RDWR | O_CREAT | O_CLOEXEC` beneath *that directory descriptor* and
+   refuse with the lock path named when `F_OFD_SETLK` returns `EAGAIN`;
+   `fstat` the directory descriptor for a witness `st_dev` and `st_ino`;
+   `fstatat` the single component `.broker-workspace.txn` relative to the
+   anchored parent with `AT_SYMLINK_NOFOLLOW` and require the same `st_dev`,
+   the same `st_ino` and a directory type immediately before the rename. An
+   absent name, a differing identity or a non-directory type releases the lock
+   by closing its only descriptor and retries from resolution, at most three
+   resolution attempts in total, after which the command exits nonzero with
+   `D2B-BZLTXN-CONCURRENT` having moved and created nothing; a name that does
+   not resolve to a directory at all refuses under the same code. Only on a
+   match does it rename the whole transaction
    directory onto the first free one of the four fixed sibling names
    `bazel/cargo/.broker-workspace.txn.quarantine.0` through
    `bazel/cargo/.broker-workspace.txn.quarantine.3` with
-   `renameat2(RENAME_NOREPLACE)`, fsyncs the shared parent, releases the lock,
+   `renameat2(RENAME_NOREPLACE)`, re-taking that identity check before each
+   slot attempt so the observation is always the syscall immediately preceding
+   the rename it authorizes, treating all four slots occupied as a terminal
+   refusal rather than a retry trigger, and treating `ENOENT` from that call
+   as an attempt consumed and a return to resolution. After a rename returns 0
+   it `fstatat`s the
+   slot through the same anchor with `AT_SYMLINK_NOFOLLOW` and requires the
+   witness identity and a directory type; on any difference it exits nonzero
+   with `D2B-BZLTXN-DISPLACED`, names the slot and the transaction path
+   repository-relative, and neither moves anything further nor attempts a
+   restore, because a restore is a second unsynchronized rename with the same
+   defect. Otherwise it fsyncs the shared parent, releases the lock,
    prints the quarantine path repository-relative and names re-running the
    ordinary repin. It reads no entry inside what it moves, removes nothing,
    spawns no process, writes nothing under `bazel/cargo/broker-workspace/`,
    `bazel/cargo/broker.lock` or any Cargo manifest or lock, exits zero without
    writing when the transaction directory is absent, and refuses without
-   moving anything when all four slots are occupied.
+   moving anything when all four slots are occupied. Its refusals carry
+   exactly the codes `D2B-BZLTXN-HUB`, `D2B-BZLTXN-CONCURRENT` and
+   `D2B-BZLTXN-DISPLACED` beside the unchanged `EAGAIN` contention refusal,
+   each naming only its own remedy, and none prints an absolute path, a user
+   identifier, a process identifier, or any byte read from inside the
+   directory it refused over.
 10. That command then spawns exactly one Bazel child under ADR 0052 section 3's
     scoped controls and derived output root. Two changed-path rules bound the
     result. The child may change only `bazel/cargo/broker.lock`, which is ADR
@@ -2407,11 +2646,15 @@ integration can reach.
     continuous-integration context, and no top-level shell gate. Its drift
     checks extend `test-drift`, which already exists for this class of
     staleness, and its transaction, recovery, residue, quarantine,
+    quarantine-identity, hub-guard,
     changed-path and lock-descriptor negatives
     are `#[test]`s in `packages/xtask`, running under the existing
     `rust-main-workspace-tests` surface against throwaway fixture repositories
     rather than the contributor's worktree; no new shell gate carries any of
-    them. No
+    them. The observation points those tests drive the quarantine's identity
+    binding through are a `#[cfg(test)]`-gated parameter of the library entry
+    point, so the shipped `xtask` binary carries no fault-injection surface
+    and the release CLI path constructs none. No
     gate, Make target, workflow, or Bazel invocation on the gate path generates
     a tracked artifact. The only writers of
     `bazel/cargo/broker-workspace/**` are `cargo xtask gen-bazel` and, for that
@@ -2803,6 +3046,100 @@ record merges. Each is a command and a verdict.
     `packages/d2b-priv-broker/Cargo.lock` are byte-identical before and after
     every one of them.
 
+    The identity binding is exercised at each fault point it exists for, and
+    the injection surface does not ship. These are in-crate `#[test]`s in
+    `packages/xtask` on the same throwaway fixture repositories, driving the
+    quarantine as a library entry point whose named observation points are a
+    `#[cfg(test)]`-gated parameter, so the release build of `xtask` carries no
+    injection surface at all; a grep of the non-`cfg(test)` build for that
+    parameter type returns nothing, and the release CLI path constructs none.
+    Six arms, each planting at a different point in the sequence and each
+    asserting a different outcome, with every identity assertion made on
+    `st_dev` and `st_ino` rather than on path strings.
+
+    Before the transaction directory is opened, the entry at
+    `bazel/cargo/.broker-workspace.txn` is replaced. With a symlink to a
+    directory, and with a regular file, the run exits nonzero with
+    `D2B-BZLTXN-CONCURRENT`, creates no quarantine slot, and leaves the
+    planted entry exactly where it is; the control is the third shape, an
+    unrelated directory, which is legitimately what the name denotes, so the
+    run quarantines it, the postcondition passes against that directory's own
+    inode, and the run exits zero.
+
+    Between the transaction directory being opened and the lock being taken,
+    and again after the lock is taken but before the identity check, the name
+    is repointed at a second directory. In both arms the lock is held on the
+    witnessed inode, because it was opened beneath that directory's
+    descriptor; the identity check reports the mismatch, the run releases the
+    lock and re-resolves rather than renaming, and no quarantine slot exists
+    at any point during the first attempt, which is asserted by an observer
+    the test drives inside the retry rather than only at the end. These two
+    arms are kept separate because the second is the state in which an
+    implementation that trusted the lock would consider itself safe.
+
+    Identity mismatch renewed on every attempt exhausts the bound. With the
+    test replacing the name with a fresh directory at each retry, the run
+    exits nonzero with `D2B-BZLTXN-CONCURRENT` after exactly three resolution
+    attempts, counted by the observation point rather than inferred, moves
+    nothing, creates no slot, and leaves `git status --porcelain` unchanged.
+    A bound that is not three fails this check in either direction.
+
+    A replacement landing after the identity check and before `renameat2` is
+    the only arm the postcondition exists for and it must fail loudly rather
+    than silently. With a second directory swapped in at that point, the
+    rename returns 0, the postcondition finds an inode that is not the
+    witness, and the run exits nonzero with `D2B-BZLTXN-DISPLACED`, names both
+    `bazel/cargo/.broker-workspace.txn` and the slot repository-relative,
+    leaves the moved entry in the slot rather than attempting a restore, and
+    does not touch the witnessed directory. A build with the postcondition
+    removed must make this arm pass silently, which is how the check proves
+    the postcondition is not dead code; reverted.
+
+    A fresh live transaction is never moved, which is the failure the whole
+    binding exists to prevent. The fixture is driven to the exact interleaving:
+    the run resolves and locks transaction directory T, the test then moves T
+    onto `.quarantine.0` and creates a fresh T2 at the name with its own
+    `lock`, a second holder takes `F_OFD_SETLK` on `T2/lock` as a running
+    repin would, and the run resumes. It must find the mismatch, release, and
+    re-resolve to T2, whereupon the lock is refused `EAGAIN` and it exits
+    nonzero naming `bazel/cargo/.broker-workspace.txn/lock`. Afterwards
+    `bazel/cargo/.broker-workspace.txn` still resolves to T2's inode,
+    `.quarantine.1` does not exist, and `.quarantine.0` still holds T's inode
+    with its entries intact. Running the same interleaving against a build
+    with the identity check removed must instead move T2 onto `.quarantine.1`,
+    which is the measured proof that the round-3 sequence had this defect and
+    that the check is what removes it; reverted.
+
+    The flag is broker-only and the guard runs before any worktree state is
+    touched. This is a later `#[test]` in `packages/xtask` on the same fixture
+    shape and it is a negative in all three of its arms. For each of `main`,
+    `guest` and `walker`, the closed four-hub set minus `broker`,
+    `cargo xtask bazel-repin --hub <name> --quarantine-transaction-state`
+    exits nonzero with `D2B-BZLTXN-HUB`, its message states that the flag is
+    broker-only and names
+    `cargo xtask bazel-repin --hub broker --quarantine-transaction-state` as
+    the only accepted form, and no quarantine slot exists afterwards. Two of
+    the three fixture states are what make the ordering mechanically
+    checkable rather than asserted. In the first, the transaction directory
+    exists and carries `published` but no `lock`: after the refused run,
+    `fstatat` on `bazel/cargo/.broker-workspace.txn/lock` must still return
+    `ENOENT`, which a guard placed after the `O_RDWR | O_CREAT` open could not
+    satisfy, and the directory's inode is unchanged. In the second, the
+    transaction directory is absent entirely: the run must still exit nonzero,
+    because a guard placed after the transaction directory is resolved would
+    take the absent-directory path and exit zero, reporting success for a hub
+    the flag is meaningless for. In the third, an ordinary transaction
+    directory with `lock` and `published` present is byte-identical
+    afterwards, entry by entry on name bytes, type and content, with its inode
+    unchanged. Across all three, `git status --porcelain` is byte-identical,
+    no Bazel process is spawned, no output base is created, and
+    `bazel/cargo/broker-workspace/**`, `bazel/cargo/broker.lock`,
+    `packages/d2b-priv-broker/Cargo.toml` and
+    `packages/d2b-priv-broker/Cargo.lock` are byte-unchanged. The control is
+    the same third fixture under `--hub broker`, which must exit zero and
+    quarantine it, so the arms prove the guard refuses rather than the fixture
+    being inert.
+
     The negatives are the remedies this record rejects, run against the same
     planted states, each asserted to leave the state uncleared, and each
     measured at git 2.54.0 before being written down. Against a planted
@@ -3012,5 +3349,29 @@ record merges. Each is a command and a verdict.
   four quarantine names, and `git status --porcelain` was byte-identical
   across the quarantine with a modified tracked file, an untracked file, an
   ignored `target/` output and a staged modification present
+- The identity-binding measurements of section 6: a third C probe run
+  2026-08-04 on Linux 7.0.10, unprivileged, with the worktree on ext4,
+  issuing `openat2` under the four resolve flags, `fstat`, `fstatat` with and
+  without `AT_SYMLINK_NOFOLLOW`, `fcntl(F_OFD_SETLK)` and `renameat2`
+  directly. Its arms: `fstat` on the transaction directory descriptor and
+  `fstatat` on the name agreeing on `st_dev`, `st_ino` and directory type
+  while the name still denotes the locked directory; that descriptor's
+  `fstat` reporting the same identity after the directory has been renamed
+  onto a quarantine slot, with `fstatat` on the old name then returning
+  `ENOENT` and `fstatat` on the slot returning the witness identity; a
+  directory freshly created at the vacated name carrying a different inode
+  and a different `lock` file on which `F_OFD_SETLK` with `F_WRLCK` returned
+  0 while the moved directory's lock was still held by the same process,
+  while `F_OFD_SETLK` on that moved directory's `lock` reached through its
+  new name returned `EAGAIN`; a symlink to a directory planted at the name
+  reported as a symlink by `fstatat` with `AT_SYMLINK_NOFOLLOW` and as a
+  directory without it, refused `ELOOP` by `openat2` under
+  `RESOLVE_NO_SYMLINKS`, and moved rather than followed by
+  `renameat2(RENAME_NOREPLACE)`, which returned 0; a regular file planted at
+  the name reported as a regular file; and the flag surface, where
+  `RENAME_NOREPLACE`, `RENAME_EXCHANGE` and `RENAME_WHITEOUT` are the whole
+  defined set, an undefined flag bit returned `EINVAL` and
+  `RENAME_NOREPLACE | RENAME_EXCHANGE` returned `EINVAL`, so no form of the
+  call binds the source to an inode
 - `specs/003-adr052-bazel-rust/contracts/workspace-and-tool-pinning.md`, the
   hub and repin contract this record leaves intact

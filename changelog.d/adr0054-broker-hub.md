@@ -73,7 +73,28 @@
   refusing the next run in the same way. It takes the same exclusion token a
   regeneration takes and declines to act while a regeneration is actually
   running, which the version-control command it replaces was measured not to
-  do. It prints where it put the state, so it stays readable in place, and
+  do. Holding that token is necessary and not sufficient, because it attaches
+  to the directory itself and not to the name the directory currently has: if
+  a second recovery sets that state aside while this one is starting, and an
+  ordinary regeneration then begins and creates fresh bookkeeping under the
+  same name, a recovery acting on the name alone would set aside the
+  bookkeeping of the regeneration that is running at that moment, taking its
+  record of what it had already done with it. So the recovery confirms,
+  immediately before it acts, that the name it is about to move still refers
+  to the exact directory whose token it holds, and starts over from the
+  beginning a small fixed number of times when it does not, stopping with its
+  own distinct message rather than moving anything. A rename by something that
+  takes no token at all cannot be prevented by any means the system offers, so
+  it is caught immediately afterwards instead: the recovery confirms that what
+  landed in the set-aside place is what it had claimed, and where it is not it
+  says so and names both places rather than trying to put anything back, since
+  putting it back would repeat the same defect against a name it has just been
+  shown it cannot predict. The recovery also applies only to the one
+  dependency set that has bookkeeping at all, and it decides that from its own
+  arguments before it opens anything in the working copy, because there is
+  only one such directory in the repository and a request naming a different
+  set would otherwise have set that one aside anyway. It prints where it put
+  the state, so it stays readable in place, and
   says to run the ordinary regeneration again. There is a small fixed number
   of places it will put state aside; once they are full it stops and says so
   rather than choosing for the contributor, and it never deletes anything or
