@@ -1573,6 +1573,24 @@
         }
       );
 
+      # Map each topical Nix-unit check to its per-file jobs for the hosted
+      # matrix. The selected runner evaluates these jobs one at a time rather
+      # than forcing one aggregate check graph in a single evaluator.
+      nixUnitCheckJobShards = forAllSystems (system:
+        let
+          pkgs = nixpkgsFor.${system};
+          nixUnitCorpus = nixUnitCorpusFor system;
+          jobsFor = files:
+            pkgs.lib.filterAttrs
+              (jobName: _:
+                builtins.elem
+                  "${pkgs.lib.removePrefix "case-" jobName}.nix"
+                  files)
+              nixUnitCorpus.fileJobs;
+        in
+        pkgs.lib.mapAttrs (_check: files: jobsFor files) nixUnitShardCaseFiles
+      );
+
       # One locked, evaluation-only inventory keeps both exact source case
       # names and the per-file job names together. Attr-name discovery does
       # not force any case expression.

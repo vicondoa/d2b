@@ -1372,7 +1372,7 @@ fn execution_manifest_schema_and_prose_agree_with_non_empty_discovery() {
         "execution-manifest-policy: Nix-unit emitter must use the evaluation-only nix-eval-jobs surface"
     );
     assert!(
-        nix_driver.contains("nixUnitJobShards.${system}")
+        nix_driver.contains("nixUnitCheckJobShards.${system}")
             && nix_driver.contains("builtins.getAttr \\\"${check}\\\" shards")
             && nix_driver.contains("selected_jobs_file")
             && nix_driver.contains("mapfile -t selected_jobs")
@@ -1391,6 +1391,7 @@ fn execution_manifest_schema_and_prose_agree_with_non_empty_discovery() {
             && !nix_jobs.contains("jobsFor")
             && !nix_jobs.contains("derivationName")
             && flake.contains("nixUnitJobs = forAllSystems")
+            && flake.contains("nixUnitCheckJobShards = forAllSystems")
             && flake.contains("nixUnitInventory = forAllSystems")
             && flake.contains("nixUnitCorpus.caseNames")
             && flake.contains("nixUnitCorpus.jobNames")
