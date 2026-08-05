@@ -1804,7 +1804,7 @@ and bind a profile onto a seat that is mandatory anyway.
 | `net-paths` | `networking` | `nixos-modules/network*.nix`, `nixos-modules/net.nix`, `nixos-modules/net-*.nix`, `packages/d2b-provider-network-local/**`, `packages/d2b-zone-routing/**`, `packages/d2b-realm-router/**`, `packages/d2b-realm-transport/**`, `docs/reference/inet-d2b-chains.md`, `docs/reference/host-egress-policy.md`, and any path whose basename contains `firewall`, `nftables`, `nft`, `bridge`, `vsock`, `dhcp`, `dnsmasq`, `dns`, `resolv`, `route`, `ifname`, `egress`, `mtu` or `networkmanager`, matched case-insensitively on the basename |
 | `net-tokens` | `networking` | changed line contains any of `nftables`, `iptables`, `AF_VSOCK`, `AF_INET`, `systemd.network`, `systemd-networkd`, `NetworkManager`, `169.254.`, `0.0.0.0`, `::/0`, `bind(`, `listen(`, `connect(`, `SO_BINDTODEVICE`, `resolv`, `/etc/hosts`, `masquerade`, `snat`, `dnat`, `forward`, `mtu`, `MTU`, `mss`, `MSS`, `TCPMSS`, `ip route`, `RTM_`, `gateway`, `default via` |
 | `kernel-paths` | `kernel` | `nixos-modules/minijail*`, `packages/d2b-priv-broker/**`, `packages/d2b-guest-shell-runner/**` |
-| `kernel-tokens` | `kernel` | changed line contains any of `pidfd`, `cgroup`, `clone3`, `unshare(`, `setns`, `seccomp`, `ioctl`, `openat2`, `RESOLVE_`, `MS_`, `/proc/`, `/sys/fs/cgroup`, `signal(`, `sigaction`, `signalfd`, `SIGKILL`, `SIGTERM`, `SIGCHLD`, `SIGPIPE`, `SA_RESTART`, `O_CLOEXEC`, `FD_CLOEXEC`, `fcntl(`, `F_OFD_`, `flock(`, `mount(`, `umount`, `MNT_`, `statx`, `renameat2`, `EXDEV`, `EINTR`, `EAGAIN`, `ENOSPC` |
+| `kernel-tokens` | `kernel` | changed line contains any of `pidfd`, `cgroup`, `clone3`, `unshare(`, `setns`, `seccomp`, `ioctl`, `openat2`, `RESOLVE_`, `MS_`, `/proc/`, `/sys/fs/cgroup`, `signal(`, `sigaction`, `signalfd`, `SIGKILL`, `SIGTERM`, `SIGCHLD`, `SIGPIPE`, `SA_RESTART`, `O_CLOEXEC`, `FD_CLOEXEC`, `fcntl(`, `F_OFD_`, `flock(`, `mount(`, `umount`, `MNT_`, `statx`, `renameat2`, `EXDEV`, `EMLINK`, `EEXIST`, `EINTR`, `EAGAIN`, `ENOSPC` |
 | `reliability-paths` | `reliability` | `packages/xtask/src/delivery/**`, `packages/d2bd/src/**`, `packages/d2b-priv-broker/src/**`, `packages/d2b-resource-store*/**`, `nixos-modules/store.nix`, and any path under `packages/*/src/**` whose basename contains `storage`, `state`, `lifecycle`, `session`, `shutdown`, `restart`, `pool`, `adopt`, `lock`, `lease`, `sync`, `reconcile`, `supervisor` or `cleanup` |
 | `reliability-tokens` | `reliability` | changed line contains any of `Drop for`, `tokio::spawn`, `thread::spawn`, `JoinHandle`, `Mutex<`, `RwLock<`, `Atomic`, `catch_unwind`, `rename(`, `fsync`, `O_TMPFILE`, `SCHEMA_VERSION`, `deny_unknown_fields`, `EBUSY` |
 | `agentic-paths` | `agentic` | `.github/agents/**`, `.github/prompts/**`, `.github/instructions/**`, `.github/skills/**`, `.github/copilot-instructions.md`, `scripts/copilot/**`, `.gc/**`, `**/AGENTS.md`, `**/*.formula.toml`, `**/pack.toml`, `**/prompt.template.md`, `docs/contributing/copilot-agents.md`, `docs/contributing/panel-review.md`, `docs/adr/0053-gascity-contributor-infrastructure.md`, `docs/adr/specs/0053-panel-prompt-sources.md` |
@@ -1813,6 +1813,20 @@ and bind a profile onto a seat that is mandatory anyway.
 | `software-shell-profile` | nobody; adds `shell` to `software.profiles` | `**/*.sh`, `**/*.bash`, any extensionless path whose parent directory is named `bin` or `tools`, or any path whose **interpreter fact** is `shell` or `undecidable` |
 | `software-nix-profile` | nobody; adds `nix` to `software.profiles` | `**/*.nix`, `flake.lock` |
 | `adr-0053-product-profile` | nobody; binds `product.profile = gascity` | `docs/adr/0053-*.md`, `docs/adr/specs/0053-*` |
+
+**Two hardlink errno tokens are added, and short I/O deliberately gets none.**
+`kernel-tokens` carries `EMLINK` and `EEXIST` beside `EXDEV`, because a
+content-addressed hardlink farm meets all three - the mount boundary, the
+per-inode link ceiling, and a name that already exists - and the seat that owns
+`link(2)`'s error set has to be seated when any of them appears in a changed
+line. Short reads and short writes get **no** token and the record says so
+rather than inventing one: the only candidate selectors are `read(` and
+`write(`, which match `.read(`, `write!(` and every buffered-I/O wrapper in the
+tree, so such a rule would fire on most of any Rust delta and carry no
+information at all. Short-transfer handling is therefore a prompt requirement
+the `kernel` seat applies whenever it is seated by some other rule, not a
+selector; a delta that reaches short-I/O code without seating `kernel` is a gap
+this record names rather than papers over.
 
 **The interpreter fact is a current-file classifier input, not a content
 rule.** This is the second correction of the added-line class, and it is a
@@ -2129,8 +2143,8 @@ holding the finding released itself. Closing that with a refusal of
 `relevant: false` from held seats was the obvious move and it is the wrong one,
 because it punishes an honest "I have nothing further" with a full extra round
 and contradicts the settled rule that a later `false` is ignored rather than
-rejected. The bypass closes on the **release condition** instead, and closing
-it needs a channel a gate can read.
+rejected. The bypass closes on the **release condition**, and on the record
+admission that feeds it, instead; closing it needs a channel a gate can read.
 
 `prior_resolutions` is that channel and it is not a second findings channel.
 Each entry is `{ finding_id, state }` where `finding_id` is one of the open
@@ -2154,7 +2168,12 @@ Record-local rules, now four, all rejections:
   **exactly**: one entry per open identifier, no duplicates, and no identifier
   the controller did not issue to this seat. Under-coverage, over-coverage and
   an unknown identifier are each invalid. A seat with no open prior findings
-  carries an empty list; that is the ordinary first-round case.
+  carries an empty list; that is the ordinary first-round case. **This rule
+  does not read `relevant`.** Coverage is checked against the identifier set
+  the controller issued, before any relevance normalization runs, so a later
+  `relevant: false` cannot shrink the obligation: the claim is accepted and
+  normalized as it always was, and the record is still refused when the
+  coverage is short.
 - A `not_resolved` entry requires a `recommendation` in the same record
   carrying that `finding_id` as its `supersedes` value, and a `resolved` entry
   forbids one. This is what keeps the two channels consistent with each other
@@ -2172,15 +2191,49 @@ one: admission parses the DTO into an **internal verdict type that cannot
 represent an inconsistent combination**, shaped as
 
 ```
-Pass     { declared: Relevant | NotRelevant, resolutions: ResolutionSet }
-Blocking { recommendations: NonEmpty<Recommendation>, resolutions: ResolutionSet }
+Pass     { declared: Relevant | NotRelevant, resolved: Set<FindingId> }
+Blocking { recommendations: NonEmpty<Recommendation>, resolved: Set<FindingId> }
+
+Recommendation { severity, where, what, why, fix, supersedes: Option<FindingId> }
 ```
 
-so `relevant: false` beside a recommendation, `signoff: true` beside a
-recommendation, and a `not_resolved` with no superseding recommendation are all
-unrepresentable after admission rather than merely rejected during it. The
-constructor is fallible, takes the seat's open-identifier set as an input, and
-is the only way to obtain the internal type. `EffectiveRelevance` is a separate
+`Blocking` carries no `declared` member, because `relevant: false` forces an
+empty recommendation set, so a blocking verdict is relevant by construction
+rather than by a field that could disagree with itself.
+
+**There is no internal `not_resolved` value, and that is the whole of the
+fix.** An earlier revision of this amendment gave both variants a shared
+`ResolutionSet` carrying the wire enum, which reproduced the forbidden state
+inside the type whose job was to forbid it: a `Pass` could hold a
+`not_resolved` entry with no recommendation anywhere in the record to supersede
+it, which is exactly the combination the DTO rules reject. The corrected type
+keeps only the **resolved** identifiers, as a set, and represents an unresolved
+prior finding **solely** as a `Recommendation` whose closed optional
+`supersedes` names the prior identifier. A `Pass` has no recommendations, so it
+has nowhere to put an unresolved finding, so a `Pass` that leaves one open is
+not a value that exists.
+
+The constructor is fallible, takes the seat's open-identifier set as its other
+input, and is the only way to obtain the internal type. It verifies an **exact
+partition** of that set:
+
+- every identifier in `resolved`, and every `supersedes` value, is a member of
+  the seat's open set, so an unknown identifier cannot enter either side;
+- no identifier appears twice - not twice in `resolved`, not in `resolved` and
+  as a `supersedes` value, and not as the `supersedes` value of two
+  recommendations;
+- every open identifier appears exactly once, in `resolved` or as the
+  `supersedes` value of exactly one recommendation, so under-coverage is a
+  refusal rather than a smaller obligation;
+- `Pass` therefore carries `resolved` equal to the whole open set, and
+  `Blocking` carries `resolved` plus one superseding recommendation for each
+  remaining identifier.
+
+So `relevant: false` beside a recommendation, `signoff: true` beside a
+recommendation, an unresolved prior finding with no superseding recommendation,
+an identifier that is both resolved and superseded, and a partial or unknown
+coverage of the open set are all **unrepresentable after admission** rather
+than merely rejected during it. `EffectiveRelevance` is a separate
 controller-owned type that no producer record can construct, which is what
 stops the derived value from being confused with the claimed one three call
 sites later.
@@ -2209,11 +2262,16 @@ effective_relevant(seat) = OR over every round k so far of
 
 Once true it never becomes false for that candidate lineage. A later
 `relevant: false` from a seat that has already latched is **recorded and
-normalized**: the record is admitted, the claim is stored verbatim, and the
-seat's effective relevance is the derived value, which is still true. It is not
-a rejection, because refusing
+normalized**: the claim is stored verbatim, and the
+seat's effective relevance is the derived value, which is still true. The claim
+is never
+a rejection reason, because refusing
 an honest "I have nothing further" would cost a round to punish a verdict that
-changes nothing. The ledger stores both the claim and the derived value, so the
+changes nothing. What the claim does not do is excuse the record from the
+record-local rules above: the record is admitted when its `prior_resolutions`
+partitions the seat's open findings exactly, and refused when it does not,
+whichever way `relevant` reads. The ledger stores both the claim and the
+derived value, so the
 divergence is visible rather than lost. **A session cannot opt a reviewer out
 by writing `relevant: false`**, which is the whole reason relevance is derived
 rather than asserted. Everything downstream - the roster, `held`, both relevance
@@ -2243,12 +2301,19 @@ a candidate lineage:
   seat does not have to remember them and the orchestrator does not get to
   choose which ones it is shown; both properties are the point.
 - **A normalized `relevant: false` from a held seat releases nothing by
-  itself.** Its effective relevance is true, so it stays in scope, and it
-  leaves `held` only by satisfying the same two-part condition every other
-  record satisfies. A held seat that genuinely has nothing further writes
-  `relevant: false`, `signoff: true` and a complete all-`resolved` resolution
-  set, which is a specific, attributable, gate-checkable claim about each prior
-  finding rather than a silence that reads like one.
+  itself, and an incomplete one is not admitted at all.** Its effective
+  relevance is true, so it stays in scope, and it leaves `held` only by
+  satisfying the same two-part condition every other record satisfies. A held
+  seat that genuinely has nothing further writes `relevant: false`,
+  `signoff: true` and a complete all-`resolved` resolution set, which is a
+  specific, attributable, gate-checkable claim about each prior finding rather
+  than a silence that reads like one. A held seat that writes `relevant: false`
+  with a short set is refused as `held-seat-unreleased` **before the round can
+  count the record**, so the honest case costs nothing and the incomplete case
+  never becomes part of a round at all. The refusal is a coverage refusal and
+  not a relevance refusal: the identical record with the coverage completed is
+  admitted, its claim recorded, its relevance normalized to true, and the seat
+  released.
 - A seat that has never been effectively relevant may be **rotated out** in a
   later round, subject to the composition invariants. A seat that has been
   effectively relevant and has not yet released may not.
@@ -2267,6 +2332,22 @@ a candidate lineage:
 - New specialists are added freely as fixes change the surface. Roster growth
   between rounds needs no justification beyond the trigger table.
 - Mandatory seats are never in the rotatable set at all.
+
+**A unanimous round leaves no held state, and the gate asserts that rather
+than deriving it.** The review loop terminates on unanimity and publication
+refuses on any unresolved or held state, so if those two conditions could
+disagree the loop would exit into a publication that is blocked forever with
+no round left in which to fix it. They cannot disagree, and the reason is
+admission order: coverage is verified before the record is counted, so a held
+seat's record either partitions its open set exactly or is refused and never
+enters the round. Every roster record carrying `signoff: true` therefore
+carries a complete all-`resolved` set, which is the release condition, so a
+unanimous round releases every held seat by construction. That is an argument,
+and an argument is not a control, so the gate **also checks the conclusion
+directly**: a record set that is unanimous while any seat remains in `held` is
+refused as `held-seat-unreleased`. The direct check is what catches a drifting
+or planted admission path, which is the only way the argument above can stop
+being true.
 
 **Every held reviewer judges its own prior findings before writing a new
 verdict, and now the judgement is structured.** A seat whose earlier record on
@@ -2370,7 +2451,9 @@ plainly because the alternative is a claim that does not survive contact.
   `prior_resolutions` and the superseding-recommendation rule; unanimity; that
   `held` is a subset of
   `roster`; that no seat in the dispatch record's `held` set was released
-  without both halves of the release condition; that the dispatch record's
+  without both halves of the release condition, **and that no record set is
+  unanimous while any seat remains held**, so the loop's exit condition and
+  publication's precondition cannot disagree; that the dispatch record's
   controller-derived effective-relevance
   set is consistent with the final round it is looking at, so a seat writing
   `relevant: true` cannot be absent from it; both relevance floors
@@ -2477,13 +2560,25 @@ with a wider hammer, or a suggestion to ask somebody.
 | `surface-class-disagreement` | The request's surface class differs from the trusted dispatch record's | Names both classes; the dispatch record is authoritative, so discard the request and re-request dispatch from the controller. A candidate whose class is in dispute has no defined floor and none is guessed |
 | `profile-binding-mismatch` | The dispatch record's bound profile set differs from `profiles(change_surface)` recomputed from the bound artifact, or a seat's review payload disagrees with the dispatch record | Names the bound set, the recomputed set and the seat; re-run controller dispatch against the current change-surface artifact. A stale binding is never accepted as the narrower of the two |
 | `review-payload-digest-mismatch` | A submitted review payload does not match the digest the dispatch record bound for that seat | Names the seat and both digests; re-dispatch that seat from the controller. The payload is controller-owned, so the remedy is never to re-submit an edited payload |
-| `held-seat-unreleased` | A held seat's record carries `signoff: true` with an incomplete `prior_resolutions` set | Names the seat and each open finding identifier left unjudged; re-run that seat with the full resolution obligation set and judge each identifier `resolved` or `not_resolved` |
+| `held-seat-unreleased` | A held seat's record leaves an open finding identifier unjudged, whatever it claims for `relevant`, or a record set is unanimous while a seat remains held | Names the seat and each open finding identifier left unjudged; re-run that seat with the full resolution obligation set and judge each identifier `resolved` or `not_resolved`. A `relevant: false` claim does not reduce the obligation: the claim is accepted and normalized, and the record is refused until the coverage is exact |
+| `prior-resolution-invalid` | A record's prior-finding judgement is malformed against the obligation set the controller issued: a closed `reason` names which class, and the message names every offending identifier | One row rather than four, because the operator action differs only by the `reason` the message carries. `unknown-identifier`: names the offending identifiers and the set actually issued to this seat; drop them, or re-run the seat against the review payload it was issued, since a producer cannot mint an identifier. `duplicate-identifier`: names each identifier judged more than once; judge each open identifier exactly once, either as a `prior_resolutions` entry or as one recommendation's `supersedes`, never both and never twice. `resolved-with-superseding-recommendation`: names the identifier and the recommendation; drop that recommendation if the finding is closed, or change the entry to `not_resolved` if it is not. `not-resolved-without-superseding-recommendation`: names the identifier; add the recommendation that supersedes it, or change the entry to `resolved` |
 | `held-seat-identity-substituted` | A held seat's pinned identity differs from the one that raised the open finding | Names the seat, the pinned binding and the submitted one; re-dispatch that seat under its pinned provider, model, effort and prompt digest |
 | `agent-file-mismatch` | `check-bindings.mjs` finds a pool member with no `panel-<role>.agent.md`, or a `panel-*` agent file with no pool member | Names both directions and the offending names; add the missing agent file, or delete the orphaned one, in the same commit as the pool change |
 | `generated-path-drift` | The versioned table's generated-path list differs from `drift_paths` in `tests/unit/gates/drift-check.sh` | Names the paths present on one side only; copy the current `drift_paths` array into the table and bump the table version, since the gate script owns the list and the table only mirrors it |
 | `change-surface-store-full` | The retained round-input store is at its cap and every remaining artifact belongs to an active candidate or an unresolved held reviewer | Names the lineages holding the space and `d2b-gc rounds list --active`; close or abort them through the controller's decision enum, or raise the configured size bound through a reviewed configuration change. Nothing active is evicted to make room |
 
-**Retention for the artifacts D21 adds is D17's contract, not a second one.**
+**Why incomplete coverage is not a fifth `reason` value.** The line between
+the two prior-resolution rows is the operator action, which is the axis the
+whole table is organized on. `prior-resolution-invalid` means the record is
+malformed against an obligation set the seat could have satisfied: the fix is
+to correct the record, and the seat may well have already done the work.
+`held-seat-unreleased` means the obligation is **unmet**: the seat still owes a
+judgement on a finding it raised, the fix is to re-dispatch that seat with its
+full obligation set, and no edit of the submitted record is a legitimate
+remedy. Folding them together would produce one error whose message has to
+tell an operator to do one of two incompatible things.
+
+
 Four persistent artifacts are new: the change-surface artifact, the roster
 artifact, the per-seat review payload, and the continuity ledger. They are
 classified into the two retention classes D17 already defines, rather than
@@ -3501,7 +3596,16 @@ The eight items below are added by the 2026-08-04 amendment and belong to D21.
   the `undecidable` rule, proving the bound over-binds rather than under-binds;
   a fixture whose extensionless file is a binary blob binds `{shell}` for the
   same reason; a fixture whose extensionless file begins `#!/usr/bin/env
-  python3` binds `{python}` and **not** `{shell}`; and a documentation fixture
+  python3` has `interpreter_fact = other` and binds the **empty** software
+  profile set, asserted exactly and in both directions: **not** `{shell}`,
+  because only `shell` and `undecidable` bind that profile, and **not**
+  `{python}`, because the interpreter fact is shell-only by decision and the
+  Python profile is bound by extension and by the named Python project files
+  alone. A planted classifier that binds either fails this item. That gap is
+  decided rather than overlooked: the four extensionless shebang files this
+  tree commits are all shell, so widening the interpreter fact to a second
+  language buys nothing today and is a separate table-version change when it
+  does. Finally, a documentation fixture
   whose `.md` body quotes `#!/bin/bash` inside a fenced block binds the
   **empty set**, proving prose is still excluded. A controller that cannot read
   the candidate snapshot raises `change-surface-snapshot-unreadable` and
@@ -3523,7 +3627,11 @@ The eight items below are added by the 2026-08-04 amendment and belong to D21.
 
   **Every typed error named by D21 is asserted to carry its remedy.** For each
   row of D21's typed-error table, the rendered message is asserted to contain
-  the operator action that row names, and a grep over the delivery crate
+  the operator action that row names, and for the one row whose message
+  branches on a closed `reason` enum, `prior-resolution-invalid`, **every**
+  reason value is exercised and asserted to render its own remedy, so a reason
+  that falls through to a generic string is caught. A grep over the delivery
+  crate
   asserts no refusal message contains a support-referral or
   contact-somebody phrase. A planted error whose message states only what went
   wrong, with no corrective action, is **rejected**.
@@ -3590,9 +3698,11 @@ The eight items below are added by the 2026-08-04 amendment and belong to D21.
   identifier is **refused**, since those fields are not the producer's to
   write; a record with `relevant: false` and a non-empty `recommendations` is
   **refused**; a `relevant: false` from a seat that already latched effectively
-  relevant is **accepted and normalized**, with the ledger showing both the
-  claim and the derived value `true`, and the seat still present on the next
-  round's roster;
+  relevant is **accepted and normalized** whenever its record covers that
+  seat's open findings exactly, with the ledger showing both the claim and the
+  derived value `true`, and every downstream reader - the roster, `held`, both
+  floors and the PR body - observed to use the derived value rather than the
+  claim;
   and a `relevant: false` from a seat that has never been relevant is
   **accepted** as a pass, after which that seat is observed to be rotatable out
   of a later roster while the composition invariants still hold.
@@ -3606,16 +3716,45 @@ The eight items below are added by the 2026-08-04 amendment and belong to D21.
   naming the second; one covering both as `resolved` **releases** the seat; one
   covering one `resolved` and one `not_resolved` carries a superseding
   recommendation, therefore `signoff: false`, and keeps the seat held; one
-  carrying a `not_resolved` with **no** superseding recommendation is refused;
-  one carrying `resolved` **and** a superseding recommendation for the same
-  identifier is refused; and one naming an identifier the controller never
-  issued to that seat is refused. The pivotal control is the last:
-  a round-two record from that seat carrying `relevant: false`,
-  `signoff: true`, empty `recommendations` and an **empty**
-  `prior_resolutions` is **accepted, normalized to effective relevance true,
-  and does not release the seat**, which is asserted by finding it on round
-  three's roster with both identifiers still open. A planted implementation
-  that releases on `signoff: true` alone fails this item.
+  carrying a `not_resolved` with **no** superseding recommendation is refused
+  as `prior-resolution-invalid` with reason
+  `not-resolved-without-superseding-recommendation`; one carrying `resolved`
+  **and** a superseding recommendation for the same identifier is refused with
+  reason `resolved-with-superseding-recommendation`; one judging the same
+  identifier twice, and one judging it once while a recommendation also
+  supersedes it, are each refused with reason `duplicate-identifier`; and one
+  naming an identifier the controller never issued to that seat is refused
+  with reason `unknown-identifier`. Every refusal asserts the reason value and
+  the exact offending identifiers in the rendered message, not merely that
+  admission failed.
+
+  The pivotal control is the pair that proves the coverage rule and the
+  relevance rule are different rules. A round-two record from that seat
+  carrying `relevant: false`, `signoff: true`, empty `recommendations` and an
+  **empty** `prior_resolutions` is **refused** as `held-seat-unreleased`
+  naming both open identifiers, and the test proves the refusal is about the
+  coverage rather than the claim by asserting that the same record with a
+  complete all-`resolved` set is **admitted**, records the `relevant: false`
+  claim verbatim, normalizes effective relevance to `true`, and **releases**
+  the seat. Normalization is then asserted where it is observable without
+  release, since a `relevant: false` that is admitted at all is one that
+  released: over a lineage in which one mandatory seat latched effectively
+  relevant in round one, a round-two set in which **every** mandatory seat
+  claims `relevant: false` **passes** the all-mandatory-irrelevant floor,
+  because the floor reads the derived value and that seat's derived value is
+  `true`, while the ledger and the rendered PR body carry the claim and the
+  derived value side by side. A planted implementation that releases on
+  `signoff: true` alone fails this item; so does one that refuses a held seat's
+  record for carrying `relevant: false` at all; and so does one that lets any
+  floor, roster or PR-body reader see the claim in place of the derived value.
+
+  **The loop's exit condition and publication's precondition are asserted to
+  agree.** Over the same lineage, a round in which every roster record carries
+  `signoff: true` is asserted to leave `held` **empty** for the next round,
+  and a planted record set that is unanimous while a seat is still held is
+  **refused** as `held-seat-unreleased` rather than sealed. Without this
+  control the loop can terminate on unanimity into a publication that refuses
+  forever, with no further round in which to fix it.
 
   A three-round lineage is then driven end to end: a seat returns a finding in
   round one, is present in rounds two and three under the same pinned seat
@@ -4198,10 +4337,19 @@ its finding unaddressed. Refusing such a record closes it and costs a full
 extra round every time a held seat honestly has nothing further to add, which
 is a real and common case, and it contradicts the settled rule that a later
 `false` is ignored rather than rejected. The chosen fix moves the control to
-the **release condition** instead: the record is still admitted, the claim is
-still recorded, relevance is still normalized to true, and the seat leaves
-`held` only on a true sign-off **plus** a complete structured resolution of
-every open finding the controller issued to it. That required adding a second
+the **release condition** and to **record admission**, neither of which reads
+the relevance claim: the claim is always accepted, always recorded, and always
+normalized to effective relevance true, while the record itself is admitted
+only when its `prior_resolutions` partitions the open identifier set exactly,
+and the seat leaves `held` only on a true sign-off **plus** a complete
+all-`resolved` set. The distinction is not cosmetic and the two rules refuse
+different records: a held seat writing `relevant: false` with complete
+coverage is admitted and released, and one writing `relevant: true` with short
+coverage is refused. A revision between the two got this wrong in the other
+direction by admitting the short record because its claim was `false`, which
+produced a unanimous round with a seat still held and a publication gate that
+could never open; coverage is therefore checked before the round counts the
+record, and the gate re-checks the conclusion. That required adding a second
 producer-written field, which an earlier revision explicitly declined to do on
 the grounds that `recommendations` was channel enough. It was not: a channel
 the gate cannot parse is not a control, and the cost of the extra field is one

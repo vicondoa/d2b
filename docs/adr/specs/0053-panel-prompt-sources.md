@@ -159,7 +159,7 @@ the boundaries; this is the operative restatement.
 | Agent profiles, instruction layering, prompt contracts, formula and pack mechanics, mechanical gates versus prompt-only assurances | `agentic` |
 | Module and option system, activation ordering, merge semantics and priority, eval-time assertions, structural option surfaces per RFC 42, NixOS-specific correctness | `nixos` |
 | Reachability delta, firewall posture, address and port allocation, MTU and MSS, routing, host network coexistence | `networking` |
-| Syscall and kernel interface semantics, version floors, race classes, descriptor inheritance and lock semantics, signal semantics, mount semantics, filesystem error cases | `kernel` |
+| Syscall and kernel interface semantics, version floors, race classes, descriptor inheritance and lock semantics, signal semantics, mount semantics, filesystem error and short-transfer cases | `kernel` |
 
 Four boundaries are stated again because they are the ones that will be got
 wrong:
@@ -175,8 +175,9 @@ wrong:
   afterwards. `kernel` owns whether the syscall was used correctly and what
   kernel version it needs, **including descriptor inheritance across `exec`,
   open file description versus POSIX record lock semantics, signal disposition
-  and restart behaviour, mount semantics, and which errno a filesystem call can
-  return**. `test` owns whether any of it is covered. The `kernel` and
+  and restart behaviour, mount semantics, which errno a filesystem call can
+  return, and whether a short read or write is accounted for rather than
+  assumed away**. `test` owns whether any of it is covered. The `kernel` and
   `reliability` line is drawn at the same file twice: whether `O_CLOEXEC` was
   set on the `open` is `kernel`'s, whether the descriptor is closed on the
   error branch three frames up is `reliability`'s; whether an OFD lock survives
@@ -240,10 +241,15 @@ the prompt restates only what the seat must do:
   thing of a skipped lane, a recorded reason rather than silence, and that is
   the one part of its design worth borrowing.
 - `relevant: false` is not an exit. A seat that was relevant earlier in the
-  same candidate stays on the roster whatever it writes later: the controller
-  normalizes the later claim to effective relevance true, records both values,
-  and keeps the seat held. Writing it is not an error and is not refused; it
-  simply does not release the seat.
+  same candidate does not leave the roster by writing it later: the controller
+  normalizes the later claim to effective relevance true and records both
+  values, so the claim by itself neither releases the seat nor takes it out of
+  scope. Writing it is not an error and is not refused. It is **not** a
+  reduction of the resolution duty either. A held seat that writes it still
+  owes the complete `prior_resolutions` set, and a record that is short is
+  refused before the round can count it, so the shortcut of declaring
+  irrelevance instead of judging the findings does not exist. What is refused
+  there is the missing coverage, never the `false`.
 - `signoff` is true if and only if `recommendations` is empty. A seat that
   wants to raise something it is not willing to block on has the summary for
   it.
@@ -274,20 +280,45 @@ The mechanics the prompt must state exactly:
 
 - The dispatch payload gives the seat its **own** open finding identifiers, and
   only its own. The seat does not mint, rename or retire an identifier, and a
-  record naming one it was not given is refused.
+  record naming one it was not given is refused as `prior-resolution-invalid`
+  with reason `unknown-identifier`, naming both the offending identifier and
+  the set actually issued.
 - Coverage is exact: every identifier given, once each, no others. An
-  incomplete set is refused with the missing identifiers named, so a seat that
-  answers three of four is told which one it skipped rather than silently
-  releasing.
+  incomplete set is refused as `held-seat-unreleased` with the missing
+  identifiers named, so a seat that answers three of four is told which one it
+  skipped rather than silently releasing. Judging the same identifier twice,
+  or judging it once while a recommendation also supersedes it, is refused as
+  `prior-resolution-invalid` with reason `duplicate-identifier`.
+- **Coverage does not read `relevant`.** The claim is always accepted and
+  always normalized; the coverage rule is evaluated against the identifier set
+  the controller issued, whatever the record claims. So `relevant: false` with
+  a short set is refused for the short set, and the same record with the
+  coverage completed is admitted, its claim recorded, and the seat released.
+  These are two rules
+  and the prompt states them as two: the seat is never refused for saying it
+  has nothing further, and never excused from saying what happened to each
+  finding it raised.
 - `not_resolved` requires a recommendation in the same record carrying that
-  identifier as its `supersedes` value. `resolved` forbids one. That is what
+  identifier as its `supersedes` value, and `resolved` forbids one; the two
+  mismatches are refused as `prior-resolution-invalid` with reasons
+  `not-resolved-without-superseding-recommendation` and
+  `resolved-with-superseding-recommendation`. That is what
   keeps `signoff` true if and only if `recommendations` is empty: any
   `not_resolved` produces a recommendation and therefore a false sign-off.
 - **A seat leaves the held set only on a true sign-off plus a complete
   all-`resolved` set.** A held seat with genuinely nothing further writes
   `relevant: false`, `signoff: true` and a complete all-`resolved` set, which
   is a specific claim about each finding rather than a silence that reads like
-  one. Writing the `relevant: false` without the resolutions releases nothing.
+  one. Writing the `relevant: false` without the resolutions releases nothing,
+  and does not produce an admitted record either.
+- **A unanimous round therefore leaves nobody held**, which is why the loop can
+  terminate at all. Because coverage is checked before a record joins a round,
+  every sign-off in a unanimous round carries a complete all-`resolved` set,
+  so the condition the loop exits on and the condition publication requires are
+  the same condition. The gate re-checks that directly and refuses a record set
+  that is unanimous while any seat remains held; the seat does not have to
+  reason about it, but it should know that a half-answered obligation costs a
+  round rather than slipping through.
 
 Two corollaries:
 
@@ -1423,7 +1454,7 @@ both prompts carry the split in the same words: how the expression reads is
 | Nixpkgs Manual | N M | T1 | <https://nixos.org/manual/nixpkgs/stable/> |
 | Nix Reference Manual | N M | T1 | <https://nix.dev/manual/nix/latest/> |
 | ADR 0015, daemon-only clean break | N | T1 | repository-local, and binding on any unit proposal |
-| `nixos-modules/assertions.nix` and the eval-time assertion row in `docs/contributing/critical-subsystems.md` | N | T1 | repository-local, and binding |
+| `nixos-modules/assertions.nix`, the eval-time assertion row in `docs/contributing/critical-subsystems.md`, and the matching case corpus at `tests/unit/nix/cases/assertions.nix` over the table in `tests/unit/nix/eval-cases/assertions.nix` | N | T1 | repository-local, and binding |
 | `AGENTS.md` critical-subsystem index, the net VM `lib.mkForce` row and the do-not-delete-an-assertion rule | N | T1 | repository-local, and binding |
 
 **Premade prompt assets: none exist, and this is a verified enumeration
@@ -1462,6 +1493,23 @@ that touches an option surface or an invariant:
   message misleads, fix the message. A delta that removes or narrows a
   predicate without an argument that the predicate was wrong is a blocking
   finding, and the finding names the invariant that stopped being checked.
+- **Does the new assertion have its case, in the file the repository names?**
+  `docs/contributing/critical-subsystems.md` states the rule outright: new
+  assertions need a matching case in `tests/unit/nix/cases/assertions.nix`.
+  That case file reuses the shared table in
+  `tests/unit/nix/eval-cases/assertions.nix`, so a new assertion lands as a new
+  row there carrying the message substring the rejected misconfiguration must
+  produce. A delta that adds, widens or re-predicates an eval-time assertion
+  with no matching case is a blocking finding, and the finding names the
+  assertion and that path rather than asking for "a test". The placement is
+  part of the finding: `tests/AGENTS.md` classifies this as a type 1 eval case
+  under `tests/unit/nix/cases/*.nix`, and proving the same invariant through a
+  full `nixosSystem` integration path instead buys the same coverage at the
+  heavy per-case evaluation cost the nix-unit corpus exists to avoid. Whether
+  the change as a whole is covered is `test`'s question; whether this
+  repository's assertion corpus gained the row its own rule requires is this
+  seat's, because the corpus is this seat's territory and the rule is
+  repository-local.
 - **Is the failure message actionable?** An assertion that fires and names no
   corrective action costs a consumer the same debugging session an unasserted
   invariant would have.
@@ -1639,6 +1687,9 @@ version assumptions, and Linux API edge cases.
 | `signal-safety(7)`, async-signal-safe function list | N | T1 | <https://man7.org/linux/man-pages/man7/signal-safety.7.html> |
 | `errno(3)`, for the filesystem and interruption error set | N | T1 | <https://man7.org/linux/man-pages/man3/errno.3.html> |
 | `rename(2)`, for its error semantics; the durability ordering stays `reliability`'s | N | T1 | <https://man7.org/linux/man-pages/man2/rename.2.html> |
+| `link(2)`, for `EXDEV`, `EMLINK` and `EEXIST` on the hardlink path | N | T1 | <https://man7.org/linux/man-pages/man2/link.2.html> |
+| `read(2)`, for short-read semantics in RETURN VALUE | N | T1 | <https://man7.org/linux/man-pages/man2/read.2.html> |
+| `write(2)`, for partial-write semantics in RETURN VALUE | N | T1 | <https://man7.org/linux/man-pages/man2/write.2.html> |
 | Kernel ABI stability documentation | N | T1 | <https://docs.kernel.org/admin-guide/abi.html> |
 | ADR 0008 and ADR 0011, the platform floor and the cgroup and pidfd contract | N | T1 | repository-local, and binding |
 | ADR 0034's `O_CLOEXEC` and OFD-lock requirement, restated in `AGENTS.md` | N | T1 | repository-local, and binding |
@@ -1687,16 +1738,63 @@ primitives serve; the split is restated in section 1.2 and in 3.1.
   states outright: only async-signal-safe functions are callable from a
   handler, per `signal-safety(7)`, and a blocking call that can return `EINTR`
   either has `SA_RESTART` or has an explicit retry loop, never neither.
-- **Filesystem and interruption error cases.** Every filesystem call in the
-  delta is checked against the errors it can actually return, with four named
-  because they are the ones handled wrongly most often here: **`EXDEV`**, which
-  makes a `rename` across a filesystem boundary fail rather than fall back, and
-  which matters because the hardlink farm requires `/var/lib/d2b` and
-  `/nix/store` on the same filesystem; **`EINTR`**, per the signals rule above;
-  **`EAGAIN`**, which is not an error on a non-blocking descriptor and is
-  frequently treated as one; and **`ENOSPC`**, which must leave the on-disk
-  state readable rather than half-written. A delta that maps any of the four
-  into a generic error without saying so is a finding.
+- **Filesystem, short-transfer and interruption error cases.** Every
+  filesystem call in the delta is checked against what it can actually return,
+  including the returns that are not errors at all.
+
+  **`EXDEV`, and the hardlink case is not the rename case.** Both `rename(2)`
+  and `link(2)` return `EXDEV` when the two paths are not on the same
+  **mounted filesystem**, and both man pages carry the same load-bearing
+  parenthetical: Linux permits a filesystem to be mounted at multiple points,
+  and neither call works across different mount points **even if the same
+  filesystem is mounted on both**, observed in man-pages 6.18 on 2026-08-04.
+  So "same filesystem" is the wrong test for either call and "same mount" is
+  the right one. Where the two differ is what a caller may do next. A `rename`
+  that fails `EXDEV` has a fallback, copy then unlink, and whether losing
+  atomicity for it is acceptable is `reliability`'s durability question rather
+  than this seat's. A `link` that fails `EXDEV` has **none**: `link(2)` states
+  that hard links cannot span filesystems and points at `symlink(2)` where that
+  is required, so the remedy is a layout change and never a retry. That matters
+  here because the hardlink farm needs `/var/lib/d2b` and `/nix/store`
+  reachable under **one mount**, and a delta that bind-mounts the store
+  elsewhere satisfies same-filesystem while breaking every `link` call. An
+  earlier revision of this document attributed `EXDEV` to `rename` alone while
+  citing the hardlink case, and stated the requirement as same-filesystem; both
+  were wrong and the correction is recorded rather than quietly applied.
+
+  **`EMLINK` and `EEXIST`, the two the hardlink farm meets next.** `link(2)`
+  returns `EMLINK` when the source inode already holds the maximum number of
+  links, 65,000 on an `ext4` filesystem without `dir_index` and 65,535 on
+  `btrfs` per the man page, which a farm keyed by content hash reaches on a
+  popular blob rather than never. It returns `EEXIST` when `newpath` already
+  exists, and it does **not** overwrite, so an idempotent re-link may treat
+  `EEXIST` as success only after proving the existing name is a link to the
+  same inode, and must treat it as a collision otherwise. Note that the two
+  calls disagree on `EEXIST` as well: for `rename(2)` it is the non-empty
+  destination directory case, and plain `rename` replaces an existing file
+  rather than refusing it.
+
+  **`EINTR`**, per the signals rule above; **`EAGAIN`**, which is not an error
+  on a non-blocking descriptor and is frequently treated as one; and
+  **`ENOSPC`**, which must leave the on-disk state readable rather than
+  half-written. A delta that maps any of these six into a generic error without
+  saying so is a finding.
+
+  **Short reads and short writes, which no errno check will catch.** A
+  successful `read(2)` may return fewer bytes than requested, and a successful
+  `write(2)` may transfer fewer bytes than `count`; both man pages say so in
+  RETURN VALUE, and `write(2)` names the remedy outright, call again for the
+  remainder. Neither is an error, so neither reaches an error branch, which is
+  why this is the filesystem defect class that survives review most often. The
+  prompt requires every `read` and `write` in the delta to be either a loop
+  that accounts for the returned count or a documented full-transfer helper,
+  and treats a discarded return value as a finding. **This requirement rides on
+  no trigger token, and the record says so** rather than pretending otherwise:
+  the only candidate selectors are `read(` and `write(`, which match `.read(`,
+  `write!(` and every buffered-I/O wrapper in the tree, so a token rule on them
+  would fire on nearly all of any Rust delta and select nothing. It applies
+  whenever this seat is seated by some other rule. Whether the bytes that did
+  land are durable stays `reliability`'s.
 
 **Anti-patterns and non-goals.** Citing distribution blog posts or
 administration guides for kernel semantics; asserting behaviour with no version
