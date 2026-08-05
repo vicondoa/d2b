@@ -440,7 +440,7 @@ for shard in "${nix_unit_shards[@]}"; do
   shard_status_file="$shard_dir/$shard.status"
   rm -f -- "$shard_result" "$shard_stderr" "$shard_status_file"
   (
-    nix-eval-jobs \
+    exec nix-eval-jobs \
       --no-instantiate \
       --flake "${flake_ref}#nixUnitJobShards.${system}.${shard}" \
       --workers 1 \
