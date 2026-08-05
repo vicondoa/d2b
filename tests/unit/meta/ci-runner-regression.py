@@ -1121,7 +1121,7 @@ printf '%s\n' "$sanitized_line"
         self.assertIn("shard_statuses=()", driver)
         self.assertIn("shard_workers", driver)
         self.assertIn("harvest_nix_unit_shard()", driver)
-        self.assertIn("settle_nix_unit_children()", driver)
+        self.assertIn("settle_nix_unit_process_group()", driver)
         self.assertIn("setsid nix-eval-jobs", driver)
         self.assertIn('kill -TERM -- "-$pid"', driver)
         self.assertRegex(

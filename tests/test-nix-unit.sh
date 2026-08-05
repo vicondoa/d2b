@@ -470,6 +470,11 @@ run_nix_unit_shard() {
   rc=$?
   set -e
   kill -TERM -- "-$pid" 2>/dev/null || true
+  if ! settle_nix_unit_process_group "$pid"; then
+    printf '%s\n' 1 >"$shard_status_file"
+    shard_status=1
+    return 1
+  fi
   printf '%s\n' "$rc" >"$shard_status_file"
   [ "$rc" -eq 0 ] || shard_status=1
 }
@@ -482,18 +487,17 @@ harvest_nix_unit_shard() {
   set -e
   printf '%s\n' "$rc" >"$status_file"
   [ "$rc" -eq 0 ] || shard_status=1
-  settle_nix_unit_children
 }
 
-settle_nix_unit_children() {
-  local attempt
+settle_nix_unit_process_group() {
+  local process_group="$1" attempt
   for attempt in $(seq 1 50); do
-    if ! pgrep -P "$$" >/dev/null 2>&1; then
+    if ! kill -0 -- "-$process_group" 2>/dev/null; then
       return 0
     fi
     sleep 0.1
   done
-  fail "nix-unit shard left a child process after evaluator exit; refusing to start the next shard"
+  fail "nix-unit shard process group $process_group did not exit; refusing to start the next shard"
   return 1
 }
 
@@ -510,7 +514,6 @@ for shard in "${nix_unit_shards[@]}"; do
   if [ "$shard_workers" -eq 1 ]; then
     run_nix_unit_shard \
       "$shard" "$shard_result" "$shard_stderr" "$shard_status_file"
-    settle_nix_unit_children
   else
     (
       run_nix_unit_shard \

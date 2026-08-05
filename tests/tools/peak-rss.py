@@ -60,6 +60,24 @@ def process_rss_kib(root: int) -> int | None:
     seen = False
     for pid in proc_pids(root):
         try:
+            rollup = (
+                pathlib.Path("/proc") / str(pid) / "smaps_rollup"
+            ).read_text(encoding="ascii")
+        except OSError:
+            rollup = None
+        if rollup is not None:
+            rollup_seen = False
+            for line in rollup.splitlines():
+                if line.startswith("Pss:"):
+                    fields = line.split()
+                    if len(fields) >= 2:
+                        total += int(fields[1])
+                        seen = True
+                        rollup_seen = True
+                    break
+            if rollup_seen:
+                continue
+        try:
             status = (pathlib.Path("/proc") / str(pid) / "status").read_text(
                 encoding="ascii"
             )
@@ -139,7 +157,10 @@ def format_kib(value: int) -> str:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Run a command with an aggregate process-tree/cgroup RSS ceiling."
+        description=(
+            "Run a command with an aggregate process-tree/cgroup resident "
+            "memory ceiling."
+        )
     )
     parser.add_argument("--lane", required=True)
     parser.add_argument("--max-kib", required=True, type=int)
