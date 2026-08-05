@@ -18,8 +18,15 @@
   splice the standalone `packages/d2b-priv-broker` workspace directly, because
   its first-party path dependencies are members of the separate main
   workspace. That record leaves the four-hub set, the three authoritative
-  Cargo locks, `skip_cargo_lockfile_overwrite = True`, the repin contract and
-  invariant 2 unchanged; it reverses and supersedes nothing here.
+  Cargo locks, `skip_cargo_lockfile_overwrite = True` and invariant 2
+  unchanged. It adds exactly one precondition to the section 3 repin command:
+  `cargo xtask bazel-repin --hub <name>` first checks that the generated
+  inputs the named hub reads are what `cargo xtask gen-bazel` would emit, and
+  refuses before spawning Bazel when they are not, because the post-run
+  changed-file rule is about what a run wrote and cannot see a stale input.
+  That command's required hub argument, its scoped child environment, its
+  single output base and the changed-file rule itself are unchanged; the
+  record reverses and supersedes nothing here.
 - Related: [ADR 0009](0009-rust-toolchain-msrv-and-supply-chain.md) (Rust
   toolchain, MSRV, and supply-chain policy), which keeps its authority
   unchanged and is not superseded;

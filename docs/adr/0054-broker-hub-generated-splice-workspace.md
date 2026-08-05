@@ -3,7 +3,7 @@
 - Status: Proposed
 - Date: 2026-08-04
 - Related: [ADR 0052](0052-bazel-rust-build-and-test.md) (Bazel as the Rust
-  build and test scheduler), whose sections 2, 3 and 4 and invariant 2 this
+  build and test scheduler), whose sections 2, 3, 4 and 5 and invariant 2 this
   record refines without reversing anything in them;
   [ADR 0009](0009-rust-toolchain-msrv-and-supply-chain.md) (Rust toolchain,
   MSRV and supply-chain policy), whose independent per-lock `cargo-deny` and
@@ -190,11 +190,45 @@ output.
     copy of `packages/d2b-priv-broker/Cargo.lock`. Measured on the real tree,
     not on the reproduction.
 
+12. **The broker workspace has exactly one member, and the broker suites test
+    only that member.** `cargo metadata --manifest-path
+    packages/d2b-priv-broker/Cargo.toml --format-version 1 --no-deps
+    --offline` reports one entry in `workspace_members` and one in
+    `workspace_default_members`, `d2b-priv-broker`, whose package declares one
+    `lib` target, one `bin` target and thirteen `test` targets. The three
+    `rust-broker-*` surfaces in ADR 0052 section 5 are
+    `cargo test --workspace --manifest-path
+    packages/d2b-priv-broker/Cargo.toml` under three feature sets
+    (`tests/test-rust.sh` lines 506, 509 and 512), and `--workspace` on that
+    manifest selects that one member. The five path-dependency crates' test
+    targets are not built and not run by the broker suites today; they belong
+    to `rust-main-workspace-tests`. Together with constraint 6 this fixes what
+    a broker-hub first-party target may be: a test target for `d2b-core` needs
+    `regex` and one for `d2b-host` needs `ttrpc`, and neither crate is in the
+    authoritative broker lock at all.
+
+13. **The hub's staleness check covers only the manifests the hub names, and
+    the splice runs only once a repin is already required.** Read from the
+    fetched 0.73.0 source. `determine_repin` in
+    `crate_universe/private/generate_utils.bzl` calls `cargo-bazel query`,
+    which recomputes `Digest::new` over the committed hub lock's own context,
+    the generated config, a `SplicingMetadata`, and the `cargo`, `rustc` and
+    `cargo-bazel` versions. `SplicingMetadata::try_from` reads and parses the
+    file contents of exactly the manifests named in the hub's `manifests`
+    attribute and nothing else, and `crate_universe/extensions.bzl` performs
+    the splice inside `if repin:`. So for a hub whose `manifests` attribute is
+    one generated workspace root, a stub manifest beneath that root is outside
+    the digest, does not trigger a repin, and is not read at all on an
+    ordinary build. The substrate does not notice that the generated tree
+    moved.
+
 Constraints 1 and 2 are the two committed experiments. Constraints 3, 4 and 6
 together rule out every arrangement that splices the real first-party
 manifests. Constraint 8 rules out serving the broker from the main hub or
 mixing hubs. Constraint 10 rules out waiting. Constraint 11 fixes what the
-generator must read.
+generator must read. Constraint 12 fixes which targets a broker-hub first-party
+variant may carry. Constraint 13 fixes where generated-tree staleness has to be
+caught, because the substrate does not catch it.
 
 ### Drift noted, not corrected
 
@@ -332,15 +366,17 @@ The generator fails closed, by name, in three cases a stub cannot represent:
   --locked --offline` and requires exit zero. This proves the generated tree's
   resolution is exactly the authoritative broker lock, needs no network and no
   Bazel, and runs on every pull request rather than only when someone repins.
-- **The substrate's own refusal.** `cargo xtask bazel-repin --hub broker`
-  cannot produce a hub from a tree whose resolve differs from the lock,
-  because constraint 4's `--locked` metadata pass refuses first. This is the
-  backstop, not the primary gate, because repins are rare.
+- **The substrate's own refusal.** A repin cannot produce a hub from a tree
+  whose resolve differs from the lock, because constraint 4's `--locked`
+  metadata pass refuses first. This is the last backstop and not a gate: it
+  fires only on a repin, only on a difference the resolve realizes, and by
+  constraint 13 it never sees a stub whose edges moved without moving a
+  version. Section 6's preflight stands in front of it.
 
 The first two are stated as a pair deliberately. Version drift and feature
 drift are different failures and neither gate catches both.
 
-### 6. Ordering, and the one place the order is load-bearing
+### 6. Ordering, and the preflight that makes the order enforceable
 
 Changing a dependency of the broker or of any crate in its closure is:
 
@@ -348,21 +384,65 @@ Changing a dependency of the broker or of any crate in its closure is:
 2. `cargo xtask gen-bazel`;
 3. `cargo xtask bazel-repin --hub broker`.
 
-Step 2 before step 3 is binding. A repin run against a stale generated tree
-either splices the old dependency set into the hub lock or refuses under
-constraint 4; the first outcome is silent and the second is confusing. The
-repin command's existing rule, that it fails when any tracked file other than
-the named hub's Bazel-side lock changed, now also protects the generated tree:
-a contributor who skips step 2 gets a refusal naming a changed file rather
-than a wrong hub.
+Step 2 before step 3 is binding, and the repin command enforces it itself
+rather than leaving it to a convention or to a diff taken afterwards.
 
-### 7. Two first-party target sets, named
+**The preflight.** Before it constructs any Bazel command line,
+`cargo xtask bazel-repin --hub <name>` regenerates the generated inputs that
+hub reads into a scratch tree and byte-compares them against the tracked ones,
+which is the `cargo xtask gen-bazel --check` comparison narrowed to one hub's
+inputs. For `broker` those inputs are `bazel/cargo/broker-workspace/**`,
+including the lock mirror; for the other three hubs the set is empty today and
+the preflight is a no-op that still runs. On any difference the command exits
+nonzero, names the first differing path and names `cargo xtask gen-bazel` as
+the remedy, and returns before it spawns Bazel: no Bazel process starts, no
+server starts, no output base is created, and `CARGO_BAZEL_REPIN` and
+`CARGO_BAZEL_REPIN_ONLY` never enter any child environment. The preflight only
+reads and compares. It never regenerates the tracked tree on the contributor's
+behalf, because a repin that quietly fixes its own inputs makes the state it
+was supposed to refuse unobservable.
 
-The five crates in the broker's closure are compiled twice, once against
-`@main//` for the main workspace and once against `@broker//` for the broker's
-three feature suites. This is forced by constraint 8, not chosen: the two locks
-resolve different versions of crates those five crates depend on, so a single
-compilation would be wrong for one of the two consumers.
+**The changed-file check is preserved and is a different check.** After the
+Bazel child exits, the command still fails when any tracked file other than
+the named hub's Bazel-side lock changed. That check is about what the run
+wrote, and it keeps its own job: it is what catches a regression in
+`skip_cargo_lockfile_overwrite` rewriting an authoritative `Cargo.lock`
+(constraint 5) or a second hub's lock moving. It cannot substitute for the
+preflight, because a stale input is not something the run writes. The repin
+reads the generated tree, renders a hub from it, and writes exactly
+`bazel/cargo/broker.lock`, so the post-check sees exactly the one change it
+permits and passes while the hub is wrong.
+
+**The specific ordering hazard.** Skipping step 2 outright is not the shape
+that survives review, because `test-drift` fails on the stale tree and names
+`cargo xtask gen-bazel` as the remedy. The dangerous shape is what obeying that
+remedy produces, which is step 2 run late:
+
+1. edit a manifest in a way that moves no resolved version, for example enable
+   a feature on an existing dependency or change a `[features]` default;
+2. `cargo xtask bazel-repin --hub broker`, which renders the hub from the
+   previous generated tree;
+3. `cargo xtask gen-bazel`, which brings the tree up to date;
+4. commit.
+
+Every gate is then green. `gen-bazel --check` passes, because the tree matches
+the manifests. The offline `cargo metadata --locked` passes, because the
+resolve did not move and the mirror still matches the lock. Constraint 4 never
+fires, for the same reason. `determine_repin` passes on every later build,
+because by constraint 13 the stub manifests are outside the hub digest and the
+splice never re-runs. The committed `bazel/cargo/broker.lock` is the only wrong
+artifact, and it renders the broker's crates with a feature set Cargo would not
+produce. The preflight closes this by construction: at step 2 the tree is
+stale, so the command refuses, and there is no order in which a hub lock gets
+written from a tree the repository has since replaced.
+
+### 7. Two first-party library sets, and one place the tests live
+
+The five crates in the broker's closure are compiled twice **as libraries**,
+once against `@main//` for the main workspace and once against `@broker//` for
+the broker's three feature suites. This is forced by constraint 8, not chosen:
+the two locks resolve different versions of crates those five crates depend
+on, so a single compilation would be wrong for one of the two consumers.
 
 The generator emits the broker-hub variant beside the main-hub one in the same
 Bazel package, suffixed `-broker`: `//packages/d2b-contracts:d2b-contracts` and
@@ -371,10 +451,84 @@ Bazel package, suffixed `-broker`: `//packages/d2b-contracts:d2b-contracts` and
 coverage map so an unmapped variant fails analysis rather than being merely
 absent.
 
-Binding a broker target to a main-hub first-party library is forbidden. A
-graph check derived from the coverage map asserts that no target reachable
-from a `-broker` variant depends on a `@main//` spoke, and no target reachable
-from a main-hub variant depends on a `@broker//` spoke.
+**A `-broker` variant is a library target and nothing else.** It carries no
+`rust_test`, no `rust_doc_test`, and belongs to no test suite. The tests of the
+five closure crates stay on their main-workspace variants under
+`rust-main-workspace-tests`, which is where they run today.
+
+This falls out of constraint 6 rather than being a preference. A test target
+for `d2b-core` needs `regex` and one for `d2b-host` needs `ttrpc`; neither is
+in the authoritative broker lock, because Cargo does not resolve a non-member
+path dependency's dev-dependencies. A `-broker` test target therefore demands
+crates the broker hub does not contain and cannot be rendered from it at all.
+The only two ways to obtain them would be to make the five crates members of
+the generated workspace, which constraint 4 refuses because the authoritative
+lock would no longer satisfy the tree, or to reach into `@main//` for the
+missing dev-dependencies, which is exactly the version mixture the isolation
+check below forbids.
+
+It is also parity rather than a reduction, and that is constraint 12: the
+broker workspace has one member, the three `rust-broker-*` surfaces are
+`cargo test --workspace` on that manifest, and the five closure crates' test
+targets are not built by those surfaces today. Rendering them under Bazel
+would add a surface, not preserve one, and it would be a surface with no
+identifier and no census row in the coverage map.
+
+The rule the generator applies is derived, not hard-coded, and it is the same
+membership rule section 3 applies to dev-dependencies: **a package compiled
+against the broker hub carries test targets if and only if it is a member of
+the broker Cargo workspace.** Today that is exactly `d2b-priv-broker`, whose
+one lib, one bin and thirteen test targets its own lock supports, and which
+needs no suffix because it has no main-hub variant. If the broker workspace
+ever gains a member, that member's tests come with it and its stub keeps its
+dev-dependencies, and nothing about the five path-dependency crates changes.
+
+**Isolation is checked over first-party targets directly.** The generator
+emits the two target sets it created, and the check reads those sets rather
+than re-deriving them from label text:
+
+- **B**, the broker set: every target of a package that is a member of the
+  broker Cargo workspace, today `//packages/d2b-priv-broker:*`, plus every
+  `-broker` variant it emitted.
+- **M**, the main set: every other first-party Rust target in the repository.
+
+Two conditions over Rust compile and link edges, meaning the `deps` and
+`proc_macro_deps` a target declares, transitively:
+
+- the first-party portion of `deps(B)` is a subset of `B`;
+- the first-party portion of `deps(M)` is a subset of `M`.
+
+In words: no target reachable from a `-broker` variant may depend on an
+unsuffixed first-party variant, and no main-hub variant may depend on a
+`-broker` variant. A runfiles or `data` edge from a main-workspace test to the
+broker *binary* is not a compile edge and is not restricted: it spawns a
+separate process rather than linking one lock's compilation into the other's
+graph. Source-file edges are likewise out of scope, which is what the existing
+policy tests that read `packages/d2b-priv-broker/src` take.
+
+Both conditions are evaluated primarily over the generator's own emitted
+compile-edge map, because both graphs are generated: every `deps` and
+`proc_macro_deps` entry written for a target in B names a label in B or an
+`@broker//` spoke, and every such entry written for a target in M names a
+label in M or an `@main//` spoke. That check needs no Bazel server and is
+total over the class of edge that matters. A `bazel query` over library kinds
+confirms it against the analysed graph. Reading emitted sets rather than
+matching `-broker$` over labels is deliberate: a first-party crate
+legitimately named for the broker would match the pattern and a variant the
+generator failed to emit would not, so a label regex is a heuristic where an
+emitted set is a fact.
+
+The third-party form of the same idea, that no target reachable from a
+`-broker` variant depends on a `@main//` spoke and no main-hub target depends
+on a `@broker//` spoke, is retained as a supplemental assertion. It is not the
+proof and must not be the only check, because it detects a wrong first-party
+edge only when the crate on the far side of that edge happens to have a
+third-party dependency. Today all five do; `d2b-realm-core` has two, `serde`
+and `schemars`. Nothing forbids a first-party crate with none, a new leaf crate
+is the likely shape of one, and against that crate the spoke check silently
+proves nothing while the direct check still names the edge. The spoke check
+also names the wrong thing when it does fire: it reports a third-party alias
+resolved from the wrong hub, not the first-party dependency that put it there.
 
 ## Consequences
 
@@ -389,15 +543,21 @@ manifests, six empty `src/lib.rs` files, one lock mirror, one `BUILD.bazel`.
 Measured at 139 lines of manifest for the real closure. All generated, all
 drift-checked, none authored.
 
-**Repin surface.** Unchanged in shape. `cargo xtask bazel-repin --hub broker`
-still touches exactly one Bazel-side lock, still refuses ambient repin
-controls, and still scopes `CARGO_BAZEL_REPIN_ONLY` to one child process. Its
-input set gains the generated tree.
+**Repin surface.** One added precondition and no other change in shape.
+`cargo xtask bazel-repin --hub broker` still touches exactly one Bazel-side
+lock, still refuses ambient repin controls, and still scopes
+`CARGO_BAZEL_REPIN_ONLY` to one child process. Its input set gains the
+generated tree, and section 6's preflight refuses before spawning Bazel when
+that tree is not what `cargo xtask gen-bazel` would emit. This is the only
+refinement this record makes to ADR 0052 section 3's repin contract.
 
-**Build cost.** Five first-party libraries and their test targets compile twice.
-The duplicate third-party compilation, up to eighty-four crates shared between
-the main and broker locks at identical versions, is pre-existing under the
-four-hub design and is neither created nor removed here.
+**Build cost.** Five first-party libraries compile twice. Their test targets
+compile once, against the main hub, exactly as they do today: section 7 makes
+the `-broker` variants library-only, so this decision adds no test target
+anywhere. The duplicate third-party compilation, up to eighty-four crates
+shared between the main and broker locks at identical versions, is
+pre-existing under the four-hub design and is neither created nor removed
+here.
 
 **Discoverability cost, and it is real.** There is now a directory that looks
 like a Cargo workspace, resolves like the broker workspace, and is not the
@@ -413,9 +573,12 @@ unchanged: `Cargo.toml`, the three `Cargo.lock` files and the two
 inputs, and a dependency change is still a Cargo-file edit followed by a
 regeneration. The generated splice workspace is a derived artifact of exactly
 that class, not a second place a dependency is declared. Section 4's generator
-gains one output class. The four-hub set, the three authoritative locks, the
-repin command's contract, and the ban on the source bootstrap and the repin
-environment controls are all unchanged.
+gains one output class. The four-hub set, the three authoritative locks, and
+the ban on the source bootstrap and the repin environment controls are all
+unchanged. The section 3 repin command gains exactly one precondition, the
+generated-input preflight of section 6; its required hub argument, its scoped
+child environment, its single output base and its changed-file check are
+unchanged.
 
 ### The specific failures this design makes possible
 
@@ -445,7 +608,36 @@ broker's lock does not gain it, because a non-member path dependency's
 dev-dependencies are not resolved. Under a design that made those crates
 members it would, and the two paths would test different graphs. This design
 refuses by construction: the stubs for path-dependency packages carry no
-dev-dependencies, and the offline `--locked` check proves it.
+dev-dependencies, the `-broker` variants they render carry no test target at
+all (section 7), and the offline `--locked` check proves the first half.
+
+**A repin that renders the hub from the previous dependency set.** Enable a
+feature on an existing dependency of `packages/d2b-priv-broker`, which moves no
+resolved version, then run `cargo xtask bazel-repin --hub broker`, then
+`cargo xtask gen-bazel`, then commit. Every gate is green afterwards and the
+committed `bazel/cargo/broker.lock` describes a manifest set the repository no
+longer has. `gen-bazel --check` compares the tree to the manifests and they
+agree. The offline `cargo metadata --locked` compares the tree to the lock and
+they agree. Neither compares the hub lock to the tree, and by constraint 13 the
+substrate never will: the stub manifests are outside the hub digest, so
+`determine_repin` reports the lockfile current and the splice never runs again.
+The guard is section 6's preflight, the only check in the sequence that runs
+before anything is written and looks at the inputs rather than at what the run
+changed.
+
+**The privileged binary linking a library the broker lock never described.**
+Bind `//packages/d2b-priv-broker:d2b-priv-broker` to
+`//packages/d2b-contracts:d2b-contracts` instead of to its `-broker` variant,
+which is one wrong label in a generated file. The binary that runs as root then
+contains third-party code resolved from the main lock, and the two surfaces
+that exist to notice keep passing, because `rust-deny-broker` and
+`rust-audit-broker` read `packages/d2b-priv-broker/Cargo.lock` and that lock is
+still internally true about a graph the build no longer has. The guard is
+section 7's first-party target-set check, which reports the offending
+first-party edge by name. The supplemental spoke check would also fire here,
+because `d2b-contracts` has third-party dependencies today, but it is not what
+this rests on: it reports a `@main//` alias in the broker graph, and against a
+first-party crate with no third-party dependencies it reports nothing.
 
 **A hub that silently omits a first-party crate.** Give
 `d2b-guest-shell-runner` a path dependency on `d2b-contracts`. Its hub would
@@ -546,6 +738,24 @@ the splice copy the authoritative lock in and `cargo fetch` re-resolve, which
 solves constraint 3 by re-introducing constraint 5: measured, the source lock
 is rewritten. ADR 0052 section 3 forbids it and is right to.
 
+**Name every stub manifest in the hub's `manifests` attribute and let the
+substrate detect the staleness.** Measured compatible and rejected as the
+primary guard. `SplicerKind::new` bails only when the supplied manifests
+resolve to more than one distinct `parent_workspace`; every stub resolves to
+the generated root, so listing the root plus its members still selects
+`SplicerKind::Workspace`, splices identically, and prints an upstream `INFO`
+line saying the extra entries can be removed. Each listed manifest's parsed
+content would then enter the hub digest (constraint 13), so a stub edit would
+make `determine_repin` fail closed. It is rejected because of when it fires:
+the digest is consulted the next time Bazel analyses the hub, which is after
+the wrong `bazel/cargo/broker.lock` has already been written and possibly
+committed, and it cannot run inside the repin command at all. The property
+being enforced is an ordering between two repository-owned commands, and that
+is enforceable in the command itself, without Bazel, before anything is
+written. Section 6 does that. This option stays recorded because a future
+reader will ask why the substrate is not doing this work, and because it
+remains available as a second net if the preflight ever proves insufficient.
+
 ## Invariants this decision creates
 
 1. `packages/d2b-priv-broker/Cargo.toml` and
@@ -575,16 +785,34 @@ is rewritten. ADR 0052 section 3 forbids it and is right to.
    package name disagree, or when any Cargo workspace resolves a lock with
    more than one `source`-less entry and has no generated splice workspace.
 7. First-party crates in the broker's closure carry two Bazel library
-   variants. No target reachable from a `-broker` variant depends on a
-   `@main//` spoke and no target reachable from a main-hub variant depends on
-   a `@broker//` spoke. Both variants appear in the ADR 0052 section 5 coverage
-   map.
-8. Regeneration order is `gen-bazel` then `bazel-repin --hub broker`. The
-   repin command's existing rule, that it fails when any tracked file other
-   than the named hub's Bazel-side lock changed, covers the generated tree.
+   variants, and the `-broker` variant is a library target only: it carries no
+   `rust_test`, no `rust_doc_test`, and belongs to no test suite. A package
+   compiled against the broker hub carries test targets if and only if it is a
+   member of the broker Cargo workspace, which today is exactly
+   `d2b-priv-broker`. The five closure crates' tests stay on their
+   main-workspace variants under `rust-main-workspace-tests`. Both library
+   variants appear in the ADR 0052 section 5 coverage map.
+8. Regeneration order is `gen-bazel` then `bazel-repin --hub broker`, and the
+   repin command enforces it. Before spawning Bazel it byte-compares the
+   generated inputs the named hub reads against a fresh regeneration and
+   refuses on any difference, naming the differing path and
+   `cargo xtask gen-bazel`, without starting a Bazel process, creating an
+   output base, or placing `CARGO_BAZEL_REPIN` or `CARGO_BAZEL_REPIN_ONLY` in
+   any child environment, and without writing the tracked tree. ADR 0052's
+   post-run rule, that the command fails when any tracked file other than the
+   named hub's Bazel-side lock changed, is unchanged and is a separate check.
 9. This decision adds no Make target, no Layer-1 job, no required
    continuous-integration context, and no top-level shell gate. Its checks
    extend `test-drift`, which already exists for this class of staleness.
+10. Let B be every target of a broker Cargo workspace member plus every
+    `-broker` variant, and M every other first-party Rust target. Over Rust
+    compile and link edges, the `deps` and `proc_macro_deps` closure, the
+    first-party portion of `deps(B)` is a subset of B and the first-party
+    portion of `deps(M)` is a subset of M. Runfiles, `data` and source-file
+    edges are outside this invariant, since they carry no compilation across
+    the boundary. Both sets are read from what the generator emitted, not
+    matched from label text. The `@main//` and `@broker//` spoke assertion is
+    supplemental and may not be the only check.
 
 ## Implementation checks
 
@@ -623,14 +851,42 @@ record merges. Each is a command and a verdict.
    after a deliberate broker dependency change followed by
    `cargo xtask gen-bazel`, it reports a changed `bazel/cargo/broker.lock` and
    no other tracked change.
-8. `cargo xtask bazel-repin --hub broker` run without the preceding
-   `gen-bazel` on a tree whose broker manifest changed exits nonzero naming the
-   stale generated file.
-9. The Bazel-side hub lock's registry `(name, version)` key set equals the
-   registry `(name, version)` key set of
-   `packages/d2b-priv-broker/Cargo.lock`, checked offline, with 111 entries
-   today.
-10. `bazel query '@broker//:all'` names only crates present in
+8. `cargo xtask bazel-repin --hub broker` run on a tree whose broker manifest
+   changed without the preceding `cargo xtask gen-bazel` exits nonzero, names
+   a path under `bazel/cargo/broker-workspace/` and names
+   `cargo xtask gen-bazel` as the remedy, and leaves both
+   `bazel/cargo/broker.lock` and the generated tree byte-unchanged. The same
+   invocation with the Bazel binary absent from its `PATH` produces the
+   identical refusal, which is the evidence that the refusal precedes the
+   Bazel spawn rather than following it; the control is that the same run on a
+   regenerated tree fails instead on the missing Bazel binary. The stale run
+   also creates no output base under the wrapper's derived output user root.
+9. The section 6 ordering hazard is unreachable. With a planted feature-only
+   change to a broker manifest, one that moves no resolved version so a
+   refusal cannot be attributed to constraint 4,
+   `cargo xtask bazel-repin --hub broker` exits nonzero and leaves
+   `bazel/cargo/broker.lock` byte-unchanged; after `cargo xtask gen-bazel` the
+   same command exits zero and reports that lock as the only tracked change.
+10. `bazel query 'kind(".*_test rule", <emitted broker target set>)'` names
+    only targets of `//packages/d2b-priv-broker`, and the full first-party
+    test target set, `bazel query 'kind(".*_test rule", //packages/...)'`, is
+    equal before and after this change. No `-broker` label appears in either
+    result.
+11. The two set conditions of invariant 10 hold. The primary evaluation is
+    over the generator's emitted compile-edge map, `deps` and
+    `proc_macro_deps`, and reports empty for both directions: first-party
+    edges out of B that land outside B, and first-party edges out of M that
+    land in B. A `bazel query` over `kind("rust_library rule", ...)` and the
+    emitted label sets confirms the same two results against the analysed
+    graph. Each direction is demonstrated nonempty against a planted mutation
+    that rebinds one `-broker` dependency edge to the unsuffixed variant,
+    reverted after. The supplemental `@main//` and `@broker//` spoke assertion
+    is present and is not the only check.
+12. The Bazel-side hub lock's registry `(name, version)` key set equals the
+    registry `(name, version)` key set of
+    `packages/d2b-priv-broker/Cargo.lock`, checked offline, with 111 entries
+    today.
+13. `bazel query '@broker//:all'` names only crates present in
     `packages/d2b-priv-broker/Cargo.lock`, and `bazel build` of two of them
     succeeds. Two pieces of this are already measured. On the reproduction of
     this repository's workspace shape, the hub's rendered set matched the
@@ -641,12 +897,12 @@ record merges. Each is a command and a verdict.
     from the resolve satisfies `cargo metadata --locked --offline` against a
     byte-identical copy of the authoritative broker lock. What remains for the
     implementer is running the real hub through Bazel end to end.
-11. A planted `build = "build.rs"` key on a closure package, a planted
+14. A planted `build = "build.rs"` key on a closure package, a planted
     directory-name mismatch, and a planted first-party path dependency in
     `packages/d2b-guest-shell-runner/Cargo.toml` each make
     `cargo xtask gen-bazel` exit nonzero with its own named refusal and its own
     remedy; all three are reverted.
-12. `tests/unit/meta/adr-index-coverage.sh` passes with this record indexed.
+15. `tests/unit/meta/adr-index-coverage.sh` passes with this record indexed.
 
 ## References
 
@@ -659,7 +915,13 @@ record merges. Each is a command and a verdict.
   `crate_universe/src/metadata.rs` (`LockGenerator::generate` and its
   `cargo fetch`), `crate_universe/src/metadata/cargo_tree_resolver.rs`
   (the copied project and its `--locked` metadata call),
-  `crate_universe/extensions.bzl` (`_from_cargo` and `_FROM_COMMON_ATTRS`)
+  `crate_universe/src/lockfile.rs` (`Digest::new` and its inputs) and
+  `crate_universe/src/splicing.rs` (`SplicingMetadata::try_from`, which reads
+  and parses only the named manifests),
+  `crate_universe/private/generate_utils.bzl` (`determine_repin` and the
+  `cargo-bazel query` call behind it),
+  `crate_universe/extensions.bzl` (`_from_cargo`, `_FROM_COMMON_ATTRS` and the
+  `if repin:` guard around the splice)
 - `MODULE.bazel` and `bazel/cargo/README.md` on `spec003-w0-planfix`
 - Spec 003 W0 experiments `65fbe095` (`bazel: include broker path manifests`)
   and `e80ac1ef` (`bazel: restore standalone broker hub declaration`), and the
@@ -670,6 +932,8 @@ record merges. Each is a command and a verdict.
   `packages/d2b-guest-shell-runner/Cargo.lock` and
   `tests/tools/no-bash-ast-walker/Cargo.lock`, each with one `source`-less
   entry
+- `tests/test-rust.sh` lines 504 through 512, the three broker feature passes
+  and the `--workspace --manifest-path` form they use
 - [ADR 0052](0052-bazel-rust-build-and-test.md) sections 2, 3, 4 and 5 and
   invariants 2, 9 and 14
 - [ADR 0009](0009-rust-toolchain-msrv-and-supply-chain.md), the per-lock
