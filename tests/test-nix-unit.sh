@@ -320,6 +320,10 @@ if ! command -v jq >/dev/null 2>&1; then
   fail "jq is required to report every nix-eval-jobs attribute result; the locked nix-unit shell should provide it" || true
   exit 2
 fi
+if ! command -v setsid >/dev/null 2>&1; then
+  fail "setsid is required to reap isolated Nix-unit evaluator process groups"
+  exit 2
+fi
 
 # nix-eval-jobs owns the evaluator worker pool. It evaluates one aggregate
 # attr per case file, while --no-instantiate never submits them as installables
@@ -419,6 +423,25 @@ shard_pids=()
 shard_statuses=()
 shard_status=0
 
+run_nix_unit_shard() {
+  local shard="$1" shard_result="$2" shard_stderr="$3" shard_status_file="$4"
+  local rc pid
+  setsid nix-eval-jobs \
+    --no-instantiate \
+    --flake "${flake_ref}#nixUnitJobShards.${system}.${shard}" \
+    --workers 1 \
+    --max-memory-size "$memory_mb" \
+    --show-trace >"$shard_result" 2>"$shard_stderr" &
+  pid=$!
+  set +e
+  wait "$pid"
+  rc=$?
+  set -e
+  kill -TERM -- "-$pid" 2>/dev/null || true
+  printf '%s\n' "$rc" >"$shard_status_file"
+  [ "$rc" -eq 0 ] || shard_status=1
+}
+
 harvest_nix_unit_shard() {
   local pid="$1" status_file="$2"
   set +e
@@ -453,26 +476,13 @@ for shard in "${nix_unit_shards[@]}"; do
   shard_status_file="$shard_dir/$shard.status"
   rm -f -- "$shard_result" "$shard_stderr" "$shard_status_file"
   if [ "$shard_workers" -eq 1 ]; then
-    set +e
-    nix-eval-jobs \
-      --no-instantiate \
-      --flake "${flake_ref}#nixUnitJobShards.${system}.${shard}" \
-      --workers 1 \
-      --max-memory-size "$memory_mb" \
-      --show-trace >"$shard_result" 2>"$shard_stderr"
-    rc=$?
-    set -e
-    printf '%s\n' "$rc" >"$shard_status_file"
-    [ "$rc" -eq 0 ] || shard_status=1
+    run_nix_unit_shard \
+      "$shard" "$shard_result" "$shard_stderr" "$shard_status_file"
     settle_nix_unit_children
   else
     (
-      exec nix-eval-jobs \
-        --no-instantiate \
-        --flake "${flake_ref}#nixUnitJobShards.${system}.${shard}" \
-        --workers 1 \
-        --max-memory-size "$memory_mb" \
-        --show-trace >"$shard_result" 2>"$shard_stderr"
+      run_nix_unit_shard \
+        "$shard" "$shard_result" "$shard_stderr" "$shard_status_file"
     ) &
     shard_pids+=("$!")
     shard_statuses+=("$shard_status_file")

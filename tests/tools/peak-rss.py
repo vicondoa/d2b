@@ -201,6 +201,13 @@ def main() -> int:
 
     if process.poll() is None:
         process.wait()
+    # A worker launcher can leave a short-lived descendant behind after its
+    # parent exits. Reap the process group before the outer runner starts its
+    # next shard, otherwise a later aggregate tree would retain that worker.
+    try:
+        os.killpg(process.pid, signal.SIGTERM)
+    except ProcessLookupError:
+        pass
     final_tree = process_rss_kib(process.pid)
     if final_tree is not None:
         peak_tree = max(peak_tree or 0, final_tree)
