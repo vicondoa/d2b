@@ -378,8 +378,16 @@ None may be inferred from an earlier ADR 0054 draft.
 Spec 003 W0 remains parked at broker lock regeneration. Admission reads exactly
 one marked execution-status block from each of `plan.md`, `tasks.md`, and the
 workspace contract. Only exactly three `READY` blocks with the closed key set
-and byte-identical values admit T021. A missing block, duplicate block, unknown
-key or value, or disagreement refuses before T021, any child, or any write.
+and byte-identical values admit T021. The four non-status literals are
+immutable; only status may change under a future accepted ADR, amended Spec
+003, and renewed unanimous plan panel. Admission opens the repository root
+once, resolves each fixed path component descriptor-relative without following
+links, opens and verifies each regular final file once, and reads bytes from
+that same descriptor. A missing, duplicate, reversed, nested, unknown,
+misplaced, NUL-bearing, invalid-UTF-8, symlinked, nonregular,
+component-replaced, or disagreeing input refuses before T021, any child, or any
+write. A fake filesystem fixture replaces a component and final file between
+open and check/read to prove there is no check-open or check-read path race.
 After ADR 0054 merges, the required order is:
 
 1. accept a separate broker-repin ADR;
@@ -456,7 +464,10 @@ execution protocol.
    result.
 9. Main, guest, and walker repin behavior remains exactly ADR 0052 behavior.
 10. Spec 003 W0 remains parked, and only three exact agreeing `READY` blocks
-    can admit T021, pending that ADR, amendment, and a new panel.
+    can admit T021. The four non-status literals are immutable, and descriptor-
+    relative, no-follow, same-fd parsing rejects link, replacement, nonregular,
+    NUL, invalid-UTF-8, marker, field, and disagreement mutations before
+    activity, pending that ADR, amendment, and a new panel.
 
 ## References
 

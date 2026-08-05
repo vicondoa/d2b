@@ -34,8 +34,9 @@ Files:
   the note corpus through, and the two violation shapes it renders, and
   permitted tool acquisition.
 - `execution-manifest-binding.md` - executor-to-existing-contract binding.
-- `shadow-promotion-evidence.md` - qualification records, evidence, and
-  lifecycle gates.
+- `shadow-promotion-evidence.md` - the ADR 0052 canonical-predicate projection,
+  complete authoritative qualification lineage, resolver evidence, negative
+  fixtures, evidence, and lifecycle gates.
 - `cache-workflow-boundaries.md` - permissions, credentials, key inputs,
   trimming, and generations.
 - `recovery-deadline.md` - cleanup, shutdown, and deadline behavior.

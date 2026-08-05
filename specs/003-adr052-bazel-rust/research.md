@@ -3,9 +3,11 @@
 This document consolidates the amended ADR 0052 decisions and resolves the
 plan-level choices needed to execute them. ADR 0052 was amended on 2026-08-03
 after an upstream review measured five mechanics that the first draft could not
-implement and two supporting statements that were wrong about the substrate.
-That amended record is merged and is settled authority here. Committed passing
-code remains the baseline. The broker repin lifecycle remains an external
+implement and two supporting statements that were wrong about the substrate,
+then on 2026-08-05 to bind qualification to one canonical predicate, complete
+lineage, immutable run/job IDs, and authoritative resolver evidence. Both
+amendments are settled authority here. Committed passing code remains the
+baseline. The broker repin lifecycle remains an external
 architectural blocker rather than an open choice this research may settle.
 
 Every version-sensitive claim below is sourced in the "Upstream evidence"
@@ -969,17 +971,16 @@ filters. Shadow restores and saves nothing. PR-reachable jobs have
 `contents: read`, no `actions: write`, and no direct, indirect, post-step, or
 unknown cache writer.
 
-**Evidence comes only from qualification records.** A qualification record is
-a `push` event on `refs/heads/v3` produced by a merged pull request. The
-required Cargo workflow triggers on `push` for `[main, v3]`, so both runs are
-identified by the same head commit under the same event, which is what makes
-"both paths tested the same commit" mechanically true. Each record carries the
-head commit, both run identifiers, both rollup verdicts, the same-commit
-`make test-policy` verdict for fixture-independent policy binaries, the
-separate `D2B_ENABLE_FIXTURE_BUILD=1 make test-fixture-contracts` companion
-verdict for fixture-dependent surfaces, and, for a cold-sample record, the four
-slice durations plus the scalar record duration defined as their maximum,
-which is the workflow critical path.
+**Evidence comes only from ADR 0052 section 9's canonical `Q` predicate over a
+complete authoritative lineage.** From the merged W3 shadow-workflow commit
+through the recorded end SHA, the repository-owned resolver enumerates every
+chronological first-parent `push` on `refs/heads/v3` produced by a pull request
+merged to `v3`. For each it resolves immutable workflow run and job IDs, run
+attempt, head SHA, event, branch, conclusion, and normalized GitHub
+Actions/Pulls API evidence for Cargo, Bazel, `make test-policy`,
+`D2B_ENABLE_FIXTURE_BUILD=1 make test-fixture-contracts`, and all four Bazel
+slices. The required Cargo workflow triggers on `push` for `[main, v3]`, so
+every carrier is resolved to the same eligible head.
 
 **Pull-request runs stay diagnostic and stay path-filtered.**
 `refs/pull/N/merge` is recomputed against a moving base, so two workflows
@@ -990,15 +991,20 @@ Dropping the path filter was considered and rejected: with no cache published
 during the shadow stage, every such run is a full cold Rust build that buys
 nothing.
 
-**Streak arithmetic is fail-closed and machine-evaluable.** A record whose two
-verdicts differ resets the streak. A shadow run that reaches no verdict while
-its paired Cargo run reaches one counts as a mismatch and also resets, because
-otherwise cancelling a run about to go red would launder the streak. A push
-where neither side reached a verdict is not a record and neither extends nor
-resets. A missing or failed same-commit `make test-policy` or fixture-contract
-verdict disqualifies the record and resets the streak.
+**Streak arithmetic is fail-closed and machine-evaluable.** `Q` requires
+passing Cargo, Bazel, policy, fixture, and all four slice jobs at one eligible
+head, with no shadow cache restore or write. A genuine eligible push with any
+missing, failed, timed-out, skipped, or cancelled carrier remains in the
+lineage and resets the streak, even when every carrier was cancelled. A
+wrong-commit, stale-reused, cross-attempt, forged, or unresolved ID, an
+ineligible inserted event, an omitted/duplicate/reordered eligible push, or an
+omitted reset disqualifies the evidence set. The stored streak is the maximal
+true-`Q` suffix replayed from the complete lineage.
 
-Qualification requires both same-commit policy and fixture verdicts to pass; missing or failed either disqualifies the record and resets the streak.
+Cold qualification is `C(row) = Q(row) && cache_restored == 0 && four
+complete durations from the same resolved slice job IDs`; the duration is
+their maximum. Both same-commit policy and fixture jobs therefore gate every
+streak row, cold sample, and promotion decision.
 
 At promotion, action and download snapshots become separate 4/1 GiB entries.
 The output base is never cached. Keys bind, at minimum: `.bazelversion`,
@@ -1033,13 +1039,13 @@ worse than no cache.
 
 **Decision**: A profile passes only when its median is at or below the ceiling
 and no sample exceeds 1.2 times it. Local sets contain three consecutive runs;
-the continuous-integration set is the five most recent qualifying cold
-qualification records, where qualifying means no Bazel cache was restored and
-all four slice jobs completed with a recorded duration, and the same-commit
-policy and fixture-contract verdicts both passed. During the shadow stage every
-run is cold by construction, so the qualifier excludes runs that produced no
-measurement rather than selecting among warm and cold runs. Scheduled,
-dispatched, and `main`-push runs are liveness probes and never enter the set.
+the continuous-integration set is the five most recent canonical `C(row)`
+values from the complete authoritative lineage. `C` requires true `Q`, no
+Bazel cache restore, and four complete durations from the same resolver-
+confirmed slice job IDs; passing same-commit Cargo, Bazel, policy, fixture, and
+slice jobs are therefore mandatory. During the shadow stage every conforming
+run is cold by construction. Scheduled, dispatched, and `main`-push runs are
+liveness probes and never enter the set.
 
 **A feasibility gate precedes the binding cold-CI ceiling.** The 15-minute
 median and 18-minute maximum are asserted against a 4 vCPU runner that pays a
@@ -1106,11 +1112,12 @@ boundaries, and an untestable boundary is where the off-by-one lives.
 ## Decision 11: Stage promotion, alias removal, and retirement separately
 
 **Decision**: Cargo remains authoritative through the shadow stage and W4
-evidence. Promotion requires exact coverage, census, and topology, ten matching
-qualification records with passing same-commit policy and fixture-contract
-verdicts, an eighteen-case isolated failure matrix, twenty broker repetitions,
-all performance sets, supply-chain equivalence including the yanked outcome,
-and cache-policy evidence.
+evidence. Promotion requires exact coverage, census, and topology; a complete
+resolver-confirmed eligible lineage ending in at least ten true canonical-`Q`
+rows, each with passing same-commit Cargo, Bazel, policy, fixture, and slice
+jobs; an eighteen-case isolated failure matrix; twenty broker repetitions; all
+performance sets, including the five most recent `C` rows; supply-chain
+equivalence including the yanked outcome; and cache-policy evidence.
 
 W4 commits one immutable qualification record set. W5 writes a separate
 promotion record after the ordered protected-`v3` maintenance and save run.
@@ -1210,10 +1217,13 @@ generated contracts or evidence.
 
 **Decision**: The ADR 0052 amendment is merged. Protected `v3` is the sole
 promotion, cache-maintenance, cache-publication, equivalence-streak, and
-post-promotion observation lineage, and the cold continuous-integration profile
-draws from qualifying cold qualification records on `v3`. No task in this
-feature amends the ADR; W0 instead verifies that the amended commit is present
-in the base it builds on and refuses to proceed otherwise.
+post-promotion observation lineage. The resolver retains every eligible
+merged-PR push from the W3 anchor through the recorded end; qualification uses
+only canonical `Q`, and the cold continuous-integration profile draws the five
+most recent `C` rows, each requiring passing same-commit policy and fixture
+jobs. No task in this feature amends the ADR; W0 instead verifies that the
+amended commit is present in the base it builds on and refuses to proceed
+otherwise.
 
 **Rationale**: The repository's GitHub default branch is `main`, while binding
 repository policy makes `v3` the clean-break integration lineage that never

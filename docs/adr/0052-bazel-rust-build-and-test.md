@@ -12,6 +12,15 @@
   happens to find, and records the measured `crate_universe` repin controls
   that make a scoped, reviewed lock regeneration possible without a gate-path
   escape hatch. No decision here is reversed and nothing here is superseded.
+- Amended: 2026-08-05. Qualification now has one canonical predicate over the
+  complete chronological eligible protected-`v3` merged-PR push lineage.
+  Immutable Cargo, Bazel, policy, fixture, and slice workflow run/job IDs and
+  authoritative GitHub resolver evidence bind every row to one head SHA.
+  Passing same-commit policy and fixture jobs are mandatory for the streak,
+  cold samples, and promotion. Missing, failed, cancelled, wrong-commit,
+  stale-reused, forged, ineligible, omitted, duplicate, reordered, and
+  omitted-reset evidence fails closed as section 9 defines. This tightens the
+  evidence proof without changing the selected executor or migration scope.
 - Proposed broker graph refinement:
   [ADR 0054](0054-broker-hub-generated-splice-workspace.md) is limited to the
   committed generated splice workspace and exact graph fidelity for the
@@ -1273,15 +1282,59 @@ protected `v3`, and none resolves to `main`. Pushes to `main`, the weekly
 schedule and `workflow_dispatch` remain useful as liveness probes and produce
 no evidence.
 
-**A qualification record is a `push` event on `refs/heads/v3` produced by a
-merged pull request.** It carries the head SHA, the shadow-workflow run
-identifier, the required Cargo workflow run identifier, both verdicts, and, for
-a cold-sample record, the measured wall clock of each of the four slice jobs.
-The required Cargo workflow triggers on `push` for `[main, v3]` (constraint
-10), so both runs are identified by the same `head_sha` under the same `push`
-event, which is what makes "both paths tested the same commit" mechanically
-true rather than approximately true. Sections 11 and 12 draw their evidence
-from this record stream and from nothing else.
+**The canonical qualification predicate is `Q`; every other qualification
+site consumes it rather than defining a weaker copy.** The lineage begins with
+the merged W3 shadow-workflow commit and ends at the recorded protected-`v3`
+tip. It contains every `push` event on `refs/heads/v3` in that first-parent
+interval whose head is the merge commit of a pull request merged to `v3`, in
+chronological branch order. The repository-owned resolver proves that event,
+branch, merged-pull-request relation, and order from the GitHub Actions and
+Pull Requests APIs. An authored evidence row is never authority for its own
+eligibility.
+
+Every lineage row records the immutable workflow ID, workflow run ID, run
+attempt, job ID, head SHA, event, branch, conclusion, and normalized resolver
+evidence reference and digest for:
+
+- the required Cargo rollup running
+  `D2B_SKIP_FIXTURE_BUILD=1 make test-rust`;
+- the Bazel shadow rollup;
+- the enforcing `make test-policy` job;
+- the enforcing
+  `D2B_ENABLE_FIXTURE_BUILD=1 make test-fixture-contracts` job; and
+- each of the four attributed Bazel slice jobs.
+
+The same workflow run ID may legitimately own more than one job, but every job
+ID is immutable, belongs to the recorded run attempt, and is used by exactly
+one lineage row and carrier slot. The resolver projection is the evidence:
+recorded conclusions, head SHAs, names, or IDs that do not resolve exactly are
+not trusted. The required Cargo workflow triggers on `push` for `[main, v3]`
+(constraint 10), so every carrier is resolved against the one eligible
+`head_sha` under the one `push` event.
+
+| Canonical check | `Q(row)` requirement | Failure effect |
+| --- | --- | --- |
+| Eligibility | Event is `push`, branch is `refs/heads/v3`, and the head is the merge commit of a pull request merged to `v3`. | An ineligible row in qualification evidence disqualifies the evidence set. |
+| Complete lineage | Every eligible push from the W3 anchor through `lineage_end_sha` appears exactly once in chronological first-parent order. | An omitted or duplicate eligible push, a gap, or an order change disqualifies the evidence set until corrected. |
+| Resolver identity | Every Cargo, Bazel, policy, fixture, and slice run/job ID resolves, belongs to the recorded workflow and attempt, has the recorded head SHA, and is not reused in another row or slot. | A forged, stale-reused, cross-attempt, wrong-workflow, or wrong-commit ID disqualifies the evidence set. |
+| Cargo and Bazel | Both rollup jobs reached terminal `success` on the eligible head SHA. | Missing, failed, timed-out, skipped, or cancelled resets the streak at this eligible push. |
+| Policy | The same-commit `make test-policy` job reached terminal `success`. | Missing, failed, timed-out, skipped, or cancelled resets the streak. |
+| Fixture | The same-commit `D2B_ENABLE_FIXTURE_BUILD=1 make test-fixture-contracts` job reached terminal `success`. | Missing, failed, timed-out, skipped, or cancelled resets the streak. |
+| Slices | All four named Bazel slice job IDs resolve to the Bazel run and attempt at the same head SHA and reached terminal `success`. | Missing, failed, timed-out, skipped, cancelled, duplicated, or misattributed slice resets the streak. |
+| Shadow cache | The resolved shadow run restored and wrote no Bazel cache. | A restore or write makes the row nonqualifying and resets the streak; it also cannot be a cold sample. |
+
+Thus `Q(row)` is true only when every row above passes. The policy and fixture
+verdicts are both same-commit requirements even though neither is compared
+between executors. A real eligible push is always represented: missing or
+cancelled jobs produce a nonqualifying reset row, including when every job was
+cancelled. They are never erased as "no record."
+
+The streak is the length of the maximal suffix of the complete chronological
+lineage for which `Q` is true. Every false `Q` resets it to zero at that row.
+The streak count stored in evidence is derived and must equal a replay of the
+canonical predicate; an omitted reset disqualifies the evidence set. Sections
+11 and 12 draw their cold samples and promotion evidence from this resolved
+record stream and from nothing else.
 
 **Pull-request runs stay diagnostic and stay path-filtered.** A pull-request
 run tells a contributor whether their Bazel-surface change builds; it is not a
@@ -1293,13 +1346,11 @@ precisely the sample in which a Cargo-versus-Bazel divergence cannot appear, so
 a streak built from it would prove nothing about the surfaces the gate exists
 to protect.
 
-Streak arithmetic is fail-closed, and it is stated so a machine can evaluate
-it. A record whose two verdicts differ resets the streak to zero. A
-push-to-`v3` shadow run that reaches no verdict while its paired Cargo run
-reaches one counts as a mismatch and also resets the streak, because otherwise
-cancelling a run that was about to go red would launder the streak. A push
-where neither side reached a verdict, which is what a superseding push
-produces, is not a record at all: it neither extends nor resets.
+Pull-request runs remain diagnostic even if all jobs pass. Likewise
+`main`-push, scheduled, and dispatched runs are ineligible and never enter a
+lineage, streak, or measurement set. Injecting one into qualification evidence
+is an evidence-set failure rather than another opportunity to increment a
+counter.
 
 The workflow satisfies the existing structural policies without exception:
 `defaults.run.shell: sh tests/tools/ci-shell {0}`, and every
@@ -1499,14 +1550,17 @@ by the Actions API, which no step can influence.
 measurement set, and the budget holds when the median is at or under the
 ceiling **and** no single measurement exceeds 1.2 times the ceiling. The
 measurement set is three consecutive runs locally on the reference host, and in
-continuous integration the five most recent qualifying cold qualification
-records as section 9 defines them. Qualifying means the shadow run restored no
-Bazel cache of any kind and all four slice jobs ran to completion with a
-recorded duration; during the shadow stage every run is cold by construction,
-because section 10 publishes and restores nothing, so the qualifier exists to
-exclude runs that produced no measurement rather than to select among warm and
-cold runs. Scheduled, dispatched and `main`-push runs are liveness probes and
-never enter the set. All measurements are reported, not just the median.
+continuous integration the five most recent rows for which section 9's
+canonical `Q(row)` is true and each of the four authoritatively resolved slice
+jobs has a complete Actions-API duration. Cold-sample qualification is exactly
+`C(row) = Q(row) && cache_restored == 0 && four complete resolved slice
+durations`; it therefore requires passing same-commit Cargo, Bazel,
+`make test-policy`, fixture-contract, and slice verdicts. The scalar duration
+is the maximum of those four durations. During the shadow stage every
+conforming run is cold by construction because section 10 publishes and
+restores nothing. Scheduled, dispatched and `main`-push runs are liveness
+probes and never enter the set. All measurements and their immutable run/job
+IDs and resolver evidence references are reported, not just the median.
 
 **Fail-closed response when a budget is missed.**
 
@@ -1802,17 +1856,16 @@ hold. Each is mechanically checkable.
    exactly one identifier, no Rust test target is unmapped, and no hand-written
    fragment is unlisted, the channel transition and the `rustdoc_json` rule
    included.
-2. **Equivalence, positive.** Ten consecutive matching qualification records as
-   section 9 defines them: ten consecutive push-to-`v3` records in which the
-   Bazel rollup and the Cargo
-   `D2B_SKIP_FIXTURE_BUILD=1 make test-rust` rollup reached the same verdict at
-   the same `head_sha`, and the separate enforcing
-   `D2B_ENABLE_FIXTURE_BUILD=1 make test-fixture-contracts` lane passed on that
-   same commit. The fixture lane is not compared to Bazel because its two
-   surfaces remain explicitly outside this migration; it is a required
-   companion verdict so a qualification record cannot hide a contract-layer
-   regression. Pull-request, `main`-push, scheduled and dispatched runs never
-   enter the streak, and the reset rules in section 9 apply.
+2. **Equivalence, positive.** The complete authoritative lineage through the
+   recorded end SHA has a maximal suffix of at least ten rows for which section
+   9's canonical `Q(row)` is true. Consequently every one of the ten has
+   immutable resolver-confirmed Cargo, Bazel, `make test-policy`,
+   fixture-contract, and four-slice run/job IDs at one head SHA and every job
+   passed. The fixture lane remains outside the Bazel comparison, but it and
+   policy are mandatory same-commit companion verdicts. Missing, failed,
+   cancelled, wrong-commit, stale-reused, forged, ineligible, omitted, or
+   omitted-reset evidence has exactly the reset or disqualification effect in
+   the canonical table; no local promotion predicate may reinterpret it.
 3. **Equivalence, negative.** A recorded seeded-failure matrix: for each of the
    eighteen surfaces, a deliberately broken tree makes exactly that Bazel
    target fail and does not make an unrelated surface fail. This is recorded
@@ -2243,6 +2296,11 @@ the promoted workflow actually has.
     `test-performance-budgets`, and the heavy-lane semaphore are all
     unchanged. This ADR changes the executor beneath the Rust gate and nothing
     above it.
+14. Neutral: qualification now retains the complete eligible protected-`v3`
+    push lineage and authoritative resolver projections for Cargo, Bazel,
+    policy, fixture, and slice jobs. Both same-commit companion verdicts are
+    mandatory for every streak row, cold sample, and promotion check; evidence
+    cannot discard a red or cancelled push to improve the suffix.
 
 ### The specific failures this design makes possible
 
@@ -2306,15 +2364,17 @@ and requires failure, because a locator that never misses is indistinguishable
 from one that chains.
 
 **A laundered equivalence streak.** The streak is the single piece of evidence
-between the shadow stage and a required context changing executors, and two
-ways to inflate it are real. Counting a run whose paired Cargo verdict came
-from a different tree is the first; it is closed by pairing on `head_sha` under
-the `push` event on `v3` rather than on a pull-request number, because
-`refs/pull/N/merge` is recomputed against a moving base. Cancelling a shadow
-run that is about to go red is the second; it is closed by counting a shadow
-run that reached no verdict, while its paired Cargo run reached one, as a
-mismatch that resets the streak. The residual is a double cancellation that
-stops both sides, which produces no record and therefore buys nothing.
+between the shadow stage and a required context changing executors. Pairing a
+job from another tree, reusing an old green job ID, fabricating an ID, omitting
+an eligible push, dropping a reset, or cancelling a red run can all inflate it.
+The canonical predicate closes those routes with one authoritative resolver:
+it enumerates the complete protected-`v3` merged-PR push lineage, resolves each
+Cargo, Bazel, policy, fixture, and slice run/job pair to the same head and
+attempt, and derives the streak. Missing, failed, timed-out, skipped, or
+cancelled jobs remain reset rows even when every carrier was cancelled.
+Wrong-commit, stale-reused, forged, ineligible, omitted, duplicate, reordered,
+or omitted-reset evidence disqualifies the set. Committed negative fixtures
+exercise each class through the existing Layer-1 Rust policy carrier.
 
 **A vendor tree that is quietly short a crate.** `cargo-deny licenses` harvests
 license text from crate sources. A vendored tree missing a package produces
@@ -2717,22 +2777,23 @@ closed when any `.bazelrc` line or wrapper argument sets that flag.
     new top-level shell gate, Layer-1 job, or Make target carries
     them.
 21. Every promotion, cache, shadow and post-promotion clock this decision
-    defines runs on protected `v3`; none resolves to `main`. A qualification
-    record is a `push` event on `refs/heads/v3` produced by a merged pull
-    request, carrying the head SHA, both run identifiers, both verdicts, and,
-    for a cold-sample record, the four slice durations, with both runs
-    identified by the same `head_sha`. The positive equivalence evidence is ten
-    consecutive matching qualification records and the cold
-    continuous-integration measurement set is the five most recent qualifying
-    cold records, where qualifying means no Bazel cache was restored and all
-    four slice jobs completed with a recorded duration. A differing verdict
-    resets the streak; a shadow run that reaches no verdict while its paired
-    Cargo run does is a mismatch and resets it; a record where neither side
-    reaches a verdict does not exist. Pull-request, `main`-push, scheduled and
-    dispatched runs are diagnostic and never enter a streak or a measurement
-    set. Each qualification record also carries a passing
-    `test-fixture-contracts` verdict for the same commit; fixture surfaces
-    remain outside the Bazel comparison but cannot regress invisibly.
+    defines runs on protected `v3`; none resolves to `main`. Qualification
+    retains every eligible merged-PR `push` from the merged W3 anchor through
+    the recorded lineage end in chronological first-parent order. Section 9's
+    canonical `Q` is the only qualification predicate. Each row carries
+    immutable, authoritative-resolver-confirmed workflow run and job IDs,
+    attempts, head SHA, event, branch, merged-PR eligibility, and conclusions
+    for Cargo, Bazel, `make test-policy`,
+    `D2B_ENABLE_FIXTURE_BUILD=1 make test-fixture-contracts`, and all four
+    slices. `Q` requires every job to pass at the same head with no shadow
+    cache restore or write. Any real eligible push with a missing, failed,
+    timed-out, skipped, or cancelled carrier is retained and resets the streak.
+    Wrong-commit, stale-reused, forged, ineligible, omitted, duplicate,
+    reordered, or omitted-reset evidence disqualifies the set. Promotion
+    requires a ten-row true-`Q` suffix. A cold sample additionally requires all
+    four resolved durations and uses their maximum; the cold set is the five
+    most recent such rows. Pull-request, `main`-push, scheduled and dispatched
+    runs are diagnostic and never enter the lineage.
 22. No first-party test under Bazel locates a binary through compile-time
     `env!("CARGO_BIN_EXE_*")`, resolves a repository path by walking out of
     `CARGO_MANIFEST_DIR`, or resolves anything by an absolute execroot path.
@@ -2776,8 +2837,13 @@ closed when any `.bazelrc` line or wrapper argument sets that flag.
 - `docs/reference/test-execution-manifest.md`, the baseline surface set
 - `docs/contributing/gates-and-lints.md`, the Rust budget and execution
   manifest section
-- `packages/xtask/tests/policy_ci.rs`, the approved Make target list and
-  workflow allowlist
+- `packages/xtask/tests/bazel_qualification.rs`, the qualification
+  resolver/predicate carrier and its
+  missing-policy, missing-fixture, failed, cancelled, wrong-commit,
+  stale-reused-job, forged-ID, ineligible-event, omitted-eligible-push, and
+  omitted-reset fixtures
+- `specs/003-adr052-bazel-rust/contracts/shadow-promotion-evidence.md`, the
+  Spec 003 projection of section 9's canonical qualification predicate
 - `packages/d2b-contract-tests/tests/policy_docs.rs`, the secure-cleanup
   marker set and the ban on path-based recursive cleanup
 - `packages/d2b-exec-runner/src/service_mode.rs`, the committed

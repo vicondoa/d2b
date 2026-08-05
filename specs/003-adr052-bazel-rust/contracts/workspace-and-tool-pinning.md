@@ -22,12 +22,13 @@ only the five ordered keys shown above, one exact BEGIN followed by one exact
 END, and one exact `status: PARKED` or `status: READY` line; all three blocks
 must be byte-identical. Only exactly three READY values admit T021. A prefix,
 substring, misplaced status token, missing, duplicate, empty, unknown,
-misnamed, reversed, nested, extraction-failed, or disagreeing input emits the
-fixed architecture-pending result and remedy and refuses before T021, any
-child, or any write. ADR 0054 is not authority to regenerate the broker lock
-or close W0. After ADR 0054 merges, an accepted repin-lifecycle ADR, an amended
-Spec 003, and a renewed unanimous plan panel are prerequisites to changing all
-three blocks atomically.
+misnamed, reordered, reversed, nested, extraction-failed, NUL-bearing,
+invalid-UTF-8, symlinked, nonregular, component-replaced, or disagreeing input
+emits the fixed architecture-pending result and remedy and refuses before
+T021, any child, or any write. The four non-status lines shown above are
+immutable literals; only all three status lines may change under a future
+accepted repin-lifecycle ADR, amended Spec 003, and renewed unanimous plan
+panel. ADR 0054 is not authority to regenerate the broker lock or close W0.
 
 ## Startup options come from the wrapper
 

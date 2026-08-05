@@ -24,12 +24,13 @@ in each of this file, `tasks.md`, and
 with one BEGIN followed by one END, the closed ordered five-key schema, one
 exact `status: READY` line, and byte-identical values admit T021. A prefix,
 substring, misplaced status token, missing, duplicate, empty, unknown,
-misnamed, reversed, nested, extraction-failed, or disagreeing input emits the
-fixed architecture-pending result and remedy and refuses before T021, any
-child, or any write. The present three exact `status: PARKED` lines therefore
-refuse. ADR 0054 does not close W0. After ADR 0054 merges, a separate accepted
-repin-lifecycle ADR, a surgical Spec 003 amendment, and a renewed unanimous
-plan panel are required before this status may change.
+misnamed, reordered, reversed, nested, extraction-failed, NUL-bearing,
+invalid-UTF-8, symlinked, nonregular, component-replaced, or disagreeing input
+emits the fixed architecture-pending result and remedy and refuses before
+T021, any child, or any write. The four non-status literals are immutable;
+only all three status lines may change under a future accepted ADR, surgical
+Spec 003 amendment, and renewed unanimous plan panel. The present three exact
+`status: PARKED` lines therefore refuse. ADR 0054 does not close W0.
 
 The exact result below belongs to an already-built `xtask` process invoked as
 `bazel-repin --hub broker`. That process returns nonzero with empty stdout,
@@ -47,10 +48,9 @@ the two-line built-process result.
 
 ## Summary
 
-ADR 0052 is accepted and amended as of 2026-08-03. The amendment corrected five
-mechanics the first draft could not implement and two supporting statements
-that were wrong about the build substrate; it is merged and is settled
-authority for this plan. Add Bazel 8.6.0 beside the authoritative Cargo Rust
+ADR 0052 is accepted and amended as of 2026-08-03 for the measured substrate
+and 2026-08-05 for canonical qualification lineage. Both amendments are
+settled authority for this plan. Add Bazel 8.6.0 beside the authoritative Cargo Rust
 gate, preserve the exact eighteen-surface execution and isolation contract,
 collect qualification evidence on protected `v3`, and promote only after every
 mechanical gate passes. Cargo manifests, four workspace locks, policy files,
@@ -111,22 +111,28 @@ orchestration. No runtime daemon, broker, VM, package, image, fixture, or
 release contract changes.
 
 **Promotion Lineage**: Protected `v3`, settled by the merged ADR amendment. A
-qualification record is a push event on `refs/heads/v3` produced by a merged
-pull request, carrying the head commit, both workflow run identifiers, both
-rollup verdicts, a passing same-commit `make test-policy` verdict, a passing
-same-commit fixture-contract companion verdict, and, for a cold sample, the
-four slice durations. Pull-request runs are diagnostic and
-stay path-filtered. W0 verifies the amended ADR commit is present in its base
-and refuses to proceed otherwise; no task in this feature amends the ADR.
-
-Qualification requires both same-commit policy and fixture verdicts to pass; missing or failed either disqualifies the record and resets the streak.
+qualification record is one row in the complete chronological merged-PR push
+lineage from the W3 merge through the recorded end SHA. ADR 0052 section 9's
+canonical `Q` is the only predicate. The authoritative resolver records
+immutable workflow run/job IDs, attempts, head SHA, event, branch,
+merged-pull-request eligibility, conclusions, and normalized API evidence for
+Cargo, Bazel, same-commit `make test-policy`, same-commit fixture contracts,
+and all four slices. Every carrier must pass at one head. A genuine eligible
+push with a missing, failed, timed-out, skipped, or cancelled carrier resets
+the streak, including full cancellation. Wrong-commit, stale-reused, forged,
+or unresolved IDs, ineligible inserted events, omitted/duplicate/reordered
+eligible pushes, or an omitted reset disqualifies the evidence set.
+Pull-request runs are diagnostic and stay path-filtered. W0 verifies the
+amended ADR commit is present in its base and refuses to proceed otherwise; no
+task in this feature amends the ADR.
 
 **Performance Goals**: Three warm local runs: median at most 10 minutes and
 maximum at most 12. Three cold local runs: median at most 15 and maximum at
-most 18. Five most recent qualifying cold qualification records: median at most
-15 and none above 18. Such a record qualifies only with passing same-commit
-policy and fixture verdicts, zero restored Bazel cache, and all four slice
-durations present. The cold continuous-integration ceiling does not become
+most 18. Five most recent canonical `C` rows: median at most 15 and none above
+18. Such a record qualifies only through
+`C(row) = Q(row) && cache_restored == 0 && four complete durations from the
+same authoritative slice job IDs`; passing same-commit policy and fixture jobs
+are therefore mandatory. The cold continuous-integration ceiling does not become
 binding until the W3 feasibility measurement records it as attainable on the
 real runner class; the only pre-authorized answers to a shortfall are a larger
 runner class or a further disjoint slice split. A promoted job has a 15-minute
@@ -273,6 +279,9 @@ packages/xtask/src/bazel_yanked.rs    # Yanked refresh and check; YankedIndex se
 packages/xtask/src/spec003_admission.rs # Exact three-block W0 admission
 packages/xtask/tests/bazel_module_refresh.rs # Real-Bazel module lock drift and remediation
 packages/xtask/tests/spec003_admission.rs # READY-only and before-activity mutations
+packages/xtask/src/bazel_qualification.rs # One Q/C/streak/promotion predicate and resolver
+packages/xtask/tests/bazel_qualification.rs # Resolver, lineage, and predicate fixtures
+packages/xtask/tests/fixtures/qualification/ # Positive and independent negative lineages
 packages/xtask/src/                   # Schema output and evidence helpers
 packages/xtask/tests/policy_ci.rs
 packages/xtask/tests/fixtures/ci/
@@ -906,7 +915,15 @@ lock, and fails when any other generated artifact changed;
 the already-built xtask binary invoked as `bazel-repin --hub broker` instead
 returns nonzero with empty stdout and exactly the two prescribed path-free
 stderr lines, spawns no child, and changes no path, while no exact aggregate
-output or no-Cargo-state claim is made for the public Cargo launcher;
+output or no-Cargo-state claim is made for the public Cargo launcher; execution
+admission opens the repository root once, walks the three fixed paths
+descriptor-relative with no-follow close-on-exec directory opens, opens and
+verifies each regular leaf once, reads its bytes from that same descriptor,
+rejects NUL and invalid UTF-8, and accepts only three agreeing READY blocks
+with four immutable non-status literals; the exact READY pass and every
+PARKED, symlink, nonregular, component/leaf replacement, NUL marker/field,
+invalid-UTF-8, reversed, nested, missing, duplicate, unknown, misplaced, and
+disagreement mutation fail before task, child, or write activity;
 `cargo xtask bazel-module-refresh`
 takes no arguments, refuses an ambient repin control, changes only
 `MODULE.bazel.lock`, fails when any other tracked derived file changed, and
@@ -1148,56 +1165,84 @@ panel and PR are sealed and merged.
 ### W3 - Shadow CI
 
 **Deliverable**: A non-required four-slice workflow with no restore or save,
-workflow and cache permission guards with fixtures, qualification-record
-capture, and the cold-CI feasibility measurement that must precede the binding
-ceiling. The required Cargo CI is unchanged.
+workflow and cache permission guards with fixtures, and qualification-record
+capture. The required Cargo CI is unchanged. The first eligible push is the W3
+merge itself, so its cold-CI feasibility measurement is a post-merge W4 entry
+condition rather than evidence a pre-merge W3 panel could honestly inspect.
 
 **Ownership**:
 
 - `shadow-workflow`: `.github/workflows/pr-bazel-rust.yml`.
 - `workflow-policy`: `policy_ci.rs` and CI fixtures.
+- `qualification-policy`: `packages/xtask/src/bazel_qualification.rs`,
+  `packages/xtask/tests/bazel_qualification.rs`,
+  `packages/xtask/tests/fixtures/qualification/`, and the qualification
+  consistency lint in `packages/d2b-contract-tests/tests/policy_docs.rs`.
 - `target-policy`: the approved-target list if it did not land in W1.
-- Integrator: triggers, path filters, and workflow allowlist reconciliation.
+- Integrator prep: before parallel dispatch, land the
+  `bazel_qualification.rs` module/command seam in `packages/xtask/src/main.rs`
+  and the workflow-capture schema read by the shadow and qualification scopes.
+  After scopes return, the integrator owns triggers, path filters, and
+  workflow allowlist reconciliation.
 
-**Validation**: `make test-rust-main`, `make test-policy`, `make test-lint`,
-`make check-tier0`, `D2B_ENABLE_FIXTURE_BUILD=1 make test-fixture-contracts`
-for actual fixture-dependent coverage, four Bazel slices, and inspection of
+**Validation**: `make test-rust-main`, including the complete qualification
+lineage and all named negative fixtures; `make test-policy`, including the
+closed normative/executable-site inventory; `make test-lint`,
+`make check-tier0`; `D2B_ENABLE_FIXTURE_BUILD=1 make test-fixture-contracts`
+for actual fixture-dependent coverage; four Bazel slices; and inspection of
 the shadow workflow's
 `pull_request` run from a draft W3 PR for permissions, zero writes, slice
-verdicts, and rollup attribution.
+verdicts, and rollup attribution. That diagnostic pull-request run proves
+shape only and is never labelled a qualification or feasibility sample.
 
 **Done when**: the workflow is non-required and outside `V3_PR_GATE_WORKFLOWS`;
 jobs call approved Make targets only; PR reachability has only
 `contents: read`, no writer, and no `actions: write`; shadow publishes nothing;
-policy fixtures pass; push events on protected `v3` produce complete
-qualification records carrying both run identifiers, the shared head commit,
-both verdicts, passing same-commit policy and fixture-contract verdicts, and
-the four slice durations, while pull-request runs produce none and a missing
-or failed companion resets the streak; the cold-CI feasibility measurement is
-recorded with its four slice durations and either clears the ceiling or names
-which pre-authorized remedy is being taken; panel and PR are sealed and merged.
+policy fixtures pass; the resolver records immutable run/job IDs and
+authoritative evidence for Cargo, Bazel, same-commit policy, same-commit
+fixture contracts, and all four slices for every eligible protected-`v3` push;
+pull-request runs produce no lineage row; every missing, failed, timed-out,
+skipped, or cancelled carrier resets, while wrong-commit, stale-reused,
+forged, ineligible, omitted, duplicated, reordered, and omitted-reset fixtures
+disqualify exactly as canonical `Q` requires; the cold-CI feasibility
+measurement procedure is ready but no ineligible pull-request run is used to
+satisfy it; panel and PR are sealed and merged. Immediately after merge, the
+integrator resolves the W3 merge push as the lineage anchor and records its
+true-`C` feasibility result before W4 dispatch.
 
 ### W4 - Evidence qualification
 
 **Deliverable**: A reviewed promotion evidence summary, with no executor flip
 and no cache publication.
 
+**Entry**: W3 is merged and its merge push has been authoritatively resolved as
+the lineage anchor. That row satisfies `C`, records all four slice durations
+and their maximum, and either makes the cold-CI ceiling binding or records one
+pre-authorized remedy before any W4 scope opens.
+
 **Ownership**: One curator owns the immutable
 `specs/003-adr052-bazel-rust/evidence/qualification.json`. No implementation
 source.
 
-**Validation**: Audit ten consecutive matching qualification records, each at a
-shared head commit with passing same-commit policy and fixture-contract
-verdicts;
-eighteen isolated seeded failures; exact generator-derived census, topology,
+**Validation**: Resolve the complete chronological eligible lineage and audit
+its maximal suffix of at least ten true-`Q` rows, each with immutable
+Cargo/Bazel/policy/fixture/slice run/job IDs and authoritative evidence at a
+shared head commit; audit the passing complete-lineage fixture and the
+independent missing-policy, missing-fixture, failed, cancelled, wrong-commit,
+stale-reused-job, forged-ID, ineligible-event, omitted-eligible-push, and
+omitted-reset fixtures; audit eighteen isolated seeded failures; exact
+generator-derived census, topology,
 and ignored counts; twenty exclusive broker repetitions; three warm, three
-cold-local, and the five most recent qualifying cold qualification-record
-measurements; supply-chain equivalence together with the landed yanked carrier
+cold-local, and the five most recent true-`C` lineage records; supply-chain
+equivalence together with the landed yanked carrier
 and its passing offline key-set drift check; and zero shadow cache publication.
 Run both Rust aggregates, policy, and fixture contracts on the evidence commit.
 
-**Done when**: the Qualification Evidence Record validates every threshold and
-reference, no item is pending, and the load-bearing documentation wave gets
+**Done when**: the Qualification Evidence Record validates every threshold,
+the complete-lineage digest, every immutable run/job and resolver reference,
+the derived streak, and the five most recent `C` rows; the consistency guard
+enumerates ADR 0052, every Spec 003 normative site, and every executable
+predicate; no item is pending; and the load-bearing documentation wave gets
 unanimous panel signoff and merges. The committed record is immutable.
 Qualification evidence and promotion never combine.
 
@@ -1328,7 +1373,7 @@ possible, each with the guard that catches it.
 | Graph discovery traverses `.scratch/` or a Cargo output directory and either fails or absorbs generated files. | Generated drift-checked `.bazelignore` plus an absolute `--symlink_prefix` beneath `.scratch/`, with a mutation that removes a directory from the list failing closed. | Regenerate `.bazelignore`; the wrapper refuses to run without it. |
 | A third-party build script probes the host, diverges from Cargo behavior, or fails under sandboxing. | W0 enumerates every build-script-producing crate per hub, records required annotations, and pins a minimal action-environment allowlist that is itself a cache-key input. | Fix declared inputs and annotations, or stop the migration at W0. |
 | A `--test_output=streamed` run silently serializes every test and produces a measurement that means nothing. | The profile invalidation list forbids it, and every recorded sample carries the flags it ran under. | Invalidate and replace the sample. |
-| The equivalence streak is laundered by pairing runs that tested different trees, cancelling a run about to go red, or ignoring a failed policy or fixture companion. | Records are push events on `v3` with a shared head commit; a Bazel run reaching no verdict while its paired Cargo run does is a mismatch, and a missing or failed same-commit policy or fixture verdict disqualifies the record. Both reset the streak. | Reset the streak; a double cancellation produces no record and buys nothing, while either failed companion remains a recorded reset. |
+| The equivalence streak is laundered by pairing another commit's job, reusing a stale green job, forging an ID, inserting an ineligible event, omitting an eligible push or reset, cancelling every job, or ignoring a failed policy/fixture companion. | The authoritative resolver enumerates the complete W3-anchor-to-end eligible `v3` lineage and resolves immutable Cargo, Bazel, policy, fixture, and slice run/job IDs at one head. Missing, failed, timed-out, skipped, or cancelled carriers remain reset rows, including full cancellation; wrong-commit, stale-reused, forged, ineligible, omitted, duplicate, reordered, and omitted-reset evidence disqualifies the set. | Correct the evidence from authoritative resolver output and replay canonical `Q`; no authored counter or selected subsequence is accepted. |
 | Cleanup follows a replacement or leaks descriptors. | Descriptor-relative removal, forced fallback route with the strict policy's leaf `O_NOFOLLOW` asserted on that route, exec-leak and decoy race tests. | Revert W2; never use raw recursive removal. |
 | A timeout kills the caller or leaves descendants alive. | Dedicated-group escalation order with real sibling and descendant tests. | Revert W5 to Cargo. |
 | Retirement deletes a public entry point along with its Cargo implementation. | The retirement inventory proves only the eighteen implementations disappeared and that `make test-rust` plus all eight leaf names still resolve to Bazel carriers. | Revert W7; W6 and W5 are unaffected. |

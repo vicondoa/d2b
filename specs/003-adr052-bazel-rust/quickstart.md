@@ -35,125 +35,160 @@ worktree output tree.
 The current tree is intentionally parked. Admission reads exactly three marked
 blocks: `plan.md`, `tasks.md`, and
 `contracts/workspace-and-tool-pinning.md`. Run this read-only check before T021
-or any command that can spawn or write:
+or any task, generator, or repin command that can spawn or write:
 
 ```bash
 set -euo pipefail
 
-readonly pending_code=broker-repin-architecture-pending
-readonly pending_remedy='broker repin is unavailable; no local recovery command exists; prerequisite is an accepted repin-lifecycle ADR plus amended/re-panelled Spec 003.'
-readonly begin_marker='<!-- BEGIN SPEC003-EXECUTION-STATUS -->'
-readonly end_marker='<!-- END SPEC003-EXECUTION-STATUS -->'
-readonly -a status_files=(
-  specs/003-adr052-bazel-rust/plan.md
-  specs/003-adr052-bazel-rust/tasks.md
-  specs/003-adr052-bazel-rust/contracts/workspace-and-tool-pinning.md
-)
-
-architecture_pending() {
-  printf '%s\n' "$pending_code" "$pending_remedy" >&2
-  return 10
-}
-
-PARSED_STATUS=
-PARSED_BLOCK=
-parse_status_block() {
-  local file=$1 state=before line
-  local begin_count=0 end_count=0
-  local -a lines=() payload=()
-
-  if [[ ! -f $file || ! -r $file ]]; then
-    return 1
-  fi
-  if ! mapfile -t lines < "$file"; then
-    return 1
-  fi
-
-  for line in "${lines[@]}"; do
-    if [[ $line == "$begin_marker" ]]; then
-      ((begin_count += 1))
-      if [[ $state != before || $begin_count -ne 1 ]]; then
-        return 1
-      fi
-      state=inside
-      continue
-    fi
-    if [[ $line == "$end_marker" ]]; then
-      ((end_count += 1))
-      if [[ $state != inside || $end_count -ne 1 ]]; then
-        return 1
-      fi
-      state=after
-      continue
-    fi
-    if [[ $state == inside ]]; then
-      payload+=("$line")
-    fi
-  done
-
-  if [[ $state != after || $begin_count -ne 1 || $end_count -ne 1 ]]; then
-    return 1
-  fi
-  if [[ ${#payload[@]} -ne 5 ]]; then
-    return 1
-  fi
-  case "${payload[0]}" in
-    'status: READY') PARSED_STATUS=READY ;;
-    'status: PARKED') PARSED_STATUS=PARKED ;;
-    *) return 1 ;;
-  esac
-  [[ ${payload[1]} == 'parked_at: broker-lock-regeneration' ]] || return 1
-  [[ ${payload[2]} == 'next_refused_task: T021' ]] || return 1
-  [[ ${payload[3]} == 'runtime_state_source: task-checkpoints' ]] || return 1
-  [[ ${payload[4]} == 'resume_requires: accepted-repin-lifecycle-adr+amended-spec003+renewed-plan-panel' ]] || return 1
-
-  printf -v PARSED_BLOCK '%s\n' "${payload[@]}"
-  PARSED_BLOCK=${PARSED_BLOCK%$'\n'}
-}
-
-check_admission() {
-  local file
-  local -a statuses=() blocks=()
-
-  if [[ $# -ne 3 ]]; then
-    architecture_pending
-    return
-  fi
-  for file in "$@"; do
-    if ! parse_status_block "$file"; then
-      architecture_pending
-      return
-    fi
-    statuses+=("$PARSED_STATUS")
-    blocks+=("$PARSED_BLOCK")
-  done
-  if [[ ${blocks[0]} != "${blocks[1]}" ||
-        ${blocks[1]} != "${blocks[2]}" ]]; then
-    architecture_pending
-    return
-  fi
-  if [[ ${statuses[0]} != READY ||
-        ${statuses[1]} != READY ||
-        ${statuses[2]} != READY ]]; then
-    architecture_pending
-    return
-  fi
-}
-
-if check_admission "${status_files[@]}"; then
-  exit 0
-else
-  rc=$?
-  exit "$rc"
+if ! command -v python3 >/dev/null 2>&1; then
+  printf '%s\n' \
+    'broker-repin-architecture-pending' \
+    'broker repin is unavailable; no local recovery command exists; prerequisite is an accepted repin-lifecycle ADR plus amended/re-panelled Spec 003.' \
+    >&2
+  exit 10
 fi
+
+python3 - <<'PY'
+import os
+import stat
+import sys
+
+PENDING = (
+    b"broker-repin-architecture-pending\n"
+    b"broker repin is unavailable; no local recovery command exists; "
+    b"prerequisite is an accepted repin-lifecycle ADR plus "
+    b"amended/re-panelled Spec 003.\n"
+)
+BEGIN = b"<!-- BEGIN SPEC003-EXECUTION-STATUS -->"
+END = b"<!-- END SPEC003-EXECUTION-STATUS -->"
+READY = b"status: READY"
+PARKED = b"status: PARKED"
+IMMUTABLE_FIELDS = (
+    b"parked_at: broker-lock-regeneration",
+    b"next_refused_task: T021",
+    b"runtime_state_source: task-checkpoints",
+    b"resume_requires: "
+    b"accepted-repin-lifecycle-adr+amended-spec003+renewed-plan-panel",
+)
+STATUS_PATHS = (
+    ("specs", "003-adr052-bazel-rust", "plan.md"),
+    ("specs", "003-adr052-bazel-rust", "tasks.md"),
+    (
+        "specs",
+        "003-adr052-bazel-rust",
+        "contracts",
+        "workspace-and-tool-pinning.md",
+    ),
+)
+DIR_FLAGS = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
+# O_NONBLOCK makes a planted FIFO reject after fstat instead of blocking.
+FILE_FLAGS = os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK
+
+
+def read_fixed_file(root_fd, components):
+    opened_dirs = []
+    directory_fd = root_fd
+    file_fd = None
+    try:
+        for component in components[:-1]:
+            directory_fd = os.open(
+                component, DIR_FLAGS, dir_fd=directory_fd
+            )
+            opened_dirs.append(directory_fd)
+        file_fd = os.open(
+            components[-1], FILE_FLAGS, dir_fd=directory_fd
+        )
+        if not stat.S_ISREG(os.fstat(file_fd).st_mode):
+            raise ValueError("execution-status input is not regular")
+        chunks = []
+        while True:
+            chunk = os.read(file_fd, 65536)
+            if not chunk:
+                return b"".join(chunks)
+            chunks.append(chunk)
+    finally:
+        if file_fd is not None:
+            os.close(file_fd)
+        for opened_fd in reversed(opened_dirs):
+            os.close(opened_fd)
+
+
+def parse_block(data):
+    if b"\0" in data:
+        raise ValueError("NUL in execution-status input")
+    data.decode("utf-8", errors="strict")
+    lines = data.split(b"\n")
+    if lines.count(BEGIN) != 1 or lines.count(END) != 1:
+        raise ValueError("execution-status marker count")
+    begin_index = lines.index(BEGIN)
+    end_index = lines.index(END)
+    if begin_index >= end_index:
+        raise ValueError("execution-status marker order")
+    payload = tuple(lines[begin_index + 1 : end_index])
+    if len(payload) != 5:
+        raise ValueError("execution-status field count")
+    if payload[0] not in (READY, PARKED):
+        raise ValueError("execution-status value")
+    if payload[1:] != IMMUTABLE_FIELDS:
+        raise ValueError("execution-status immutable fields")
+    return payload
+
+
+root_fd = None
+admitted = False
+try:
+    # The wrapper is run from the repository root. Open that root once, then
+    # resolve every fixed component relative to already-open descriptors.
+    root_fd = os.open(".", DIR_FLAGS)
+    blocks = tuple(
+        parse_block(read_fixed_file(root_fd, path))
+        for path in STATUS_PATHS
+    )
+    admitted = (
+        blocks[0] == blocks[1] == blocks[2]
+        and all(block[0] == READY for block in blocks)
+    )
+except (OSError, UnicodeError, ValueError):
+    admitted = False
+finally:
+    if root_fd is not None:
+        try:
+            os.close(root_fd)
+        except OSError:
+            admitted = False
+
+if not admitted:
+    sys.stderr.buffer.write(PENDING)
+    raise SystemExit(10)
+PY
 ```
 
-The parser uses Bash builtins for file extraction and performs no task
-callback, child spawn, or write. On the current tree, exit 10 with exactly the
-two fixed architecture-pending lines is required. Exit 0 is valid only when
-all three blocks are atomically changed to byte-identical records whose first
-line is exactly `status: READY`. A prefix, suffix, substring, or `READY` token
-anywhere else in an extracted block is not a status value.
+The wrapper retains `set -euo pipefail`; the executable Python 3 body performs
+no task callback, subprocess spawn, or write. It opens the repository root
+once, walks every fixed directory component descriptor-relative with
+`O_DIRECTORY|O_NOFOLLOW|O_CLOEXEC`, opens each leaf with
+`O_RDONLY|O_NOFOLLOW|O_CLOEXEC` (plus `O_NONBLOCK` so a nonregular FIFO cannot
+stall refusal), verifies that leaf is regular with `fstat`, and reads bytes
+from that same descriptor. It rejects NUL before parsing and validates UTF-8
+strictly without using decoded text for the byte comparisons. A directory or
+leaf replacement after open cannot redirect a later check or read to a second
+path lookup.
+
+The committed development shell does not currently provide Python 3. Provision
+the pinned interpreter before entering this wrapper, for example with
+`nix shell --quiet --inputs-from "$D2B_WORKTREE" nixpkgs#python3`, then run the
+wrapper from the repository root inside that shell. Interpreter acquisition is
+bootstrap outside the admission proof. The wrapper itself never invokes Nix;
+if `python3` is absent it fails closed with the same exit 10 and fixed two-line
+pending result.
+
+On the current tree, exit 10 with exactly the two fixed
+architecture-pending lines is required. Exit 0 is valid only when all three
+blocks are atomically changed to byte-identical records whose first line is
+exactly `status: READY`. The four non-status lines are immutable literals;
+only the status may change, and only under a future accepted ADR, amended
+Spec 003, and renewed unanimous plan panel. A prefix, suffix, substring, or
+`READY` token anywhere else in an extracted block is not a status value.
 
 The persistent admission suite plants every row below independently. Every
 rejecting row must return 10, emit only the fixed two-line result and remedy,
@@ -167,10 +202,23 @@ and leave the task, child, and write activity record empty.
 | `READY`, `note: READY`, or a second status token elsewhere in the block | Reject misplaced token. |
 | Missing, duplicated, empty, misnamed, or unknown status key/value | Reject. |
 | Missing source or source extraction error | Reject. |
+| A symlink at any directory component or final file | Reject without following it. |
+| A directory, FIFO, socket, device, or other nonregular final object | Reject without reading it as status input. |
+| A component or leaf replaced between the fake filesystem seam's open and read/check callbacks | Read and validate only the already-open descriptor; the decoy cannot admit. |
 | Missing, duplicated, reversed, or nested BEGIN/END marker | Reject. |
 | A BEGIN or END marker in any order other than one BEGIN followed by one END | Reject. |
-| Any missing, duplicated, reordered, unknown, empty, or changed non-status schema line | Reject. |
+| A NUL inserted into a marker, status field, or non-status field | Reject before parsing. |
+| Any invalid UTF-8 byte sequence anywhere in a source | Reject before parsing. |
+| Any missing, duplicated, reordered, unknown, misplaced, empty, or changed non-status schema line | Reject. |
 | Any byte disagreement among the three extracted blocks | Reject. |
+
+The component-replacement/check-open race is deterministic coverage, not a
+timing test: the persistent Layer-1 Rust admission test uses an injected
+descriptor-filesystem fake that swaps the name to a decoy after the component
+or leaf open callback and before the check/read callback. Independent fixtures
+cover the directory-component and leaf cases. The same suite plants the
+symlink, nonregular, NUL-marker, NUL-field, invalid-UTF-8, reversed, nested,
+missing, duplicate, unknown, misplaced, and three-source disagreement cases.
 
 ## Assertion helpers
 
@@ -267,7 +315,10 @@ grep -q '^- Status: Accepted$' docs/adr/0052-bazel-rust-build-and-test.md \
   || fail 'ADR 0052 is not accepted'
 grep -q '^- Amended: 2026-08-03\.' \
   docs/adr/0052-bazel-rust-build-and-test.md \
-  || fail 'ADR 0052 amendment is missing'
+  || fail 'ADR 0052 substrate amendment is missing'
+grep -q '^- Amended: 2026-08-05\.' \
+  docs/adr/0052-bazel-rust-build-and-test.md \
+  || fail 'ADR 0052 qualification amendment is missing'
 grep -q 'yanked' docs/adr/0052-bazel-rust-build-and-test.md \
   || fail 'ADR 0052 yanked carrier is missing'
 grep -q 'bazel-repin' docs/adr/0052-bazel-rust-build-and-test.md \
@@ -281,11 +332,14 @@ grep -q '0054-broker-hub-generated-splice-workspace.md' docs/adr/README.md \
   || fail 'ADR 0054 index row is missing'
 ```
 
-The record must be `Status: Accepted`, must carry the 2026-08-03 amendment
-line, must already name protected `v3` as the promotion,
+The record must be `Status: Accepted`, must carry both the 2026-08-03 substrate
+and 2026-08-05 qualification amendment lines, must already name protected
+`v3` as the promotion,
 cache-maintenance, cache-publication, streak, and post-promotion lineage, with
-the cold measurement set drawn from qualifying cold qualification records, must
-state that the section 6 yanked carrier lands unconditionally, and must define
+the cold measurement set drawn from canonical `C` rows in the complete
+authoritative eligible lineage and both same-commit policy and fixture jobs
+gating `Q`, must state that the section 6 yanked carrier lands
+unconditionally, and must define
 `HubInventory = {main, broker, guest, walker}` separately from
 `RepinnableHub = {main, guest, walker}`. ADR 0054 must remain Proposed and
 indexed; it does not authorize broker lock regeneration.
@@ -310,14 +364,20 @@ shas=$(git rev-list --reverse HEAD \
   || fail 'git rev-list failed on the ADR 0052 path'
 test -n "$shas" || fail 'ADR 0052 has no history reachable from HEAD'
 
-amendment=
+substrate_amendment=
+qualification_amendment=
 while read -r sha; do
   test -n "$sha" || continue
   body=$(git show "$sha:docs/adr/0052-bazel-rust-build-and-test.md") \
     || fail "cannot read ADR 0052 at $sha"
   if printf '%s\n' "$body" | grep -q '^- Amended: 2026-08-03\.'; then
-    amendment=$sha
-    break
+    test -n "$substrate_amendment" || substrate_amendment=$sha
+  else
+    rc=$?
+    test "$rc" -eq 1 || fail "grep exited $rc reading ADR 0052 at $sha"
+  fi
+  if printf '%s\n' "$body" | grep -q '^- Amended: 2026-08-05\.'; then
+    test -n "$qualification_amendment" || qualification_amendment=$sha
   else
     rc=$?
     test "$rc" -eq 1 || fail "grep exited $rc reading ADR 0052 at $sha"
@@ -325,9 +385,11 @@ while read -r sha; do
 done <<EOF
 $shas
 EOF
-test -n "$amendment" \
+test -n "$substrate_amendment" \
   || fail 'no commit in that history introduces the 2026-08-03 amendment'
-printf '%s\n' "$amendment"
+test -n "$qualification_amendment" \
+  || fail 'no commit in that history introduces the 2026-08-05 amendment'
+printf '%s\n' "$substrate_amendment" "$qualification_amendment"
 ```
 
 The shape matters more than it looks. `git rev-list ... | while read` reports
@@ -348,10 +410,10 @@ commit that could have removed the file; it fires only if the object store
 cannot produce a blob the commit list just named, which is a condition to stop
 on rather than to skip past.
 
-Record that resolved SHA as evidence and require it to be an ancestor of the
+Record both resolved SHAs as evidence and require both to be ancestors of the
 W0 base. If any of `.bazelversion`, `.bazelrc`, `.bazelignore`, `MODULE.bazel`,
 `MODULE.bazel.lock`, `bazel/`, or generated `packages/**/BUILD.bazel` exists in
-a commit that predates it, stop.
+a commit that predates the 2026-08-03 substrate amendment, stop.
 
 ## Foundation validation - W0
 
@@ -1309,9 +1371,12 @@ jq -e '
     (.sample_refs | length) == 5 and
     (.feasibility_ref | length) > 0 and
     all(.sample_refs[];
-      .source_event == "push" and .branch == "v3" and
-      .policy_verdict == "passed" and
-      .fixture_verdict == "passed" and
+      .qualifies and
+      .source_event == "push" and .branch == "refs/heads/v3" and
+      .policy_job.conclusion == "success" and
+      .fixture_job.conclusion == "success" and
+      (.slice_jobs | length) == 4 and
+      all(.slice_jobs[]; .conclusion == "success") and
       .cache_restored == 0))
 ' specs/003-adr052-bazel-rust/evidence/qualification.json
 ```
@@ -1336,81 +1401,223 @@ non-required, use four slices and a rollup, restore and save nothing, call only
 Make targets, use credentialless checkout, and grant pull-request jobs only
 `contents: read`.
 
-Evidence comes only from qualification records: push events on
-`refs/heads/v3` produced by merged pull requests, where the Bazel run and the
-required Cargo run carry the same head commit. A pull-request run is
-diagnostic and produces no record, because its merge ref is recomputed against
-a moving base and its path filter excludes exactly the changes a divergence
-would appear in.
+Evidence comes only from ADR 0052 section 9's canonical `Q` predicate over the
+complete chronological eligible protected-`v3` lineage. The authoritative
+resolver, not authored JSON, binds immutable workflow run/job IDs, attempt,
+head SHA, event, branch, merged-PR eligibility, and conclusion for Cargo,
+Bazel, same-commit `make test-policy`, same-commit fixture contracts, and all
+four slices.
 
-Qualification requires both same-commit policy and fixture verdicts to pass; missing or failed either disqualifies the record and resets the streak.
+A genuine eligible push with a missing, failed, timed-out, skipped, or
+cancelled carrier remains a false-`Q` reset row, including full cancellation.
+Wrong-commit, stale-reused, forged, unresolved, ineligible, omitted, duplicate,
+reordered, or omitted-reset evidence disqualifies the set. Cold qualification
+is exactly `C(row) = Q(row) && cache_restored == 0 && four complete durations
+from the same resolved slice job IDs`.
 
-Validate that exact invariant across the contract, specification, entities,
-research, plan, tasks, and this quickstart before auditing evidence:
+From W3, validate the closed normative-site and executable-predicate inventory
+before auditing evidence. This list is explicit rather than globbed so a new
+second predicate is a review-visible contract change:
 
 ```bash
 set -euo pipefail
 perl -Mstrict -Mwarnings -e '
   my $root = "specs/003-adr052-bazel-rust";
-  my @artifacts = (
-    "$root/contracts/shadow-promotion-evidence.md",
-    "$root/spec.md",
-    "$root/data-model.md",
-    "$root/research.md",
-    "$root/plan.md",
-    "$root/tasks.md",
-    "$root/quickstart.md",
+  my @sites = (
+    ["docs/adr/0052-bazel-rust-build-and-test.md",
+     "The canonical qualification predicate is `Q`"],
+    ["docs/adr/0052-bazel-rust-build-and-test.md",
+     "The streak is the length of the maximal suffix"],
+    ["docs/adr/0052-bazel-rust-build-and-test.md",
+     "Cold-sample qualification is exactly"],
+    ["docs/adr/0052-bazel-rust-build-and-test.md",
+     "The complete authoritative lineage through the"],
+    ["docs/adr/0052-bazel-rust-build-and-test.md",
+     "qualification now retains the complete eligible"],
+    ["docs/adr/0052-bazel-rust-build-and-test.md",
+     "A laundered equivalence streak."],
+    ["docs/adr/0052-bazel-rust-build-and-test.md",
+     "Section 9'\''s canonical `Q` is the only qualification predicate."],
+    ["docs/adr/0052-bazel-rust-build-and-test.md",
+     "packages/xtask/tests/bazel_qualification.rs"],
+    ["$root/contracts/shadow-promotion-evidence.md",
+     "ADR 0052 section 9'\''s `Q(row)` table is the single canonical"],
+    ["$root/contracts/shadow-promotion-evidence.md",
+     "C(row) = Q(row) && cache_restored == 0"],
+    ["$root/contracts/shadow-promotion-evidence.md",
+     "maximal suffix contains at least ten true-`Q` rows"],
+    ["$root/contracts/shadow-promotion-evidence.md",
+     "missing policy, missing fixture, failed, cancelled, wrong commit"],
+    ["$root/contracts/cache-workflow-boundaries.md",
+     "ADR 0052 section 9'\''s canonical"],
+    ["$root/contracts/execution-manifest-binding.md",
+     "ADR 0052 section 9'\''s"],
+    ["$root/contracts/make-target-compatibility.md",
+     "bazel-evidence qualification [--check]"],
+    ["$root/spec.md", "one canonical `Q` predicate. No requirement"],
+    ["$root/spec.md", "**FR-045**: Promotion MUST be blocked"],
+    ["$root/spec.md",
+     "**Qualification Record**: One push event on protected `v3`"],
+    ["$root/spec.md",
+     "**SC-002**: The authoritative complete eligible lineage"],
+    ["$root/spec.md",
+     "**SC-008**: A recorded feasibility measurement"],
+    ["$root/spec.md",
+     "Fixture-contract and `make test-policy` verdicts both pass"],
+    ["$root/research.md",
+     "canonical `Q` predicate over a complete authoritative lineage"],
+    ["$root/research.md",
+     "the continuous-integration set is the five most recent canonical"],
+    ["$root/research.md",
+     "a complete resolver-confirmed eligible lineage ending in at least ten"],
+    ["$root/research.md",
+     "The resolver retains every eligible merged-PR push"],
+    ["$root/data-model.md",
+     "Derived only by ADR 0052 section 9'\''s canonical `Q(row)`"],
+    ["$root/data-model.md",
+     "A real eligible push with any missing, failed, timed-out"],
+    ["$root/data-model.md",
+     "Exactly `C(row) = Q(row) && cache_restored == 0"],
+    ["$root/data-model.md",
+     "Complete eligible lineage from the merged W3 anchor"],
+    ["$root/plan.md", "canonical `Q` is the only predicate"],
+    ["$root/plan.md", "Five most recent canonical `C` rows"],
+    ["$root/plan.md",
+     "resolver records immutable run/job IDs and authoritative evidence"],
+    ["$root/plan.md",
+     "Resolve the complete chronological eligible lineage"],
+    ["$root/plan.md",
+     "the complete-lineage digest, every immutable run/job"],
+    ["$root/plan.md",
+     "The equivalence streak is laundered by pairing another commit'\''s job"],
+    ["$root/tasks.md", "canonical `Q` is the only qualification predicate"],
+    ["$root/tasks.md",
+     "fixtures/qualification/` for missing policy, missing fixture"],
+    ["$root/tasks.md",
+     "Resolve and retain under `.scratch/adr052-w4/records/`"],
+    ["$root/tasks.md",
+     "Select the five most recent canonical `C(row)`"],
+    ["$root/tasks.md",
+     "compute every threshold only through `qualification_decision`"],
+    ["$root/tasks.md",
+     "all ten named negative fixture classes"],
+    ["$root/quickstart.md",
+     "canonical `Q` predicate over the complete chronological", 2],
+    ["$root/quickstart.md",
+     "Cold qualification is exactly `C(row) = Q(row)", 2],
+    ["$root/quickstart.md",
+     ".qualification_records[-1].derived_streak >= 10", 2],
+    ["$root/quickstart.md",
+     "all(.qualification_records[-10:][]; .qualifies and", 3],
   );
-  my $invariant =
-    "Qualification requires both same-commit policy and fixture verdicts " .
-    "to pass; missing or failed either disqualifies the record and resets " .
-    "the streak.";
-  my @commands = ("make test-policy", "make test-fixture-contracts");
+  my @executables = (
+    ["packages/xtask/src/bazel_qualification.rs",
+     "pub fn qualification_decision"],
+    ["packages/xtask/tests/bazel_qualification.rs",
+     "qualification_negative_omitted_reset"],
+    ["packages/d2b-contract-tests/tests/policy_docs.rs",
+     "qualification_normative_sites_are_closed"],
+    ["packages/xtask/tests/policy_ci.rs",
+     "pr_bazel_rust_workflow_is_observation_only"],
+  );
 
-  for my $artifact (@artifacts) {
-    open my $handle, "<:encoding(ASCII)", $artifact
-      or die "$artifact: cannot read: $!\n";
+  for my $site (@sites) {
+    my ($artifact, $needle, $expected) = @$site;
+    $expected //= 1;
+    open my $handle, "<:encoding(UTF-8)", $artifact
+      or die "$artifact: cannot read normative site: $!\n";
     local $/;
     my $text = <$handle>;
     close $handle or die "$artifact: cannot close: $!\n";
-    my $count = () = $text =~ /\Q$invariant\E/g;
-    die "$artifact: qualification invariant must appear exactly once\n"
-      unless $count == 1;
-    for my $command (@commands) {
-      die "$artifact: qualification command missing: $command\n"
-        unless index($text, $command) >= 0;
-    }
+    $text =~ s/\s+/ /g;
+    my $count = () = $text =~ /\Q$needle\E/g;
+    die "$artifact: qualification site missing or duplicate: $needle\n"
+      unless $count == $expected;
   }
 
-  print "qualification cross-artifact consistency: PASS\n";
+  for my $site (@executables) {
+    my ($artifact, $needle) = @$site;
+    open my $handle, "<:encoding(UTF-8)", $artifact
+      or die "$artifact: cannot read executable site: $!\n";
+    local $/;
+    my $text = <$handle>;
+    close $handle or die "$artifact: cannot close: $!\n";
+    my $count = () = $text =~ /\Q$needle\E/g;
+    die "$artifact: executable predicate site missing or duplicate\n"
+      unless $count == 1;
+  }
+
+  print "qualification normative/executable consistency: PASS\n";
 '
+
+make test-rust-main
+make test-policy
 ```
 
+`make test-rust-main` must report the passing complete-lineage fixture and
+independent missing-policy, missing-fixture, failed, cancelled, wrong-commit,
+stale-reused-job, forged-ID, ineligible-event, omitted-eligible-push, and
+omitted-reset negatives from
+`packages/xtask/tests/fixtures/qualification/`. `make test-policy` must report
+the closed normative-site inventory. The failed fixture is parameterized over
+Cargo, Bazel, policy, fixture, and all four slices; the cancelled fixture
+includes a fully cancelled eligible push. Each fixture is schema-valid and
+reaches its named canonical decision rather than failing common parsing.
+
 Before the cold ceiling binds, record the W3 feasibility measurement with all
-four slice durations and derive that record's duration as their maximum. A
-single feasibility run does not claim a median. If its critical-path duration
-shows the ceiling is not plausible, the only authorized answers are a larger
-runner class or a further disjoint slice split.
+four authoritative slice job IDs and durations, require that Cargo, Bazel,
+policy, fixture, and all slices passed at the same head, and derive that
+record's duration as their maximum. A single feasibility run does not claim a
+median. If its critical-path duration shows the ceiling is not plausible, the
+only authorized answers are a larger runner class or a further disjoint slice
+split.
 
 Audit the streak and shadow cache behavior:
 
 ```bash
+cargo xtask bazel-evidence qualification --check \
+  specs/003-adr052-bazel-rust/evidence/qualification.json
+
 jq -e '
+  .lineage_complete and
+  .lineage_order == "first-parent-chronological" and
+  .lineage_resolver_digest != "" and
   (.qualification_records | length) >= 10 and
-  ([.qualification_records[-10:][] |
-    (.source_event == "push") and
-    (.branch == "v3") and
-    (.cargo_run_head_sha == .bazel_run_head_sha) and
-    (.cargo_verdict == .bazel_verdict) and
-    (.policy_verdict == "passed") and
-    (.fixture_verdict == "passed") and
-    (.cache_writes == 0)] | all)
+  (.qualification_records[-1].derived_streak >= 10) and
+  all(.qualification_records[];
+    . as $record |
+    .source_event == "push" and
+    .branch == "refs/heads/v3" and
+    .merged_pr.merged and
+    .merged_pr.base_ref == "v3" and
+    .merged_pr.merge_commit_sha == .head_sha and
+    (.resolver_evidence.digest | length) > 0 and
+    (.slice_jobs | length) == 4 and
+    all([
+      .cargo_job, .bazel_job, .policy_job, .fixture_job,
+      .slice_jobs[0], .slice_jobs[1], .slice_jobs[2], .slice_jobs[3]
+    ][];
+      .head_sha == $record.head_sha and
+      (.workflow_run_id | type) == "number" and
+      (.job_id | type) == "number" and
+      (.run_attempt | type) == "number")) and
+  all(.qualification_records[-10:][];
+    .qualifies and
+    .cargo_job.conclusion == "success" and
+    .bazel_job.conclusion == "success" and
+    .policy_job.conclusion == "success" and
+    .fixture_job.conclusion == "success" and
+    all(.slice_jobs[]; .conclusion == "success") and
+    .cache_restored == 0 and .cache_writes == 0)
 ' specs/003-adr052-bazel-rust/evidence/qualification.json
 ```
 
 ## Promotion evidence audit - W4
 
 ```bash
+cargo xtask bazel-evidence qualification --check \
+  specs/003-adr052-bazel-rust/evidence/qualification.json
+
 jq -e '
   .status == "qualified" and
   .coverage.exact_surface_count == 18 and
@@ -1418,10 +1625,13 @@ jq -e '
   .coverage.carriers_claimed_more_than_once == 0 and
   .coverage.analysis_time_label_check_passed and
   .coverage.out_of_test_completeness_check_passed and
+  .lineage_complete and
+  .lineage_resolver_digest != "" and
   (.qualification_records | length) >= 10 and
   all(.qualification_records[-10:][];
-    .policy_verdict == "passed" and
-    .fixture_verdict == "passed") and
+    .qualifies and
+    .policy_job.conclusion == "success" and
+    .fixture_job.conclusion == "success") and
   .supply_chain.differing_enforcing_outcomes == 0 and
   .supply_chain.yanked_carrier_landed and
   .supply_chain.yanked_snapshot_key_set_matches_all_three_locks and

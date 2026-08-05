@@ -30,7 +30,7 @@ positive integer and remains the only resource budget. Cold-local evidence
 preparation is an internal, temporary W2 xtask helper, not a Make target or
 environment contract, and is removed in W5.
 
-Four other operations are deliberately **not** Make targets and never become
+Five other operations are deliberately **not** Make targets and never become
 approved targets, because every approved target is reachable from a workflow:
 
 - `cargo xtask bazel-repin --hub <main|guest|walker>`, the `RepinnableHub`
@@ -39,10 +39,17 @@ approved targets, because every approved target is reachable from a workflow:
   in the same contract;
 - `cargo xtask bazel-yanked-refresh`, the reviewed networked yanked-snapshot
   update;
-- `cargo xtask bazel-evidence prepare-cold-local`, the temporary W2 helper.
+- `cargo xtask bazel-evidence prepare-cold-local`, the temporary W2 helper;
+- `cargo xtask bazel-evidence qualification [--check]`, the W3-W4
+  authoritative Actions/Pulls API resolver and sole canonical
+  qualification/streak/cold-sample/promotion predicate. The write form emits a
+  candidate summary; `--check` refetches and compares authoritative evidence
+  without changing the summary.
 
 The workflow guard rejects any workflow that invokes any of them, and the
 approved-target guard rejects any `Makefile` recipe that names one.
+Both evidence subcommands are removed in W5 after immutable qualification is
+consumed; neither is a workflow observation path.
 
 `cargo xtask bazel-yanked-check` is the one exception in shape but not in
 policy. It is the offline key-set validator the three Bazel supply-chain
