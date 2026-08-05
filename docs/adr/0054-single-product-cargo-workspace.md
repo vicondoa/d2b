@@ -66,7 +66,7 @@ generic test exclusion, `--exclude d2b-contract-tests`. Its generic clippy
 package-selection arguments are:
 
 ```text
-cargo clippy --locked --manifest-path packages/Cargo.toml --workspace --all-targets -- -D warnings
+nix develop --command bash -c 'cd packages && cargo clippy --locked --workspace --all-targets -- -D warnings'
 ```
 
 There is no clippy exclusion; because `d2b-contract-tests` is a root member,
@@ -136,8 +136,10 @@ two counts are branch observations rather than a resolution mismatch.
 
 `MODULE.bazel` declared exactly `product` and `walker` hubs. The product hub
 used `packages/Cargo.toml` and `packages/Cargo.lock`; the walker remained
-independent. `cargo xtask gen-bazel --check` and module-lock error mode passed.
-A full `bazel query //... --output=label` returned 321 labels.
+independent. The pinned root command
+`nix develop --command bash -c 'cd packages && cargo xtask gen-bazel --check'`
+and module-lock error mode passed. A full
+`bazel query //... --output=label` returned 321 labels.
 
 The following native targets and representative tests passed:
 
@@ -186,7 +188,7 @@ and guest builds, all four representative tests, and context queries. This
 standard pinned command then passed:
 
 ```text
-nix develop --command cargo xtask bazel-repin --hub product
+nix develop --command bash -c 'cd packages && cargo xtask bazel-repin --hub product'
 ```
 
 It generated only `bazel/cargo/product.lock`. Production already always
@@ -204,9 +206,8 @@ package's nested `[workspace]`, workspace-local `[profile.*]` tables, and
 `Cargo.lock`. Generate and verify the sole authoritative product lock with:
 
 ```text
-cargo generate-lockfile --offline --manifest-path packages/Cargo.toml
-cargo metadata --locked --offline --manifest-path packages/Cargo.toml \
-  --format-version 1
+nix develop --command bash -c 'cd packages && cargo generate-lockfile --offline'
+nix develop --command bash -c 'cd packages && cargo metadata --locked --offline --format-version 1'
 ```
 
 The packages keep `default = []` and their explicit dependencies. The guest
@@ -228,23 +229,12 @@ The existing `real-libshpool` code gates remain.
 The root-runnable package selectors are:
 
 ```text
-cargo test --locked --manifest-path packages/Cargo.toml \
-  -p d2b-priv-broker --no-default-features \
-  -- --test-threads 1
-cargo test --locked --manifest-path packages/Cargo.toml \
-  -p d2b-priv-broker --no-default-features \
-  --features layer1-bootstrap -- --test-threads 1
-cargo test --locked --manifest-path packages/Cargo.toml \
-  -p d2b-priv-broker --no-default-features \
-  --features fake-backends -- --test-threads 1
-cargo fmt --manifest-path packages/Cargo.toml \
-  -p d2b-guest-shell-runner --check
-cargo clippy --locked --manifest-path packages/Cargo.toml \
-  -p d2b-guest-shell-runner --no-default-features \
-  --features real-libshpool --all-targets -- -D warnings
-cargo nextest run --locked --manifest-path packages/Cargo.toml \
-  -p d2b-guest-shell-runner --no-default-features \
-  --features real-libshpool
+nix develop --command bash -c 'cd packages && cargo test --locked -p d2b-priv-broker --no-default-features -- --test-threads 1'
+nix develop --command bash -c 'cd packages && cargo test --locked -p d2b-priv-broker --no-default-features --features layer1-bootstrap -- --test-threads 1'
+nix develop --command bash -c 'cd packages && cargo test --locked -p d2b-priv-broker --no-default-features --features fake-backends -- --test-threads 1'
+nix develop --command bash -c 'cd packages && cargo fmt -p d2b-guest-shell-runner --check'
+nix develop --command bash -c 'cd packages && cargo clippy --locked -p d2b-guest-shell-runner --no-default-features --features real-libshpool --all-targets -- -D warnings'
+nix develop --command bash -c 'cd packages && cargo nextest run --locked -p d2b-guest-shell-runner --no-default-features --features real-libshpool'
 ```
 
 Broker lanes remain three serial `cargo test` processes in isolated target
@@ -255,15 +245,8 @@ default-feature, and `real-libshpool` selectors.
 The exact generic-main split is:
 
 ```text
-cargo clippy --locked --manifest-path packages/Cargo.toml \
-  --workspace --all-targets \
-  --exclude d2b-priv-broker \
-  --exclude d2b-guest-shell-runner -- -D warnings
-cargo nextest run --locked --manifest-path packages/Cargo.toml \
-  --workspace \
-  --exclude d2b-contract-tests \
-  --exclude d2b-priv-broker \
-  --exclude d2b-guest-shell-runner
+nix develop --command bash -c 'cd packages && cargo clippy --locked --workspace --all-targets --exclude d2b-priv-broker --exclude d2b-guest-shell-runner -- -D warnings'
+nix develop --command bash -c 'cd packages && cargo nextest run --locked --workspace --exclude d2b-contract-tests --exclude d2b-priv-broker --exclude d2b-guest-shell-runner'
 ```
 
 The generic doctest and harness-free companion discovery uses the nextest
@@ -319,11 +302,18 @@ The authoritative hub input and output paths after migration are:
 | product | `packages/Cargo.toml` | `packages/Cargo.lock` | `bazel/cargo/product.lock` |
 | walker | `tests/tools/no-bash-ast-walker/Cargo.toml` | `tests/tools/no-bash-ast-walker/Cargo.lock` | `bazel/cargo/walker.lock` |
 
-The workspace merge regenerates only the product Bazel-side lock with
-`nix develop --command cargo xtask bazel-repin --hub product`. The walker lock
-stays byte-identical. Its corresponding command is
-`nix develop --command cargo xtask bazel-repin --hub walker`, used only when
-the walker Cargo inputs change in a separately reviewed change.
+The workspace merge regenerates only the product Bazel-side lock. The walker
+lock stays byte-identical. These are the only root-runnable repin commands:
+
+```text
+nix develop --command bash -c 'cd packages && cargo xtask bazel-repin --hub product'
+nix develop --command bash -c 'cd packages && cargo xtask bazel-repin --hub walker'
+```
+
+Changing the walker lock remains a separately reviewed change. Entering
+`packages/` is load-bearing: rustup discovers `rust-toolchain.toml` there and
+Cargo discovers `.cargo/config.toml` and its `xtask` alias there. No command in
+this decision relies on that alias from the repository root.
 
 Product code is represented by native first-party targets. Each broker and
 guest configured context declares its own direct first-party and `@product`
@@ -333,8 +323,9 @@ each Cargo context is not an invariant. The selected Cargo closure and its
 package policy are the security authority; native configured targets remain
 authoritative for actual first-party Bazel edges and features.
 
-Every Bazel selected-root or containment checker, for broker default, broker
-layer1, broker fake, and guest real-libshpool, runs these steps in order:
+Every Bazel selected-root or containment checker for broker default, broker
+layer1, broker fake, guest real-libshpool, product hub, and walker hub runs
+these steps in order:
 
 1. Assert the selected root exists exactly once.
 2. Materialize the complete context closure and assert it is nonempty.
@@ -342,108 +333,126 @@ layer1, broker fake, and guest real-libshpool, runs these steps in order:
    census includes the root, configured first-party targets, expected direct
    first-party dependencies, cfg and feature values, and all reached external
    identities.
-4. Then prove product-hub and product-lock containment, expected configured
-   first-party dependencies and features, zero unrelated first-party siblings,
-   and zero guest-runner dependencies in broker production through `cquery`
-   and `aquery`.
+4. Then prove matching hub and lock containment, expected configured
+   first-party dependencies, cfgs and features, zero cross-context edges, and
+   zero unrelated first-party siblings through `cquery` and `aquery`.
 
-Each package-closure checker independently asserts that its selected Cargo root
-exists exactly once, its closure is nonempty, and its exact generated census of
-normal and build edges is complete before applying a containment, minimality,
-deny, audit, or leakage predicate. Every checker has seeded negatives that
-must fail for a missing selected root, an empty or truncated closure, an
-omitted normal edge, an omitted build edge, and connected leakage from one
-unrelated first-party sibling. An empty census cannot satisfy an absence
-predicate. The `@product` external union is accepted; a wrong native edge or
-an inexact selected Cargo closure is not.
+Package-closure checkers apply the same root, nonempty-census, completeness,
+containment, minimality, deny, audit, and leakage order. An empty census cannot
+satisfy an absence predicate. The `@product` external union is accepted; a
+wrong native edge or an inexact selected Cargo closure is not.
 
 ### 4. Enforce package-scoped selected-closure policy
 
 The repository-owned generator has these exact root-runnable entry points:
 
 ```text
-cargo run --manifest-path packages/Cargo.toml -p xtask -- gen-package-policy-inputs
-cargo run --manifest-path packages/Cargo.toml -p xtask -- gen-package-policy-inputs --check
+nix develop --command bash -c 'cd packages && cargo xtask gen-package-policy-inputs'
+nix develop --command bash -c 'cd packages && cargo xtask gen-package-policy-inputs --check'
 ```
 
-It deterministically derives two tracked input sets for broker production with
-default features disabled and guest production with `real-libshpool`:
+The target set is exactly the root flake's `systems`: `x86_64-linux` maps to
+`x86_64-unknown-linux-gnu`, and `aarch64-linux` maps to
+`aarch64-unknown-linux-gnu`. ADR 0008 supports broker host runtime only on
+x86_64 Linux. The aarch64 artifact is required flake cross-evaluation and build
+coverage, not aarch64 broker host runtime or graphics/audio support.
+
+For each system, the generator deterministically derives tracked inputs for
+broker production with default features disabled and guest production with
+`real-libshpool`:
 
 1. `production/closure.json` plus `production/Cargo.lock`: the selected normal
    and build closure, resolved features, and pruned lock used for binary and
    static-dependency minimality.
-2. `policy/metadata.json` plus `policy/Cargo.lock`: the dev-inclusive package
-   graph and filtered lock used to preserve the existing package deny and
-   audit semantics.
+2. `policy/metadata.json` plus `policy/Cargo.lock`: the production graph plus
+   every root dev edge and the complete transitive normal/build closure of each
+   reached dev package, used for package deny and audit.
 
 The resulting paths are:
 
 ```text
-packages/policy-inputs/broker-production/{production,policy}/
-packages/policy-inputs/guest-real-libshpool/{production,policy}/
+packages/policy-inputs/<system>/broker-production/{production,policy}/
+packages/policy-inputs/<system>/guest-real-libshpool/{production,policy}/
 ```
 
 Both sets derive from locked, offline root metadata and the root lock and bind
-the selected root, target, package identity, version, source, checksum, edge
-kind, and resolved features. The policy set includes the selected package's
-dev edges and every normal/build transitive edge they reach. Every drift
-diagnostic lists every stale generated path repository-relative and ends with
-this remediation, in this order:
+the selected root, Nix system, Cargo target, package identity, version, source,
+checksum, edge kind, cfg, and resolved features. Production includes all
+target-specific normal and build dependencies for that system. Policy adds the
+root dev closure described above. Every drift diagnostic lists all stale paths
+repository-relative and ends with this remediation, in this order:
 
 ```text
-cargo run --manifest-path packages/Cargo.toml -p xtask -- gen-package-policy-inputs
+nix develop --command bash -c 'cd packages && cargo xtask gen-package-policy-inputs'
 Review and commit the generated changes under packages/policy-inputs/.
-cargo run --manifest-path packages/Cargo.toml -p xtask -- gen-package-policy-inputs --check
+nix develop --command bash -c 'cd packages && cargo xtask gen-package-policy-inputs --check'
 ```
 
 For each policy set, the implementation reuses ADR 0052's pinned offline source
 materialization rather than defining a second vendor path. Nix uses the
 root-lock-derived filtered lock through `rustPlatform.importCargoLock`; the
 Bazel carrier re-declares the same registry URL and lock checksum or the pinned
-git rev and archive checksum. Before cargo-deny starts, the gate asserts the
-exact nonempty selected external source set, count, and checksums and exact
-equality with the metadata and filtered-lock identities. Any selected external
-source that is missing, extra, unreadable, or checksum-mismatched refuses
-before policy execution. A clean-environment negative, with no ambient Cargo
-source cache, removes one selected source and must fail before cargo-deny
-starts.
+git rev and archive checksum. Before cargo-deny starts, the gate proves the
+exact nonempty source set, count, readability, source identities, checksums,
+and equality between metadata and filtered-lock identities.
 
 The existing package configs run over the dev-inclusive metadata with no
-`--exclude-dev`:
+`--exclude-dev`; they check bans, licenses, and sources. Package audits use the
+generated policy locks and pinned RustSec database with `--no-fetch`. Broker
+has no ignore; guest has exactly `--ignore RUSTSEC-2024-0384`. Existing
+aggregate checks remain unchanged, including the root audit's two ignores and
+the no-ignore `Cargo.guest.lock` audit. Aggregate and package checks may each
+block the change.
 
-```text
-cargo deny check \
-  --metadata-path packages/policy-inputs/broker-production/policy/metadata.json \
-  --config packages/d2b-priv-broker/deny.toml \
-  bans licenses sources
-cargo deny check \
-  --metadata-path packages/policy-inputs/guest-real-libshpool/policy/metadata.json \
-  --config packages/d2b-guest-shell-runner/deny.toml \
-  bans licenses sources
-```
+The package checks under `checks.<system>` are
+`broker-production-dependency-policy`,
+`guest-shell-runner-static-dependency-policy`,
+`broker-production-package-policy`, and `guest-real-libshpool-package-policy`.
+Each reads only its matching system directory and first matches the embedded
+system and target. All four exist for both systems; none falls back to x86_64.
 
-Package audits run the generated dev-inclusive `policy/Cargo.lock` files
-against the repository-pinned RustSec database with `--no-fetch`. Broker has
-no ignore; guest has exactly `--ignore RUSTSEC-2024-0384`. The existing
-aggregate root deny and audits remain. The root-lock audit retains exactly
-`--ignore RUSTSEC-2026-0194` and `--ignore RUSTSEC-2026-0195`; the
-`packages/Cargo.guest.lock` audit retains no ignore. Aggregate and package
-checks may each block the change.
+### Seeded refusal matrix
 
-```text
-cargo-audit audit \
-  --file packages/policy-inputs/broker-production/policy/Cargo.lock \
-  --db ${advisoryDbGit} --no-fetch
-cargo-audit audit \
-  --file packages/policy-inputs/guest-real-libshpool/policy/Cargo.lock \
-  --db ${advisoryDbGit} --no-fetch --ignore RUSTSEC-2024-0384
-```
+Each row is a separately named fixture mutation over a passing baseline and
+must fail with that predicate's diagnostic. Reusing one mutation for two rows,
+letting a seed reach a later predicate, or observing a zero exit is a harness
+failure. The matrix is instantiated for every applicable checker.
 
-Source, license, ban, and advisory failures are enforcing. A main-only
-dependency must not alter a broker or guest closure verdict. Adding an edge
-that makes it reachable must alter the generated input and subject it to that
-package's policy. Seeded dev-only forbidden-license, forbidden-source, and
-advisory cases must each fail, proving dev edges were not filtered away.
+| Case | Isolated mutation |
+| --- | --- |
+| `missing-root` | Remove the selected root. |
+| `duplicate-root` | Emit the selected root twice. |
+| `empty-closure` | Retain the root declaration but emit no closure. |
+| `omitted-normal-edge` | Remove one reached normal edge. |
+| `omitted-build-edge` | Remove one reached build edge. |
+| `omitted-root-dev-edge` | Remove one root dev edge from policy metadata. |
+| `omitted-dev-normal-edge` | Remove a normal edge transitively reached from a root dev edge. |
+| `omitted-dev-build-edge` | Remove a build edge transitively reached from a root dev edge. |
+| `wrong-cfg` | Change one configured target cfg value. |
+| `wrong-feature` | Change one resolved feature set. |
+| `cross-context-edge` | Add an edge valid only in another configured context. |
+| `unrelated-first-party-sibling` | Connect one unrelated product sibling. |
+| `product-hub-containment` | Add an external identity absent from the product hub. |
+| `walker-hub-containment` | Add an external identity absent from the walker hub. |
+| `product-lock-containment` | Add a product-hub identity absent from the product lock. |
+| `walker-lock-containment` | Add a walker-hub identity absent from the walker lock. |
+| `broker-x86_64-target-edge` | Omit a synthetic x86_64-only broker dependency. |
+| `guest-x86_64-target-edge` | Omit a synthetic x86_64-only guest dependency. |
+| `broker-aarch64-target-edge` | Omit a synthetic aarch64-only broker dependency. |
+| `guest-aarch64-target-edge` | Omit a synthetic aarch64-only guest dependency. |
+| `stale-bazel-output` | Change generated Bazel output; the pinned Bazel generation check refuses. |
+| `source-missing` | Remove one selected source in a clean source-cache environment. |
+| `source-extra` | Materialize one source absent from metadata. |
+| `source-unreadable` | Make one selected source unreadable. |
+| `checksum-mismatch` | Change selected source bytes without changing its checksum. |
+| `source-identity-mismatch` | Change a registry URL or git rev on one side only. |
+| `metadata-lock-mismatch` | Make metadata and the filtered lock name/version/source sets differ. |
+| `forbidden-production-class` | Connect a forbidden static dependency class. |
+| `forbidden-license` | Connect a dev-only package denied by license policy. |
+| `forbidden-source` | Connect a dev-only package denied by source policy. |
+| `forbidden-ban` | Connect a dev-only package denied by bans policy. |
+| `advisory` | Connect a dev-only package with a non-ignored pinned advisory. |
+| `stale-policy-output` | Change a tracked policy artifact; the pinned policy generation check refuses. |
 
 The guest real-libshpool policy currently has six pre-existing license
 denials: BSD-3-Clause for `bindgen` and `instant`, ISC for `inotify`,
@@ -454,23 +463,24 @@ package/license pairs. A blanket license expansion is not the remedy. The
 exact root-runnable remedy and recheck sequence is:
 
 ```text
-cargo run --manifest-path packages/Cargo.toml -p xtask -- gen-package-policy-inputs
+nix develop --command bash -c 'cd packages && cargo xtask gen-package-policy-inputs'
 Review and commit packages/d2b-guest-shell-runner/deny.toml and the generated packages/policy-inputs/ changes.
-cargo run --manifest-path packages/Cargo.toml -p xtask -- gen-package-policy-inputs --check
+nix develop --command bash -c 'cd packages && cargo xtask gen-package-policy-inputs --check'
 make test-rust-supply-chain
 make test-policy
 nix build --no-link \
-  .#checks.x86_64-linux.guest-shell-runner-static-dependency-policy
+  .#checks.x86_64-linux.broker-production-dependency-policy \
+  .#checks.aarch64-linux.broker-production-dependency-policy \
+  .#checks.x86_64-linux.guest-shell-runner-static-dependency-policy \
+  .#checks.aarch64-linux.guest-shell-runner-static-dependency-policy
 nix build --no-link .#checks.x86_64-linux.guest-static-elf
 nix build --no-link .#checks.x86_64-linux.rust-deny
 nix build --no-link .#checks.x86_64-linux.rust-audit
 ```
 
-The exact Nix check
-`checks.x86_64-linux.guest-shell-runner-static-dependency-policy` reads only
-the generated guest real-libshpool `production/closure.json` and
-`production/Cargo.lock`. It never reads either deleted standalone lock or the
-full root lock.
+The guest static checks read only their generated system-specific
+`production/closure.json` and `production/Cargo.lock`, never a deleted
+standalone lock or the full root lock.
 
 ### 5. Amend Spec 003 after merge
 
@@ -523,14 +533,13 @@ Rejected. It has a real tooling boundary and no product path dependency.
    excluded from main tests, not from clippy, policy, or fixture compilation.
 4. Broker default, layer 1, and fake lanes stay serial and target-isolated.
 5. Nix uses root source and lock without weakening selected-dependency or ELF
-   checks; guest static dependency policy reads only generated guest production
-   closure inputs.
+   checks; package checks use only matching per-system generated inputs.
 6. Bazel has one product hub and one separate walker hub.
 7. Every selected context proves one root and a nonempty exact census before
    predicates; native first-party contexts, not the product external union,
    define actual Bazel dependencies and features.
-8. Broker and guest package-closure deny and audit inputs are generated,
-   checked for drift and exact pinned source completeness, and enforcing.
+8. Broker and guest per-system package inputs cover production and root-dev
+   closures, drift, and exact pinned sources and are enforcing.
 9. The guest license blocker is resolved by reviewed policy in the merge
    change, not waived or misreported.
 10. Spec 003 is amended and re-panelled after this ADR merges and before

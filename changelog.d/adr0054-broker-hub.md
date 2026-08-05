@@ -5,9 +5,11 @@
   workspace. The decision accepts the shared external package and feature
   superset while keeping selected Cargo closure policy authoritative for
   security and exact native Bazel context censuses authoritative for
-  first-party edges. Generated production inventories and pruned locks enforce
-  binary and static minimality; dev-inclusive metadata and locks preserve deny
-  and audit policy through exact pinned offline source checks. Existing
-  contract-crate clippy, policy, test, and fixture compilation coverage remains
-  enforcing. The guest real-libshpool policy's six existing license findings
-  remain an implementation blocker requiring a narrow reviewed update.
+  first-party edges. Broker and real-libshpool guest production and
+  root-dev-inclusive policy inputs are generated separately for x86_64-linux
+  and aarch64-linux with target/build edges, exact pinned offline sources, and
+  system-bound Nix checks. Root commands preserve the packages toolchain and
+  Cargo configuration. Distinct seeded failures cover every completeness,
+  containment, target, source-integrity, policy, and generated-drift refusal.
+  Existing contract-crate coverage remains enforcing. The guest policy's six
+  existing license findings remain blocked on a narrow reviewed update.

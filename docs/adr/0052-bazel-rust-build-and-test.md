@@ -23,9 +23,14 @@
   first-party context censuses still refuse unrelated sibling leakage. It
   preserves the baseline contract-crate clippy, policy, test, and fixture
   compilation surfaces. Broker and guest production inventories and
-  dev-inclusive deny and audit inputs reuse this record's pinned offline source
-  materialization with exact source-set, count, readability, and checksum
-  checks before policy runs. If accepted, Spec 003 must be amended and
+  root-dev-inclusive deny and audit inputs are generated separately for the
+  root flake's x86_64-linux and aarch64-linux systems, including target and
+  build dependencies, and reuse this record's pinned offline sources. Matching
+  Nix checks may read only their system's artifact. Product/walker repins and
+  policy generation/check enter `packages/` through `nix develop`, preserving
+  its pinned toolchain and Cargo configuration. A distinct seeded failure
+  covers every completeness, containment, source-integrity, policy, target,
+  and generated-drift refusal. If accepted, Spec 003 must be amended and
   re-panelled before implementation resumes.
 - Related: [ADR 0009](0009-rust-toolchain-msrv-and-supply-chain.md) (Rust
   toolchain, MSRV, and supply-chain policy), which keeps its authority
