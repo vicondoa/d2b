@@ -577,7 +577,7 @@ mod tests {
     #[test]
     fn every_provider_prefixed_name_has_one_explicit_classification() {
         let root = repo_root().expect("resolve repository root");
-        let members = cargo_workspace_members(&root).expect("read workspace metadata");
+        let members = cargo_workspace_members(root).expect("read workspace metadata");
         let mut names: BTreeSet<String> = members
             .into_iter()
             .map(|member| member.package_name)
