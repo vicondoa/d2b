@@ -145,6 +145,11 @@
           "guest-config-containment.nix"
           "guest-control-auth.nix"
           "guest-control-vsock.nix"
+          "guest-control-vsock-extra-equals.nix"
+          "guest-control-vsock-extra-split.nix"
+          "guest-control-vsock-long-socket.nix"
+          "guest-control-vsock-user-cid.nix"
+          "guest-control-vsock-user-socket.nix"
           "guest-exec-policy.nix"
           "guest-shell-policy.nix"
         ];

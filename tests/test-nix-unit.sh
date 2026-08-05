@@ -511,6 +511,7 @@ for shard in "${nix_unit_shards[@]}"; do
   shard_stderr="$shard_dir/$shard.stderr"
   shard_status_file="$shard_dir/$shard.status"
   rm -f -- "$shard_result" "$shard_stderr" "$shard_status_file"
+  log "  evaluating Nix-unit shard: $shard"
   if [ "$shard_workers" -eq 1 ]; then
     run_nix_unit_shard \
       "$shard" "$shard_result" "$shard_stderr" "$shard_status_file"
