@@ -565,6 +565,7 @@ struct CachedTypedShellSessionTarget {
 struct TypedShellSessionTargetCache {
     entries: BTreeMap<(u32, String), CachedTypedShellSessionTarget>,
     recency: VecDeque<(u32, String)>,
+    create_reservations: BTreeSet<(u32, String)>,
 }
 
 impl std::fmt::Debug for TypedShellSessionTargetCache {
@@ -678,6 +679,19 @@ fn new_zone_coordinator() -> Arc<Mutex<ZoneCoordinator>> {
 
 fn new_typed_shell_session_targets() -> Arc<Mutex<TypedShellSessionTargetCache>> {
     Arc::new(Mutex::new(TypedShellSessionTargetCache::default()))
+}
+
+struct TypedShellSessionCreateReservation {
+    cache: Arc<Mutex<TypedShellSessionTargetCache>>,
+    key: (u32, String),
+}
+
+impl Drop for TypedShellSessionCreateReservation {
+    fn drop(&mut self) {
+        if let Ok(mut cache) = self.cache.lock() {
+            cache.create_reservations.remove(&self.key);
+        }
+    }
 }
 
 /// Populate the daemon's Zone authority index from the trusted host bundle.
@@ -9457,6 +9471,28 @@ fn cached_typed_shell_session_target(
         .and_then(|mut sessions| sessions.cached(&(peer_uid, name.as_str().to_owned())))
 }
 
+fn reserve_typed_shell_session_create(
+    state: &ServerState,
+    peer_uid: u32,
+    name: &public_wire::ShellName,
+) -> Result<TypedShellSessionCreateReservation, TypedError> {
+    let key = (peer_uid, name.as_str().to_owned());
+    let mut cache = state
+        .typed_shell_session_targets
+        .lock()
+        .map_err(|_| shell_protocol_failed())?;
+    if !cache.create_reservations.insert(key.clone()) {
+        return Err(TypedError::WorkloadAliasConflict {
+            workload_id: name.as_str().to_owned(),
+            detail: "ShellSession name is already being created".to_owned(),
+        });
+    }
+    Ok(TypedShellSessionCreateReservation {
+        cache: Arc::clone(&state.typed_shell_session_targets),
+        key,
+    })
+}
+
 #[cfg(test)]
 fn typed_shell_session_target_cache_len(state: &ServerState) -> usize {
     state
@@ -9599,7 +9635,7 @@ fn run_typed_shell_owner(
         }
     };
     let creating = method == "Create";
-    let target = if creating {
+    let (target, create_reservation) = if creating {
         let Some(execution_ref) = request.get("executionRef").and_then(Value::as_str) else {
             let _ = write_json_frame(
                 &stream,
@@ -9609,6 +9645,13 @@ fn run_typed_shell_owner(
         };
         let target = match typed_shell_execution_target(execution_ref) {
             Ok(target) => target,
+            Err(error) => {
+                let _ = write_json_frame(&stream, &typed_shell_resource_error_frame(&error));
+                return;
+            }
+        };
+        let create_reservation = match reserve_typed_shell_session_create(&state, peer.uid, &name) {
+            Ok(reservation) => reservation,
             Err(error) => {
                 let _ = write_json_frame(&stream, &typed_shell_resource_error_frame(&error));
                 return;
@@ -9631,15 +9674,16 @@ fn run_typed_shell_owner(
                 return;
             }
         }
-        target
+        (target, Some(create_reservation))
     } else {
-        match resolve_typed_shell_session_target(&state, &peer, &resource) {
+        let target = match resolve_typed_shell_session_target(&state, &peer, &resource) {
             Ok(target) => target,
             Err(error) => {
                 let _ = write_json_frame(&stream, &typed_shell_resource_error_frame(&error));
                 return;
             }
-        }
+        };
+        (target, None)
     };
     let attach_stream = request
         .get("attach")
@@ -9672,6 +9716,7 @@ fn run_typed_shell_owner(
         }
     };
     remember_typed_shell_session_target(&state, peer.uid, &name, &target);
+    drop(create_reservation);
     let session = established.attach.session.clone();
     let owner_shell_ref_digest = shell_ref_digest(&[
         &established.target,
@@ -30252,6 +30297,74 @@ mod broker_dispatch_tests {
             "work"
         );
         assert!(super::typed_shell_execution_target("Process/command").is_err());
+    }
+
+    #[test]
+    fn concurrent_typed_shell_creates_reserve_one_uid_name_and_release() {
+        use std::sync::Barrier;
+
+        let state =
+            test_state_with_broker_socket(unreachable_broker_socket_path("shell-create-reserve"));
+        let name = d2b_contracts::public_wire::ShellName::new("primary").unwrap();
+        let start = Arc::new(Barrier::new(2));
+        let release = Arc::new(Barrier::new(2));
+        let outcomes = Arc::new(Mutex::new(Vec::new()));
+
+        std::thread::scope(|scope| {
+            for _ in 0..2 {
+                let start = Arc::clone(&start);
+                let release = Arc::clone(&release);
+                let outcomes = Arc::clone(&outcomes);
+                let name = name.clone();
+                let state = &state;
+                scope.spawn(move || {
+                    start.wait();
+                    let reservation =
+                        super::reserve_typed_shell_session_create(state, 1000, &name);
+                    match reservation {
+                        Ok(reservation) => {
+                            outcomes.lock().unwrap().push(1u8);
+                            release.wait();
+                            drop(reservation);
+                        }
+                        Err(super::typed_error::TypedError::WorkloadAliasConflict { .. }) => {
+                            outcomes.lock().unwrap().push(0u8);
+                            release.wait();
+                        }
+                        Err(_) => {
+                            outcomes.lock().unwrap().push(2u8);
+                            release.wait();
+                        }
+                    }
+                });
+            }
+        });
+
+        let mut outcomes = outcomes.lock().unwrap().clone();
+        outcomes.sort_unstable();
+        assert_eq!(
+            outcomes,
+            vec![0, 1],
+            "one concurrent create must reserve the UID/name and the other must conflict"
+        );
+
+        let failed_create = super::reserve_typed_shell_session_create(&state, 1000, &name)
+            .expect("reservation must be released when create setup fails");
+        assert!(
+            super::cached_typed_shell_session_target(&state, 1000, &name).is_none(),
+            "an in-flight create must not become a normal binding"
+        );
+        drop(failed_create);
+
+        let committed_create = super::reserve_typed_shell_session_create(&state, 1000, &name)
+            .expect("released reservation must admit a retry");
+        super::remember_typed_shell_session_target(&state, 1000, &name, "work");
+        drop(committed_create);
+        assert_eq!(
+            super::cached_typed_shell_session_target(&state, 1000, &name).as_deref(),
+            Some("work"),
+            "the normal binding is installed only after creation succeeds"
+        );
     }
 
     #[test]
