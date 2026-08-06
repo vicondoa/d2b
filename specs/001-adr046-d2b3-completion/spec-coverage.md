@@ -952,7 +952,7 @@ Run this against `tasks.md` before implementation starts.
 - [ ] Before starting a task, the implementer retrieves the full manifest entry and treats
       `detailedDesign`, `validation`, and `removalProof` as the task definition
 - [x] `dependencyOwner` edges are represented: 91 of 545 manifest work items are marked
-      free-to-start, while the full `tasks.md` census has 100 `[P]` tasks of 605 total
+      free-to-start, while the full `tasks.md` census has 99 `[P]` tasks of 605 total
 - [x] Wave assignment matches the implementation graph, with no item moved between waves
 - [x] Parallel groups are preserved so file-disjoint slices launch together (FR-028)
 - [x] The 14 `file-overlap-order` edges are recorded as explicit ordering constraints

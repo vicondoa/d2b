@@ -247,9 +247,8 @@ contract correction, and evidence, and T603 adds the amended-plan resume reconci
 do not renumber, replace, or complete a manifest item. Dependency order is:
 
 ```text
-T073-T218 obligations -> T603 -> T589 -> {T590,T591,T593,T594}
-T591 -> T592
-T593 -> T605
+T073-T218 obligations -> T603 -> T589 -> {T590,T591,T594}
+T591 -> T592 -> T593 -> T605
 {T590,T592,T594,T605} -> T595
 T595 -> {T596,T597,T598,T599,T604} -> T220 -> freeze candidate F
 freeze candidate F -> {T600,T601} -> T602 -> T219
@@ -258,9 +257,10 @@ freeze candidate F -> {T600,T601} -> T602 -> T219
 T603 is the sole direct prerequisite of T589. T589 remains blocked until the external
 reconciliation receipt and editor progress receipt pass, every receipt row is satisfied, and
 T073-T218 plus T603 are checked by the sole authorized `/d2b-spec-edit` progress batch.
-T590, T591, T593, and T594 are file-disjoint and launch together from the T589 prep commit.
+T590, T591, and T594 are file-disjoint and launch together from the T589 prep commit.
 T592 launches only after T591 because both tasks serially own `transaction.rs`: T591 first
 removes store-side policy interpretation, then T592 becomes the sole audit/replay writer.
+T593 launches only after T592 because both tasks serialize `packages/Cargo.lock`.
 T605 launches after T593 so it can regenerate the one shared API-snapshot set after both the
 registrar surface reduction and the Zone enum addition.
 T595 is the only daemon-composition writer. T596-T599 and T604 are file-disjoint. T220 is the
@@ -1396,7 +1396,7 @@ agents share a working tree or a `packages/target/`:
 | W2 | 2 | **2** - zero file-overlap edges; both start together |
 | W3 | 1 | **1** - strictly serial by design |
 | W4 | 6 | **6** |
-| W5 | 12 manifest groups + completion graph | **12** for the original manifest groups; after T589 the completion graph has **6** file-disjoint implementation slices (T590-T594 plus T605), then one serial daemon composition slice, then **5** file-disjoint acceptance/docs slices including T604 |
+| W5 | 12 manifest groups + completion graph | **12** for the original manifest groups; after T589, T590/T591/T594 start together and the T591 branch continues as T591 -> T592 -> T593 -> T605, then daemon composition waits for T590/T592/T594/T605, followed by **5** file-disjoint acceptance/docs slices including T604 |
 | W6 | 28 | **up to 27** - each Provider's hermetic suite compiles without any other Provider existing |
 | W7 | 5 | **5** |
 
@@ -1483,7 +1483,7 @@ wave entry criteria**.
 | W2 | 2 | Zero file-overlap edges; both groups start together. The 3 `primitives` items have no intra-wave dependency at all |
 | W3 | 1 | Strictly serial by design; every Provider dossier depends on it |
 | W4 | 6 | Five parallel member-spec groups plus `core-config-hub:w4`; all six start together |
-| W5 (`adr046w5`) | 12 manifest groups + completion graph | T603 is the two-pass receipt/editor-mediated resume gate and sole direct prerequisite of T589; T590/T591/T593/T594 start from T589, T591 serializes into T592 on `transaction.rs`, T593 serializes into T605 on shared API snapshots, T595 composes after T590/T592/T594/T605, T596-T599 plus T604 fan out, T220 converges and freezes F, and T600-T601 share that immutable candidate before T219's one binding close |
+| W5 (`adr046w5`) | 12 manifest groups + completion graph | T603 is the two-pass receipt/editor-mediated resume gate and sole direct prerequisite of T589; T589 -> {T590,T591,T594}, T591 -> T592 -> T593 -> T605, T595 composes after T590/T592/T594/T605, T596-T599 plus T604 fan out, T220 converges and freezes F, and T600-T601 share that immutable candidate before T219's one binding close |
 | W6 | 28 | 27 crates in five families; each Provider's hermetic suite compiles without any other Provider existing |
 | W7 | 5 | Five file-disjoint closing groups; all five start together |
 
