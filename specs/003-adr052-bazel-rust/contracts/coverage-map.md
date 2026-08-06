@@ -134,6 +134,14 @@ grandfathered. The filter returns the fixed `EACCES` sentinel for `socket`,
 `io_uring_setup`, `io_uring_enter`, and `io_uring_register`, plus `socketcall`
 where the native architecture exposes it. There is no identity, policy-open,
 digest, preflight, `no_new_privs`, filter-load, or action-exec fallback.
+For the immutable execution supervisor, the same filter permits ptrace request
+arguments only for `PTRACE_TRACEME`, `PTRACE_SETOPTIONS`, `PTRACE_CONT`, and
+`PTRACE_DETACH`; attach, seize, memory/register access, syscall tracing, and
+every other request remain denied. This parent-child exec-event allowance adds
+no capability and changes none of the socket, io_uring, `pidfd_getfd`, or
+action no-network denials. Startup and native host-conformance evidence bind
+the exact request set and reject either a missing required request or any
+additional one.
 
 The same pinned Linux sandbox patch also binds crash containment. Every
 governed action has a fresh `CLONE_NEWPID` namespace. Namespace PID 1 remains

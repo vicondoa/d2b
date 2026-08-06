@@ -262,11 +262,14 @@
   restore-before-unlock. The
   single-threaded helper inherits that mask, first refuses any managed
   `SIG_IGN` before fork without reset-and-continue, then installs dispositions
-  and synchronous consumption. It creates the close-on-exec child error and
-  group-confirmation pipes, forks once, performs both child and supervisor
-  `setpgid`, confirms the exact live group before `READY` or signal
-  consumption/forwarding, emits framed `READY` then `EXECUTED`, remains alive, forwards allowed
-  termination signals, and reaps and mirrors exact target status. Exact
+  and synchronous consumption. It creates only the close-on-exec child error
+  pipe, forks once, performs both child and supervisor `setpgid`, completes
+  child setup, enters `PTRACE_TRACEME` initial `SIGSTOP`, confirms the exact
+  live group and tracing state, installs `PTRACE_O_TRACEEXEC`, emits framed
+  `READY`, releases with signal zero, accepts only exact kernel
+  `PTRACE_EVENT_EXEC`, detaches with signal zero, and only then emits
+  `EXECUTED`; it remains alive, forwards allowed termination signals, and
+  reaps and mirrors exact target status. Exact
   source/derivation-dependency/output/protocol identity, one Rust invocation
   site, private-fd identity, descriptor absence, exact
   single-record exec-error `EINTR`/`EAGAIN`/short/partial/overlong and
@@ -274,10 +277,14 @@
   closed-reader `EPIPE`, waitable default `SIGCHLD`, fast-same-status crash
   discrimination, ignored-disposition refusal, handoff-window/
   normalization-time/blocked SIGTERM, parent/child setpgid races,
-  `ESRCH`/`EPERM`/early-child-exit cleanup, pending signal before group
-  confirmation, pre-`READY` ownership, deterministic post-`READY` pre-exec
-  termination for every managed signal including child-death empty EOF,
-  helper group kill/reap, no pre-exec forwarding/grace, no false
+  `ESRCH`/`EPERM`/early-child-exit cleanup, initial-stop/options/continue
+  failures, pending signal before group/trace confirmation, pre-`READY`
+  ownership, deterministic post-`READY` pre-exec termination for every managed
+  signal, pre-exec `SIGKILL`/`SIGSYS`/fault/exit/OOM-like kill, empty EOF
+  without event, missing/wrong event, detach failure, fast first-instruction
+  exit, Linux/native-platform/Yama gates, exact four-request ptrace seccomp
+  allowance with unchanged action no-network, helper group kill/reap, no
+  pre-exec forwarding/grace, no false
   `EXECUTED`/target terminal/audit event, no-deadline external-TERM
   escalation, target-ignore-TERM, and every Rust-parent and C-supervisor
   ownership/closure/cleanup/wait/reap failure are covered. The patched
@@ -370,12 +377,17 @@
   against physical lines; census/section/mismatch positions are actual;
   oversized record/line inputs assert closed bounds. Temp-dir,
   path-resolution, make-path, copy, mkdir, open3, and subprocess capture/wait
-  failures and warnings are injected at their actual seams and execute through
-  `run_cli_entrypoint --self-test` after sentinel output. No case supplies its
-  expected reason to a generic setup wrapper. Each returns status 1, empty
-  stdout, and only its seam-specific fixed setup diagnostic and remedy; no raw
-  exception/path, sentinel, or task rewrite appears. `self-test-contract` is
-  byte-tested only for invalid validator self-test behavior. Actual
+  exceptions, warnings, false, undefined, malformed, and
+  successful-with-missing-side-effect results are injected at their actual
+  seams and execute through `run_cli_entrypoint --self-test` after sentinel
+  output. No case supplies its expected reason to a generic setup wrapper.
+  Each returns status 1, empty stdout, and only its seam-specific fixed setup
+  diagnostic and remedy. Failed-subprocess cleanup checks every close and
+  consume-reaps with at most eight `EINTR` retries; injected close/wait/retry/
+  exhaustion results preserve the primary failure and append only fixed
+  `D2B-SPEC003-PLAN-CLEANUP` on cleanup failure. No raw warning/error/path,
+  sentinel, or task rewrite appears. `self-test-contract` is byte-tested only
+  for invalid validator self-test behavior. Actual
   unreadable-source and unsupported-argument subprocesses
   assert empty stdout and exact status 1 and 2. Diagnostics authorize only the fixed repository-relative source plus
   bounded numeric or closed `none`/`overflow` locators, never task/dependency

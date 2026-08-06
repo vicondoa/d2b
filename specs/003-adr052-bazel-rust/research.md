@@ -544,29 +544,34 @@ produces the typed ignored-disposition recovery code and fails before fork
 without resetting and continuing. Only after verifying non-ignored
 dispositions and the complete inherited mask does it install defaults,
 ignored `SIGPIPE`, waitable `SIGCHLD`, synchronous consumption, and the final
-mask. It creates one nonblocking close-on-exec child exec-error pipe plus a
-close-on-exec group-confirmation pipe and forks exactly once. The child and
-supervisor both call `setpgid`; the child waits with managed signals blocked
-until the supervisor confirms the exact group and liveness. `ESRCH`, `EPERM`,
-mismatch, and early child exit are typed failures with cleanup. Only after
-confirmation may the supervisor release the child or emit `READY`. The child
-then resets signal state, installs declared
-stdio, sets the executable fd CLOEXEC, closes supervisor-only descriptors, and
-calls `execveat(private_fd, "", argv, envp, AT_EMPTY_PATH)`. Failure writes one
-fixed record with bounded `EINTR`/`EAGAIN`/short-write handling under the
-absolute deadline, then `_exit`s. There is no target path, reopen,
-`/proc/self/fd`, `fexecve`, or fallback.
+mask. It creates one nonblocking close-on-exec child exec-error pipe and forks
+exactly once. There is no confirmation pipe. Child and supervisor both call
+`setpgid`. The child installs declared stdio and descriptor state, calls
+`PTRACE_TRACEME`, restores final signal state, and raises one initial
+`SIGSTOP`; at that stop all fallible setup is complete. The supervisor
+confirms the exact group and initial stop, installs exactly
+`PTRACE_O_TRACEEXEC`, emits framed `READY`, and releases the child with
+zero-signal `PTRACE_CONT`. The child's next operation is
+`execveat(private_fd, "", argv, envp, AT_EMPTY_PATH)`. Failure writes one fixed
+record with bounded `EINTR`/`EAGAIN`/short-write handling under the absolute
+deadline, then `_exit`s. There is no target path, reopen, `/proc/self/fd`,
+`fexecve`, or fallback.
 
-The supervisor emits framed `READY`. Until `EXECUTED`, managed signals
-coalesce into one pre-exec setup termination and are never forwarded or
-escalated. That request overrides empty close-on-exec EOF, suppresses
-`EXECUTED`, target terminal status, and target-executed audit publication,
-and makes the helper kill and consume-reap the confirmed group before typed
-`HELPER_PRE_EXEC_TERMINATION`; the sandbox backstops incomplete cleanup. With
-no queued request, empty EOF proves exec and the supervisor emits framed
-`EXECUTED`, remains alive, forwards the fixed termination-signal allowlist,
-waits and reaps, emits framed terminal status, and mirrors the exact target
-status. Case expiry and external `SIGTERM`,
+Until the kernel exec event, managed signals coalesce into one pre-exec setup
+termination and are never forwarded or escalated. The helper kills and
+consume-reaps the confirmed group before typed
+`HELPER_PRE_EXEC_TERMINATION`; the sandbox backstops incomplete cleanup.
+Exec-error EOF is only writer closure. Execution requires the exact stopped
+`SIGTRAP` with `PTRACE_EVENT_EXEC`, followed by successful zero-signal
+`PTRACE_DETACH`; only then does the supervisor emit framed `EXECUTED`. A
+pre-exec `SIGKILL`, `SIGSYS`, fault, normal exit, OOM-like kill, EOF without
+the event, plain or wrong event, or detach failure suppresses `EXECUTED`,
+target terminal status, and target-executed audit publication. The kernel
+holds the target at the exec event, so successful detach and `EXECUTED` remain
+ordered even when the target exits on its first instruction. The supervisor
+remains alive, forwards the fixed termination-signal allowlist, waits and
+reaps, emits framed terminal status, and mirrors the exact target status. Case
+expiry and external `SIGTERM`,
 including with no case deadline, both run the complete fixed
 TERM/grace/unconditional-KILL sequence. Exec-error stays a single-record
 EOF/record/one-overlong-byte protocol. Status uses fixed magic, version, type,
@@ -584,14 +589,25 @@ stdio, CLOEXEC, signal forwarding, exact status, and every cleanup, wait, and
 reap failure. Deterministic plants cover an inherited managed `SIG_IGN`
 refusal, `SIGTERM` in the Rust-to-helper handoff window, parent-first,
 child-first setpgid races, `ESRCH`, `EPERM`, other setpgid errors, early child
-exit, and a pending managed signal before group confirmation. Disposition planting
-stays in reviewed C test tooling. Deterministic barriers after `READY` and
-before exec inject every managed signal, including a child-death case with
-empty exec-pipe EOF, and prove one setup request, helper group kill/reap, no
-grace, no `EXECUTED` or target terminal, and no target-executed audit event.
+exit, and a pending managed signal before group/trace confirmation. Disposition planting
+stays in reviewed C test tooling. The deterministic initial stop after
+`READY` admits every managed-signal plant and proves one setup request, helper
+group kill/reap, no grace, no `EXECUTED` or target terminal, and no
+target-executed audit event. Separate tests cover all pre-exec death/fault/EOF/
+wrong-event/detach classes and mutations accepting any of them.
 No Rust unsafe is added. The closed
 invocation-site census rejects every runfiles, worktree, Rust, Bazel, Make, or
 workflow invocation except the one typed consumer.
+
+The decision is gated to native x86_64/aarch64 Linux >= 3.19 and an actual
+passing parent-child exec-event startup probe. Yama, when present, must permit
+the natural unprivileged parent-child relationship in mode 0 or 1; no
+`CAP_SYS_PTRACE` is granted. Action seccomp admits only `PTRACE_TRACEME`,
+`PTRACE_SETOPTIONS`, `PTRACE_CONT`, and `PTRACE_DETACH`, denying all other
+ptrace requests while preserving every no-network denial. Exact source,
+protocol, seccomp, platform/kernel/Yama, both native probe/conformance,
+positive/negative/mutation, and recovery results are evidence and
+qualification inputs rather than prose claims.
 
 The supervisor is the normal teardown owner, not the final crash boundary.
 Every governed action already passes through the exact patched Bazel Linux
@@ -1035,12 +1051,17 @@ text. Every code has one exact remedy and rerun. The injectable entrypoint
 supplies every fixture's complete byte comparison. Separate actual
 subprocesses prove unreadable-source status 1 and unsupported-argument status
 2 with empty stdout and byte-exact stderr. Temp-dir, path-resolution,
-make-path, copy, mkdir, open3, and subprocess capture/wait failures and
-warnings are injected at their actual operation seams and run through
+make-path, copy, mkdir, open3, and subprocess capture/wait exceptions,
+warnings, false, undefined, malformed, and successful-with-missing-side-effect
+returns are injected at their actual operation seams and run through
 `run_cli_entrypoint --self-test` after writing sentinel stdout/stderr. No case
-passes an expected reason to a generic wrapper. Each returns status 1,
-discards all sentinel and raw exception/path content, and emits only its
-seam-specific fixed setup class and remedy, never a task-rewrite remedy.
+passes an expected reason to a generic wrapper. Each returns status 1 and
+emits only its seam-specific fixed setup class and remedy. Failed-subprocess
+cleanup checks every close and consume-reaps with at most eight `EINTR`
+retries; close/wait/retry/exhaustion injections preserve the primary typed
+failure and append only fixed `D2B-SPEC003-PLAN-CLEANUP` on cleanup failure.
+All sentinel and raw warning/error/path content is discarded and no
+task-rewrite remedy appears.
 `self-test-contract` is reserved for the exact invalid validator self-test
 case. This remains a planning tool under
 the specification directory and is not a repository gate.
@@ -1113,9 +1134,12 @@ for:
   helper crash/EOF before `EXECUTED`, fast same-status target, non-waitable
   SIGCHLD, mask capture/block/guard-poison/restoration, per-launch guard,
   unlock-before-restoration, managed-`SIG_IGN` refusal,
-  handoff-window/blocked SIGTERM, setpgid confirmation/race failure, pre-exec
-  forwarding/grace, child-death empty-EOF success, false `EXECUTED` or audit,
-  target-ignore-TERM, numeric Rust signal, signal/status,
+  handoff-window/blocked SIGTERM, setpgid/initial-stop race failure, missing
+  trace option, pre-exec forwarding/grace/death/fault/OOM-like kill, empty EOF
+  without event, wrong/missing event, detach failure, platform/kernel/Yama/
+  ptrace-request-policy gap, no-network regression, false `EXECUTED` or audit,
+  fast first-instruction exit ordering, target-ignore-TERM, numeric Rust
+  signal, signal/status,
   ownership/cleanup/wait/reap regression, patched-Bazel
   PID-namespace/teardown/ceiling identity, crash containment, capability, or
   setup-before-payload gap,

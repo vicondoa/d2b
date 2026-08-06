@@ -6,7 +6,10 @@ use File::Copy qw(copy);
 use File::Path qw(make_path);
 use File::Spec;
 use File::Temp qw(tempdir);
+use Errno qw(ECHILD EINTR EINVAL);
 use IPC::Open3 qw(open3);
+use POSIX qw(WNOHANG);
+use Scalar::Util qw(openhandle);
 use Symbol qw(gensym);
 
 my $tool_path = 'specs/003-adr052-bazel-rust/tools/validate-plan-structure.pl';
@@ -17,6 +20,7 @@ my $fixture_root =
     'specs/003-adr052-bazel-rust/tools/validator-fixtures/';
 my $max_record_ordinal = 999;
 my $max_line_number = 9999;
+my $max_cleanup_wait_eintr = 8;
 
 my %code = (
     read       => 'D2B-SPEC003-PLAN-READ',
@@ -30,6 +34,7 @@ my %code = (
     adjacency  => 'D2B-SPEC003-PLAN-ADJACENCY',
     cycle      => 'D2B-SPEC003-PLAN-CYCLE',
     conflict   => 'D2B-SPEC003-PLAN-CONFLICT',
+    cleanup    => 'D2B-SPEC003-PLAN-CLEANUP',
 );
 
 my %remedy = (
@@ -55,6 +60,8 @@ my %remedy = (
         'Remove a dependency edge so the task graph is acyclic.',
     conflict =>
         'Order the conflicting tasks by dependency or give them disjoint owned paths.',
+    cleanup =>
+        'Correct validator self-test descriptor close and child reap; verify local process resources, then rerun.',
 );
 
 my %specific_remedy = (
@@ -78,6 +85,8 @@ my %specific_remedy = (
         'Correct validator self-test process creation; verify the Perl interpreter and validator executable, then rerun.',
     'parse:self-test-setup-subprocess' =>
         'Correct validator self-test subprocess capture and wait; verify local process resources, then rerun.',
+    'cleanup:self-test-subprocess-cleanup' =>
+        'Correct validator self-test descriptor close and child reap; verify local process resources, then rerun.',
     'task_id:duplicate-task' =>
         'Assign every task one unique canonical TNNN identifier and update its dependency row.',
 );
@@ -145,6 +154,7 @@ my %known_reason = (
     },
     cycle => { map { $_ => 1 } qw(detected) },
     conflict => { map { $_ => 1 } qw(detected) },
+    cleanup => { map { $_ => 1 } qw(self-test-subprocess-cleanup) },
 );
 
 my @fixture_names = qw(
@@ -308,17 +318,38 @@ sub self_test_setup_stderr {
     );
 }
 
+sub self_test_cleanup_stderr {
+    return render_error(
+        error_record('cleanup', 'self-test-subprocess-cleanup'),
+        'tasks'
+    );
+}
+
 {
     package D2B::Spec003::SelfTestSetupFailure;
 
     sub new {
-        my ($class, $reason) = @_;
-        return bless { reason => $reason }, $class;
+        my ($class, $reason, $cleanup_failed) = @_;
+        return bless {
+            reason         => $reason,
+            cleanup_failed => $cleanup_failed ? 1 : 0,
+        }, $class;
     }
 
     sub reason {
         my ($self) = @_;
         return $self->{reason};
+    }
+
+    sub cleanup_failed {
+        my ($self) = @_;
+        return $self->{cleanup_failed};
+    }
+
+    sub with_cleanup_failure {
+        my ($self) = @_;
+        $self->{cleanup_failed} = 1;
+        return $self;
     }
 }
 
@@ -371,6 +402,16 @@ sub default_self_test_operations {
                 : $wait_status >> 8;
             return [$status, $stdout, $stderr];
         },
+        cleanup_close => sub {
+            my ($fh) = @_;
+            return close $fh;
+        },
+        cleanup_wait => sub {
+            my ($pid) = @_;
+            local $! = 0;
+            my $waited = waitpid($pid, 0);
+            return [$waited, 0 + $!];
+        },
     };
 }
 
@@ -397,6 +438,11 @@ sub run_setup_boundary {
     return $result;
 }
 
+sub is_plain_nonempty_scalar {
+    my ($value) = @_;
+    return defined($value) && !ref($value) && $value && length($value) > 0;
+}
+
 sub create_self_test_temp_dir {
     my ($operations) = @_;
     return run_setup_boundary(
@@ -404,7 +450,7 @@ sub create_self_test_temp_dir {
         sub {
             my $path = $operations->{temp_dir}->();
             die "temporary directory unavailable"
-                if !defined($path) || $path eq '' || !-d $path;
+                if !is_plain_nonempty_scalar($path) || !-d $path;
             return $path;
         }
     );
@@ -415,10 +461,10 @@ sub resolve_self_test_path {
     return run_setup_boundary(
         'self-test-setup-path-resolution',
         sub {
-            die "path unavailable" if !defined($path) || $path eq '';
+            die "path unavailable" if !is_plain_nonempty_scalar($path);
             my $resolved = $operations->{path_resolution}->($path);
             die "path unresolved"
-                if !defined($resolved) || $resolved eq '';
+                if !is_plain_nonempty_scalar($resolved) || !-f $resolved;
             return $resolved;
         }
     );
@@ -430,7 +476,8 @@ sub create_self_test_tools_dir {
         'self-test-setup-make-path',
         sub {
             my $created = $operations->{make_path}->($path);
-            die "tools directory unavailable" if !$created || !-d $path;
+            die "tools directory unavailable"
+                if !defined($created) || ref($created) || !$created || !-d $path;
             return $path;
         }
     );
@@ -442,7 +489,8 @@ sub copy_self_test_script {
         'self-test-setup-copy',
         sub {
             my $copied = $operations->{copy}->($source, $destination);
-            die "script copy failed" if !$copied || !-f $destination;
+            die "script copy failed"
+                if !defined($copied) || ref($copied) || !$copied || !-f $destination;
             return $destination;
         }
     );
@@ -455,24 +503,84 @@ sub create_unreadable_source_fixture {
         sub {
             my $created = $operations->{mkdir}->($path);
             die "unreadable-source fixture unavailable"
-                if !$created || !-d $path;
+                if !defined($created) || ref($created) || !$created || !-d $path;
             return $path;
         }
     );
 }
 
 sub cleanup_failed_subprocess_capture {
-    my ($process) = @_;
-    return if !defined $process;
+    my ($operations, $process, $already_reaped) = @_;
+    return 1 if !defined $process;
     my ($pid, $stdin_fh, $stdout_fh, $stderr_fh) = @$process;
-    {
-        local $SIG{__WARN__} = sub { };
-        eval { close $stdin_fh if defined $stdin_fh; };
-        eval { close $stdout_fh if defined $stdout_fh; };
-        eval { close $stderr_fh if defined $stderr_fh; };
-        eval { waitpid($pid, 0) if defined $pid; };
+    my $cleanup_ok = 1;
+
+    for my $fh ($stdin_fh, $stdout_fh, $stderr_fh) {
+        next if !openhandle($fh);
+        my $closed;
+        my $completed = eval {
+            local $SIG{__WARN__} = sub { die $_[0]; };
+            $closed = $operations->{cleanup_close}->($fh);
+            1;
+        };
+        $cleanup_ok = 0
+            if !$completed || !defined($closed) || ref($closed) || !$closed;
     }
-    return;
+
+    if (!$already_reaped && defined($pid) && !ref($pid)) {
+        my $wait_complete = 0;
+        for (1 .. $max_cleanup_wait_eintr) {
+            my $wait_result;
+            my $completed = eval {
+                local $SIG{__WARN__} = sub { die $_[0]; };
+                $wait_result = $operations->{cleanup_wait}->($pid);
+                1;
+            };
+            if (
+                !$completed
+                || ref($wait_result) ne 'ARRAY'
+                || @$wait_result != 2
+                || !defined($wait_result->[0])
+                || ref($wait_result->[0])
+                || $wait_result->[0] !~ /\A-?[0-9]+\z/
+                || !defined($wait_result->[1])
+                || ref($wait_result->[1])
+                || $wait_result->[1] !~ /\A[0-9]+\z/
+            ) {
+                $cleanup_ok = 0;
+                last;
+            }
+            my ($waited, $errno) = @$wait_result;
+            if ($waited == $pid || ($waited == -1 && $errno == ECHILD)) {
+                $wait_complete = 1;
+                last;
+            }
+            if ($waited == -1 && $errno == EINTR) {
+                next;
+            }
+            $cleanup_ok = 0;
+            last;
+        }
+        $cleanup_ok = 0 if !$wait_complete;
+    }
+    return $cleanup_ok;
+}
+
+sub subprocess_postconditions {
+    my ($process) = @_;
+    my ($pid, $stdin_fh, $stdout_fh, $stderr_fh) = @$process;
+    my $descriptors_closed =
+        !openhandle($stdin_fh)
+        && !openhandle($stdout_fh)
+        && !openhandle($stderr_fh);
+
+    local $! = 0;
+    my $waited = waitpid($pid, WNOHANG);
+    my $errno = 0 + $!;
+    return ($descriptors_closed && $waited == -1 && $errno == ECHILD, 0)
+        if $waited == -1;
+    return (0, 1) if $waited == $pid;
+    return (0, 0);
 }
 
 sub run_subprocess {
@@ -484,19 +592,40 @@ sub run_subprocess {
         sub {
             my $opened = $operations->{open3}->(@command);
             die "process creation failed"
-                if ref($opened) ne 'ARRAY' || @$opened != 4;
+                if ref($opened) ne 'ARRAY'
+                || @$opened != 4
+                || !defined($opened->[0])
+                || ref($opened->[0])
+                || $opened->[0] !~ /\A[1-9][0-9]*\z/
+                || !openhandle($opened->[1])
+                || !openhandle($opened->[2])
+                || !openhandle($opened->[3]);
             return $opened;
         }
     );
 
     my $result;
+    my $reaped_by_postcondition = 0;
     my $completed = eval {
         $result = run_setup_boundary(
             'self-test-setup-subprocess',
             sub {
                 my $captured = $operations->{subprocess}->($process);
                 die "subprocess capture failed"
-                    if ref($captured) ne 'ARRAY' || @$captured != 3;
+                    if ref($captured) ne 'ARRAY'
+                    || @$captured != 3
+                    || !defined($captured->[0])
+                    || ref($captured->[0])
+                    || $captured->[0] !~ /\A[0-9]+\z/
+                    || $captured->[0] > 255
+                    || !defined($captured->[1])
+                    || ref($captured->[1])
+                    || !defined($captured->[2])
+                    || ref($captured->[2]);
+                my ($postconditions_ok, $probe_reaped) =
+                    subprocess_postconditions($process);
+                $reaped_by_postcondition = $probe_reaped;
+                die "subprocess postcondition failed" if !$postconditions_ok;
                 return $captured;
             }
         );
@@ -504,7 +633,17 @@ sub run_subprocess {
     };
     if (!$completed) {
         my $failure = $@;
-        cleanup_failed_subprocess_capture($process);
+        my $cleanup_ok = cleanup_failed_subprocess_capture(
+            $operations,
+            $process,
+            $reaped_by_postcondition
+        );
+        if (
+            !$cleanup_ok
+            && ref($failure) eq 'D2B::Spec003::SelfTestSetupFailure'
+        ) {
+            $failure->with_cleanup_failure();
+        }
         die $failure;
     }
     return @$result;
@@ -1357,6 +1496,9 @@ sub run_self_test_entrypoint {
         my $failure_stderr =
             ref($failure) eq 'D2B::Spec003::SelfTestSetupFailure'
             ? self_test_setup_stderr($failure->reason())
+                . ($failure->cleanup_failed()
+                    ? self_test_cleanup_stderr()
+                    : '')
             : self_test_contract_stderr();
         ${$args{stdout}} = '';
         ${$args{stderr}} = $failure_stderr;
@@ -1711,16 +1853,60 @@ RERUN D2B-SPEC003-PLAN-PARSE perl specs/003-adr052-bazel-rust/tools/validate-pla
     );
     for my $setup_case (@setup_failure_cases) {
         my ($name, $operation_key, $reason) = @$setup_case;
-        for my $mode (qw(failure warning)) {
-            my $injected_operation = sub {
-                if ($mode eq 'warning') {
-                    warn
-                        "raw $name setup warning at /tmp/d2b-sensitive-self-test-path\n";
-                    return;
-                }
-                die
-                    "raw $name setup failure at /tmp/d2b-sensitive-self-test-path\n";
-            };
+        for my $mode (
+            qw(failure warning false undefined malformed missing-side-effect)
+        ) {
+            my $injected_operation;
+            if ($mode eq 'failure' || $mode eq 'warning') {
+                $injected_operation = sub {
+                    if ($mode eq 'warning') {
+                        warn
+                            "raw $name setup warning at /tmp/d2b-sensitive-self-test-path\n";
+                        return;
+                    }
+                    die
+                        "raw $name setup failure at /tmp/d2b-sensitive-self-test-path\n";
+                };
+            } elsif ($mode eq 'false') {
+                $injected_operation = sub { return 0; };
+            } elsif ($mode eq 'undefined') {
+                $injected_operation = sub { return undef; };
+            } elsif ($mode eq 'malformed') {
+                $injected_operation =
+                    $operation_key eq 'open3'
+                    ? sub { return [1, 2]; }
+                    : $operation_key eq 'subprocess'
+                    ? sub { return [0, {}, '']; }
+                    : sub { return { malformed => 1 }; };
+            } elsif ($operation_key eq 'temp_dir') {
+                $injected_operation = sub {
+                    return File::Spec->catfile(
+                        $0,
+                        'missing-temp-dir-side-effect'
+                    );
+                };
+            } elsif ($operation_key eq 'path_resolution') {
+                $injected_operation = sub {
+                    return File::Spec->catfile(
+                        $_[0],
+                        'missing-path-resolution-side-effect'
+                    );
+                };
+            } elsif (
+                $operation_key eq 'make_path'
+                || $operation_key eq 'copy'
+                || $operation_key eq 'mkdir'
+            ) {
+                $injected_operation = sub { return 1; };
+            } elsif ($operation_key eq 'open3') {
+                $injected_operation = sub {
+                    return [424242, gensym, gensym, gensym];
+                };
+            } else {
+                $injected_operation = sub {
+                    return [0, '', ''];
+                };
+            }
             my ($failure_stdout, $failure_stderr) = ('', '');
             my $failure_status = run_cli_entrypoint(
                 argv => ['--self-test'],
@@ -1749,6 +1935,101 @@ RERUN D2B-SPEC003-PLAN-PARSE perl specs/003-adr052-bazel-rust/tools/validate-pla
                 $$self_stderr .= self_test_contract_stderr();
                 return 1;
             }
+        }
+    }
+
+    my $cleanup_failure_expected =
+        $setup_failure_expected{'self-test-setup-subprocess'}
+        . q|FAIL D2B-SPEC003-PLAN-CLEANUP source=specs/003-adr052-bazel-rust/tasks.md record=none line=none reason=self-test-subprocess-cleanup
+REMEDY D2B-SPEC003-PLAN-CLEANUP Correct validator self-test descriptor close and child reap; verify local process resources, then rerun.
+RERUN D2B-SPEC003-PLAN-CLEANUP perl specs/003-adr052-bazel-rust/tools/validate-plan-structure.pl --self-test && perl specs/003-adr052-bazel-rust/tools/validate-plan-structure.pl
+|;
+    my @cleanup_cases = (
+        [
+            'close-failure',
+            sub {
+                my ($fh) = @_;
+                close $fh;
+                return 0;
+            },
+            undef,
+            $cleanup_failure_expected,
+        ],
+        [
+            'wait-failure',
+            undef,
+            sub {
+                my ($pid) = @_;
+                waitpid($pid, 0);
+                return [-1, EINVAL];
+            },
+            $cleanup_failure_expected,
+        ],
+    );
+    my $retry_count = 0;
+    push @cleanup_cases, [
+        'wait-eintr-retry',
+        undef,
+        sub {
+            my ($pid) = @_;
+            $retry_count++;
+            return [-1, EINTR] if $retry_count < 3;
+            my $waited = waitpid($pid, 0);
+            return [$waited, 0];
+        },
+        $setup_failure_expected{'self-test-setup-subprocess'},
+    ];
+    my $exhaustion_count = 0;
+    push @cleanup_cases, [
+        'wait-eintr-exhaustion',
+        undef,
+        sub {
+            my ($pid) = @_;
+            $exhaustion_count++;
+            waitpid($pid, 0)
+                if $exhaustion_count == $max_cleanup_wait_eintr;
+            return [-1, EINTR];
+        },
+        $cleanup_failure_expected,
+    ];
+    for my $cleanup_case (@cleanup_cases) {
+        my ($name, $close_operation, $wait_operation, $expected) =
+            @$cleanup_case;
+        my %overrides = (
+            subprocess => sub {
+                die
+                    "raw $name primary failure at /tmp/d2b-sensitive-self-test-path\n";
+            },
+        );
+        $overrides{cleanup_close} = $close_operation
+            if defined $close_operation;
+        $overrides{cleanup_wait} = $wait_operation
+            if defined $wait_operation;
+        my ($failure_stdout, $failure_stderr) = ('', '');
+        my $failure_status = run_cli_entrypoint(
+            argv => ['--self-test'],
+            self_test_runner => sub {
+                my ($runner_stdout, $runner_stderr) = @_;
+                $$runner_stdout .=
+                    "sentinel $name stdout /tmp/d2b-sensitive-self-test-path\n";
+                $$runner_stderr .=
+                    "sentinel $name stderr /tmp/d2b-sensitive-self-test-path\n";
+                return run_self_tests(
+                    $runner_stdout,
+                    $runner_stderr,
+                    self_test_ops => \%overrides,
+                );
+            },
+            stdout => \$failure_stdout,
+            stderr => \$failure_stderr,
+        );
+        if (
+            $failure_status != 1
+            || $failure_stdout ne ''
+            || $failure_stderr ne $expected
+        ) {
+            $$self_stderr .= self_test_contract_stderr();
+            return 1;
         }
     }
 
@@ -1833,15 +2114,18 @@ RERUN D2B-SPEC003-PLAN-TASK-ID perl specs/003-adr052-bazel-rust/tools/validate-p
     }
 
     $$self_stdout .=
-        'PASS: 67 validator self-tests; positive fixture accepted; '
+        'PASS: 99 validator self-tests; positive fixture accepted; '
         . '47 independent negative fixtures cover noncanonical unchecked-list forms, census declarations, '
         . 'task parsing, ownership, dependency, adjacency, section, cycle, '
         . 'and conflict fixtures rejected; full stderr byte-matched against '
         . 'independent literals; physical census/mismatch and adjacency rows '
         . 'and bounded numeric, none, and overflow locators verified; actual '
         . 'temp-dir, path-resolution, make-path, copy, mkdir, open3, and subprocess '
-        . 'failures and warnings emit only their seam-specific fixed setup diagnostics after '
-        . 'sentinel output is discarded; actual unreadable-source status 1 and unsupported-argument '
+        . 'exceptions, warnings, false, undefined, malformed, and missing-side-effect results '
+        . 'emit only their seam-specific fixed setup diagnostics after sentinel output is discarded; '
+        . 'failed-subprocess close and bounded-EINTR consume-reap results preserve the primary '
+        . 'failure and add only the fixed cleanup code when cleanup fails; actual unreadable-source '
+        . 'status 1 and unsupported-argument '
         . 'status 2 subprocesses verified; self-test-contract is reserved for '
         . "validator contract failures\n";
     return 0;

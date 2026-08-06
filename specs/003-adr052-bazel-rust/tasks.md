@@ -213,17 +213,25 @@ to the same file are explicitly sequential.
   the crash, ignored or `SA_NOCLDWAIT` inherited `SIGCHLD`,
   a managed `SIG_IGN` refusal before fork, pending-at-entry,
   Rust-to-helper-handoff-window, normalization-time, and blocked `SIGTERM`,
-  parent-first/child-first setpgid confirmation races, typed
-  `ESRCH`/`EPERM`/other-error/group-mismatch/early-child-exit cleanup, a pending managed
-  signal before group confirmation, pre-`READY` termination ownership, and a
-  deterministic barrier after `READY` but before exec for every managed
-  signal. Require one coalesced pre-exec termination request, no forwarding or
-  grace, immediate helper-owned confirmed-group kill/reap, typed
-  `HELPER_PRE_EXEC_TERMINATION`, no `EXECUTED`, no target terminal frame, and
-  no target-executed audit event. One case makes the child die with empty
-  exec-pipe EOF and proves the pending request still suppresses `EXECUTED`.
-  Add mutations for pre-exec forwarding, pre-exec escalation, empty-EOF
-  success, and false execution/audit publication,
+  parent-first/child-first setpgid and initial-trace-stop races; typed
+  `ESRCH`/`EPERM`/other-error/group-mismatch/early-child-exit cleanup; exact
+  `PTRACE_TRACEME`, initial `SIGSTOP`, `PTRACE_O_TRACEEXEC`,
+  `READY`-before-zero-signal-`PTRACE_CONT`, exact kernel
+  `PTRACE_EVENT_EXEC`, and zero-signal-detach-before-`EXECUTED` transitions; a
+  pending managed signal before group/trace confirmation; pre-`READY`
+  termination ownership; and a deterministic initial-stop hold after `READY`
+  for every managed signal. Require one coalesced pre-exec termination request,
+  no forwarding or grace, immediate helper-owned confirmed-group kill/reap,
+  typed `HELPER_PRE_EXEC_TERMINATION`, no `EXECUTED`, no target terminal frame,
+  and no target-executed audit event. Add direct pre-exec
+  `SIGKILL`, `SIGSYS`, fault, normal-exit, and OOM-like-kill cases; empty EOF
+  without an exec event; missing/wrong/plain ptrace events; detach failure; and
+  a target that exits on its first instruction after event and detach. Add
+  mutations for pre-exec forwarding/escalation, accepting EOF or any/wrong
+  stop as exec, accepting detach failure, and false execution/audit publication,
+  plus Linux/native-platform/minimum-kernel/Yama gates, the exact
+  `TRACEME`/`SETOPTIONS`/`CONT`/`DETACH` seccomp request allowance, forbidden
+  ptrace requests, and unchanged action no-network,
   target-ignore-TERM escalation with no case deadline,
   signal-forwarding/status mismatch, spawn, close, cleanup, wait, and reap
   failures. The fixed protocol requires `READY`, then `EXECUTED`, then terminal
@@ -276,8 +284,9 @@ to the same file are explicitly sequential.
   root without declaring not-yet-present modules, implement the
   dependency-leaf owner, safe command-fd mapping, typed supervisor protocol,
   one process-wide serialized safe signal-mask handoff with restore-before-unlock,
-  pre-exec signal queuing and helper-owned setup termination, and cleanup
-  behavior required for every T005 test to pass. Add the already reviewed pinned `nix` 0.29 `signal`
+  the Rust-side initial-stop/exec-event/detach state model, pre-exec signal
+  queuing, helper-owned setup termination, and cleanup behavior required for
+  every T005 test to pass. Add the already reviewed pinned `nix` 0.29 `signal`
   feature to that leaf for safe `SigSet` mask operations; add no new signal
   FFI dependency. No Rust helper crate, runner `sys.rs`, raw-fork
   implementation, `pre_exec`, signal-disposition mutation, or first-party Rust
@@ -328,7 +337,12 @@ to the same file are explicitly sequential.
   Bazel source/patch/policy/capability hashes plus per-native-system output-NAR
   and executable hashes, and exact C source/Nix expression/protocol/static
   compiler/libc/header/dependency-closure hashes plus per-native-system
-  derivation/output-NAR/executable/static-ELF hashes, never full store paths.
+  derivation/output-NAR/executable/static-ELF hashes, protocol version, Linux
+  minimum, supported systems, Yama assumption, and exact ptrace request set,
+  never full store paths. Bind both native startup-probe and host-conformance
+  results, every exec-event negative/mutation, unchanged no-network result,
+  and all new helper/child recovery-code bytes into execution evidence and the
+  qualification input schema.
   Test exact framed `READY`/`EXECUTED`/`EXITED`/`SIGNALED` status with fixed
   header/version/type/length, retained fragmented and coalesced frames, every
   malformed/duplicate/order negative, and no status-stream overlong probe;
@@ -337,19 +351,32 @@ to the same file are explicitly sequential.
   default `SIGCHLD`, inherited full managed mask, first-operation observation
   of every managed disposition, typed refusal of any managed `SIG_IGN` before
   fork without reset-and-continue, disposition and synchronous-consumer
-  installation only after verification, and final-mask establishment. Add one
-  close-on-exec group-confirmation pipe; make child and supervisor both call
-  `setpgid`; keep both masks blocked until the supervisor confirms the exact
-  group and child liveness before `READY` or signal consumption/forwarding.
-  Test pending, handoff-window, normalization-time, and
-  pre-group-confirmation `SIGTERM`, pre-`READY` termination ownership,
-  every managed signal at a deterministic post-`READY`, post-barrier,
-  pre-exec hold, including a child death that yields empty exec-pipe EOF,
-  one queued pre-exec request, helper-owned group kill/reap, typed setup
-  failure, and absence of `EXECUTED`, target terminal, grace, and
-  target-executed audit publication,
-  parent-first/child-first confirmation races, typed
-  `ESRCH`/`EPERM`/other-error/group-mismatch/early-child-exit cleanup, signal forwarding,
+  installation only after verification, and final-mask establishment. Create
+  no confirmation pipe. Make child and supervisor both call `setpgid`; have
+  the child finish stdio/CLOEXEC/close/ptrace/signal setup, call
+  `PTRACE_TRACEME`, and raise the initial `SIGSTOP` immediately before its sole
+  `execveat`. Have the supervisor consume exactly that stop, confirm the exact
+  group, install exactly `PTRACE_O_TRACEEXEC`, complete `READY`, and release
+  with zero-signal `PTRACE_CONT`. Under the original absolute deadline, accept
+  execution only from exact `WIFSTOPPED`/`SIGTRAP`/`PTRACE_EVENT_EXEC`, then
+  detach exactly once with signal zero and emit `EXECUTED` only after detach
+  succeeds. Empty exec-pipe EOF is closure only. Test pending, handoff-window,
+  normalization-time, and pre-trace-confirmation `SIGTERM`, pre-`READY`
+  termination ownership, every managed signal at the deterministic
+  post-`READY` initial stop, one queued pre-exec request, helper-owned group
+  kill/reap, typed setup failure, and absence of `EXECUTED`, target terminal,
+  grace, and target-executed audit publication. Separately inject pre-exec
+  `SIGKILL`, `SIGSYS`, fault, normal exit, OOM-like kill, empty EOF without an
+  event, plain/missing/wrong ptrace event, and detach failure; none may
+  false-confirm. Prove a target exiting on its first instruction still yields
+  event, successful detach, `EXECUTED`, then terminal. Add parent-first/
+  child-first confirmation races and typed
+  `ESRCH`/`EPERM`/other-error/group-mismatch/early-child-exit cleanup; Linux
+  >= 3.19 and native x86_64/aarch64 gates; Yama 0/1 parent-child acceptance and
+  2/3 refusal; no `CAP_SYS_PTRACE`; an action seccomp allowance for exactly
+  `PTRACE_TRACEME`, `PTRACE_SETOPTIONS`, `PTRACE_CONT`, and `PTRACE_DETACH`;
+  denial of every other ptrace request; unchanged socket/socketcall/io_uring/
+  `pidfd_getfd` denial and every existing no-network plant; signal forwarding,
   external-SIGTERM escalation with no case deadline, target wait/reap and exact
   status mirroring, held-open writer, exact single-record exec-error
   `EINTR`/`EAGAIN`/short/partial/overlong transport, fast-same-status target
@@ -562,11 +589,16 @@ to the same file are explicitly sequential.
   and failed spawn, capture/block/poison/restoration failures and overlapping
   restore-before-unlock mutation coverage, inherited-mask verification, managed-`SIG_IGN` refusal
   before fork, pending/handoff-window/normalization-time/blocked SIGTERM,
-  parent-first/child-first setpgid races, typed
-  `ESRCH`/`EPERM`/other-error/group-mismatch/early-child-exit cleanup, pending signal before
-  group confirmation, pre-`READY` ownership, deterministic post-`READY`
-  pre-exec managed-signal setup termination including child-death empty EOF,
-  no false `EXECUTED` or audit publication, no-deadline external-TERM escalation,
+  parent-first/child-first setpgid and initial-stop races, typed
+  `ESRCH`/`EPERM`/other-error/group-mismatch/early-child-exit cleanup, exact
+  options/continue/event/detach order, pending signal before group/trace
+  confirmation, pre-`READY` ownership, deterministic post-`READY` pre-exec
+  managed-signal setup termination, direct pre-exec
+  `SIGKILL`/`SIGSYS`/fault/exit/OOM-like kill, empty EOF without event,
+  missing/wrong event, detach failure, fast first-instruction exit, no false
+  `EXECUTED` or audit publication, native/minimum-kernel/Yama and exact ptrace
+  seccomp request gates with unchanged action no-network, no-deadline
+  external-TERM escalation,
   target-ignore-TERM, allowed-signal forwarding, exact target status, and
   terminal child reap. Use reviewed C test tooling for disposition planting;
   add no Rust unsafe.
@@ -847,10 +879,14 @@ to the same file are explicitly sequential.
   serialized safe mask handoff, capture/block/poison/restoration failures,
   overlapping-launch restore-before-unlock mutation, inherited managed
   `SIG_IGN` refusal, handoff-window and normalization-time SIGTERM,
-  parent/child setpgid confirmation races, typed
-  `ESRCH`/`EPERM`/early-child-exit cleanup, pending signal before group
-  confirmation, pre-`READY` termination ownership, deterministic post-`READY`
-  pre-exec signal queuing, empty-EOF priority, helper kill/reap, no false
+  parent/child setpgid and initial-trace-stop races, typed
+  `ESRCH`/`EPERM`/early-child-exit cleanup, exact options/continue/event/detach
+  order, pending signal before group/trace confirmation, pre-`READY`
+  termination ownership, deterministic post-`READY` pre-exec signal queuing,
+  pre-exec death/fault/OOM-like kill, empty EOF without event, missing/wrong
+  event, detach failure, fast first-instruction exit, native/kernel/Yama gates,
+  exact ptrace request allowance with unchanged no-network, helper kill/reap,
+  no false
   `EXECUTED`/target terminal/audit event, full post-`EXECUTED` signal forwarding,
   no-deadline external-TERM escalation,
   target-ignore-TERM, target-status mirroring, no-numeric-Rust-signal, and
@@ -1070,11 +1106,15 @@ to the same file are explicitly sequential.
   the patched-sandbox mappings and live exact tests. Include exact rows for
   `PARENT_SIGNAL_HANDOFF`, `HELPER_SIGNAL_INHERITED_IGNORED`,
   `HELPER_SIGNAL_HANDOFF`, `HELPER_GROUP_ESRCH`, `HELPER_GROUP_EPERM`,
-  `HELPER_GROUP_ERROR`, `HELPER_GROUP_EARLY_EXIT`, and
-  `HELPER_PRE_EXEC_TERMINATION`; their remedies preserve safe Rust mask handoff,
-  fail-before-fork ignored-disposition refusal, and group confirmation before
-  `READY`, then prohibit signal forwarding and grace until `EXECUTED`, without
-  suggesting Rust unsafe or numeric signaling.
+  `HELPER_GROUP_ERROR`, `HELPER_GROUP_EARLY_EXIT`,
+  `HELPER_PTRACE_POLICY`, `HELPER_PTRACE_STOP`, `HELPER_PTRACE_OPTIONS`,
+  `HELPER_PTRACE_CONT`, `HELPER_PRE_EXEC_TERMINATION`,
+  `HELPER_PRE_EXEC_DEATH`, `HELPER_PTRACE_EVENT`,
+  `HELPER_PTRACE_DETACH`, `CHILD_PTRACE`, and `CHILD_STOP`; their remedies
+  preserve safe Rust mask handoff, fail-before-fork ignored-disposition
+  refusal, group plus tracing confirmation before `READY`, exact exec-event
+  proof and zero-signal detach before `EXECUTED`, and no capability, broad
+  ptrace, unsafe Rust, numeric signaling, or no-network weakening.
   Load the not-yet-wired recovery module through a test-local path.
 - [ ] T068 [owner: spec003w2-recovery] [files:
   packages/d2b-bazel-runner/src/recovery.rs] [depends: T067] Implement the
@@ -1084,7 +1124,8 @@ to the same file are explicitly sequential.
   lifetimes. No free-form remedy or command and no numeric signal instruction
   is accepted. The ignored-disposition code never offers reset-and-continue,
   and the group codes retain distinct `ESRCH`, `EPERM`, other-error, and
-  early-exit corrections.
+  early-exit corrections. Ptrace codes retain distinct policy, initial-stop,
+  options, continue, pre-exec-death, wrong-event, and detach corrections.
 - [ ] T069 [owner: spec003w2-evidence] [files:
   packages/xtask/tests/bazel_evidence.rs] [depends: T060] Add failing
   cold-local preparation and evidence validation tests, loading the
@@ -1156,7 +1197,15 @@ to the same file are explicitly sequential.
   passing omitted/duplicate/unknown-stage, wrong-recovery-class,
   malformed-digest, patch/monitor-mismatch, illegal-cleanup/quarantine,
   false-reaped, success-after-quarantine, quarantined-reuse, and
-  forbidden-field validator mutations.
+  forbidden-field validator mutations. Add a closed exec-event qualification
+  input binding both native startup and host-conformance results, exact
+  source/protocol/seccomp identities, Linux minimum, supported systems, Yama
+  assumption, four-request ptrace allowance, unchanged no-network result,
+  exact event/detach positive, fast-exit positive, every
+  death/fault/EOF/wrong-event/detach negative and mutation, and every
+  parent/helper/child recovery-code byte result. Missing, duplicate,
+  wrong-system, wrong-policy, incomplete-matrix, or no-network-regression
+  inputs refuse.
 - [ ] T076 [owner: spec003w3-shadow-workflow] [files:
   .github/workflows/pr-bazel-rust.yml,
   packages/xtask/src/bazel_qualification.rs] [depends: T075] Implement the
@@ -1167,8 +1216,9 @@ to the same file are explicitly sequential.
   correction command `cargo xtask bazel-evidence refresh-qualification`.
   Both stay unreachable from Make and every workflow; a query failure leaves
   the prior record untouched and is never interpreted as an empty inventory.
-  Qualification requires all seven containment results and every named
-  validator mutation result; no summary count or trusted boolean substitutes.
+  Qualification requires all seven containment results, the complete
+  exec-event qualification input, and every named validator mutation result;
+  no summary count or trusted boolean substitutes.
 - [ ] T077 [owner: spec003w3-workflow-policy] [files:
   packages/xtask/tests/policy_ci.rs,
   packages/xtask/tests/fixtures/ci/cache-save-pr.yml,

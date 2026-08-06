@@ -189,62 +189,103 @@ the final mask. The managed set stays blocked for synchronous consumption and
 every other catchable signal is unblocked.
 
 The supervisor creates exactly one `O_CLOEXEC|O_NONBLOCK` child exec-error
-pipe and one close-on-exec group-confirmation pipe before forking exactly
-once. The child calls `setpgid(0, 0)` and waits at the confirmation pipe with
-managed signals still blocked; the supervisor independently calls
-`setpgid(child, child)` and confirms `getpgid(child) == child` while checking
-that the child has not exited. `ESRCH`, `EPERM`, any other setpgid error, a
-mismatched group, or early child exit is a typed helper failure with
-direct-child reap and descriptor cleanup. Managed signals remain blocked and unconsumed in both
-processes through confirmation. Only after confirmation may the supervisor
-release the child setup barrier or emit `READY`. A pending managed signal at
-entry, in the Rust-to-helper
-handoff window, during normalization, or during the setpgid race records one
-`termination-requested` transition. Before a child exists it refuses without
-forking; after group confirmation and before `READY` it performs fixed
-child-group termination and direct-child reap, closes every owned descriptor,
-emits no `READY`, and exits with the closed helper failure status. After the
-barrier releases, the child restores an empty signal mask and
-default dispositions for every catchable signal including `SIGTERM` and
-`SIGPIPE`, installs the declared stdin/stdout/stderr at 0/1/2, sets the
-executable fd `FD_CLOEXEC`, closes every supervisor-only and non-surviving
-descriptor, and calls
-`execveat(private_fd, "", argv, envp, AT_EMPTY_PATH)`. There is no target path,
-reopen, `fexecve`, `/proc/self/fd`, or fallback. A child setup or exec failure
-writes exactly one fixed-size exec-error record with bounded
-`EINTR`/`EAGAIN`/short-write handling under the absolute monotonic deadline,
-then calls `_exit`.
+pipe before forking exactly once. There is no group-confirmation pipe: the
+kernel ptrace stop is the sole child-release barrier. The child calls
+`setpgid(0, 0)`, installs declared stdin/stdout/stderr at 0/1/2, marks the
+private executable fd `FD_CLOEXEC`, closes every supervisor-only and
+non-surviving descriptor, calls `ptrace(PTRACE_TRACEME)`, restores the empty
+signal mask and default dispositions for every catchable signal, and raises
+the initial `SIGSTOP`. At that stop every fallible pre-exec setup operation is
+complete; after release the next operation is
+`execveat(private_fd, "", argv, envp, AT_EMPTY_PATH)`. A child setup,
+`PTRACE_TRACEME`, initial-stop, or exec failure writes exactly one fixed-size
+`CHILD_*` exec-error record with bounded `EINTR`/`EAGAIN`/short-write handling
+under the absolute monotonic deadline, then calls `_exit`. There is no target
+path, reopen, `fexecve`, `/proc/self/fd`, or fallback.
 
-The supervisor closes its exec-error writer after fork and emits exactly one
-`READY` status frame to the Rust parent only after process-group confirmation.
-It reads the exec-error pipe to
-either empty close-on-exec EOF or one complete fixed failure record. Every
-exec-error read and every supervisor-status read or write uses its original
-absolute monotonic deadline: `EINTR` retries only after a budget check,
-`EAGAIN` waits only for the remaining budget, and a short operation advances
-an exact byte cursor without resetting time.
+The supervisor closes its exec-error writer after fork, independently calls
+`setpgid(child, child)`, and consumes direct-child wait states. Before
+`READY`, it requires all of the following under the original absolute exec
+deadline:
 
-The exec-error pipe remains a single-record protocol. Its reader accepts only
-empty EOF or exactly one fixed failure record followed by EOF, and uses one
-additional byte only to distinguish overlong input. EOF after any failure
-record byte is partial. A held writer, second record, unknown record, timeout,
-or I/O failure is typed. Empty EOF is exec success only when no managed signal
-has been observed before `EXECUTED`.
+1. `getpgid(child) == child`;
+2. one initial ptrace wait state with `WIFSTOPPED`, `WSTOPSIG == SIGSTOP`, and
+   ptrace event value zero;
+3. successful `PTRACE_SETOPTIONS(child, PTRACE_O_TRACEEXEC)` while that child
+   remains stopped; and
+4. no child error record, managed termination request, early exit, fault,
+   other signal stop, or deadline expiry.
 
-From group confirmation through the pending `ExecResult`, including after
-`READY`, the supervisor may synchronously observe managed signals but must not
-forward one or start TERM/grace/KILL escalation. The first observation queues
-one closed `pre-exec-termination-requested` state; later managed signals
-coalesce into that same state. That state takes precedence over every
-exec-error outcome, including empty EOF after the child dies. The helper
-suppresses `EXECUTED` and every target terminal frame, performs immediate
-setup cleanup by killing the confirmed child group and consuming the direct
-child reap, emits typed `HELPER_PRE_EXEC_TERMINATION`, and exits nonzero. A
-cleanup failure preserves that first setup cause and hands remaining
-containment to the patched sandbox monitor. The Rust parent emits no
-target-executed audit event. Only after the helper has accepted empty EOF and
-successfully emitted `EXECUTED` may managed-signal forwarding or the normal
-grace policy begin.
+Those observations confirm both the exact live process group and the
+parent-child tracing state. `ESRCH`, `EPERM`, any other `setpgid` error, group
+mismatch, missing or wrong initial stop, ptrace option failure, or early child
+death is a typed helper failure with direct-child consume-reap and descriptor
+cleanup. A pending managed signal at entry, in the Rust-to-helper handoff
+window, during normalization, the setpgid race, or the initial trace stop
+records one `termination-requested` transition. Before a child exists it
+refuses without forking; after a group exists it performs fixed child-group
+SIGKILL and direct-child consume-reap, emits no `READY`, and exits with the
+closed helper failure status.
+
+Only after all four confirmations may the supervisor emit exactly one framed
+`READY`. A completed `READY` write precedes
+`ptrace(PTRACE_CONT, child, 0)`, which injects no signal and releases the child
+from the kernel stop. From release through accepted exec, the single-threaded
+supervisor runs one deadline-bounded loop over its synchronous managed-signal
+source, nonblocking exec-error reader, and `waitpid` trace states. Each
+iteration drains a pending managed signal before accepting a trace event. The
+first such signal queues one closed `pre-exec-termination-requested` state.
+A traced-child signal-delivery stop for any managed signal before the exec
+event queues the same state and is not reinjected; later managed signals
+coalesce. The helper forwards no signal and starts no TERM grace in this state.
+It instead kills the confirmed child group, consume-reaps the tracee,
+suppresses `EXECUTED`, target terminal status, and target-executed audit
+publication, and emits typed `HELPER_PRE_EXEC_TERMINATION`. Cleanup failure
+preserves that first cause and hands remaining containment to the patched
+sandbox monitor.
+
+The exec-error pipe remains a single-record failure protocol. Its reader
+accepts only empty EOF or exactly one fixed failure record followed by EOF and
+uses one additional byte only to distinguish overlong input. EOF after any
+failure-record byte is partial. A held writer, second record, unknown record,
+timeout, or I/O failure is typed. Empty EOF is only evidence that the writer
+closed; it is never execution success and never causes `EXECUTED`.
+
+Exec success is exactly one consumed direct-child wait state satisfying all of
+`WIFSTOPPED`, `WSTOPSIG == SIGTRAP`, and
+`status >> 16 == PTRACE_EVENT_EXEC`, after `PTRACE_O_TRACEEXEC` was installed
+and after the sole child exec site invoked the verified private descriptor.
+The event is the kernel's successful exec transition for that exact
+`execveat` attempt. Before this event:
+
+- `WIFEXITED` or `WIFSIGNALED`, including injected `SIGKILL` and OOM-like
+  kill, causes a final deadline-bounded drain of the error pipe; a complete
+  `CHILD_*` record wins, while empty EOF is `HELPER_PRE_EXEC_DEATH`;
+- `SIGSYS`, a synchronous fault, an unrecognized signal-delivery stop, a plain
+  `SIGTRAP`, an event other than `PTRACE_EVENT_EXEC`, or a second initial stop
+  is `HELPER_PTRACE_EVENT`;
+- EOF without the event remains pending until a child failure, a valid event,
+  or the original deadline, and therefore cannot false-confirm; and
+- a fixed child error record preserves its exact `CHILD_*` cause even if EOF,
+  an exit wait state, or an invalid trace state arrives before the decoder
+  finishes that record.
+
+At the valid exec-event stop the target has not run user code. The supervisor
+calls `ptrace(PTRACE_DETACH, child, 0)` exactly once. A detach failure is typed
+`HELPER_PTRACE_DETACH`; it emits no `EXECUTED`, kills and consume-reaps the
+owned group, and leaves incomplete containment to the sandbox. A successful
+detach injects no signal, removes tracing, and resumes the target without
+changing its signal state or later wait status. Only after that successful
+detach does the supervisor emit framed `EXECUTED`. The target may then exit
+immediately; the supervisor still emits `EXECUTED` before the terminal frame
+and performs the ordinary non-ptrace consuming wait. Fast target exit cannot
+race ahead of execution proof because the kernel holds the target at the exec
+event until detach.
+
+Every exec-error read, ptrace transition, trace wait, and supervisor-status
+write uses the same original absolute exec deadline: `EINTR` retries only
+after a budget check, `EAGAIN` waits only for the remaining budget, and a
+short operation advances an exact byte cursor without resetting time.
 
 The status pipe is a distinct framed stream and never uses the exec-error
 pipe's one-byte overlong probe. Every frame has this fixed eight-byte header:
@@ -269,12 +310,12 @@ detects status overrun without consuming the first byte of a valid coalesced
 frame.
 
 A status writer completes each frame or returns typed timeout, `EPIPE`, or I/O
-failure. Empty exec-error EOF with no queued pre-exec termination causes
-exactly one `EXECUTED` frame. Partial,
+failure. Only a valid kernel `PTRACE_EVENT_EXEC` followed by successful
+zero-signal detach causes exactly one `EXECUTED` frame. Partial,
 overlong, duplicate, malformed, unknown, held-open-writer, timeout, or I/O
 failure on either protocol is a typed helper failure at that protocol's
-closed stage. A queued pre-exec termination overrides empty EOF and causes no
-`EXECUTED` frame.
+closed stage. A queued pre-exec termination, empty EOF without an exec event,
+wrong event, pre-exec death, or detach failure causes no `EXECUTED` frame.
 
 The supervisor remains alive after `EXECUTED`. It forwards only `SIGHUP`,
 `SIGINT`, `SIGTERM`, and `SIGQUIT` to the target process group. Case-deadline
@@ -294,6 +335,29 @@ channel EOF before `EXECUTED` is always a typed helper failure, regardless of
 the helper process status. A target that execs and immediately exits with the
 same status as a planted helper crash is accepted only when `READY`,
 `EXECUTED`, the terminal record, and the mirrored status all agree.
+
+This protocol is supported only on `x86_64-linux` and `aarch64-linux` with
+Linux 3.19 or newer. Build evaluation rejects every other platform. Startup
+checks the minimum release and then performs the same parent-child
+`PTRACE_TRACEME`/initial-stop/`PTRACE_O_TRACEEXEC`/exec-event/detach sequence
+against the immutable probe; version text alone is not capability evidence.
+When Yama is present, unprivileged `kernel.yama.ptrace_scope` must be `0` or
+`1`; values `2` and `3` fail before a governed action with the fixed
+`HELPER_PTRACE_POLICY` recovery. The design relies only on the natural
+parent-child `PTRACE_TRACEME` relationship, grants no `CAP_SYS_PTRACE`, and
+does not attach to a sibling or host process.
+
+The action seccomp filter retains every network denial. Its ptrace rule allows
+only `PTRACE_TRACEME`, `PTRACE_SETOPTIONS`, `PTRACE_CONT`, and
+`PTRACE_DETACH`; every attach, seize, memory/register access, syscall tracing,
+or other ptrace request is denied. Existing `execveat`, `wait4`/`waitid`,
+`setpgid`/`getpgid`, signal, polling, and descriptor syscalls remain allowed.
+No socket, socketcall, io_uring, `pidfd_getfd`, capability, namespace, or
+network exception is added. The source, protocol identity, seccomp-policy
+identity, kernel minimum, four-request ptrace set, Yama assumption, both
+native-system startup results, host conformance result, every negative and
+mutation result, and every recovery-code byte test are bound into execution
+evidence and are mandatory qualification inputs.
 
 No runfiles, worktree, copied, symlinked, caller-supplied, or fd-0 helper
 transport is permitted. A closed invocation-site policy derives the complete
@@ -317,15 +381,21 @@ exec-error and supervisor transport, helper EOF/crash before `EXECUTED`, fast
 same-exit-status target versus helper crash, closed status reader, inherited
 ignored or `SA_NOCLDWAIT` `SIGCHLD`, inherited blocked or ignored `SIGTERM`,
 target-ignore-TERM escalation with no case deadline, forwarding or starting
-grace before `EXECUTED`, treating pre-exec empty EOF as success, publishing a
-false target-executed audit event, disallowed or lost signal forwarding,
-target-status mismatch, a per-launch signal guard, unlock-before-restoration,
-and any first-party Rust unsafe allowance.
-Deterministic post-barrier tests hold the child after `READY` and before exec,
-inject each managed signal, and require one queued setup termination,
-helper-owned group kill/reap, no grace, no `EXECUTED`, no target terminal
-frame, and no target-executed audit event. One case makes the child die so the
-exec-error reader receives empty EOF and proves the queued signal still wins.
+grace before `EXECUTED`, treating empty EOF without an exec event as success,
+missing `PTRACE_O_TRACEEXEC`, plain or wrong ptrace event, pre-exec
+`SIGKILL`/`SIGSYS`/fault/normal exit, OOM-like kill injection, failed detach,
+unsupported Yama mode, forbidden ptrace request, publishing a false
+target-executed audit event, disallowed or lost signal forwarding, target-status
+mismatch, a per-launch signal guard, unlock-before-restoration, and any
+first-party Rust unsafe allowance. Deterministic post-`READY` tests hold the
+child at the kernel initial stop, inject each managed signal, and require one
+queued setup termination, helper-owned group kill/reap, no grace, no
+`EXECUTED`, no target terminal frame, and no target-executed audit event.
+Separate releases inject every pre-exec death/fault class, empty EOF without
+an exec event, a missing/wrong event, detach failure, and an execing target
+that exits on its first instruction. The positive proves the exact event and
+successful detach precede `EXECUTED`; mutations accepting EOF, any stop, or
+detach failure must fail.
 Crash before `READY`, after `READY`, after `EXECUTED`, during grace, and with
 long-lived descendants is covered by real patched-sandbox integration rather
 than a Cargo mock.
@@ -351,15 +421,15 @@ than a Cargo mock.
 | `InheritedSignals` | As its first setup operation, the supervisor observes every managed disposition while the full managed set remains inherited blocked. | `HELPER_SIGNAL_INHERITED_IGNORED` if any managed disposition is `SIG_IGN`, or `HELPER_SIGNAL_HANDOFF` if the inherited mask is incomplete; close fixed inherited fds and fail before fork. An ignored managed disposition is never reset-and-continued. |
 | `Adopted` | After signal-handoff verification, the supervisor owns mapped executable fd, status writer, argv/environment, and declared stdio. | `HELPER_ADOPT` for absent/colliding/wrong descriptors; close all owned fds; no fork. |
 | `Normalized` | While the managed set remains blocked, the supervisor installs default dispositions, ignored `SIGPIPE`, waitable default `SIGCHLD`, and the synchronous consumer, then establishes the final mask. | `HELPER_SIGNAL_NORMALIZE`; close all owned fds; no fork. |
-| `ExecPipe` | Supervisor creates and owns exactly one `O_CLOEXEC|O_NONBLOCK` exec-error reader/writer pair and one close-on-exec group-confirmation pipe. | `HELPER_EXEC_PIPE`; close both pairs and prior resources; no fork. |
-| `Forked` | Exactly one target child exists. Supervisor owns child pid, exec-error reader, group-confirmation writer, and Rust status writer; child owns the two readers/writers required for setup, executable fd, and stdio copies. | `HELPER_FORK` before child creation, or a later typed failure followed by direct-child reap and closure of every supervisor fd. |
-| `GroupConfirmed` | Child calls `setpgid(0, 0)` and waits with managed signals blocked. Supervisor calls `setpgid(child, child)`, confirms `getpgid(child) == child` and no early exit, then releases the child setup barrier and may emit `READY`. It still cannot forward or escalate a managed signal before `EXECUTED`. | `HELPER_GROUP_ESRCH`, `HELPER_GROUP_EPERM`, `HELPER_GROUP_ERROR`, or `HELPER_GROUP_EARLY_EXIT`; close the barrier, kill the confirmed group when one exists, consume-reap the direct child, close every fd, and emit no `READY`. |
-| `ChildSetup` | After group confirmation, child restores its empty mask/default dispositions, installs 0/1/2, marks executable fd CLOEXEC, and closes supervisor-only fds. | Fixed `CHILD_GROUP`, `CHILD_SIGNAL`, `CHILD_STDIO`, `CHILD_CLOEXEC`, or `CHILD_CLOSE` exec-error record; bounded exact write; `_exit`. |
-| `Execveat` | Child calls `execveat` on the same open file description. Successful exec closes the error writer and executable fd. | Fixed `CHILD_EXECVEAT` record, including typed `ENOSYS`; bounded exact write; `_exit`; no fallback. |
-| `ExecResult` | Supervisor emits framed `READY` only after `GroupConfirmed`, then accepts only empty EOF or one complete child failure record under one absolute deadline. Until `EXECUTED`, observed managed signals coalesce into one `pre-exec-termination-requested` state and are never forwarded or escalated. Empty EOF emits framed `EXECUTED` only when that state is absent; every exec-error cursor and retry remains under that deadline. | `HELPER_PRE_EXEC_TERMINATION` for any managed signal observed before `EXECUTED`: suppress `EXECUTED` and target terminal/audit publication, immediately kill and consume-reap the confirmed group as setup cleanup, then fail nonzero. Transport failures remain `HELPER_EXEC_TIMEOUT`, `HELPER_EXEC_PARTIAL`, `HELPER_EXEC_OVERLONG`, `HELPER_EXEC_UNKNOWN`, `HELPER_EXEC_EPIPE`, or `HELPER_EXEC_IO`; kill and reap target and close reader/status. Sandbox containment backstops incomplete cleanup. |
+| `ExecPipe` | Supervisor creates and owns exactly one `O_CLOEXEC|O_NONBLOCK` exec-error reader/writer pair. The kernel trace stop replaces the former confirmation pipe. | `HELPER_EXEC_PIPE`; close the pair and prior resources; no fork. |
+| `Forked` | Exactly one target child exists. Supervisor owns child pid, exec-error reader, and Rust status writer; child owns the error writer, executable fd, and stdio copies. | `HELPER_FORK` before child creation, or a later typed failure followed by direct-child consume-reap and closure of every supervisor fd. |
+| `ChildSetup` | Child calls `setpgid`, installs 0/1/2, marks the executable fd CLOEXEC, closes supervisor-only fds, calls `PTRACE_TRACEME`, restores final signal state, and raises `SIGSTOP`. After the stop, its next operation is the sole `execveat`. | Fixed `CHILD_GROUP`, `CHILD_SIGNAL`, `CHILD_STDIO`, `CHILD_CLOEXEC`, `CHILD_CLOSE`, `CHILD_PTRACE`, or `CHILD_STOP` exec-error record; bounded exact write; `_exit`. |
+| `TraceReady` | Supervisor confirms the exact group, consumes only the expected initial `SIGSTOP` with event zero, successfully installs `PTRACE_O_TRACEEXEC`, emits framed `READY`, then releases with zero-signal `PTRACE_CONT`. | `HELPER_GROUP_ESRCH`, `HELPER_GROUP_EPERM`, `HELPER_GROUP_ERROR`, `HELPER_GROUP_EARLY_EXIT`, `HELPER_PTRACE_STOP`, `HELPER_PTRACE_OPTIONS`, or `HELPER_PTRACE_CONT`; emit no `READY` unless group and tracing state are confirmed, and kill/consume-reap after any post-fork failure. |
+| `Execveat` | Released child immediately calls `execveat` on the same verified open file description. Successful exec closes the error writer and produces the kernel `PTRACE_EVENT_EXEC` stop before target user code runs. | Fixed `CHILD_EXECVEAT` record, including typed `ENOSYS`; bounded exact write; `_exit`; no fallback. |
+| `ExecEvent` | The deadline-bounded loop drains managed signals first, treats error-pipe EOF only as writer closure, and accepts only `WIFSTOPPED`, `SIGTRAP`, and exact `PTRACE_EVENT_EXEC`. It then performs one zero-signal `PTRACE_DETACH`; only successful detach permits framed `EXECUTED`. | `HELPER_PRE_EXEC_TERMINATION`, `HELPER_PRE_EXEC_DEATH`, `HELPER_PTRACE_EVENT`, or `HELPER_PTRACE_DETACH`; suppress `EXECUTED` and terminal/audit publication, kill and consume-reap the group, and preserve the first cause. Transport failures remain `HELPER_EXEC_TIMEOUT`, `HELPER_EXEC_PARTIAL`, `HELPER_EXEC_OVERLONG`, `HELPER_EXEC_UNKNOWN`, `HELPER_EXEC_EPIPE`, or `HELPER_EXEC_IO`. Empty EOF, wrong/missing event, pre-exec death, or detach failure can never transition. |
 | `Supervising` | Supervisor owns the live target group and status writer, forwards only the four allowed termination signals, and applies the fixed escalation on case expiry or external `SIGTERM`, including when no case deadline exists. | `HELPER_SIGNAL_FORWARD` or `HELPER_DEADLINE`; full grace and unconditional target-group kill when required, direct-child reap, typed failure. |
 | `Reaped` | Supervisor has exact terminal wait status and no live child; it writes the framed `EXITED` or `SIGNALED` terminal, closes the status writer, and mirrors that status. | `HELPER_WAIT`, `HELPER_REAP`, `HELPER_TERMINAL_WRITE`, or `HELPER_STATUS_MIRROR`; retain the first cause and close every remaining fd. |
-| `Closed` | No provider/private/pipe/status descriptor and no unreaped child remains. | `HELPER_CLEANUP` is attached to the first failure; cleanup is attempted on every reachable path. |
+| `Closed` | No provider/private/pipe/status descriptor, trace relationship, or unreaped child remains. | `HELPER_CLEANUP` is attached to the first failure; cleanup, detach where legal, and consume-reap are attempted on every reachable path without replacing the first cause. |
 
 No successful stage owns an unclosed parent-only fd or an unreaped child.
 No child path returns through C after fork: it either execs or calls `_exit`.
@@ -422,18 +492,26 @@ closed-reader `EPIPE`; inherited ignored and `SA_NOCLDWAIT` `SIGCHLD`;
 inherited blocked `SIGTERM`; a target that ignores TERM with no case deadline;
 parent-first and child-first setpgid races; typed `ESRCH`, `EPERM`, other-error,
 mismatched-group, and early-child-exit cleanup; a pending
-signal before group confirmation; every managed signal at a deterministic
-post-`READY`, post-barrier, pre-exec hold, including child death with empty
-exec-pipe EOF, with one setup request, helper kill/reap, no grace, no
-`EXECUTED` or target terminal frame, and no target-executed audit event; each
+signal before group/trace confirmation; the exact initial `SIGSTOP`, successful
+`PTRACE_O_TRACEEXEC`, `READY`-before-`PTRACE_CONT`, exact kernel
+`PTRACE_EVENT_EXEC`, zero-signal detach, and detach-before-`EXECUTED` order;
+every managed signal while held at the deterministic initial stop, with one
+setup request, helper kill/reap, no grace, no `EXECUTED` or target terminal
+frame, and no target-executed audit event; pre-exec `SIGKILL`, `SIGSYS`, fault,
+normal exit, OOM-like kill, empty EOF without an exec event, missing/wrong
+event, and detach failure, each with no false execution confirmation; each
 exact `EINTR`, `EAGAIN`, short,
 fragmented and coalesced status frame, partial single-record exec-error,
 duplicate, malformed, and held-writer transport boundary;
-a target that execs and exits immediately with the planted helper-crash
-status; exact signal forwarding and target status; unchanged declared stdin;
+a target that exits on its first instruction with the planted helper-crash
+status after the event and detach; exact signal forwarding and target status;
+unchanged declared stdin;
 separate stdout and stderr; absence of every provider, private, exec-error,
 and status descriptor; and presence only of a planted descriptor explicitly
-declared to survive.
+declared to survive. Native x86_64 and aarch64 cases bind Linux >= 3.19,
+the parent-child Yama modes, exact four-request ptrace seccomp allowance,
+unchanged network denial, and rejection of Yama 2/3 and every other ptrace
+request.
 
 The host-backed supervisor cases do not claim crash containment. A separate
 real Bazel sandbox integration runs the action through the exact patched

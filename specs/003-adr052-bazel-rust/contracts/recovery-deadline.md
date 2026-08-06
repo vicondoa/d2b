@@ -117,13 +117,20 @@ Every helper code names the fixed input
 | `HELPER_SIGNAL_HANDOFF` | `D2B-BZLEXEC-HELPER-SIGNAL-HANDOFF` | Correct the typed Rust launch handoff so the helper inherits the complete managed set blocked before its first setup operation. |
 | `HELPER_ADOPT` | `D2B-BZLEXEC-HELPER-ADOPT` | Correct private-fd, status-fd, argv, environment, and stdio adoption before fork. |
 | `HELPER_SIGNAL_NORMALIZE` | `D2B-BZLEXEC-HELPER-SIGNAL-NORMALIZE` | After refusing any inherited managed `SIG_IGN`, install dispositions and synchronous consumption while the inherited managed set remains blocked, establish the final mask, preserve pending termination, ignore `SIGPIPE`, and restore waitable default `SIGCHLD` without `SA_NOCLDWAIT`. |
-| `HELPER_EXEC_PIPE` | `D2B-BZLEXEC-HELPER-EXEC-PIPE` | Correct creation and ownership of the single nonblocking close-on-exec exec-error pipe and the close-on-exec group-confirmation pipe. |
+| `HELPER_EXEC_PIPE` | `D2B-BZLEXEC-HELPER-EXEC-PIPE` | Correct creation and ownership of the single nonblocking close-on-exec exec-error pipe; the kernel ptrace stop is the only release barrier. |
 | `HELPER_FORK` | `D2B-BZLEXEC-HELPER-FORK` | Correct the sole supervisor fork and leave no child on a reported fork failure. |
-| `HELPER_GROUP_ESRCH` | `D2B-BZLEXEC-HELPER-GROUP-ESRCH` | Correct the parent-and-child `setpgid` handshake and group-confirmation barrier; an absent child or group must fail before `READY` with direct-child cleanup. |
+| `HELPER_GROUP_ESRCH` | `D2B-BZLEXEC-HELPER-GROUP-ESRCH` | Correct the parent-and-child `setpgid` handshake; an absent child or group must fail before `READY` with direct-child cleanup. |
 | `HELPER_GROUP_EPERM` | `D2B-BZLEXEC-HELPER-GROUP-EPERM` | Correct the parent-and-child `setpgid` handshake without changing session or group authority; `EPERM` must fail before `READY` with direct-child cleanup. |
 | `HELPER_GROUP_ERROR` | `D2B-BZLEXEC-HELPER-GROUP-ERROR` | Correct the parent-and-child `setpgid` handshake; any other setpgid error or confirmed-group mismatch must fail before `READY` with direct-child cleanup and no raw errno text. |
-| `HELPER_GROUP_EARLY_EXIT` | `D2B-BZLEXEC-HELPER-GROUP-EARLY-EXIT` | Keep the child blocked at the group-confirmation barrier and reject an early exit before `READY`; consume-reap it and close every owned descriptor. |
-| `HELPER_PRE_EXEC_TERMINATION` | `D2B-BZLEXEC-HELPER-PRE-EXEC-TERMINATION` | While `ExecResult` is pending, coalesce any managed signal into one pre-exec setup termination, suppress `EXECUTED` and target terminal/audit publication even on empty exec-pipe EOF, immediately kill and consume-reap the confirmed child group without forwarding or grace, and let sandbox containment backstop incomplete cleanup. |
+| `HELPER_GROUP_EARLY_EXIT` | `D2B-BZLEXEC-HELPER-GROUP-EARLY-EXIT` | Reject child exit before the expected initial trace stop and `READY`; consume-reap it and close every owned descriptor. |
+| `HELPER_PTRACE_POLICY` | `D2B-BZLEXEC-HELPER-PTRACE-POLICY` | Run on Linux 3.19 or newer on a supported native system, require unprivileged Yama parent-child mode 0 or 1 when present, and retain only the four-request ptrace seccomp allowance without granting `CAP_SYS_PTRACE` or weakening action no-network. |
+| `HELPER_PTRACE_STOP` | `D2B-BZLEXEC-HELPER-PTRACE-STOP` | Correct the child `PTRACE_TRACEME` plus initial `SIGSTOP` barrier and accept no other initial wait state before `READY`. |
+| `HELPER_PTRACE_OPTIONS` | `D2B-BZLEXEC-HELPER-PTRACE-OPTIONS` | Install exactly `PTRACE_O_TRACEEXEC` on the stopped direct child before emitting `READY`; do not infer tracing state from the stop alone. |
+| `HELPER_PTRACE_CONT` | `D2B-BZLEXEC-HELPER-PTRACE-CONT` | Release the confirmed initial stop exactly once with zero-signal `PTRACE_CONT` after the complete `READY` write. |
+| `HELPER_PRE_EXEC_TERMINATION` | `D2B-BZLEXEC-HELPER-PRE-EXEC-TERMINATION` | Before the kernel exec event, coalesce any managed signal into one pre-exec setup termination, suppress `EXECUTED` and target terminal/audit publication even on empty exec-pipe EOF, immediately kill and consume-reap the confirmed child group without forwarding or grace, and let sandbox containment backstop incomplete cleanup. |
+| `HELPER_PRE_EXEC_DEATH` | `D2B-BZLEXEC-HELPER-PRE-EXEC-DEATH` | Treat every normal exit, `SIGKILL`, OOM-like kill, or other child death before the kernel exec event as setup failure; consume-reap and never publish execution. |
+| `HELPER_PTRACE_EVENT` | `D2B-BZLEXEC-HELPER-PTRACE-EVENT` | Accept only `WIFSTOPPED`, `SIGTRAP`, and exact `PTRACE_EVENT_EXEC` after options and release; empty EOF, `SIGSYS`, faults, plain `SIGTRAP`, missing/wrong events, and other stops must fail closed. |
+| `HELPER_PTRACE_DETACH` | `D2B-BZLEXEC-HELPER-PTRACE-DETACH` | At the exact exec-event stop, detach exactly once with signal zero; on failure suppress `EXECUTED`, kill and consume-reap the group, and leave no live trace relationship. |
 | `HELPER_EXEC_TIMEOUT` | `D2B-BZLEXEC-HELPER-EXEC-TIMEOUT` | Correct absolute-deadline accounting without resetting time after retry or short I/O. |
 | `HELPER_EXEC_PARTIAL` | `D2B-BZLEXEC-HELPER-EXEC-PARTIAL` | Correct exact record cursors so EOF after any byte is partial. |
 | `HELPER_EXEC_OVERLONG` | `D2B-BZLEXEC-HELPER-EXEC-OVERLONG` | Correct the one-record-plus-one-byte overlong check. |
@@ -143,11 +150,13 @@ Every child code names the same fixed supervisor source and the contract row
 
 | Internal stage | Public code | Exact correction |
 | --- | --- | --- |
-| `CHILD_GROUP` | `D2B-BZLEXEC-CHILD-GROUP` | Correct the child's `setpgid(0, 0)` half of the target-group handshake and keep managed signals blocked until the supervisor confirms that exact group. |
-| `CHILD_SIGNAL` | `D2B-BZLEXEC-CHILD-SIGNAL` | Restore the empty child mask and default disposition for every catchable signal. |
+| `CHILD_GROUP` | `D2B-BZLEXEC-CHILD-GROUP` | Correct the child's `setpgid(0, 0)` half of the target-group handshake before the initial trace stop. |
+| `CHILD_SIGNAL` | `D2B-BZLEXEC-CHILD-SIGNAL` | Restore the empty child mask and default disposition for every catchable signal before raising the initial trace stop. |
 | `CHILD_STDIO` | `D2B-BZLEXEC-CHILD-STDIO` | Correct exact installation of declared stdin, stdout, and stderr at fds 0, 1, and 2. |
 | `CHILD_CLOEXEC` | `D2B-BZLEXEC-CHILD-CLOEXEC` | Set close-on-exec on the private executable fd and every non-surviving descriptor. |
 | `CHILD_CLOSE` | `D2B-BZLEXEC-CHILD-CLOSE` | Correct closure of every supervisor-only and non-surviving child descriptor. |
+| `CHILD_PTRACE` | `D2B-BZLEXEC-CHILD-PTRACE` | Correct unprivileged parent-child `PTRACE_TRACEME`; do not add attach, capability, or sibling tracing. |
+| `CHILD_STOP` | `D2B-BZLEXEC-CHILD-STOP` | Raise exactly one initial `SIGSTOP` after all fallible child setup and before the sole `execveat`. |
 | `CHILD_EXECVEAT` | `D2B-BZLEXEC-CHILD-EXECVEAT` | Correct same-open-file-description `execveat(AT_EMPTY_PATH)`; do not add a reopen or path fallback. |
 
 Every sandbox code names the fixed inputs

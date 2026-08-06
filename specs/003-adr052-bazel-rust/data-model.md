@@ -425,14 +425,14 @@ count of twenty consecutive executions for its own context.
 | `descriptor` | One `O_RDONLY|O_CLOEXEC` open using `RESOLVE_NO_MAGICLINKS` only, deliberately without `RESOLVE_BENEATH` or `RESOLVE_NO_SYMLINKS`. |
 | `fallback` | Forced component walk: intermediate `O_DIRECTORY|O_NOFOLLOW|O_CLOEXEC`; declared leaf symlink permitted; leaf opened `O_RDONLY|O_CLOEXEC` without `O_NOFOLLOW`. |
 | `identity` | Kind, executable mode, freshness, byte digest, and matching pre/post descriptor metadata. |
-| `execution` | The sole safe Rust consuming API maps the verified open file description to a private fd; immutable static C `d2b-bazel-exec-supervisor` forks once, proves exec through a close-on-exec error pipe, remains alive, and supervises `execveat(private_fd, "", argv, envp, AT_EMPTY_PATH)`. |
+| `execution` | The sole safe Rust consuming API maps the verified open file description to a private fd; immutable static C `d2b-bazel-exec-supervisor` forks once, uses the exec-error pipe only for failure, and proves the exact `execveat(private_fd, "", argv, envp, AT_EMPTY_PATH)` through a kernel `PTRACE_EVENT_EXEC` followed by zero-signal detach before `EXECUTED`. |
 | `enosys` | Named refusal requiring a kernel with `execveat`; no fallback. |
 | `auxiliary_descriptors` | All close-on-exec and proven by child descriptor-table behavior. |
 | `api_seal` | Private fields and minting trait; empty public inherent API and empty locally-authored explicit trait-impl allowlists; exact compiler-derived public, hidden, auto, and blanket API snapshots; no descriptor/path accessor or extraction, `Deref`, descriptor `Borrow`, `AsFd`, raw-fd trait, formatting, serialization, conversion, default, or duplication API. |
 | `owner` | One dependency-leaf crate owns the type and the only public API that consumes it. |
 | `execution_transfer` | The public API consumes the handle by value and uses the exact pinned reviewed safe `command-fds` mapping dependency to install the verified description at a fixed private fd while leaving declared stdin/stdout/stderr unchanged. Under the one process-wide serialization guard, its spawning thread uses safe `nix::sys::signal::SigSet` to capture its mask, block the full managed set before spawn, and attempt exact restoration after successful or failed spawn before unlocking. Capture, block, poison, restoration, per-launch-guard, and unlock-before-restoration mutations refuse. |
 | `helper_identity` | Exact immutable dedicated Nix store artifact, bound by C source, derivation dependency closure, output NAR, executable, protocol, and native-system hashes; runfiles, worktree, copied, symlinked, missing, and wrong outputs refuse. |
-| `helper` | One tiny statically linked single-threaded C supervisor built outside the product Rust workspace. It creates the close-on-exec exec-error pipe, forks exactly once, and owns target supervision; no Rust unsafe exception exists. |
+| `helper` | One tiny statically linked single-threaded C supervisor built outside the product Rust workspace. It creates the close-on-exec exec-error pipe, forks exactly once, owns the natural parent-child trace through the exec event only, detaches without a signal, and owns later target supervision; no Rust unsafe exception exists. |
 | `spawn_owner` | Safe Rust `std::process`, `command-fds`, and `nix::sys::signal::SigSet` spawn and wait-own the supervisor with no Rust unsafe or disposition mutation. The C supervisor owns the only fork, inherited-disposition refusal, signal normalization/forwarding, parent-and-child setpgid handshake, target wait, and reap. Rust never signals a numeric PID/PGID. The patched sandbox PID-1 monitor owns abnormal teardown. No Rust `pre_exec`, raw fork, or signal-handler path exists. |
 | `invocation_policy` | Closed source/call-site census permits only the typed consumer to invoke the exact helper and rejects every other Rust, Bazel, Make, workflow, runfiles, or worktree invocation. |
 
@@ -462,14 +462,21 @@ status-pipe, or auxiliary descriptor.
 | `InheritedSignals` | With the managed set inherited blocked, the helper's first setup operation observes every managed disposition. Any `SIG_IGN` emits typed `HELPER_SIGNAL_INHERITED_IGNORED` and fails before fork without resetting and continuing; an incomplete inherited mask emits `HELPER_SIGNAL_HANDOFF`. |
 | `Adopted` | Only after signal-handoff verification, supervisor exclusively owns the mapped executable fd, declared stdio, and Rust status writer; wrong identity or absent descriptor emits a typed failure and closes all owned fds. |
 | `Normalized` | While the managed set stays blocked, the single thread installs default dispositions, ignored `SIGPIPE`, waitable default `SIGCHLD`, and fixed synchronous consumption, then establishes the final mask. Normalization failure emits a typed failure before fork. |
-| `ExecPipe` | Supervisor creates exactly one `O_CLOEXEC|O_NONBLOCK` exec-error pipe and one close-on-exec group-confirmation pipe; pipe failure emits a typed failure and forks no child. |
-| `Forked` | Exactly one fork creates the target child. Supervisor owns the child pid and both parent pipe ends; managed signals remain blocked and unconsumed. |
-| `GroupConfirmed` | Child calls `setpgid(0, 0)` then waits behind the confirmation pipe. Supervisor calls `setpgid(child, child)`, verifies the exact group and no early exit, then releases the child. `ESRCH`, `EPERM`, mismatch, and early exit are typed failures with direct-child cleanup. No managed signal is consumed or forwarded and no `READY` is emitted before confirmation; confirmation permits `READY`, not pre-`EXECUTED` forwarding or grace. |
-| `ChildSetup` | After confirmation, child resets mask/dispositions, installs 0/1/2, sets the executable fd CLOEXEC, and closes supervisor-only fds. A stage failure writes one fixed exec-error record under the absolute deadline and `_exit`s. |
-| `ExecResult` | Supervisor reads exact empty EOF as exec success or one complete fixed error record using exact `EINTR`/`EAGAIN`/short/partial/overlong loops under one original absolute deadline. The single-record exec-error reader alone uses one additional overlong byte. Status uses the separate framed stream and fixed bounded writer. Until `EXECUTED`, managed signals coalesce into one closed pre-exec termination request and are neither forwarded nor escalated. That request overrides empty EOF, suppresses `EXECUTED`, target terminal status, and target-executed audit, and causes typed `HELPER_PRE_EXEC_TERMINATION` after immediate helper-owned group kill/reap. Closed-reader `EPIPE`, held-open writer, timeout, or unknown data is typed failure. |
+| `ExecPipe` | Supervisor creates exactly one `O_CLOEXEC|O_NONBLOCK` exec-error pipe; the kernel trace stop is the sole release barrier. Pipe failure emits a typed failure and forks no child. |
+| `Forked` | Exactly one fork creates the target child. Supervisor owns child pid, exec-error reader, and status writer; the child owns the error writer, executable fd, and stdio copies. |
+| `ChildSetup` | Child calls `setpgid`, installs 0/1/2, sets CLOEXEC, closes supervisor-only fds, calls `PTRACE_TRACEME`, restores final signal state, and raises `SIGSTOP`. At that stop all fallible setup is complete and its next operation after release is the sole `execveat`. A stage failure writes one fixed `CHILD_*` record and `_exit`s. |
+| `TraceReady` | Supervisor confirms `getpgid(child) == child`, consumes exactly the initial `SIGSTOP` with event zero, installs exactly `PTRACE_O_TRACEEXEC`, emits `READY`, and releases with zero-signal `PTRACE_CONT`. Group, stop, option, continuation, policy, or early-death failure is typed and consume-reaped. |
+| `ExecEvent` | One absolute deadline covers trace waits, the single-record exec-error decoder, and status writes. Empty EOF is writer closure only. Success requires exact `WIFSTOPPED`/`SIGTRAP`/`PTRACE_EVENT_EXEC` followed by successful zero-signal `PTRACE_DETACH`; only then may `EXECUTED` be emitted. Managed termination, pre-exec death, `SIGSYS`/fault, missing or wrong event, EOF without event, or detach failure suppresses execution/terminal/audit publication and causes helper kill/consume-reap. |
 | `Supervising` | After `EXECUTED`, supervisor remains alive, forwards only `SIGHUP`, `SIGINT`, `SIGTERM`, and `SIGQUIT` to the target group, and applies the complete fixed TERM/grace/unconditional-KILL policy on case expiry or external `SIGTERM`, including with no case deadline. |
 | `Reaped` | Supervisor waits and reaps the direct target, emits framed `EXITED` or `SIGNALED`, closes the Rust status writer, and mirrors the exact target normal exit or terminating signal. A mirror, signal, wait, or reap failure is typed and cannot be reported as target status. |
 | `Closed` | Every non-exec and post-exec path closes each owned fd once and reaps every created child. The first operation failure and any cleanup failure retain distinct fixed stages. |
+
+The execution entity is valid only on native `x86_64-linux` or
+`aarch64-linux`, Linux >= 3.19, and an actual passing parent-child ptrace
+startup probe. Yama, when present, is restricted to unprivileged mode 0 or 1.
+The action seccomp rule admits only `PTRACE_TRACEME`, `PTRACE_SETOPTIONS`,
+`PTRACE_CONT`, and `PTRACE_DETACH`; it preserves the complete network-denial
+set and grants no capability.
 
 | Stage | Patched sandbox ownership, transition, and failure |
 | --- | --- |
@@ -606,14 +613,15 @@ qualification, and promotion.
 | `loadPoint` | Sandbox child verifies and loads the fixed filter after sandbox construction and before exec of the full action command, covering compile/build commands, test setup, tests, and descendants. |
 | `startupProbe` | The exact Nix output reports the fixed capability ABI and denies a planted syscall before any server or governed action starts. |
 | `inheritedCapabilities` | Complete pre-filter descriptor census rejects sockets and every io_uring ring, including SQPOLL and registered/fixed-socket states. |
-| `syscalls` | Closed denied socket-operation, `pidfd_getfd`, `socketcall` when present, and three-io_uring-entry-point set. |
+| `syscalls` | Closed denied socket-operation, `pidfd_getfd`, `socketcall` when present, and three-io_uring-entry-point set, plus an exact ptrace request allowlist of `TRACEME`, `SETOPTIONS`, `CONT`, and `DETACH`; all other ptrace requests remain denied. |
 | `plants` | Patch-removal, wrong-output, filter-load, strategy fallback, inherited socket/ring/SQPOLL/fixed-socket, setup-before-payload, compile/build, test, descendant, and exact eight IPv4, IPv6, netlink, packet, pathname Unix, abstract Unix, socketpair, and io_uring pre-action results. |
 | `external_egress_plant` | A build/test action attempts host/external egress and is denied. |
 | `live_index_plant` | The offline yanked validator receives a live-index source and refuses before resolution or socket use. |
 | `repository_fetch_inventory` | Exact fetch sites outside governed actions, offline during gates, each pinned by lock checksum or git revision plus archive sha256. |
 | `cargo_compatibility_carriers` | Exact generated test identities, Cargo selectors, existing surface IDs, same-commit verdicts, and non-advisory classification for mandatory socket users. |
 | `containmentQualification` | Exact seven-stage bounded containment result set with closed recovery/escalation/cleanup/quarantine values, patch/monitor/pending/result digests, forbidden-field absence, and every validator mutation result. |
-| `qualification_result` | Identity, startup, strategy, inherited-capability, setup-before-payload, all eight socket/io_uring, external-egress, and live-index plants fail at their own predicates; every sandbox-policy stage has its fixed redacted code/remedy; inventories are complete; and every compatibility carrier passes on the same head. |
+| `execEventQualification` | Both native systems bind Linux minimum, Yama parent-child mode, passing real ptrace startup/host conformance, exact initial stop/options/event/detach order, fast-exit positive, pre-exec death/fault/EOF/wrong-event/detach negatives, four-request seccomp allowance, forbidden-request mutations, unchanged no-network plants, and every fixed recovery code. |
+| `qualification_result` | Identity, startup, strategy, inherited-capability, exec-event qualification, setup-before-payload, all eight socket/io_uring, external-egress, and live-index plants fail or pass at their own predicates as declared; every sandbox-policy stage has its fixed redacted code/remedy; inventories are complete; and every compatibility carrier passes on the same head. |
 
 There is no endpoint declaration field. A network namespace cannot enforce
 one, and no such claim is part of qualification.
@@ -671,6 +679,11 @@ Qualification additionally binds:
   setup-before-payload/inherited-capability/fallback results, eight pre-action
   socket/io_uring plants, external-egress and live-index plants, and exact
   Cargo compatibility census;
+- exact static-supervisor protocol identity, Linux/Yama/platform gates,
+  four-request ptrace seccomp allowance, both native startup and host
+  conformance results, kernel exec-event plus zero-signal detach positive,
+  fast-exit result, pre-exec death/fault/empty-EOF/wrong-event/detach
+  negatives, forbidden-request mutations, and every typed recovery result;
 - all seven PID-namespace containment results, the exact sandbox patch and
   canonical monitor identity digests, closed supervisor recovery classes,
   cleanup/quarantine results, pending observation, and every

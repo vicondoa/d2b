@@ -365,8 +365,10 @@ Acceptance:
    block the full managed set before spawn and restore the spawning thread's
    exact prior mask after every spawn result before unlock. Every first-party crate remains
    at `unsafe_code = "forbid"`. The
-   single-threaded supervisor performs the sole fork, proves exec with its
-   close-on-exec error pipe and explicit `READY` then `EXECUTED` records,
+   single-threaded supervisor performs the sole fork, uses its close-on-exec
+   error pipe only for failure, proves exec with exact kernel
+   `PTRACE_EVENT_EXEC` and successful zero-signal detach, and emits explicit
+   `READY` then `EXECUTED` records,
    turns any managed signal observed before `EXECUTED` into typed helper-owned
    setup termination without false execution/audit publication, then remains
    alive to forward post-`EXECUTED` signals and reap and mirror target status.
@@ -533,38 +535,57 @@ Acceptance:
   default dispositions, ignore `SIGPIPE` so a closed reader becomes typed
   `EPIPE`, restore `SIGCHLD` to waitable `SIG_DFL` without `SA_NOCLDWAIT`,
   install fixed synchronous consumption, and establish the final mask.
-  It MUST create one nonblocking close-on-exec child exec-error pipe, one
-  close-on-exec group-confirmation pipe, and fork exactly once while
-  single-threaded. The child and supervisor MUST both perform the standard
-  `setpgid` handshake. The child MUST wait with managed signals blocked until
-  the supervisor confirms `getpgid(child) == child` and no early child exit.
-  `ESRCH`, `EPERM`, every other setpgid error, group mismatch, and early exit
-  MUST be typed failures with direct-child cleanup.
-  The supervisor MUST NOT consume or forward a managed signal or emit `READY`
-  before confirmation. After confirmation, the child MUST restore
-  the fixed default signal mask and dispositions, install declared
-  stdin/stdout/stderr, set the executable descriptor close-on-exec, close
-  every supervisor-only descriptor, and call
-  `execveat(private_fd, "", argv, envp, AT_EMPTY_PATH)`. On failure it MUST
-  write one fixed exec-error record with bounded
-  `EINTR`/`EAGAIN`/short-write handling under the absolute deadline and call
-  `_exit`; there is no target path, reopen, `/proc`, `fexecve`, or fallback.
-  The supervisor MUST emit framed `READY` after successful process-group
-  confirmation, consume
-  exactly empty EOF or one complete exec-error record with exact bounded
-  `EINTR`/`EAGAIN`/short/partial/overlong/held-writer handling under the same
-  original absolute deadline, emit
-  framed `EXECUTED` only for empty close-on-exec EOF when no managed signal has
-  been observed, and otherwise emit one typed failure. From group confirmation
-  through pending `ExecResult`, including after `READY`, it MUST NOT forward a
-  managed signal or begin group escalation. The first observed managed signal
-  MUST queue one closed pre-exec termination request; later managed signals
-  MUST coalesce. That request MUST take precedence over empty exec-pipe EOF,
-  suppress `EXECUTED`, every target terminal record, and the target-executed
-  audit event, immediately kill and consume-reap the confirmed child group as
-  helper-owned setup cleanup, emit typed `HELPER_PRE_EXEC_TERMINATION`, and
-  leave incomplete containment to the patched sandbox monitor. Only after
-  `EXECUTED` may forwarding or grace begin. It MUST remain alive after
+  It MUST create one nonblocking close-on-exec child exec-error pipe and fork
+  exactly once while single-threaded. No group-confirmation pipe exists; the
+  kernel ptrace stop is the only child-release barrier. Child and supervisor
+  MUST both perform `setpgid`. The child MUST install stdio and descriptor
+  state, call `PTRACE_TRACEME`, restore its final signal state, and raise one
+  initial `SIGSTOP`. At that stop every fallible pre-exec setup operation MUST
+  be complete and its next operation after release MUST be the sole
+  `execveat(private_fd, "", argv, envp, AT_EMPTY_PATH)`. Setup,
+  `PTRACE_TRACEME`, stop, or `execveat` failure MUST write one fixed
+  single-record `CHILD_*` error under the original deadline and call `_exit`;
+  no path, reopen, `/proc`, `fexecve`, or fallback is permitted.
+  Before `READY`, the supervisor MUST confirm `getpgid(child) == child`,
+  consume exactly an initial `WIFSTOPPED`/`SIGSTOP` state with ptrace event
+  zero, and successfully install exactly `PTRACE_O_TRACEEXEC`. `ESRCH`,
+  `EPERM`, other group failure, early child death, missing/wrong initial stop,
+  and ptrace option failure MUST be typed and directly consume-reaped.
+  The complete framed `READY` write MUST precede zero-signal `PTRACE_CONT`.
+  From release until exec-event acceptance, one original absolute deadline
+  MUST cover synchronous managed-signal consumption, trace waits, the
+  nonblocking exec-error reader, and status writes. Each loop iteration MUST
+  give a pending managed signal precedence over a trace event, coalesce it
+  into one setup-termination request, forward nothing, start no grace, kill
+  and consume-reap the group, emit `HELPER_PRE_EXEC_TERMINATION`, and suppress
+  `EXECUTED`, terminal, and target-executed audit publication.
+  The exec-error pipe MUST remain a one-record failure channel with exact
+  `EINTR`/`EAGAIN`/short/partial/overlong/held-writer handling. Empty EOF MUST
+  mean only writer closure and MUST never prove execution.
+  Exec success MUST require the exact kernel wait state `WIFSTOPPED`,
+  `WSTOPSIG == SIGTRAP`, and `status >> 16 == PTRACE_EVENT_EXEC` after
+  `PTRACE_O_TRACEEXEC`. Any pre-event normal exit, `SIGKILL`, OOM-like kill,
+  `SIGSYS`, fault, other signal stop, plain `SIGTRAP`, missing/wrong ptrace
+  event, or EOF without that event MUST fail closed and MUST NOT emit
+  `EXECUTED`. At the valid event stop, before target user code runs, the
+  supervisor MUST call `PTRACE_DETACH` exactly once with signal zero. Detach
+  failure MUST emit typed `HELPER_PTRACE_DETACH`, kill and consume-reap the
+  group, leave incomplete cleanup to sandbox containment, and publish no
+  execution. Only successful detach MAY emit framed `EXECUTED`. The detach
+  MUST resume the target without changing its signal state or eventual wait
+  status; an immediate first-instruction exit remains ordered after
+  `EXECUTED`.
+  The protocol MUST be gated to native `x86_64-linux` and `aarch64-linux`,
+  Linux >= 3.19, an actual passing parent-child ptrace startup probe, and Yama
+  mode 0 or 1 when Yama is present. It MUST grant no `CAP_SYS_PTRACE`. The
+  action seccomp policy MUST allow only `PTRACE_TRACEME`,
+  `PTRACE_SETOPTIONS`, `PTRACE_CONT`, and `PTRACE_DETACH`, deny every other
+  ptrace request, preserve every socket/socketcall/io_uring/`pidfd_getfd`
+  denial, and add no network exception.
+  Source, protocol, seccomp, platform, kernel, Yama, both native startup and
+  host-conformance, exec-event/detach, negative/mutation, and fixed recovery
+  evidence MUST be qualification-bound. Only after `EXECUTED` may forwarding
+  or grace begin. It MUST remain alive after
   `EXECUTED`, forward only
   `SIGHUP`/`SIGINT`/`SIGTERM`/`SIGQUIT` to the target process group, preserve
   the existing deadline escalation, and run that full fixed
@@ -590,14 +611,19 @@ Acceptance:
   spawning-thread mask restoration and injected restoration failure after
   successful and failed spawn, overlapping-launch serialization and
   restore-before-unlock mutations, managed `SIG_IGN` refusal before fork,
-  `SIGTERM` in the
-  Rust-to-helper handoff window, parent-first/child-first setpgid
-  races, `ESRCH`, `EPERM`, other setpgid error, group mismatch, early child exit, a pending managed
-  signal before group confirmation, pre-`READY` termination, and every managed
-  signal at a deterministic post-`READY`, post-barrier, pre-exec hold. One
-  pre-exec case MUST make the child die with empty exec-pipe EOF; every case
-  MUST prove one queued setup termination, helper kill/reap, no forwarding or
+  `SIGTERM` in the Rust-to-helper handoff window, parent-first/child-first
+  setpgid races, `ESRCH`, `EPERM`, other setpgid error, group mismatch, early
+  child exit, initial-stop/options/continue failures, a pending managed signal
+  before confirmation, pre-`READY` termination, and every managed signal while
+  held at the deterministic post-`READY` initial ptrace stop. Every case MUST
+  prove one queued setup termination, helper kill/reap, no forwarding or
   grace, no `EXECUTED` or target terminal frame, and no target-executed audit.
+  Separate cases MUST cover pre-exec `SIGKILL`, `SIGSYS`, fault, normal exit,
+  OOM-like kill, empty EOF without an exec event, missing/wrong ptrace event,
+  detach failure, and a target that exits on its first instruction after
+  event/detach. Mutations that accept EOF, any stop, a wrong event, or detach
+  failure MUST fail. Platform, minimum-kernel, Yama 2/3, forbidden ptrace
+  request, and unchanged action no-network tests MUST be exact.
   Tests MUST also cover target-ignore-TERM without a case deadline, private-fd
   identity, descriptor absence, executable and auxiliary close-on-exec,
   unchanged stdin and split stdout/stderr, signal forwarding, exact target
@@ -1186,10 +1212,12 @@ Acceptance:
   opened with `RESOLVE_NO_MAGICLINKS` only, owned with its sole consuming API
   by one dependency-leaf crate and passed through reviewed safe command-fd
   mapping to the exact immutable Nix-built static C
-  `d2b-bazel-exec-supervisor`. Its sole fork and close-on-exec error pipe prove
-  same-open-file-description `execveat(AT_EMPTY_PATH)` before it supervises,
-  forwards signals, reaps, and mirrors target status; declared stdio survives
-  and no first-party Rust unsafe exception exists.
+  `d2b-bazel-exec-supervisor`. Its sole fork uses the close-on-exec error pipe
+  only for failure and proves same-open-file-description
+  `execveat(AT_EMPTY_PATH)` through exact kernel `PTRACE_EVENT_EXEC` plus
+  zero-signal detach before it supervises, forwards signals, reaps, and mirrors
+  target status; declared stdio survives and no first-party Rust unsafe
+  exception exists.
 - **Action Seccomp Provider**: The Nix-pinned patched Bazel 8.6.0 Linux
   sandbox, whose child loads the fixed filter before the action command and
   whose exact source/patch/policy/output identity, startup probe, configured
@@ -1317,10 +1345,12 @@ Acceptance:
   and failed spawn, capture/block/poison/restoration failures,
   overlapping-launch and restore-before-unlock mutations, inherited managed
   `SIG_IGN` refusal, handoff-window and
-  normalization-time `SIGTERM`, parent/child setpgid handshake and confirmation
-  races, typed `ESRCH`/`EPERM`/early-exit cleanup, pending signal before group
-  confirmation, wrong pre-`READY` ownership, forwarding or grace before
-  `EXECUTED`, pre-exec signal success on empty EOF, false `EXECUTED` or
+  normalization-time `SIGTERM`, parent/child setpgid handshake and initial
+  trace-stop races, typed `ESRCH`/`EPERM`/early-exit cleanup, pending signal
+  before group and trace confirmation, wrong pre-`READY` ownership, missing
+  `PTRACE_O_TRACEEXEC`, wrong/missing exec event, pre-exec
+  `SIGKILL`/`SIGSYS`/fault/exit/OOM-like kill, empty EOF without an exec event,
+  detach failure, forwarding or grace before `EXECUTED`, false `EXECUTED` or
   target-executed audit publication, target-ignore-TERM with no case deadline,
   wrong signal forwarding or target status, every Rust-parent
   and C-supervisor ownership/closure/cleanup/wait/reap failure, ambiguous
@@ -1426,14 +1456,20 @@ Acceptance:
   and the exact rerun command. Adjacency rows are independently checked
   against physical lines; census/section/mismatch locations are actual;
   oversized inputs assert both bounds. Temp-dir, path-resolution, make-path,
-  copy, mkdir, open3, and subprocess capture/wait failures and warnings are
+  copy, mkdir, open3, and subprocess capture/wait exceptions, warnings, false,
+  undefined, malformed, and successful-with-missing-side-effect returns are
   injected at their actual operation seams and run through
   `run_cli_entrypoint --self-test` after writing sentinel stdout/stderr. No
   case supplies an expected reason to a generic setup wrapper. Each produces
   empty stdout, exact status 1, and only its seam-specific fixed setup
-  diagnostic and remedy; raw exception/path content and task-rewrite remedies
-  are absent. `self-test-contract` is reserved for an exact invalid validator
-  self-test contract case. Actual unreadable-source and
+  diagnostic and remedy. Failed subprocess cleanup checks every close result
+  and uses a consuming wait with at most eight `EINTR` retries. Injected close,
+  wait, retry-success, and retry-exhaustion cases preserve the primary typed
+  setup failure and append only fixed
+  `D2B-SPEC003-PLAN-CLEANUP` when cleanup fails. Raw warnings, errors, paths,
+  sentinel content, and task-rewrite remedies are absent. `self-test-contract`
+  is reserved for an exact invalid validator self-test contract case. Actual
+  unreadable-source and
   unsupported-argument subprocesses produce empty stdout and exact status 1
   and 2. No task/dependency ID, owned path, contents, or count is rendered.
 - **SC-041**: `promotion-record.json` validates against the actual sealed

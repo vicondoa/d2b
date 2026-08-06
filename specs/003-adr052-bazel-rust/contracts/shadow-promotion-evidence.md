@@ -20,6 +20,11 @@ contains:
 - a closed seven-entry PID-namespace containment result set, canonical sandbox
   patch and monitor identity digests, and the complete containment-validator
   mutation result set;
+- one closed exec-event qualification result binding both native
+  startup/conformance proofs, protocol/seccomp identities, platform,
+  minimum-kernel and Yama gates, exact four-request ptrace allowance,
+  unchanged no-network result, event/detach positives, the complete negative
+  and mutation matrix, and fixed recovery-code results;
 - effective permissions.
 
 The canonical cache field spellings are exactly `bazelRestoreCount`,
@@ -332,12 +337,17 @@ It also proves:
     outcomes, capture/block/poison/restoration failures, overlapping-launch
     one-guard and restore-before-unlock mutations, inherited managed `SIG_IGN`
     refusal, handoff-window/normalization-time `SIGTERM`, child/supervisor
-    setpgid confirmation races, typed `ESRCH`/`EPERM`/early-child-exit cleanup,
-    pending signal before confirmation, pre-`READY` termination ownership,
-    deterministic post-`READY` pre-exec signals, child-death empty-EOF
-    priority, one setup request, helper group kill/reap, no pre-exec
-    forwarding/grace/`EXECUTED`/target terminal/audit, and post-exec forwarding,
-    no-deadline external-TERM escalation, target-ignore-TERM, absence of
+    setpgid and initial-stop races, typed
+    `ESRCH`/`EPERM`/early-child-exit cleanup, exact
+    `PTRACE_TRACEME`/initial-stop/options/zero-signal-cont/event/
+    zero-signal-detach order, pending signal before group/trace confirmation,
+    pre-`READY` termination ownership, deterministic post-`READY` pre-exec
+    signals, one setup request, pre-exec death/fault/OOM-like kill, empty EOF
+    without event, missing/wrong event, detach failure, fast first-instruction
+    exit, helper group kill/reap, Linux minimum, native-system and Yama gates,
+    exact four-request ptrace seccomp allowance with unchanged no-network,
+    no pre-exec forwarding/grace/`EXECUTED`/target terminal/audit, and post-exec
+    forwarding, no-deadline external-TERM escalation, target-ignore-TERM, absence of
     numeric Rust signaling; and every Rust-parent and C-supervisor
     ownership/closure/cleanup/wait/reap result; plus every parent/helper/child
     runner recovery-code byte-exact result and every patched-sandbox-owned

@@ -163,6 +163,9 @@ Layer-1 surfaces. No new top-level shell gate or Layer-1 job.
 | Group confirmation and `READY` were treated as authority to forward a managed signal while the exec result was still pending. | A signal can kill the child before exec and produce empty close-on-exec EOF, which is not execution evidence once a pre-exec termination request exists. | Between confirmation and `EXECUTED`, coalesce managed signals into one closed pre-exec setup termination, forward nothing, run no grace, prioritize that request over empty EOF, kill/reap the confirmed group through the helper, emit `HELPER_PRE_EXEC_TERMINATION`, and publish neither `EXECUTED`, target terminal status, nor a target-executed audit event. Add deterministic post-`READY` barrier tests and false-execution mutations; the patched sandbox remains the containment backstop. |
 | The signal-handoff contract named one process-wide guard but its tests covered only normal restoration. | Per-launch guards, guard poison, capture/block failure, and unlock-before-restoration could pass while violating process-wide signal inheritance. | Inject capture, block, poisoned-guard, and restoration failures after both spawn outcomes. Hold two launches at deterministic barriers and mutation-test one shared guard plus restoration attempt before unlock, using only reviewed safe APIs and no new unsafe. |
 | Validator setup self-tests supplied the class they expected to a generic wrapper. | A wrong production classifier could remain green, and `self-test-contract` was being used for repairable operation failures. | Put fixed classification at the temp-dir, path-resolution, make-path, copy, mkdir, open3, and subprocess capture/wait boundaries. Inject failure and warning at each actual seam through the public CLI, byte-match status/stdout/stderr and redaction, give each seam its own setup remedy, and reserve `self-test-contract` for invalid validator self-test behavior. |
+| Empty close-on-exec EOF remained an ambiguous execution proof. | Child death before exec closes the same writer, so no signal-priority rule can turn EOF into a kernel exec fact. | This correction supersedes the confirmation-pipe and EOF-success rows above. Use the natural parent-child `PTRACE_TRACEME` initial stop as the sole release barrier, install `PTRACE_O_TRACEEXEC`, emit `READY`, release with zero-signal `PTRACE_CONT`, require exact kernel `PTRACE_EVENT_EXEC`, detach with signal zero, and emit `EXECUTED` only after successful detach. Empty EOF is failure-channel closure only. Bind Linux/Yama/platform gates, the exact four-request ptrace seccomp allowance, unchanged action no-network, host evidence, qualification, recovery, negative tests, and mutations. |
+| Validator setup tests covered only thrown exceptions and warnings. | False, undefined, malformed, or truthy results without the required side effect could bypass the tested classifier. | Exercise every temp-dir, path-resolution, make-path, copy, mkdir, open3, and subprocess seam through the public CLI with exception, warning, false, undefined, malformed, and successful-with-missing-side-effect returns; require the same seam-specific fixed diagnostic for every variant. |
+| Failed validator subprocess capture discarded descriptor-close and wait results. | A child or descriptor could leak while the public CLI reported only the primary setup failure. | Check every close, perform a consuming wait with at most eight `EINTR` retries, inject close/wait/retry/exhaustion results, preserve the primary typed setup failure, append only fixed `D2B-SPEC003-PLAN-CLEANUP` on cleanup failure, and render no raw warning, error, or path. |
 
 ## Shared Design Invariants
 
@@ -429,12 +432,17 @@ own the same file.
   Every negative compares complete stderr byte-for-byte with an independent
   literal through the injectable entrypoint, including exact exit status.
   Temp-dir, path-resolution, make-path, copy, mkdir, open3, and subprocess
-  capture/wait failures and warnings are injected at their actual operation
-  seams and execute through `run_cli_entrypoint --self-test` after the runner
-  writes sentinel stdout/stderr. No test supplies an expected reason to a
-  generic setup wrapper. Each seam produces status 1, empty stdout, and only
-  its fixed setup-class stderr with its own validator-specific remedy, not a
-  task rewrite; raw exception/path and sentinel content are discarded.
+  capture/wait exceptions, warnings, false, undefined, malformed, and
+  successful-with-missing-side-effect results are injected at their actual
+  operation seams and execute through `run_cli_entrypoint --self-test` after
+  the runner writes sentinel stdout/stderr. No test supplies an expected
+  reason to a generic setup wrapper. Each seam produces status 1, empty
+  stdout, and only its fixed setup-class stderr with its own validator-specific
+  remedy, not a task rewrite. Failed-subprocess cleanup checks every close and
+  performs a consuming wait with at most eight `EINTR` retries. Injected close,
+  wait, retry-success, and retry-exhaustion results preserve the primary typed
+  failure and append only fixed `D2B-SPEC003-PLAN-CLEANUP` on cleanup failure;
+  raw warning/error/path and sentinel content are discarded.
   `self-test-contract` is byte-tested only for invalid validator self-test
   behavior.
   Unreadable-source status 1 and
@@ -539,17 +547,20 @@ The prep commit:
   capture its exact mask, block the complete managed set before spawn, and
   attempt restoration of the captured mask after successful or failed spawn
   before unlock.
-  No new signal FFI dependency is added. It models the fixed single-record exec-error
-  protocol, group-confirmation barrier, and fixed-header stateful framed
-  `READY`, `EXECUTED`, failure, and terminal status protocol;
+  No new signal FFI dependency is added. It models the fixed single-record
+  exec-error failure protocol, exact initial trace stop,
+  `PTRACE_O_TRACEEXEC`, kernel exec-event and zero-signal detach transitions,
+  and fixed-header stateful framed `READY`, `EXECUTED`, failure, and terminal
+  status protocol;
 - adds no Rust helper crate. Injected prep tests cover the Rust-parent
   stage-error and owner/closure table, one-site invocation policy, private-fd
   mapping, capture/block/guard-poison/restoration failures after both spawn
   outcomes, overlapping-launch serialization and restore-before-unlock
-  mutations, protocol discrimination, held-open/partial transport,
-  group-confirmation races, deterministic post-`READY` pre-exec signal
-  queuing including child-death empty EOF, no false execution/audit, and a
-  fast target status equal to a planted helper crash. The dedicated static C
+  mutations, protocol discrimination, held-open/partial transport, group and
+  initial-trace-stop races, deterministic post-`READY` pre-exec signal
+  queuing, pre-exec death/fault/empty-EOF/wrong-event/detach failures, no
+  false execution/audit, and a fast target status equal to a planted helper
+  crash after the event and detach. The dedicated static C
   supervisor source and real-output conformance land in the sequential
   toolchain scope. No runner `sys.rs`, Rust raw fork, `pre_exec`, Rust signal
   handler, signal-disposition mutation, runfiles/worktree helper path, target
@@ -595,10 +606,14 @@ replacement waiter, or manual release,
 static-supervisor source/dependency/output/protocol, and
 framed status, single-record exec-error, inherited-signal verification,
 ignored-disposition refusal, Rust-to-helper handoff-window `SIGTERM`,
-parent/child setpgid confirmation, early-signal/group-race cleanup,
-post-`READY` pre-exec signal queuing, empty-EOF priority, helper group
-kill/reap, and no false `EXECUTED`/terminal/audit publication, and
-no-first-party-Rust-unsafe tests.
+parent/child setpgid confirmation, exact initial ptrace stop/options/release,
+kernel exec-event, zero-signal detach, early-signal/group-race cleanup,
+post-`READY` pre-exec signal queuing,
+pre-exec-death/fault/empty-EOF/wrong-event/detach refusal, helper group
+kill/reap, fast first-instruction exit, platform/kernel/Yama gates, exact
+four-request ptrace seccomp allowance with unchanged action no-network, no
+false `EXECUTED`/terminal/audit publication, and no-first-party-Rust-unsafe
+tests.
 Cargo tests retain mocks; the real
 containment proof runs only through the patched Bazel Linux sandbox. It
 implements sandbox mapping/rendering only in
@@ -808,29 +823,32 @@ All must be true:
   `SIG_IGN` is a typed fail-before-fork refusal and is never
   reset-and-continued. Only then does it install normalized dispositions and
   synchronous consumption. It creates one close-on-exec nonblocking child
-  exec-error pipe plus a group-confirmation pipe and forks once. The child and
-  supervisor both call `setpgid`, the confirmation barrier keeps managed
-  signals blocked, and the supervisor proves the exact live group before
-  `READY`. The child then installs stdio
-  and executable-fd CLOEXEC and performs same-open-file-description
-  `execveat(AT_EMPTY_PATH)` with no reopen or fallback. The exec-error pipe
-  accepts one record or EOF and alone uses the
+  exec-error pipe and forks once; no confirmation pipe exists. Child and
+  supervisor both call `setpgid`. The child completes stdio, CLOEXEC,
+  descriptor, ptrace, and signal setup, then raises the initial `SIGSTOP`.
+  The supervisor proves the exact live group and initial trace state, installs
+  exactly `PTRACE_O_TRACEEXEC`, completes `READY`, and releases with
+  zero-signal `PTRACE_CONT`. The child immediately performs
+  same-open-file-description `execveat(AT_EMPTY_PATH)` with no reopen or
+  fallback. The exec-error pipe accepts one record or EOF and alone uses the
   additional overlong byte. The status pipe emits fixed-header version-1
   `READY`, `EXECUTED`, and terminal frames; its 27-byte stateful decoder
   retains fragmented and coalesced frames and rejects malformed, duplicate,
   out-of-order, partial-EOF, trailing, and overflow input without a one-byte
   status probe. All I/O retains exact bounded
   `EINTR`/`EAGAIN`/short/partial/closed-reader/held-writer handling under the
-  original deadline. Before `EXECUTED`, the helper coalesces managed signals
-  into one typed setup termination, forwards nothing, runs no grace, gives the
-  request priority over empty EOF, kills/reaps the confirmed group, and emits
-  no false `EXECUTED`, target terminal, or target-executed audit event. After
-  `EXECUTED`, it remains alive, forwards the fixed termination signals, reaps,
-  and mirrors exact target status. After its initial
+  original deadline. Empty exec-error EOF is closure only. Before `EXECUTED`,
+  the helper coalesces managed signals into one typed setup termination,
+  forwards nothing, runs no grace, and kills/reaps the confirmed group. It
+  accepts execution only on exact `PTRACE_EVENT_EXEC` followed by successful
+  zero-signal `PTRACE_DETACH`; pre-exec death/fault/empty EOF/wrong event or
+  detach failure emits no false `EXECUTED`, target terminal, or
+  target-executed audit event. After `EXECUTED`, it remains alive, forwards the
+  fixed termination signals, reaps, and mirrors exact target status. After its initial
   inherited-disposition and mask verification, it installs dispositions and
   synchronous consumption while blocked and establishes the final mask. It
   ignores `SIGPIPE`, restores waitable default `SIGCHLD`, owns pending,
-  handoff-window, normalization-time, or pre-group-confirmation `SIGTERM`
+  handoff-window, normalization-time, or pre-trace-confirmation `SIGTERM`
   before `READY`, and escalates external `SIGTERM` through the complete fixed
   grace even with no case deadline. Missing/wrong output, rebind,
   private-fd identity, descriptor absence, CLOEXEC, stdin, helper crash/EOF
@@ -840,8 +858,12 @@ All must be true:
   restore-before-unlock mutations, blocked SIGTERM,
   managed-`SIG_IGN` refusal, handoff-window SIGTERM, parent-first/child-first
   setpgid races, typed `ESRCH`/`EPERM`/other-error/early-exit cleanup,
-  pre-confirmation signal ownership, deterministic post-`READY` pre-exec
-  signals including child-death empty EOF, no false execution/audit,
+  initial-stop/options/continue failures, pre-confirmation signal ownership,
+  deterministic post-`READY` pre-exec signals, pre-exec
+  `SIGKILL`/`SIGSYS`/fault/exit/OOM-like kill, empty EOF without event,
+  missing/wrong event, detach failure, fast first-instruction exit, no false
+  execution/audit, Linux/Yama/native-platform gates, exact ptrace request
+  filter and unchanged no-network plants,
   target-ignore-TERM, signal/status
   mismatch, and every Rust-parent and C-supervisor
   ownership/closure/cleanup/wait/reap failure test passes; every
@@ -1662,7 +1684,7 @@ old-rerun-after-failure fixtures prove both rules.
 | A rerun of an old run inflates the streak or reorders behind newer failures. | Streak positions are distinct push-created (run ID, head SHA) units ordered by `createdAt` then run ID, with repeated-attempt and old-rerun-after-failure fixtures. |
 | The pre-merge rollback rehearsal reads a promotion record that does not exist yet and silently rehearses nothing. | Rehearsal resolves the candidate from verified candidate HEAD and the recorded spec003w5 parent; promotion-record reads are post-merge only. |
 | A verified executable becomes forgeable or descriptor-revealing through a harmless-looking trait, formatter, serializer, constructor, or accessor. | Compiler-derived closed public/hidden/inherent/explicit/auto/blanket API snapshots plus focused rustdoc compile-fail examples. |
-| The immutable helper is rebound, fd 0 stops being stdin, a mapped descriptor is wrong, concurrent launches use separate signal guards, restoration follows unlock, inherited `SIG_IGN` is silently overridden, group creation races `READY`, a pre-exec signal turns empty EOF into false execution, or a fast target exit is mistaken for a helper crash with the same status. | The dependency-leaf safe Rust consumer uses the exact static C Nix output, reviewed safe command-fd mapping, and one serialized safe `SigSet` mask handoff at its invocation site. Capture/block/poison/restoration and overlap mutations prove restore-before-unlock. The helper refuses ignored managed dispositions before fork; parent and child setpgid under a confirmation barrier before `READY`; signals before `EXECUTED` become one helper-owned setup termination with no forwarding, grace, execution, target-status, or audit publication. Framed status, source/dependency/output identity, handoff, group-race, empty-EOF, stdio, CLOEXEC, transport, crash/EOF, ownership, cleanup, wait, and reap plants cover every stage without Rust unsafe. |
+| The immutable helper is rebound, fd 0 stops being stdin, a mapped descriptor is wrong, concurrent launches use separate signal guards, restoration follows unlock, inherited `SIG_IGN` is silently overridden, group creation races `READY`, empty EOF or a wrong stop false-confirms exec, detach fails after the event, or a fast target exit is mistaken for a helper crash with the same status. | The dependency-leaf safe Rust consumer uses the exact static C Nix output, reviewed safe command-fd mapping, and one serialized safe `SigSet` mask handoff at its invocation site. Capture/block/poison/restoration and overlap mutations prove restore-before-unlock. The child completes setup and enters `PTRACE_TRACEME` initial stop; the supervisor confirms group/tracing state, installs `PTRACE_O_TRACEEXEC`, emits `READY`, releases with zero signal, accepts only exact kernel `PTRACE_EVENT_EXEC`, and detaches with zero signal before `EXECUTED`. Pre-exec signals/death/fault/EOF/wrong-event/detach failure publish no execution. Platform/kernel/Yama, exact ptrace-request seccomp, unchanged no-network, framed-status, identity, stdio, CLOEXEC, transport, recovery, cleanup, wait, and reap plants cover every stage without Rust unsafe. |
 | The supervisor crashes after forking and leaves a target or daemonized descendant alive, Rust cleanup signals a reused numeric identity, or recovery destroys the only wait owner before reap. | The patched Bazel sandbox creates one fresh PID namespace whose original live monitor survives the action tree and remains sole wait owner. Its fixed ceiling bounds userspace escalation and the close-or-quarantine decision, while pending kernel cleanup remains quarantined, failed, and non-reusable until that monitor publishes consuming-reap release. The governed runbook drains without terminating it and forbids reboot, early retry, replacement waiter, and manual release. Real crash-stage, descendant, beyond-ceiling, byte-exact diagnostic/link/release, and recovery mutations prove the boundary. |
 | Inherited `SIGPIPE`, non-waitable `SIGCHLD`, a pending managed signal, an ignored managed disposition, or a stalled short-I/O loop defeats supervision. | Safe Rust block-before-spawn and restore-before-unlock, helper first-operation ignored-disposition refusal, typed closed-reader `EPIPE`, default waitable `SIGCHLD`, confirmed group before `READY`, no forwarding or grace before `EXECUTED`, deterministic pre-exec setup termination, no-deadline external-TERM escalation, single-record exec-error, and stateful framed-status tests cover every boundary. |
 | A cache API page interleaves a foreign prefix and maintenance adopts it. | Closed typed prefix enum, mixed-page fixtures, preservation checks, and zero delete calls on every authorization refusal. |
@@ -1716,11 +1738,16 @@ After the desired waves:
     non-record and overflow locators are closed; oversized record/line inputs
     and real unreadable-source and unsupported-argument subprocesses pass.
     Temp-dir, path-resolution, make-path, copy, mkdir, open3, and subprocess
-    capture/wait failures and warnings are injected at their actual seams and
-    pass through `run_cli_entrypoint --self-test` after sentinel output. Each
-    exact case returns status 1 with empty stdout and only its seam-specific
-    fixed setup diagnostic and remedy; no test passes an expected reason into
-    a generic wrapper, and no raw exception/path, sentinel, or task-rewrite
+    capture/wait exceptions, warnings, false, undefined, malformed, and
+    successful-with-missing-side-effect results are injected at their actual
+    seams and pass through `run_cli_entrypoint --self-test` after sentinel
+    output. Each exact case returns status 1 with empty stdout and only its
+    seam-specific fixed setup diagnostic and remedy; no test passes an
+    expected reason into a generic wrapper. Failed-subprocess cleanup checks
+    every close, consumes the reap with at most eight `EINTR` retries, and
+    injects close/wait/retry/exhaustion outcomes while preserving the primary
+    setup failure and appending only fixed `D2B-SPEC003-PLAN-CLEANUP` on
+    cleanup failure. No raw warning/error/path, sentinel, or task-rewrite
     remedy appears. `self-test-contract` appears only in the exact invalid
     validator-contract case.
 13. process references use exactly `spec003w0` through `spec003w7` plus
@@ -1747,11 +1774,17 @@ After the desired waves:
     capture/block/poison/restoration failures after both spawn outcomes, one
     shared guard under overlapping launch, restore-before-unlock mutations,
     helper first-operation managed-`SIG_IGN` refusal, handoff-window and
-    normalization-time `SIGTERM`, parent/child setpgid confirmation races,
-    typed `ESRCH`/`EPERM`/early-child-exit cleanup, pending signal before group
+    normalization-time `SIGTERM`, parent/child setpgid and initial-stop races,
+    typed `ESRCH`/`EPERM`/early-child-exit cleanup, exact
+    `PTRACE_TRACEME`/initial-stop/`PTRACE_O_TRACEEXEC`/zero-signal-cont/event/
+    zero-signal-detach order, pending signal before group and trace
     confirmation, pre-`READY` ownership, deterministic post-`READY` pre-exec
-    signals including child-death empty EOF, one queued setup termination,
-    helper kill/reap, no pre-exec forwarding/grace, no false
+    signals, one queued setup termination, pre-exec
+    `SIGKILL`/`SIGSYS`/fault/exit/OOM-like kill, empty EOF without event,
+    missing/wrong event, detach failure, fast first-instruction exit, helper
+    kill/reap, Linux/Yama/native-platform gates, exact four-request ptrace
+    seccomp allowance, unchanged action no-network, no pre-exec
+    forwarding/grace, no false
     `EXECUTED`/target terminal/audit event, no-deadline external-TERM escalation,
     target-status
     mirroring, ownership, cleanup, wait, and reap coverage all pass. The real
