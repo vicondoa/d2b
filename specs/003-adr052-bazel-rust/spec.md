@@ -551,7 +551,12 @@ Acceptance:
   zero, and successfully install exactly `PTRACE_O_TRACEEXEC`. `ESRCH`,
   `EPERM`, other group failure, early child death, missing/wrong initial stop,
   and ptrace option failure MUST be typed and directly consume-reaped.
-  The complete framed `READY` write MUST precede zero-signal `PTRACE_CONT`.
+  Every C ptrace call MUST carry all four libc arguments in exact positions:
+  `ptrace(PTRACE_TRACEME, 0, 0, 0)`,
+  `ptrace(PTRACE_SETOPTIONS, child, 0, PTRACE_O_TRACEEXEC)`,
+  `ptrace(PTRACE_CONT, child, 0, 0)`, and
+  `ptrace(PTRACE_DETACH, child, 0, 0)`. The complete framed `READY` write MUST
+  precede the exact zero-signal continuation call.
   From release until exec-event acceptance, one original absolute deadline
   MUST cover synchronous managed-signal consumption, trace waits, the
   nonblocking exec-error reader, and status writes. Each loop iteration MUST
@@ -568,22 +573,31 @@ Acceptance:
   `SIGSYS`, fault, other signal stop, plain `SIGTRAP`, missing/wrong ptrace
   event, or EOF without that event MUST fail closed and MUST NOT emit
   `EXECUTED`. At the valid event stop, before target user code runs, the
-  supervisor MUST call `PTRACE_DETACH` exactly once with signal zero. Detach
-  failure MUST emit typed `HELPER_PTRACE_DETACH`, kill and consume-reap the
-  group, leave incomplete cleanup to sandbox containment, and publish no
+  supervisor MUST call `ptrace(PTRACE_DETACH, child, 0, 0)` exactly once.
+  Detach failure MUST emit typed `HELPER_PTRACE_DETACH`, kill and consume-reap
+  the group, leave incomplete cleanup to sandbox containment, and publish no
   execution. Only successful detach MAY emit framed `EXECUTED`. The detach
   MUST resume the target without changing its signal state or eventual wait
   status; an immediate first-instruction exit remains ordered after
   `EXECUTED`.
   The protocol MUST be gated to native `x86_64-linux` and `aarch64-linux`,
   Linux >= 3.19, an actual passing parent-child ptrace startup probe, and Yama
-  mode 0 or 1 when Yama is present. It MUST grant no `CAP_SYS_PTRACE`. The
+  mode 0 or 1 when Yama is present. Unsupported system, old kernel, Yama
+  refusal, startup-probe failure, and patched-sandbox ptrace seccomp-policy
+  drift MUST each have a distinct Nix/toolchain/sandbox owner, public code,
+  fixed causing input, exact repair or migration, and phase-valid rerun, and
+  MUST refuse before helper start. After spawn, helper initial-stop, options,
+  continuation, event, and detach failures MUST retain distinct helper codes.
+  It MUST grant no `CAP_SYS_PTRACE`. The
   action seccomp policy MUST allow only `PTRACE_TRACEME`,
   `PTRACE_SETOPTIONS`, `PTRACE_CONT`, and `PTRACE_DETACH`, deny every other
   ptrace request, preserve every socket/socketcall/io_uring/`pidfd_getfd`
   denial, and add no network exception.
   Source, protocol, seccomp, platform, kernel, Yama, both native startup and
-  host-conformance, exec-event/detach, negative/mutation, and fixed recovery
+  host-conformance, exec-event/detach, exact request/pid/address/data call
+  positions, omission/exchange/wrong-pid/options-in-address/nonzero-signal
+  mutations, every distinct pre-helper and post-spawn code, byte-exact
+  diagnostic, wrong-remedy result, negative/mutation, and fixed recovery
   evidence MUST be qualification-bound. Only after `EXECUTED` may forwarding
   or grace begin. It MUST remain alive after
   `EXECUTED`, forward only
@@ -622,8 +636,13 @@ Acceptance:
   OOM-like kill, empty EOF without an exec event, missing/wrong ptrace event,
   detach failure, and a target that exits on its first instruction after
   event/detach. Mutations that accept EOF, any stop, a wrong event, or detach
-  failure MUST fail. Platform, minimum-kernel, Yama 2/3, forbidden ptrace
-  request, and unchanged action no-network tests MUST be exact.
+  failure MUST fail. Exact call tests MUST pin request, pid, address, and data
+  positions and fail omitted, exchanged, wrong-pid, options-in-address, and
+  nonzero-signal mutations. Unsupported system, minimum-kernel, Yama 2/3,
+  startup-probe failure, and patched-sandbox policy drift MUST each refuse
+  before helper spawn under its distinct owner/code; fixed-input, exact
+  repair, phase-valid rerun, byte-exact, and wrong-remedy tests MUST pass.
+  Forbidden ptrace request and unchanged action no-network tests MUST be exact.
   Tests MUST also cover target-ignore-TERM without a case deadline, private-fd
   identity, descriptor absence, executable and auxiliary close-on-exec,
   unchanged stdin and split stdout/stderr, signal forwarding, exact target
@@ -1462,10 +1481,16 @@ Acceptance:
   `run_cli_entrypoint --self-test` after writing sentinel stdout/stderr. No
   case supplies an expected reason to a generic setup wrapper. Each produces
   empty stdout, exact status 1, and only its seam-specific fixed setup
-  diagnostic and remedy. Failed subprocess cleanup checks every close result
-  and uses a consuming wait with at most eight `EINTR` retries. Injected close,
-  wait, retry-success, and retry-exhaustion cases preserve the primary typed
-  setup failure and append only fixed
+  diagnostic and remedy. Failed subprocess capture MUST return an owned object
+  retaining the actual child identity and all three descriptor birth
+  identities. Cleanup MUST attempt each descriptor exactly once despite any
+  prior close failure, then consume-reap only that child in at most eight wait
+  attempts. `ECHILD` MUST NOT be success unless the object already recorded a
+  consuming reap. Tests MUST use a literal `8` independent of the production
+  bound, assert no ninth wait, inject every descriptor position, a wrong
+  supplied pid/resource-bearing malformed result, wait `ECHILD`, retry
+  success, and retry exhaustion, and prove the actual child reaped. Every case
+  preserves the primary typed setup failure and appends only fixed
   `D2B-SPEC003-PLAN-CLEANUP` when cleanup fails. Raw warnings, errors, paths,
   sentinel content, and task-rewrite remedies are absent. `self-test-contract`
   is reserved for an exact invalid validator self-test contract case. Actual

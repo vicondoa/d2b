@@ -8,8 +8,7 @@ use File::Spec;
 use File::Temp qw(tempdir);
 use Errno qw(ECHILD EINTR EINVAL);
 use IPC::Open3 qw(open3);
-use POSIX qw(WNOHANG);
-use Scalar::Util qw(openhandle);
+use Scalar::Util qw(blessed openhandle);
 use Symbol qw(gensym);
 
 my $tool_path = 'specs/003-adr052-bazel-rust/tools/validate-plan-structure.pl';
@@ -20,7 +19,7 @@ my $fixture_root =
     'specs/003-adr052-bazel-rust/tools/validator-fixtures/';
 my $max_record_ordinal = 999;
 my $max_line_number = 9999;
-my $max_cleanup_wait_eintr = 8;
+my $max_cleanup_wait_attempts = 8;
 
 my %code = (
     read       => 'D2B-SPEC003-PLAN-READ',
@@ -326,6 +325,132 @@ sub self_test_cleanup_stderr {
 }
 
 {
+    package D2B::Spec003::OwnedProcessCapture;
+
+    sub new {
+        my (
+            $class,
+            $actual_pid,
+            $stdin_fh,
+            $stdout_fh,
+            $stderr_fh,
+            %args
+        ) = @_;
+        my @descriptors = ($stdin_fh, $stdout_fh, $stderr_fh);
+        my @descriptor_identities = map {
+            Scalar::Util::openhandle($_) ? fileno($_) : undef
+        } @descriptors;
+        return bless {
+            actual_pid            => $actual_pid,
+            supplied_pid          => exists($args{supplied_pid})
+                ? $args{supplied_pid}
+                : $actual_pid,
+            descriptors           => \@descriptors,
+            descriptor_identities => \@descriptor_identities,
+            close_attempted       => [0, 0, 0],
+            consuming_reap        => 0,
+            reaped_pid            => undef,
+        }, $class;
+    }
+
+    sub has_valid_initial_shape {
+        my ($self) = @_;
+        return 0
+            if !defined($self->{actual_pid})
+            || ref($self->{actual_pid})
+            || $self->{actual_pid} !~ /\A[1-9][0-9]*\z/
+            || !defined($self->{supplied_pid})
+            || ref($self->{supplied_pid})
+            || $self->{supplied_pid} !~ /\A[1-9][0-9]*\z/
+            || $self->{supplied_pid} != $self->{actual_pid}
+            || @{$self->{descriptors}} != 3
+            || @{$self->{descriptor_identities}} != 3;
+        for my $position (0 .. 2) {
+            my $fh = $self->{descriptors}->[$position];
+            my $identity = $self->{descriptor_identities}->[$position];
+            return 0
+                if !defined($identity)
+                || ref($identity)
+                || $identity !~ /\A[0-9]+\z/
+                || !Scalar::Util::openhandle($fh)
+                || fileno($fh) != $identity;
+        }
+        return 1;
+    }
+
+    sub actual_pid {
+        my ($self) = @_;
+        return $self->{actual_pid};
+    }
+
+    sub supplied_pid {
+        my ($self) = @_;
+        return $self->{supplied_pid};
+    }
+
+    sub descriptor_identity {
+        my ($self, $position) = @_;
+        return $self->{descriptor_identities}->[$position];
+    }
+
+    sub descriptor_handle {
+        my ($self, $position) = @_;
+        return $self->{descriptors}->[$position];
+    }
+
+    sub descriptor_close_attempted {
+        my ($self, $position) = @_;
+        return $self->{close_attempted}->[$position] ? 1 : 0;
+    }
+
+    sub attempt_descriptor_close {
+        my ($self, $position, $closer) = @_;
+        die "descriptor close attempted twice"
+            if $self->{close_attempted}->[$position];
+        $self->{close_attempted}->[$position] = 1;
+        return $closer->(
+            $self->{descriptors}->[$position],
+            $self->{descriptor_identities}->[$position],
+            $position
+        );
+    }
+
+    sub all_descriptors_attempted_once {
+        my ($self) = @_;
+        return !grep { !$_ } @{$self->{close_attempted}};
+    }
+
+    sub all_descriptors_closed {
+        my ($self) = @_;
+        return !grep {
+            Scalar::Util::openhandle($_)
+        } @{$self->{descriptors}};
+    }
+
+    sub record_consuming_reap {
+        my ($self, $waited_pid) = @_;
+        return 0
+            if !defined($waited_pid)
+            || ref($waited_pid)
+            || $waited_pid != $self->{actual_pid}
+            || $self->{consuming_reap};
+        $self->{consuming_reap} = 1;
+        $self->{reaped_pid} = $waited_pid;
+        return 1;
+    }
+
+    sub consuming_reap_recorded {
+        my ($self) = @_;
+        return $self->{consuming_reap} ? 1 : 0;
+    }
+
+    sub reaped_pid {
+        my ($self) = @_;
+        return $self->{reaped_pid};
+    }
+}
+
+{
     package D2B::Spec003::SelfTestSetupFailure;
 
     sub new {
@@ -383,19 +508,40 @@ sub default_self_test_operations {
                 $stderr_fh,
                 @command
             );
-            return [$pid, $stdin_fh, $stdout_fh, $stderr_fh];
+            return D2B::Spec003::OwnedProcessCapture->new(
+                $pid,
+                $stdin_fh,
+                $stdout_fh,
+                $stderr_fh
+            );
         },
         subprocess => sub {
             my ($process) = @_;
-            my ($pid, $stdin_fh, $stdout_fh, $stderr_fh) = @$process;
-            close $stdin_fh or die "stdin close failed";
+            my $stdin_closed = $process->attempt_descriptor_close(
+                0,
+                sub { return close $_[0]; }
+            );
+            die "stdin close failed" if !$stdin_closed;
             local $/;
+            my $stdout_fh = $process->descriptor_handle(1);
+            my $stderr_fh = $process->descriptor_handle(2);
             my $stdout = <$stdout_fh> // '';
             my $stderr = <$stderr_fh> // '';
-            close $stdout_fh or die "stdout close failed";
-            close $stderr_fh or die "stderr close failed";
+            my $stdout_closed = $process->attempt_descriptor_close(
+                1,
+                sub { return close $_[0]; }
+            );
+            die "stdout close failed" if !$stdout_closed;
+            my $stderr_closed = $process->attempt_descriptor_close(
+                2,
+                sub { return close $_[0]; }
+            );
+            die "stderr close failed" if !$stderr_closed;
+            my $pid = $process->actual_pid();
             waitpid($pid, 0) == $pid or die "subprocess wait failed";
             my $wait_status = $?;
+            $process->record_consuming_reap($pid)
+                or die "subprocess reap ownership failed";
             my $status =
                 $wait_status == -1 || ($wait_status & 127)
                 ? 255
@@ -510,26 +656,32 @@ sub create_unreadable_source_fixture {
 }
 
 sub cleanup_failed_subprocess_capture {
-    my ($operations, $process, $already_reaped) = @_;
+    my ($operations, $process) = @_;
     return 1 if !defined $process;
-    my ($pid, $stdin_fh, $stdout_fh, $stderr_fh) = @$process;
     my $cleanup_ok = 1;
 
-    for my $fh ($stdin_fh, $stdout_fh, $stderr_fh) {
-        next if !openhandle($fh);
+    for my $position (0 .. 2) {
+        next if $process->descriptor_close_attempted($position);
         my $closed;
         my $completed = eval {
             local $SIG{__WARN__} = sub { die $_[0]; };
-            $closed = $operations->{cleanup_close}->($fh);
+            $closed = $process->attempt_descriptor_close(
+                $position,
+                $operations->{cleanup_close}
+            );
             1;
         };
         $cleanup_ok = 0
             if !$completed || !defined($closed) || ref($closed) || !$closed;
     }
+    $cleanup_ok = 0
+        if !$process->all_descriptors_attempted_once()
+        || !$process->all_descriptors_closed();
 
-    if (!$already_reaped && defined($pid) && !ref($pid)) {
+    if (!$process->consuming_reap_recorded()) {
+        my $pid = $process->actual_pid();
         my $wait_complete = 0;
-        for (1 .. $max_cleanup_wait_eintr) {
+        for (1 .. $max_cleanup_wait_attempts) {
             my $wait_result;
             my $completed = eval {
                 local $SIG{__WARN__} = sub { die $_[0]; };
@@ -551,8 +703,20 @@ sub cleanup_failed_subprocess_capture {
                 last;
             }
             my ($waited, $errno) = @$wait_result;
-            if ($waited == $pid || ($waited == -1 && $errno == ECHILD)) {
+            if ($waited == $pid) {
+                if (!$process->record_consuming_reap($waited)) {
+                    $cleanup_ok = 0;
+                    last;
+                }
                 $wait_complete = 1;
+                last;
+            }
+            if ($waited == -1 && $errno == ECHILD) {
+                if ($process->consuming_reap_recorded()) {
+                    $wait_complete = 1;
+                } else {
+                    $cleanup_ok = 0;
+                }
                 last;
             }
             if ($waited == -1 && $errno == EINTR) {
@@ -568,44 +732,53 @@ sub cleanup_failed_subprocess_capture {
 
 sub subprocess_postconditions {
     my ($process) = @_;
-    my ($pid, $stdin_fh, $stdout_fh, $stderr_fh) = @$process;
-    my $descriptors_closed =
-        !openhandle($stdin_fh)
-        && !openhandle($stdout_fh)
-        && !openhandle($stderr_fh);
+    return
+        $process->all_descriptors_attempted_once()
+        && $process->all_descriptors_closed()
+        && $process->consuming_reap_recorded();
+}
 
-    local $! = 0;
-    my $waited = waitpid($pid, WNOHANG);
-    my $errno = 0 + $!;
-    return ($descriptors_closed && $waited == -1 && $errno == ECHILD, 0)
-        if $waited == -1;
-    return (0, 1) if $waited == $pid;
-    return (0, 0);
+sub spawn_owned_process {
+    my ($operations, @command) = @_;
+    my $opened;
+    my $completed = eval {
+        local $SIG{__WARN__} = sub { die $_[0]; };
+        $opened = $operations->{open3}->(@command);
+        1;
+    };
+    if (!$completed) {
+        die D2B::Spec003::SelfTestSetupFailure->new(
+            'self-test-setup-open3'
+        );
+    }
+
+    my $owned =
+        blessed($opened)
+        && $opened->isa('D2B::Spec003::OwnedProcessCapture')
+        ? $opened
+        : undef;
+    if (!defined($owned) || !$owned->has_valid_initial_shape()) {
+        my $failure = D2B::Spec003::SelfTestSetupFailure->new(
+            'self-test-setup-open3'
+        );
+        if (
+            defined($owned)
+            && !cleanup_failed_subprocess_capture($operations, $owned)
+        ) {
+            $failure->with_cleanup_failure();
+        }
+        die $failure;
+    }
+    return $owned;
 }
 
 sub run_subprocess {
     my ($operations, @command) = @_;
     die "missing subprocess command" if !@command;
 
-    my $process = run_setup_boundary(
-        'self-test-setup-open3',
-        sub {
-            my $opened = $operations->{open3}->(@command);
-            die "process creation failed"
-                if ref($opened) ne 'ARRAY'
-                || @$opened != 4
-                || !defined($opened->[0])
-                || ref($opened->[0])
-                || $opened->[0] !~ /\A[1-9][0-9]*\z/
-                || !openhandle($opened->[1])
-                || !openhandle($opened->[2])
-                || !openhandle($opened->[3]);
-            return $opened;
-        }
-    );
+    my $process = spawn_owned_process($operations, @command);
 
     my $result;
-    my $reaped_by_postcondition = 0;
     my $completed = eval {
         $result = run_setup_boundary(
             'self-test-setup-subprocess',
@@ -622,10 +795,8 @@ sub run_subprocess {
                     || ref($captured->[1])
                     || !defined($captured->[2])
                     || ref($captured->[2]);
-                my ($postconditions_ok, $probe_reaped) =
-                    subprocess_postconditions($process);
-                $reaped_by_postcondition = $probe_reaped;
-                die "subprocess postcondition failed" if !$postconditions_ok;
+                die "subprocess postcondition failed"
+                    if !subprocess_postconditions($process);
                 return $captured;
             }
         );
@@ -635,8 +806,7 @@ sub run_subprocess {
         my $failure = $@;
         my $cleanup_ok = cleanup_failed_subprocess_capture(
             $operations,
-            $process,
-            $reaped_by_postcondition
+            $process
         );
         if (
             !$cleanup_ok
@@ -1857,6 +2027,11 @@ RERUN D2B-SPEC003-PLAN-PARSE perl specs/003-adr052-bazel-rust/tools/validate-pla
             qw(failure warning false undefined malformed missing-side-effect)
         ) {
             my $injected_operation;
+            my $resource_capture;
+            my @resource_close_attempts;
+            my @resource_wait_attempts;
+            my @resource_cleanup_events;
+            my $resource_reaped_pid;
             if ($mode eq 'failure' || $mode eq 'warning') {
                 $injected_operation = sub {
                     if ($mode eq 'warning') {
@@ -1872,12 +2047,33 @@ RERUN D2B-SPEC003-PLAN-PARSE perl specs/003-adr052-bazel-rust/tools/validate-pla
             } elsif ($mode eq 'undefined') {
                 $injected_operation = sub { return undef; };
             } elsif ($mode eq 'malformed') {
-                $injected_operation =
-                    $operation_key eq 'open3'
-                    ? sub { return [1, 2]; }
-                    : $operation_key eq 'subprocess'
+                if ($operation_key eq 'open3') {
+                    $injected_operation = sub {
+                        my (@command) = @_;
+                        my $stderr_fh = gensym;
+                        my ($stdin_fh, $stdout_fh);
+                        my $actual_pid = IPC::Open3::open3(
+                            $stdin_fh,
+                            $stdout_fh,
+                            $stderr_fh,
+                            @command
+                        );
+                        $resource_capture =
+                            D2B::Spec003::OwnedProcessCapture->new(
+                                $actual_pid,
+                                $stdin_fh,
+                                $stdout_fh,
+                                $stderr_fh,
+                                supplied_pid => $actual_pid + 1000000
+                            );
+                        return $resource_capture;
+                    };
+                } else {
+                    $injected_operation =
+                    $operation_key eq 'subprocess'
                     ? sub { return [0, {}, '']; }
                     : sub { return { malformed => 1 }; };
+                }
             } elsif ($operation_key eq 'temp_dir') {
                 $injected_operation = sub {
                     return File::Spec->catfile(
@@ -1899,12 +2095,31 @@ RERUN D2B-SPEC003-PLAN-PARSE perl specs/003-adr052-bazel-rust/tools/validate-pla
             ) {
                 $injected_operation = sub { return 1; };
             } elsif ($operation_key eq 'open3') {
-                $injected_operation = sub {
-                    return [424242, gensym, gensym, gensym];
-                };
+                $injected_operation = sub { return { missing => 1 }; };
             } else {
                 $injected_operation = sub {
                     return [0, '', ''];
+                };
+            }
+            my %injected_overrides = (
+                $operation_key => $injected_operation,
+            );
+            if ($operation_key eq 'open3' && $mode eq 'malformed') {
+                $injected_overrides{cleanup_close} = sub {
+                    my ($fh, $identity, $position) = @_;
+                    push @resource_close_attempts,
+                        [$position, $identity, fileno($fh)];
+                    push @resource_cleanup_events, "close:$position";
+                    return close $fh;
+                };
+                $injected_overrides{cleanup_wait} = sub {
+                    my ($pid) = @_;
+                    push @resource_wait_attempts, $pid;
+                    push @resource_cleanup_events, 'wait';
+                    local $! = 0;
+                    my $waited = waitpid($pid, 0);
+                    $resource_reaped_pid = $waited if $waited == $pid;
+                    return [$waited, 0 + $!];
                 };
             }
             my ($failure_stdout, $failure_stderr) = ('', '');
@@ -1919,9 +2134,7 @@ RERUN D2B-SPEC003-PLAN-PARSE perl specs/003-adr052-bazel-rust/tools/validate-pla
                     return run_self_tests(
                         $runner_stdout,
                         $runner_stderr,
-                        self_test_ops => {
-                            $operation_key => $injected_operation,
-                        }
+                        self_test_ops => \%injected_overrides,
                     );
                 },
                 stdout => \$failure_stdout,
@@ -1935,6 +2148,40 @@ RERUN D2B-SPEC003-PLAN-PARSE perl specs/003-adr052-bazel-rust/tools/validate-pla
                 $$self_stderr .= self_test_contract_stderr();
                 return 1;
             }
+            if ($operation_key eq 'open3' && $mode eq 'malformed') {
+                my $resource_observation_ok =
+                    defined($resource_capture)
+                    && $resource_capture->actual_pid()
+                        != $resource_capture->supplied_pid()
+                    && @resource_close_attempts == 3
+                    && @resource_wait_attempts == 1
+                    && join(',', @resource_cleanup_events)
+                        eq 'close:0,close:1,close:2,wait'
+                    && $resource_wait_attempts[0]
+                        == $resource_capture->actual_pid()
+                    && defined($resource_reaped_pid)
+                    && $resource_reaped_pid
+                        == $resource_capture->actual_pid()
+                    && $resource_capture->consuming_reap_recorded()
+                    && $resource_capture->reaped_pid()
+                        == $resource_capture->actual_pid()
+                    && $resource_capture->all_descriptors_attempted_once()
+                    && $resource_capture->all_descriptors_closed();
+                for my $position (0 .. 2) {
+                    $resource_observation_ok = 0
+                        if !defined($resource_close_attempts[$position])
+                        || $resource_close_attempts[$position]->[0]
+                            != $position
+                        || $resource_close_attempts[$position]->[1]
+                            != $resource_capture->descriptor_identity($position)
+                        || $resource_close_attempts[$position]->[2]
+                            != $resource_capture->descriptor_identity($position);
+                }
+                if (!$resource_observation_ok) {
+                    $$self_stderr .= self_test_contract_stderr();
+                    return 1;
+                }
+            }
         }
     }
 
@@ -1945,66 +2192,78 @@ REMEDY D2B-SPEC003-PLAN-CLEANUP Correct validator self-test descriptor close and
 RERUN D2B-SPEC003-PLAN-CLEANUP perl specs/003-adr052-bazel-rust/tools/validate-plan-structure.pl --self-test && perl specs/003-adr052-bazel-rust/tools/validate-plan-structure.pl
 |;
     my @cleanup_cases = (
+        ['close-failure-stdin',  0, 'success',    1, $cleanup_failure_expected],
+        ['close-failure-stdout', 1, 'success',    1, $cleanup_failure_expected],
+        ['close-failure-stderr', 2, 'success',    1, $cleanup_failure_expected],
+        ['wait-failure',     undef, 'failure',    1, $cleanup_failure_expected],
+        ['wait-echild',      undef, 'echild',     1, $cleanup_failure_expected],
         [
-            'close-failure',
-            sub {
-                my ($fh) = @_;
-                close $fh;
-                return 0;
-            },
+            'wait-eintr-retry',
             undef,
-            $cleanup_failure_expected,
+            'retry-success',
+            8,
+            $setup_failure_expected{'self-test-setup-subprocess'},
         ],
         [
-            'wait-failure',
+            'wait-eintr-exhaustion',
             undef,
-            sub {
-                my ($pid) = @_;
-                waitpid($pid, 0);
-                return [-1, EINVAL];
-            },
+            'retry-exhaustion',
+            8,
             $cleanup_failure_expected,
         ],
     );
-    my $retry_count = 0;
-    push @cleanup_cases, [
-        'wait-eintr-retry',
-        undef,
-        sub {
-            my ($pid) = @_;
-            $retry_count++;
-            return [-1, EINTR] if $retry_count < 3;
-            my $waited = waitpid($pid, 0);
-            return [$waited, 0];
-        },
-        $setup_failure_expected{'self-test-setup-subprocess'},
-    ];
-    my $exhaustion_count = 0;
-    push @cleanup_cases, [
-        'wait-eintr-exhaustion',
-        undef,
-        sub {
-            my ($pid) = @_;
-            $exhaustion_count++;
-            waitpid($pid, 0)
-                if $exhaustion_count == $max_cleanup_wait_eintr;
-            return [-1, EINTR];
-        },
-        $cleanup_failure_expected,
-    ];
     for my $cleanup_case (@cleanup_cases) {
-        my ($name, $close_operation, $wait_operation, $expected) =
-            @$cleanup_case;
+        my (
+            $name,
+            $failed_close_position,
+            $wait_mode,
+            $expected_wait_attempts,
+            $expected
+        ) = @$cleanup_case;
+        my $owned_process;
+        my @close_attempts;
+        my @wait_attempts;
+        my @cleanup_events;
+        my $actual_reaped_pid;
+        my $ninth_wait_attempted = 0;
         my %overrides = (
             subprocess => sub {
+                ($owned_process) = @_;
                 die
                     "raw $name primary failure at /tmp/d2b-sensitive-self-test-path\n";
             },
+            cleanup_close => sub {
+                my ($fh, $identity, $position) = @_;
+                push @close_attempts, [$position, $identity, fileno($fh)];
+                push @cleanup_events, "close:$position";
+                my $closed = close $fh;
+                return 0
+                    if defined($failed_close_position)
+                    && $position == $failed_close_position;
+                return $closed;
+            },
+            cleanup_wait => sub {
+                my ($pid) = @_;
+                push @wait_attempts, $pid;
+                push @cleanup_events, 'wait';
+                $ninth_wait_attempted = 1 if @wait_attempts > 8;
+                if ($wait_mode eq 'retry-success') {
+                    return [-1, EINTR] if @wait_attempts < 8;
+                } elsif ($wait_mode eq 'retry-exhaustion') {
+                    if (@wait_attempts == 8) {
+                        my $waited = waitpid($pid, 0);
+                        $actual_reaped_pid = $waited
+                            if $waited == $pid;
+                    }
+                    return [-1, EINTR];
+                }
+                my $waited = waitpid($pid, 0);
+                $actual_reaped_pid = $waited if $waited == $pid;
+                return [-1, EINVAL] if $wait_mode eq 'failure';
+                return [-1, ECHILD] if $wait_mode eq 'echild';
+                return [$waited, 0];
+            },
         );
-        $overrides{cleanup_close} = $close_operation
-            if defined $close_operation;
-        $overrides{cleanup_wait} = $wait_operation
-            if defined $wait_operation;
         my ($failure_stdout, $failure_stderr) = ('', '');
         my $failure_status = run_cli_entrypoint(
             argv => ['--self-test'],
@@ -2030,6 +2289,54 @@ RERUN D2B-SPEC003-PLAN-CLEANUP perl specs/003-adr052-bazel-rust/tools/validate-p
         ) {
             $$self_stderr .= self_test_contract_stderr();
             return 1;
+        }
+        my $cleanup_observation_ok =
+        defined($owned_process)
+        && @close_attempts == 3
+        && @wait_attempts == $expected_wait_attempts
+        && !$ninth_wait_attempted
+        && @wait_attempts <= 8
+        && join(',', @cleanup_events)
+            eq join(
+                ',',
+                'close:0',
+                'close:1',
+                'close:2',
+                ('wait') x $expected_wait_attempts
+            )
+        && defined($actual_reaped_pid)
+        && $actual_reaped_pid == $owned_process->actual_pid()
+        && $owned_process->all_descriptors_attempted_once()
+        && $owned_process->all_descriptors_closed();
+        for my $position (0 .. 2) {
+        $cleanup_observation_ok = 0
+            if !defined($close_attempts[$position])
+            || $close_attempts[$position]->[0] != $position
+            || $close_attempts[$position]->[1]
+                != $owned_process->descriptor_identity($position)
+            || $close_attempts[$position]->[2]
+                != $owned_process->descriptor_identity($position);
+        }
+        for my $wait_pid (@wait_attempts) {
+        $cleanup_observation_ok = 0
+            if $wait_pid != $owned_process->actual_pid();
+        }
+        my $should_record_reap =
+        $wait_mode eq 'success'
+        || $wait_mode eq 'retry-success';
+        $cleanup_observation_ok = 0
+        if $owned_process->consuming_reap_recorded()
+            != ($should_record_reap ? 1 : 0);
+        $cleanup_observation_ok = 0
+        if $should_record_reap
+        && (
+            !defined($owned_process->reaped_pid())
+            || $owned_process->reaped_pid()
+                != $owned_process->actual_pid()
+        );
+        if (!$cleanup_observation_ok) {
+        $$self_stderr .= self_test_contract_stderr();
+        return 1;
         }
     }
 
@@ -2114,7 +2421,7 @@ RERUN D2B-SPEC003-PLAN-TASK-ID perl specs/003-adr052-bazel-rust/tools/validate-p
     }
 
     $$self_stdout .=
-        'PASS: 99 validator self-tests; positive fixture accepted; '
+        'PASS: 102 validator self-tests; positive fixture accepted; '
         . '47 independent negative fixtures cover noncanonical unchecked-list forms, census declarations, '
         . 'task parsing, ownership, dependency, adjacency, section, cycle, '
         . 'and conflict fixtures rejected; full stderr byte-matched against '
@@ -2123,8 +2430,9 @@ RERUN D2B-SPEC003-PLAN-TASK-ID perl specs/003-adr052-bazel-rust/tools/validate-p
         . 'temp-dir, path-resolution, make-path, copy, mkdir, open3, and subprocess '
         . 'exceptions, warnings, false, undefined, malformed, and missing-side-effect results '
         . 'emit only their seam-specific fixed setup diagnostics after sentinel output is discarded; '
-        . 'failed-subprocess close and bounded-EINTR consume-reap results preserve the primary '
-        . 'failure and add only the fixed cleanup code when cleanup fails; actual unreadable-source '
+        . 'failed-subprocess owned-child, three-descriptor identity/close-once, ECHILD refusal, '
+        . 'and literal-eight bounded consume-reap results preserve the primary failure and add only '
+        . 'the fixed cleanup code when cleanup fails; actual unreadable-source '
         . 'status 1 and unsupported-argument '
         . 'status 2 subprocesses verified; self-test-contract is reserved for '
         . "validator contract failures\n";

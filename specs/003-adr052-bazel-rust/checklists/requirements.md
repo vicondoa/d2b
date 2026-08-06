@@ -264,10 +264,12 @@
   `SIG_IGN` before fork without reset-and-continue, then installs dispositions
   and synchronous consumption. It creates only the close-on-exec child error
   pipe, forks once, performs both child and supervisor `setpgid`, completes
-  child setup, enters `PTRACE_TRACEME` initial `SIGSTOP`, confirms the exact
-  live group and tracing state, installs `PTRACE_O_TRACEEXEC`, emits framed
-  `READY`, releases with signal zero, accepts only exact kernel
-  `PTRACE_EVENT_EXEC`, detaches with signal zero, and only then emits
+  child setup, calls `ptrace(PTRACE_TRACEME, 0, 0, 0)`, and enters the initial
+  `SIGSTOP`. It confirms the exact live group and tracing state, calls
+  `ptrace(PTRACE_SETOPTIONS, child, 0, PTRACE_O_TRACEEXEC)`, emits framed
+  `READY`, releases with `ptrace(PTRACE_CONT, child, 0, 0)`, accepts only exact
+  kernel `PTRACE_EVENT_EXEC`, calls
+  `ptrace(PTRACE_DETACH, child, 0, 0)`, and only then emits
   `EXECUTED`; it remains alive, forwards allowed termination signals, and
   reaps and mirrors exact target status. Exact
   source/derivation-dependency/output/protocol identity, one Rust invocation
@@ -282,8 +284,12 @@
   ownership, deterministic post-`READY` pre-exec termination for every managed
   signal, pre-exec `SIGKILL`/`SIGSYS`/fault/exit/OOM-like kill, empty EOF
   without event, missing/wrong event, detach failure, fast first-instruction
-  exit, Linux/native-platform/Yama gates, exact four-request ptrace seccomp
-  allowance with unchanged action no-network, helper group kill/reap, no
+  exit, byte-exact request/pid/address/data call tests plus every argument
+  mutation, distinct pre-helper Nix/toolchain/sandbox system/kernel/Yama/
+  probe/policy codes and post-spawn helper stop/options/continue/event/detach
+  codes, exact fixed inputs/remedies/reruns, wrong-remedy results, exact
+  four-request ptrace seccomp allowance with unchanged action no-network,
+  helper group kill/reap, no
   pre-exec forwarding/grace, no false
   `EXECUTED`/target terminal/audit event, no-deadline external-TERM
   escalation, target-ignore-TERM, and every Rust-parent and C-supervisor
@@ -382,9 +388,15 @@
   seams and execute through `run_cli_entrypoint --self-test` after sentinel
   output. No case supplies its expected reason to a generic setup wrapper.
   Each returns status 1, empty stdout, and only its seam-specific fixed setup
-  diagnostic and remedy. Failed-subprocess cleanup checks every close and
-  consume-reaps with at most eight `EINTR` retries; injected close/wait/retry/
-  exhaustion results preserve the primary failure and append only fixed
+  diagnostic and remedy. Failed-subprocess capture returns an owned object
+  retaining the actual child and all three descriptor birth identities.
+  Cleanup attempts each descriptor exactly once after any failure and then
+  consume-reaps only that child in at most eight wait attempts; `ECHILD`
+  succeeds only after the object already recorded a consuming reap. Tests use
+  an independent literal `8`, assert no ninth wait, inject each descriptor
+  position, wrong supplied pid/resource-bearing malformed result, `ECHILD`,
+  retry success, and exhaustion, and prove the actual child reaped. Results
+  preserve the primary failure and append only fixed
   `D2B-SPEC003-PLAN-CLEANUP` on cleanup failure. No raw warning/error/path,
   sentinel, or task rewrite appears. `self-test-contract` is byte-tested only
   for invalid validator self-test behavior. Actual

@@ -135,13 +135,16 @@ grandfathered. The filter returns the fixed `EACCES` sentinel for `socket`,
 where the native architecture exposes it. There is no identity, policy-open,
 digest, preflight, `no_new_privs`, filter-load, or action-exec fallback.
 For the immutable execution supervisor, the same filter permits ptrace request
-arguments only for `PTRACE_TRACEME`, `PTRACE_SETOPTIONS`, `PTRACE_CONT`, and
-`PTRACE_DETACH`; attach, seize, memory/register access, syscall tracing, and
-every other request remain denied. This parent-child exec-event allowance adds
-no capability and changes none of the socket, io_uring, `pidfd_getfd`, or
-action no-network denials. Startup and native host-conformance evidence bind
-the exact request set and reject either a missing required request or any
-additional one.
+arguments only for the exact tuples `TRACEME(0,0,0)`,
+`SETOPTIONS(child,0,PTRACE_O_TRACEEXEC)`, `CONT(child,0,0)`, and
+`DETACH(child,0,0)` after their request argument. Attach, seize,
+memory/register access, syscall tracing, every other request, a wrong pid,
+options in the address position, or nonzero `CONT`/`DETACH` data remain
+denied. This parent-child exec-event allowance adds no capability and changes
+none of the socket, io_uring, `pidfd_getfd`, or action no-network denials.
+Startup and native host-conformance evidence bind the exact request, pid,
+address, and data positions and reject a missing, exchanged, or additional
+argument tuple.
 
 The same pinned Linux sandbox patch also binds crash containment. Every
 governed action has a fresh `CLONE_NEWPID` namespace. Namespace PID 1 remains
@@ -173,10 +176,17 @@ strategy fallback. The patched sandbox owns the
 execution-containment codes, corrections, renderer, and live byte-exact cases; T067/T068
 own no `SANDBOX_*` row. The closed table is in `recovery-deadline.md`.
 
-Runtime failures use this closed stage table:
+Nix/toolchain admission and patched-sandbox runtime failures use this closed
+stage table. Every row names the fixed causing input from
+`recovery-deadline.md` and renders no observed value:
 
 | Stage | Code | Exact correction before rerun |
 | --- | --- | --- |
+| Unsupported native system before helper start | `D2B-BZLEXEC-NIX-PTRACE-SYSTEM` | Move evaluation and execution to native `x86_64-linux` or `aarch64-linux`; run `make test-flake`; run the exact closed slice retry command. |
+| Kernel below the ptrace minimum before helper start | `D2B-BZLEXEC-TOOLCHAIN-PTRACE-KERNEL` | Migrate to a native supported runner with Linux 3.19 or newer; run `make test-flake`; run the exact closed slice retry command. |
+| Yama parent-child refusal before helper start | `D2B-BZLEXEC-TOOLCHAIN-PTRACE-YAMA` | Migrate to a native supported runner whose boot policy fixes `kernel.yama.ptrace_scope=1`; grant no `CAP_SYS_PTRACE`; run `make test-flake`; run the exact closed slice retry command. |
+| Real ptrace startup-probe failure before helper start | `D2B-BZLEXEC-TOOLCHAIN-PTRACE-PROBE` | Restore and rebuild the pinned static supervisor and probe; if exact identities pass but the probe refuses, migrate to a runner satisfying the kernel and Yama rows; run `make test-flake`; run the exact closed slice retry command. |
+| Patched-sandbox ptrace seccomp-policy drift before helper start | `D2B-BZLEXEC-SANDBOX-PTRACE-POLICY` | Restore the pinned patch and policy with only the four exact argument tuples and unchanged no-network denial; run `make test-flake`; run the exact closed slice retry command. |
 | Bazel output identity | `D2B-BZLNET-BAZEL-IDENTITY` | Re-enter the repository Nix environment and restore the pinned Bazel output; run `make test-flake`; run the exact closed slice retry command. |
 | Patched capability probe | `D2B-BZLNET-CAPABILITY` | Restore the repository-pinned Bazel patch and capability ABI; run `make test-flake`; run the exact closed slice retry command. |
 | Strategy inventory | `D2B-BZLNET-STRATEGY` | Remove every non-sandboxed strategy or fallback; run `(cd packages && cargo xtask gen-bazel --check)`; run the exact closed slice retry command. |

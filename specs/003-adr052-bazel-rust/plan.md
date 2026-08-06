@@ -165,7 +165,10 @@ Layer-1 surfaces. No new top-level shell gate or Layer-1 job.
 | Validator setup self-tests supplied the class they expected to a generic wrapper. | A wrong production classifier could remain green, and `self-test-contract` was being used for repairable operation failures. | Put fixed classification at the temp-dir, path-resolution, make-path, copy, mkdir, open3, and subprocess capture/wait boundaries. Inject failure and warning at each actual seam through the public CLI, byte-match status/stdout/stderr and redaction, give each seam its own setup remedy, and reserve `self-test-contract` for invalid validator self-test behavior. |
 | Empty close-on-exec EOF remained an ambiguous execution proof. | Child death before exec closes the same writer, so no signal-priority rule can turn EOF into a kernel exec fact. | This correction supersedes the confirmation-pipe and EOF-success rows above. Use the natural parent-child `PTRACE_TRACEME` initial stop as the sole release barrier, install `PTRACE_O_TRACEEXEC`, emit `READY`, release with zero-signal `PTRACE_CONT`, require exact kernel `PTRACE_EVENT_EXEC`, detach with signal zero, and emit `EXECUTED` only after successful detach. Empty EOF is failure-channel closure only. Bind Linux/Yama/platform gates, the exact four-request ptrace seccomp allowance, unchanged action no-network, host evidence, qualification, recovery, negative tests, and mutations. |
 | Validator setup tests covered only thrown exceptions and warnings. | False, undefined, malformed, or truthy results without the required side effect could bypass the tested classifier. | Exercise every temp-dir, path-resolution, make-path, copy, mkdir, open3, and subprocess seam through the public CLI with exception, warning, false, undefined, malformed, and successful-with-missing-side-effect returns; require the same seam-specific fixed diagnostic for every variant. |
-| Failed validator subprocess capture discarded descriptor-close and wait results. | A child or descriptor could leak while the public CLI reported only the primary setup failure. | Check every close, perform a consuming wait with at most eight `EINTR` retries, inject close/wait/retry/exhaustion results, preserve the primary typed setup failure, append only fixed `D2B-SPEC003-PLAN-CLEANUP` on cleanup failure, and render no raw warning, error, or path. |
+| Failed validator subprocess capture discarded descriptor-close and wait results. | A child or descriptor could leak while the public CLI reported only the primary setup failure. | Check every close, perform a bounded consuming wait, inject close/wait/retry/exhaustion results, preserve the primary typed setup failure, append only fixed `D2B-SPEC003-PLAN-CLEANUP` on cleanup failure, and render no raw warning, error, or path. The later owned-capture correction below fixes the exact identities and eight-attempt bound. |
+| C ptrace examples omitted variadic libc arguments. | An omitted address or data argument lets libc consume unspecified call-site state; for `CONT` or `DETACH` that can inject an unintended signal. | Spell the only four C calls exactly as `ptrace(PTRACE_TRACEME, 0, 0, 0)`, `ptrace(PTRACE_SETOPTIONS, child, 0, PTRACE_O_TRACEEXEC)`, `ptrace(PTRACE_CONT, child, 0, 0)`, and `ptrace(PTRACE_DETACH, child, 0, 0)`. Bind request, pid, address, and data positions with byte-exact tests and omission, exchange, wrong-pid, options-in-address, and nonzero-signal mutations. |
+| Unsupported system, old kernel, Yama refusal, startup-probe failure, and ptrace seccomp drift shared one helper policy code. | Those predicates fail before helper start and require different repairs; a helper code misstates the owner and can send an operator to change the wrong layer. | Give Nix evaluation, toolchain startup, and patched sandbox distinct fixed codes and causing inputs. Keep helper codes only for initial stop, options, continuation, exec event, and detach after spawn. Byte-test each exact code, correction, and phase-valid rerun; reject borrowed remedies; bind every result into qualification. |
+| Validator failed-subprocess cleanup trusted a returned pid tuple and accepted `ECHILD` as reap completion. | A malformed resource-bearing result can substitute another pid, leave the actual child unreaped, skip later descriptor closes after one failure, or hide a retry-bound change. | Return one owned capture object retaining the actual child and all three birth descriptor identities. Attempt each descriptor exactly once even after failures, consume-reap only that child with at most eight wait attempts, and accept `ECHILD` only after the object already recorded a consuming reap. Tests use a literal eight independent of the production bound, forbid a ninth wait, inject every descriptor position, wrong supplied pid, resource-bearing malformed result, `ECHILD`, retry success, and exhaustion, and prove the actual child was reaped while preserving the primary typed failure plus bounded cleanup code. |
 
 ## Shared Design Invariants
 
@@ -438,10 +441,16 @@ own the same file.
   the runner writes sentinel stdout/stderr. No test supplies an expected
   reason to a generic setup wrapper. Each seam produces status 1, empty
   stdout, and only its fixed setup-class stderr with its own validator-specific
-  remedy, not a task rewrite. Failed-subprocess cleanup checks every close and
-  performs a consuming wait with at most eight `EINTR` retries. Injected close,
-  wait, retry-success, and retry-exhaustion results preserve the primary typed
-  failure and append only fixed `D2B-SPEC003-PLAN-CLEANUP` on cleanup failure;
+  remedy, not a task rewrite. Failed-subprocess capture returns one owned
+  process object retaining the actual child identity and all three descriptor
+  birth identities. Cleanup attempts each descriptor exactly once even when an
+  earlier close fails, then consume-reaps only the owned child in at most eight
+  wait attempts; `ECHILD` is success only after that object already recorded a
+  consuming reap. Tests use an independent literal `8`, assert no ninth wait,
+  inject each descriptor position, wrong supplied pid, resource-bearing
+  malformed result, wait `ECHILD`, retry success, and retry exhaustion, and
+  prove the actual child was reaped. Every result preserves the primary typed
+  failure and appends only fixed `D2B-SPEC003-PLAN-CLEANUP` on cleanup failure;
   raw warning/error/path and sentinel content are discarded.
   `self-test-contract` is byte-tested only for invalid validator self-test
   behavior.
@@ -607,11 +616,17 @@ static-supervisor source/dependency/output/protocol, and
 framed status, single-record exec-error, inherited-signal verification,
 ignored-disposition refusal, Rust-to-helper handoff-window `SIGTERM`,
 parent/child setpgid confirmation, exact initial ptrace stop/options/release,
-kernel exec-event, zero-signal detach, early-signal/group-race cleanup,
+all four libc arguments for the exact
+`TRACEME(0,0,0)`/`SETOPTIONS(child,0,PTRACE_O_TRACEEXEC)`/
+`CONT(child,0,0)`/`DETACH(child,0,0)` calls, kernel exec-event,
+zero-signal detach, exact argument-position mutations,
+early-signal/group-race cleanup,
 post-`READY` pre-exec signal queuing,
 pre-exec-death/fault/empty-EOF/wrong-event/detach refusal, helper group
-kill/reap, fast first-instruction exit, platform/kernel/Yama gates, exact
-four-request ptrace seccomp allowance with unchanged action no-network, no
+kill/reap, fast first-instruction exit, separately owned and coded unsupported
+system/kernel/Yama/startup-probe gates before helper start, patched-sandbox
+ptrace-policy drift, exact four-request ptrace seccomp allowance with
+unchanged action no-network, no
 false `EXECUTED`/terminal/audit publication, and no-first-party-Rust-unsafe
 tests.
 Cargo tests retain mocks; the real
@@ -825,10 +840,13 @@ All must be true:
   synchronous consumption. It creates one close-on-exec nonblocking child
   exec-error pipe and forks once; no confirmation pipe exists. Child and
   supervisor both call `setpgid`. The child completes stdio, CLOEXEC,
-  descriptor, ptrace, and signal setup, then raises the initial `SIGSTOP`.
+  descriptor, signal, and exact four-argument
+  `ptrace(PTRACE_TRACEME, 0, 0, 0)` setup, then raises the initial `SIGSTOP`.
   The supervisor proves the exact live group and initial trace state, installs
-  exactly `PTRACE_O_TRACEEXEC`, completes `READY`, and releases with
-  zero-signal `PTRACE_CONT`. The child immediately performs
+  options with
+  `ptrace(PTRACE_SETOPTIONS, child, 0, PTRACE_O_TRACEEXEC)`, completes
+  `READY`, and releases with `ptrace(PTRACE_CONT, child, 0, 0)`. The child
+  immediately performs
   same-open-file-description `execveat(AT_EMPTY_PATH)` with no reopen or
   fallback. The exec-error pipe accepts one record or EOF and alone uses the
   additional overlong byte. The status pipe emits fixed-header version-1
@@ -841,7 +859,8 @@ All must be true:
   the helper coalesces managed signals into one typed setup termination,
   forwards nothing, runs no grace, and kills/reaps the confirmed group. It
   accepts execution only on exact `PTRACE_EVENT_EXEC` followed by successful
-  zero-signal `PTRACE_DETACH`; pre-exec death/fault/empty EOF/wrong event or
+  `ptrace(PTRACE_DETACH, child, 0, 0)`; pre-exec
+  death/fault/empty EOF/wrong event or
   detach failure emits no false `EXECUTED`, target terminal, or
   target-executed audit event. After `EXECUTED`, it remains alive, forwards the
   fixed termination signals, reaps, and mirrors exact target status. After its initial
@@ -862,8 +881,11 @@ All must be true:
   deterministic post-`READY` pre-exec signals, pre-exec
   `SIGKILL`/`SIGSYS`/fault/exit/OOM-like kill, empty EOF without event,
   missing/wrong event, detach failure, fast first-instruction exit, no false
-  execution/audit, Linux/Yama/native-platform gates, exact ptrace request
-  filter and unchanged no-network plants,
+  execution/audit, byte-exact request/pid/address/data call tests and
+  argument-position mutations, distinct pre-helper Nix/toolchain/sandbox
+  system/kernel/Yama/probe/policy codes, distinct post-spawn helper
+  stop/options/continue/event/detach codes, exact remedies and phase-valid
+  reruns, exact ptrace request filter and unchanged no-network plants,
   target-ignore-TERM, signal/status
   mismatch, and every Rust-parent and C-supervisor
   ownership/closure/cleanup/wait/reap failure test passes; every
@@ -871,7 +893,11 @@ All must be true:
 - the actual Bazel executable matches `tests/golden/bazel-toolchain.json` and
   its exact Bazel 8.6.0 source, Linux sandbox patch, fixed policy, output NAR,
   executable, and capability hashes. The startup probe passes; patch-removal,
-  wrong-output, and filter-load plants fail before a governed action;
+  wrong-output, and filter-load plants fail before a governed action.
+  Unsupported system, old kernel, Yama refusal, real startup-probe failure,
+  and ptrace seccomp-policy drift each fail before helper spawn with its own
+  Nix/toolchain/sandbox code, fixed causing input, exact repair, phase-valid
+  rerun, byte-exact expectation, and wrong-remedy mutation;
   configured-target, `aquery`, and strategy inventories cover every stable/
   nightly compile, build, setup, and test action and reject process, local,
   standalone, worker, remote, or other fallback. Inherited socket,
@@ -1182,13 +1208,15 @@ Cargo lock, then walker-repins, then module-refreshes, and proves
 | Integrator | `packages/d2b-bazel-runner/src/lib.rs`, `packages/xtask/src/main.rs`, `packages/Cargo.lock`, `bazel/cargo/product.lock`, `MODULE.bazel.lock`, generated BUILD files listed by the committed generation manifest, `changelog.d/adr052-bazel-safety.md` |
 
 The exact `spec003w2-recovery` ownership is parent/helper/child mapping and
-tests only. It contains no `SANDBOX_*` mapping, renderer, or byte-exact case;
-those were already landed in the sequential spec003w0 toolchain files that
-exist before action setup and remain through quarantine and consuming reap.
+tests only. It contains no Nix-ptrace, toolchain-ptrace, or `SANDBOX_*`
+mapping, renderer, or byte-exact case; those pre-helper rows were already
+landed in the sequential spec003w0 toolchain files that exist before action
+setup and remain through quarantine and consuming reap.
 Its closed rows include `PARENT_SIGNAL_HANDOFF`,
 `HELPER_SIGNAL_INHERITED_IGNORED`, `HELPER_SIGNAL_HANDOFF`,
 `HELPER_GROUP_ESRCH`, `HELPER_GROUP_EPERM`, `HELPER_GROUP_ERROR`, and
-`HELPER_GROUP_EARLY_EXIT`, plus `HELPER_PRE_EXEC_TERMINATION`. Both recovery
+`HELPER_GROUP_EARLY_EXIT`, plus distinct helper initial-stop, options,
+continue, event, detach, and `HELPER_PRE_EXEC_TERMINATION` rows. Both recovery
 harnesses resolve every governed
 fixed file and Markdown anchor from the repository root; the T120 sandbox
 harness additionally resolves the contributing runbook and byte-matches
@@ -1354,8 +1382,11 @@ under `.scratch/`.
   coverage, sandbox strategy inventory, patch-removal and filter-load results,
   inherited socket/ring/SQPOLL/fixed-socket plants, setup-before-payload and
   all eight pre-action socket/io_uring plants, every fixed-code stage
-  diagnostic, external-egress and live-index results, and the pinned offline
-  repository-fetch inventory outside governed actions;
+  diagnostic, the exact four libc ptrace tuples and every argument-position
+  mutation, distinct pre-helper Nix/toolchain/sandbox code/remedy/
+  wrong-remedy result, distinct post-spawn helper stop/options/continue/event/
+  detach result, external-egress and live-index results, and the pinned
+  offline repository-fetch inventory outside governed actions;
 - exact same-commit non-advisory Cargo compatibility-carrier passes for every
   mandatory socket-using test;
 - exactly seven bounded PID-namespace containment results covering each crash
@@ -1743,13 +1774,19 @@ After the desired waves:
     seams and pass through `run_cli_entrypoint --self-test` after sentinel
     output. Each exact case returns status 1 with empty stdout and only its
     seam-specific fixed setup diagnostic and remedy; no test passes an
-    expected reason into a generic wrapper. Failed-subprocess cleanup checks
-    every close, consumes the reap with at most eight `EINTR` retries, and
-    injects close/wait/retry/exhaustion outcomes while preserving the primary
-    setup failure and appending only fixed `D2B-SPEC003-PLAN-CLEANUP` on
-    cleanup failure. No raw warning/error/path, sentinel, or task-rewrite
-    remedy appears. `self-test-contract` appears only in the exact invalid
-    validator-contract case.
+    expected reason into a generic wrapper. Failed-subprocess capture returns
+    an owned object with the actual child and all three birth descriptor
+    identities. Cleanup attempts every descriptor exactly once despite prior
+    failure, then consume-reaps only that child in at most eight wait attempts.
+    `ECHILD` is not success without a previously recorded consuming reap.
+    Tests use literal `8` independently of the production bound, assert no
+    ninth wait, inject failure at each descriptor position, wrong supplied
+    pid, resource-bearing malformed result, `ECHILD`, retry success, and retry
+    exhaustion, and prove the actual child reaped. Outcomes preserve the
+    primary setup failure and append only fixed
+    `D2B-SPEC003-PLAN-CLEANUP` on cleanup failure. No raw warning/error/path,
+    sentinel, or task-rewrite remedy appears. `self-test-contract` appears
+    only in the exact invalid validator-contract case.
 13. process references use exactly `spec003w0` through `spec003w7` plus
     `spec003w5fu1`; no other qualified Spec 003 wave is accepted.
 14. every authoritative native inventory is six checks per system, artifact
@@ -1775,15 +1812,21 @@ After the desired waves:
     shared guard under overlapping launch, restore-before-unlock mutations,
     helper first-operation managed-`SIG_IGN` refusal, handoff-window and
     normalization-time `SIGTERM`, parent/child setpgid and initial-stop races,
-    typed `ESRCH`/`EPERM`/early-child-exit cleanup, exact
-    `PTRACE_TRACEME`/initial-stop/`PTRACE_O_TRACEEXEC`/zero-signal-cont/event/
-    zero-signal-detach order, pending signal before group and trace
+    typed `ESRCH`/`EPERM`/early-child-exit cleanup, exact four-argument
+    `ptrace(PTRACE_TRACEME, 0, 0, 0)`/
+    `ptrace(PTRACE_SETOPTIONS, child, 0, PTRACE_O_TRACEEXEC)`/
+    `ptrace(PTRACE_CONT, child, 0, 0)`/event/
+    `ptrace(PTRACE_DETACH, child, 0, 0)` order and argument-position
+    mutations, pending signal before group and trace
     confirmation, pre-`READY` ownership, deterministic post-`READY` pre-exec
     signals, one queued setup termination, pre-exec
     `SIGKILL`/`SIGSYS`/fault/exit/OOM-like kill, empty EOF without event,
     missing/wrong event, detach failure, fast first-instruction exit, helper
-    kill/reap, Linux/Yama/native-platform gates, exact four-request ptrace
-    seccomp allowance, unchanged action no-network, no pre-exec
+    kill/reap, distinct pre-helper Nix/toolchain/sandbox codes for unsupported
+    system, minimum kernel, Yama, startup probe, and ptrace seccomp-policy
+    drift, distinct post-spawn helper initial-stop/options/continue/event/
+    detach codes, exact remedies and phase-valid reruns, exact four-request
+    ptrace seccomp allowance, unchanged action no-network, no pre-exec
     forwarding/grace, no false
     `EXECUTED`/target terminal/audit event, no-deadline external-TERM escalation,
     target-status

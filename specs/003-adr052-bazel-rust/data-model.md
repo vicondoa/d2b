@@ -464,9 +464,9 @@ status-pipe, or auxiliary descriptor.
 | `Normalized` | While the managed set stays blocked, the single thread installs default dispositions, ignored `SIGPIPE`, waitable default `SIGCHLD`, and fixed synchronous consumption, then establishes the final mask. Normalization failure emits a typed failure before fork. |
 | `ExecPipe` | Supervisor creates exactly one `O_CLOEXEC|O_NONBLOCK` exec-error pipe; the kernel trace stop is the sole release barrier. Pipe failure emits a typed failure and forks no child. |
 | `Forked` | Exactly one fork creates the target child. Supervisor owns child pid, exec-error reader, and status writer; the child owns the error writer, executable fd, and stdio copies. |
-| `ChildSetup` | Child calls `setpgid`, installs 0/1/2, sets CLOEXEC, closes supervisor-only fds, calls `PTRACE_TRACEME`, restores final signal state, and raises `SIGSTOP`. At that stop all fallible setup is complete and its next operation after release is the sole `execveat`. A stage failure writes one fixed `CHILD_*` record and `_exit`s. |
-| `TraceReady` | Supervisor confirms `getpgid(child) == child`, consumes exactly the initial `SIGSTOP` with event zero, installs exactly `PTRACE_O_TRACEEXEC`, emits `READY`, and releases with zero-signal `PTRACE_CONT`. Group, stop, option, continuation, policy, or early-death failure is typed and consume-reaped. |
-| `ExecEvent` | One absolute deadline covers trace waits, the single-record exec-error decoder, and status writes. Empty EOF is writer closure only. Success requires exact `WIFSTOPPED`/`SIGTRAP`/`PTRACE_EVENT_EXEC` followed by successful zero-signal `PTRACE_DETACH`; only then may `EXECUTED` be emitted. Managed termination, pre-exec death, `SIGSYS`/fault, missing or wrong event, EOF without event, or detach failure suppresses execution/terminal/audit publication and causes helper kill/consume-reap. |
+| `ChildSetup` | Child calls `setpgid`, installs 0/1/2, sets CLOEXEC, closes supervisor-only fds, calls `ptrace(PTRACE_TRACEME, 0, 0, 0)`, restores final signal state, and raises `SIGSTOP`. At that stop all fallible setup is complete and its next operation after release is the sole `execveat`. A stage failure writes one fixed `CHILD_*` record and `_exit`s. |
+| `TraceReady` | Supervisor confirms `getpgid(child) == child`, consumes exactly the initial `SIGSTOP` with event zero, calls `ptrace(PTRACE_SETOPTIONS, child, 0, PTRACE_O_TRACEEXEC)`, emits `READY`, and releases with `ptrace(PTRACE_CONT, child, 0, 0)`. Group, stop, option, continuation, or early-death failure is typed and consume-reaped. Pre-helper system, kernel, Yama, probe, and sandbox-policy refusal cannot enter this state. |
+| `ExecEvent` | One absolute deadline covers trace waits, the single-record exec-error decoder, and status writes. Empty EOF is writer closure only. Success requires exact `WIFSTOPPED`/`SIGTRAP`/`PTRACE_EVENT_EXEC` followed by `ptrace(PTRACE_DETACH, child, 0, 0)`; only then may `EXECUTED` be emitted. Managed termination, pre-exec death, `SIGSYS`/fault, missing or wrong event, EOF without event, or detach failure suppresses execution/terminal/audit publication and causes helper kill/consume-reap. |
 | `Supervising` | After `EXECUTED`, supervisor remains alive, forwards only `SIGHUP`, `SIGINT`, `SIGTERM`, and `SIGQUIT` to the target group, and applies the complete fixed TERM/grace/unconditional-KILL policy on case expiry or external `SIGTERM`, including with no case deadline. |
 | `Reaped` | Supervisor waits and reaps the direct target, emits framed `EXITED` or `SIGNALED`, closes the Rust status writer, and mirrors the exact target normal exit or terminating signal. A mirror, signal, wait, or reap failure is typed and cannot be reported as target status. |
 | `Closed` | Every non-exec and post-exec path closes each owned fd once and reaps every created child. The first operation failure and any cleanup failure retain distinct fixed stages. |
@@ -476,7 +476,12 @@ The execution entity is valid only on native `x86_64-linux` or
 startup probe. Yama, when present, is restricted to unprivileged mode 0 or 1.
 The action seccomp rule admits only `PTRACE_TRACEME`, `PTRACE_SETOPTIONS`,
 `PTRACE_CONT`, and `PTRACE_DETACH`; it preserves the complete network-denial
-set and grants no capability.
+set and grants no capability. Unsupported system is Nix-evaluation-owned;
+minimum kernel, Yama, and startup-probe refusal are toolchain-startup-owned;
+ptrace seccomp-policy drift is patched-sandbox-owned. Each is a distinct
+pre-helper code with fixed input, exact repair, phase-valid rerun, byte-exact
+and wrong-remedy test, and qualification result. Helper initial-stop, options,
+continuation, event, and detach codes exist only after spawn.
 
 | Stage | Patched sandbox ownership, transition, and failure |
 | --- | --- |
@@ -620,7 +625,7 @@ qualification, and promotion.
 | `repository_fetch_inventory` | Exact fetch sites outside governed actions, offline during gates, each pinned by lock checksum or git revision plus archive sha256. |
 | `cargo_compatibility_carriers` | Exact generated test identities, Cargo selectors, existing surface IDs, same-commit verdicts, and non-advisory classification for mandatory socket users. |
 | `containmentQualification` | Exact seven-stage bounded containment result set with closed recovery/escalation/cleanup/quarantine values, patch/monitor/pending/result digests, forbidden-field absence, and every validator mutation result. |
-| `execEventQualification` | Both native systems bind Linux minimum, Yama parent-child mode, passing real ptrace startup/host conformance, exact initial stop/options/event/detach order, fast-exit positive, pre-exec death/fault/EOF/wrong-event/detach negatives, four-request seccomp allowance, forbidden-request mutations, unchanged no-network plants, and every fixed recovery code. |
+| `execEventQualification` | Both native systems bind Linux minimum, Yama parent-child mode, passing real ptrace startup/host conformance, the exact four request/pid/address/data tuples, initial stop/options/continue/event/detach order, fast-exit positive, pre-exec death/fault/EOF/wrong-event/detach negatives, every omitted/exchanged/wrong-pid/options-in-address/nonzero-signal argument mutation, four-request seccomp allowance, forbidden-request mutations, unchanged no-network plants, each pre-helper Nix/toolchain/sandbox code and wrong-remedy result, and every post-spawn helper recovery code. |
 | `qualification_result` | Identity, startup, strategy, inherited-capability, exec-event qualification, setup-before-payload, all eight socket/io_uring, external-egress, and live-index plants fail or pass at their own predicates as declared; every sandbox-policy stage has its fixed redacted code/remedy; inventories are complete; and every compatibility carrier passes on the same head. |
 
 There is no endpoint declaration field. A network namespace cannot enforce

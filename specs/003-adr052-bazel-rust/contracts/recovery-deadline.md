@@ -91,6 +91,29 @@ state. The
 alias-removal commit changes the selected version and byte-exact expectations
 atomically; it does not change a code, input, or correction.
 
+The four Nix/toolchain ptrace admission predicates that run before helper
+start are not helper failures. Each diagnostic names its closed causing-input
+label and the fixed repository locator shown below; it never renders the
+observed system, kernel release, Yama value, or probe output. The fifth
+pre-helper predicate, sandbox policy drift, is the
+`SANDBOX_PTRACE_POLICY` row in the complete sandbox table below.
+
+| Owner and internal stage | Public code | Fixed causing input and locator | Exact correction before the phase-valid slice rerun |
+| --- | --- | --- | --- |
+| Nix evaluation `NIX_PTRACE_SYSTEM` | `D2B-BZLEXEC-NIX-PTRACE-SYSTEM` | `native-system`; `flake.nix` plus `specs/003-adr052-bazel-rust/contracts/runner-environment.md#ptrace-admission-call-shape-and-recovery-ownership-contract` | Move evaluation and execution to a native `x86_64-linux` or `aarch64-linux` runner; run `make test-flake`. |
+| Toolchain startup `TOOLCHAIN_PTRACE_KERNEL` | `D2B-BZLEXEC-TOOLCHAIN-PTRACE-KERNEL` | `linux-minimum-3.19`; `tests/golden/bazel-exec-supervisor.json` plus `specs/003-adr052-bazel-rust/contracts/runner-environment.md#ptrace-admission-call-shape-and-recovery-ownership-contract` | Migrate the action to a native supported runner with Linux 3.19 or newer; run `make test-flake`. |
+| Toolchain startup `TOOLCHAIN_PTRACE_YAMA` | `D2B-BZLEXEC-TOOLCHAIN-PTRACE-YAMA` | `yama-parent-child-mode`; `tests/golden/bazel-exec-supervisor.json` plus `specs/003-adr052-bazel-rust/contracts/runner-environment.md#ptrace-admission-call-shape-and-recovery-ownership-contract` | Migrate the action to a native supported runner whose boot policy fixes `kernel.yama.ptrace_scope=1`; grant no `CAP_SYS_PTRACE`; run `make test-flake`. |
+| Toolchain startup `TOOLCHAIN_PTRACE_PROBE` | `D2B-BZLEXEC-TOOLCHAIN-PTRACE-PROBE` | `immutable-ptrace-startup-probe`; `tests/golden/bazel-exec-supervisor.json` plus `tests/tools/d2b-bazel-exec-supervisor/supervisor.c` | Restore and rebuild the pinned static supervisor and startup probe; if the exact identities pass but the probe still refuses, migrate to a native runner satisfying the kernel and Yama rows; run `make test-flake`. |
+
+Nix evaluation owns only the unsupported-system row. Toolchain startup owns
+the kernel, Yama, and real capability-probe rows and completes them before
+spawning the helper. The patched sandbox owns policy-identity and
+request-argument drift. Sequential T120 owns their renderers, byte-exact
+tests, fixed-locator resolution, and missing or borrowed remedy mutations
+across all four slices and both command versions. Each test asserts no helper
+was spawned. Qualification requires every positive, refusal, wrong-remedy,
+and call-position mutation result.
+
 Every parent code names the fixed input
 `specs/003-adr052-bazel-rust/contracts/runner-environment.md#rust-parent-stage-owner-and-closure-contract`.
 
@@ -123,7 +146,6 @@ Every helper code names the fixed input
 | `HELPER_GROUP_EPERM` | `D2B-BZLEXEC-HELPER-GROUP-EPERM` | Correct the parent-and-child `setpgid` handshake without changing session or group authority; `EPERM` must fail before `READY` with direct-child cleanup. |
 | `HELPER_GROUP_ERROR` | `D2B-BZLEXEC-HELPER-GROUP-ERROR` | Correct the parent-and-child `setpgid` handshake; any other setpgid error or confirmed-group mismatch must fail before `READY` with direct-child cleanup and no raw errno text. |
 | `HELPER_GROUP_EARLY_EXIT` | `D2B-BZLEXEC-HELPER-GROUP-EARLY-EXIT` | Reject child exit before the expected initial trace stop and `READY`; consume-reap it and close every owned descriptor. |
-| `HELPER_PTRACE_POLICY` | `D2B-BZLEXEC-HELPER-PTRACE-POLICY` | Run on Linux 3.19 or newer on a supported native system, require unprivileged Yama parent-child mode 0 or 1 when present, and retain only the four-request ptrace seccomp allowance without granting `CAP_SYS_PTRACE` or weakening action no-network. |
 | `HELPER_PTRACE_STOP` | `D2B-BZLEXEC-HELPER-PTRACE-STOP` | Correct the child `PTRACE_TRACEME` plus initial `SIGSTOP` barrier and accept no other initial wait state before `READY`. |
 | `HELPER_PTRACE_OPTIONS` | `D2B-BZLEXEC-HELPER-PTRACE-OPTIONS` | Install exactly `PTRACE_O_TRACEEXEC` on the stopped direct child before emitting `READY`; do not infer tracing state from the stop alone. |
 | `HELPER_PTRACE_CONT` | `D2B-BZLEXEC-HELPER-PTRACE-CONT` | Release the confirmed initial stop exactly once with zero-signal `PTRACE_CONT` after the complete `READY` write. |
@@ -162,10 +184,15 @@ Every child code names the same fixed supervisor source and the contract row
 Every sandbox code names the fixed inputs
 `pkgs/bazel-8.6.0-seccomp/linux-sandbox-seccomp.patch` and
 `specs/003-adr052-bazel-rust/contracts/runner-environment.md#patched-sandbox-stage-error-owner-and-closure-contract`.
+`SANDBOX_PTRACE_POLICY` additionally names the closed causing-input label
+`pinned-ptrace-seccomp-policy` and
+`pkgs/bazel-8.6.0-seccomp/seccomp-policy.json`; it renders no observed policy
+bytes.
 
 | Internal stage | Public code | Exact correction |
 | --- | --- | --- |
 | `SANDBOX_NAMESPACE` | `D2B-BZLEXEC-SANDBOX-NAMESPACE` | Restore one fresh `CLONE_NEWPID` namespace for every governed action and refuse every fallback strategy. |
+| `SANDBOX_PTRACE_POLICY` | `D2B-BZLEXEC-SANDBOX-PTRACE-POLICY` | Restore the pinned patch and policy so only `TRACEME(0,0,0)`, `SETOPTIONS(child,0,PTRACE_O_TRACEEXEC)`, `CONT(child,0,0)`, and `DETACH(child,0,0)` are admitted in their exact request, pid, address, and data positions; retain every no-network denial. |
 | `SANDBOX_MONITOR` | `D2B-BZLEXEC-SANDBOX-MONITOR` | Restore namespace PID 1 as the action's adoption, abnormal-teardown, and reap owner. |
 | `SANDBOX_KILL` | `D2B-BZLEXEC-SANDBOX-KILL` | Correct namespace-local kill of every member other than PID 1; do not signal a host PID or PGID. |
 | `SANDBOX_REAP` | `D2B-BZLEXEC-SANDBOX-REAP` | Correct nonblocking adopted-child reap progress and require a consuming wait before recording any PID-1 reap. |
@@ -208,9 +235,9 @@ success-after-quarantine, and reuse while quarantined. Pending and
 consuming-reap release diagnostics are byte-exact. No runner recovery file
 renders a sandbox code.
 
-Together the T067 runner harness and T120 live sandbox harness cover every
-execution parent/helper/child/sandbox code, sandbox-policy stage and slice,
-qualification
+Together the T067 runner harness and T120 Nix/toolchain/live-sandbox harness
+cover every execution Nix/toolchain/parent/helper/child/sandbox code,
+sandbox-policy stage and slice, qualification
 query/refusal/publication class, and release query/refusal class. It rejects
 missing or wrong remedies and command versions, descriptor numbers, absolute,
 runfiles, socket, and Nix store paths, OS/errno text, raw
