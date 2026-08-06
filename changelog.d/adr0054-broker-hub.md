@@ -15,10 +15,11 @@
   the repository root, then run the named `cargo xtask` command from
   `packages/`. They remain unreachable from workflows and Make targets; gates
   use approved Make targets and hermetic vendored policy inputs. The `main`,
-  `broker`, and `guest` hub identifiers are retired with fixed instructions to
-  use `product`; `walker` remains. Existing Layer-1 supply-chain, drift, and
-  flake targets recurrently run policy and wiring checks. Separate native
-  x86_64 and aarch64 runners each realize their four wrappers and static guest
-  ELF check, with pinned inventories and wrong-runner, wrong-system, and
+  `broker`, and `guest` hub identifiers are retired with a fixed `product`
+  command that runs from `packages/` and never repeats that path; `walker`
+  remains. Existing Layer-1 supply-chain, drift, and flake targets recurrently
+  run policy and wiring checks. Separate native x86_64 and aarch64 runners each
+  realize their four wrappers and static guest ELF check, with pinned
+  inventories and independent per-architecture foreign-system and
   remote-builder negatives. Existing contract-crate coverage remains
   enforcing, and the six guest license findings require a narrow update.

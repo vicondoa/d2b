@@ -270,14 +270,15 @@ actionable diagnostics:
 
 | Refused hub | Diagnostic |
 | --- | --- |
-| `main` | `Hub 'main' is retired; enter nix develop, then run cd packages && cargo xtask bazel-repin --hub product` |
-| `broker` | `Hub 'broker' is retired; enter nix develop, then run cd packages && cargo xtask bazel-repin --hub product` |
-| `guest` | `Hub 'guest' is retired; enter nix develop, then run cd packages && cargo xtask bazel-repin --hub product` |
+| `main` | `Hub 'main' is retired; after entering nix develop, run from packages/: cargo xtask bazel-repin --hub product` |
+| `broker` | `Hub 'broker' is retired; after entering nix develop, run from packages/: cargo xtask bazel-repin --hub product` |
+| `guest` | `Hub 'guest' is retired; after entering nix develop, run from packages/: cargo xtask bazel-repin --hub product` |
 
-Tests bind the refused-hub mapping and actionable text. The message describes
-an interactive two-step workflow; it is not extracted or executed as a
-one-line command, and no final-byte or punctuation contract is created.
-Changing the walker lock remains a separately reviewed change.
+Tests bind each refused-hub mapping and exact diagnostic line. In the
+already-entered environment they execute its exact remediation command with
+cwd fixed to `packages/`; a `cd packages` or `packages/` path prefix must fail
+as a duplicated `packages/packages` path. No final newline contract is created.
+Changing the walker lock remains separately reviewed.
 
 Product code is represented by native first-party targets. Each broker and
 guest configured context declares its own direct first-party and `@product`
@@ -391,7 +392,8 @@ Recurring enforcement stays in existing Layer-1 jobs:
   offline audit logic for broker GNU and guest musl on each native runner.
 - `make test-drift` enforces generation `--check`, the eight-check inventory
   and exact mapping, with missing-check, cross-system, wrong-runner,
-  wrong-target, foreign-system, and remote-builder plants.
+  wrong-target, and separate per-architecture foreign-system and remote-builder
+  plants.
 - `make test-flake` owns realization. `D2B_FLAKE_REALIZED_CHECKS` adds
   `broker-production-dependency-policy`, `guest-shell-runner-static-dependency-policy`,
   `broker-production-package-policy`, `guest-real-libshpool-package-policy`, and
@@ -418,7 +420,10 @@ harness failure. Instantiate the matrix for every applicable checker.
 | `wrong-system` | Change only the embedded Nix system. |
 | `wrong-runner` | Put a native-system realization on the other architecture's runner. |
 | `wrong-target` | Change only the embedded GNU or musl target. |
-| `remote-builder` | Add a foreign system override or remote builder. |
+| `x86_64-foreign-system` | Add foreign `--system` to the x86_64 native mapping; expect `x86_64-linux native realization must not set a foreign system`. |
+| `x86_64-remote-builder` | Add `--builders` to the x86_64 native mapping; expect `x86_64-linux native realization must not configure a remote builder`. |
+| `aarch64-foreign-system` | Add foreign `--system` to the aarch64 native mapping; expect `aarch64-linux native realization must not set a foreign system`. |
+| `aarch64-remote-builder` | Add `--builders` to the aarch64 native mapping; expect `aarch64-linux native realization must not configure a remote builder`. |
 | `wrong-edge-kind` | Change one edge to another valid kind; retain all other fields. |
 | `omitted-normal-edge` | Remove one reached normal edge. |
 | `omitted-build-edge` | Remove one reached build edge. |
@@ -556,8 +561,8 @@ Rejected. It has a real tooling boundary and no product path dependency.
    predicates; native first-party contexts, not the product external union,
    define actual Bazel dependencies and features.
 8. Existing Layer-1 supply-chain, drift, and flake jobs enforce the four target
-   contexts, eight wrappers, wrong-runner/system/remote-builder refusals, and
-   dual-system pins.
+   contexts, eight wrappers, wrong-runner/system and architecture-specific
+   foreign-system/remote-builder refusals, and dual-system pins.
 9. The guest license blocker is resolved by reviewed policy in the merge
    change, not waived or misreported.
 10. Spec 003 is amended and re-panelled after this ADR merges and before

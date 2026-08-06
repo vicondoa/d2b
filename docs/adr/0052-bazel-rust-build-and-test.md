@@ -36,17 +36,18 @@
   shell functions are outside the security model. Gates call approved Make
   targets in controlled environments, while package policy remains hermetic
   through vendored sources and the pinned advisory database. `main`, `broker`,
-  and `guest` hub inputs are retired with fixed diagnostics that say to enter
-  `nix develop`, then run
-  `cd packages && cargo xtask bazel-repin --hub product`. The diagnostic is
-  actionable text, not a copy-executable one-line command or final-byte
-  contract. The implementation adds all eight
-  per-system dependency/package installables. Existing Layer-1 supply-chain,
-  drift, and flake targets execute their shared checker logic, enforce
-  generated inventory and target mapping with wrong-runner, wrong-system, and
-  remote-builder refusals, and realize each system's four wrappers plus
-  `guest-static-elf` on separate native x86_64 and aarch64 runners. Neither
-  native block uses a foreign system or remote builder; common cross-system
+  and `guest` hub inputs are retired with fixed diagnostics that, after the
+  operator has entered `nix develop`, say to run
+  `cargo xtask bazel-repin --hub product` from `packages/`. They never say
+  `cd packages`. Tests execute that exact remediation with `packages/` as cwd
+  and reject a duplicated `packages/packages` path. The implementation adds
+  all eight per-system dependency/package installables. Existing Layer-1
+  supply-chain, drift, and flake targets execute their shared checker logic,
+  enforce generated inventory and target mapping with wrong-runner and
+  wrong-system refusals plus independent x86_64 and aarch64 foreign-system and
+  remote-builder seeds, each expecting its own diagnostic. Each system's four
+  wrappers plus `guest-static-elf` realize on its native runner. Neither native
+  block uses a foreign system or remote builder; common cross-system
   configuration pins and drift remain one step. The Layer-1, realized-class,
   and dual-system matrix pins are regenerated. If accepted, Spec 003 must be
   amended and re-panelled before implementation resumes.
