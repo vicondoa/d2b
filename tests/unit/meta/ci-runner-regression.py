@@ -1117,17 +1117,50 @@ printf '%s\n' "$sanitized_line"
 
     def test_nix_unit_uses_a_bounded_process_group_scheduler(self) -> None:
         driver = executable_shell_source(source_text(NIX_UNIT_DRIVER))
+        exit_handler = driver[
+            driver.index("nix_unit_exit()") : driver.index("trap nix_unit_exit EXIT")
+        ]
         self.assertIn("shard_pids=()", driver)
+        self.assertIn("shard_group_files=()", driver)
         self.assertIn("shard_statuses=()", driver)
         self.assertIn("shard_workers", driver)
         self.assertIn("harvest_nix_unit_shard()", driver)
         self.assertIn("settle_nix_unit_process_group()", driver)
+        self.assertIn("terminate_nix_unit_process_group()", driver)
+        self.assertIn("terminate_active_nix_unit_shard_groups()", driver)
         self.assertIn("setsid nix-eval-jobs", driver)
-        self.assertIn('kill -TERM -- "-$pid"', driver)
+        self.assertIn('kill -TERM -- "-$process_group"', driver)
+        self.assertIn('terminate_nix_unit_process_group "$pid"', driver)
+        self.assertIn(
+            'trap \'terminate_nix_unit_process_group "$pid" || true; exit 143\' TERM INT HUP',
+            driver,
+        )
+        self.assertIn("terminate_active_nix_unit_shard_groups || true", exit_handler)
         self.assertRegex(
             driver,
             r"(?i)(?:nix-unit|lix-unit|nix-eval-jobs|"
             r"\bnix\s+(?:eval|build|flake\s+check)\b)",
+        )
+
+    def test_nix_unit_preserves_nonzero_evaluator_status_files(self) -> None:
+        driver = executable_shell_source(source_text(NIX_UNIT_DRIVER))
+        run_region = driver[
+            driver.index("run_nix_unit_shard()") : driver.index("harvest_nix_unit_shard()")
+        ]
+        harvest_start = driver.index("harvest_nix_unit_shard()")
+        harvest_region = driver[
+            harvest_start : driver.index('while [ "${#shard_pids[@]}" -gt 0 ]; do', harvest_start)
+        ]
+
+        self.assertIn('printf \'%s\\n\' "$rc" >"$shard_status_file"', run_region)
+        self.assertIn('return "$rc"', run_region)
+        self.assertIn('recorded_rc=$(head -n 1 "$status_file" 2>/dev/null || true)', harvest_region)
+        self.assertIn('[ "$recorded_rc" -ne 0 ]; then', harvest_region)
+        self.assertIn("rc=$recorded_rc", harvest_region)
+        self.assertLess(
+            harvest_region.index('recorded_rc=$(head -n 1 "$status_file" 2>/dev/null || true)'),
+            harvest_region.index('printf \'%s\\n\' "$rc" >"$status_file"'),
+            "harvest must consult the evaluator status file before rewriting it",
         )
 
     def test_fixture_driver_realizes_minimal_and_excludes_real_binary_probe(self) -> None:
@@ -1277,6 +1310,100 @@ printf '%s\n' "$sanitized_line"
                 f"{active.stderr}",
             )
             self.assertIn(f"{lane} peak RSS guard failed", active.stderr)
+
+            nested_pid = self.scratch / f"{lane}-nested-setsid.pid"
+            nested_driver = self.scratch / f"{lane}-nested-setsid.sh"
+            nested_python = (
+                "import os, pathlib, signal, time; "
+                "signal.signal(signal.SIGTERM, signal.SIG_IGN); "
+                "pathlib.Path(os.environ['D2B_CHILD_PID_FILE']).write_text(str(os.getpid())); "
+                "x = [0] * 2000000; time.sleep(30)"
+            )
+            nested_driver.write_text(
+                f"""#!/usr/bin/env bash
+set -euo pipefail
+child_pid_file=$1
+settle_group() {{
+  local pg="$1" attempt=1
+  while [ "$attempt" -le 40 ]; do
+    if ! kill -0 -- "-$pg" 2>/dev/null; then
+      return 0
+    fi
+    sleep 0.05
+    attempt=$((attempt + 1))
+  done
+  return 1
+}}
+terminate_group() {{
+  local pg="$1" attempt=1
+  kill -TERM -- "-$pg" 2>/dev/null || true
+  while [ "$attempt" -le 10 ]; do
+    if ! kill -0 -- "-$pg" 2>/dev/null; then
+      return 0
+    fi
+    sleep 0.05
+    attempt=$((attempt + 1))
+  done
+  kill -KILL -- "-$pg" 2>/dev/null || true
+  settle_group "$pg"
+}}
+cleanup() {{
+  local pg
+  [ -r "$child_pid_file" ] || return 0
+  pg=$(cat "$child_pid_file")
+  case "$pg" in
+    ''|*[!0-9]*) return 0 ;;
+  esac
+  terminate_group "$pg" || true
+}}
+trap cleanup EXIT
+export D2B_CHILD_PID_FILE="$child_pid_file"
+setsid {shlex.quote(sys.executable)} -c {shlex.quote(nested_python)} &
+wait
+""",
+                encoding="utf-8",
+            )
+            nested_driver.chmod(0o755)
+            nested = subprocess.run(
+                [
+                    sys.executable,
+                    str(helper),
+                    "--lane",
+                    lane,
+                    "--max-kib",
+                    "1",
+                    "--",
+                    "bash",
+                    str(nested_driver),
+                    str(nested_pid),
+                ],
+                cwd=ROOT,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(
+                nested.returncode,
+                125,
+                msg=f"{lane} nested-setsid guard unexpectedly passed:\n{nested.stderr}",
+            )
+            self.assertTrue(
+                nested_pid.is_file(),
+                f"{lane} nested-setsid worker never published its process-group id",
+            )
+            nested_group = int(nested_pid.read_text(encoding="utf-8").strip())
+            for _ in range(40):
+                try:
+                    os.killpg(nested_group, 0)
+                except ProcessLookupError:
+                    break
+                time.sleep(0.05)
+            else:
+                self.fail(
+                    f"{lane} nested-setsid worker process group {nested_group} "
+                    f"survived the guard:\n{nested.stderr}"
+                )
 
             passed = subprocess.run(
                 [

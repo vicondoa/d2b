@@ -94,6 +94,7 @@ cd "$ROOT"
 manifest_exit_publication_enabled=1
 nix_unit_surface=nix-unit
 nix_unit_command_succeeded=0
+shard_group_files=()
 nix_unit_baseline_leaves=(
   nix-unit
   nix-unit-daemon
@@ -113,9 +114,49 @@ publish_manifest_fragment() {
     --status "$status"
 }
 
+settle_nix_unit_process_group() {
+  local process_group="$1" attempt=1
+  while [ "$attempt" -le 40 ]; do
+    if ! kill -0 -- "-$process_group" 2>/dev/null; then
+      return 0
+    fi
+    sleep 0.1
+    attempt=$((attempt + 1))
+  done
+  fail "nix-unit shard process group $process_group did not exit; refusing to start the next shard"
+  return 1
+}
+
+terminate_nix_unit_process_group() {
+  local process_group="$1" attempt=1
+  kill -TERM -- "-$process_group" 2>/dev/null || true
+  while [ "$attempt" -le 10 ]; do
+    if ! kill -0 -- "-$process_group" 2>/dev/null; then
+      return 0
+    fi
+    sleep 0.1
+    attempt=$((attempt + 1))
+  done
+  kill -KILL -- "-$process_group" 2>/dev/null || true
+  settle_nix_unit_process_group "$process_group"
+}
+
+terminate_active_nix_unit_shard_groups() {
+  local shard_group_file process_group
+  for shard_group_file in "${shard_group_files[@]}"; do
+    [ -r "$shard_group_file" ] || continue
+    process_group=$(head -n 1 "$shard_group_file" 2>/dev/null || true)
+    case "$process_group" in
+      ''|*[!0-9]*) continue ;;
+    esac
+    terminate_nix_unit_process_group "$process_group" || true
+  done
+}
+
 nix_unit_exit() {
   local rc=$?
   trap - EXIT
+  terminate_active_nix_unit_shard_groups || true
   if [ "$manifest_exit_publication_enabled" -eq 1 ] \
     && [ -n "${D2B_EXECUTION_MANIFEST:-}" ] \
     && [ -n "$nix_unit_surface" ]; then
@@ -484,7 +525,7 @@ shard_statuses=()
 shard_status=0
 
 run_nix_unit_shard() {
-  local shard="$1" shard_result="$2" shard_stderr="$3" shard_status_file="$4"
+  local shard="$1" shard_result="$2" shard_stderr="$3" shard_status_file="$4" shard_group_file="$5"
   local rc pid
   setsid nix-eval-jobs \
     --no-instantiate \
@@ -493,41 +534,39 @@ run_nix_unit_shard() {
     --max-memory-size "$memory_mb" \
     --show-trace >"$shard_result" 2>"$shard_stderr" &
   pid=$!
+  trap 'terminate_nix_unit_process_group "$pid" || true; exit 143' TERM INT HUP
+  printf '%s\n' "$pid" >"$shard_group_file"
   set +e
   wait "$pid"
   rc=$?
   set -e
-  kill -TERM -- "-$pid" 2>/dev/null || true
-  if ! settle_nix_unit_process_group "$pid"; then
+  trap - TERM INT HUP
+  if ! terminate_nix_unit_process_group "$pid"; then
     printf '%s\n' 1 >"$shard_status_file"
     shard_status=1
     return 1
   fi
   printf '%s\n' "$rc" >"$shard_status_file"
   [ "$rc" -eq 0 ] || shard_status=1
+  return "$rc"
 }
 
 harvest_nix_unit_shard() {
   local pid="$1" status_file="$2"
+  local rc recorded_rc=
   set +e
   wait "$pid"
-  local rc=$?
+  rc=$?
   set -e
+  if [ -r "$status_file" ]; then
+    recorded_rc=$(head -n 1 "$status_file" 2>/dev/null || true)
+  fi
+  if [[ "$recorded_rc" =~ ^[0-9]+$ ]] \
+    && [ "$recorded_rc" -ne 0 ]; then
+    rc=$recorded_rc
+  fi
   printf '%s\n' "$rc" >"$status_file"
   [ "$rc" -eq 0 ] || shard_status=1
-}
-
-settle_nix_unit_process_group() {
-  local process_group="$1" attempt=1
-  while [ "$attempt" -le 50 ]; do
-    if ! kill -0 -- "-$process_group" 2>/dev/null; then
-      return 0
-    fi
-    sleep 0.1
-    attempt=$((attempt + 1))
-  done
-  fail "nix-unit shard process group $process_group did not exit; refusing to start the next shard"
-  return 1
 }
 
 for shard in "${nix_unit_shards[@]}"; do
@@ -539,15 +578,17 @@ for shard in "${nix_unit_shards[@]}"; do
   shard_result="$shard_dir/$shard.jsonl"
   shard_stderr="$shard_dir/$shard.stderr"
   shard_status_file="$shard_dir/$shard.status"
-  rm -f -- "$shard_result" "$shard_stderr" "$shard_status_file"
+  shard_group_file="$shard_dir/$shard.group"
+  rm -f -- "$shard_result" "$shard_stderr" "$shard_status_file" "$shard_group_file"
+  shard_group_files+=("$shard_group_file")
   log "  evaluating Nix-unit shard: $shard"
   if [ "$shard_workers" -eq 1 ]; then
     run_nix_unit_shard \
-      "$shard" "$shard_result" "$shard_stderr" "$shard_status_file"
+      "$shard" "$shard_result" "$shard_stderr" "$shard_status_file" "$shard_group_file" || true
   else
     (
       run_nix_unit_shard \
-        "$shard" "$shard_result" "$shard_stderr" "$shard_status_file"
+        "$shard" "$shard_result" "$shard_stderr" "$shard_status_file" "$shard_group_file"
     ) &
     shard_pids+=("$!")
     shard_statuses+=("$shard_status_file")
