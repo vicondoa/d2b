@@ -2,7 +2,7 @@ diff --git a/src/main/tools/linux-sandbox-pid1.cc b/src/main/tools/linux-sandbox
 index 1a4bc4d..d2b9a01 100644
 --- a/src/main/tools/linux-sandbox-pid1.cc
 +++ b/src/main/tools/linux-sandbox-pid1.cc
-@@ -22,21 +22,29 @@
+@@ -22,21 +22,30 @@
  #include <errno.h>
 +#include <dirent.h>
  #include <fcntl.h>
@@ -31,8 +31,9 @@ index 1a4bc4d..d2b9a01 100644
  #include <sys/types.h>
  #include <sys/wait.h>
 +#include <stdint.h>
++#include <time.h>
  #include <unistd.h>
-@@ -65,8 +71,340 @@
+@@ -68,8 +69,340 @@
  #include "src/main/tools/logging.h"
  #include "src/main/tools/process-tools.h"
 -
@@ -376,26 +377,74 @@ index 1a4bc4d..d2b9a01 100644
 +
  // Helper methods
  static void CreateFile(const char *path) {
-@@ -701,6 +949,9 @@ int Pid1Main(void *args) {
-   }
-   SetupNetworking();
-   EnterWorkingDirectory();
+@@ -549,1 +882,41 @@ static int WaitForChild() {
++static int64_t D2BNowMilliseconds() {
++  struct timespec now;
++  if (clock_gettime(CLOCK_MONOTONIC, &now) != 0) {
++    return -1;
++  }
++  return static_cast<int64_t>(now.tv_sec) * 1000 + now.tv_nsec / 1000000;
++}
++
++static void D2BKillAndReapRemaining() {
++  if (kill(-1, SIGKILL) != 0 && errno != ESRCH) {
++    fprintf(stderr, "D2B-BZLEXEC-SANDBOX-KILL\n");
++    return;
++  }
++  const int64_t deadline =
++      D2BNowMilliseconds() + kD2BUserspaceCeilingMs;
++  while (true) {
++    int status;
++    const pid_t pid = waitpid(-1, &status, WNOHANG);
++    if (pid > 0) {
++      continue;
++    }
++    if (pid < 0 && errno == ECHILD) {
++      return;
++    }
++    if (pid < 0 && errno != EINTR) {
++      fprintf(stderr, "D2B-BZLEXEC-SANDBOX-REAP\n");
++      return;
++    }
++    if (D2BNowMilliseconds() >= deadline) {
++      fprintf(stderr, "%s\n", kD2BPendingCleanup);
++      fprintf(stderr, "state=pending-kernel-cleanup\n");
++      fprintf(stderr, "quarantine=entered-and-held\n");
++      fprintf(stderr, "wait-owner=original-live-monitor\n");
++      fprintf(stderr, "runbook=%s\n", kD2BPendingRunbook);
++      return;
++    }
++    usleep(1000);
++  }
++}
++
+ static int WaitForChild() {
+@@ -575,1 +948,2 @@
++      D2BKillAndReapRemaining();
+       return 128 + signal;
+@@ -581,1 +954,2 @@
++    D2BKillAndReapRemaining();
+     return exit_code;
+@@ -742,0 +1117,3 @@
 +  // The fixed policy is loaded after namespace construction and before the
 +  // action command. There is no policy-open, digest, load, or exec fallback.
 +  D2BPrepareActionPolicy();
--
-+
-   // Ignore terminal signals; we hand off the terminal to the child in
-   // SpawnChild below.
+@@ -755,3 +1133,2 @@
+-  // Note that there's no need to kill any remaining descendant processes; they
+-  // are in our PID namespace and the kernel will send them SIGKILL
+-  // automatically once we exit.
++  // PID 1 kills every remaining namespace member and makes nonblocking reap
++  // progress before returning the action status to outer linux-sandbox.
 diff --git a/src/main/tools/linux-sandbox.cc b/src/main/tools/linux-sandbox.cc
 index 2c92d4e..b8f1b73 100644
 --- a/src/main/tools/linux-sandbox.cc
 +++ b/src/main/tools/linux-sandbox.cc
-@@ -58,2 +58,3 @@
+@@ -58,2 +58,4 @@
  #include <sys/wait.h>
 +#include <stdint.h>
++#include <time.h>
  #include <unistd.h>
-@@ -161,13 +162,38 @@ static pid_t SpawnPid1() {
+@@ -214,13 +215,38 @@ static pid_t SpawnPid1() {
    return child_pid;
  }
 -
@@ -415,11 +464,11 @@ index 2c92d4e..b8f1b73 100644
 +    "D2B-BZLEXEC-SANDBOX-CONSUMING-REAP-RELEASE";
 +
 +static int64_t D2BMonotonicMilliseconds() {
-+  struct timeval now;
-+  if (gettimeofday(&now, nullptr) != 0) {
++  struct timespec now;
++  if (clock_gettime(CLOCK_MONOTONIC, &now) != 0) {
 +    return -1;
 +  }
-+  return static_cast<int64_t>(now.tv_sec) * 1000 + now.tv_usec / 1000;
++  return static_cast<int64_t>(now.tv_sec) * 1000 + now.tv_nsec / 1000000;
 +}
 +
  static int WaitForPid1(const pid_t child_pid) {
@@ -436,12 +485,7 @@ index 2c92d4e..b8f1b73 100644
      if (ret > 0) {
        break;
      }
-@@ -233,9 +259,40 @@ static int WaitForPid1(const pid_t child_pid) {
-     if (errno == EINTR) {
-       continue;
-     }
--
-+
+@@ -236,0 +262,21 @@
 +    if (ret == 0) {
 +      if (!quarantined && D2BMonotonicMilliseconds() >= ceiling) {
 +        quarantined = true;
@@ -463,11 +507,7 @@ index 2c92d4e..b8f1b73 100644
 +      usleep(1000);
 +      continue;
 +    }
-+
-     DIE("wait4");
-   }
--
-+
+@@ -240,0 +287,8 @@
 +  if (quarantined) {
 +    fprintf(stderr, "%s\n", kD2BConsumingReapRelease);
 +    fprintf(stderr, "cleanup=complete-after-quarantine\n");
@@ -476,6 +516,3 @@ index 2c92d4e..b8f1b73 100644
 +    fprintf(stderr, "action=failed\n");
 +    return EXIT_FAILURE;
 +  }
-+
-   // If we're supposed to write stats to a file, do so now.
-   if (!opt.stats_path.empty()) {
