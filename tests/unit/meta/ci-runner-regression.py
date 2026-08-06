@@ -1316,8 +1316,8 @@ printf '%s\n' "$sanitized_line"
             nested_python = (
                 "import os, pathlib, signal, time; "
                 "signal.signal(signal.SIGTERM, signal.SIG_IGN); "
-                "pathlib.Path(os.environ['D2B_CHILD_PID_FILE']).write_text(str(os.getpid())); "
-                "x = [0] * 2000000; time.sleep(30)"
+                "pathlib.Path(os.environ['D2B_CHILD_PID_FILE']).write_text(str(os.getpgrp())); "
+                "x = bytearray(64 * 1024 * 1024); time.sleep(30)"
             )
             nested_driver.write_text(
                 f"""#!/usr/bin/env bash
@@ -1371,7 +1371,7 @@ wait
                     "--lane",
                     lane,
                     "--max-kib",
-                    "1",
+                    "32768",
                     "--",
                     "bash",
                     str(nested_driver),
