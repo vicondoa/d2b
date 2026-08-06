@@ -661,20 +661,18 @@ run_fast_lint_gate() {
       packages/d2b-priv-broker/*)
         ;;
       packages/d2b-guest-shell-runner/*)
-        case "$path" in
-          *.rs|*/Cargo.toml|*/Cargo.lock|*/build.rs)
-            guest_shell_runner_changed=1
-            ;;
-        esac
+        if [[ "$path" == *.rs || "$path" == */Cargo.toml \
+          || "$path" == */Cargo.lock || "$path" == */build.rs ]]; then
+          guest_shell_runner_changed=1
+        fi
         ;;
       packages/*)
-        case "$path" in
-          *.rs|*/Cargo.toml|*/build.rs)
-            package=${path#packages/}
-            package=${package%%/*}
-            [ -f "$ROOT/packages/$package/Cargo.toml" ] && main_packages["$package"]=1
-            ;;
-        esac
+        if [[ "$path" == *.rs || "$path" == */Cargo.toml \
+          || "$path" == */build.rs ]]; then
+          package=${path#packages/}
+          package=${package%%/*}
+          [ -f "$ROOT/packages/$package/Cargo.toml" ] && main_packages["$package"]=1
+        fi
         ;;
     esac
   done < <(
