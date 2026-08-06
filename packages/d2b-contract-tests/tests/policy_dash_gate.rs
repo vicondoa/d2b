@@ -83,7 +83,9 @@ fn exact_vendor_fixture(name: &str) -> PathBuf {
         "skills/caveman-compress/SKILL.md",
     ] {
         fs::copy(
-            repo_root().join("third_party/caveman/v1.10.0").join(relative),
+            repo_root()
+                .join("third_party/caveman/v1.10.0")
+                .join(relative),
             vendor.join(relative),
         )
         .expect("copy exact vendor fixture");
