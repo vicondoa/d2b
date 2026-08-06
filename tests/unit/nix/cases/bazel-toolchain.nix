@@ -7,6 +7,8 @@ let
   policy = builtins.fromJSON (builtins.readFile
     (flakeRoot + "/pkgs/bazel-8.6.0-seccomp/seccomp-policy.json"));
   flakeText = builtins.readFile (flakeRoot + "/flake.nix");
+  bazelText = builtins.readFile
+    (flakeRoot + "/pkgs/bazel-8.6.0-seccomp/default.nix");
   patchText = builtins.readFile
     (flakeRoot + "/pkgs/bazel-8.6.0-seccomp/linux-sandbox-seccomp.patch");
   supervisorText = builtins.readFile
@@ -48,9 +50,9 @@ in
     expr = {
       inherit (toolchain) loadPoint noNetwork noFallback;
       policyName = toolchain.policyName;
-      policyFile = builtins.match ".*seccomp-policy\\.json.*" flakeText != null;
+      policyFile = builtins.match ".*seccomp-policy\\.json.*" bazelText != null;
       patchFile =
-        builtins.match ".*linux-sandbox-seccomp\\.patch.*" flakeText != null;
+        builtins.match ".*linux-sandbox-seccomp\\.patch.*" bazelText != null;
       sourcePatchLoad =
         builtins.match ".*D2BPrepareActionPolicy\\(\\).*" patchText != null;
     };
