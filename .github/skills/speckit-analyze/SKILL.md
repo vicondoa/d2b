@@ -8,6 +8,13 @@ metadata:
 ---
 
 
+## d2b feature artifact routing
+
+<!-- D2B-SPECKIT-ROUTE: analyze initial-create=none; existing=read-only-editor-remediation -->
+
+This command is read-only for feature artifacts. Report proposed corrections; the caller must send them as one /d2b-spec-edit batch. Never apply remediation directly.
+
+
 ## User Input
 
 ```text
@@ -198,7 +205,7 @@ At end of report, output a concise Next Actions block:
 
 - If CRITICAL issues exist: Recommend resolving before `/speckit-implement`
 - If only LOW/MEDIUM: User may proceed, but provide improvement suggestions
-- Provide explicit command suggestions: e.g., "Run /speckit-specify with refinement", "Run /speckit-plan to adjust architecture", "Manually edit tasks.md to add coverage for 'performance-metrics'"
+- Provide explicit command suggestions: e.g., "Run /speckit-specify with refinement", "Run /speckit-plan to adjust architecture", "Send a /d2b-spec-edit batch to add coverage for 'performance-metrics'"
 
 ### 8. Offer Remediation
 

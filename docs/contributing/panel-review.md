@@ -1,13 +1,12 @@
 # Panel review
 
-The panel sign-off contract: the phase gate, how fix rounds are scoped, the
-default ten-role roster and each role's focus, and the harness notes for
-running the panel under swarm or unattended.
+Panel sign-off contract: phase gate, fix round scope, default ten-role roster
+and focus, and harness notes for swarm or unattended runs.
 
-The binding rules are in [`../../AGENTS.md`](../../AGENTS.md) under "Panel
-review": a phase closes only on unanimous sign-off, `signoff` is `true` iff
+Binding rules are in [`../../AGENTS.md`](../../AGENTS.md) under "Panel review":
+a phase closes only on unanimous sign-off, `signoff` is `true` iff
 `recommendations` is `[]`, and green tests never waive the gate. This file
-carries the detail behind those rules.
+provides the detail.
 
 For the once-per-wave binding panel enforced in code, see
 `packages/xtask/src/delivery/panel.rs` and
@@ -16,15 +15,13 @@ section 12.3.
 
 ## Phase gate
 
-Multi-phase plans MUST pass a panel sign-off gate at each phase
-boundary. The integrator MUST NOT begin the next phase until every
-reviewer on the selected roster returns `signoff: true` (N/N for the
-plan's panel size; the default roster below is 10).
+Multi-phase plans MUST pass a panel sign-off gate at each phase boundary. The
+integrator MUST NOT begin the next phase until every selected reviewer returns
+`signoff: true` (N/N for the panel size; the default roster is 10).
 
-For plan-driven work, a "phase" is usually one wave from the plan's
-parallelization graph (`Wave 0`, `Wave 1`, ...). For tiny plans that
-touch fewer than three files, a single phase covering the whole plan is
-acceptable.
+For plan-driven work, a "phase" is usually one wave from the plan's graph
+(`Wave 0`, `Wave 1`, ...). For plans touching fewer than three files, one phase
+covering the whole plan is acceptable.
 
 For each phase:
 
@@ -88,6 +85,13 @@ that phase, including sign-offs from reviewers whose focus the change did
 not touch. Those reviewers still re-report, but their prompt should scope
 them to the delta and permit a short confirmation that their area is
 unaffected.
+
+Selected panel lanes may use optional full transient communication through the
+`d2b-caveman` contract. An explicit `normal` or `off` request wins. This is a
+communication choice only: reviewers remain read-only, the shared finding bar
+stays byte-identical, verdict JSON stays exact, `signoff` still means
+`recommendations` is empty, and optional communication never waives or changes
+the normal panel gate.
 
 Each engineer returns a JSON sign-off record shaped like:
 
@@ -269,7 +273,7 @@ ranked. Read this ordering before wiring any harness.
    reasoning effort pinned to `github-copilot` /
    `gpt-5.6-sol` / `xhigh`. The panel model is deliberately
    not the coding model, so a lane cannot both author a change and
-   attest to it. There is no override, no force flag, and no partial
+   attest to it. No override, no force flag, and no partial
    pass. Historical `gemini-3.1-pro-preview` / `high` request-record
    sets remain accepted only as an exact compatibility pair.
    See [`docs/specs/ADR-046-validation-and-delivery.md`](../specs/ADR-046-validation-and-delivery.md)

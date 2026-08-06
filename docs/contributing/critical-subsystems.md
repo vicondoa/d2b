@@ -1,25 +1,37 @@
 # Critical subsystems
 
-Full invariants for the subsystems where a careless change causes silent data
-loss, a security regression, or an unrecoverable device-tampering signal to a
-remote identity provider.
+Invariants for subsystems where a careless change can cause silent data loss,
+security regression, or an unrecoverable device-tampering signal to a remote
+identity provider.
 
-[`../../AGENTS.md`](../../AGENTS.md) carries the index: which subsystems are
-critical, where each lives, and the one-line risk. **Read the row there
-first, then the section here for the subsystem you are about to touch.**
-Touch none of these without a clear plan and a corresponding test run.
+[`../../AGENTS.md`](../../AGENTS.md) carries the index: critical subsystem,
+location, and one-line risk. **Read its row first, then this subsystem's
+section.** Touch none without a clear plan and corresponding test run.
 
 ## Net VM networking / firewall
 
-**Where:** `nixos-modules/net.nix` (the `lib.mkForce` neutralization of `base.nix`'s `10-eth-dhcp`, plus the per-env MTU/MSS and east-west wiring)
+**Where:** `nixos-modules/net.nix` (`lib.mkForce` neutralizes `base.nix`'s `10-eth-dhcp`, plus per-env MTU/MSS and east-west wiring)
 
-Net VM dual-stacks DHCP on its uplink, breaks NAT, or weakens same-env isolation unexpectedly. Validate with `tests/unit/nix/cases/net-vm-network.nix`.
+Net VM dual-stacks DHCP on its uplink, breaks NAT, or weakens same-env
+isolation unexpectedly. Validate with `tests/unit/nix/cases/net-vm-network.nix`.
 
 ## Per-VM `/nix/store` hardlink farm
 
 **Where:** `nixos-modules/store.nix`, `/var/lib/d2b/vms/<vm>/store{,-meta}/`, `nixos-modules/processes-json.nix` (`virtiofsdRunner` ro-store `--shared-dir`), daemon `StoreSync` op + broker `store_view_farm`
 
-The guest's `/nix/store` MUST be the per-VM closure-only farm `/var/lib/d2b/vms/<vm>/store`, never the host's full `/nix/store`: virtiofsd-ro-store's `--shared-dir` points at that farm (the `share.source == "/nix/store"` string stays as the eval-time sentinel - do not "simplify" it back to serving `/nix/store`, that re-leaks the whole host store to every guest). Requires `/var/lib/d2b` and `/nix/store` on the **same filesystem** - hardlinks can't cross FS boundaries; if split, `d2b vm switch` refuses with a fatal error. The broker builds the farm inside a private mount namespace where `/nix/store` is lazily detached (NixOS bind-mounts `/nix/store` on itself, so a same-`st_dev` cross-vfsmount `link(2)` returns `EXDEV` - recoverable, distinct from a fatal different-filesystem `EXDEV`); a `link(2)` `EMLINK` on a `--optimise`d store's saturated empty-file inode falls back to a byte copy. The daemon owns the sync; there is no per-VM `store-sync` unit.
+The guest's `/nix/store` MUST be the per-VM closure-only farm
+`/var/lib/d2b/vms/<vm>/store`, never the host's full `/nix/store`:
+virtiofsd-ro-store's `--shared-dir` points at that farm (the
+`share.source == "/nix/store"` string stays as the eval-time sentinel - do not
+"simplify" it back to serving `/nix/store`, which re-leaks the whole host
+store). Requires `/var/lib/d2b` and `/nix/store` on the **same filesystem** -
+hardlinks cannot cross FS boundaries; if split, `d2b vm switch` refuses with a
+fatal error. The broker builds the farm inside a private mount namespace where
+`/nix/store` is lazily detached (NixOS bind-mounts `/nix/store` on itself, so a
+same-`st_dev` cross-vfsmount `link(2)` returns `EXDEV` - recoverable, distinct
+from fatal different-filesystem `EXDEV`); a `link(2)` `EMLINK` on a
+`--optimise`d store's saturated empty-file inode falls back to a byte copy. The
+daemon owns sync; there is no per-VM `store-sync` unit.
 
 ## TPM persistence (per-VM swtpm)
 
@@ -43,7 +55,7 @@ Graphics VMs run cloud-hypervisor with the GPU device attached. Restarting `d2bd
 
 **Where:** `nixos-modules/components/video/guest.nix`, `nixos-modules/processes-json.nix`, `pkgs/vhost-user-video/`, `packages/d2b-host/src/video_argv.rs`, broker `SpawnRunner{role: Video}`
 
-`graphics.videoSidecar = true` is an explicit opt-in H264 decode path: guest `virtio_media` + patched Cloud Hypervisor `--vhost-user-media` + patched crosvm `device video-decoder --backend vaapi`. There is no per-VM video systemd unit, no stock crosvm/CH fallback, and no free-form video extra args. The video runner MUST use the dedicated `d2b-<vm>-video` principal, not `d2b-<vm>-gpu`, so broker/activation ACLs can deny host Wayland/PipeWire/Pulse sockets to video without breaking GPU cross-domain. The broker masks `/dev` for the video runner and exposes only the declared device allowlist: default `/dev/dri/renderD128`, plus `/dev/nvidiactl`, `/dev/nvidia0`, and `/dev/nvidia-uvm` only when `graphics.videoNvidiaDecode = true`. `virtio_media` is a guest module, not a host `/proc/modules` preflight requirement. Firefox/VA-API uses the separate experimental `graphics.virglVideo` GPU path; it is default-off and must not be treated as stable video-sidecar coverage. Validate evaluated shape with `tests/unit/nix/cases/video-contract.nix`; rendered argv and sandbox coverage lives in `packages/d2b-contract-tests/tests/minijail_swtpm_video.rs` and runs in the enforcing fixture-contract lane.
+`graphics.videoSidecar = true` is an explicit opt-in H264 decode path: guest `virtio_media` + patched Cloud Hypervisor `--vhost-user-media` + patched crosvm `device video-decoder --backend vaapi`. No per-VM video systemd unit, no stock crosvm/CH fallback, and no free-form video extra args. The video runner MUST use the dedicated `d2b-<vm>-video` principal, not `d2b-<vm>-gpu`, so broker/activation ACLs can deny host Wayland/PipeWire/Pulse sockets to video without breaking GPU cross-domain. The broker masks `/dev` for the video runner and exposes only the declared device allowlist: default `/dev/dri/renderD128`, plus `/dev/nvidiactl`, `/dev/nvidia0`, and `/dev/nvidia-uvm` only when `graphics.videoNvidiaDecode = true`. `virtio_media` is a guest module, not a host `/proc/modules` preflight requirement. Firefox/VA-API uses the separate experimental `graphics.virglVideo` GPU path; it is default-off and must not be treated as stable video-sidecar coverage. Validate evaluated shape with `tests/unit/nix/cases/video-contract.nix`; rendered argv and sandbox coverage lives in `packages/d2b-contract-tests/tests/minijail_swtpm_video.rs` and runs in the enforcing fixture-contract lane.
 
 ## UI color contract / niri backend
 
@@ -61,7 +73,7 @@ Authenticated transport evidence and attachment credits are consumed into a priv
 
 **Where:** `packages/d2b-bus/src/{router,registry,authorization,streams,operations}.rs`, `packages/d2b-resource-api/src/adapter.rs`
 
-Registration consumes the single-owner capability admission; comparing a clonable token is insufficient. Every route is exact, subject-bound, revision-bound, and Zone-checked before minting authority. There is no wildcard pub/sub and no direct store handle. `UnregisteredBusAdapter` is a deliberate unreachable seam and must remain unregistered until authenticated ComponentSession, the Zone bus, and Zone registration land together.
+Registration consumes the single-owner capability admission; comparing a clonable token is insufficient. Every route is exact, subject-bound, revision-bound, and Zone-checked before minting authority. No wildcard pub/sub and no direct store handle. `UnregisteredBusAdapter` is a deliberate unreachable seam and must remain unregistered until authenticated ComponentSession, the Zone bus, and Zone registration land together.
 
 ## Resource mutation seal
 
@@ -100,7 +112,7 @@ whose acceptor it does not hold.
 
 **Where:** `packages/d2b-bus/src/router.rs` (`ZoneRegistrar`), `packages/d2b-session-unix/src/subject.rs`
 
-`ZoneRegistrar` **exclusively owns and consumes** subject resolution: a peer is mapped to a subject from registrar-private state using verified peer evidence. There is no public subject-configuration type and no raw-claim registration path, and there must not be one - caller-supplied `subject_ref`/`subject_uid` are exactly how a component would name itself something it is not. Production currently fails closed because no authoritative resolver is wired, which is the intended state until the Zone runtime supplies one; do not "fix" that by accepting claims from the caller. This boundary moved several times before it closed, each time by reappearing as a public constructor or registrar mutator somewhere the guard was not looking, so it is enforced by the type-based mint-surface inventory and a compile-fail fixture rather than by convention.
+`ZoneRegistrar` **exclusively owns and consumes** subject resolution: a peer is mapped to a subject from registrar-private state using verified peer evidence. No public subject-configuration type and no raw-claim registration path, and there must not be one - caller-supplied `subject_ref`/`subject_uid` are exactly how a component would name itself something it is not. Production currently fails closed because no authoritative resolver is wired, which is the intended state until the Zone runtime supplies one; do not "fix" that by accepting claims from the caller. This boundary moved several times before it closed, each time by reappearing as a public constructor or registrar mutator somewhere the guard was not looking, so it is enforced by the type-based mint-surface inventory and a compile-fail fixture rather than by convention.
 
 ## Capability mint surface allowlist
 
@@ -160,13 +172,13 @@ Arbitrary `d2b vm exec` is **admin-only**; configured `d2b launch` local-VM item
 
 **Where:** `packages/d2bd/src/{workload_dispatch,unsafe_local_helper,unsafe_local_terminal,shell_backend}.rs`, shell owner dispatch in `packages/d2bd/src/lib.rs`, `packages/d2b-unsafe-local-helper/src/{shell_runtime,shell_supervisor}.rs`, and `tests/host-integration/unsafe-local-helper.nix`
 
-`d2b shell` remains **admin-only** for every provider. Unsafe-local target identity and `defaultName`/`maxSessions` come only from the hash-verified private bundle; public `ShellOp` keeps protocol v3 and carries no policy, uid, argv, env, cwd, or path. The daemon dispatches helper protocol v2 to the exact `SO_PEERCRED` uid, validates exactly one connected CLOEXEC stream fd, and multiplexes terminal protocol v1 behind a fresh opaque public handle. Disconnect/`CloseAttach` detach but never kill; `Kill` targets only the helper-verified transient user scope. Shells survive CLI, daemon, and helper reconnects while that scope and the non-lingering user manager live. User logout ends them by design. User scopes provide lifecycle ownership, **not containment from other processes with the same host uid**. There is no root unit, broker op, per-VM service, SSH path, host-shell fallback, direct-compositor fallback, or automatic replay after an ambiguous daemon timeout. Never log/audit/label shell names, supervisor ids, public handles, terminal bytes, helper diagnostics, PIDs, unit names, argv, env, cwd, or paths; audit may use configured target/peer uid and fixed digests, while metrics use closed provider/component/operation/outcome/error labels.
+`d2b shell` remains **admin-only** for every provider. Unsafe-local target identity and `defaultName`/`maxSessions` come only from the hash-verified private bundle; public `ShellOp` keeps protocol v3 and carries no policy, uid, argv, env, cwd, or path. The daemon dispatches helper protocol v2 to the exact `SO_PEERCRED` uid, validates exactly one connected CLOEXEC stream fd, and multiplexes terminal protocol v1 behind a fresh opaque public handle. Disconnect/`CloseAttach` detach but never kill; `Kill` targets only the helper-verified transient user scope. Shells survive CLI, daemon, and helper reconnects while that scope and the non-lingering user manager live. User logout ends them by design. User scopes provide lifecycle ownership, **not containment from other processes with the same host uid**. No root unit, broker op, per-VM service, SSH path, host-shell fallback, direct-compositor fallback, or automatic replay after an ambiguous daemon timeout. Never log/audit/label shell names, supervisor ids, public handles, terminal bytes, helper diagnostics, PIDs, unit names, argv, env, cwd, or paths; audit may use configured target/peer uid and fixed digests, while metrics use closed provider/component/operation/outcome/error labels.
 
 ## Lifecycle permission group
 
 **Where:** `nixos-modules/host-users.nix`
 
-Membership in `d2b` + `SO_PEERCRED` at `public.sock` accept time is the **only** lifecycle authorisation surface. There is no polkit allowlist; wiring anything else into the group inverts the threat model. **Exception:** the guarded `ExecStop` shutdown hook runs as uid 0 and receives the narrow `HostShutdown` role, which is permitted only for `vmStop` during host-shutdown teardown (see `packages/d2bd/src/admission.rs`). This exception is scoped strictly: all other admin-only operations (exec, USB attach, key rotation, host prepare, audit export) are denied for this role. The daemon-restart continuation guard is preserved: `Restart=on-failure` restarts never receive `HostShutdown` treatment because the restarting daemon re-adopts runners and the shutdown hook only runs under systemd stop with a live `stopping` system state check.
+Membership in `d2b` + `SO_PEERCRED` at `public.sock` accept time is the **only** lifecycle authorisation surface. No polkit allowlist; wiring anything else into the group inverts the threat model. **Exception:** the guarded `ExecStop` shutdown hook runs as uid 0 and receives the narrow `HostShutdown` role, which is permitted only for `vmStop` during host-shutdown teardown (see `packages/d2bd/src/admission.rs`). This exception is scoped strictly: all other admin-only operations (exec, USB attach, key rotation, host prepare, audit export) are denied for this role. The daemon-restart continuation guard is preserved: `Restart=on-failure` restarts never receive `HostShutdown` treatment because the restarting daemon re-adopts runners and the shutdown hook only runs under systemd stop with a live `stopping` system state check.
 
 ## SSH key generation / rotation
 
