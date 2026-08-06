@@ -97,11 +97,11 @@ Given that feature description, do this:
       - Set `SPECIFY_FEATURE_DIRECTORY` to `specs/<directory-name>`
       - If `branch_numbering` was used (and `feature_numbering` was absent), emit a one-line warning: "⚠️ `branch_numbering` in init-options.json is deprecated. Rename to `feature_numbering`."
 
-   **Create the directory and spec file**:
-   - `mkdir -p SPECIFY_FEATURE_DIRECTORY`
-   - Resolve the active `spec-template` through the Spec Kit preset/template resolution stack (equivalent to `specify preset resolve spec-template`)
-   - Copy the resolved `spec-template` file to `SPECIFY_FEATURE_DIRECTORY/spec.md` as the starting point
-   - Set `SPEC_FILE` to `SPECIFY_FEATURE_DIRECTORY/spec.md`
+   **Create the directory and initial artifacts**:
+   - Create `SPECIFY_FEATURE_DIRECTORY` with `mkdir -p` when it is absent; leave an existing directory's files untouched.
+   - Resolve the active `spec-template` through the Spec Kit preset/template resolution stack (equivalent to `specify preset resolve spec-template`).
+   - If `SPEC_FILE` is absent, copy the resolved `spec-template` to `SPECIFY_FEATURE_DIRECTORY/spec.md` as the starting point. If it exists, do not overwrite it; collect requested changes for one `/d2b-spec-edit` batch.
+   - Set `SPEC_FILE` to `SPECIFY_FEATURE_DIRECTORY/spec.md`.
    - Persist the resolved path to `.specify/feature.json`:
      ```json
      {
@@ -114,7 +114,7 @@ Given that feature description, do this:
    **IMPORTANT**:
    - You must only create one feature per `/speckit-specify` invocation
    - The spec directory name and the git branch name are independent - they may be the same but that is the user's choice
-   - The spec directory and file are always created by this command, never by the hook
+   - Only absent initial artifacts are created by this command; an existing spec is never overwritten.
 
 4. Load the resolved active `spec-template` file to understand required sections.
 
@@ -149,7 +149,7 @@ Given that feature description, do this:
 
 8. **Specification Quality Validation**: After writing the initial spec, validate it against quality criteria:
 
-   a. **Create Spec Quality Checklist**: Generate a checklist file at `SPECIFY_FEATURE_DIRECTORY/checklists/requirements.md` using the checklist template structure with these validation items:
+   a. **Create Spec Quality Checklist**: If `SPECIFY_FEATURE_DIRECTORY/checklists/requirements.md` is absent, prepare its initial contents from the checklist template using these validation items. If it exists, do not overwrite it; include only requested state changes in the pending `/d2b-spec-edit` batch.
 
       ```markdown
       # Specification Quality Checklist: [FEATURE NAME]
@@ -282,7 +282,7 @@ Report completion to the user with:
 - Checklist results summary
 - Readiness for the next phase (`/speckit-clarify` or `/speckit-plan`)
 
-**NOTE:** Branch creation is handled by the `before_specify` hook (git extension). Spec directory and file creation are always handled by this core command.
+**NOTE:** Branch creation is handled by the `before_specify` hook (git extension). This command creates only absent initial feature artifacts.
 
 ## Quick Guidelines
 

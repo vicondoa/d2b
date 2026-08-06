@@ -12,7 +12,7 @@ metadata:
 
 <!-- D2B-SPECKIT-ROUTE: implement initial-create=none; existing=editor -->
 
-Implementation may change source files in its assigned scope, but every task checkbox or other feature-directory artifact update is a request to /d2b-spec-edit. Do not write tasks.md or another existing feature artifact directly.
+Implementation may change source files in its assigned scope, but every task checkbox or other feature-directory artifact update is one `/d2b-spec-edit` request. Do not write tasks.md or another existing feature artifact directly; initial creation belongs to the owning speckit command.
 
 
 ## User Input

@@ -12,7 +12,7 @@ metadata:
 
 <!-- D2B-SPECKIT-ROUTE: checklist initial-create=checklist; existing=editor -->
 
-Create a checklist file only when that file is absent. Route every append or edit to an existing checklist through /d2b-spec-edit; do not write an existing feature checklist directly.
+Create a checklist file only when that file is absent. Prepare every append or edit to an existing checklist in one `/d2b-spec-edit` batch; do not write an existing feature checklist directly.
 
 
 ## Checklist Purpose: "Unit Tests for English"
@@ -257,19 +257,20 @@ You **MUST** consider the user input before proceeding (if not empty).
 
 7. **Structure Reference**: Generate the checklist following the canonical template in `.specify/templates/checklist-template.md` for title, meta section, category headings, and ID formatting. If template is unavailable, use: H1 title, purpose/created meta lines, `##` category sections containing `- [ ] CHK### <requirement item>` lines with globally incrementing IDs starting at CHK001.
 
-8. **Report**: Output full path to checklist file, item count, and summarize whether the run created a new file or appended to an existing one. Summarize:
+8. **Report**: Output the checklist path, item count, and whether the run
+   created an absent file or prepared an editor batch. Summarize:
    - Focus areas selected
    - Depth level
    - Actor/timing
    - Any explicit user-specified must-have items incorporated
 
-**Important**: Each `/speckit-checklist` command invocation uses a short, descriptive checklist filename and either creates a new file or appends to an existing one. This allows:
+**Important**: Each `/speckit-checklist` command invocation uses a short, descriptive checklist filename. It either prepares initial content for an absent file or prepares an editor batch for an existing one. This allows:
 
 - Multiple checklists of different types (e.g., `ux.md`, `test.md`, `security.md`)
 - Simple, memorable filenames that indicate checklist purpose
 - Easy identification and navigation in the `checklists/` folder
 
-To avoid clutter, use descriptive types and clean up obsolete checklists when done.
+To avoid clutter, use descriptive types. Request cleanup of obsolete existing checklists through `/d2b-spec-edit`; do not delete them directly.
 
 ## Example Checklist Types & Sample Items
 

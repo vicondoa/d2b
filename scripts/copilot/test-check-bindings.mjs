@@ -385,6 +385,94 @@ const CASES = [
     expectText: "feature-artifact routing marker is missing or duplicated",
   },
   {
+    name: "clarify per-answer integration instruction is rejected",
+    mutate: (dir) =>
+      mutateFile(dir, ".github/skills/speckit-clarify/SKILL.md", (text) =>
+        `${text}\nIntegration after EACH accepted answer (incremental update approach):\n`),
+    expectExit: 1,
+    expectText: "contradictory direct-write instruction",
+  },
+  {
+    name: "clarify direct checklist save is rejected",
+    mutate: (dir) =>
+      mutateFile(dir, ".github/skills/speckit-clarify/SKILL.md", (text) =>
+        `${text}\nSave the updated checklist file.\n`),
+    expectExit: 1,
+    expectText: "contradictory direct-write instruction",
+  },
+  {
+    name: "clarify per-write validation is rejected",
+    mutate: (dir) =>
+      mutateFile(dir, ".github/skills/speckit-clarify/SKILL.md", (text) =>
+        `${text}\nValidation (performed after EACH write plus final pass):\n`),
+    expectExit: 1,
+    expectText: "contradictory direct-write instruction",
+  },
+  {
+    name: "specify unconditional template copy is rejected",
+    mutate: (dir) =>
+      mutateFile(dir, ".github/skills/speckit-specify/SKILL.md", (text) =>
+        `${text}\nCopy the resolved \`spec-template\` file to \`SPECIFY_FEATURE_DIRECTORY/spec.md\` as the starting point\n`),
+    expectExit: 1,
+    expectText: "contradictory direct-write instruction",
+  },
+  {
+    name: "specify unconditional spec creation is rejected",
+    mutate: (dir) =>
+      mutateFile(dir, ".github/skills/speckit-specify/SKILL.md", (text) =>
+        `${text}\nThe spec directory and file are always created by this command.\n`),
+    expectExit: 1,
+    expectText: "contradictory direct-write instruction",
+  },
+  {
+    name: "plan direct existing-artifact write is rejected",
+    mutate: (dir) =>
+      mutateFile(dir, ".github/skills/speckit-plan/SKILL.md", (text) =>
+        `${text}\nWrite an existing plan.md directly.\n`),
+    expectExit: 1,
+    expectText: "contradictory direct-write instruction",
+  },
+  {
+    name: "tasks direct existing-artifact write is rejected",
+    mutate: (dir) =>
+      mutateFile(dir, ".github/skills/speckit-tasks/SKILL.md", (text) =>
+        `${text}\nWrite an existing tasks file directly.\n`),
+    expectExit: 1,
+    expectText: "contradictory direct-write instruction",
+  },
+  {
+    name: "implement direct task-artifact write is rejected",
+    mutate: (dir) =>
+      mutateFile(dir, ".github/skills/speckit-implement/SKILL.md", (text) =>
+        `${text}\nWrite tasks.md or another existing feature artifact directly.\n`),
+    expectExit: 1,
+    expectText: "contradictory direct-write instruction",
+  },
+  {
+    name: "converge direct append section is rejected",
+    mutate: (dir) =>
+      mutateFile(dir, ".github/skills/speckit-converge/SKILL.md", (text) =>
+        `${text}\n### 7. Append Convergence Tasks (or report converged)\nAppend to the **end** of \`tasks.md\`.\n`),
+    expectExit: 1,
+    expectText: "contradictory direct-write instruction",
+  },
+  {
+    name: "checklist direct append wording is rejected",
+    mutate: (dir) =>
+      mutateFile(dir, ".github/skills/speckit-checklist/SKILL.md", (text) =>
+        `${text}\nEach invocation either creates a new file or appends to an existing one.\n`),
+    expectExit: 1,
+    expectText: "contradictory direct-write instruction",
+  },
+  {
+    name: "analyze manual artifact edit is rejected",
+    mutate: (dir) =>
+      mutateFile(dir, ".github/skills/speckit-analyze/SKILL.md", (text) =>
+        `${text}\nManually edit tasks.md to add coverage for 'performance-metrics'\n`),
+    expectExit: 1,
+    expectText: "contradictory direct-write instruction",
+  },
+  {
     name: "editor root escape wording is rejected",
     mutate: (dir) =>
       mutateFile(

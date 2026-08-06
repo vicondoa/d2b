@@ -66,6 +66,39 @@ const SPECKIT_ROUTE_MARKERS = {
   "speckit-converge": "D2B-SPECKIT-ROUTE: converge initial-create=none; existing=editor-append",
   "speckit-checklist": "D2B-SPECKIT-ROUTE: checklist initial-create=checklist; existing=editor",
 };
+const SPECKIT_DIRECT_WRITE_RULES = {
+  "speckit-specify": [
+    ["unconditional template copy", /Copy the resolved `spec-template` file to `SPECIFY_FEATURE_DIRECTORY\/spec\.md` as the starting point/i],
+    ["unconditional spec creation", /The spec directory and file are always created by this command/i],
+  ],
+  "speckit-clarify": [
+    ["per-answer integration", /Integration after EACH accepted answer/i],
+    ["immediate append", /Append a bullet line immediately after acceptance/i],
+    ["per-write validation", /Validation \(performed after EACH write plus final pass\)/i],
+    ["direct checklist save", /Save the updated checklist file\./i],
+  ],
+  "speckit-analyze": [
+    ["manual feature-artifact edit", /Manually edit tasks\.md to add coverage/i],
+  ],
+  "speckit-plan": [
+    ["direct existing-artifact write", /Write an existing (?:plan|research|data-model|contracts|quickstart)/i],
+  ],
+  "speckit-tasks": [
+    ["direct existing tasks write", /^\s*Write an existing tasks file directly/im],
+  ],
+  "speckit-implement": [
+    ["direct task-artifact write", /^\s*Write tasks\.md or another existing feature artifact directly\./im],
+  ],
+  "speckit-converge": [
+    ["append section", /### 7\. Append Convergence Tasks\b/i],
+    ["direct tasks append", /Append to the \*\*end\*\* of `tasks\.md`/i],
+    ["direct mutation request", /The command's only mutation request is an append/i],
+  ],
+  "speckit-checklist": [
+    ["direct existing checklist append", /either creates a new file or appends to an existing one/i],
+    ["direct checklist cleanup", /clean up obsolete checklists when done/i],
+  ],
+};
 
 // Measured from the CLI's own model catalog. The legacy Gemini panel binding
 // has no `xhigh`; requesting it is invalid rather than merely unusual.
@@ -993,6 +1026,11 @@ for (const [skill, marker] of Object.entries(SPECKIT_ROUTE_MARKERS)) {
   const source = readFileSync(path, "utf8");
   if (occurrenceCount(source, marker) !== 1 || !source.includes("d2b-spec-edit")) {
     fail(`${skill}: feature-artifact routing marker is missing or duplicated.`);
+  }
+  for (const [label, pattern] of SPECKIT_DIRECT_WRITE_RULES[skill] ?? []) {
+    if (pattern.test(source)) {
+      fail(`${skill}: contradictory direct-write instruction (${label}); existing feature artifacts must use one d2b-spec-edit batch.`);
+    }
   }
 }
 for (const [label, path] of [
