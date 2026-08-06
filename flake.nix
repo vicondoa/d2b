@@ -21,6 +21,17 @@
       systems = [ "x86_64-linux" "aarch64-linux" ];
       forAllSystems = nixpkgs.lib.genAttrs systems;
       nixpkgsFor = forAllSystems (system: import nixpkgs { inherit system; });
+      mkBazelSeccomp = system:
+        if builtins.elem system systems then
+          import ./pkgs/bazel-8.6.0-seccomp {
+            pkgs = nixpkgsFor.${system};
+          }
+        else
+          throw ''
+            D2B-BZLEXEC-NIX-PTRACE-SYSTEM: native-system is unsupported.
+            Move evaluation and execution to a native x86_64-linux or aarch64-linux runner;
+            run make test-flake; then run the exact phase-valid closed slice command.
+          '';
       mkGuestRustPackagesSrc = pkgs:
         pkgs.runCommand "d2b-guest-rust-src" { } ''
           mkdir -p $out/packages
@@ -104,7 +115,7 @@
       # for pkgs.rustc/pkgs.cargo and the pin will be served natively.
       devShells = forAllSystems (system: let
         pkgs = nixpkgsFor.${system};
-        bazelSeccomp = import ./pkgs/bazel-8.6.0-seccomp { inherit pkgs; };
+        bazelSeccomp = mkBazelSeccomp system;
       in {
         default = pkgs.mkShell {
           name = "d2b-dev";
@@ -149,7 +160,7 @@
 
       packages = forAllSystems (system: let
         pkgs = nixpkgsFor.${system};
-        bazelSeccomp = import ./pkgs/bazel-8.6.0-seccomp { inherit pkgs; };
+        bazelSeccomp = mkBazelSeccomp system;
         bazelExecSupervisor =
           import ./pkgs/d2b-bazel-exec-supervisor { inherit pkgs; };
         rustPackagesSrc = pkgs.runCommand "d2b-rust-src" { } ''

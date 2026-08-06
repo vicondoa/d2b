@@ -109,5 +109,47 @@
     "pendingState": "pending-kernel-cleanup",
     "releaseRecord": "D2B-BZLEXEC-SANDBOX-CONSUMING-REAP-RELEASE",
     "runbook": "docs/contributing/critical-subsystems.md#bazel-pending-kernel-cleanup-quarantine"
-  }
+  },
+  "preHelperPredicates": [
+    {
+      "owner": "nix-evaluation",
+      "stage": "NIX_PTRACE_SYSTEM",
+      "code": "D2B-BZLEXEC-NIX-PTRACE-SYSTEM",
+      "causingInput": "native-system",
+      "locator": "flake.nix",
+      "correction": "Move evaluation and execution to a native x86_64-linux or aarch64-linux runner; run make test-flake; then run the exact phase-valid closed slice command."
+    },
+    {
+      "owner": "toolchain-startup",
+      "stage": "TOOLCHAIN_PTRACE_KERNEL",
+      "code": "D2B-BZLEXEC-TOOLCHAIN-PTRACE-KERNEL",
+      "causingInput": "linux-minimum-3.19",
+      "locator": "tests/golden/bazel-exec-supervisor.json",
+      "correction": "Migrate to a native supported runner with Linux 3.19 or newer; run make test-flake; then run the exact phase-valid closed slice command."
+    },
+    {
+      "owner": "toolchain-startup",
+      "stage": "TOOLCHAIN_PTRACE_YAMA",
+      "code": "D2B-BZLEXEC-TOOLCHAIN-PTRACE-YAMA",
+      "causingInput": "yama-parent-child-mode",
+      "locator": "tests/golden/bazel-exec-supervisor.json",
+      "correction": "Migrate to a native supported runner whose boot policy fixes kernel.yama.ptrace_scope=1; grant no CAP_SYS_PTRACE; run make test-flake; then run the exact phase-valid closed slice command."
+    },
+    {
+      "owner": "toolchain-startup",
+      "stage": "TOOLCHAIN_PTRACE_PROBE",
+      "code": "D2B-BZLEXEC-TOOLCHAIN-PTRACE-PROBE",
+      "causingInput": "immutable-ptrace-startup-probe",
+      "locator": "tests/tools/d2b-bazel-exec-supervisor/supervisor.c",
+      "correction": "Restore and rebuild the pinned static supervisor and startup probe; if exact identities pass but the probe refuses, migrate to a native runner satisfying the kernel and Yama rows; run make test-flake; then run the exact phase-valid closed slice command."
+    },
+    {
+      "owner": "patched-sandbox",
+      "stage": "SANDBOX_PTRACE_POLICY",
+      "code": "D2B-BZLEXEC-SANDBOX-PTRACE-POLICY",
+      "causingInput": "pinned-ptrace-seccomp-policy",
+      "locator": "pkgs/bazel-8.6.0-seccomp/seccomp-policy.json",
+      "correction": "Restore the pinned patch and policy so seccomp admits only the four request values with the enforceable constant arguments and retains every no-network denial; run make test-flake; then run the phase-valid closed slice command selected verbatim from the command-version table."
+    }
+  ]
 }

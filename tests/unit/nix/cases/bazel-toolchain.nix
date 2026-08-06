@@ -55,6 +55,8 @@ in
         builtins.match ".*linux-sandbox-seccomp\\.patch.*" bazelText != null;
       sourcePatchLoad =
         builtins.match ".*D2BPrepareActionPolicy\\(\\).*" patchText != null;
+      sandboxDiagnosticCodes = map (diagnostic: diagnostic.code)
+        toolchain.diagnostics;
     };
     expected = {
       loadPoint = "after-sandbox-construction-before-action-command-exec";
@@ -64,6 +66,16 @@ in
       policyFile = true;
       patchFile = true;
       sourcePatchLoad = true;
+      sandboxDiagnosticCodes = [
+        "D2B-BZLEXEC-SANDBOX-NAMESPACE"
+        "D2B-BZLEXEC-SANDBOX-PTRACE-POLICY"
+        "D2B-BZLEXEC-SANDBOX-MONITOR"
+        "D2B-BZLEXEC-SANDBOX-KILL"
+        "D2B-BZLEXEC-SANDBOX-REAP"
+        "D2B-BZLEXEC-SANDBOX-CEILING"
+        "D2B-BZLEXEC-SANDBOX-PENDING-KERNEL-CLEANUP"
+        "D2B-BZLEXEC-SANDBOX-CLEANUP"
+      ];
     };
   };
 

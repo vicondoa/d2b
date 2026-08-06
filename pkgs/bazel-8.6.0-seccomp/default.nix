@@ -46,6 +46,48 @@ pkgs.bazel_8.overrideAttrs (old: {
       userspaceCeilingMs = 10000;
       pendingState = "pending-kernel-cleanup";
       releaseRecord = "D2B-BZLEXEC-SANDBOX-CONSUMING-REAP-RELEASE";
+      diagnostics = [
+        {
+          owner = "patched-sandbox";
+          stage = "SANDBOX_NAMESPACE";
+          code = "D2B-BZLEXEC-SANDBOX-NAMESPACE";
+        }
+        {
+          owner = "patched-sandbox";
+          stage = "SANDBOX_PTRACE_POLICY";
+          code = "D2B-BZLEXEC-SANDBOX-PTRACE-POLICY";
+        }
+        {
+          owner = "patched-sandbox";
+          stage = "SANDBOX_MONITOR";
+          code = "D2B-BZLEXEC-SANDBOX-MONITOR";
+        }
+        {
+          owner = "patched-sandbox";
+          stage = "SANDBOX_KILL";
+          code = "D2B-BZLEXEC-SANDBOX-KILL";
+        }
+        {
+          owner = "patched-sandbox";
+          stage = "SANDBOX_REAP";
+          code = "D2B-BZLEXEC-SANDBOX-REAP";
+        }
+        {
+          owner = "patched-sandbox";
+          stage = "SANDBOX_CEILING";
+          code = "D2B-BZLEXEC-SANDBOX-CEILING";
+        }
+        {
+          owner = "patched-sandbox";
+          stage = "SANDBOX_PENDING_KERNEL_CLEANUP";
+          code = "D2B-BZLEXEC-SANDBOX-PENDING-KERNEL-CLEANUP";
+        }
+        {
+          owner = "patched-sandbox";
+          stage = "SANDBOX_CLEANUP";
+          code = "D2B-BZLEXEC-SANDBOX-CLEANUP";
+        }
+      ];
     };
   };
   meta = (old.meta or { }) // {

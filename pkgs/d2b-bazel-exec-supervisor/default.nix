@@ -106,6 +106,26 @@ staticPkgs.stdenv.mkDerivation {
       refusedModes = [ 2 3 ];
       capSysPtrace = false;
     };
+    preHelperPredicates = [
+      {
+        owner = "toolchain-startup";
+        stage = "TOOLCHAIN_PTRACE_KERNEL";
+        code = "D2B-BZLEXEC-TOOLCHAIN-PTRACE-KERNEL";
+        causingInput = "linux-minimum-3.19";
+      }
+      {
+        owner = "toolchain-startup";
+        stage = "TOOLCHAIN_PTRACE_YAMA";
+        code = "D2B-BZLEXEC-TOOLCHAIN-PTRACE-YAMA";
+        causingInput = "yama-parent-child-mode";
+      }
+      {
+        owner = "toolchain-startup";
+        stage = "TOOLCHAIN_PTRACE_PROBE";
+        code = "D2B-BZLEXEC-TOOLCHAIN-PTRACE-PROBE";
+        causingInput = "immutable-ptrace-startup-probe";
+      }
+    ];
     sourceFiles = [
       "tests/tools/d2b-bazel-exec-supervisor/supervisor.c"
       "tests/tools/d2b-bazel-exec-supervisor/sandbox-crash-plant.c"

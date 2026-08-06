@@ -201,6 +201,38 @@ fn policy_binds_fresh_pid_namespace_and_typed_quarantine() {
         policy["monitor"]["runbook"],
         "docs/contributing/critical-subsystems.md#bazel-pending-kernel-cleanup-quarantine"
     );
+
+    let toolchain = json(TOOLCHAIN_GOLDEN);
+    let predicates = toolchain["preHelperPredicates"]
+        .as_array()
+        .expect("pre-helper predicate table must be an array");
+    assert_eq!(predicates.len(), 5);
+    assert_eq!(
+        predicates
+            .iter()
+            .map(|predicate| predicate["code"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        [
+            "D2B-BZLEXEC-NIX-PTRACE-SYSTEM",
+            "D2B-BZLEXEC-TOOLCHAIN-PTRACE-KERNEL",
+            "D2B-BZLEXEC-TOOLCHAIN-PTRACE-YAMA",
+            "D2B-BZLEXEC-TOOLCHAIN-PTRACE-PROBE",
+            "D2B-BZLEXEC-SANDBOX-PTRACE-POLICY"
+        ]
+    );
+    assert_eq!(predicates[0]["owner"], "nix-evaluation");
+    assert_eq!(predicates[1]["owner"], "toolchain-startup");
+    assert_eq!(predicates[2]["owner"], "toolchain-startup");
+    assert_eq!(predicates[3]["owner"], "toolchain-startup");
+    assert_eq!(predicates[4]["owner"], "patched-sandbox");
+    for predicate in predicates {
+        assert!(
+            predicate["correction"]
+                .as_str()
+                .is_some_and(|correction| correction.contains("run make test-flake"))
+        );
+        assert!(predicate["locator"].as_str().is_some());
+    }
 }
 
 #[test]
@@ -325,6 +357,9 @@ fn package_and_flake_select_only_the_pinned_bazel_output() {
     assert!(supervisor_package.contains("capSysPtrace = false"));
     assert!(flake.contains("import ./pkgs/bazel-8.6.0-seccomp"));
     assert!(flake.contains("bazelSeccomp"));
+    assert!(flake.contains("D2B-BZLEXEC-NIX-PTRACE-SYSTEM"));
+    assert!(flake.contains("native-system"));
+    assert!(flake.contains("run make test-flake"));
     assert!(!flake.contains("bazel_8"));
     assert!(!flake.contains("Bazelisk"));
 }
