@@ -13,13 +13,13 @@ use d2b_contracts::v3::{
     ResourceUid, RetryClass, Timestamp, ZoneId, canonical_digest, canonical_json_bytes,
 };
 use redb::{Database, Durability, ReadableDatabase, ReadableTable, TableDefinition};
-use rustix::fs::{AtFlags, FileType, fsync, renameat, statat};
+use rustix::fs::{AtFlags, FileType, RenameFlags, fsync, renameat_with, statat};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::schema::TABLE_SCHEMAS;
 use crate::transaction::{
-    ALL_TABLES, PHYSICAL_SCHEMA_VERSION, StoreMeta, decode, integrity, read_meta,
+    ALL_TABLES, PHYSICAL_SCHEMA_VERSION, StoreMeta, decode, encode, integrity, read_meta,
     validate_consistency, validate_identity,
 };
 use crate::{DecodedKey, DecodedValue, KeySpace, StoreIdentity, ValueKind};
@@ -387,6 +387,20 @@ impl LogicalBackup {
         database: &Database,
         identity: &StoreIdentity,
     ) -> Result<(), crate::StoreError> {
+        let next_backup_generation = self
+            .backup_generation
+            .checked_add(1)
+            .ok_or_else(|| integrity("backup-generation-exhausted"))
+            .map_err(|error| error.with_store_slot(identity.slot()))?;
+        self.restore_into_with_generation(database, identity, next_backup_generation)
+    }
+
+    pub(crate) fn restore_into_with_generation(
+        &self,
+        database: &Database,
+        identity: &StoreIdentity,
+        next_backup_generation: u64,
+    ) -> Result<(), crate::StoreError> {
         self.validate_for_identity(identity)
             .map_err(|error| error.with_store_slot(identity.slot()))?;
         let read = database
@@ -427,8 +441,19 @@ impl LogicalBackup {
                 .map_err(integrity)
                 .map_err(|error| error.with_store_slot(identity.slot()))?;
             for row in &table_snapshot.rows {
+                let value = if table_snapshot.name == "store_meta"
+                    && row.key == crate::transaction::meta_key()
+                {
+                    let mut meta: StoreMeta = decode(ValueKind::StoreMetaScalar, &row.value)
+                        .map_err(|error| error.with_store_slot(identity.slot()))?;
+                    meta.backup_generation = next_backup_generation;
+                    encode(ValueKind::StoreMetaScalar, &meta)
+                        .map_err(|error| error.with_store_slot(identity.slot()))?
+                } else {
+                    row.value.clone()
+                };
                 if table
-                    .insert(row.key.as_slice(), row.value.as_slice())
+                    .insert(row.key.as_slice(), value.as_slice())
                     .map_err(integrity)
                     .map_err(|error| error.with_store_slot(identity.slot()))?
                     .is_some()
@@ -459,6 +484,20 @@ impl LogicalBackup {
         file: File,
         identity: &StoreIdentity,
     ) -> Result<Database, crate::StoreError> {
+        let next_backup_generation = self
+            .backup_generation
+            .checked_add(1)
+            .ok_or_else(|| integrity("backup-generation-exhausted"))
+            .map_err(|error| error.with_store_slot(identity.slot()))?;
+        self.restore_file_with_generation(file, identity, next_backup_generation)
+    }
+
+    pub(crate) fn restore_file_with_generation(
+        &self,
+        file: File,
+        identity: &StoreIdentity,
+        next_backup_generation: u64,
+    ) -> Result<Database, crate::StoreError> {
         crate::validate_owned_file(&file)
             .map_err(|error| error.with_store_slot(identity.slot()))?;
         if file
@@ -481,7 +520,7 @@ impl LogicalBackup {
             .create_with_backend(backend)
             .map_err(integrity)
             .map_err(|error| error.with_store_slot(identity.slot()))?;
-        self.restore_into(&database, identity)?;
+        self.restore_into_with_generation(&database, identity, next_backup_generation)?;
         Ok(database)
     }
 }
@@ -660,20 +699,30 @@ pub fn publish_staged(
                 "publication-active-not-regular",
             ));
         }
-        renameat(parent, active_name, parent, prior_name)
-            .map_err(crate::transaction::durability_failure)
-            .map_err(|_| {
-                crate::transaction::quarantined_reason("publication-prior-rename-failed")
-            })?;
+        renameat_with(
+            parent,
+            active_name,
+            parent,
+            prior_name,
+            RenameFlags::NOREPLACE,
+        )
+        .map_err(crate::transaction::durability_failure)
+        .map_err(|_| crate::transaction::quarantined_reason("publication-prior-rename-failed"))?;
         fsync(parent)
             .map_err(crate::transaction::durability_failure)
             .map_err(|_| {
                 crate::transaction::quarantined_reason("publication-parent-fsync-failed")
             })?;
     }
-    renameat(parent, staged_name, parent, active_name)
-        .map_err(crate::transaction::durability_failure)
-        .map_err(|_| crate::transaction::quarantined_reason("publication-active-rename-failed"))?;
+    renameat_with(
+        parent,
+        staged_name,
+        parent,
+        active_name,
+        RenameFlags::NOREPLACE,
+    )
+    .map_err(crate::transaction::durability_failure)
+    .map_err(|_| crate::transaction::quarantined_reason("publication-active-rename-failed"))?;
     fsync(parent)
         .map_err(crate::transaction::durability_failure)
         .map_err(|_| crate::transaction::quarantined_reason("publication-parent-fsync-failed"))
@@ -767,6 +816,12 @@ mod tests {
                 .current_revision,
             0
         );
+        assert_eq!(
+            crate::transaction::current_meta(&restored)
+                .unwrap()
+                .backup_generation,
+            1
+        );
     }
 
     #[test]
@@ -809,6 +864,22 @@ mod tests {
         assert_eq!(
             publication_state(&directory, "staged", "active", "prior").unwrap(),
             PublicationState::ActiveAndPrior
+        );
+    }
+
+    #[test]
+    fn staged_publication_refuses_a_preexisting_prior_without_overwriting_it() {
+        let parent = tempfile::tempdir().unwrap();
+        let directory = File::open(parent.path()).unwrap();
+        File::create(parent.path().join("active")).unwrap();
+        File::create(parent.path().join("staged")).unwrap();
+        std::fs::write(parent.path().join("prior"), b"prior").unwrap();
+
+        let error = publish_staged(&directory, "staged", "active", "prior").unwrap_err();
+        assert_eq!(error.reason_code(), "publication-state-ambiguous");
+        assert_eq!(
+            std::fs::read(parent.path().join("prior")).unwrap(),
+            b"prior"
         );
     }
 }

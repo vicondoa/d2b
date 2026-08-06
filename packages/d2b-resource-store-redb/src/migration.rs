@@ -13,7 +13,9 @@ use d2b_contracts::v3::RetryClass;
 use d2b_resource_store::{StoreError, StoreErrorKind};
 use redb::backends::FileBackend;
 use redb::{Database, Durability, ReadableDatabase, ReadableTable};
-use rustix::fs::{AtFlags, FileType, Mode, OFlags, fsync, openat, renameat, statat, unlinkat};
+use rustix::fs::{
+    AtFlags, FileType, Mode, OFlags, RenameFlags, fsync, openat, renameat_with, statat, unlinkat,
+};
 use rustix::io::{FdFlags, fcntl_getfd};
 
 use crate::backup::{self, LogicalBackup, PublicationState};
@@ -128,7 +130,8 @@ pub fn restore_owned(
         return Err(quarantine(identity, "migration-backup-identity-mismatch"));
     }
 
-    prepare_restore_stage(parent, backup, identity)?;
+    let next_backup_generation = next_backup_generation(parent, backup, identity)?;
+    prepare_restore_stage(parent, backup, identity, next_backup_generation)?;
     publish_with_rollback(parent, None, identity)?;
     validate_named_current(parent, DEFAULT_ACTIVE_FILE_NAME, identity)?;
     finalize_prior(parent, identity)?;
@@ -245,15 +248,35 @@ fn recover_owned_inner(
     }
 }
 
+fn next_backup_generation(
+    parent: &File,
+    backup: &LogicalBackup,
+    identity: &StoreIdentity,
+) -> Result<u64, StoreError> {
+    let current_generation = match entry_type(parent, DEFAULT_ACTIVE_FILE_NAME)? {
+        None => 0,
+        Some(FileType::RegularFile) => {
+            let active = open_named_database(parent, DEFAULT_ACTIVE_FILE_NAME, identity)?;
+            read_meta(&active, identity)?.backup_generation
+        }
+        Some(_) => return Err(quarantine(identity, "migration-active-not-regular")),
+    };
+    current_generation
+        .max(backup.backup_generation)
+        .checked_add(1)
+        .ok_or_else(|| quarantine(identity, "migration-backup-generation-exhausted"))
+}
+
 fn prepare_restore_stage(
     parent: &File,
     backup: &LogicalBackup,
     identity: &StoreIdentity,
+    next_backup_generation: u64,
 ) -> Result<(), StoreError> {
     let staged = create_stage(parent, identity)?;
     let result = (|| {
         let database = backup
-            .restore_file(staged, identity)
+            .restore_file_with_generation(staged, identity, next_backup_generation)
             .map_err(|_| quarantine(identity, "migration-staged-restore-invalid"))?;
         drop(database);
         validate_named_current(parent, DEFAULT_STAGED_FILE_NAME, identity)?;
@@ -405,11 +428,12 @@ fn publish_once(
         return Err(injected_fault("migration-fault-after-stage-sync", identity));
     }
     if matches!(state, PublicationState::ActiveAndStaged) {
-        renameat(
+        renameat_with(
             parent,
             DEFAULT_ACTIVE_FILE_NAME,
             parent,
             DEFAULT_PRIOR_FILE_NAME,
+            RenameFlags::NOREPLACE,
         )
         .map_err(|_| quarantine(identity, "migration-prior-rename-failed"))?;
         sync_parent(parent, identity)?;
@@ -420,11 +444,12 @@ fn publish_once(
             ));
         }
     }
-    renameat(
+    renameat_with(
         parent,
         DEFAULT_STAGED_FILE_NAME,
         parent,
         DEFAULT_ACTIVE_FILE_NAME,
+        RenameFlags::NOREPLACE,
     )
     .map_err(|_| quarantine(identity, "migration-active-rename-failed"))?;
     if fault == Some(PublicationBoundary::ActiveRename) {
@@ -441,11 +466,12 @@ fn publish_once(
 }
 
 fn resume_staged_with_prior(parent: &File, identity: &StoreIdentity) -> Result<(), StoreError> {
-    renameat(
+    renameat_with(
         parent,
         DEFAULT_STAGED_FILE_NAME,
         parent,
         DEFAULT_ACTIVE_FILE_NAME,
+        RenameFlags::NOREPLACE,
     )
     .map_err(|_| quarantine(identity, "migration-active-rename-failed"))?;
     sync_parent(parent, identity)
@@ -466,11 +492,12 @@ fn rollback_publication(parent: &File, identity: &StoreIdentity) -> Result<(), S
         PublicationState::StagedAndPrior => {
             validate_named_supported(parent, DEFAULT_PRIOR_FILE_NAME, identity)?;
             remove_regular(parent, DEFAULT_STAGED_FILE_NAME, identity)?;
-            renameat(
+            renameat_with(
                 parent,
                 DEFAULT_PRIOR_FILE_NAME,
                 parent,
                 DEFAULT_ACTIVE_FILE_NAME,
+                RenameFlags::NOREPLACE,
             )
             .map_err(|_| quarantine(identity, "migration-rollback-rename-failed"))?;
             sync_parent(parent, identity)
@@ -478,11 +505,12 @@ fn rollback_publication(parent: &File, identity: &StoreIdentity) -> Result<(), S
         PublicationState::ActiveAndPrior => {
             remove_regular(parent, DEFAULT_ACTIVE_FILE_NAME, identity)?;
             validate_named_supported(parent, DEFAULT_PRIOR_FILE_NAME, identity)?;
-            renameat(
+            renameat_with(
                 parent,
                 DEFAULT_PRIOR_FILE_NAME,
                 parent,
                 DEFAULT_ACTIVE_FILE_NAME,
+                RenameFlags::NOREPLACE,
             )
             .map_err(|_| quarantine(identity, "migration-rollback-rename-failed"))?;
             sync_parent(parent, identity)
@@ -546,6 +574,8 @@ fn validate_named_database(
     expected_version: Option<u32>,
 ) -> Result<(), StoreError> {
     let database = open_named_database(parent, name, identity)?;
+    crate::transaction::backfill_schema_catalog(&database)
+        .map_err(|_| quarantine(identity, "migration-schema-catalog-backfill-failed"))?;
     validate_table_set(&database, identity)?;
     let meta = read_meta(&database, identity)?;
     if expected_version.is_some_and(|expected| meta.schema_version != expected)
@@ -568,6 +598,8 @@ fn validate_database(
     identity: &StoreIdentity,
     expected_version: Option<u32>,
 ) -> Result<(), StoreError> {
+    crate::transaction::backfill_schema_catalog(database)
+        .map_err(|_| quarantine(identity, "migration-schema-catalog-backfill-failed"))?;
     validate_table_set(database, identity)?;
     let meta = read_meta(database, identity)?;
     if expected_version.is_some_and(|expected| meta.schema_version != expected)
@@ -1014,11 +1046,12 @@ mod tests {
         let (directory, parent_fd, mut marker) = parent();
         create_current_file(&directory, DEFAULT_ACTIVE_FILE_NAME);
         create_staged_current(&directory);
-        renameat(
+        renameat_with(
             &parent_fd,
             DEFAULT_ACTIVE_FILE_NAME,
             &parent_fd,
             DEFAULT_PRIOR_FILE_NAME,
+            RenameFlags::NOREPLACE,
         )
         .unwrap();
         sync_parent(&parent_fd, &identity()).unwrap();

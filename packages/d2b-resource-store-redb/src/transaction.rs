@@ -111,6 +111,12 @@ pub(crate) struct OperationRecord {
     pub outcome: String,
     pub accepted_revision: u64,
     pub finished_revision: u64,
+    /// A durable post-commit audit outbox entry.
+    ///
+    /// Older operation rows omit this field.  A pending value is cleared only
+    /// after the corresponding audit records have reached their sink.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub audit_outbox: Option<AuditOutboxRecord>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -121,6 +127,31 @@ pub(crate) struct OperationResourceRecord {
     pub zone: String,
     pub canonical_json: Vec<u8>,
     pub payload_digest: String,
+}
+
+/// The metadata needed to reconstruct a resource-mutation audit record after
+/// a daemon restart.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct AuditOutboxRecord {
+    pub zone: String,
+    pub operation_id: String,
+    pub correlation_id: String,
+    pub subject_digest: String,
+    pub policy_revision: u64,
+    pub resulting_revision: u64,
+    pub mutations: Vec<AuditOutboxMutation>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct AuditOutboxMutation {
+    pub verb: String,
+    pub resource_type: String,
+    pub resource_uid: String,
+    pub target_digest: String,
+    pub generation: u64,
+    pub expected_revision: u64,
 }
 
 /// Closed resource mutation event persisted in the revision log.
@@ -346,6 +377,57 @@ pub(crate) struct VerifiedPreparedMutation {
     prepared_payload_digest: Option<String>,
 }
 
+fn audit_outbox_for(
+    verified: &VerifiedWrite,
+    resources: &[StoredResource],
+    resulting_revision: u64,
+) -> Result<AuditOutboxRecord, StoreError> {
+    if verified.mutations.len() != resources.len() {
+        return Err(integrity("audit-outbox-resource-count-mismatch"));
+    }
+    let mutations = verified
+        .mutations
+        .iter()
+        .zip(resources)
+        .map(|(prepared, resource)| {
+            let mutation = prepared.mutation();
+            AuditOutboxMutation {
+                verb: mutation_audit_verb(mutation.kind).to_owned(),
+                resource_type: resource.resource_ref.resource_type().as_str().to_owned(),
+                resource_uid: resource.uid.as_str().to_owned(),
+                target_digest: crate::audit::opaque_digest(&mutation.target.to_canonical_string()),
+                generation: resource.generation.get(),
+                expected_revision: match mutation.expected {
+                    ExpectedRevision::CreateAbsent => 0,
+                    ExpectedRevision::Exact(revision) => revision.get(),
+                },
+            }
+        })
+        .collect::<Vec<_>>();
+    Ok(AuditOutboxRecord {
+        zone: verified.authorization.zone.as_str().to_owned(),
+        operation_id: verified.operation.operation_id.clone(),
+        correlation_id: verified.operation.correlation_id.clone(),
+        subject_digest: crate::audit::opaque_digest(
+            &verified.authorization.subject_ref.to_canonical_string(),
+        ),
+        policy_revision: verified.policy_snapshot.policy_revision,
+        resulting_revision,
+        mutations,
+    })
+}
+
+const fn mutation_audit_verb(kind: ResourceMutationKind) -> &'static str {
+    match kind {
+        ResourceMutationKind::Create => "create",
+        ResourceMutationKind::UpdateSpec => "update-spec",
+        ResourceMutationKind::UpdateStatus => "update-status",
+        ResourceMutationKind::UpdateMetadata => "update-metadata",
+        ResourceMutationKind::UpdateFinalizers => "update-finalizers",
+        ResourceMutationKind::Delete => "delete",
+    }
+}
+
 struct FinalizedMutation {
     canonical_json: Vec<u8>,
     payload_digest: String,
@@ -468,6 +550,59 @@ pub(crate) fn initialize(
         let schema_value = encode(ValueKind::ApiSchemaRecord, &schema)?;
         schemas
             .insert(schema_key.as_slice(), schema_value.as_slice())
+            .map_err(integrity)?;
+    }
+    drop(schemas);
+    write.commit().map_err(integrity)
+}
+
+/// Idempotently install the current standard schema catalog in a legacy
+/// physical-v1 store.
+///
+/// The first v1 stores predate the catalog rows and therefore have an empty
+/// `api_schemas` table.  Only that exact legacy shape is backfilled.  A
+/// partial or otherwise populated table is never rewritten because doing so
+/// could hide catalog corruption or discard a Provider-owned row.
+pub(crate) fn backfill_schema_catalog(database: &Database) -> Result<(), StoreError> {
+    {
+        let read = database.begin_read().map_err(integrity)?;
+        let meta = read_meta(&read)?;
+        if meta.schema_version != PHYSICAL_SCHEMA_VERSION {
+            return Ok(());
+        }
+        let table = read.open_table(API_SCHEMAS).map_err(integrity)?;
+        let count = table.len().map_err(integrity)?;
+        if count == STANDARD_SCHEMA_CATALOG.len() as u64 {
+            return Ok(());
+        }
+        if count != 0 {
+            return Err(integrity("api-schema-catalog-migration-ambiguous"));
+        }
+    }
+
+    let mut write = database.begin_write().map_err(integrity)?;
+    set_full_durability(&mut write)?;
+    let meta = read_meta_in_write(&write)?;
+    if meta.schema_version != PHYSICAL_SCHEMA_VERSION {
+        write.abort().map_err(integrity)?;
+        return Ok(());
+    }
+    let mut schemas = write.open_table(API_SCHEMAS).map_err(integrity)?;
+    let count = schemas.len().map_err(integrity)?;
+    if count == STANDARD_SCHEMA_CATALOG.len() as u64 {
+        drop(schemas);
+        write.abort().map_err(integrity)?;
+        return Ok(());
+    }
+    if count != 0 {
+        return Err(integrity("api-schema-catalog-migration-ambiguous"));
+    }
+    for resource_type in STANDARD_SCHEMA_CATALOG {
+        let schema = api_schema_record(resource_type)?;
+        let key = api_schema_key(resource_type)?;
+        let value = encode(ValueKind::ApiSchemaRecord, &schema)?;
+        schemas
+            .insert(key.as_slice(), value.as_slice())
             .map_err(integrity)?;
     }
     drop(schemas);
@@ -678,6 +813,9 @@ pub(crate) fn validate_consistency(database: &Database) -> Result<(), StoreError
         if operation_id.is_empty() {
             return Err(integrity("operation-key-invalid"));
         }
+        if let Some(outbox) = &operation.audit_outbox {
+            validate_audit_outbox(outbox, &operation_id, &meta)?;
+        }
     }
     validate_api_schemas(&read, &meta)?;
     validate_zone_link_cursors(&read, &meta)?;
@@ -783,6 +921,45 @@ fn api_schema_record(resource_type: &str) -> Result<ApiSchemaRecord, StoreError>
         properties: std::collections::BTreeMap::new(),
         required: Vec::new(),
     })
+}
+
+fn validate_audit_outbox(
+    outbox: &AuditOutboxRecord,
+    operation_id: &str,
+    meta: &StoreMeta,
+) -> Result<(), StoreError> {
+    if outbox.zone != meta.zone_name
+        || outbox.operation_id != operation_id
+        || outbox.correlation_id.is_empty()
+        || outbox.correlation_id.len() > 512
+        || outbox
+            .correlation_id
+            .bytes()
+            .any(|byte| byte.is_ascii_control())
+        || !valid_digest(&outbox.subject_digest)
+        || outbox.resulting_revision > meta.current_revision
+        || outbox.mutations.is_empty()
+        || outbox.mutations.len() > d2b_contracts::v3::MAX_BATCH_MUTATIONS
+    {
+        return Err(integrity("audit-outbox-record-invalid"));
+    }
+    for mutation in &outbox.mutations {
+        if !matches!(
+            mutation.verb.as_str(),
+            "create"
+                | "update-spec"
+                | "update-status"
+                | "update-metadata"
+                | "update-finalizers"
+                | "delete"
+        ) || ResourceTypeName::parse(mutation.resource_type.clone()).is_err()
+            || ResourceUid::parse(mutation.resource_uid.clone()).is_err()
+            || !valid_digest(&mutation.target_digest)
+        {
+            return Err(integrity("audit-outbox-mutation-invalid"));
+        }
+    }
+    Ok(())
 }
 
 pub(crate) fn api_schema_key_for_type(
@@ -939,18 +1116,60 @@ fn validate_active_schema(
 }
 
 fn validate_standard_base(envelope: &ResourceEnvelope) -> Result<bool, StoreError> {
-    let bytes = envelope.spec().base().to_canonical_bytes();
-    let valid = match envelope.resource_type().as_str() {
-        "Host" => serde_json::from_slice::<d2b_contracts::v3::host::HostSpec>(&bytes).is_ok(),
-        "Guest" => serde_json::from_slice::<d2b_contracts::v3::guest::GuestSpec>(&bytes).is_ok(),
-        "Process" => {
-            serde_json::from_slice::<d2b_contracts::v3::process::ProcessSpec>(&bytes).is_ok()
+    validate_standard_base_bytes(
+        envelope.resource_type().as_str(),
+        &envelope.spec().base().to_canonical_bytes(),
+    )
+}
+
+fn validate_standard_base_bytes(resource_type: &str, bytes: &[u8]) -> Result<bool, StoreError> {
+    let valid = match resource_type {
+        "Zone" => serde_json::from_slice::<d2b_contracts::v3::zone::ZoneSpec>(bytes).is_ok(),
+        "ZoneLink" => {
+            serde_json::from_slice::<d2b_contracts::v3::zone_link::ZoneLinkSpec>(bytes).is_ok()
         }
-        "User" => serde_json::from_slice::<d2b_contracts::v3::user::UserSpec>(&bytes).is_ok(),
         "Provider" => {
-            serde_json::from_slice::<d2b_contracts::v3::provider::ProviderSpec>(&bytes).is_ok()
+            serde_json::from_slice::<d2b_contracts::v3::provider::ProviderSpec>(bytes).is_ok()
         }
-        "Zone" => envelope.spec().base().is_empty(),
+        "Role" => serde_json::from_slice::<d2b_contracts::v3::role::RoleSpec>(bytes).is_ok(),
+        "RoleBinding" => {
+            serde_json::from_slice::<d2b_contracts::v3::role_binding::RoleBindingSpec>(bytes)
+                .is_ok()
+        }
+        "Quota" => serde_json::from_slice::<d2b_contracts::v3::quota::QuotaSpec>(bytes).is_ok(),
+        "EmergencyPolicy" => serde_json::from_slice::<
+            d2b_contracts::v3::emergency_policy::EmergencyPolicySpec,
+        >(bytes)
+        .is_ok(),
+        "Host" => serde_json::from_slice::<d2b_contracts::v3::host::HostSpec>(bytes).is_ok(),
+        "Guest" => serde_json::from_slice::<d2b_contracts::v3::guest::GuestSpec>(bytes).is_ok(),
+        "Process" => {
+            serde_json::from_slice::<d2b_contracts::v3::process::ProcessSpec>(bytes).is_ok()
+        }
+        "EphemeralProcess" => {
+            serde_json::from_slice::<d2b_contracts::v3::process::EphemeralProcessSpec>(bytes)
+                .is_ok()
+        }
+        "Volume" => serde_json::from_slice::<d2b_contracts::v3::volume::VolumeSpec>(bytes).is_ok(),
+        "Network" => {
+            serde_json::from_slice::<d2b_contracts::v3::network::NetworkSpec>(bytes).is_ok()
+        }
+        "Device" => serde_json::from_slice::<d2b_contracts::v3::device::DeviceSpec>(bytes).is_ok(),
+        "User" => serde_json::from_slice::<d2b_contracts::v3::user::UserSpec>(bytes).is_ok(),
+        "Credential" => {
+            serde_json::from_slice::<d2b_contracts::v3::credential::CredentialSpec>(bytes).is_ok()
+        }
+        "Endpoint" => {
+            serde_json::from_slice::<d2b_contracts::v3::endpoint::EndpointSpec>(bytes).is_ok()
+        }
+        "ResourceExport" => {
+            serde_json::from_slice::<d2b_contracts::v3::resource_export::ResourceExportSpec>(bytes)
+                .is_ok()
+        }
+        "ResourceImport" => {
+            serde_json::from_slice::<d2b_contracts::v3::resource_import::ResourceImportSpec>(bytes)
+                .is_ok()
+        }
         _ => return Ok(false),
     };
     if !valid {
@@ -972,6 +1191,73 @@ fn valid_digest(value: &str) -> bool {
 pub(crate) fn current_meta(database: &Database) -> Result<StoreMeta, StoreError> {
     let read = database.begin_read().map_err(integrity)?;
     read_meta(&read)
+}
+
+/// Return committed operations whose audit record has not been acknowledged
+/// by the durable sink.
+pub(crate) fn pending_audit_outboxes(
+    database: &Database,
+) -> Result<Vec<AuditOutboxRecord>, StoreError> {
+    let read = database.begin_read().map_err(integrity)?;
+    let operations = read.open_table(OPERATIONS).map_err(integrity)?;
+    operations
+        .iter()
+        .map_err(integrity)?
+        .map(|row| {
+            let (_, value) = row.map_err(integrity)?;
+            let operation: OperationRecord = decode(ValueKind::OperationRecord, value.value())?;
+            Ok(operation.audit_outbox)
+        })
+        .filter_map(|result| match result {
+            Ok(Some(outbox)) => Some(Ok(outbox)),
+            Ok(None) => None,
+            Err(error) => Some(Err(error)),
+        })
+        .collect()
+}
+
+pub(crate) fn audit_outbox_pending(
+    database: &Database,
+    operation_id: &str,
+) -> Result<bool, StoreError> {
+    let read = database.begin_read().map_err(integrity)?;
+    let table = read.open_table(OPERATIONS).map_err(integrity)?;
+    let key = operation_key(operation_id)?;
+    let Some(value) = table.get(key.as_slice()).map_err(integrity)? else {
+        return Ok(false);
+    };
+    let operation: OperationRecord = decode(ValueKind::OperationRecord, value.value())?;
+    Ok(operation.audit_outbox.is_some())
+}
+
+/// Clear one audit outbox entry after its records have been durably written.
+pub(crate) fn mark_audit_outbox_complete(
+    database: &Database,
+    operation_id: &str,
+) -> Result<(), StoreError> {
+    let mut write = database.begin_write().map_err(integrity)?;
+    set_full_durability(&mut write)?;
+    let key = operation_key(operation_id)?;
+    let mut operation = {
+        let table = write.open_table(OPERATIONS).map_err(integrity)?;
+        let bytes = table
+            .get(key.as_slice())
+            .map_err(integrity)?
+            .ok_or_else(|| integrity("audit-outbox-operation-missing"))?;
+        decode::<OperationRecord>(ValueKind::OperationRecord, bytes.value())?
+    };
+    if operation.audit_outbox.is_none() {
+        write.abort().map_err(integrity)?;
+        return Ok(());
+    }
+    operation.audit_outbox = None;
+    let value = encode(ValueKind::OperationRecord, &operation)?;
+    write
+        .open_table(OPERATIONS)
+        .map_err(integrity)?
+        .insert(key.as_slice(), value.as_slice())
+        .map_err(integrity)?;
+    write.commit().map_err(integrity)
 }
 
 pub(crate) fn read_meta(read: &redb::ReadTransaction) -> Result<StoreMeta, StoreError> {
@@ -1015,7 +1301,7 @@ pub(crate) fn apply_group(
 pub(crate) fn apply_group_with_hook(
     database: &Database,
     group: Vec<VerifiedWrite>,
-    before_commit: impl FnOnce(&CommittedGroup) -> Result<(), StoreError>,
+    after_commit: impl FnOnce(&CommittedGroup) -> Result<(), StoreError>,
 ) -> Result<CommittedGroup, StoreError> {
     #[cfg(test)]
     if FAIL_NEXT_APPLY_GROUP.swap(false, std::sync::atomic::Ordering::SeqCst) {
@@ -1027,7 +1313,7 @@ pub(crate) fn apply_group_with_hook(
             batch: None,
             resulting_revision: current_meta(database)?.current_revision,
         };
-        before_commit(&committed)?;
+        after_commit(&committed)?;
         return Ok(committed);
     }
 
@@ -1146,6 +1432,7 @@ pub(crate) fn apply_group_with_hook(
             outcome: "committed".to_owned(),
             accepted_revision: revision,
             finished_revision: revision,
+            audit_outbox: Some(audit_outbox_for(&verified, &group_resources, revision)?),
         };
         let operation_value = encode(ValueKind::OperationRecord, &operation)?;
         write
@@ -1172,11 +1459,8 @@ pub(crate) fn apply_group_with_hook(
             batch: None,
             resulting_revision: meta.current_revision,
         };
-        if let Err(error) = before_commit(&committed) {
-            let _ = write.abort();
-            return Err(error);
-        }
         write.abort().map_err(integrity)?;
+        after_commit(&committed)?;
         return Ok(committed);
     }
     for (ordinal, entry) in entries.iter_mut().enumerate() {
@@ -1202,11 +1486,10 @@ pub(crate) fn apply_group_with_hook(
         batch: Some(batch.clone()),
         resulting_revision: revision,
     };
-    if let Err(error) = before_commit(&committed) {
-        let _ = write.abort();
-        return Err(error);
-    }
     write.commit().map_err(integrity)?;
+    // The database commit/abort is the authority boundary.  The callback may
+    // write the external audit sink only after that transaction outcome.
+    after_commit(&committed)?;
     Ok(committed)
 }
 
@@ -3688,6 +3971,18 @@ mod tests {
         let error = apply_group(&database, vec![verified("bad-schema", update, uid)]).unwrap_err();
         assert_eq!(error.kind(), StoreErrorKind::ResourceSchemaInvalid);
         assert_eq!(current_meta(&database).unwrap().current_revision, 1);
+    }
+
+    #[test]
+    fn every_standard_catalog_type_has_a_closed_base_validator() {
+        for resource_type in STANDARD_SCHEMA_CATALOG {
+            let result = validate_standard_base_bytes(resource_type, b"{}");
+            assert!(
+                !matches!(result, Ok(false)),
+                "catalog type {resource_type} must have a validator binding"
+            );
+        }
+        assert!(!validate_standard_base_bytes("vendor.d2bus.org.Extension", b"{}").unwrap());
     }
 
     #[test]

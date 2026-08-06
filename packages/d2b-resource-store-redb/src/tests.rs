@@ -1,6 +1,8 @@
-use crate::audit::DurableMutationAudit;
+use crate::audit::{DurableMutationAudit, resource_mutation_record};
 use crate::metrics::{NoopStoreTelemetry, StoreMetric};
-use d2b_audit::{AuditHash, AuditRecord, AuditRecordError, AuditRecordFields, genesis_hash};
+use d2b_audit::{
+    AuditHash, AuditRecord, AuditRecordError, AuditRecordFields, AuditSink, genesis_hash,
+};
 use d2b_contracts::v3::identity::STANDARD_RESOURCE_TYPES;
 use d2b_contracts::v3::{
     CanonicalJsonValue, ConfigurationGeneration, RESOURCE_ENVELOPE_DOMAIN_TAG, ResourceEnvelope,
@@ -14,7 +16,7 @@ use d2b_resource_store::{
     PolicySnapshot, PreparedStoreMutation, ResourceMutationKind, StoreGetRequest, StoreListRequest,
     StoreMutation, StoreOperationContext, StoreProjection, StoreSlot, StoreWatchRequest,
 };
-use redb::{Database, Durability};
+use redb::{Database, Durability, ReadableDatabase, ReadableTable};
 use rustix::io::{FdFlags, fcntl_getfd, fcntl_setfd};
 use rustix::net::{
     AddressFamily, SendAncillaryBuffer, SendAncillaryMessage, SendFlags, SocketFlags, SocketType,
@@ -57,6 +59,15 @@ impl DurableMutationAudit for RecordingAudit {
         record.verify(&previous)?;
         records.push(record.clone());
         Ok(())
+    }
+}
+
+struct RejectingAudit(AtomicU64);
+
+impl DurableMutationAudit for RejectingAudit {
+    fn append_before_commit(&self, _record: &AuditRecord) -> Result<(), AuditRecordError> {
+        self.0.fetch_add(1, Ordering::Relaxed);
+        Err(AuditRecordError::Serialization)
     }
 }
 
@@ -463,13 +474,94 @@ fn backup_capture_limits_are_accounted_cumulatively() {
 #[test]
 fn production_ports_use_real_telemetry_and_durable_audit_adapters() {
     let (directory, file) = owned_file();
-    let ports = super::StorePorts::production(&file).expect("production ports");
+    let production = super::StorePorts::production(&file).expect("production ports");
+    assert!(!production.audit.enabled());
+    assert!(!directory.path().join("audit").exists());
+
+    let owned_audit = directory.path().join("owned-audit");
+    let sink = Arc::new(AuditSink::open(&owned_audit).expect("owner-provisioned audit sink"));
+    let ports = super::StorePorts::with_audit_sink(&file, sink).expect("owned audit ports");
     assert!(ports.audit.enabled());
-    assert!(directory.path().join("audit").is_dir());
+    assert!(owned_audit.is_dir());
     ports.telemetry.metric(
         StoreMetric::QueueDepth,
         std::collections::BTreeMap::from([("operation".to_owned(), "write".to_owned())]),
         1.0,
+    );
+}
+
+#[test]
+fn resource_mutation_audit_class_is_not_privileged_by_default() {
+    let standard = resource_mutation_record(
+        1,
+        "work",
+        "op-standard",
+        "corr-standard",
+        "resource-store",
+        genesis_hash(),
+        "create",
+        "Host",
+        "sha256:uid",
+        1,
+        0,
+        1,
+        "sha256:subject",
+        7,
+        "ok",
+        None,
+    )
+    .unwrap();
+    assert_eq!(
+        super::audit_write_class(&standard),
+        d2b_audit::AuditWriteClass::Standard
+    );
+
+    let denied = resource_mutation_record(
+        1,
+        "work",
+        "op-denied",
+        "corr-denied",
+        "resource-store",
+        genesis_hash(),
+        "create",
+        "Host",
+        "sha256:uid",
+        0,
+        0,
+        0,
+        "sha256:subject",
+        7,
+        "denied",
+        Some("authorization-denied".to_owned()),
+    )
+    .unwrap();
+    assert_eq!(
+        super::audit_write_class(&denied),
+        d2b_audit::AuditWriteClass::Privileged
+    );
+
+    let role = resource_mutation_record(
+        1,
+        "work",
+        "op-role",
+        "corr-role",
+        "resource-store",
+        genesis_hash(),
+        "create",
+        "Role",
+        "sha256:uid",
+        1,
+        0,
+        1,
+        "sha256:subject",
+        7,
+        "ok",
+        None,
+    )
+    .unwrap();
+    assert_eq!(
+        super::audit_write_class(&role),
+        d2b_audit::AuditWriteClass::Privileged
     );
 }
 
@@ -545,13 +637,13 @@ async fn initialized_schema_catalog_is_digest_bound_and_complete() {
 async fn mutation_audit_uses_result_identity_and_failure_revision() {
     let (_directory, file, marker) = provisioned_store();
     let store_identity = identity();
-    let (issuer, acceptor) = mutation_seal_pair(store_identity.seal_identity());
+    let (issuer, store_acceptor) = mutation_seal_pair(store_identity.seal_identity());
     let audit = Arc::new(RecordingAudit::default());
     let store = RedbResourceStore::provision_owned_with_test_ports(
         file,
         marker,
         store_identity,
-        acceptor,
+        store_acceptor,
         Arc::new(NoopStoreTelemetry),
         audit.clone(),
     )
@@ -630,6 +722,82 @@ async fn mutation_audit_uses_result_identity_and_failure_revision() {
         crate::audit::opaque_digest("Host/audited-denied")
     );
     assert_eq!(fields[2].resulting_revision, 1);
+}
+
+#[tokio::test]
+async fn audit_failure_after_commit_returns_error_and_retains_the_outbox() {
+    let (directory, file, marker) = provisioned_store();
+    let store_identity = identity();
+    let (issuer, store_acceptor) = mutation_seal_pair(store_identity.seal_identity());
+    let audit = Arc::new(RejectingAudit(AtomicU64::new(0)));
+    let store = RedbResourceStore::provision_owned_with_test_ports(
+        file,
+        marker,
+        store_identity,
+        store_acceptor,
+        Arc::new(NoopStoreTelemetry),
+        audit.clone(),
+    )
+    .await
+    .unwrap();
+
+    let canonical = create_body("audit-outbox");
+    let digest = canonical_digest(RESOURCE_ENVELOPE_DOMAIN_TAG, &canonical);
+    let error = store
+        .commit_verified(issuer.seal(create_seal_body_with_resource(
+            "audit-outbox",
+            "audit-outbox",
+            canonical,
+            digest,
+        )))
+        .await
+        .unwrap_err();
+    assert_eq!(
+        error.kind(),
+        d2b_resource_store::StoreErrorKind::StoreIntegrityFailure
+    );
+    assert_eq!(audit.0.load(Ordering::Relaxed), 1);
+    drop(store);
+
+    let file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(directory.path().join("store.redb"))
+        .unwrap();
+    let database = Database::builder()
+        .create_with_backend(redb::backends::FileBackend::new(file).unwrap())
+        .unwrap();
+    assert_eq!(
+        crate::transaction::current_meta(&database)
+            .unwrap()
+            .current_revision,
+        1
+    );
+    assert_eq!(
+        crate::transaction::pending_audit_outboxes(&database)
+            .unwrap()
+            .len(),
+        1
+    );
+    drop(database);
+
+    let audit = Arc::new(RecordingAudit::default());
+    let file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(directory.path().join("store.redb"))
+        .unwrap();
+    let recovered = RedbResourceStore::open_owned_with_test_ports(
+        file,
+        identity(),
+        acceptor(&identity()),
+        Arc::new(NoopStoreTelemetry),
+        audit.clone(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(audit.records().len(), 1);
+    recovered.shutdown().await.unwrap();
 }
 
 #[test]
@@ -954,6 +1122,103 @@ async fn owned_file_open_initializes_and_reopens_only_matching_identity() {
         error.kind(),
         d2b_resource_store::StoreErrorKind::StoreIntegrityFailure
     );
+}
+
+#[tokio::test]
+async fn legacy_v1_reopen_backfills_the_catalog_without_losing_resources() {
+    let (directory, file, marker) = provisioned_store();
+    let store_identity = identity();
+    let (issuer, acceptor) = mutation_seal_pair(store_identity.seal_identity());
+    let store = RedbResourceStore::provision_owned(file, marker, store_identity.clone(), acceptor)
+        .await
+        .unwrap();
+    let canonical = create_body("legacy-reopen");
+    let digest = canonical_digest(RESOURCE_ENVELOPE_DOMAIN_TAG, &canonical);
+    store
+        .commit_verified(issuer.seal(create_seal_body_with_resource(
+            "legacy-reopen",
+            "legacy-reopen",
+            canonical,
+            digest,
+        )))
+        .await
+        .unwrap();
+    store.shutdown().await.unwrap();
+
+    let legacy_file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(directory.path().join("store.redb"))
+        .unwrap();
+    let database = Database::builder()
+        .create_with_backend(redb::backends::FileBackend::new(legacy_file).unwrap())
+        .unwrap();
+    let keys = {
+        let read = database.begin_read().unwrap();
+        read.open_table(crate::transaction::API_SCHEMAS)
+            .unwrap()
+            .iter()
+            .unwrap()
+            .map(|row| row.unwrap().0.value().to_vec())
+            .collect::<Vec<_>>()
+    };
+    let mut write = database.begin_write().unwrap();
+    write.set_durability(Durability::Immediate).unwrap();
+    let mut schemas = write.open_table(crate::transaction::API_SCHEMAS).unwrap();
+    for key in keys {
+        schemas.remove(key.as_slice()).unwrap();
+    }
+    drop(schemas);
+    write.commit().unwrap();
+    drop(database);
+
+    let file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(directory.path().join("store.redb"))
+        .unwrap();
+    let store = open_store(file, store_identity.clone()).await.unwrap();
+    let backup = store.logical_backup().await.unwrap();
+    let schemas = backup
+        .tables
+        .iter()
+        .find(|table| table.name == "api_schemas")
+        .unwrap();
+    assert_eq!(schemas.rows.len(), STANDARD_RESOURCE_TYPES.len());
+    assert!(
+        store
+            .get(StoreGetRequest {
+                operation: operation("legacy-reopen-read"),
+                zone: ZoneId::parse("work").unwrap(),
+                target: ResourceRef::parse("Host/legacy-reopen").unwrap(),
+                expected_uid: None,
+                projection: StoreProjection::MetadataOnly,
+            })
+            .await
+            .is_ok()
+    );
+    store.shutdown().await.unwrap();
+
+    let file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(directory.path().join("store.redb"))
+        .unwrap();
+    let reopened = open_store(file, store_identity).await.unwrap();
+    assert_eq!(
+        reopened
+            .logical_backup()
+            .await
+            .unwrap()
+            .tables
+            .iter()
+            .find(|table| table.name == "api_schemas")
+            .unwrap()
+            .rows
+            .len(),
+        STANDARD_RESOURCE_TYPES.len()
+    );
+    reopened.shutdown().await.unwrap();
 }
 
 #[tokio::test]

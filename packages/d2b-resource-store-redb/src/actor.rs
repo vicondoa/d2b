@@ -25,9 +25,10 @@ use crate::metrics::{StoreMetric, StoreTelemetry};
 use crate::revision_log::{WatchCoordinator, WatchRegistrationId, WatchSelector, WatchStream};
 use crate::tracing::{STORE_READ_SPAN, STORE_WRITE_SPAN};
 use crate::transaction::{
-    API_SCHEMAS, ChangeBatch, CommittedGroup, RESOURCES, ResourceRecord, StoreMeta, VerifiedWrite,
-    apply_group_with_hook, backpressure, current_meta, decode, resource_key, stored_resource,
-    timeout,
+    API_SCHEMAS, AuditOutboxRecord, ChangeBatch, CommittedGroup, RESOURCES, ResourceRecord,
+    StoreMeta, VerifiedWrite, apply_group_with_hook, audit_outbox_pending, backpressure,
+    current_meta, decode, mark_audit_outbox_complete, pending_audit_outboxes, resource_key,
+    stored_resource, timeout,
 };
 use d2b_resource_store::mutation_seal::OpenedMutation;
 
@@ -168,6 +169,55 @@ const fn mutation_audit_verb(kind: ResourceMutationKind) -> &'static str {
     }
 }
 
+fn recover_pending_audit_outboxes(
+    database: &redb::Database,
+    audit: &dyn DurableMutationAudit,
+) -> Result<(), StoreError> {
+    if !audit.enabled() {
+        return Ok(());
+    }
+    for outbox in pending_audit_outboxes(database)? {
+        append_audit_outbox(audit, &outbox)?;
+        mark_audit_outbox_complete(database, &outbox.operation_id)?;
+    }
+    Ok(())
+}
+
+fn append_audit_outbox(
+    audit: &dyn DurableMutationAudit,
+    outbox: &AuditOutboxRecord,
+) -> Result<(), StoreError> {
+    let mut previous_hash = audit
+        .previous_hash()
+        .map_err(|_| crate::transaction::durability_failure("audit-unavailable"))?;
+    for mutation in &outbox.mutations {
+        let record = resource_mutation_record(
+            unix_timestamp_ms(),
+            outbox.zone.clone(),
+            outbox.operation_id.clone(),
+            outbox.correlation_id.clone(),
+            "resource-store",
+            previous_hash.clone(),
+            mutation.verb.clone(),
+            audit_resource_type(&mutation.resource_type),
+            mutation.resource_uid.clone(),
+            mutation.generation,
+            mutation.expected_revision,
+            outbox.resulting_revision,
+            outbox.subject_digest.clone(),
+            outbox.policy_revision,
+            "ok",
+            None,
+        )
+        .map_err(|_| crate::transaction::durability_failure("audit-record-invalid"))?;
+        audit
+            .append_before_commit(&record)
+            .map_err(|_| crate::transaction::durability_failure("audit-unavailable"))?;
+        previous_hash = record.record_hash().clone();
+    }
+    Ok(())
+}
+
 impl SignalCounters {
     pub(crate) fn snapshot(&self) -> BackendSignals {
         BackendSignals {
@@ -212,6 +262,7 @@ impl WriterHandle {
     ) -> Result<Self, StoreError> {
         let (sender, receiver) = mpsc::channel(WRITE_QUEUE_CAPACITY);
         crate::transaction::set_clean_shutdown(&database, false)?;
+        recover_pending_audit_outboxes(&database, audit.as_ref())?;
         let actor_signals = Arc::clone(&signals);
         let actor_telemetry = Arc::clone(&telemetry);
         let actor_audit = Arc::clone(&audit);
@@ -1039,6 +1090,11 @@ impl WriterActor {
                 Err(_) => committed.resulting_revision,
             };
             if let Some(intent) = intent {
+                let outbox_pending =
+                    result.is_ok() && audit_outbox_pending(&self.database, &intent.operation_id)?;
+                if result.is_ok() && !outbox_pending {
+                    continue;
+                }
                 let resources = result.as_ref().ok().map(|commit| &commit.resources);
                 let mut mutations = intent.mutations;
                 if mutations.is_empty() {
@@ -1077,6 +1133,9 @@ impl WriterActor {
                         error_code.clone(),
                         resulting_revision,
                     )?;
+                }
+                if outbox_pending {
+                    mark_audit_outbox_complete(&self.database, &intent.operation_id)?;
                 }
             } else {
                 #[cfg(not(test))]
@@ -1323,6 +1382,7 @@ fn audit_resource_type(resource_type: &str) -> &'static str {
         "Role" => "Role",
         "RoleBinding" => "RoleBinding",
         "Quota" => "Quota",
+        "EmergencyPolicy" => "EmergencyPolicy",
         "Host" => "Host",
         "Guest" => "Guest",
         "Process" => "Process",

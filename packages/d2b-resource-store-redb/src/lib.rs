@@ -16,12 +16,14 @@ pub mod values;
 use std::collections::BTreeMap;
 use std::fs::File;
 use std::io::{Read as _, Seek as _, SeekFrom, Write as _};
-use std::os::fd::{AsFd, AsRawFd, OwnedFd};
-use std::path::PathBuf;
+use std::os::fd::{AsFd, OwnedFd};
 use std::sync::{Arc, Mutex};
 
 use actor::{ReadPool, SignalCounters, WriterHandle};
-use d2b_audit::AuditSink;
+use d2b_audit::{
+    AuditHash, AuditRecord, AuditRecordError, AuditRecordFields, AuditSink, AuditWriteClass,
+    AuditWriteOutcome,
+};
 use d2b_contracts::v3::{ResourceUid, Timestamp, ZoneId};
 use d2b_resource_store::mutation_seal::{MutationSealAcceptor, SealedMutation};
 use d2b_resource_store::{
@@ -36,9 +38,9 @@ use redb::backends::FileBackend;
 use rustix::io::{FdFlags, fcntl_getfd};
 use rustix::net::{RecvAncillaryBuffer, RecvAncillaryMessage, RecvFlags, recvmsg};
 
+use crate::audit::DurableMutationAudit;
 #[cfg(test)]
 use crate::audit::NoopMutationAudit;
-use crate::audit::{AuditSinkMutationAudit, DurableMutationAudit};
 #[cfg(test)]
 use crate::metrics::NoopStoreTelemetry;
 use crate::metrics::{EmitterStoreTelemetry, StoreTelemetry};
@@ -86,18 +88,103 @@ struct StorePorts {
     audit: Arc<dyn DurableMutationAudit>,
 }
 
+/// Production uses the store's durable operation rows as an audit outbox.
+///
+/// The broker owns the database descriptor and its parent directory.  The
+/// Zone runtime is not allowed to infer a sibling audit path from that
+/// descriptor, and it cannot create one under the broker's 0750 directory.
+/// Tests that own an explicitly provisioned audit sink may inject it through
+/// the test seam below; normal production startup keeps the outbox durable in
+/// the database instead.
+#[derive(Debug, Default, Clone, Copy)]
+struct DurableOutboxAudit;
+
+impl DurableMutationAudit for DurableOutboxAudit {
+    fn enabled(&self) -> bool {
+        false
+    }
+
+    fn append_before_commit(&self, _record: &AuditRecord) -> Result<(), AuditRecordError> {
+        Ok(())
+    }
+}
+
+/// Adapter for an audit sink whose directory was provisioned by its owner.
+///
+/// Resource-store mutations are standard resource-plane events, not
+/// privileged host mutations.  The adapter is intentionally separate from
+/// the legacy privileged broker adapter.
+#[allow(dead_code)]
+struct StandardAuditSinkMutationAudit {
+    sink: Arc<AuditSink>,
+}
+
+impl DurableMutationAudit for StandardAuditSinkMutationAudit {
+    fn previous_hash(&self) -> Result<AuditHash, AuditRecordError> {
+        self.sink
+            .chain_head()
+            .map_err(|_| AuditRecordError::Serialization)
+    }
+
+    fn append_before_commit(&self, record: &AuditRecord) -> Result<(), AuditRecordError> {
+        let class = audit_write_class(record);
+        match self
+            .sink
+            .append(class, record)
+            .map_err(|_| AuditRecordError::Serialization)?
+        {
+            AuditWriteOutcome::Written => Ok(()),
+            AuditWriteOutcome::RateLimited | AuditWriteOutcome::DroppedUnavailable => {
+                Err(AuditRecordError::Serialization)
+            }
+        }
+    }
+}
+
+#[allow(dead_code)]
+fn audit_write_class(record: &AuditRecord) -> AuditWriteClass {
+    let AuditRecordFields::ResourceMutation(fields) = record.fields() else {
+        return AuditWriteClass::Standard;
+    };
+    if fields.outcome == "denied"
+        || matches!(
+            fields.resource_type.as_str(),
+            "Zone"
+                | "ZoneLink"
+                | "Provider"
+                | "Role"
+                | "RoleBinding"
+                | "Quota"
+                | "EmergencyPolicy"
+                | "Credential"
+                | "ResourceExport"
+                | "ResourceImport"
+        )
+    {
+        AuditWriteClass::Privileged
+    } else {
+        AuditWriteClass::Standard
+    }
+}
+
 impl StorePorts {
-    fn production(file: &File) -> Result<Self, StoreError> {
-        let audit_directory = audit_directory_for_file(file)?;
-        let audit_sink = Arc::new(
-            AuditSink::open(audit_directory)
-                .map_err(|_| transaction::durability_failure("audit-unavailable"))?,
-        );
+    fn production(_file: &File) -> Result<Self, StoreError> {
         let telemetry_emitter = BoundedEmitter::with_default_capacity("/run/d2b/telemetry.sock")
             .map_err(|_| transaction::durability_failure("telemetry-unavailable"))?;
         Ok(Self {
             telemetry: Arc::new(EmitterStoreTelemetry::new(telemetry_emitter)),
-            audit: Arc::new(AuditSinkMutationAudit::new(audit_sink)),
+            audit: Arc::new(DurableOutboxAudit),
+        })
+    }
+
+    #[cfg(test)]
+    fn with_audit_sink(file: &File, sink: Arc<AuditSink>) -> Result<Self, StoreError> {
+        let telemetry_emitter = BoundedEmitter::with_default_capacity("/run/d2b/telemetry.sock")
+            .map_err(|_| transaction::durability_failure("telemetry-unavailable"))?;
+        let _ = file;
+        Ok(Self {
+            telemetry: Arc::new(EmitterStoreTelemetry::new(telemetry_emitter)),
+            audit: Arc::new(StandardAuditSinkMutationAudit { sink }),
         })
     }
 
@@ -113,22 +200,6 @@ impl StorePorts {
     fn for_file(file: &File) -> Result<Self, StoreError> {
         Self::production(file)
     }
-}
-
-fn audit_directory_for_file(file: &File) -> Result<PathBuf, StoreError> {
-    let fd_path = PathBuf::from(format!("/proc/self/fd/{}", file.as_raw_fd()));
-    let database_path = std::fs::read_link(fd_path)
-        .map_err(|_| transaction::durability_failure("audit-unavailable"))?;
-    if !database_path.is_absolute()
-        || database_path.to_string_lossy().ends_with(" (deleted)")
-        || database_path.file_name().is_none()
-    {
-        return Err(transaction::durability_failure("audit-unavailable"));
-    }
-    let parent = database_path
-        .parent()
-        .ok_or_else(|| transaction::durability_failure("audit-unavailable"))?;
-    Ok(parent.join("audit"))
 }
 
 /// Immutable identity and generation binding for one already-provisioned store.
@@ -286,6 +357,32 @@ impl RedbResourceStore {
         identity: StoreIdentity,
         acceptor: MutationSealAcceptor,
     ) -> Result<Self, StoreError> {
+        Self::open_owned_with_ports(file, identity, acceptor, None).await
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn open_owned_with_test_ports(
+        file: File,
+        identity: StoreIdentity,
+        acceptor: MutationSealAcceptor,
+        telemetry: Arc<dyn StoreTelemetry>,
+        audit: Arc<dyn DurableMutationAudit>,
+    ) -> Result<Self, StoreError> {
+        Self::open_owned_with_ports(
+            file,
+            identity,
+            acceptor,
+            Some(StorePorts { telemetry, audit }),
+        )
+        .await
+    }
+
+    async fn open_owned_with_ports(
+        file: File,
+        identity: StoreIdentity,
+        acceptor: MutationSealAcceptor,
+        ports: Option<StorePorts>,
+    ) -> Result<Self, StoreError> {
         let slot = identity.slot();
         validate_acceptor(&identity, &acceptor)?;
         validate_owned_file(&file).map_err(|error| error.with_store_slot(slot))?;
@@ -300,7 +397,9 @@ impl RedbResourceStore {
                 transaction::quarantined_reason("provisioned-store-empty").with_store_slot(slot)
             );
         }
-        let ports = StorePorts::for_file(&file).map_err(|error| error.with_store_slot(slot))?;
+        let ports = ports
+            .map_or_else(|| StorePorts::for_file(&file), Ok)
+            .map_err(|error| error.with_store_slot(slot))?;
         let open_identity = identity.clone();
         let database = tokio::task::spawn_blocking(move || {
             let backend = FileBackend::new(file).map_err(transaction::integrity)?;
@@ -308,6 +407,7 @@ impl RedbResourceStore {
                 .set_cache_size(REDB_CACHE_SIZE)
                 .create_with_backend(backend)
                 .map_err(transaction::integrity)?;
+            transaction::backfill_schema_catalog(&database)?;
             let meta = transaction::validate_identity(&database, &open_identity)?;
             transaction::validate_consistency(&database)?;
             let recovered_after_crash = !meta.clean_shutdown;
