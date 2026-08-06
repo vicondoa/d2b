@@ -193,12 +193,13 @@ specs/001-adr046-d2b3-completion/
 The ADR-046 set is the design. This plan sequences and gates it; it does **not** restate it,
 and it must not lose it.
 
-**The manifests are authoritative.** Every work item carries 15 fields, including
-`detailedDesign`, `validation`, `destination`, `integration`, `dataMigration`, `currentSource`,
-`reuseAction`, `reuseSource`, `dependencyOwner`, and `removalProof`. Those fields are carried
-**verbatim** into `tasks.md` and into the implementing change. They are never paraphrased,
-condensed, or selectively quoted, because a paraphrase silently drops obligations that the
-wave seal will later be asserted against.
+**The manifests are authoritative.** Every work item is a 15-field object. `tasks.md`
+deliberately does not copy those fields: each manifest-backed row carries a stable
+`workItemId` pointer plus non-authoritative orientation labels. At dispatch, retrieve the
+complete object **verbatim** from `docs/specs/ADR-046-work-items.json` and carry all 15 fields
+unchanged in the work prompt. The implementing change is checked against those canonical
+bytes; a task-row label, paraphrase, condensation, or selective quotation cannot satisfy an
+obligation that the wave seal will later assert.
 
 **Why this plan does not inline the spec text.** Copying 545 items of design and validation
 prose into planning artifacts would create a second source of truth that no drift gate checks,

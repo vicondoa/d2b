@@ -23,19 +23,22 @@ integration tests pass, but panel, seal, and merge remain **strictly ordered**. 
 construction and MUST be launched in the same coordination cycle - a ready slice left
 unlaunched without a recorded blocker is a process failure, not a scheduling preference.
 
-## Format: `[ID] [P?] [Story] WorkItemId - destination (reuseAction)`
+## Format: `[ID] [P?] [Story] WorkItemId - destination label (reuseAction display)`
 
 - **[P]**: Free to start immediately within its wave - no incoming dependency or file-overlap
   edge. 91 of 545 manifest work items qualify. Across the full task list, 99 of 605 total
   tasks carry `[P]`.
 - **[Story]**: US1 live resource plane, US2 Providers, US3 cutover, US4 release.
-- Destination shown is the **first** path only. The authoritative destination list, and every
-  other obligation, lives in the manifest.
+- Text after `WorkItemId` is a **non-authoritative navigation label**, not the manifest
+  `destination` field, a writable path list, or a substitute for retrieval. Labels use
+  balanced path syntax but may omit destinations and descriptive detail. The complete
+  `destination`, canonical `reuseAction`, and every other field come only from the full
+  manifest object retrieved at dispatch.
 
 ## The authoritative-detail rule
 
 Each task below is a **pointer to a manifest entry, never a summary of one**. Before starting
-any task, retrieve its full entry:
+or dispatching any task, retrieve its complete 15-field entry verbatim:
 
 ```bash
 jq --arg id ADR046-routing-001 \
@@ -43,11 +46,14 @@ jq --arg id ADR046-routing-001 \
   docs/specs/ADR-046-work-items.json
 ```
 
-That entry carries `detailedDesign`, `validation`, the complete `destination` list,
-`integration`, `dataMigration`, `currentSource`, `reuseAction`, `reuseSource`,
-`dependencyOwner`, and `removalProof`. **Those fields are the task.** A task is not complete
-until its `validation` obligations are satisfied and its `removalProof` passes where it
-retires a path.
+The returned object includes `workItemId`, `specId`, `specPath`, `implementationState`,
+`detailedDesign`, `validation`, `destination`, `integration`, `dataMigration`,
+`currentSource`, `reuseAction`, `reuseSource`, `dependencyOwner`, `removalProof`, and
+`evidence`. Retrieve and carry the whole object; selecting only the fields named in prose is
+not equivalent. Its design, validation, destination, integration, migration, reuse,
+dependency, and removal-proof fields are the implementation obligations. A task is not
+complete until its `validation` obligations are satisfied and its `removalProof` passes where
+it retires a path.
 
 Deliberately, this file does not copy that text. Duplicating 531 manifest entries into
 Markdown would create a second source of truth that no drift gate checks - the same failure
@@ -240,7 +246,7 @@ requalification above before W2 close.
 - [X] T031 [P] [US1] `ADR046-provider-001` - `packages/d2b-contracts/src/v3/provider.rs` (adapt)
 - [X] T032 [P] [US1] `ADR046-provider-002` - one `packages/d2b-provider-<base>-<implementation>/` per Provider with mandatory src/ (adapt)
 - [X] T033 [P] [US1] `ADR046-provider-003` - `packages/d2b-provider-system-core/` (adapt)
-- [X] T034 [US1] `ADR046-provider-004` - `packages/d2b-contracts/src/v3/semantic_services/{mod (create)
+- [X] T034 [US1] `ADR046-provider-004` - `packages/d2b-contracts/src/v3/semantic_services/{mod,audio,security_key,telemetry,usb}.rs` (create)
 
 - [ ] T035 [US1] W3 CONVERGE + FREEZE - depends on T031, T032, T033, and T034. Before any remaining implementation, convergence-fix, or recovery lane is dispatched, require exactly one plan-review disposition: exact contemporaneous W3 plan-panel receipts, or unchecked T030 plus one unanimous `w3-plan-review-remediation` receipt bound to the current clean base and feature snapshot. The latter is late remediation, not historical compliance; any later base or feature change requires re-review. After W2 is sealed and merged, rebase W3 onto updated `v3`; merge every slice branch into the wave integration branch, run integration tests and CI on the converged tree, resolve every content-changing result, then reconcile and fold all changelog fragments. Before freezing, confirm reference docs landed with behavior (FR-019), no change contradicts the decision register (FR-047), every required removal proof passed (FR-023), and the deferred-findings and friction registers are current (FR-051, FR-052, FR-053). Open or update one PR against `v3` and identify the clean proposed F3 commit and tree. Before declaring that identity frozen, require exactly one T030 disposition: either checked T030 backed by the exact contemporaneous historical receipt, or unchecked T030 plus one passing proposed-F3-bound `historical-entry-remediation-t030` record that reruns the current Gate 0, destination, lineage, predecessor-merge/rebase, cleanliness, semaphore, fast-suite, integration, and slice-ancestry checks. Absence, duplication, mismatch, or a current rerun labelled historical leaves T035 incomplete and no F3 exists. This remedial record does not check T030 or assert historical entry compliance. Once exactly one disposition validates, freeze that same clean HEAD and tree as F3. T035 MUST NOT issue a binding work-panel request, panel-attest, or seal. Any content change, slice merge, generated-output change, changelog fold, or rebase after F3 is frozen invalidates F3 and its remedial record and requires T035 to rerun.
 - [ ] T036 [US1] W3 SINGLE BINDING WORK GATE + MERGE - depends on T035. Require HEAD and tree to equal clean F3, revalidate exactly one T030 disposition, and revalidate exactly one plan-review disposition accepted by T035, including its ten unanimous records, reviewed-base ancestry, and current feature snapshot. T036's work panel is not a substitute. Recheck those exclusive dispositions before pre-panel dispatch, panel request, panel-attest, seal, merge-target registration, and merge eligibility; absence, duplication, mismatch, or a current rerun labelled historical refuses each stage. Against F3, first dispatch the read-only reviewer Task lane and rubber-duck Task lane in parallel, each bound to `gpt-5.6-luna` / `max` / `long_context`; a content defect from either lane abandons F3 and returns to T035 before any binding panel request. Only after both pre-panel lanes are clear, run F3's one binding `/d2b-panel-round work`, whose ten seats bind `github-copilot` / `gpt-5.6-sol` / `xhigh` / `default`; import F3-bound validation evidence, panel-request (refused unless every prior-wave work item is Merged and W3 is rebased after the predecessor merge), panel-attest (10/10 unanimous), seal (every prior-wave and wave item Merged), register merge-target, pass merge-eligibility, and then merge the already-open PR. A nonunanimous result permanently fails F3 but preserves scoped recovery: retain its records, route only its recommendations through a fix round, return to T035, rerun integration and validation, freeze a distinct successor with its own valid T030 disposition, and run that candidate's delta/full-context follow-up panel before its single binding request. Never re-request or modify F3. If committed policy or tooling refuses the successor flow, stop with an integrator escalation naming the external contract; do not waive findings. From binding panel request through disposition of F3, F3 and its tree are immutable. The merge MUST preserve the successful candidate's tree byte-for-byte. After merge, rebase the next wave onto updated `v3`, then clean up in order: delete each worktree `packages/target`, remove worktrees, delete local branches, delete remote branches, run `nix-collect-garbage`, and audit `git worktree list` plus `git branch -a` for residue.
@@ -267,7 +273,7 @@ requalification above before W2 close.
 
 - [x] T041 [US1] `ADR046-pstate-001` - `packages/d2b-contracts/src/v3/volume_state.rs` (adapt)
 - [x] T042 [US1] `ADR046-pstate-002` - `packages/d2b-contracts/src/v3/provider.rs` (component descriptor `stateNamespaces` field) (adapt)
-- [x] T043 [US1] `ADR046-pstate-003` - `packages/d2b-provider-volume-local/` (new crate (adapt)
+- [x] T043 [US1] `ADR046-pstate-003` - `packages/d2b-provider-volume-local/` (adapt)
 - [X] T044 [US1] `ADR046-pstate-004` - `packages/d2b-provider-volume-local/src/migration.rs` (adapt)
 - [X] T045 [US1] `ADR046-pstate-005` - `packages/d2b-provider-volume-local/src/sealing.rs` (adapt)
 - [X] T046 [US1] `ADR046-pstate-006` - `packages/d2b-provider-volume-local/src/snapshot.rs` (adapt)
@@ -276,17 +282,17 @@ requalification above before W2 close.
 - [x] T049 [US1] `ADR046-pstate-009` - `packages/d2b-provider-volume-local/tests/state.rs` (ported hermetic atomic/lock/quarantine/lease tests) (adapt)
 - [x] T050 [US1] `ADR046-pstate-010` - `nixos-modules/zone-resources.nix` (per-Zone bundle emitter NixOS module) (adapt)
 - [x] T051 [US1] `ADR046-pstate-011` - `packages/xtask/src/provider_crate_policy.rs` (adapt)
-- [X] T052 [US1] `ADR046-pstate-012` - `packages/d2b-core-controller/src/optional_state_admission.rs` (storage-need admission: reject a declared namespace whose payload is derivable from spec/status/core ledger/external observation with `component-state-not-justified` (adapt)
+- [X] T052 [US1] `ADR046-pstate-012` - `packages/d2b-core-controller/src/optional_state_admission.rs` (adapt)
 
 ### Group `wi:ADR-046-resources-credential` (8 items)
 
 - [x] T053 [US1] `ADR046-credential-001` - `packages/d2b-contracts/src/v3/credential.rs` (adapt)
 - [x] T054 [US1] `ADR046-credential-002` - `packages/d2b-contracts/proto/v3/credential.proto` (adapt)
-- [x] T055 [US1] `ADR046-credential-003` - `packages/d2b-provider-credential-secret-service/src/{lib.rs (adapt)
-- [x] T056 [US1] `ADR046-credential-004` - `packages/d2b-provider-credential-entra/src/{lib.rs (adapt)
-- [x] T057 [US1] `ADR046-credential-005` - `packages/d2b-provider-credential-managed-identity/src/{lib.rs (adapt)
+- [x] T055 [US1] `ADR046-credential-003` - `packages/d2b-provider-credential-secret-service/src/{lib.rs, controller.rs, service.rs, main.rs}` (adapt)
+- [x] T056 [US1] `ADR046-credential-004` - `packages/d2b-provider-credential-entra/src/{lib.rs, controller.rs, service.rs, main.rs}` (adapt)
+- [x] T057 [US1] `ADR046-credential-005` - `packages/d2b-provider-credential-managed-identity/src/{lib.rs, controller.rs, service.rs, main.rs}` (adapt)
 - [X] T058 [US1] `ADR046-credential-006` - `packages/d2b-provider-credential-<impl>/src/controller.rs` (adapt)
-- [x] T059 [US1] `ADR046-credential-007` - `nixos-modules/options-resources.nix` (generic schema-derived resource options (adapt)
+- [x] T059 [US1] `ADR046-credential-007` - `nixos-modules/options-resources.nix` (adapt)
 - [X] T060 [US1] `ADR046-credential-008` - `packages/d2b-provider-credential-<impl>/src/audit.rs` (adapt)
 
 ### Group `wi:ADR-046-resources-network` (8 items)
@@ -370,19 +376,19 @@ signoff, and T603 progress reconciliation.
 - [ ] T074 [US1] `ADR046-cli-002` - `packages/d2b/src/guest.rs` (`d2b guest start/stop/restart/list/status`) (adapt)
 - [ ] T075 [US1] `ADR046-cli-003` - `packages/d2b/src/exec.rs` (`d2b exec run/attach/wait/status/list/logs/kill`) (adapt)
 - [ ] T076 [US1] `ADR046-cli-004` - `packages/d2b/src/shell.rs` (`d2b shell open/attach/list/detach/kill/status`) (adapt)
-- [ ] T077 [US1] `ADR046-cli-005` - `packages/d2b/src/provider.rs` (`d2b provider list/get/status/inspect` (adapt)
+- [ ] T077 [US1] `ADR046-cli-005` - `packages/d2b/src/provider.rs` (adapt)
 - [ ] T078 [US1] `ADR046-cli-006` - `packages/d2b/src/complete.rs` (`d2b complete bash/zsh/fish`) (adapt)
 - [ ] T079 [US1] `ADR046-cli-007` - `packages/d2b/src/activation.rs` (`d2b activation build/generations/switch/boot/test/rollback/gc/migrate/keys/trust/rotate-known-host/config`) (adapt)
 - [ ] T080 [US1] `ADR046-cli-008` - `packages/d2b/src/host.rs` (all `d2b host` subcommands) (adapt)
 - [ ] T081 [US1] `ADR046-cli-009` - `packages/d2b/src/zone.rs` (`d2b zone get/list/status`) (adapt)
 - [ ] T082 [US1] `ADR046-cli-010` - `packages/d2b/src/resource.rs` (standard `d2b get/list/watch/create/update-spec/delete/status` top-level verbs) (adapt)
-- [ ] T083 [US1] `ADR046-cli-011` - Nix: `nixos-modules/options-zones.nix` (unified `d2b.zones.<zone>.resources` attrset (replace)
+- [ ] T083 [US1] `ADR046-cli-011` - Nix: `nixos-modules/options-zones.nix` (replace)
 - [ ] T084 [US1] `ADR046-cli-012` - `packages/d2b/src/endpoint.rs` (`d2b endpoint get/list/watch/status/resolve`) (adapt)
 - [ ] T085 [US1] `ADR046-cli-013` - `packages/d2b/src/share.rs` (`d2b export …` and `d2b import …` nouns) (adapt)
 
 ### Group `wi:ADR-046-nix-configuration` (35 items)
 
-- [ ] T086 [US1] `ADR046-nix-001` - `nixos-modules/options-zones.nix` (Zone-level options: `label` (adapt)
+- [ ] T086 [US1] `ADR046-nix-001` - `nixos-modules/options-zones.nix` (adapt)
 - [ ] T087 [US1] `ADR046-nix-002` - `Network` resource fields in `nixos-modules/options-zones-resources.nix` (adapt)
 - [ ] T088 [US1] `ADR046-nix-003` - `nixos-modules/options-site.nix` (retained) (adapt)
 - [ ] T089 [US1] `ADR046-nix-004` - `nixos-modules/index.nix` (rewritten) (adapt)
@@ -391,9 +397,9 @@ signoff, and T603 progress reconciliation.
 - [ ] T092 [US1] `ADR046-nix-007` - `nixos-modules/resources-zones-volumes.nix` (adapt)
 - [ ] T093 [US1] `ADR046-nix-008` - Compiler-only `parentZone` map in `nixos-modules/options-zones.nix` (adapt)
 - [ ] T094 [US1] `ADR046-nix-009` - Provider/display-wayland and Provider/shell-terminal Process configs in `zones/<z>/resource-bundle.json` (adapt)
-- [ ] T095 [US1] `ADR046-nix-010` - User-only `Host` resource in `zones/<z>/resource-bundle.json` (`spec.isolationPosture: "none"` (adapt)
+- [ ] T095 [US1] `ADR046-nix-010` - User-only `Host` resource in `zones/<z>/resource-bundle.json` (adapt)
 - [ ] T096 [P] [US1] `ADR046-nix-011` - `nixos-modules/privileges-json.nix` (retained) (copy-unchanged)
-- [ ] T097 [US1] `ADR046-nix-012` - `nixos-modules/closures-json.nix` (rewritten (adapt)
+- [ ] T097 [US1] `ADR046-nix-012` - `nixos-modules/closures-json.nix` (adapt)
 - [ ] T098 [US1] `ADR046-nix-013` - Per-Zone `zones/<z>/resource-bundle.json` (`schemaVersion`) (replace)
 - [ ] T099 [US1] `ADR046-nix-014` - `nixos-modules/assertions.nix` (adapt)
 - [ ] T100 [US1] `ADR046-nix-015` - Same files (adapt)
@@ -421,10 +427,10 @@ signoff, and T603 progress reconciliation.
 ### Group `wi:ADR-046-resources-device` (7 items)
 
 - [ ] T121 [P] [US1] `ADR046-device-001` - `packages/d2b-contracts/src/v3/device.rs` (adapt)
-- [ ] T122 [US1] `ADR046-device-002` - `packages/d2b-provider-device-tpm/src/` (controller (adapt)
-- [ ] T123 [US1] `ADR046-device-003` - `packages/d2b-provider-device-usbip/src/` (controller (adapt)
-- [ ] T124 [US1] `ADR046-device-004` - `packages/d2b-provider-device-security-key/src/` (controller (adapt)
-- [ ] T125 [US1] `ADR046-device-005` - `packages/d2b-provider-device-gpu/src/` (controller (adapt)
+- [ ] T122 [US1] `ADR046-device-002` - `packages/d2b-provider-device-tpm/src/` (adapt)
+- [ ] T123 [US1] `ADR046-device-003` - `packages/d2b-provider-device-usbip/src/` (adapt)
+- [ ] T124 [US1] `ADR046-device-004` - `packages/d2b-provider-device-security-key/src/` (adapt)
+- [ ] T125 [US1] `ADR046-device-005` - `packages/d2b-provider-device-gpu/src/` (adapt)
 - [ ] T126 [US1] `ADR046-device-006` - `nixos-modules/resources-device.nix` (adapt)
 - [ ] T127 [US1] `ADR046-device-008` - `packages/xtask/src/main.rs` (`check-provider-layout` subcommand) (adapt)
 
@@ -448,26 +454,26 @@ signoff, and T603 progress reconciliation.
 - [ ] T143 [US1] `ADR046-exec-018` - `packages/d2b-bus-wire/src/session.rs`: v3 bus protocol constants and wire types (adapt)
 - [ ] T144 [US1] `ADR046-exec-019` - `packages/d2b-provider-runtime/src/`: `registry.rs` (adapt)
 - [ ] T145 [US1] `ADR046-exec-020` - `packages/d2b-provider-toolkit/src/`: retain all modules verbatim (adapt)
-- [ ] T146 [US1] `ADR046-exec-021` - `packages/d2b-bus-contracts/src/generated_v3_services/`: v3 generated ttrpc stubs for Zone service methods (Resource CRUD (adapt)
+- [ ] T146 [US1] `ADR046-exec-021` - `packages/d2b-bus-contracts/src/generated_v3_services/` (adapt)
 - [ ] T147 [US1] `ADR046-exec-022` - `packages/d2b-bus-client/src/`: all above modules (adapt)
-- [ ] T148 [US1] `ADR046-exec-023` - `packages/d2b-zone-router/src/`: `router.rs` (v3 `ZoneOperationRouter` - idempotency semantics copied verbatim (adapt)
+- [ ] T148 [US1] `ADR046-exec-023` - `packages/d2b-zone-router/src/`: `router.rs` (adapt)
 - [ ] T149 [US1] `ADR046-user-session-001` - `packages/d2b-core-controller/src/user_session_authority.rs` (or a core/user-agent per-session agent Process under `Provider/system-systemd`) (adapt)
 
 ### Group `wi:ADR-046-resources-volume` (6 items)
 
 - [ ] T150 [P] [US1] `ADR046-volume-001` - `packages/d2b-contracts/src/v3/volume.rs` (adapt)
-- [ ] T151 [US1] `ADR046-volume-002` - `packages/d2b-provider-volume-local/src/` (layout engine (adapt)
-- [ ] T152 [US1] `ADR046-volume-003` - `packages/d2b-provider-volume-virtiofs/src/` (controller (adapt)
+- [ ] T151 [US1] `ADR046-volume-002` - `packages/d2b-provider-volume-local/src/` (adapt)
+- [ ] T152 [US1] `ADR046-volume-003` - `packages/d2b-provider-volume-virtiofs/src/` (adapt)
 - [ ] T153 [US1] `ADR046-volume-004` - `nixos-modules/resources-volume.nix` (adapt)
-- [ ] T154 [US1] `ADR046-volume-005` - `packages/d2b-provider-volume-local/src/` (block-image (create)
-- [ ] T155 [US1] `ADR046-volume-006` - `nixos-modules/resources-volume.nix` (Nix eval-time schema validation (create)
+- [ ] T154 [US1] `ADR046-volume-005` - `packages/d2b-provider-volume-local/src/` (create)
+- [ ] T155 [US1] `ADR046-volume-006` - `nixos-modules/resources-volume.nix` (create)
 
 ### Group `wi:ADR-046-resources-zone-control` (26 items)
 
-- [ ] T156 [US1] `ADR046-client-001` - `packages/d2b-client/src/` (updated for v3 Zone API (adapt)
-- [ ] T157 [US1] `ADR046-pkg-001` - `packages/d2b-contract-tests/tests/policy_provider_crate_layout.rs` (new file (create)
+- [ ] T156 [US1] `ADR046-client-001` - `packages/d2b-client/src/` (adapt)
+- [ ] T157 [US1] `ADR046-pkg-001` - `packages/d2b-contract-tests/tests/policy_provider_crate_layout.rs` (create)
 - [ ] T158 [US1] `ADR046-provider-agent-001` - `packages/d2b-provider/src/agent.rs` (v3 provider agent dispatch) (adapt)
-- [ ] T159 [US1] `ADR046-wire-001` - `packages/d2b-contracts/src/v3/{services (adapt)
+- [ ] T159 [US1] `ADR046-wire-001` - `packages/d2b-contracts/src/v3/{services,state,identity,provider}.rs` (adapt)
 - [ ] T160 [US1] `ADR046-zone-control-001` - `packages/d2b-contracts/src/v3/zone.rs` (adapt)
 - [ ] T161 [US1] `ADR046-zone-control-002` - `packages/d2b-contracts/src/v3/zone_link.rs` (adapt)
 - [ ] T162 [US1] `ADR046-zone-control-003` - `packages/d2b-contracts/src/v3/provider.rs` (adapt)
@@ -475,31 +481,31 @@ signoff, and T603 progress reconciliation.
 - [ ] T164 [US1] `ADR046-zone-control-005` - `packages/d2b-contracts/src/v3/role_binding.rs` (adapt)
 - [ ] T165 [US1] `ADR046-zone-control-006` - `packages/d2b-resource-api/src/authz.rs` (adapt)
 - [ ] T166 [US1] `ADR046-zone-control-007` - `nixos-modules/options-zones.nix` (adapt)
-- [ ] T167 [US1] `ADR046-zone-control-008` - `packages/d2b-contracts/src/v3/host.rs` (Host resource schema (adapt)
+- [ ] T167 [US1] `ADR046-zone-control-008` - `packages/d2b-contracts/src/v3/host.rs` (adapt)
 - [ ] T168 [US1] `ADR046-zone-control-009` - `packages/d2b-contracts/src/v3/quota.rs` (create)
 - [ ] T169 [US1] `ADR046-zone-control-010` - `packages/d2b-contracts/src/v3/emergency_policy.rs` (create)
-- [ ] T170 [US1] `ADR046-zone-control-011` - `packages/d2b-bus/src/{lifecycle (adapt)
-- [ ] T171 [US1] `ADR046-zone-control-012` - `packages/d2b-bus-unix/src/{adapter (adapt)
+- [ ] T170 [US1] `ADR046-zone-control-011` - `packages/d2b-bus/src/{lifecycle,engine,driver,streams,transport,error}.rs` (adapt)
+- [ ] T171 [US1] `ADR046-zone-control-012` - `packages/d2b-bus-unix/src/{adapter,socket,pidfd,credit,descriptor,error,systemd}.rs` (adapt)
 - [ ] T172 [US1] `ADR046-zone-control-013` - `packages/d2b-contracts/src/v3/component_session.rs` (new v3 namespace in existing contracts crate) (adapt)
 - [ ] T173 [US1] `ADR046-zone-control-014` - `nixos-modules/options-zones.nix` (create)
-- [ ] T174 [US1] `ADR046-zone-control-015` - `packages/d2b-resource-compiler/src/{main (create)
-- [ ] T175 [US1] `ADR046-zone-control-017` - `packages/d2b-provider/src/{registry (adapt)
+- [ ] T174 [US1] `ADR046-zone-control-015` - `packages/d2b-resource-compiler/src/{main,bundle,schema,validator,digest,sort,secret_lint,generation}.rs` (create)
+- [ ] T175 [US1] `ADR046-zone-control-017` - `packages/d2b-provider/src/{registry,rpc}.rs` (adapt)
 - [ ] T176 [US1] `ADR046-zone-control-018` - `packages/d2b-core-controller/src/zone_link.rs` (ZoneLink handler) (adapt)
-- [ ] T177 [US1] `ADR046-zone-control-019` - `packages/d2b-contracts/src/v3/{resource_export (adapt)
+- [ ] T177 [US1] `ADR046-zone-control-019` - `packages/d2b-contracts/src/v3/{resource_export,resource_import}.rs` (adapt)
 - [ ] T178 [US1] `ADR046-zone-control-020` - `packages/d2b-core-controller/src/export_import_projection.rs` (local qualified Service projection lifecycle owned by `ResourceImport`) (create)
 - [ ] T179 [US1] `ADR046-zone-control-022` - `packages/d2b-core-controller/src/authority.rs` (adapt)
-- [ ] T180 [US1] `ADR046-zone-control-023` - `packages/d2b-core-controller/src/{quota (adapt)
+- [ ] T180 [US1] `ADR046-zone-control-023` - `packages/d2b-core-controller/src/{quota,emergency_policy}.rs` (adapt)
 - [ ] T181 [US1] `ADR046-zone-control-024` - `packages/d2b-core-controller/src/authority.rs` (Host-global index scope + hardware admission) (adapt)
 
 ### Group `wi:ADR-046-telemetry-audit-and-support` (26 items)
 
-- [ ] T182 [P] [US1] `ADR046-audit-001` - `packages/d2b-audit/src/{hash_chain.rs (adapt)
+- [ ] T182 [P] [US1] `ADR046-audit-001` - `packages/d2b-audit/src/{hash_chain.rs,segment.rs,rate_limit.rs,record_types.rs,sink.rs,export.rs}` (adapt)
 - [ ] T183 [US1] `ADR046-audit-002` - `packages/d2b-resource-store-redb/src/audit.rs` (adapt)
 - [ ] T184 [US1] `ADR046-audit-003` - `packages/d2b-session/src/audit.rs` (adapt)
 - [ ] T185 [US1] `ADR046-audit-004` - `packages/d2b/src/zone_audit.rs` (new `d2b zone audit export` subcommand) (adapt)
 - [ ] T186 [US1] `ADR046-doctor-001` - `packages/d2b/src/zone_doctor.rs` (adapt)
 - [ ] T187 [US1] `ADR046-doctor-002` - `packages/d2b/src/zone_support_bundle.rs` (adapt)
-- [ ] T188 [US1] `ADR046-host-posture-001` - `packages/d2b-provider-system-core/src/{host_reconciler.rs (adapt)
+- [ ] T188 [US1] `ADR046-host-posture-001` - `packages/d2b-provider-system-core/src/{host_reconciler.rs,host_status.rs,host_process_audit.rs}` (adapt)
 - [ ] T189 [US1] `ADR046-reuse-001` - `packages/d2b-session/` copied verbatim (adapt)
 - [ ] T190 [US1] `ADR046-reuse-002` - `packages/d2b-session-unix/` copied verbatim. (adapt)
 - [ ] T191 [US1] `ADR046-reuse-003` - `packages/d2b-client/` copied (adapt)
@@ -509,7 +515,7 @@ signoff, and T603 progress reconciliation.
 - [ ] T195 [US1] `ADR046-reuse-007` - `packages/d2b-bus/src/service_router.rs` and `packages/d2b-core-controller/src/provider_effects.rs`. (adapt)
 - [ ] T196 [US1] `ADR046-reuse-008` - `packages/d2b-contract-tests/tests/component_session_v2_vectors.rs` and `tests/noise_vectors.rs` copied verbatim. (adapt)
 - [ ] T197 [US1] `ADR046-reuse-009` - `packages/d2b-telemetry/src/session_metrics_sink.rs`. (adapt)
-- [ ] T198 [P] [US1] `ADR046-telem-001` - `packages/d2b-telemetry/src/{trace_context.rs (adapt)
+- [ ] T198 [P] [US1] `ADR046-telem-001` - `packages/d2b-telemetry/src/{trace_context.rs,audit_hash.rs,emitter.rs,meter_registry.rs,metric_label_policy.rs,redaction_guard.rs}` (adapt)
 - [ ] T199 [US1] `ADR046-telem-002` - `packages/d2b-resource-store-redb/src/metrics.rs` (adapt)
 - [ ] T200 [US1] `ADR046-telem-003` - `packages/d2b-resource-api/src/metrics.rs` (adapt)
 - [ ] T201 [US1] `ADR046-telem-004` - `packages/d2b-core-controller/src/metrics.rs` (adapt)
@@ -517,7 +523,7 @@ signoff, and T603 progress reconciliation.
 - [ ] T203 [US1] `ADR046-telem-006` - `packages/d2b-provider-observability-otel/src/` (adapt)
 - [ ] T204 [US1] `ADR046-telem-007` - `packages/d2b-provider-observability-otel/src/nix/journald.nix` (new Nix fragment) (adapt)
 - [ ] T205 [US1] `ADR046-telem-008` - `packages/d2b-contract-tests/tests/policy_telemetry_redaction.rs` (new) (adapt)
-- [ ] T206 [P] [US1] `ADR046-telem-009` - `nixos-modules/resources.nix` (uniform `d2b.zones.<zone>.resources` schema-aware option (adapt)
+- [ ] T206 [P] [US1] `ADR046-telem-009` - `nixos-modules/resources.nix` (adapt)
 - [ ] T207 [US1] `ADR046-telem-010` - `nixos-modules/resources-bundle.nix` (build-time validation step 4 in the `resources-bundle` derivation) (adapt)
 
 ### Group `wi:core-config-hub:w5` (6 items)
@@ -525,9 +531,9 @@ signoff, and T603 progress reconciliation.
 - [ ] T208 [US1] `ADR046-device-007` - `packages/d2b-core-controller/src/configuration.rs` (create)
 - [ ] T209 [US1] `ADR046-exec-013` - `packages/d2b-core-controller/src/cleanup.rs`: EphemeralProcess TTL cleanup controller handler (create)
 - [ ] T210 [US1] `ADR046-exec-015` - `packages/d2b-core-controller/src/configuration.rs`: `ZoneConfigController` (create)
-- [ ] T211 [US1] `ADR046-telem-011` - `packages/d2b-core-controller/src/{configuration.rs (adapt)
-- [ ] T212 [US1] `ADR046-zone-control-016` - `packages/d2b-core-controller/src/configuration.rs` (Phase 3 activation (adapt)
-- [ ] T213 [US1] `ADR046-zone-control-021` - `packages/d2b-core-controller/src/{coordinator (adapt)
+- [ ] T211 [US1] `ADR046-telem-011` - `packages/d2b-core-controller/src/{configuration.rs, ownership.rs}` (adapt)
+- [ ] T212 [US1] `ADR046-zone-control-016` - `packages/d2b-core-controller/src/configuration/{mod,bundle_apply,generation_transition}.rs` (adapt)
+- [ ] T213 [US1] `ADR046-zone-control-021` - `packages/d2b-core-controller/src/{coordinator,configuration,zonelink}.rs` (adapt)
 
 ### Group `wi:reconciliation-real-backend:w5` (1 items)
 
@@ -943,7 +949,7 @@ signoff, and T603 progress reconciliation.
 - [ ] T229 [P] [US2] `ADR046-audio-001` - `packages/d2b-provider-audio-pipewire/src/audio_policy.rs` (copy-unchanged)
 - [ ] T230 [US2] `ADR046-audio-002` - `packages/d2b-provider-audio-pipewire/src/argv.rs` (component template renderer) (adapt)
 - [ ] T231 [US2] `ADR046-audio-004` - `packages/d2b-provider-audio-pipewire/src/mediator/enforcement.rs` (adapt)
-- [ ] T232 [US2] `ADR046-audio-005` - `packages/d2b-provider-audio-pipewire/src/{resource_type (adapt)
+- [ ] T232 [US2] `ADR046-audio-005` - `packages/d2b-provider-audio-pipewire/src/{resource_type,admission,provider_extension}.rs` (adapt)
 - [ ] T233 [US2] `ADR046-audio-006` - `packages/d2b-provider-audio-pipewire/src/controller/audio_service.rs` (adapt)
 - [ ] T234 [US2] `ADR046-audio-007` - `packages/d2b-provider-audio-pipewire/src/mediator/mod.rs` (create)
 - [ ] T235 [US2] `ADR046-audio-008` - `nixos-modules/components/audio/v3-resource.nix` (replace)
@@ -971,29 +977,29 @@ signoff, and T603 progress reconciliation.
 
 ### Group `wi:ADR-046-provider-credential-entra` (1 items)
 
-- [ ] T254 [US2] `ADR046-cred-entra-001` - `packages/d2b-provider-credential-entra/src/{lib.rs (adapt)
+- [ ] T254 [US2] `ADR046-cred-entra-001` - `packages/d2b-provider-credential-entra/src/{lib.rs,controller.rs,service.rs,controller_main.rs,agent_main.rs,audit.rs,telemetry.rs}` (adapt)
 
 ### Group `wi:ADR-046-provider-credential-managed-identity` (5 items)
 
-- [ ] T255 [US2] `ADR046-cred-mi-001` - `packages/d2b-provider-credential-managed-identity/src/{lib.rs (adapt)
+- [ ] T255 [US2] `ADR046-cred-mi-001` - `packages/d2b-provider-credential-managed-identity/src/{lib.rs, controller.rs, agent.rs, service.rs, audit.rs, telemetry.rs}` (adapt)
 - [ ] T256 [US2] `ADR046-cred-mi-002` - packages/d2b-provider-credential-managed-identity/src/controller.rs (adapt)
 - [ ] T257 [US2] `ADR046-cred-mi-003` - nixos-modules/options-resources.nix (replace)
-- [ ] T258 [US2] `ADR046-cred-mi-004` - packages/d2b-provider-credential-managed-identity/src/{audit.rs (adapt)
-- [ ] T259 [US2] `ADR046-mi-topology-001` - packages/d2b-provider-credential-managed-identity/src/{controller.rs (adapt)
+- [ ] T258 [US2] `ADR046-cred-mi-004` - packages/d2b-provider-credential-managed-identity/src/{audit.rs,telemetry.rs} (adapt)
+- [ ] T259 [US2] `ADR046-mi-topology-001` - packages/d2b-provider-credential-managed-identity/src/{controller.rs,agent.rs} (adapt)
 
 ### Group `wi:ADR-046-provider-credential-secret-service` (6 items)
 
 - [ ] T260 [P] [US2] `ADR046-cred-ss-001` - packages/d2b-contracts/src/v3/credential.rs (adapt)
 - [ ] T261 [P] [US2] `ADR046-cred-ss-002` - packages/d2b-contracts/proto/v3/credential.proto (create)
-- [ ] T262 [US2] `ADR046-cred-ss-003` - `packages/d2b-provider-credential-secret-service/src/{lib.rs (adapt)
+- [ ] T262 [US2] `ADR046-cred-ss-003` - `packages/d2b-provider-credential-secret-service/src/{lib.rs, controller.rs, service.rs, main.rs}` (adapt)
 - [ ] T263 [P] [US2] `ADR046-cred-ss-004` - packages/d2b-provider-credential-<impl>/src/controller.rs (create)
 - [ ] T264 [P] [US2] `ADR046-cred-ss-005` - nixos-modules/options-resources.nix (create)
-- [ ] T265 [P] [US2] `ADR046-cred-ss-006` - packages/d2b-provider-credential-secret-service/src/{audit.rs (adapt)
+- [ ] T265 [P] [US2] `ADR046-cred-ss-006` - packages/d2b-provider-credential-secret-service/src/{audit.rs,telemetry.rs} (adapt)
 
 ### Group `wi:ADR-046-provider-device-gpu` (9 items)
 
 - [ ] T266 [P] [US2] `ADR046-gpu-001` - `packages/d2b-provider-device-gpu/` with `src/` (extract)
-- [ ] T267 [US2] `ADR046-gpu-002` - `packages/d2b-provider-device-gpu/src/{controller.rs (adapt)
+- [ ] T267 [US2] `ADR046-gpu-002` - `packages/d2b-provider-device-gpu/src/{controller.rs,telemetry.rs}` (adapt)
 - [ ] T268 [US2] `ADR046-gpu-003` - `packages/d2b-provider-device-gpu/src/probe.rs` (create)
 - [ ] T269 [US2] `ADR046-gpu-004` - `packages/d2b-provider-device-gpu/src/arbitration.rs` (create)
 - [ ] T270 [US2] `ADR046-gpu-005` - `packages/d2b-provider-device-gpu/src/worker_gpu.rs` (adapt)
@@ -1029,10 +1035,10 @@ signoff, and T603 progress reconciliation.
 - [ ] T297 [US2] `ADR046-security-key-023` - `packages/d2b-provider-device-security-key/README.md` (create)
 - [ ] T298 [US2] `ADR046-security-key-024` - Authority/projection Service Endpoint and Binding private Endpoint resolution (create)
 - [ ] T299 [US2] `ADR046-security-key-025` - `d2b-contracts` neutral `SecurityKeyEffectPort` trait/types (create)
-- [ ] T300 [US2] `ADR046-security-key-026` - `packages/d2b-provider-device-security-key/src/{resource_type (create)
+- [ ] T300 [US2] `ADR046-security-key-026` - `packages/d2b-provider-device-security-key/src/{resource_type,provider_extension,admission}.rs` (create)
 - [ ] T301 [US2] `ADR046-security-key-027` - Provider descriptor state declaration (create)
 - [ ] T302 [US2] `ADR046-security-key-028` - `packages/d2b-provider-device-security-key/src/share_adapter.rs` (adapt)
-- [ ] T303 [US2] `ADR046-security-key-029` - `packages/d2b-provider-device-security-key/src/{authority (adapt)
+- [ ] T303 [US2] `ADR046-security-key-029` - `packages/d2b-provider-device-security-key/src/{authority,relay,streams}.rs` (adapt)
 - [ ] T304 [US2] `ADR046-security-key-030` - Removed from daemon (delete-after-cutover)
 - [ ] T305 [US2] `ADR046-security-key-031` - Removed from daemon startup (delete-after-cutover)
 - [ ] T306 [US2] `ADR046-security-key-032` - Removed from guest Nix module (delete-after-cutover)
@@ -1042,14 +1048,14 @@ signoff, and T603 progress reconciliation.
 
 ### Group `wi:ADR-046-provider-device-tpm` (13 items)
 
-- [ ] T310 [P] [US2] `ADR046-device-tpm-001` - packages/d2b-provider-device-tpm/{src/ (adapt)
+- [ ] T310 [P] [US2] `ADR046-device-tpm-001` - packages/d2b-provider-device-tpm/{src/,tests/,integration/README.md,README.md} (adapt)
 - [ ] T311 [US2] `ADR046-device-tpm-002` - packages/d2b-provider-device-tpm/src/effect_port.rs (wrap)
 - [ ] T312 [US2] `ADR046-device-tpm-003` - packages/d2b-provider-device-tpm/src/controller.rs (replace)
 - [ ] T313 [US2] `ADR046-device-tpm-004` - packages/d2b-provider-device-tpm/src/resources.rs (replace)
 - [ ] T314 [US2] `ADR046-device-tpm-005` - packages/d2b-provider-device-tpm/src/resources.rs (adapt)
 - [ ] T315 [US2] `ADR046-device-tpm-006` - packages/d2b-provider-device-tpm/src/resources.rs (adapt)
 - [ ] T316 [US2] `ADR046-device-tpm-007` - packages/d2b-provider-device-tpm/src/status.rs (create)
-- [ ] T317 [US2] `ADR046-device-tpm-008` - packages/d2b-provider-device-tpm/src/{effect_port.rs (replace)
+- [ ] T317 [US2] `ADR046-device-tpm-008` - packages/d2b-provider-device-tpm/src/{effect_port.rs,status.rs} (replace)
 - [ ] T318 [US2] `ADR046-device-tpm-009` - packages/d2b-provider-device-tpm/tests/marker_fail_closed.rs (adapt)
 - [ ] T319 [US2] `ADR046-device-tpm-010` - packages/d2b-provider-device-tpm/src/resources.rs (create)
 - [ ] T320 [US2] `ADR046-device-tpm-011` - nixos-modules/options-resources.nix and Nix eval/golden tests for §17.1 Device JSON (replace)
@@ -1061,10 +1067,10 @@ signoff, and T603 progress reconciliation.
 - [ ] T323 [P] [US2] `ADR046-usbip-001` - packages/d2b-contracts/src/usbip_effect_port.rs (create)
 - [ ] T324 [US2] `ADR046-usbip-002` - packages/d2b-core/src/device_usbip_adapter.rs (adapt)
 - [ ] T325 [US2] `ADR046-usbip-003` - packages/d2b-provider-device-usbip/ (create)
-- [ ] T326 [US2] `ADR046-usbip-004` - packages/d2b-provider-device-usbip/src/{controller (adapt)
+- [ ] T326 [US2] `ADR046-usbip-004` - packages/d2b-provider-device-usbip/src/{controller,reconcile,export_import}.rs (adapt)
 - [ ] T327 [US2] `ADR046-usbip-005` - packages/d2b-provider-device-usbip/src/reconcile.rs (adapt)
 - [ ] T328 [US2] `ADR046-usbip-006` - packages/d2b-provider-device-usbip/src/status.rs (adapt)
-- [ ] T329 [US2] `ADR046-usbip-007` - packages/d2b-provider-device-usbip/{src (adapt)
+- [ ] T329 [US2] `ADR046-usbip-007` - packages/d2b-provider-device-usbip/{src,tests,integration/README.md} (adapt)
 - [ ] T330 [US2] `ADR046-usbip-008` - nixos-modules/components/usbip.nix (adapt)
 - [ ] T331 [US2] `ADR046-usbip-009` - packages/d2bd/src/ (delete-after-cutover)
 
@@ -1082,7 +1088,7 @@ signoff, and T603 progress reconciliation.
 - [ ] T338 [P] [US2] `ADR046-nl-003` - `d2b-contracts` opaque byte-array newtypes (create)
 - [ ] T339 [US2] `ADR046-nl-004` - Core LaunchTicket builder and dependency resolver that walks `Guest.ownerRef: Network/<name>` to resolved tap FDs. (create)
 - [ ] T340 [P] [US2] `ADR046-nl-005` - Core adapter imports `d2b-host` modules (adapt)
-- [ ] T341 [US2] `ADR046-nl-006` - `packages/d2b-provider-network-local/src/{controller.rs (adapt)
+- [ ] T341 [US2] `ADR046-nl-006` - `packages/d2b-provider-network-local/src/{controller.rs,metrics.rs}` (adapt)
 - [ ] T342 [P] [US2] `ADR046-nl-007` - `packages/d2b-provider-network-local/src/process_specs.rs` agent template plus agent service implementation in the net-VM artifact. (create)
 - [ ] T343 [P] [US2] `ADR046-nl-008` - `packages/d2b-provider-network-local/src/config_volume.rs`. (adapt)
 - [ ] T344 [P] [US2] `ADR046-nl-009` - `packages/d2b-provider-network-local/src/process_specs.rs`. (adapt)
@@ -1100,7 +1106,7 @@ signoff, and T603 progress reconciliation.
 
 ### Group `wi:ADR-046-provider-notification-desktop` (6 items)
 
-- [ ] T356 [P] [US2] `ADR046-notify-001` - `packages/d2b-provider-notification-desktop/src/{types (adapt)
+- [ ] T356 [P] [US2] `ADR046-notify-001` - `packages/d2b-provider-notification-desktop/src/{types,redact,action_nonce}.rs` (adapt)
 - [ ] T357 [US2] `ADR046-notify-002` - `packages/d2b-provider-notification-desktop/src/stream_admission.rs` (adapt)
 - [ ] T358 [US2] `ADR046-notify-003` - `packages/d2b-provider-notification-desktop/src/controller.rs` (create)
 - [ ] T359 [US2] `ADR046-notify-004` - `packages/d2b-provider-notification-desktop/src/host_sink.rs` (adapt)
@@ -1109,33 +1115,33 @@ signoff, and T603 progress reconciliation.
 
 ### Group `wi:ADR-046-provider-observability-otel` (6 items)
 
-- [ ] T362 [US2] `ADR046-otel-001` - `packages/d2b-provider-observability-otel/src/{forwarder_bin (adapt)
-- [ ] T363 [US2] `ADR046-otel-002` - `packages/d2b-provider-observability-otel/src/{collector_bin (adapt)
+- [ ] T362 [US2] `ADR046-otel-001` - `packages/d2b-provider-observability-otel/src/{forwarder_bin,controller,binding}.rs` (adapt)
+- [ ] T363 [US2] `ADR046-otel-002` - `packages/d2b-provider-observability-otel/src/{collector_bin,emitter_socket,ingress_policy,exporter,controller,service,binding}.rs` (adapt)
 - [ ] T364 [US2] `ADR046-otel-003` - `packages/d2b-provider-observability-otel/src/nix/journald.nix` (adapt)
 - [ ] T365 [US2] `ADR046-otel-004` - `packages/d2b-contract-tests/tests/policy_observability.rs` (updated) (adapt)
 - [ ] T366 [US2] `ADR046-otel-005` - `packages/d2b-provider-observability-otel/src/share_adapter.rs` (adapt)
-- [ ] T367 [US2] `ADR046-otel-006` - `packages/d2b-provider-observability-otel/src/{authority (adapt)
+- [ ] T367 [US2] `ADR046-otel-006` - `packages/d2b-provider-observability-otel/src/{authority,service,binding,projection}.rs` (adapt)
 
 ### Group `wi:ADR-046-provider-runtime-azure-container-apps` (7 items)
 
 - [ ] T368 [US2] `ADR046-aca-001` - `packages/d2b-provider-runtime-azure-container-apps/src/controller.rs` (replace)
 - [ ] T369 [US2] `ADR046-aca-002` - `packages/d2b-provider-runtime-azure-container-apps/src/deployment_service.rs` (adapt)
-- [ ] T370 [US2] `ADR046-aca-003` - `packages/d2b-contracts/src/provider_effects/aca.rs` (shared `d2b-contracts` provider-effects module (adapt)
-- [ ] T371 [US2] `ADR046-aca-004` - ACA sandbox-agent Endpoint/session controller (§§7 (replace)
+- [ ] T370 [US2] `ADR046-aca-003` - `packages/d2b-contracts/src/provider_effects/aca.rs` (adapt)
+- [ ] T371 [US2] `ADR046-aca-004` - ACA sandbox-agent Endpoint/session controller (replace)
 - [ ] T372 [US2] `ADR046-aca-005` - `packages/d2b-provider-runtime-azure-container-apps/src/types.rs` (adapt)
 - [ ] T373 [US2] `ADR046-aca-006` - `nixos-modules/` (generated Guest resource options) (replace)
-- [ ] T374 [US2] `ADR046-aca-007` - `nixos-modules/` (gateway Guest declaration (create)
+- [ ] T374 [US2] `ADR046-aca-007` - `nixos-modules/` (create)
 
 ### Group `wi:ADR-046-provider-runtime-azure-virtual-machine` (9 items)
 
-- [ ] T375 [P] [US2] `ADR046-azure-vm-001` - `src/{lib.rs (adapt)
-- [ ] T376 [US2] `ADR046-azure-vm-002` - `src/effect/{mod.rs (adapt)
-- [ ] T377 [US2] `ADR046-azure-vm-003` - `src/controller/{mod.rs (adapt)
+- [ ] T375 [P] [US2] `ADR046-azure-vm-001` - `src/{lib.rs,config.rs,schema.rs,error.rs,effect/mod.rs}` (adapt)
+- [ ] T376 [US2] `ADR046-azure-vm-002` - `src/effect/{mod.rs,real.rs,fake.rs,rate_limit.rs}` (adapt)
+- [ ] T377 [US2] `ADR046-azure-vm-003` - `src/controller/{mod.rs,lifecycle.rs,idempotency.rs}` (adapt)
 - [ ] T378 [US2] `ADR046-azure-vm-004` - `src/controller/bootstrap.rs` (adapt)
 - [ ] T379 [US2] `ADR046-azure-vm-005` - `src/credential.rs` (adapt)
 - [ ] T380 [US2] `ADR046-azure-vm-006` - `src/controller/idempotency.rs` (adapt)
 - [ ] T381 [US2] `ADR046-azure-vm-007` - `nixos-modules/` (Provider/Guest resource emitters) (adapt)
-- [ ] T382 [US2] `ADR046-azure-vm-008` - `src/{telemetry.rs (adapt)
+- [ ] T382 [US2] `ADR046-azure-vm-008` - `src/{telemetry.rs,audit.rs}` (adapt)
 - [ ] T383 [P] [US2] `ADR046-azure-vm-009` - `tests/` (adapt)
 
 ### Group `wi:ADR-046-provider-runtime-cloud-hypervisor` (7 items)
@@ -1150,10 +1156,10 @@ signoff, and T603 progress reconciliation.
 
 ### Group `wi:ADR-046-provider-runtime-qemu-media` (19 items)
 
-- [ ] T391 [P] [US2] `ADR046-qemu-media-001` - packages/d2b-provider-runtime-qemu-media/{src/lib.rs (create)
+- [ ] T391 [P] [US2] `ADR046-qemu-media-001` - packages/d2b-provider-runtime-qemu-media/{src/lib.rs,tests/provider_layout.rs,integration/mod.rs,README.md} (create)
 - [ ] T392 [US2] `ADR046-qemu-media-002` - packages/d2b-provider-runtime-qemu-media/src/types/guest.rs (adapt)
 - [ ] T393 [US2] `ADR046-qemu-media-003` - packages/d2b-provider-runtime-qemu-media/src/config.rs (adapt)
-- [ ] T394 [US2] `ADR046-qemu-media-004` - packages/d2b-provider-runtime-qemu-media/src/{descriptor.rs (create)
+- [ ] T394 [US2] `ADR046-qemu-media-004` - packages/d2b-provider-runtime-qemu-media/src/{descriptor.rs,state.rs} (create)
 - [ ] T395 [US2] `ADR046-qemu-media-005` - packages/d2b-provider-runtime-qemu-media/src/controller/volume.rs (adapt)
 - [ ] T396 [US2] `ADR046-qemu-media-006` - packages/d2b-provider-runtime-qemu-media/src/controller/media_watch.rs (adapt)
 - [ ] T397 [US2] `ADR046-qemu-media-007` - packages/d2b-provider-runtime-qemu-media/src/controller/device_watch.rs (create)
@@ -1172,19 +1178,19 @@ signoff, and T603 progress reconciliation.
 
 ### Group `wi:ADR-046-provider-shell-terminal` (13 items)
 
-- [ ] T410 [P] [US2] `ADR046-sterm-001` - `packages/d2b-provider-shell-terminal/src/resources/{pool (create)
+- [ ] T410 [P] [US2] `ADR046-sterm-001` - `packages/d2b-provider-shell-terminal/src/resources/{pool,session}.rs` (create)
 - [ ] T411 [P] [US2] `ADR046-sterm-002` - `packages/d2b-provider-shell-terminal/src/bin/d2b-shell-terminal-controller.rs` (create)
 - [ ] T412 [P] [US2] `ADR046-sterm-003` - `packages/d2b-provider-shell-terminal/src/bin/d2b-shell-session-supervisor.rs` (adapt)
 - [ ] T413 [P] [US2] `ADR046-sterm-004` - `packages/d2b-provider-shell-terminal/src/process_templates.rs` (replace)
 - [ ] T414 [P] [US2] `ADR046-sterm-005` - `packages/d2b-provider-shell-terminal/src/service/open_session.rs` (create)
-- [ ] T415 [P] [US2] `ADR046-sterm-006` - `packages/d2b-provider-shell-terminal/src/session/{pty (adapt)
+- [ ] T415 [P] [US2] `ADR046-sterm-006` - `packages/d2b-provider-shell-terminal/src/session/{pty,ring}.rs` (adapt)
 - [ ] T416 [P] [US2] `ADR046-sterm-007` - `packages/d2b-provider-shell-terminal/src/session/adopt.rs` (adapt)
 - [ ] T417 [P] [US2] `ADR046-sterm-008` - `packages/d2b-provider-shell-terminal/src/host_rules.rs` (replace)
 - [ ] T418 [P] [US2] `ADR046-sterm-009` - `packages/d2b-provider-shell-terminal/src/guest_rules.rs` (replace)
 - [ ] T419 [P] [US2] `ADR046-sterm-010` - `packages/d2b-provider-shell-terminal/src/authz.rs` (replace)
-- [ ] T420 [P] [US2] `ADR046-sterm-011` - `packages/d2b-provider-shell-terminal/src/{audit (create)
+- [ ] T420 [P] [US2] `ADR046-sterm-011` - `packages/d2b-provider-shell-terminal/src/{audit,telemetry}.rs` (create)
 - [ ] T421 [P] [US2] `ADR046-sterm-012` - `packages/d2b-provider-shell-terminal/src/migration.rs` (delete-after-cutover)
-- [ ] T422 [P] [US2] `ADR046-sterm-013` - `packages/d2b-provider-shell-terminal/src/service/{controller (adapt)
+- [ ] T422 [P] [US2] `ADR046-sterm-013` - `packages/d2b-provider-shell-terminal/src/service/{controller,supervisor}.rs` (adapt)
 
 ### Group `wi:ADR-046-provider-system-core` (1 items)
 
@@ -1216,21 +1222,21 @@ signoff, and T603 progress reconciliation.
 - [ ] T435 [US2] `ADR046-transport-relay-003` - `packages/d2b-provider-transport-azure-relay/src/reconnect.rs` (create)
 - [ ] T436 [US2] `ADR046-transport-relay-004` - `packages/d2b-provider-transport-azure-relay/src/transport_settings.rs` (create)
 - [ ] T437 [US2] `ADR046-transport-relay-005` - `packages/d2b-provider-transport-azure-relay/src/backpressure.rs` (adapt)
-- [ ] T438 [US2] `ADR046-transport-relay-006` - `packages/d2b-provider-transport-azure-relay/src/{metrics.rs (create)
+- [ ] T438 [US2] `ADR046-transport-relay-006` - `packages/d2b-provider-transport-azure-relay/src/{metrics.rs, audit.rs}` (create)
 - [ ] T439 [P] [US2] `ADR046-transport-relay-007` - `packages/d2b-provider-transport-azure-relay/src/tests/integration/README` (create)
 
 ### Group `wi:ADR-046-provider-transport-unix` (11 items)
 
-- [ ] T440 [US2] `ADR046-transport-unix-001` - `packages/d2b-provider-transport-unix/src/credit.rs` (imports `MAX_PACKET_ATTACHMENTS=32` (adapt)
-- [ ] T441 [US2] `ADR046-transport-unix-002` - `packages/d2b-provider-transport-unix/src/{seqpacket (adapt)
-- [ ] T442 [US2] `ADR046-transport-unix-003` - `packages/d2b-provider-transport-unix/src/{stream (adapt)
+- [ ] T440 [US2] `ADR046-transport-unix-001` - `packages/d2b-provider-transport-unix/src/credit.rs` (adapt)
+- [ ] T441 [US2] `ADR046-transport-unix-002` - `packages/d2b-provider-transport-unix/src/{seqpacket,identity,socket}.rs` (adapt)
+- [ ] T442 [US2] `ADR046-transport-unix-003` - `packages/d2b-provider-transport-unix/src/{stream,socket}.rs` (adapt)
 - [ ] T443 [US2] `ADR046-transport-unix-004` - `packages/d2b-provider-transport-unix/src/credit.rs` (adapt)
 - [ ] T444 [US2] `ADR046-transport-unix-005` - `packages/d2b-provider-transport-unix/src/descriptor.rs` (adapt)
 - [ ] T445 [US2] `ADR046-transport-unix-006` - `packages/d2b-provider-transport-unix/src/admission.rs` (adapt)
-- [ ] T446 [US2] `ADR046-transport-unix-007` - `packages/d2b-provider-transport-unix/src/{portal (adapt)
+- [ ] T446 [US2] `ADR046-transport-unix-007` - `packages/d2b-provider-transport-unix/src/{portal,service}.rs` (adapt)
 - [ ] T447 [US2] `ADR046-transport-unix-008` - `packages/d2b-provider-transport-unix/` crate Cargo.toml binary target `d2b-transport-unix-service` (adapt)
 - [ ] T448 [US2] `ADR046-transport-unix-009` - `docs/reference/schemas/v3/providers/transport-unix.transport-binding.json` (create)
-- [ ] T449 [US2] `ADR046-transport-unix-010` - `packages/d2b-provider-transport-unix/src/{audit (create)
+- [ ] T449 [US2] `ADR046-transport-unix-010` - `packages/d2b-provider-transport-unix/src/{audit,metrics}.rs` (create)
 - [ ] T450 [US2] `ADR046-transport-unix-011` - `packages/d2b-provider-transport-unix/integration/` and `integration/README.md` (adapt)
 
 ### Group `wi:ADR-046-provider-transport-vsock` (7 items)
@@ -1245,13 +1251,13 @@ signoff, and T603 progress reconciliation.
 
 ### Group `wi:ADR-046-provider-volume-local` (13 items)
 
-- [ ] T458 [US2] `ADR046-vl-001` - `d2b-contracts/src/v3/volume_layout.rs` (LayoutEntry (adapt)
+- [ ] T458 [US2] `ADR046-vl-001` - `d2b-contracts/src/v3/volume_layout.rs` (adapt)
 - [ ] T459 [US2] `ADR046-vl-002` - Full `packages/d2b-provider-volume-local/` scaffold per §Crate layout: `src/` (adapt)
 - [ ] T460 [US2] `ADR046-vl-003` - `src/controller.rs` (adapt)
 - [ ] T461 [US2] `ADR046-vl-004` - `src/store_view.rs` (adapt)
 - [ ] T462 [US2] `ADR046-vl-005` - `src/swtpm_volume.rs` (adapt)
 - [ ] T463 [US2] `ADR046-vl-006` - `src/source.rs` (block-image and tmpfs branches) (create)
-- [ ] T464 [US2] `ADR046-vl-007` - `src/{migration (adapt)
+- [ ] T464 [US2] `ADR046-vl-007` - `src/{migration,snapshot,sealing}.rs` (adapt)
 - [ ] T465 [US2] `ADR046-vl-008` - `src/relocation.rs` (create)
 - [ ] T466 [US2] `ADR046-vl-009` - `src/audit.rs` (adapt)
 - [ ] T467 [US2] `ADR046-vl-010` - `nixos-modules/zone-resources.nix` (per §ADR046-pstate-010) (adapt)
@@ -1301,15 +1307,15 @@ signoff, and T603 progress reconciliation.
 
 ### Group `wi:ADR-046-reset-and-cutover` (11 items)
 
-- [ ] T492 [P] [US3] `ADR046-reset-001` - `packages/d2b-cutover/src/{inventory (adapt)
-- [ ] T493 [US3] `ADR046-reset-002` - `packages/d2b-cutover/src/{bundle_validate (adapt)
-- [ ] T494 [US3] `ADR046-reset-003` - `packages/d2b-cutover/src/{consent (adapt)
+- [ ] T492 [P] [US3] `ADR046-reset-001` - `packages/d2b-cutover/src/{inventory,snapshot,checkpoint}.rs` (adapt)
+- [ ] T493 [US3] `ADR046-reset-002` - `packages/d2b-cutover/src/{bundle_validate,trust_preflight}.rs` (adapt)
+- [ ] T494 [US3] `ADR046-reset-003` - `packages/d2b-cutover/src/{consent,drain,disposition}.rs` (adapt)
 - [ ] T495 [US3] `ADR046-reset-004` - `packages/d2b-cutover/src/adopt.rs` (adapt)
-- [ ] T496 [US3] `ADR046-reset-005` - `packages/d2b-cutover/src/{store_bootstrap (create)
-- [ ] T497 [US3] `ADR046-reset-006` - `packages/d2b-cutover/src/{zonelink_cutover (adapt)
-- [ ] T498 [US3] `ADR046-reset-007` - `packages/d2b-cutover/src/{verify (adapt)
+- [ ] T496 [US3] `ADR046-reset-005` - `packages/d2b-cutover/src/{store_bootstrap,provider_sequence}.rs` (create)
+- [ ] T497 [US3] `ADR046-reset-006` - `packages/d2b-cutover/src/{zonelink_cutover,guest_activation}.rs` (adapt)
+- [ ] T498 [US3] `ADR046-reset-007` - `packages/d2b-cutover/src/{verify,doctor,degraded}.rs` (adapt)
 - [ ] T499 [US3] `ADR046-reset-008` - `packages/d2b-cutover/src/finalize.rs` (create)
-- [ ] T500 [US3] `ADR046-reset-009` - `packages/d2b-cutover/src/{journal (adapt)
+- [ ] T500 [US3] `ADR046-reset-009` - `packages/d2b-cutover/src/{journal,rollback,hold}.rs` (adapt)
 - [ ] T501 [US3] `ADR046-reset-010` - `packages/d2b-cutover/src/reset_scope.rs` (adapt)
 - [ ] T502 [US3] `ADR046-reset-011` - `tests/integration/live/cutover-real-host.sh` (create)
 
@@ -1325,27 +1331,27 @@ signoff, and T603 progress reconciliation.
 - [ ] T510 [US3] `ADR046-security-008` - `packages/d2b-provider-system-core/tests/no_isolation_propagation.rs` (adapt)
 - [ ] T511 [US3] `ADR046-security-009` - `packages/d2b-provider-volume-local/tests/marker_tamper_fault_injection.rs` (adapt)
 - [ ] T512 [US3] `ADR046-security-010` - `packages/d2b-contract-tests/tests/zero_secret_invariant.rs` (adapt)
-- [ ] T513 [US3] `ADR046-security-011` - `packages/d2b-provider-{clipboard-wayland (adapt)
+- [ ] T513 [US3] `ADR046-security-011` - `packages/d2b-provider-{clipboard-wayland,shell-terminal,device-security-key,notification-desktop}/tests/stream_redaction.rs` (adapt)
 - [ ] T514 [US3] `ADR046-security-012` - `packages/d2b-audit/tests/privileged_fail_closed.rs` (adapt)
 - [ ] T515 [US3] `ADR046-security-013` - `packages/d2b-bus/tests/dos_ceiling_fault_injection.rs` (adapt)
-- [ ] T516 [US3] `ADR046-security-014` - `packages/d2b/src/commands/{doctor (adapt)
+- [ ] T516 [US3] `ADR046-security-014` - `packages/d2b/src/commands/{doctor,support_bundle}.rs` (adapt)
 - [ ] T517 [US3] `ADR046-security-015` - `packages/d2b-core-controller/src/reset.rs` (adapt)
 - [ ] T518 [P] [US3] `ADR046-security-016` - `tests/unit/gates/security-matrix-coverage.sh` (adapt)
 - [ ] T519 [US3] `ADR046-security-017` - `tests/integration/containers/malicious-child-zone.rs` (adapt)
-- [ ] T520 [P] [US3] `ADR046-security-018` - `docs/reference/security-manual-validation-checklist.md` (new reference doc (adapt)
+- [ ] T520 [P] [US3] `ADR046-security-018` - `docs/reference/security-manual-validation-checklist.md` (adapt)
 - [ ] T521 [US3] `ADR046-security-019` - `packages/d2b-contract-tests/tests/minijail_process_ownership.rs` (adapt)
 
 ### Group `wi:ADR-046-streamline` (24 items)
 
 - [ ] T522 [P] [US3] `ADR046-streamline-001` - `docs/specs/ADR-046-spec-set.json` (create)
-- [ ] T523 [US3] `ADR046-streamline-002` - `docs/specs/schemas/*.schema.json` (Tier A: hand-authored-once canonical source checked into the tree (create)
+- [ ] T523 [US3] `ADR046-streamline-002` - `docs/specs/schemas/*.schema.json` (create)
 - [ ] T524 [US3] `ADR046-streamline-003` - `packages/xtask/src/bin/spec_schema_check.rs` (create)
-- [ ] T525 [US3] `ADR046-streamline-004` - `docs/specs/providers/TEMPLATE.md` (committed (create)
+- [ ] T525 [US3] `ADR046-streamline-004` - `docs/specs/providers/TEMPLATE.md` (create)
 - [ ] T526 [US3] `ADR046-streamline-005` - `packages/d2b-contract-tests/tests/policy_spec_vocabulary.rs` (create)
 - [ ] T527 [US3] `ADR046-streamline-006` - `packages/d2b-resource-store-redb/tests/provider_state_graph.rs` (or the eventual crate implementing Zone resource storage) (create)
 - [ ] T528 [US3] `ADR046-streamline-007` - `packages/d2b-contract-tests/tests/policy_effectport_boundary.rs` (adapt)
 - [ ] T529 [US3] `ADR046-streamline-008` - `packages/d2b-contract-tests/tests/policy_work_items.rs` (create)
-- [ ] T530 [US3] `ADR046-streamline-009` - `docs/specs/ADR-046-provider-catalog.md` (generated (create)
+- [ ] T530 [US3] `ADR046-streamline-009` - `docs/specs/ADR-046-provider-catalog.md` (create)
 - [ ] T531 [US3] `ADR046-streamline-010` - `tests/tools/reconcile-stale-base.sh` (reporting only) plus a documented `git town sync`/`git town` restack procedure this report feeds into (adapt)
 - [ ] T532 [P] [US3] `ADR046-streamline-011` - `packages/xtask/src/bin/handoff_manifest.rs` (schema/validator only) (create)
 - [ ] T533 [US3] `ADR046-streamline-012` - `tests/tools/import-task-db-consistency.sh` (create)
@@ -1353,7 +1359,7 @@ signoff, and T603 progress reconciliation.
 - [ ] T535 [P] [US3] `ADR046-streamline-014` - `tests/tools/run-layer.sh` extension (this repository already has `tests/tools/run-layer.sh` and `layer1-jobs.py` bounded-parallelism precedent) plus fake `EffectPort`/`ResourceClient` stub crates under `packages/d2b-provider-toolkit-fakes/` (adapt)
 - [ ] T536 [US3] `ADR046-streamline-015` - Shared `packages/xtask` regeneration-conflict-detection helper consumed by every `gen-*`/`spec-registry` subcommand (adapt)
 - [ ] T537 [US3] `ADR046-streamline-016` - `packages/d2b-contract-tests/tests/policy_no_leaked_decision_prefix.rs` (create)
-- [ ] T538 [P] [US3] `ADR046-streamline-017` - `docs/specs/ADR-046-streamline-evidence-commands.md` (a follow-up artifact outside this task's file scope (adapt)
+- [ ] T538 [P] [US3] `ADR046-streamline-017` - `docs/specs/ADR-046-streamline-evidence-commands.md` (adapt)
 - [ ] T539 [US3] `ADR046-streamline-018` - `tests/tools/worktree-disk-report.sh` (adapt)
 - [ ] T540 [US3] `ADR046-streamline-019` - `packages/xtask/src/bin/terminology_check.rs` (`cargo run -p xtask -- terminology-check`) (create)
 - [ ] T541 [US3] `ADR046-streamline-020` - `packages/d2b-contract-tests/tests/policy_test_placement.rs` (create)
@@ -1369,7 +1375,7 @@ signoff, and T603 progress reconciliation.
 - [ ] T548 [US3] `ADR046-delivery-003` - `packages/xtask/src/delivery/validate_import.rs` (adapt). This task also owns the one hermetic `d2b-recovery-point-attestation` version 1 validator used unchanged by T580, T555, and T556. Decode each JSON timestamp directly into a bounded integer `RecoveryUnixSeconds` newtype with range 0 through 253402300799; sample verifier time once into the same type; use checked bounded addition for each 86,400-second deadline; and require `previewedAtUnix <= capturedAtUnix <= verifiedAtUnix <= attestedAtUnix <= verifierNowUnix < expiresAtUnix`. The table-driven suite starts from one valid canonical record and independently varies every required top-level and qualification field, every delivery binding, and every timestamp. It must include wrong `operatorSubjectSha256` and `restoreInstructionsSha256`; missing, duplicate, extra, malformed, and wrong-type cases; negative, fractional, and out-of-range cases for each of the six timestamp fields; future cases for each of the four event timestamps; checked-add overflow from capture and verification; retention/expiration mismatch; wrong candidate/commit/tree/preview/host/locator; and changed canonical bytes. The Cargo test-list command must succeed, discover at least one matching non-ignored test, discover zero ignored matching tests, and the tests must execute without skip. Empty discovery is failure. No close-stage task may copy or weaken this validator.
 - [ ] T549 [US3] `ADR046-delivery-004` - `packages/xtask/src/gen_spec_set.rs` (adapt)
 - [ ] T550 [US3] `ADR046-delivery-005` - `packages/xtask/src/delivery/panel.rs` (adapt)
-- [ ] T551 [US3] `ADR046-delivery-006` - `packages/xtask/src/delivery/{seal (adapt)
+- [ ] T551 [US3] `ADR046-delivery-006` - `packages/xtask/src/delivery/{seal,eligibility,history_proof}.rs` (adapt)
 - [ ] T552 [P] [US3] `ADR046-delivery-007` - `packages/xtask/src/test_runtime_ledger.rs` (adapt)
 - [ ] T553 [US3] `ADR046-delivery-008` - `docs/specs/ADR-046-implementation-graph.json` (adapt)
 - [ ] T554 [US3] `ADR046-delivery-009` - `packages/xtask/src/gen_spec_set.rs` (adapt)
@@ -1802,9 +1808,9 @@ Dispatch 27 Provider subagents freely, but serialize their `make test-integratio
 
 ### What each subagent needs in its prompt
 
-1. Its work-item ids, retrieved verbatim from the manifest - `detailedDesign`, `validation`,
-   `destination`, `removalProof` are the task
-2. Its exact destination paths, with an instruction to write nowhere else
+1. For each work-item id, the complete 15-field object retrieved verbatim from the canonical
+   manifest; never dispatch from the task row's destination label
+2. Its exact `destination` field from that object, with an instruction to write nowhere else
 3. Its worktree path and branch
 4. The reminder that unordered contended files are integrator-owned. A shared file may instead
    have explicitly ordered serial slice owners only when this plan names each owner and the
