@@ -306,22 +306,25 @@ generated only from a realized derivation.
 | Field | Rule |
 | --- | --- |
 | `binaryBytes` | Measured executable size. |
-| `allowedGrowthBytes` | Separately reviewed measured delta, initially zero. |
 | `elfType`, `elfMachine` | Exact realized values. |
 | `interpreter`, `needed` | Exact broker interpreter and sorted SONAMEs, or absent and empty for guest. |
 | `closureCount`, `closureSha256` | Count and digest derived transiently from the exact sorted recursive Nix closure; no store path is persisted. |
 | `selectedPolicyDigest` | Exact selected package-policy graph digest. |
 | `measurementCommand`, `candidateCommit` | Immutable measurement provenance. |
-| `sizeGrowthAuthorization` | Null for zero growth, otherwise the closed approved object below. |
+| `sizeGrowthAuthorization` | The only allowance source: null for unchanged or smaller size, otherwise the closed approved object below carrying `priorBinaryBytes == binaryBytes`, `newBinaryBytes == actual realized bytes`, positive exact `deltaBytes`, normalized `rationalePath`, candidate/review digests, matching system/artifact, and `decision = "approved"`. |
 
-The size predicate is `actual <= binaryBytes + allowedGrowthBytes`. A changed
-allowance is valid only with measured prior/new bytes, their exact difference,
-a repository-relative rationale, candidate-content digest, review-record
-digest, matching system/artifact, and `decision = "approved"` in the same
-change. No prose byte ceiling exists. The positive fixtures are unchanged
-size without authorization and exact authorized growth. Missing, denied,
-stale, replayed, wrong-system/artifact, absolute-rationale,
-arithmetic-mismatch, and size-plus-one authorizations are invalid.
+The size predicate is `actual <= binaryBytes` when authorization is null and
+`actual <= binaryBytes + sizeGrowthAuthorization.deltaBytes` otherwise. No
+row-level allowance field exists. Authorization is valid only when
+`priorBinaryBytes` equals the row baseline, `newBinaryBytes` equals the
+realized artifact measurement, those values have the exact positive
+`deltaBytes` difference, the rationale is repository-relative, both digests
+bind the candidate and review, the system/artifact matches, and the decision is
+approved in the same change. No prose byte ceiling exists. The positive
+fixtures are unchanged size without authorization and exact authorized growth.
+Missing, denied, stale, replayed, wrong-system/artifact, wrong-prior,
+wrong-realized-new, absolute-rationale, arithmetic-mismatch, duplicate
+allowance-source, and size-plus-one authorizations are invalid.
 
 ## Flake Check Wrapper
 
@@ -421,16 +424,20 @@ count of twenty consecutive executions for its own context.
 | `descriptor` | One `O_RDONLY|O_CLOEXEC` open using `RESOLVE_NO_MAGICLINKS` only, deliberately without `RESOLVE_BENEATH` or `RESOLVE_NO_SYMLINKS`. |
 | `fallback` | Forced component walk: intermediate `O_DIRECTORY|O_NOFOLLOW|O_CLOEXEC`; declared leaf symlink permitted; leaf opened `O_RDONLY|O_CLOEXEC` without `O_NOFOLLOW`. |
 | `identity` | Kind, executable mode, freshness, byte digest, and matching pre/post descriptor metadata. |
-| `execution` | `execveat(descriptor, "", argv, envp, AT_EMPTY_PATH)` on that same descriptor. |
+| `execution` | `execveat(private_descriptor, "", argv, envp, AT_EMPTY_PATH)` on a private `F_DUPFD_CLOEXEC` descriptor that shares the verified descriptor's original open file description. |
 | `enosys` | Named refusal requiring a kernel with `execveat`; no fallback. |
 | `auxiliary_descriptors` | All close-on-exec and proven by child descriptor-table behavior. |
 | `api_seal` | Private fields and minting trait; empty public inherent API and empty locally-authored explicit trait-impl allowlists; exact compiler-derived public, hidden, auto, and blanket API snapshots; no descriptor/path accessor or extraction, `Deref`, descriptor `Borrow`, `AsFd`, raw-fd trait, formatting, serialization, conversion, default, or duplication API. |
-| `execution_transfer` | Execution consumes the handle into fd 0 of the exact-digest `d2b-bazel-execveat` helper as the same verified open file description. |
-| `helper` | Workspace `unsafe_code = "forbid"`, no `fork` or `pre_exec`, no target path, safe `nix::unistd::execveat` call, fixed typed error. |
+| `execution_transfer` | The public safe runner API consumes the handle by value, duplicates its original open file description to one private `F_DUPFD_CLOEXEC` descriptor above stdio/error-pipe ranges, and passes only parent-prepared state to the fork child. |
+| `low_level_boundary` | Exactly `packages/d2b-bazel-runner/src/sys.rs`, following the existing broker `unsafe_code = "deny"` plus quarantined `sys.rs` convention. Item-level allowances cover only fork, dup/fcntl/close, error-pipe, execveat, fixed write, and `_exit`; no crate-wide or second unsafe surface exists. |
+| `child_sequence` | Async-signal-safe installation of declared stdin/stdout/stderr, redundant-fd close, `execveat(private_fd, "", argv, envp, AT_EMPTY_PATH)`, fixed-size error-pipe write on failure, and `_exit`. |
 
 There is no path accessor or public unchecked constructor. No
-`std::process::Command` by path, `fexecve`, `/proc/self/fd`, reopen, or
-post-`ENOSYS` fallback exists.
+exec helper binary/runfile/path, direct helper invocation, fd-0 executable
+transport, `std::process::Command` by target path, `fexecve`,
+`/proc/self/fd`, reopen, or post-`ENOSYS` fallback exists. Successful exec
+preserves declared stdio and leaks no provider, private executable,
+error-pipe, or auxiliary descriptor.
 
 The public API census is primary. Focused rustdoc `compile_fail` examples prove
 downstream construction, descriptor access/extraction, trait coercion,
@@ -506,15 +513,19 @@ qualification, and promotion.
 | Field | Rule |
 | --- | --- |
 | `wrapperProvider` | Exact static `d2b-bazel-seccomp-exec` digest and pinned libseccomp Rust/C identities. |
-| `actionKinds` | Exact stable/nightly Rustc, metadata, Clippy, rustdoc, doctest compile/run, rustfmt, unpretty, build-script, repository action-factory, and test-action coverage. |
+| `actionKinds` | Exact stable/nightly Rustc, metadata, Clippy, rustdoc, doctest compile/run, rustfmt, unpretty, build-script, repository action-factory, and test coverage from generated rule/toolchain plus `aquery`: compile/build process executable fields and the configured test target executable passed to Bazel-owned setup. |
+| `compileBuildBinding` | Wrapper is the process executable; real compiler/tool is a declared input and argument. |
+| `testBinding` | Wrapper is the generated/custom test target executable; real test binary is a declared input and argument. `--run_under` is absent. |
+| `setupScope` | Bazel server/executor/sandbox/runfiles/test-setup work before the Rust payload is outside the filter claim; the wrapper and every payload descendant are inside. |
+| `inheritedCapabilities` | Complete pre-filter descriptor census rejects sockets and every io_uring ring, including SQPOLL and registered/fixed-socket states. |
 | `syscalls` | Closed denied socket-operation, `pidfd_getfd`, `socketcall` when present, and three-io_uring-entry-point set. |
-| `plants` | Exact eight IPv4, IPv6, netlink, packet, pathname Unix, abstract Unix, socketpair, and io_uring in-action results, each returning the fixed policy errno. |
+| `plants` | Wrapper-removal, pre-wrapper, direct-action, test-executable, forbidden-`--run_under`, inherited socket/ring/SQPOLL/fixed-socket, and exact eight IPv4, IPv6, netlink, packet, pathname Unix, abstract Unix, socketpair, and io_uring in-action results. |
 | `strategy` | Sandboxed only; no local, standalone, no-sandbox, or unsandboxed fallback. |
 | `external_egress_plant` | A build/test action attempts host/external egress and is denied. |
 | `live_index_plant` | The offline yanked validator receives a live-index source and refuses before resolution or socket use. |
 | `repository_fetch_inventory` | Exact fetch sites, each a repository rule pinned by lock checksum or git revision plus archive sha256. |
 | `cargo_compatibility_carriers` | Exact generated test identities, Cargo selectors, existing surface IDs, same-commit verdicts, and non-advisory classification for mandatory socket users. |
-| `qualification_result` | All eight socket/io_uring plants plus external-egress and live-index fail at their own predicates, the provider/toolchain/strategy inventory is complete, filter-load and wrapper-removal mutations fail, and every compatibility carrier passes on the same head. |
+| `qualification_result` | Binding, inherited-capability, all eight socket/io_uring, external-egress, and live-index plants fail at their own predicates; every seccomp stage has its fixed redacted code/remedy; inventories are complete; and every compatibility carrier passes on the same head. |
 
 There is no endpoint declaration field. A network namespace cannot enforce
 one, and no such claim is part of qualification.
@@ -566,8 +577,10 @@ Qualification additionally binds:
   derivations;
 - broker `exclusive` tags, no-overlap mutation, and twenty-run result for each
   context;
-- the outermost seccomp wrapper, stable/nightly action-kind inventory,
-  no-unsandboxed-fallback result, eight socket/io_uring plants,
+- generated rule/toolchain plus `aquery` seccomp executable-field and
+  stable/nightly action-kind inventory, wrapper-as-test-executable,
+  no-`--run_under`/pre-wrapper/inherited-capability/unsandboxed-fallback
+  results, eight socket/io_uring plants,
   external-egress and live-index plants, and exact Cargo compatibility census;
 - product-only yanked authority and exact broker/guest projections;
 - all three Supply Chain Equivalence Results;
@@ -663,9 +676,11 @@ bounded and complete-stream verdicts equal.
 | --- | --- |
 | `module` | `packages/xtask/src/bazel_qualification.rs` with tests in `packages/xtask/tests/bazel_qualification.rs`, implemented no later than spec003w3. |
 | `command` | `cargo xtask bazel-qualification-validate`, no arguments, fixed repository-relative record path, unreachable from Make and workflows. |
+| `refreshCommand` | `cargo xtask bazel-evidence refresh-qualification`, no arguments, atomic fixed-record replacement, unreachable from Make and workflows. |
 | `reference_kinds` | Workflow run (`runId`, positive `attempt`, and `headSha`), commit SHA, content path plus digest, generated path plus digest. |
 | `derivation` | Every threshold is computed by counting or comparing referenced evidence; no stated number is trusted. |
-| `refusals` | Omitted, forged or ill-formed, duplicate, inconsistent, and wrong-candidate references. |
+| `outcomes` | Closed complete, typed degraded query/publication failure, or semantic refusal; query failure is never an empty inventory. |
+| `refusals` | Inventory, omitted, forged or ill-formed, duplicate, inconsistent, wrong-candidate, and degraded-evidence classes. |
 | `booleans` | Informational mirrors only; a mirror disagreeing with the derived result is a refusal. |
 | `callers` | Evidence curation, promotion validation, and contributor validation before any informational inspection. |
 
@@ -682,17 +697,27 @@ bounded and complete-stream verdicts equal.
 | `set_relationships` | Governed and declared source sets are equal; every spawn source is governed; scan-result sources equal governed sources; fresh and committed spawn-site keys are equal. |
 | `plants` | Exactly `no-shell-inventory-empty`, `no-shell-inventory-missing-entry`, `no-shell-inventory-extra-entry`, `no-shell-inventory-unguarded-spawn`, `no-shell-inventory-missing-zero-site-record`, and `no-shell-inventory-planted-shell`. |
 
+## Hybrid Disclosure Census
+
+| Field | Rule |
+| --- | --- |
+| `source` | Exact sorted nonempty `cargoCompatibilityCarriers` entries from `tests/golden/bazel-rust-coverage.json`, each retaining surface ID, Cargo selector, test identity, and socket class; no surface-only projection. |
+| `fixedDocuments` | Exactly `AGENTS.md`, `tests/AGENTS.md`, `docs/contributing/gates-and-lints.md`, `tests/README.md`, and `docs/reference/test-execution-manifest.md`. |
+| `candidateFragments` | The promotion, alias-removal, and Cargo-retirement semantic fragments when present. |
+| `comparison` | Every governed semantic block equals the complete carrier-identity source in both directions, with no duplicate or malformed entry; distinct cases sharing one surface remain distinct. |
+| `enforcement` | Fixture-independent type-5 `policy_bazel_hybrid_docs.rs` under `make test-policy`, with missing and extra negatives. |
+
 ## Evidence Sink Result
 
 | Field | Rule |
 | --- | --- |
 | `testVerdict` | Underlying passed, failed, ignored, or interrupted result. |
 | `evidenceStatus` | Closed tagged `Complete` or `Degraded` variant; never inferred from `testVerdict`. |
-| `Complete` | Requires `sinkPolicySha256` and one closed retention class; rejects degradation fields. |
-| `Degraded` | Requires closed code, sink kind, policy-row SHA-256, and closed retry command; rejects complete fields. |
-| `sinkKind` | JUnit, `test.log`, execution evidence, qualification evidence, or exporter diagnostic. |
+| `sinkKind` | Common field occurring exactly once: JUnit, `test.log`, execution evidence, qualification evidence, or exporter diagnostic. |
+| `retentionClass` | Common field occurring exactly once and derived exactly from `sinkKind`. |
+| `Complete` | Requires only `kind = "complete"` and `sinkPolicySha256`; rejects degradation fields and repeated sink/retention fields. |
+| `Degraded` | Requires only `kind = "degraded"`, closed code, policy-row SHA-256, and closed retry command; rejects complete fields and repeated sink/retention fields. |
 | `bytes`, `records` | At or below the committed measured sink-policy limits. |
-| `retention` | Exactly `junit-v1` (14 days/128), `test-log-v1` (14 days/128), `evidence-v1` (30 days/32), or `exporter-diagnostic-v1` (7 days/64), under the scope defined in `runner-environment.md`. |
 
 Every forbidden planted value is absent from every sink. Qualification accepts
 only the structurally valid complete variant but never rewrites the underlying
@@ -716,11 +741,12 @@ invalid.
 | Field | Rule |
 | --- | --- |
 | `command` | No-argument `cargo xtask bazel-release-containment-validate`, unreachable from Make and workflows. |
-| `tag` | Validated `v<major>.<minor>.<patch>` value only. |
+| `tagReferenceSha256` | Digest of the validated semantic tag reference; the tag identifier remains transient and is never persisted or printed. |
 | `containment` | Promotion commit is an ancestor of the peeled tag commit. |
 | `origin` | Peeled local and origin tag commits agree. |
 | `release` | Present, not draft, and not prerelease. |
-| `refusal` | One fixed code and exact closed command block; no raw identifier, output, path, cursor, or handle. |
+| `outcome` | Closed `Complete`, typed query `Degraded`, or semantic `Refused`; query failure is never absence. |
+| `diagnostic` | One fixed code and exact closed remedy; no tag/candidate/object/run/attempt identifier, raw output, OS text, path, cursor, descriptor, or handle. |
 
 ## Lifecycle
 
@@ -772,6 +798,8 @@ Qualification Evidence 1 -- 2 native architecture realization sets
 Qualification Evidence 1 -- 1 Typed Qualification Validator verdict
 Qualification Evidence 1 -- 1 No-Shell Spawn Inventory digest
 Qualification Evidence 1 -- 1 Promotion Record
+Coverage Map 1 -- 1 Hybrid Disclosure Census
+Hybrid Disclosure Census 1 -- many governed documents
 Promotion Record 1 -- many Post-Promotion Run Units
 Post-Promotion Run Unit 1 -- 1..n Run Attempts
 Post-Promotion Run Units many -- 1 Derived Promotion Streak

@@ -24,8 +24,9 @@ Contracts:
   and retirement command surface.
 - `runner-environment.md` - test topology, provider, environment, and
   sanitized bounded per-case evidence contract, compile-sealed verified
-  executable, safe helper-process same-open-file-description execution,
-  retention classes, and closed complete/degraded evidence.
+  executable, safe public execution over one quarantined `sys.rs`
+  same-open-file-description boundary, retention classes, and canonical closed
+  complete/degraded evidence.
 - `execution-manifest-binding.md` - Bazel carrier results bound to existing
   execution-manifest v1.
 - `shadow-promotion-evidence.md` - qualification, the typed qualification

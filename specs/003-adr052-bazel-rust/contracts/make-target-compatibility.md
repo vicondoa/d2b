@@ -48,6 +48,7 @@ cargo xtask bazel-yanked-check
 cargo xtask gen-package-policy-inputs
 cargo xtask gen-package-policy-inputs --check
 cargo xtask bazel-evidence prepare-cold-local
+cargo xtask bazel-evidence refresh-qualification
 cargo xtask bazel-qualification-validate
 cargo xtask bazel-promotion-record-validate
 cargo xtask bazel-release-containment-validate
@@ -154,7 +155,11 @@ hub repin, yanked refresh/check, policy generation, or evidence mutation.
   `cargoCompatibilityCarriers`, call those surfaces permanently hybrid under
   this specification, and state that their socket-using Cargo cases and public
   executor survive spec003w7 until a separately reviewed authorization changes
-  ADR 0052's invariant.
+  ADR 0052's invariant. The enforcing fixture-independent type-5 policy in
+  `coverage-map.md` derives that nonempty full carrier census, including each
+  surface ID, Cargo selector, test identity, and socket class, and requires
+  every governed document and the present fragment to match it exactly, with
+  independent missing and extra full-identity negatives.
 
 ## Removal
 
@@ -163,58 +168,41 @@ contains the promotion commit. Entry is exactly:
 
 ```bash
 set -euo pipefail
-promotion_sha=$(git rev-parse --verify "<promotion-commit>^{commit}")
-tag=
-while IFS= read -r candidate; do
-  git merge-base --is-ancestor "$promotion_sha" "$candidate^{commit}" \
-    || continue
-  remote_commit=$(
-    git ls-remote --exit-code --tags origin \
-      "refs/tags/$candidate" "refs/tags/$candidate^{}" \
-      | awk '
-          $2 ~ /\^\{\}$/ { peeled = $1 }
-          $2 !~ /\^\{\}$/ { direct = $1 }
-          END { print peeled != "" ? peeled : direct }
-        '
-  ) || continue
-  test -n "$remote_commit" || continue
-  test "$(git rev-parse "$candidate^{commit}")" = "$remote_commit" || continue
-  release_state=$(
-    gh release view "$candidate" --json isDraft,isPrerelease \
-      --jq '[.isDraft, .isPrerelease] | @tsv' 2>/dev/null
-  ) || continue
-  test "$release_state" = "$(printf 'false\tfalse')" || continue
-  tag=$candidate
-  break
-done < <(
-  git tag --contains "$promotion_sha" \
-    | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' \
-    | sort -V
-)
-test -n "$tag"
+(cd packages && cargo xtask bazel-promotion-record-validate)
+(cd packages && cargo xtask bazel-release-containment-validate)
 ```
 
-A containing tag that does not match `^v[0-9]+\.[0-9]+\.[0-9]+$` is not a
-release tag: the repository already carries two-component tags such as
-`v1.0`, `v1.1`, and `v1.2`. An unpushed tag, a divergent same-named local and
-remote tag, a draft release, or a prerelease also fails entry.
+The containment validator owns the query sequence. It enumerates local tags
+matching `^v[0-9]+\.[0-9]+\.[0-9]+$`, proves promotion ancestry, resolves
+peeled origin tag objects, and queries release metadata. Candidate tag names,
+object identifiers, and query output remain transient. A two-component tag,
+local-only tag, divergent local/origin tag, absent release, draft, or
+prerelease cannot satisfy entry.
 
-The release-containment checker renders one fixed code and one exact command
-block. `{tag}` below is substituted only from a validated
-`v<major>.<minor>.<patch>` value; it is not free-form input.
+Every query operation returns a typed `Complete`, `Degraded`, or `Refused`
+outcome. A failed `git` or `gh` invocation is `Degraded` and can never be
+coerced to an empty result, skipped candidate, absent tag, or absent release.
+Semantic non-eligibility is `Refused`. The closed table is:
 
-| Refusal | Code | Exact rendered commands |
+| Outcome | Code | Exact remedy |
 | --- | --- | --- |
-| No containing semantic release tag | `D2B-BZLRELEASE-NO-TAG` | `make pre-tag`; `make test-changelog`; `git fetch --tags origin`; `(cd packages && cargo xtask bazel-promotion-record-validate)`; after the protected `v3` version-release change completes, `(cd packages && cargo xtask bazel-release-containment-validate)`. |
-| Containing tag is local only | `D2B-BZLRELEASE-UNPUSHED` | `git push origin refs/tags/{tag}`; `git fetch --tags origin`; `(cd packages && cargo xtask bazel-release-containment-validate)`. |
-| Local and origin tag commits differ | `D2B-BZLRELEASE-DIVERGENT` | `git fetch --tags origin`; inspect and correct the protected tag through repository release policy; `(cd packages && cargo xtask bazel-release-containment-validate)`. No force-push command is emitted. |
-| Release object is absent | `D2B-BZLRELEASE-NO-RELEASE` | `gh release create {tag} --verify-tag --notes-from-tag`; `(cd packages && cargo xtask bazel-release-containment-validate)`. |
-| Release is draft or prerelease | `D2B-BZLRELEASE-NOT-FINAL` | `gh release edit {tag} --draft=false --prerelease=false`; `(cd packages && cargo xtask bazel-release-containment-validate)`. |
+| Promotion-record query failed | `D2B-BZLRELEASE-RECORD-QUERY` | Run `(cd packages && cargo xtask bazel-promotion-record-validate)`; run `(cd packages && cargo xtask bazel-release-containment-validate)`. |
+| Local tag enumeration failed | `D2B-BZLRELEASE-LOCAL-QUERY` | Run `git fetch --tags origin`; run `(cd packages && cargo xtask bazel-release-containment-validate)`. |
+| Origin tag query failed | `D2B-BZLRELEASE-ORIGIN-QUERY` | Run `git fetch --tags origin`; run `(cd packages && cargo xtask bazel-release-containment-validate)`. |
+| Release metadata query failed | `D2B-BZLRELEASE-METADATA-QUERY` | Run `gh auth status`; run `(cd packages && cargo xtask bazel-release-containment-validate)`. |
+| No containing semantic release tag | `D2B-BZLRELEASE-NO-TAG` | Run `make pre-tag`; run `make test-changelog`; complete the protected `v3` version-release change; run `git fetch --tags origin`; run `(cd packages && cargo xtask bazel-release-containment-validate)`. |
+| Containing tag is local only | `D2B-BZLRELEASE-UNPUSHED` | Complete the repository's protected `v3` release process; run `git fetch --tags origin`; run `(cd packages && cargo xtask bazel-release-containment-validate)`. |
+| Local and origin tag objects differ | `D2B-BZLRELEASE-DIVERGENT` | Run `git fetch --force --tags origin`; run `(cd packages && cargo xtask bazel-release-containment-validate)`. |
+| Release object is absent | `D2B-BZLRELEASE-NO-RELEASE` | Run `make pre-tag`; run `make test-changelog`; complete the repository's protected `v3` release process; run `(cd packages && cargo xtask bazel-release-containment-validate)`. |
+| Release is draft or prerelease | `D2B-BZLRELEASE-NOT-FINAL` | Complete the repository's protected final-release process; run `(cd packages && cargo xtask bazel-release-containment-validate)`. |
 
-Failures contain only the fixed code, semantic tag when one has been validated,
-and the promotion-record SHA-256. They contain no `$!`, commit SHA, run or
-attempt identifier, absolute or Nix store path, raw cursor, opaque handle, or
-raw `git`/`gh` output. Exact-message tests cover every row.
+The rendered outcome contains only its fixed code, the stable
+`release-containment-v1` policy label, the promotion-record SHA-256, and the
+exact remedy. It contains no candidate or tag name, commit/object/run/attempt
+identifier, absolute or Nix store path, descriptor, raw cursor, opaque handle,
+OS error text, or raw `git`/`gh` output. Exact-message tests cover every row,
+plant independent nonzero failures for each query backend, and reject a query
+error mislabeled as semantic absence.
 
 spec003w6 first updates
 `packages/d2b-bazel-runner/tests/make_interface.rs` to expect removal and
@@ -234,7 +222,8 @@ remove:
 
 The retirement documentation and semantic changelog repeat the exact hybrid
 surface inventory and explicitly state that these retained Cargo cases are not
-retired by the ten-green-run condition.
+retired by the ten-green-run condition. The same type-5 policy comparison must
+pass for the alias-removal and retirement fragments when present.
 
 ## Guards
 

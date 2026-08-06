@@ -300,13 +300,18 @@ depth, not proof. A network namespace does not deny socket creation.
 
 The proof is the outermost repository-owned `d2b-bazel-seccomp-exec` action
 wrapper defined in `coverage-map.md`. It preflights inherited descriptors,
-sets `no_new_privs`, loads the fixed seccomp filter, and only then executes the
-declared delegate. It has no unsandboxed or filter-load fallback. The pinned
-`rules_rust` patch covers stable and nightly `Rustc`, `RustcMetadata`, Clippy,
-rustdoc, rustdoc-test compile, rustfmt, unpretty, and Cargo build-script
-actions. The repository action factory covers every generated Rust-gate
-action, and the fixed test `--run_under` covers all test actions. Linkers, proc
-macros, build scripts, doctest runners, and test children inherit the filter.
+rejecting sockets and every io_uring ring including SQPOLL and
+registered/fixed-socket state, sets `no_new_privs`, loads the fixed seccomp
+filter, and only then executes the declared payload. It has no unsandboxed or
+stage fallback. The pinned `rules_rust` patch makes it the process executable
+for stable and nightly `Rustc`, `RustcMetadata`, Clippy, rustdoc, rustdoc-test
+compile, rustfmt, unpretty, and Cargo build-script actions. The repository
+action factory does the same for every generated Rust-gate action. Each
+generated/custom test target declares the wrapper itself as its executable and
+passes the real test binary as a declared input and argument. `--run_under` is
+forbidden. Bazel server, sandbox, runfiles, and native test-setup work before
+the payload is outside the filter claim; every Rust payload descendant starts
+after load and inherits the filter.
 
 The filter denies the complete socket-operation set, all socket domains
 through `socket`, `socketpair`, descriptor import through `pidfd_getfd`, and
@@ -332,8 +337,14 @@ socket, and no unpinned repository-rule fetch exists.
 
 Enforcement includes:
 
-- a structural inventory proving every action kind and both Rust toolchains
-  use the outer wrapper and every fetch site is a pinned repository rule;
+- generated rule/toolchain and `aquery` action-graph inventories proving every
+  governed action kind and both Rust toolchains name the wrapper in the
+  executable field, test targets use wrapper-as-payload-executable, no process
+  precedes it, and every fetch site is a pinned repository rule;
+- wrapper-removal, pre-wrapper insertion, direct-action, test-executable
+  substitution, and forbidden-`--run_under` plants;
+- inherited socket, ordinary-ring, SQPOLL-ring, and registered-fixed-socket
+  ring plants that refuse before filter load;
 - the eight IPv4, IPv6, netlink, packet, pathname Unix, abstract Unix,
   socketpair, and io_uring plants, each observing the fixed policy errno;
 - a planted build/test action that attempts external egress and must fail;
@@ -601,7 +612,6 @@ authority. It contains exactly four rows: broker and guest for each of
 realizing the actual derivations. Each row records:
 
 - the measured executable byte size;
-- a separately committed `allowedGrowthBytes`, initially zero;
 - the exact ELF type and machine;
 - for the broker, the exact interpreter basename and sorted `DT_NEEDED`
   SONAME set;
@@ -611,34 +621,38 @@ realizing the actual derivations. Each row records:
 - the exact selected package-policy graph digest; and
 - the measurement command and candidate commit.
 
-No fixed byte threshold is invented in prose. A zero-growth row has
-`sizeGrowthAuthorization = null`. A positive delta passes only with a closed
-authorization object in the same change:
+No fixed byte threshold is invented in prose. Size allowance exists only in
+`sizeGrowthAuthorization`; there is no row-level allowance field. An unchanged
+or smaller artifact has `sizeGrowthAuthorization = null`. A positive delta
+passes only with this closed authorization object in the same change:
 
 ```text
 system
 artifact
 priorBinaryBytes
 newBinaryBytes
-allowedGrowthBytes
+deltaBytes
 rationalePath
 candidateContentSha256
 reviewRecordSha256
 decision = "approved"
 ```
 
-`allowedGrowthBytes` must equal `newBinaryBytes - priorBinaryBytes`;
+`priorBinaryBytes` must equal the row's `binaryBytes`; `newBinaryBytes` must
+equal the realized artifact's measured bytes; `deltaBytes` must equal
+`newBinaryBytes - priorBinaryBytes` and must be positive;
 `rationalePath` is normalized and repository-relative; both digests bind the
 candidate and review record; and the system/artifact pair must equal the row.
 A later accepted baseline folds the authorized delta into `binaryBytes`,
-returns the allowance to zero, and removes the authorization. A first native
-baseline is accepted only with its realized artifact and zero allowance.
+then removes the authorization. A first native baseline is accepted only with
+its realized artifact and a null authorization.
 
 Positive fixtures cover unchanged size without authorization and exact growth
 with a matching approved authorization. Negative fixtures cover missing
 authorization, a denied decision, wrong system or artifact, stale candidate or
-review digest, absolute rationale, arithmetic mismatch, replay against another
-row, and one byte beyond the authorized allowance. Qualification references
+review digest, wrong prior baseline, wrong realized new bytes, absolute
+rationale, arithmetic mismatch, replay against another row, and one byte
+beyond the authorized allowance. Qualification references
 all four baseline-row digests and every nonzero authorization digest and
 refuses a row whose authorization was not part of the candidate review.
 Closure-add/remove, cross-artifact, unrelated-sibling, changed broker

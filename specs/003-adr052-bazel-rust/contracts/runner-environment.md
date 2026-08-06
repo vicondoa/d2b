@@ -47,7 +47,9 @@ The shared filesystem boundary:
 6. checks regular-file kind, executable mode, freshness, and exact digest;
 7. brackets the digest read with matching descriptor metadata;
 8. returns an unforgeable verified handle; and
-9. executes that same descriptor with `execveat` and `AT_EMPTY_PATH`.
+9. consumes the handle into a private `F_DUPFD_CLOEXEC` descriptor sharing the
+   verified descriptor's original open file description, then executes that
+   private descriptor with `execveat` and `AT_EMPTY_PATH`.
 
 No provider path is returned. No `Command` by path, `fexecve`, or
 `/proc/self/fd` fallback is permitted.
@@ -75,42 +77,67 @@ construct the type, access or extract its descriptor, coerce it through
 unverified path or descriptor into it, or implement the sealed minting trait.
 There are no Cargo-shelling compile fixtures.
 
-The multithreaded runner never runs repository code in a post-fork child. It
-consumes `VerifiedExecutable` into `Stdio` for fd 0 of the separately declared
-`d2b-bazel-execveat` helper using safe `std::process::Command`; it registers no
-`pre_exec` closure. The existing standard-library spawn implementation is the
-only child-creation boundary; the repository adds no callback to it. A Linux
-host conformance trace permits only the standard library's descriptor
-dup/close, signal-mask/reset, and exec operations between child creation and
-the helper image, and rejects allocation, logging, path lookup, or any
-repository symbol in that interval. The consumed descriptor may be duplicated to fd 0 by the
-standard library, but remains the same verified open file description and is
-never reopened. The helper itself is a normal workspace binary, inherits
-`unsafe_code = "forbid"`, is an exact-digest declared runfile, accepts no path,
-and performs no fork. In its fresh single-threaded process it prepares C
-strings and invokes the safe `nix::unistd::execveat` wrapper on fd 0 with an
-empty path and `AT_EMPTY_PATH`. `ENOSYS` and every other exec error produce a
-fixed typed status; there is no `fexecve`, `/proc/self/fd`, `Command`-by-target
-path, or path fallback.
+The multithreaded runner follows the repository's reviewed broker convention:
+the crate keeps `unsafe_code = "deny"`, all ordinary modules contain no
+unsafe code, and one quarantined `src/sys.rs` owns the low-level boundary.
+Only narrowly scoped functions in that file carry item-level
+`#[allow(unsafe_code)]`. The allowlisted operations are fork, private
+close-on-exec duplication, stdio `dup2`/`fcntl`, close, the close-on-exec
+exec-error pipe, `execveat`, fixed-size error-pipe write, and `_exit`. A
+crate-wide allowance, a second unsafe file, an unsafe callback, or an
+allowance in a general product crate is forbidden. This is the same
+`unsafe_code = "deny"` plus quarantined `sys.rs` shape already reviewed for
+`packages/d2b-priv-broker/src/sys.rs`; it is not a new exemption policy.
 
-This process boundary removes the unsafe after-fork window instead of
-hand-writing one. Tests prove the execution API consumes the handle, the
-helper receives the verified open file description on fd 0, provider and
-auxiliary descriptors are absent after target exec, argv and environment
-contain no provider path, the target executes twice from the same verified
-open file description, and a path-rebind mutation cannot affect it. Separate
-policy tests reject `pre_exec`, `fork`, a locally-authored unsafe block, a
-workspace-lint override, direct target `Command`, `/proc/self/fd`, `fexecve`,
-or any reopen. The only unsafe/FFI boundary involved is the existing standard
-library and pinned `nix` implementation; no product crate receives an unsafe
-lint exemption.
+The public safe execution function consumes `VerifiedExecutable` by value.
+Before fork, the parent validates the declared stdin, stdout, and stderr
+configuration; builds every `CString`, argv pointer, environment pointer, and
+fixed error record; duplicates the verified descriptor with
+`F_DUPFD_CLOEXEC` to a private descriptor above the stdio and error-pipe
+ranges; prepares collision-free close-on-exec stdio source descriptors; and
+creates an `O_CLOEXEC` error pipe. The private descriptor is a duplicate of,
+and therefore refers to, the original verified open file description. It is
+never reopened and is never fd 0, 1, or 2.
+
+After fork, the child executes only the parent-prepared, async-signal-safe
+sequence in `sys.rs`: close the parent error-pipe end, install the three
+declared stdio descriptors without changing their semantics, close redundant
+sources, call `execveat(private_fd, "", argv, envp, AT_EMPTY_PATH)`, and on
+failure write one fixed-size binary stage record to the error pipe before
+`_exit`. There is no allocation, formatting, logging, locking, path lookup,
+Rust destructor, `Command`, `pre_exec`, or user callback in the child. On
+successful exec, close-on-exec removes the private executable descriptor,
+error-pipe writer, original provider descriptor, and every auxiliary
+descriptor. Only the declared stdin, stdout, and stderr survive. The parent
+maps the bounded error record to a closed diagnostic and never emits raw OS
+text.
+
+No exec helper binary, helper runfile, helper path, helper digest, direct
+helper invocation, fd-0 executable transport, target-path invocation,
+`fexecve`, `/proc/self/fd`, reopen, or path fallback exists. `ENOSYS` and every
+other exec failure are typed refusals.
+
+Tests prove the safe API consumes the handle and exposes no descriptor; the
+private exec descriptor and the verifier's descriptor share the same open
+file description; a marker supplied on declared stdin reaches the target
+unchanged; stdout and stderr retain their declared destinations; and provider,
+private exec, error-pipe, and auxiliary descriptors are absent after exec.
+The host conformance test rebinds and mutates the provider path after
+verification and proves execution still uses the verified open file
+description while no path appears in argv, environment, evidence, or
+diagnostics. Mutations add a path helper, direct helper invocation, fd-0
+transport, reopen, `/proc` execution, path fallback, non-CLOEXEC private
+descriptor, leaked provider descriptor, replaced stdin, child allocation,
+and a second unsafe surface; each must fail its own guard.
 
 All absent, non-regular, non-executable, stale, wrong-digest, rebound-path,
-short-read, metadata-change, and exec errno cases are injected. The one
-host-backed conformance test may exercise kernel `execveat` behavior against a
-declared first-party probe. It executes the same verified descriptor twice,
-asserts the provider descriptor is absent in each child, and asserts a planted
-non-close-on-exec control descriptor is present.
+short-read, metadata-change, and exec-stage cases are injected. The one
+host-backed conformance test may exercise kernel `fork` plus
+`execveat(AT_EMPTY_PATH)` behavior against a declared first-party probe. It
+asserts same-open-file-description behavior, unchanged declared stdin,
+separate stdout and stderr, absence of every provider/private/error-pipe
+descriptor, and presence only of a planted descriptor explicitly declared to
+survive.
 
 Every auxiliary descriptor is close-on-exec: the runfiles anchor, provider,
 freshness-input handles, per-case directory, stdio setup copies not intended
@@ -121,8 +148,9 @@ accepted as proof of descriptor inheritance.
 
 Provider tests separately force the `openat2` and component-walk routes. The
 fallback cases prove intermediate symlink refusal, declared leaf-symlink
-acceptance followed by full identity verification, and identical same-handle
-execution. Mutations that add `RESOLVE_BENEATH` or
+acceptance followed by full identity verification, and identical
+same-open-file-description execution through the private descriptor. Mutations
+that add `RESOLVE_BENEATH` or
 `RESOLVE_NO_SYMLINKS`, place `O_NOFOLLOW` on the provider leaf, reopen for
 digest or exec, use a path/`fexecve`/`/proc` fallback, or fall back after
 `ENOSYS` must fail.
@@ -216,13 +244,40 @@ byte and record limit.
 Test outcome and evidence publication are separate typed results.
 `testVerdict` is the underlying `passed`, `failed`, `ignored`, or
 `interrupted` result and is never rewritten by an exporter. `evidenceStatus`
-is a closed tagged union:
+is a closed tagged union inside one `EvidenceSinkResult`. The common record
+carries `sinkKind` and `retentionClass` exactly once:
 
-- `{"kind":"complete","sinkPolicySha256":"<sha256>","retentionClass":"<closed>"}`;
-- `{"kind":"degraded","code":"<closed-code>","sinkKind":"<closed>",
-  "policyRowSha256":"<sha256>","retryCommand":"<closed-command>"}`.
+```text
+{
+  "sinkKind": "<closed>",
+  "retentionClass": "<closed>",
+  "testVerdict": "<closed>",
+  "evidenceStatus": {
+    "kind": "complete",
+    "sinkPolicySha256": "<sha256>"
+  }
+}
+```
 
-The complete variant rejects degradation-only fields. The degraded variant
+or:
+
+```text
+{
+  "sinkKind": "<closed>",
+  "retentionClass": "<closed>",
+  "testVerdict": "<closed>",
+  "evidenceStatus": {
+    "kind": "degraded",
+    "code": "<closed-code>",
+    "policyRowSha256": "<sha256>",
+    "retryCommand": "<closed-command>"
+  }
+}
+```
+
+`sinkKind` determines exactly one retention class through the committed sink
+policy; a mismatched pair refuses. Neither variant repeats either field. The
+complete variant rejects degradation-only fields. The degraded variant
 requires every field above and rejects complete-only fields, unknown fields,
 unknown codes, and free-form commands. A sanitizer, bound, retention, write,
 rename, exporter, or workflow-publication failure preserves `testVerdict` and

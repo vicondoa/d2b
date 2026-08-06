@@ -90,21 +90,50 @@ record, promotion validation runs it against the sealed record at the promotion
 candidate, and contributor validation runs it before any informational
 inspection of the record.
 
-Every validator refusal has one fixed code and exact rendered command block:
+`cargo xtask bazel-evidence refresh-qualification` is the paired
+no-argument contributor-only correction command. It fetches the complete
+protected stream through typed backends, rebuilds the fixed
+repository-relative record from immutable references, and atomically replaces
+only that record. It is unreachable from Make and workflows. A query failure
+does not replace the prior record.
+
+Every query degradation or validator refusal has one fixed code and exact
+rendered command block:
 
 | Refusal class | Code | Exact command block |
 | --- | --- | --- |
-| Pagination gap, missing attempt, or omitted protected push | `D2B-BZLQUAL-INVENTORY` | `git fetch origin v3`, then `(cd packages && cargo xtask bazel-qualification-validate)` after refreshing the fixed record from the complete protected stream. |
-| Omitted or malformed reference | `D2B-BZLQUAL-REFERENCE` | `(cd packages && cargo xtask bazel-qualification-validate)` after correcting the repository-relative record row. |
-| Duplicate or inconsistent reference | `D2B-BZLQUAL-CONSISTENCY` | `(cd packages && cargo xtask bazel-qualification-validate)` after removing the duplicate or replacing the inconsistent repository-relative row. |
-| Wrong candidate or stale head | `D2B-BZLQUAL-CANDIDATE` | `git fetch origin v3`, then `(cd packages && cargo xtask bazel-qualification-validate)` against evidence recaptured for the candidate. |
-| Degraded evidence | `D2B-BZLQUAL-DEGRADED` | Run the exact closed slice retry command carried by the degraded variant, then `(cd packages && cargo xtask bazel-qualification-validate)`. |
+| Cargo, Bazel, or fixture inventory query failed | `D2B-BZLQUAL-QUERY` | `git fetch origin v3`; `(cd packages && cargo xtask bazel-evidence refresh-qualification)`; `(cd packages && cargo xtask bazel-qualification-validate)`. |
+| Pagination gap, missing attempt, or omitted protected push | `D2B-BZLQUAL-INVENTORY` | `git fetch origin v3`; `(cd packages && cargo xtask bazel-evidence refresh-qualification)`; `(cd packages && cargo xtask bazel-qualification-validate)`. |
+| Omitted, malformed, or ill-formed reference | `D2B-BZLQUAL-REFERENCE` | `(cd packages && cargo xtask bazel-evidence refresh-qualification)`; `(cd packages && cargo xtask bazel-qualification-validate)`. |
+| Duplicate or inconsistent reference | `D2B-BZLQUAL-CONSISTENCY` | `(cd packages && cargo xtask bazel-evidence refresh-qualification)`; `(cd packages && cargo xtask bazel-qualification-validate)`. |
+| Wrong candidate or stale head | `D2B-BZLQUAL-CANDIDATE` | `git fetch origin v3`; `(cd packages && cargo xtask bazel-evidence refresh-qualification)`; `(cd packages && cargo xtask bazel-qualification-validate)`. |
+| A derived qualification threshold is unsatisfied | `D2B-BZLQUAL-THRESHOLD` | Run the literal command selected by the closed threshold-class table below; `(cd packages && cargo xtask bazel-evidence refresh-qualification)`; `(cd packages && cargo xtask bazel-qualification-validate)`. |
+| Degraded evidence | `D2B-BZLQUAL-DEGRADED` | Run the exact closed slice retry command carried by the degraded variant; `(cd packages && cargo xtask bazel-evidence refresh-qualification)`; `(cd packages && cargo xtask bazel-qualification-validate)`. |
+| Atomic record replacement failed | `D2B-BZLQUAL-PUBLISH` | Correct write access to `specs/003-adr052-bazel-rust/evidence/qualification.json`; `(cd packages && cargo xtask bazel-evidence refresh-qualification)`; `(cd packages && cargo xtask bazel-qualification-validate)`. |
 
-The renderer accepts no other command. Messages include only the fixed code,
-repository-relative row, and SHA-256 references. They never include `$!`, an
-absolute or Nix store path, raw pagination cursor, workflow attempt handle,
-descriptor, or raw API/exporter text. Table-driven tests cover every row and
-reject a borrowed or free-form remedy.
+The threshold class is a closed enum, not record text:
+
+| Threshold class | Exact correction |
+| --- | --- |
+| Main carrier, runner, manifest, or sink | `make test-bazel-rust-main` |
+| API census | `make test-bazel-rust-api` |
+| Broker topology or repetition | `make test-bazel-rust-broker` |
+| Guest, schema, inventory, no-shell, or auxiliary carrier | `make test-bazel-rust-aux` |
+| Package policy, yanked state, or compatibility census | `make test-rust-supply-chain` |
+| Native realization or artifact contract | `make test-flake` |
+| Workflow or source policy | `make test-policy` |
+| Fixture companion | `D2B_ENABLE_FIXTURE_BUILD=1 make test-fixture-contracts` |
+| Record-count or performance window | Complete a new protected `v3` merge. |
+
+The renderer accepts no other command. Query errors are typed degraded
+outcomes and are never interpreted as empty inventories. Messages include only
+the fixed code, repository-relative record or policy row, SHA-256 references,
+and the exact command block. They never include `$!`, an absolute, socket, or
+Nix store path, raw pagination cursor, workflow run or attempt identifier,
+candidate identifier, tag identifier, descriptor, OS error text, or raw
+API/exporter/tool output. Table-driven tests cover every row and reject a
+missing step, borrowed or free-form remedy, leaked value, or query error
+reported as absence.
 
 ## Workspace and hub evidence
 
@@ -218,9 +247,12 @@ It also proves:
 12. all workflow, cache, deadline, cleanup, repin, and seeded policy
     refusals.
 13. all eight IPv4, IPv6, netlink, packet, pathname Unix, abstract Unix,
-    socketpair, and io_uring Bazel plants denied, the external-egress and
-    live-index plants refused, every action/provider inventory complete, and
-    every permitted fetch a pinned repository rule;
+    socketpair, and io_uring Bazel plants denied; inherited socket,
+    ordinary-ring, SQPOLL-ring, and fixed-socket-ring plants refused before
+    load; wrapper-removal, pre-wrapper, direct-action, test-executable, and
+    forbidden-`--run_under` plants refused; external-egress and live-index
+    refused; every generated rule/toolchain and `aquery` action inventory
+    complete; and every permitted fetch a pinned repository rule;
 14. exact Cargo/decomposed-Bazel supply-chain equivalence for all three
     contexts;
 15. manifest/JUnit/bounded-test.log/emitted-evidence/exporter redaction,
@@ -252,9 +284,13 @@ It also proves:
 21. exactly four artifact-baseline row digests, all four artifact realization
     results, and every nonzero size-growth authorization digest and positive
     and negative authorization fixture;
-22. the outermost seccomp wrapper digest, pinned `libseccomp` Rust/C boundary,
-    stable/nightly toolchain coverage, no-unsandboxed-fallback result, and
-    wrapper/filter-load mutation results.
+22. the seccomp wrapper digest, pinned `libseccomp` Rust/C boundary, generated
+    rule/toolchain plus `aquery` compile/build process-executable and configured
+    test-target-executable coverage, wrapper-as-test-executable result,
+    explicit pre-payload Bazel setup
+    exclusion, no-`--run_under`/pre-wrapper/no-unsandboxed-fallback results,
+    inherited socket/ring/SQPOLL/fixed-socket preflight results, every closed
+    stage diagnostic, and wrapper/filter-load mutation results.
 
 Candidate-specific evidence binds one integrated commit. A content change
 invalidates affected evidence. The qualified record merges before promotion

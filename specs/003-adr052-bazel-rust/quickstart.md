@@ -7,8 +7,7 @@ their named wave lands. Run them from a committed scope-owned worktree.
 
 ```bash
 set -euo pipefail
-export D2B_WORKTREE=/absolute/path/to/the/worktree
-cd "$D2B_WORKTREE"
+test "$(git rev-parse --show-toplevel)" = "$(pwd -P)"
 test -z "$(git status --porcelain --untracked-files=all)"
 mkdir -p .scratch
 nix develop
@@ -36,8 +35,8 @@ perl specs/003-adr052-bazel-rust/tools/validate-plan-structure.pl
 Expected:
 
 ```text
-PASS: 6 validator self-tests; positive fixture accepted; parser omission, dependency/adjacency mismatch, cycle, concurrent conflict, and dynamic ownership fixtures rejected
-PASS: 118 unique tasks with exact owned paths; dependencies exist and precede consumers; adjacency matches; graph is acyclic; concurrently ready ownership is disjoint
+PASS: 16 validator self-tests; positive fixture accepted; malformed header, dot and dot-dot alias, absolute path, repeated separator, malformed quoting, duplicate path, parser omission, repeated metadata, task after graph, dependency failure, pure adjacency mismatch, cycle, concurrent conflict, and dynamic ownership fixtures rejected; fixed-code remedies are repository-relative
+PASS: 119 unique tasks with exact canonical headers and owned paths; dependencies exist and precede consumers; adjacency matches; graph is acyclic; concurrently ready ownership is disjoint
 ```
 
 Do not use parked historical `spec003-w0-*` or `spec003-w0` branches as
@@ -713,19 +712,23 @@ regression and both native results must refer to one unchanged stable PR head.
 
 Inspect `tests/golden/bazel-rust-artifact-baselines.json`. It must contain
 exactly four rows: broker and guest for each native system. Each row comes from
-the realized derivation, carries zero initial `allowedGrowthBytes`, exact
-binary bytes, a recursive closure count and digest but no Nix store path, and
-the exact selected-policy digest. Broker rows additionally carry the exact ELF
+the realized derivation, carries a null initial `sizeGrowthAuthorization` and
+no row-level allowance field, exact binary bytes, a recursive closure count and
+digest but no Nix store path, and the exact selected-policy digest. Broker rows
+additionally carry the exact ELF
 interpreter basename and sorted `DT_NEEDED` SONAMEs; guest rows require
 `ET_DYN`, the native machine, no interpreter, and no `DT_NEEDED`.
 
 Run the unchanged-size-without-authorization and exact-approved-growth
-positive fixtures. Run missing, denied, stale, replayed,
-wrong-system/artifact, arithmetic-mismatch, absolute-rationale, and
+positive fixtures. The authorization's prior bytes must equal the baseline row
+and its new bytes must equal the realized artifact measurement. Run missing,
+denied, stale, replayed, wrong-system/artifact, wrong-prior-baseline,
+wrong-realized-new-bytes, arithmetic-mismatch, absolute-rationale, and
 size-plus-one authorization negatives, plus closure-add/remove,
 cross-artifact, unrelated-sibling, broker-linkage, static-broker,
 dynamic-guest, non-PIE, and wrong-machine mutations. A nonzero growth requires
-the closed authorization binding measured old/new bytes, exact delta,
+the closed authorization as the only allowance source, binding measured
+old/new bytes to the row baseline and realized artifact, exact positive delta,
 repository-relative rationale, system/artifact, candidate-content SHA-256, and
 review-record SHA-256 in the same change. Qualification must reference all
 four row digests and every nonzero authorization digest.
@@ -951,8 +954,10 @@ exporter-diagnostic-v1    7 days    64 per workflow and head digest
 Injected-clock/filesystem tests must cover just-inside, exact-age, expired,
 count-minus-one, exact-count, count-plus-one, newest retention, unowned/link
 refusal, and expiry failure with no publication. Complete and degraded
-evidence status variants must each carry exactly their required fields, and a
-degraded publication must still emit schema-valid unchanged manifest v1.
+evidence status variants must each carry exactly their required fields beneath
+one common `sinkKind` and policy-matching `retentionClass`; neither variant may
+repeat them. A degraded publication must still emit schema-valid unchanged
+manifest v1.
 
 Require broker and network isolation:
 
@@ -968,14 +973,24 @@ The broker tests must include a tag-removal mutation that overlaps a planted
 ordinary test. Qualification, not this smoke block, runs each context with
 `--runs_per_test=20`.
 
-The action-network test proves `d2b-bazel-seccomp-exec` is the outermost
-provider for stable/nightly Rustc, metadata, Clippy, rustdoc, doctest
-compile/run, rustfmt, unpretty, Cargo build-script, repository-generated, and
-test actions. It proves no local/standalone/no-sandbox or filter-load fallback
-exists and checks the inherited-socket preflight. Its real actions attempt
-IPv4, IPv6, netlink, packet, pathname Unix, abstract Unix, socketpair, and
-io_uring and must each observe the fixed policy errno. External-egress and
-live-index are additional plants. Inspect the wrapper digest and pinned
+The action-network test proves generated rule/toolchain and `aquery`
+inventories name `d2b-bazel-seccomp-exec` as the process executable for
+stable/nightly Rustc, metadata, Clippy, rustdoc, doctest compile/run, rustfmt,
+unpretty, Cargo build-script, and repository-generated actions. Each
+generated/custom test target names the wrapper itself as its executable and
+passes the real test binary as a declared input/argument. It rejects
+`--run_under`, wrapper removal, a pre-wrapper process, direct action, test
+executable substitution, local/standalone/no-sandbox, and every stage
+fallback. Bazel setup before the payload is outside the filter claim.
+
+Preflight plants pass inherited sockets, an ordinary ring, an SQPOLL ring, and
+a ring with a registered fixed socket; each must refuse before load. Real
+actions attempt IPv4, IPv6, netlink, packet, pathname Unix, abstract Unix,
+socketpair, and io_uring and must each observe the fixed policy errno.
+External-egress and live-index are additional plants. Inspect every fixed-code
+stage diagnostic and exact slice remedy; leak tests reject descriptor numbers,
+runtime paths, OS text, raw output, and dynamic identifiers. Inspect the
+wrapper digest and pinned
 libseccomp Rust/C source hashes and verify the wrapper inherits workspace
 `unsafe_code = "forbid"`. Mandatory socket-using Rust tests remain on their
 exact same-commit non-advisory Cargo compatibility carriers; inspect the
@@ -1038,7 +1053,8 @@ Run targeted tests for:
   `RESOLVE_NO_MAGICLINKS` without `RESOLVE_BENEATH` or
   `RESOLVE_NO_SYMLINKS`, permissive fallback leaf semantics without provider
   leaf `O_NOFOLLOW`, `ENOSYS`
-  refusal, same-descriptor `execveat(AT_EMPTY_PATH)`, and behavioral
+  refusal, private-CLOEXEC same-open-file-description
+  `execveat(AT_EMPTY_PATH)`, and behavioral
   close-on-exec checks for every auxiliary descriptor.
 - a provider mutation that reintroduces `RESOLVE_BENEATH`, while strict
   result and cleanup paths retain
@@ -1048,9 +1064,14 @@ Run targeted tests for:
   exact auto/blanket set, plus focused rustdoc compile-fail examples for
   construction, descriptor extraction/access, Deref/Borrow/fd traits,
   formatting/serialization, conversion, duplication/default, and minting;
-- safe helper transfer of the consumed verified open file description to fd 0
-  with no `pre_exec`, fork, target path, reopen, `/proc/self/fd`, `fexecve`,
-  local unsafe, or workspace-lint override.
+- safe-by-value transfer of the consumed verified capability into the one
+  runner-local broker-convention `sys.rs`; parent-prepared async-signal-safe
+  fork/dup/fcntl/error-pipe/execveat operations; private CLOEXEC descriptor
+  naming the original open file description; preserved declared
+  stdin/stdout/stderr; and no helper binary/runfile/path, direct invocation,
+  fd-0 executable transport, `pre_exec`, reopen, `/proc/self/fd`, `fexecve`,
+  path fallback, provider-fd leak, second unsafe file, file-wide allowance, or
+  general-crate exemption.
 
 No test should fill a disk, require a privileged mount, sleep to reach expiry,
 or write a stale executable into `packages/target/`.
@@ -1083,10 +1104,12 @@ specific correction, and one exact closed slice rerun command without a
 generic placeholder, absolute runfiles location, or descriptor. Run the
 reason-by-slice exact-message matrix.
 
-Qualification and release refusal tables must likewise render their fixed
-codes and exact command blocks. Reject any message containing `$!`, a commit,
-run, or attempt identifier, absolute or Nix store path, raw cursor, opaque
-handle, raw API/tool output, or free-form/borrowed command.
+Qualification and release tables must likewise render fixed codes and exact
+remedies. Qualification and release query errors are typed degradation, never
+absence. Reject any message containing `$!`, descriptor numbers, runtime,
+socket, absolute, or Nix store paths, OS text, raw child/API/tool output,
+argv/environment values, dynamic identifiers, raw cursors/handles, or
+free-form/borrowed commands.
 
 Run the ADR-0054 drift/refusal table tests for stale product and walker hub
 locks, module lock, generator output, package-policy output, yanked snapshot,
@@ -1185,7 +1208,10 @@ jq -e '
   .architecture.aarch64_supply_chain_passed_on_same_stable_head and
   .broker.all_contexts_exclusive and
   .broker.all_contexts_twenty_consecutive and
-  .action_network.outermost_provider_complete and
+  .action_network.compile_build_executable_binding_exact and
+  .action_network.test_executable_binding_exact and
+  .action_network.no_run_under_or_pre_wrapper and
+  .action_network.inherited_capability_preflight_exact and
   .action_network.stable_nightly_action_inventory_exact and
   .action_network.no_unsandboxed_or_filter_load_fallback and
   .action_network.all_eight_socket_io_uring_plants_denied and
@@ -1364,6 +1390,23 @@ Those two literals are the current committed sentences that assert eight Rust
 CI jobs; both must be gone, and all eight public leaf names must remain
 documented.
 
+Run the enforcing hybrid-disclosure policy after the promotion fragment and
+all five fixed docs are present:
+
+```bash
+set -euo pipefail
+make test-policy
+```
+
+`policy_bazel_hybrid_docs` derives the exact nonempty
+`cargoCompatibilityCarriers` census from the coverage map, retaining each
+case's surface ID, Cargo selector, test identity, and socket class, and
+requires every governed semantic block and the present fragment to equal all
+entries in both directions. Distinct cases sharing one surface remain
+distinct. Its independent missing and extra full-identity fixtures must fail.
+The same test governs the alias-removal and Cargo-retirement fragments when
+those files are present.
+
 Rollback rehearsal in a disposable worktree, before merge. There is no
 promotion record yet: `promotion-record.json` is created only after the
 candidate merges, so the rehearsal resolves the candidate from the verified
@@ -1411,51 +1454,24 @@ set -euo pipefail
 (cd packages && cargo xtask bazel-release-containment-validate)
 ```
 
-The derivation it performs is shown below. This repository already carries
-two-component tags such as `v1.0`, so `git tag --contains` alone is not an
-entry condition:
-
-```bash
-set -euo pipefail
-promotion_sha=$(jq -r '.promotion_commit' \
-  specs/003-adr052-bazel-rust/evidence/promotion-record.json)
-tag=
-while IFS= read -r candidate; do
-  git merge-base --is-ancestor "$promotion_sha" "$candidate^{commit}" \
-    || continue
-  remote_commit=$(
-    git ls-remote --exit-code --tags origin \
-      "refs/tags/$candidate" "refs/tags/$candidate^{}" \
-      | awk '
-          $2 ~ /\^\{\}$/ { peeled = $1 }
-          $2 !~ /\^\{\}$/ { direct = $1 }
-          END { print peeled != "" ? peeled : direct }
-        '
-  ) || continue
-  test -n "$remote_commit" || continue
-  test "$(git rev-parse "$candidate^{commit}")" = "$remote_commit" || continue
-  release_state=$(
-    gh release view "$candidate" --json isDraft,isPrerelease \
-      --jq '[.isDraft, .isPrerelease] | @tsv' 2>/dev/null
-  ) || continue
-  test "$release_state" = "$(printf 'false\tfalse')" || continue
-  tag=$candidate
-  break
-done < <(
-  git tag --contains "$promotion_sha" \
-    | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' \
-    | sort -V
-)
-test -n "$tag"
-```
+The validator transiently enumerates only tags matching
+`^v[0-9]+\.[0-9]+\.[0-9]+$`, proves promotion ancestry, compares peeled local
+and origin objects, and requires present non-draft/non-prerelease release
+metadata. This repository already carries two-component tags such as `v1.0`,
+so containment alone is not an entry condition. It persists only a successful
+tag-reference digest.
 
 A two-component tag, a local-only tag, a divergent same-named local and remote
 tag, a draft release, and a prerelease each fail entry, and the owning
 interface test carries all five as negatives. Inspect the fixed
 `D2B-BZLRELEASE-NO-TAG`, `D2B-BZLRELEASE-UNPUSHED`,
 `D2B-BZLRELEASE-DIVERGENT`, `D2B-BZLRELEASE-NO-RELEASE`, and
-`D2B-BZLRELEASE-NOT-FINAL` messages and their exact command blocks from
-`make-target-compatibility.md`; no raw command output or identifier may be
+`D2B-BZLRELEASE-NOT-FINAL` refusals and the
+`D2B-BZLRELEASE-RECORD-QUERY`, `D2B-BZLRELEASE-LOCAL-QUERY`,
+`D2B-BZLRELEASE-ORIGIN-QUERY`, and
+`D2B-BZLRELEASE-METADATA-QUERY` degradations and their exact remedies from
+`make-target-compatibility.md`. A failed query must never appear as absence,
+and no candidate/tag/object identifier or raw command output may be
 substituted. Run
 both no-argument validators before this containment check.
 

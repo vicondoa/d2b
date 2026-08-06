@@ -51,10 +51,20 @@ The provider matrix renders each reason for each of the four closed slice
 commands; a generic `owning slice` placeholder is not accepted. Qualification
 failures use the fixed-code command table in
 `shadow-promotion-evidence.md`. Release-containment failures use the
-fixed-code command table in `make-target-compatibility.md`. They emit no
-planted forbidden value and do not rewrite the underlying `testVerdict`; they
-produce a structurally valid typed degraded status that completion and
-qualification reject.
+fixed-code command table in `make-target-compatibility.md`. Seccomp binding,
+inherited-capability, `no_new_privs`, filter, and exec stages use the complete
+table in `coverage-map.md`. Query errors are typed degraded outcomes, never
+absence. All tables emit no planted forbidden value and do not rewrite the
+underlying `testVerdict`; evidence failures produce a structurally valid typed
+degraded status that completion and qualification reject.
+
+The exact-message harness covers every seccomp stage and slice, every
+qualification query/refusal/publication class, and every release
+query/refusal class. It rejects descriptor numbers, absolute, runfiles,
+socket, and Nix store paths, OS/errno text, raw child/tool/API output, argv,
+environment values, and process, user, run, attempt, candidate, object, or tag
+identifiers. Repository-relative policy rows and SHA-256 digests are the only
+artifact locators permitted.
 
 ## Deadline
 

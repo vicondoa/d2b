@@ -353,15 +353,22 @@ census and same-commit non-advisory verdict. Promotion identifies those
 surfaces as hybrid, and Cargo retirement retains the compatibility carriers
 until a separately authorized design exists.
 
-Every Bazel action remains no-network. A network namespace does not deny socket
-creation and is only defense in depth. The enforcing boundary is a
-repository-owned static `d2b-bazel-seccomp-exec` provider used as the outermost
-executable for stable/nightly Rustc and metadata, Clippy, rustdoc, doctest,
-rustfmt, unpretty, Cargo build-script, generated repository, and Bazel test
-actions. It rejects inherited socket descriptors, sets `no_new_privs`, loads a
-fixed syscall filter, and has no filter-load or unsandboxed fallback.
+Every governed Bazel Rust action remains no-network. A network namespace does
+not deny socket creation and is only defense in depth. The enforcing boundary
+is a repository-owned static `d2b-bazel-seccomp-exec`. Generated
+rules/toolchains make it the process executable for stable/nightly Rustc and
+metadata, Clippy, rustdoc, doctest, rustfmt, unpretty, Cargo build-script, and
+generated repository actions. Generated/custom test targets make the wrapper
+itself the payload executable and pass the real test binary as a declared
+input/argument; `--run_under` is not used. `aquery` inventories the executable
+field and rejects a missing or pre-wrapper process. Bazel setup before the
+payload is outside the claim. Every Rust payload descendant starts after load
+and inherits the filter.
 
-The filter denies `socket` and `socketpair` for every domain, the complete
+The wrapper first rejects inherited socket descriptors and every io_uring ring,
+including SQPOLL and registered/fixed-socket states. It then sets
+`no_new_privs`, builds and loads the filter, and executes the payload with no
+stage or unsandboxed fallback. The filter denies `socket` and `socketpair` for every domain, the complete
 ordinary socket operation set, `pidfd_getfd`, `socketcall` where present, and
 all three io_uring entry points. Linkers, proc macros, build scripts, doctest
 runners, test binaries, and their descendants inherit it. Eight real
@@ -372,6 +379,11 @@ phase:
 registry archives bind the root lock checksum, and `wl-proxy` binds the
 revision and archive sha256. Actions receive all resulting sources, policy
 snapshots, databases, and tools as declared inputs.
+
+Wrapper-removal, pre-wrapper, direct-action, test-executable, forbidden
+`--run_under`, inherited socket, ordinary-ring, SQPOLL-ring, and
+fixed-socket-ring plants bind the design. Every stage has a closed fixed code,
+exact literal remedy/rerun, and leak-rejection tests.
 
 The wrapper is a member of the product workspace and inherits
 `unsafe_code = "forbid"`. It uses the safe pinned `libseccomp` API. The
@@ -484,7 +496,8 @@ both `RESOLVE_BENEATH` and `RESOLVE_NO_SYMLINKS`, because a declared Bazel
 runfiles leaf symlink may escape the anchor. The forced walk refuses
 intermediate symlinks with `O_NOFOLLOW`, permits and follows the provider leaf
 symlink without `O_NOFOLLOW`, opens the leaf close-on-exec, and applies the
-same identity checks. The same descriptor is executed by
+same identity checks. A private `F_DUPFD_CLOEXEC` descriptor sharing that
+verified descriptor's original open file description is executed by
 `execveat(..., AT_EMPTY_PATH)`. `ENOSYS` refuses; there is no path, `fexecve`,
 or `/proc/self/fd` fallback. A mutation reintroducing `RESOLVE_BENEATH` on
 provider opens must fail. Strict result, JUnit, execution-manifest, and cleanup
@@ -501,16 +514,28 @@ construction, conversion, duplication, defaulting, or minting. Focused rustdoc
 `compile_fail` examples prove downstream type-system absence; Cargo-shelling
 fixtures are not used.
 
-The repository does not hand-write a post-fork unsafe boundary. The
-multithreaded runner consumes the verified descriptor into fd 0 of the
-exact-digest `d2b-bazel-execveat` helper using safe
-`std::process::Command`, with no `pre_exec`. The helper is a fresh,
-single-threaded workspace process under `unsafe_code = "forbid"`; it accepts no
-target path, does not fork, prepares its arguments safely, and calls the safe
-`nix::unistd::execveat` wrapper on that same verified open file description
-with an empty path and `AT_EMPTY_PATH`. `ENOSYS` refuses. Tests reject
-`pre_exec`, `fork`, target-by-path `Command`, `/proc/self/fd`, `fexecve`,
-reopen, local unsafe, or a workspace-lint override.
+The path-launched helper design is rejected. It rebounded the helper between
+verification and spawn, overloaded fd 0 even though fd 0 is target stdin, and
+could not both hide the executable descriptor and preserve stdin.
+
+The multithreaded runner instead follows the existing reviewed broker
+convention. Its crate remains `unsafe_code = "deny"`; exactly one quarantined
+`src/sys.rs` carries narrowly scoped item-level allowances for fork, private
+CLOEXEC dup/fcntl, stdio installation, close, the CLOEXEC error pipe,
+`execveat`, fixed-size error write, and `_exit`. The public safe layer consumes
+`VerifiedExecutable` by value. Before fork it prepares all strings, pointers,
+collision-free descriptors, stdio state, and error records. The child performs
+only async-signal-safe operations, executes a private CLOEXEC duplicate of the
+original verified open file description with an empty path and
+`AT_EMPTY_PATH`, preserves declared stdin/stdout/stderr, and leaks no provider
+or auxiliary descriptor. `ENOSYS` refuses.
+
+Tests reject a helper binary, helper runfile/path/digest, direct helper
+invocation, fd-0 executable transport, `pre_exec`, target-by-path `Command`,
+`/proc/self/fd`, `fexecve`, reopen, path fallback, child allocation/logging,
+a second unsafe file, file-wide allowance, or a general product-crate
+exemption. API, same-open-file-description, stdin, stdout/stderr, close-on-exec,
+and path-rebind-absence positives bind the intended implementation.
 
 On expiry, the independently timed full grace contains repeated non-consuming
 nonblocking `waitid(EXITED|NOWAIT|NOHANG)` observations. They are
@@ -622,10 +647,12 @@ exporter diagnostics.
 Sanitization happens before every sink, under a committed generated policy
 whose byte and record limits come from measured sanitized fixtures. No raw
 child output is persisted. The underlying `testVerdict` is independent of
-the closed tagged `evidenceStatus`. Complete and degraded variants have
-disjoint required fields. An exporter or publication failure preserves the
-verdict, emits the structurally valid degraded variant, and is rejected
-separately by surface completion and qualification. Manifest v1 is unchanged.
+the closed tagged `evidenceStatus`. The common sink result carries
+`sinkKind` and its policy-derived `retentionClass` exactly once; complete and
+degraded variants do not repeat either and have disjoint required fields. An
+exporter or publication failure preserves the verdict, emits the structurally
+valid degraded variant, and is rejected separately by surface completion and
+qualification. Manifest v1 is unchanged.
 A protected-`v3` push where either or both
 workflows reach no verdict emits a degraded record and resets the streak
 instead of disappearing.
@@ -786,8 +813,13 @@ insufficient because the repository already carries two-component tags
 origin, and proves a release exists with both `isDraft` and `isPrerelease`
 false. The contributor-only no-argument
 `cargo xtask bazel-release-containment-validate` command performs this
-derivation and owns the fixed-code exact-command refusal table; Make and
-workflows cannot reach it.
+derivation and owns the fixed-code exact-remedy outcome table; Make and
+workflows cannot reach it. Promotion-record, local-tag, origin-tag, and
+release-metadata queries each return a typed result. Their failures are
+distinct degraded codes with exact identifier-free remedies; no failed
+`git`/`gh` call is suppressed as a missing tag or release. Candidate tag and
+object identifiers remain transient, and successful persistence uses only a
+tag-reference digest.
 
 spec003w5 output is integrated or squashed into one atomic promotion commit relative
 to the recorded spec003w5 parent. The integrator asserts its complete path diff and
@@ -836,13 +868,18 @@ committed baseline contains exactly four rows, one broker and guest row per
 native system. Each row records exact binary bytes, a transiently derived
 closure count and digest without store paths, selected-policy digest, ELF type
 and machine, exact broker interpreter and `DT_NEEDED` SONAMEs, and absent guest
-interpreter and `DT_NEEDED`. Initial allowed growth is zero. A later growth
-delta is accepted only with the closed same-change authorization binding
-measured old/new bytes, exact difference, repository-relative rationale,
-system/artifact, candidate digest, review digest, and approved decision.
+interpreter and `DT_NEEDED`. Initial size authorization is null. A later
+growth delta is accepted only with the closed
+same-change authorization whose prior bytes equal the baseline row, whose new
+bytes equal the realized artifact measurement, and which binds the exact
+positive difference, repository-relative rationale, system/artifact, candidate
+digest, review digest, and approved decision. That authorization object is the
+only allowance source; a baseline-row allowance field is forbidden.
 Positive unchanged/authorized-growth fixtures and missing, denied, stale,
-replayed, wrong-row, arithmetic, absolute-rationale, and size-plus-one
-negatives bind qualification. No byte ceiling is invented in prose.
+replayed, wrong-row, wrong-prior, wrong-realized-new, arithmetic,
+absolute-rationale, duplicate-allowance-source, and size-plus-one negatives
+bind qualification.
+No byte ceiling is invented in prose.
 
 Cache deletion uses a closed typed prefix enum. Neither API data nor a caller
 can supply authorization. Mixed-page fixtures interleave retired,
@@ -866,10 +903,17 @@ descriptors, workflow attempt handles, or opaque API handles.
 
 The Spec 003 validator now parses every task record, accepts only literal
 normalized repository-relative owned paths, and rejects aggregate or generated
-ownership prose rather than truncating it. Its self-test corpus has one
-positive fixture and negative parser-omission, adjacency-mismatch, cycle,
-concurrent-conflict, and dynamic-ownership fixtures. This remains a planning
-tool under the specification directory and is not a repository gate.
+ownership prose rather than truncating it. It first censuses every unchecked
+task-like checkbox, requires exact `- [ ] TNNN` headers, and rejects dot and
+dot-dot components, absolute paths, repeated separators, malformed quoting,
+duplicates, and unresolved expressions. Its self-test corpus has one positive
+fixture and independent malformed-header, dot, dot-dot, absolute,
+repeated-separator, malformed-quoting, duplicate, parser-omission, repeated
+metadata, task-after-graph, dependency, pure-adjacency, cycle,
+concurrent-conflict, and dynamic-ownership negatives.
+Every failure renders a fixed code, repository-relative source, exact remedy,
+and exact rerun without raw OS text. This remains a planning tool under the
+specification directory and is not a repository gate.
 
 ## Decision 23: Disclose retained hybrid execution
 
@@ -880,6 +924,22 @@ specification. The ten-green-run retirement step retains their cases, census,
 public executor, and same-commit verdict contribution. Only a separately
 reviewed authorization that changes ADR 0052's action invariant may retire
 them.
+
+Prose review is insufficient. An enforcing fixture-independent type-5 policy
+lint derives the exact nonempty compatibility carrier census from the coverage
+map, retaining surface ID, Cargo selector, test identity, and socket class for
+every case, and compares it bidirectionally with all five fixed hybrid docs and
+every present promotion, alias-removal, or Cargo-retirement semantic fragment.
+Distinct cases sharing a surface do not collapse. Missing and extra
+full-identity fixture documents fail independently. The policy runs under the
+existing `make test-policy` surface and adds no gate.
+
+Release containment likewise distinguishes knowledge from absence. Local-tag,
+origin-tag, release-metadata, and promotion-record query failures are closed
+typed degraded outcomes. Semantic absence is a separate refusal. Candidate tag
+and object identifiers remain transient; diagnostics persist only a stable
+policy label, digests, a fixed code, and an exact remedy, never raw `git` or
+`gh` output.
 
 ## Seeded refusal classes
 
@@ -914,9 +974,12 @@ for:
   a newer failure.
 - advisory arm, Rust slice, or rollup classification;
 - unknown, caller-supplied, ambiguous, or mixed-page cache prefix;
-- forged `VerifiedExecutable` API, `pre_exec`/fork/path-reopen helper
-  regression, seccomp provider/toolchain gap, filter-load fallback, unsealed
-  promotion SHA, sink value leak, sink bound or retention overflow, or
+- forged `VerifiedExecutable` API, helper/path/fd-0/reopen execution
+  regression, second/broad unsafe boundary, stdin or CLOEXEC regression,
+  seccomp executable-field/pre-wrapper/`--run_under` gap, inherited
+  ring/SQPOLL/fixed-socket gap, stage fallback, unsealed promotion SHA, sink
+  value leak, duplicate sink classification, sink bound or retention overflow,
+  duplicate size allowance, suppressed release query, unchecked hybrid doc, or
   malformed/success-shaped exporter degradation.
 
 The harness fails if a mutation reaches a later predicate, returns zero, or

@@ -84,7 +84,9 @@ Out of scope:
 - VM images, NixOS module behavior, fixture materialization, or release
   artifact redesign;
 - remote execution or a remote Bazel cache;
-- a new Layer-1 job, required context, linter, formatter, or hook;
+- a new Layer-1 job, required context, standalone linter, formatter, or hook;
+  the explicitly required type-5 hybrid-disclosure policy reuses the existing
+  `test-policy` lane and is not a new gate;
 - merging the no-bash walker into the product workspace;
 - treating `packages/Cargo.guest.lock` as a Cargo or Bazel dependency
   authority;
@@ -172,12 +174,19 @@ Out of scope:
 
 - Bazel Rust actions remain no-network under ADR 0052. Network namespaces are
   defense in depth and are not socket-creation enforcement.
-- The repository-owned static `d2b-bazel-seccomp-exec` provider is the
-  outermost executable for every stable/nightly Rust compile, metadata,
-  Clippy, rustdoc, doctest, rustfmt, unpretty, Cargo build-script,
-  repository-generated, and Bazel test action. It rejects inherited socket
-  descriptors, sets `no_new_privs`, loads the fixed filter, and has no
-  unsandboxed or filter-load fallback. Every descendant inherits it.
+- The repository-owned static `d2b-bazel-seccomp-exec` provider is the process
+  executable of every stable/nightly Rust compile/build action. Each
+  generated/custom governed test target uses the wrapper itself as its
+  executable and carries the real test binary as a declared input and
+  argument. `--run_under` is forbidden. Generated rule/toolchain and `aquery`
+  inventories prove the binding and reject wrapper removal or any pre-wrapper
+  process. Bazel server, sandbox, runfiles, and native test setup before the
+  payload are outside the filter claim; every Rust payload descendant starts
+  after load and inherits it.
+- Before filter load the wrapper rejects inherited socket descriptors and
+  every io_uring ring, including SQPOLL and registered/fixed-socket states. It
+  then sets `no_new_privs`, builds and loads the fixed filter, and executes the
+  payload with no stage or unsandboxed fallback.
 - The filter denies the complete socket-operation set, `socketpair`,
   `pidfd_getfd`, `socketcall` where present, and all three io_uring entry
   points. Real in-action plants cover IPv4, IPv6, netlink, packet, pathname
@@ -199,6 +208,9 @@ Out of scope:
   refuse from real Bazel actions. Promotion identifies affected surfaces as
   permanently hybrid under this specification, lists their exact IDs, and
   never claims the compatibility cases ran under Bazel.
+- Every wrapper stage has one fixed redacted code, exact correction and literal
+  slice rerun. Tests reject runtime paths, descriptors, OS text, raw output,
+  and dynamic identifiers.
 - One committed yanked snapshot has the exact key set derived only from
   `packages/Cargo.lock`; the walker lock and `Cargo.guest.lock` are excluded.
 - `rust-deny-main` evaluates the full product snapshot. Broker and guest deny
@@ -335,9 +347,10 @@ Acceptance:
 8. JUnit, `test.log`, execution evidence, qualification evidence, and exporter
    diagnostics are sanitized and bounded before publication. Degraded evidence
    preserves the underlying test verdict and is rejected separately.
-9. Same-descriptor execution consumes the verified open file description into
-   a safe no-fork helper process; neither runner nor helper weakens the
-   workspace unsafe lint.
+9. Same-descriptor execution consumes the verified capability through a safe
+   API into one runner-local quarantined `sys.rs` boundary matching the
+   broker's reviewed `unsafe_code = "deny"` convention; declared stdio is
+   preserved and no provider descriptor or helper path survives.
 10. JUnit, `test.log`, unsealed evidence, and exporter diagnostics use closed
     age/count retention classes whose expiry is enforced before publication.
 
@@ -445,16 +458,25 @@ Acceptance:
   construction, conversion, defaulting, or duplication. Focused rustdoc
   `compile_fail` examples MUST prove downstream capability absence; no
   Cargo-shelling fixture may be added.
-  Execution MUST consume the verified open file description into fd 0 of the
-  exact-digest `d2b-bazel-execveat` helper through safe
-  `std::process::Command` with no `pre_exec`. That workspace helper MUST
-  inherit `unsafe_code = "forbid"`, accept no target path, perform no fork, and
-  call the safe `nix::unistd::execveat` wrapper with an empty path and
-  `AT_EMPTY_PATH`. The standard-library spawn implementation is the only
-  child-creation boundary; a Linux conformance trace MUST allow only its
-  async-signal-safe descriptor, signal, and exec operations before the helper
-  image and no repository callback or symbol. No path or `ENOSYS` fallback
-  exists.
+  The public safe execution API MUST consume `VerifiedExecutable` by value.
+  The runner MUST retain `unsafe_code = "deny"` and MUST isolate every required
+  low-level operation in exactly one `src/sys.rs`, following the existing
+  reviewed broker convention. Only narrowly scoped item-level allowances for
+  fork, private CLOEXEC dup/fcntl, declared-stdio installation, close,
+  close-on-exec error pipe, `execveat`, fixed-size error write, and `_exit` are
+  permitted. The parent MUST prepare every allocation, C string, pointer,
+  descriptor collision, and error record before fork. The child MUST use only
+  those parent-prepared async-signal-safe operations.
+  `execveat` MUST use a private `F_DUPFD_CLOEXEC` descriptor referring to the
+  original verified open file description, with an empty path and
+  `AT_EMPTY_PATH`; successful exec MUST preserve declared stdin/stdout/stderr
+  and leak no provider, private executable, error-pipe, or auxiliary
+  descriptor. No exec helper binary, helper runfile/path/digest, direct helper
+  invocation, fd-0 executable transport, `pre_exec`, target path,
+  `std::process::Command` target invocation, reopen, `/proc`, `fexecve`, path
+  fallback, or `ENOSYS` fallback may exist. API, same-open-file-description,
+  stdin, stdout/stderr, close-on-exec, rebind-absence, and mutation coverage
+  MUST enforce this boundary.
 - **FR-019**: `crate_universe` MUST declare exactly `product` from
   `packages/{Cargo.toml,Cargo.lock}` and `walker` from the no-bash walker
   manifest and lock. Product first-party crates MUST be native Bazel targets.
@@ -504,12 +526,15 @@ Acceptance:
   MUST come from exactly four realized measured baseline rows. Exact closure
   paths MUST be validated transiently but only closure counts/digests and
   closed states may persist. A nonzero size delta MUST carry the closed
-  same-change approved authorization binding old/new bytes, exact delta,
-  repository-relative rationale, system/artifact, candidate digest, and review
-  digest. Positive unchanged/authorized and negative
+  same-change approved authorization whose prior bytes equal the baseline row,
+  whose new bytes equal the realized artifact measurement, and which binds the
+  exact positive delta, repository-relative rationale, system/artifact,
+  candidate digest, and review digest. That authorization object MUST be the
+  only source of size allowance; no baseline-row allowance field may exist.
+  Positive unchanged/authorized and negative
   missing/denied/stale/replayed/wrong-row/arithmetic/absolute-rationale/
-  size-plus-one fixtures MUST bind qualification; no prose byte ceiling is
-  accepted.
+  wrong-prior/wrong-realized-new/duplicate-allowance-source/size-plus-one
+  fixtures MUST bind qualification; no prose byte ceiling is accepted.
 - **FR-033**: Exactly six native checks per system MUST exist and realize:
   four package checks, `broker-host-artifact-contract`, and
   `guest-static-elf`, each reading only its exact system-and-target policy
@@ -540,8 +565,13 @@ Acceptance:
   sanitizer, sink-limit, exporter, publication, and qualification-degradation
   classes MUST each have an exact tested row. Artifact and validator failures
   MUST be fixed-code, repository-relative, and digest-only. Provider,
-  publication, qualification, and release refusal matrices MUST render exact
-  closed commands with no free-form command field.
+  publication, every seccomp stage, qualification query/refusal/publication,
+  planning-validator, and release query/refusal matrices MUST render exact
+  closed remedies and rerun commands with no free-form command field. Tests
+  MUST reject descriptor numbers, runtime paths, OS text, raw child/tool/API
+  output, argv/environment values, and process/user/run/attempt/candidate/tag/
+  object identifiers. Failed `git`/`gh` or qualification inventory queries
+  MUST be typed degradation, never absence.
 - **FR-040**: The shadow workflow MUST remain non-required, keep the required
   graph unchanged, and publish no cache.
 - **FR-041**: Pull-request jobs MUST remain read-only, request no
@@ -570,9 +600,11 @@ Acceptance:
   eighteen-surface failure matrix, topology, selected package policy, native
   dual-architecture realization, performance, cache, and ten-record
   equivalence evidence, including the three explicit camelCase cache counts,
-  broker twenty-run exclusivity, the outermost seccomp provider and
-  stable/nightly action-kind inventory, no unsandboxed fallback, all eight
-  socket/io_uring plants plus external-egress/live-index, exact
+  broker twenty-run exclusivity, generated rule/toolchain plus `aquery`
+  seccomp executable-field and stable/nightly action-kind inventory,
+  wrapper-as-test-executable, no `--run_under`, pre-wrapper, inherited-capability,
+  stage, or unsandboxed gap, all eight socket/io_uring plants plus
+  external-egress/live-index, exact
   same-commit Cargo compatibility-carrier coverage, complete sink
   sanitization/bounds/retention, non-advisory arm/four-slice/rollup
   classification, all four realized artifact baseline rows and any size-growth
@@ -592,36 +624,52 @@ Acceptance:
   result documents. JUnit, `test.log`, emitted evidence, and exporter
   diagnostics MUST be sanitized and bounded before writing and MUST contain no
   forbidden planted value. `testVerdict` MUST remain the underlying operation
-  result; `evidenceStatus` MUST be a closed tagged complete/degraded union with
-  disjoint required fields and closed retry commands. Publication failure MUST
+  result; common `sinkKind` and `retentionClass` MUST each occur exactly once
+  and match through the committed policy; `evidenceStatus` MUST be a closed
+  tagged complete/degraded union with disjoint required fields, no repeated
+  classification fields, and closed retry commands. Publication failure MUST
   emit the structurally valid degraded variant that surface completion and
   qualification reject. Execution-manifest v1 MUST remain unchanged.
 - **FR-055**: No new top-level shell gate, Layer-1 job, required context,
-  linter, formatter, hook, remote cache, or remote execution surface may be
-  added.
+  standalone linter, formatter, hook, remote cache, or remote execution
+  surface may be added. The explicitly required fixture-independent type-5
+  hybrid-disclosure policy MUST reuse the existing `test-policy` lane and adds
+  no new gate.
 - **FR-056**: Qualification MUST run each broker context twenty consecutive
   times with `--runs_per_test=20`, exclusivity in force, and a passing
   tag-removal/overlap mutation.
-- **FR-057**: Every Bazel Rust build/test action MUST run through
-  `d2b-bazel-seccomp-exec` as its outermost executable and every descendant
-  MUST inherit its filter. Stable/nightly Rustc, metadata, Clippy, rustdoc,
-  doctest compile/run, rustfmt, unpretty, build-script, repository action, and
-  test-action providers MUST be inventoried exactly. Filter and strategy
-  failure MUST have no unfiltered or unsandboxed fallback. The filter MUST
-  reject inherited socket descriptors and deny the complete socket-operation
-  set, `socketpair`, `pidfd_getfd`, `socketcall` where present, and all three
-  io_uring entry points. IPv4, IPv6, netlink, packet, pathname Unix, abstract
-  Unix, socketpair, and io_uring in-action plants MUST observe the fixed policy
-  errno; external-egress and live-index plants MUST also fail and enter
-  qualification. Only pinned repository-rule fetches are permitted. The
-  wrapper MUST inherit workspace `unsafe_code = "forbid"`; its pinned safe
-  libseccomp binding/native library is a separately reviewed FFI dependency
-  boundary. Mandatory socket-using Rust tests MUST remain on an exact
-  non-advisory Cargo compatibility path under their existing surface IDs until
-  separately authorized; qualification MUST bind their same-commit census and
-  verdict. Socket-denial plants MUST belong only to the
-  hermeticity/action-network carrier, never the stub carrier. No artifact may
-  claim namespace isolation denies socket creation.
+- **FR-057**: Every governed Bazel Rust compile/build action MUST name
+  `d2b-bazel-seccomp-exec` as its process executable, with the real tool as a
+  declared input/argument. Every generated/custom governed test target MUST
+  name the wrapper itself as its test executable, with the real test binary as
+  a declared input/argument; `--run_under` MUST be absent. Generated
+  rules/toolchains and configured `aquery` action-graph inventories MUST bind
+  stable/nightly Rustc, metadata, Clippy, rustdoc, doctest compile/run,
+  rustfmt, unpretty, build-script, repository action, and test-action
+  executable fields exactly. Wrapper-removal, pre-wrapper, direct-action,
+  test-executable-substitution, and `--run_under` plants MUST fail. Bazel
+  server/executor/sandbox/runfiles/native-test setup before the payload MUST be
+  identified as outside the filter claim; the wrapper payload and every
+  descendant MUST inherit the filter.
+  Before filter load the wrapper MUST reject inherited socket descriptors and
+  every io_uring ring, including SQPOLL and registered/fixed-socket states.
+  It MUST then set `no_new_privs`, construct and load the filter, and execute
+  the payload with no stage or unsandboxed fallback. The filter MUST deny the
+  complete socket-operation set, `socketpair`, `pidfd_getfd`, `socketcall`
+  where present, and all three io_uring entry points. IPv4, IPv6, netlink,
+  packet, pathname Unix, abstract Unix, socketpair, and io_uring in-action
+  plants MUST observe the fixed policy errno; inherited socket/ring/SQPOLL/
+  fixed-socket, external-egress, and live-index plants MUST also fail and enter
+  qualification. Every stage MUST have its closed fixed code, exact remedy,
+  literal slice rerun, and leak-rejection tests. Only pinned repository-rule
+  fetches are permitted. The wrapper MUST inherit workspace
+  `unsafe_code = "forbid"`; its pinned safe libseccomp binding/native library
+  is a separately reviewed FFI dependency boundary. Mandatory socket-using
+  Rust tests MUST remain on an exact non-advisory Cargo compatibility path
+  under their existing surface IDs until separately authorized; qualification
+  MUST bind their same-commit census and verdict. Socket-denial plants MUST
+  belong only to the hermeticity/action-network carrier, never the stub
+  carrier. No artifact may claim namespace isolation denies socket creation.
 - **FR-058**: `cargo xtask bazel-module-refresh` MUST be test-first,
   no-argument, `MODULE.bazel.lock`-only, idempotent, and use the same absolute
   server-selecting startup options. Module drift MUST name its exact
@@ -662,8 +710,14 @@ Acceptance:
   CI jobs. Promotion and retirement docs and semantic changelog fragments MUST
   list every hybrid surface and retained socket-using Cargo case, state that
   they are permanently hybrid under this specification, and name separate
-  authorization as the only retirement path. These shipped docs MUST contain
-  no process markers.
+  authorization as the only retirement path. An enforcing fixture-independent
+  type-5 policy lint MUST derive the exact nonempty compatibility carrier
+  census from the coverage map, retaining surface ID, Cargo selector, test
+  identity, and socket class for every case, and compare it bidirectionally
+  with every fixed hybrid doc and present promotion/alias-removal/
+  Cargo-retirement semantic fragment; distinct cases sharing a surface MUST
+  not collapse, and independent missing and extra full-identity fixtures MUST
+  fail. These shipped docs MUST contain no process markers.
 - **FR-066**: The spec003w1 no-bash scope MUST own
   `tests/tools/no-bash-ast-walker/src/main.rs` and its tests, fail closed on
   walk/read/parse errors, and prove parsed-file census equality with both the
@@ -836,7 +890,11 @@ Acceptance:
   fields are informational mirrors only, and a mirror that disagrees with the
   derived result is a refusal. Evidence curation and promotion validation MUST
   run the validator, and contributor validation MUST run it before any
-  informational inspection.
+  informational inspection. The paired no-argument contributor-only
+  `cargo xtask bazel-evidence refresh-qualification` command MUST atomically
+  rebuild only the fixed record from the complete stream. Query or publication
+  failure MUST produce its closed degraded code and exact remedy, leave the
+  prior record intact, and MUST NOT become an empty inventory.
 - **FR-087**: The no-shell property MUST be bound to
   `bazel/generated/no-shell-inventory.json`, an exact, generated,
   drift-checked source, scan-result, and spawn-site inventory. Governed sources
@@ -872,18 +930,31 @@ Acceptance:
   prerelease. The no-argument contributor-only
   `cargo xtask bazel-release-containment-validate` command MUST perform this
   derivation, remain unreachable from Make/workflows, and render every refusal
-  through the closed exact-command table.
+  through the closed exact-remedy table. Promotion-record, local-tag,
+  origin-tag, and release-metadata query failures MUST be distinct typed
+  degraded outcomes and MUST NOT be suppressed or interpreted as absence.
+  Candidate/tag/object identifiers and raw `git`/`gh` output MUST remain
+  transient and absent from persisted results and diagnostics.
 - **FR-090**: A read-only Spec 003 plan-structure validator under this
   specification directory MUST check task-ID uniqueness, dependency
   existence, dependency order, adjacency equality, acyclicity, and overlapping
-  ownership between incomparable concurrently ready scopes. It MUST parse
-  every task, accept only literal normalized exact owned paths, and reject
-  unresolved aggregate/dynamic expressions rather than truncating them. It
-  MUST ship a positive fixture and negative parser-omission,
-  dependency/adjacency-mismatch, cycle, concurrent-conflict, and
-  dynamic-ownership fixtures. It MUST run without production-code changes, be
-  required before every plan panel, and remain a planning tool rather than a
-  repository gate.
+  ownership between incomparable concurrently ready scopes. Before parsing it
+  MUST census every unchecked Markdown task-like checkbox, require the exact
+  canonical `- [ ] TNNN` header, and reject any census/parse mismatch. It MUST
+  accept only unique literal normalized repository-relative owned paths and
+  reject `.` and `..` components, absolute paths, repeated separators,
+  malformed quoting/backticks, unresolved expressions, duplicate paths, and
+  duplicate dependencies. It MUST reject repeated owner/files/depends metadata
+  after the canonical fields. It MUST ship a positive fixture and independent
+  malformed-ID/header, dot alias, dot-dot alias, absolute-path,
+  repeated-separator, malformed-quoting, duplicate-path, parser-omission,
+  repeated-metadata, task-after-graph, dependency-failure,
+  pure-adjacency-mismatch, cycle, concurrent-conflict, and dynamic-ownership
+  negatives. Every failure MUST render an exact fixed code,
+  repository-relative source, class-specific remedy, and exact
+  self-test-plus-plan rerun command without `$!`, absolute path, or raw OS
+  text. It MUST run without production-code changes, be required before every
+  plan panel, and remain a planning tool rather than a repository gate.
 
 ## Key Entities
 
@@ -908,12 +979,16 @@ Acceptance:
   whole by main and by exact selected-graph projections for broker and guest.
 - **Verified Executable Handle**: One `O_RDONLY|O_CLOEXEC` provider descriptor
   opened with `RESOLVE_NO_MAGICLINKS` only, whose bytes are verified and
-  consumed into fd 0 of the safe no-fork helper and executed from the same open
-  file description with `execveat(AT_EMPTY_PATH)`, under a compiler-derived
-  closed API/trait allowlist.
-- **Action Seccomp Provider**: The outermost static wrapper whose fixed filter
-  is inherited by every Rust action descendant and whose stable/nightly action
-  coverage, syscall set, tool digest, and no-fallback strategy are exact.
+  consumed by the public safe runner API into one private CLOEXEC descriptor
+  for same-open-file-description `execveat(AT_EMPTY_PATH)`, under a
+  compiler-derived closed API/trait allowlist and one broker-convention
+  quarantined `sys.rs`; declared stdio survives and provider fds do not.
+- **Action Seccomp Provider**: The static wrapper bound as each compile/build
+  action executable and each generated/custom test executable, whose fixed
+  filter is inherited by every Rust payload descendant and whose generated
+  rule/toolchain plus `aquery` coverage, inherited-capability preflight,
+  syscall set, stage diagnostics, tool digest, and no-fallback strategy are
+  exact.
 - **Native Artifact Baseline**: Exactly four count/digest/linkage rows with a
   closed optional size-growth authorization and no persisted store path.
 - **Cache Generation**: One action or repository cache entry with a
@@ -948,8 +1023,8 @@ Acceptance:
   complete transient run stream, with no raw cursor; never an eligibility
   input or append-only history.
 - **Evidence Sink Result**: An underlying test verdict plus complete or
-  degraded tagged status, bounded and retention-classed under the committed
-  sink policy.
+  degraded tagged status beneath one common sink-kind/retention pair, bounded
+  under the committed sink policy.
 
 ## Success Criteria
 
@@ -988,21 +1063,27 @@ Acceptance:
 - **SC-016**: All three broker suites retain `tags = ["exclusive"]`, fail the
   tag-removal mutation, and pass twenty consecutive executions per context
   without overlapping any test.
-- **SC-017**: The outermost seccomp provider covers every stable/nightly action
-  kind with no unsandboxed fallback; all eight socket/io_uring plants observe
-  the policy errno; external-egress and live-index plants fail; every mandatory
-  socket-using test passes through its exact
-  same-commit non-advisory Cargo compatibility carrier; and the fetch inventory
-  contains only pinned repository rules. No stub carrier owns a socket plant.
+- **SC-017**: Generated rule/toolchain and `aquery` inventories prove the
+  seccomp wrapper is every governed stable/nightly compile/build executable and
+  every generated/custom test executable, with no `--run_under`, missing
+  wrapper, or pre-wrapper process. Inherited socket, ordinary-ring,
+  SQPOLL-ring, and fixed-socket-ring plants refuse before load; all eight
+  socket/io_uring plants observe the policy errno; every stage has exact
+  redacted diagnostics; external-egress and live-index plants fail; every
+  mandatory socket-using test passes through its exact same-commit
+  non-advisory Cargo compatibility carrier; and the fetch inventory contains
+  only pinned repository rules. No stub carrier owns a socket plant.
 - **SC-018**: Both dedicated Nix derivations contain the exact
   `wl-proxy-0.1.2` hash, and missing, wrong, or one-sided pins fail.
 - **SC-019**: Module refresh changes only `MODULE.bazel.lock` when stale,
   changes nothing on its second run, carries matching absolute startup
   options, and has zero Make/workflow reachability.
 - **SC-020**: Provider route, descriptor inheritance, `ENOSYS`, API-census,
-  rustdoc capability, helper `pre_exec`/fork/path-reopen/unsafe-lint,
-  blocking-wait, early-reap, shortened-grace, and conditional-SIGKILL
-  mutations all fail.
+  rustdoc capability, same-open-file-description, declared stdin/stdout/stderr,
+  CLOEXEC and rebind-absence positives pass; helper binary/runfile/path, direct
+  invocation, fd-0 transport, reopen, `/proc`, fallback, second/broad unsafe
+  surface, child-allocation, blocking-wait, early-reap, shortened-grace, and
+  conditional-SIGKILL mutations all fail.
 - **SC-021**: Every qualifying record carries `bazelRestoreCount`,
   `bazelSaveCount`, and `bazelPublicationCount`; every selected cold record
   has `bazelRestoreCount` of zero and four `sliceDurationsSeconds` entries;
@@ -1016,10 +1097,12 @@ Acceptance:
 - **SC-024**: Main, broker, and guest yanked checks use the one product-lock
   snapshot with exact full-set or projection semantics; walker and
   `Cargo.guest.lock` never enter its key authority.
-- **SC-025**: Every Bazel action and descendant remains under the loaded
-  syscall filter and no namespace check is cited as socket-creation
-  enforcement. The compatibility census is complete, and missing, skipped,
-  advisory, wrong-head, or misattributed compatibility evidence fails.
+- **SC-025**: Every governed compile/build process and every Rust test payload
+  descendant starts under the loaded syscall filter; Bazel-owned setup before
+  the configured test target remains explicitly outside the claim, and no
+  namespace check is cited as socket-creation enforcement. The compatibility
+  census is complete, and missing, skipped, advisory, wrong-head, or
+  misattributed compatibility evidence fails.
 - **SC-026**: Provider tests accept escaping runfiles leaf symlinks without
   `RESOLVE_BENEATH`, reject reintroducing it, and preserve strict flags on
   result and cleanup paths.
@@ -1028,7 +1111,8 @@ Acceptance:
   wrong-machine plants fail.
 - **SC-028**: Manifest, JUnit, bounded sanitized `test.log`, emitted-evidence,
   exporter, no-shell, redaction, ignored-case, original-verdict, structurally
-  valid complete/degraded status, all four retention classes, and
+  valid complete/degraded status with sink kind and retention occurring once,
+  all four retention classes, duplicate/common-field contradictions, and
   combined-budget mutations all fail their exact guards while manifest v1
   remains unchanged.
 - **SC-029**: Every bound cache input changes each applicable primary key and
@@ -1049,7 +1133,9 @@ Acceptance:
   complete paginated, attempt-aware run inventories and immutable content
   references; page-gap, missing-attempt, omitted-push, omitted, forged,
   duplicate, inconsistent, and wrong-candidate plants each fail, and no
-  trusted boolean can qualify a record.
+  trusted boolean can qualify a record. Query, threshold, and atomic
+  publication failures use their closed degraded/refusal codes, exact
+  threshold-class corrections and reruns, and never become absence.
 - **SC-035**: The generated no-shell governed and declared source sets are
   nonempty and equal; every spawn source is governed; every governed source
   has exactly one successful scan record including zero-site sources; raw and
@@ -1065,7 +1151,10 @@ Acceptance:
 - **SC-037**: spec003w6 entry accepts only a containing published
   `v<major>.<minor>.<patch>` tag whose peeled local and origin commits match;
   a two-component tag, an unpushed tag, a divergent local/remote tag, and a
-  draft or prerelease each fail entry.
+  draft or prerelease each fail entry. Promotion-record/local/origin/metadata
+  query failures produce distinct typed degraded outcomes, never absence, and
+  no result or diagnostic exposes candidate/tag/object identifiers or raw
+  query output.
 - **SC-038**: The last ten distinct ordered run units succeed, while a
   repeated-attempt plant and an old-rerun-after-failure plant each fail to
   extend the streak.
@@ -1073,14 +1162,17 @@ Acceptance:
   system; exactly four artifact baseline rows,
   exact broker linkage, guest static linkage, selected closures, and measured
   size baselines and positive size authorizations pass, while missing, denied,
-  stale, replayed, wrong-row, arithmetic, absolute-rationale, linkage, closure,
+  stale, replayed, wrong-row, arithmetic, absolute-rationale, wrong-prior,
+  wrong-realized-new, linkage, closure, duplicate-allowance-source,
   size-plus-one, static-broker, dynamic-guest, non-PIE, and wrong-machine
   mutations fail and qualification references all results.
 - **SC-040**: The read-only plan-structure validator reports all task IDs
-  unique, every task fully parsed, every owned path literal and exact, every
+  unique, every unchecked task-like checkbox censused, every canonical task
+  fully parsed, every owned path literal, normalized, unique, and exact, every
   dependency present and earlier, adjacency equal, the graph acyclic, and no
-  ownership conflict among incomparable scopes; its positive and all five
-  negative fixture classes pass.
+  ownership conflict among incomparable scopes; its positive and all fifteen
+  independent negative fixtures plus fixed-code/remedy/rerun diagnostic
+  contract pass.
 - **SC-041**: `promotion-record.json` validates against the actual sealed
   `spec003w5` protected-`v3` merge; old-SHA, candidate-SHA, wrong-seal, and
   unsealed-merge plants fail before either post-promotion eligibility check.
@@ -1090,7 +1182,11 @@ Acceptance:
 - **SC-043**: Post-promotion eligibility is identical when derived from the
   complete transient stream and from its in-memory oracle, while persisted
   `post-promotion.json` remains within its fixed record and byte bounds and
-  contains no raw pagination cursor.
+  contains no raw pagination cursor. The enforcing type-5 hybrid policy also
+  derives a nonempty exact full compatibility-carrier census and every
+  governed doc and present semantic migration fragment matches all surface,
+  selector, test-identity, and socket-class fields bidirectionally; distinct
+  same-surface cases remain distinct, and missing and extra fixtures fail.
 
 ## Assumptions and Dependencies
 

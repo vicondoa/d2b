@@ -18,12 +18,14 @@ Requirements:
   failed/interrupted surfaces available at the boundary.
 - The underlying `testVerdict` and typed `evidenceStatus` are separate.
   `evidenceStatus` is the closed tagged complete/degraded union in
-  `runner-environment.md`; both variants require their structural fields and
-  reject unknown or opposite-variant fields. A sanitizer, bound, retention,
-  exporter, or publication failure preserves the original passed, failed, or
-  interrupted test verdict and emits the degraded variant with one closed
-  bounded code. Surface completion and qualification reject degraded evidence
-  without relabelling the underlying test as failed.
+  `runner-environment.md`; common `sinkKind` and `retentionClass` fields occur
+  exactly once outside the union and must match, while both variants require
+  only their own structural fields and reject unknown, repeated, or
+  opposite-variant fields. A sanitizer, bound, retention, exporter, or
+  publication failure preserves the original passed, failed, or interrupted
+  test verdict and emits the degraded variant with one closed bounded code.
+  Surface completion and qualification reject degraded evidence without
+  relabelling the underlying test as failed.
 - Execution-manifest v1 is unchanged. The tagged evidence status is an
   executor/publication sidecar and never becomes a v1 field. Success, failure,
   interruption, and degraded-publication tests schema-check the emitted v1

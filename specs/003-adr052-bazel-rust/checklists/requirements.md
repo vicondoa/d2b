@@ -105,10 +105,13 @@
   projections.
 - [x] The reviewed networked refresh and offline exact-key check remain
   separate, with live-index and key-set plants.
-- [x] Every Bazel action uses the outermost repository seccomp provider with
-  exact stable/nightly action-kind coverage, full socket/io_uring denial,
-  inherited-socket preflight, and no filter-load/unsandboxed fallback;
-  namespaces are defense in depth only.
+- [x] Every governed compile/build action and generated/custom test target
+  names the repository seccomp wrapper as its executable, with no
+  `--run_under` or pre-wrapper process; generated rule/toolchain and `aquery`
+  inventories cover stable/nightly action kinds, inherited
+  socket/ring/SQPOLL/fixed-socket preflight, full socket/io_uring denial, and
+  no stage/unsandboxed fallback; Bazel setup before the Rust payload is outside
+  the filter claim and namespaces are defense in depth only.
 - [x] Mandatory socket-using tests remain on exact same-commit non-advisory
   Cargo compatibility carriers under their existing surface IDs.
 - [x] All eight IPv4/IPv6/netlink/packet/pathname-Unix/abstract-Unix/
@@ -172,10 +175,10 @@
 - [x] Public Make names and required context remain compatibility contracts.
 - [x] Provider `RESOLVE_NO_MAGICLINKS`-only opens, deliberate absence of
   `RESOLVE_BENEATH`/`RESOLVE_NO_SYMLINKS`, permissive fallback leaf,
-  strict result/cleanup flags, same-descriptor
-  `execveat(AT_EMPTY_PATH)`, `ENOSYS` refusal, safe no-fork helper transfer,
-  workspace unsafe-lint preservation, and behavioral CLOEXEC coverage are
-  explicit.
+  strict result/cleanup flags, safe-by-value same-open-file-description
+  `execveat(AT_EMPTY_PATH)`, `ENOSYS` refusal, broker-convention quarantined
+  runner `sys.rs`, declared-stdio preservation, no helper/path/fd-0 transport,
+  and behavioral CLOEXEC coverage are explicit.
 - [x] Repeated non-consuming nonblocking grace observations, unconditional
   group kill, final reap, blocking-wait mutation, and early-reap mutation are
   explicit, with missing-process-group, wrapper-group, group-zero,
@@ -240,9 +243,14 @@
   construction, descriptor-access, trait, formatting/serialization,
   clone/copy/default, conversion, and minting seals, with no Cargo-shelling
   fixture.
-- [x] Same-descriptor execution consumes the verified open file description
-  into a safe `unsafe_code = "forbid"` no-fork helper and rejects `pre_exec`,
-  target paths, reopen, `/proc`, `fexecve`, local unsafe, and lint overrides.
+- [x] Same-descriptor execution consumes `VerifiedExecutable` by value into
+  one `unsafe_code = "deny"` runner `sys.rs` with narrow item allowances,
+  parent-prepared async-signal-safe fork/dup/fcntl/error-pipe/execveat work,
+  private CLOEXEC execution, preserved stdin/stdout/stderr, and API,
+  same-open-file-description, stdin, close-on-exec, rebind-absence, and
+  mutation coverage; no helper binary/runfile/path, direct invocation, fd-0
+  transport, reopen, `/proc`, `fexecve`, path fallback, second unsafe file, or
+  broad lint override remains.
 - [x] Cache deletion uses a closed typed prefix enum and mixed pagination
   negatives preserve unauthorized entries.
 - [x] The promotion record is typed and bound to the actual sealed merge before
@@ -300,9 +308,13 @@
   and merge depend on merged spec003w6 and then rebase, revalidate, and
   re-panel.
 - [x] Task IDs, inline dependencies, and the adjacency graph pass the
-  read-only plan-structure validator, which rejects dynamic ownership, checks
-  complete parsing, exact paths, acyclicity, and concurrent ownership
-  conflicts, and ships positive plus five negative fixture classes.
+  read-only plan-structure validator, which first censuses every unchecked
+  task-like checkbox, requires exact canonical headers, rejects dot/dot-dot,
+  absolute, repeated-separator, malformed-quoting, duplicate/repeated metadata,
+  post-graph tasks, and dynamic ownership, checks complete parsing, exact
+  paths, acyclicity, and concurrent ownership conflicts, and ships one positive
+  plus fifteen independent negative fixtures with fixed-code exact remedies
+  and rerun.
 
 ## Documentation Hygiene
 
@@ -317,7 +329,8 @@
   from protected-`v3` zero-count/four-duration inspection.
 - [x] Mutating validation commands have clean-diff assertions before and after
   execution; quickstart does not use printed status as evidence.
-- [x] No shipped artifact is modified by this amendment.
+- [x] The only non-Spec artifact modified by this amendment is the required
+  semantic changelog fragment for the planning validator.
 - [x] ASCII hyphens are used.
 - [x] No unresolved clarification marker remains.
 - [x] Provider, publication, qualification, release, artifact, and plan
@@ -327,6 +340,19 @@
 - [x] Promotion and retirement docs and semantic changelog tasks disclose the
   exact permanently hybrid surfaces and retained Cargo socket cases until
   separately authorized.
+- [x] An enforcing fixture-independent type-5 policy task derives the exact
+  nonempty full compatibility-carrier census, retaining surface, selector,
+  test identity, and socket class, and compares it bidirectionally with every
+  governed hybrid doc and present semantic fragment, with missing and extra
+  full-identity negatives.
+- [x] Every seccomp stage, qualification query/refusal/publication failure,
+  release query/refusal, and planning-validator failure has a closed fixed
+  code, exact remedy/rerun, and leak-rejection coverage; query errors cannot
+  become absence.
+- [x] Size allowance derives only from its authorization object, sink kind and
+  retention occur once, the authorization's prior/new bytes equal the baseline
+  row and realized artifact, and complete/degraded evidence variants cannot
+  contradict their common classification.
 - [x] Required repository validation commands and artifact scans pass.
 - [ ] Ten-role Track A plan panel returns unanimous signoff with empty
   recommendations.

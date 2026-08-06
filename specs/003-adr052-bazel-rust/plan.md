@@ -99,14 +99,14 @@ Layer-1 surfaces. No new top-level shell gate or Layer-1 job.
 | Main Clippy included broker and guest after merge. | ADR 0054 requires generic main Clippy to exclude broker and guest while retaining contract Clippy. | Add explicit exclusions and dedicated package Clippy/test lanes. |
 | Current standalone paths in `tests/test-rust.sh`, Nix, and CI remain valid after merge. | Committed code is the pre-merge baseline, not the target state. | Update them in spec003w0 while preserving selectors, target isolation, and job IDs. |
 | The amendment summarized broker serialization without its Bazel mechanism. | ADR 0052 requires all three suites to carry `tags = ["exclusive"]`, overlap no test, and pass twenty executions per context. | Restore tag, mutation, scheduler, and qualification requirements in spec003w1 and spec003w4. |
-| The amendment described offline tools without preserving the binding action no-network rule. | ADR 0052 prohibits every socket in a Bazel action. Linux network namespaces do not deny socket creation. | Use the outermost seccomp provider, full socket/io_uring set, eight in-action socket plants, external-egress/live-index plants, and no fallback; keep exact mandatory socket-using tests on same-commit non-advisory Cargo compatibility carriers until separately authorized. |
+| The amendment described offline tools without preserving the binding action no-network rule. | ADR 0052 prohibits every socket in a governed Rust payload. Linux network namespaces do not deny socket creation. | Bind the seccomp wrapper as each compile/build/test executable, use the full socket/io_uring set, inherited-capability preflight, eight in-action socket plants, external-egress/live-index plants, and no fallback; keep exact mandatory socket-using tests on same-commit non-advisory Cargo compatibility carriers until separately authorized. |
 | Moving both Nix packages to the root lock made the git output hash look implicit. | ADR 0054 says both dedicated derivations retain the pinned git output hash. | Assert the exact `wl-proxy-0.1.2` key and value in both derivations. |
 | Module lock drift named no complete repository path. | Measured Bazel remediation lacks worktree startup options. | Test then implement no-argument, lock-only, idempotent `bazel-module-refresh` with exact repository remediation. |
 | Current amended recovery prose shortened command sequences. | ADR 0052 fixes exact per-code commands and forbidden cross-code remedies. | Restore literal commands and redaction/wrong-remedy mutations. |
 | The post-promotion children were both concurrently ready while owning the same binding docs and evidence file. | Eligibility clocks are independent, but concurrently ready scopes must be file-disjoint. | Permit spec003w7 qualification and code preparation in parallel, then make its shared documentation/evidence task and merge depend on merged spec003w6, followed by revalidation and a new panel. |
 | The amended cache record retained only a zero-write summary. | ADR 0052 requires explicit restore, save, publication, duration, key, prefix, and retention semantics. | Restore fields and their fixtures in spec003w3 through spec003w5. |
 | Provider and expiry summaries omitted load-bearing kernel detail. | Same-descriptor `execveat`, close-on-exec behavior, and non-consuming grace observations are binding. | Restore exact flags, fallback semantics, mutations, and host conformance. |
-| Provider behavior tests alone proved the verified-handle seal. | Runtime behavior cannot prove an API is absent, and repository post-fork code would conflict with the workspace safety policy. | Use the compiler-derived closed API/trait census plus focused rustdoc compile-fail examples, and consume the verified open file description into the safe no-fork execveat helper. |
+| Provider behavior tests alone proved the verified-handle seal. | Runtime behavior cannot prove an API is absent, and execution must preserve the same verified open file description without exposing it. | Use the compiler-derived closed API/trait census plus focused rustdoc compile-fail examples, and make the safe runner layer consume the handle into the quarantined `sys.rs` fork/execveat boundary. |
 | Provider opens reused strict result-path resolution. | Bazel runfiles leaf symlinks may leave the anchor. Provider opens therefore use `O_RDONLY|O_CLOEXEC` with `RESOLVE_NO_MAGICLINKS` only; forced walks use `O_NOFOLLOW` only on intermediates. Strict result and cleanup paths retain all three strict resolve flags. | Remove `RESOLVE_BENEATH` and `RESOLVE_NO_SYMLINKS` from provider opens, retain them on result/cleanup paths, and add a mutation rejecting provider `RESOLVE_BENEATH`. |
 | Guest static ELF evidence accepted `ET_EXEC` and did not bind machine identity. | ADR 0054 keeps static PIE, and the native system decides the expected `e_machine`. | Require `ET_DYN`, expected native `e_machine`, no `PT_INTERP`, and no `DT_NEEDED`; add non-PIE and wrong-machine plants. |
 | spec003w0 foundation tasks proposed failing future-behavior tests behind inert seams. | A merged wave must be green. | Implement spec003w0 behavior tested there; defer spec003w1/spec003w2 tests with their implementations. |
@@ -133,19 +133,22 @@ Layer-1 surfaces. No new top-level shell gate or Layer-1 job.
 | No-shell required every governed source to contain a spawn site. | A governed source can validly contain zero sites. | Make governed and declared sets equal, make spawn sources a subset, require one scan result per governed source including zero-site records, and compare fresh and committed spawn keys exactly. |
 | Artifact requirements named size and closure checks without realizations, baselines, or exact broker linkage. | ADR 0054 preserves dedicated derivations and their security checks. | Realize four broker/guest-by-system artifacts, commit exactly four measured zero-delta baseline rows with transient closure validation, mutation-test them, and bind them into qualification. |
 | A promotion record could name any containing commit. | Post-promotion eligibility must bind the actual sealed merge. | Add a typed validator tying the record to the protected-`v3` PR merge and the exact `spec003w5` seal before either child enters. |
-| Network namespaces were described as action-wide no-socket enforcement. | A namespace does not deny socket creation, socketpair, or io_uring networking. | Add the outermost repository-owned seccomp provider, stable/nightly and action-kind coverage, inherited-socket preflight, full syscall set, eight in-action plants, and no unsandboxed/filter-load fallback. |
-| The runner planned a repository-authored post-fork raw-syscall child under a workspace that forbids unsafe code. | Existing repository convention keeps product crates at `unsafe_code = "forbid"` and isolates necessary low-level boundaries. | Consume the verified open file description into fd 0 of a safe no-fork `d2b-bazel-execveat` helper, use the safe `nix` execveat API, and reject `pre_exec`, fork, target paths, reopen, unsafe, or lint overrides. |
+| Network namespaces were described as action-wide no-socket enforcement. | A namespace does not deny socket creation, socketpair, or io_uring networking, and Bazel setup precedes the Rust payload. | Make the wrapper the executable field of every governed compile/build action and the generated/custom test executable itself; bind it through generated rules/toolchains and `aquery`, reject pre-wrapper and `--run_under` shapes, preflight sockets and every ring including SQPOLL/fixed-socket state, deny the full syscall set, and claim only wrapper payload descendants. |
+| The runner planned a repository-authored post-fork raw-syscall child under a workspace that forbids unsafe code, then replaced it with a path-launched helper using fd 0. | Existing broker canon keeps a runner crate at `unsafe_code = "deny"` and quarantines required low-level calls in one reviewed `sys.rs`; fd 0 is target stdin and a helper path can be rebound. | Remove the helper binary and runfile entirely. The safe layer consumes `VerifiedExecutable` by value; parent-prepared state enters one item-allowlisted `sys.rs` boundary for fork, dup/fcntl, error-pipe, and same-open-file-description `execveat`, preserving declared stdio and leaking no provider fd. |
 | Ad hoc Cargo-shelling compile fixtures were the VerifiedExecutable API proof. | `tests/AGENTS.md` makes the compiler-derived API census primary and reserves rustdoc compile-fail for downstream type properties. | Make VerifiedExecutable a capability root with empty public-inherent and locally-authored explicit-trait allowlists, pin compiler auto/blanket impls, and use focused rustdoc compile-fail examples only. |
-| The plan validator truncated aggregate ownership prose after `and every`. | A truncated ownership expression can hide a concurrent write. | Require literal normalized exact owned paths, reject dynamic expressions, and add positive plus parser/adjacency/cycle/conflict/dynamic self-test fixtures. |
+| The plan validator truncated aggregate ownership prose after `and every`. | A malformed checkbox or aliased path can hide a concurrent write. | Census every unchecked task-like checkbox before parsing; require the exact `- [ ] TNNN` header; reject dot/dot-dot components, absolute paths, repeated separators, malformed quoting, unresolved expressions, and duplicates; add independent header, path, parser, dependency, adjacency, cycle, conflict, and dynamic fixtures with fixed-code exact remedies. |
 | Native inventory prose alternated between five checks, two artifact rows, and six checks. | There are exactly six native checks per system and exactly four artifact baseline rows. | Normalize every inventory, task, evidence threshold, quickstart check, and checklist item to those cardinalities. |
 | Size growth relied on prose review without a typed authorization. | A changed baseline must bind its exact candidate and review. | Add closed positive/negative size-growth authorization fixtures and require all four row digests plus every nonzero authorization digest in qualification. |
 | Artifact baselines persisted exact Nix closure paths and post-promotion checkpoints persisted a cursor. | Exact store paths and pagination tokens are transient validation data. | Persist only closed states, counts, and SHA-256 digests; make fixed-code diagnostics repository-relative and digest-only. |
 | Sink policy named a retention class but defined no closed limits or expiry. | JUnit, `test.log`, unsealed evidence, and exporter diagnostics need enforced age and count limits. | Add `junit-v1`, `test-log-v1`, `evidence-v1`, and `exporter-diagnostic-v1` with injected age/count/expiry tests before publication. |
 | No-shell prose sometimes listed four plants and checked only a unique scan projection. | The exact six plants and both raw and unique scan counts are binding. | List all six everywhere and require both counts to equal governed-source count. |
 | Socket plants leaked into stub-carrier acceptance language. | Socket denial belongs only to hermeticity/action-network. | Remove forbidden-listener/socket plants from the stub carrier and enforce carrier ownership. |
-| Evidence status was a string with optional fields. | Complete and degraded states must be structurally closed without changing manifest v1. | Use a tagged sidecar union with disjoint fields, closed codes/commands, and schema-valid unchanged manifest-v1 output. |
+| Evidence status was a string with optional fields. | Complete and degraded states must be structurally closed without changing manifest v1. | Put `sinkKind` and `retentionClass` once in the common record and use a tagged sidecar union with disjoint fields, closed codes/commands, and schema-valid unchanged manifest-v1 output. |
 | Provider, publication, qualification, and release refusal prose used generic rerun placeholders. | Operator refusal UX must render exact commands without leaking identifiers. | Add closed reason-by-slice and qualification/release command tables with fixed-code, repository-relative, digest-only diagnostics. |
 | Promotion docs named aliases but not retained Cargo coverage. | Socket-using compatibility cases survive Cargo retirement. | Require promotion and retirement docs and semantic changelog fragments to list exact hybrid surfaces and state separate authorization is required for retirement. |
+| Hybrid disclosure depended on prose review. | A retained Cargo case can disappear from one binding doc while execution remains hybrid, and a surface-only set collapses distinct cases. | Add an enforcing type-5 policy lint that derives the exact nonempty full carrier census from the coverage map, retaining surface, selector, test identity, and socket class, and compares it bidirectionally with every governed hybrid doc and present semantic fragment, with independent missing and extra full-identity fixtures. |
+| Release queries suppressed `git` and `gh` errors while trying the next tag. | An unavailable query backend is degraded evidence, not proof that a release object is absent. | Use closed typed complete/degraded/refused outcomes, distinct query codes, no persisted or printed candidate/tag identifier, no raw output, and exact remedies. |
+| Artifact rows carried a size allowance beside the authorization, and evidence variants repeated sink classification. | Duplicated authorities admit contradictory records, and unrelated old/new arithmetic can authorize a real artifact. | Derive positive size delta only from `sizeGrowthAuthorization`, require its prior/new bytes to equal the baseline row and realized artifact, keep sink kind and retention once in the common evidence record, and reject duplicate authority fields. |
 
 ## Shared Design Invariants
 
@@ -169,18 +172,23 @@ Layer-1 surfaces. No new top-level shell gate or Layer-1 job.
     invariants remain.
 14. The three broker suites are exclusive against every other test and each
     qualifies with twenty consecutive executions.
-15. Every Bazel Rust action uses the outermost seccomp provider with exact
-    stable/nightly action-kind coverage, inherited-socket refusal, full
-    socket/io_uring denial, and no filter-load or unsandboxed fallback.
-    Network namespaces are defense in depth only. Mandatory socket-using tests
-    remain exact same-commit non-advisory Cargo compatibility carriers; only
-    pinned repository rules fetch.
+15. Every governed Bazel Rust compile/build action names the seccomp wrapper
+    as its executable, and every generated/custom test names the wrapper as
+    the test executable with the real binary as a declared input. Generated
+    rule/toolchain plus `aquery` inventories cover stable/nightly action kinds,
+    reject `--run_under` and pre-wrapper processes, and preflight inherited
+    sockets and all io_uring rings including SQPOLL/fixed-socket state before
+    full syscall denial with no fallback. Bazel setup before the payload is
+    outside the filter claim. Mandatory socket-using tests remain exact
+    same-commit non-advisory Cargo compatibility carriers; only pinned
+    repository rules fetch.
 16. Both dedicated Nix derivations carry the exact committed `wl-proxy` output
     hash.
 17. Provider execution opens with `O_RDONLY|O_CLOEXEC` and
     `RESOLVE_NO_MAGICLINKS` only, uses no `RESOLVE_BENEATH` or
-    `RESOLVE_NO_SYMLINKS`, executes the same descriptor with
-    `execveat(AT_EMPTY_PATH)`, and has no path fallback. Forced walk applies
+    `RESOLVE_NO_SYMLINKS`, executes the same verified open file description
+    through a private CLOEXEC descriptor with `execveat(AT_EMPTY_PATH)`, and
+    has no path fallback. Forced walk applies
     `O_NOFOLLOW` only to intermediates. Strict result and cleanup paths keep
     all three resolve flags. Expiry observes without consuming until
     unconditional group kill and direct-child reap.
@@ -211,8 +219,9 @@ Layer-1 surfaces. No new top-level shell gate or Layer-1 job.
     (run ID, head SHA) unit ordered by immutable creation order; an attempt
     never adds a position.
 28. `VerifiedExecutable` has compiler-derived closed public/trait allowlists,
-    and execution consumes its open file description into a safe
-    workspace-lint-preserving no-fork helper with no path fallback.
+    and the safe execution API consumes it into one `unsafe_code = "deny"`
+    runner `sys.rs` boundary that preserves declared stdio and performs
+    same-open-file-description `execveat` with no helper or path fallback.
 29. Every evidence sink is sanitized and bounded before writing. Exporter
     degradation preserves the underlying test verdict and blocks qualification
     separately.
@@ -227,6 +236,15 @@ Layer-1 surfaces. No new top-level shell gate or Layer-1 job.
 34. Evidence status is a closed sidecar union, manifest v1 is unchanged, and
     `junit-v1`, `test-log-v1`, `evidence-v1`, and
     `exporter-diagnostic-v1` enforce age and count before publication.
+35. Size allowance exists only in a bound positive-delta authorization;
+    evidence sink kind and retention occur once; complete/degraded records
+    cannot contradict their common classification.
+36. Every seccomp stage, qualification failure, release query, and planning
+    validator failure has a closed fixed code, exact repository-relative
+    remedy, exact rerun, and leak-rejection coverage.
+37. The exact nonempty Cargo compatibility census is enforced against every
+    governed hybrid document and semantic migration fragment by a type-5
+    policy lint with missing and extra negatives.
 
 ## Expected Implementation Locations
 
@@ -253,8 +271,10 @@ packages/
   policy-inputs/
   d2b-bazel-support/
   d2b-bazel-runner/
+    src/sys.rs
   d2b-bazel-seccomp-exec/
   d2b-test-locator/
+  d2b-contract-tests/tests/policy_bazel_hybrid_docs.rs
   d2b-priv-broker/Cargo.toml
   d2b-guest-shell-runner/{Cargo.toml,deny.toml}
   xtask/src/{bazel,bazel_evidence,bazel_qualification,bazel_yanked,hermeticity,package_policy,release_containment,schema}.rs
@@ -341,11 +361,17 @@ own the same file.
   `perl specs/003-adr052-bazel-rust/tools/validate-plan-structure.pl`.
   The read-only command checks task-ID uniqueness, dependency existence and
   textual order, exact adjacency-list equality, acyclicity, literal exact file
-  ownership, complete task parsing, and conflicts between tasks that are
-  incomparable in the dependency graph and therefore concurrently ready. Its
-  positive and five negative fixture classes must pass. A nonzero result
-  blocks dispatch. It remains a planning tool under this directory and is not
-  added to a repository gate.
+  ownership, complete checkbox census and task parsing, and conflicts between
+  tasks that are incomparable in the dependency graph and therefore
+  concurrently ready. It requires the exact `- [ ] TNNN` header and rejects
+  dot/dot-dot components, absolute paths, repeated separators, malformed
+  quoting/backticks, unresolved expressions, duplicate paths or dependencies,
+  and repeated metadata fields. Its positive and fifteen independent negative
+  fixtures must pass. Every failure prints a
+  fixed code, repository-relative source, exact remedy, and the exact
+  self-test-plus-plan rerun; it emits no raw OS text or absolute path. A
+  nonzero result blocks dispatch. It remains a planning tool under this
+  directory and is not added to a repository gate.
 
 ## spec003w0 - Product Workspace and Reversible Foundation
 
@@ -404,7 +430,7 @@ packages/d2b-bazel-seccomp-exec/src/filter.rs
 packages/d2b-bazel-seccomp-exec/tests/filter.rs
 packages/d2b-bazel-runner/Cargo.toml
 packages/d2b-bazel-runner/src/lib.rs
-packages/d2b-bazel-runner/src/bin/d2b-bazel-execveat.rs
+packages/d2b-bazel-runner/src/sys.rs
 packages/d2b-test-locator/Cargo.toml
 packages/d2b-test-locator/src/lib.rs
 packages/xtask/Cargo.toml
@@ -424,12 +450,14 @@ The prep commit:
   empty inherent API and empty locally-authored explicit-trait allowlist, exact
   auto/blanket snapshot, and focused rustdoc compile-fail examples; no
   Cargo-shelling compile fixture is created;
-- creates the `unsafe_code = "forbid"` seccomp wrapper and safe
-  same-open-file-description execveat helper. The wrapper uses the pinned safe
-  libseccomp API, while its external Rust/C FFI dependencies receive a
-  separate package-policy and source-hash review. The helper accepts the
-  consumed descriptor on fd 0, performs no fork or `pre_exec`, and accepts no
-  target path;
+- creates the `unsafe_code = "forbid"` seccomp wrapper and the runner's one
+  `unsafe_code = "deny"` quarantined `sys.rs` boundary, matching the reviewed
+  broker convention. The wrapper uses the pinned safe libseccomp API, while
+  its external Rust/C FFI dependencies receive a separate package-policy and
+  source-hash review. The public safe runner layer consumes
+  `VerifiedExecutable`; parent-prepared state enters only item-level
+  fork/dup/fcntl/error-pipe/execveat functions, preserves declared stdio, and
+  accepts no helper or target path;
 - creates and registers green runner and locator crate skeletons before any
   runner or locator test, with their complete future dependency sets and
   stable crate-root contract seams. Scope tests load their not-yet-wired
@@ -613,14 +641,23 @@ All must be true:
   examples prove downstream construction, descriptor access, coercion,
   formatting/serialization, duplication/conversion, and minting are absent;
   no Cargo-shelling compile fixture exists;
-- execution consumes the verified open file description into fd 0 of the
-  exact-digest `d2b-bazel-execveat` helper; runner and helper inherit
-  `unsafe_code = "forbid"` and tests reject `pre_exec`, fork, target paths,
-  reopen, `/proc`, `fexecve`, local unsafe, and lint overrides;
+- the safe runner execution API consumes the verified handle by value and the
+  only low-level implementation is its `unsafe_code = "deny"` quarantined
+  `src/sys.rs`, with item-level allowances matching the reviewed broker
+  convention; parent-prepared async-signal-safe child work preserves declared
+  stdin/stdout/stderr and executes the original verified open file description
+  through a private CLOEXEC descriptor; tests reject a helper binary/runfile/
+  path, direct helper invocation, fd-0 transport, reopen, `/proc`, `fexecve`,
+  path fallback, leaked provider/private fd, replaced stdin, a second unsafe
+  file, and broad lint overrides;
 - the Nix-built `d2b-bazel-seccomp-exec` digest and pinned libseccomp Rust/C
-  inputs are reviewed; every stable/nightly Rust and test action kind uses it
-  outermost, filter-load failure has no delegate, no strategy falls back
-  unsandboxed, and all eight socket/io_uring plants return the policy errno;
+  inputs are reviewed; generated rule/toolchain and `aquery` inventories prove
+  it is the executable of every stable/nightly compile/build action and every
+  generated/custom test target, with no `--run_under` or pre-wrapper process;
+  inherited socket, ordinary-ring, SQPOLL-ring, and fixed-socket ring plants
+  refuse before load; no stage or strategy falls back; all eight
+  socket/io_uring plants return the policy errno; and exact stage diagnostics
+  pass leak-rejection tests;
 - `gen-bazel --check` and `gen-package-policy-inputs --check` pass;
 - the selected-context oracle joins locked offline target-filtered root
   metadata (identities, sources, candidate edges, `cfg`),
@@ -654,7 +691,8 @@ All must be true:
 - broker and guest derivations realize on each native system; exactly four
   artifact baseline rows record broker interpreter/`DT_NEEDED`, guest static
   linkage, executable sizes, closure counts/digests without store paths,
-  selected-policy digests, and zero initial allowed growth. Unchanged and
+  selected-policy digests, null initial size authorization, and no row-level
+  allowance field. Unchanged and
   authorized-growth positives pass; missing/denied/stale/replayed/wrong-row/
   arithmetic/absolute-rationale/size-plus-one, linkage, closure,
   sibling-leakage, static-broker, and dynamic-guest mutations fail;
@@ -800,11 +838,16 @@ selected broker and guest projections. Any difference fails validation.
 - main, guest, and broker topology tests pass;
 - all broker suites carry `tags = ["exclusive"]`, overlap no test, and the
   tag-removal mutation fails;
-- every Bazel action has the outermost seccomp provider, stable/nightly and
-  action-kind coverage is exact, no unsandboxed/filter-load fallback exists,
-  all eight socket/io_uring plants return the policy errno, external-egress and
-  live-index plants fail, every repository-rule fetch is pinned, and every
-  mandatory socket-using case appears in the exact
+- generated rule/toolchain and `aquery` inventories prove every governed
+  compile/build action and generated/custom test target names the seccomp
+  wrapper as its executable, stable/nightly action-kind coverage is exact,
+  Bazel setup before the Rust payload is not claimed filtered, no
+  `--run_under`, pre-wrapper process, unsandboxed, or stage fallback exists,
+  inherited socket/ring/SQPOLL/fixed-socket plants refuse before load, all
+  eight socket/io_uring plants return the policy errno, every stage diagnostic
+  passes exact-message/leak tests, external-egress and live-index plants fail,
+  every repository-rule fetch is pinned, and every mandatory socket-using case
+  appears in the exact
   same-commit non-advisory Cargo compatibility census;
 - package carriers use the four spec003w0 policy contexts, the one product-lock
   yanked snapshot with exact main/broker/guest semantics, and pinned no-fetch
@@ -836,7 +879,8 @@ selected broker and guest projections. Any difference fails validation.
   sorted atomic manifest v1 evidence for success, failure, and handled
   interruption, original-verdict preservation, ignored-case fidelity, complete
   forbidden-value redaction across JUnit, bounded `test.log`, emitted evidence,
-  and exporter diagnostics, typed degraded evidence, required complete
+  and exporter diagnostics, one canonical common sink-kind/retention pair,
+  non-contradictory typed complete/degraded evidence, required complete
   publication, and no shell;
 - `bazel/generated/evidence-sink-policy.json` carries measured byte and record
   bounds and the four closed age/count retention classes; every sink, limit,
@@ -1049,9 +1093,12 @@ under `.scratch/`.
   refusals;
 - module-refresh lock-only/idempotence/remediation evidence and both exact Nix
   output-hash results;
-- outermost seccomp provider and stable/nightly action-kind coverage,
-  no-unsandboxed/filter-load-fallback results, all eight socket/io_uring
-  plants, external-egress and live-index results, and the pinned
+- generated rule/toolchain plus `aquery` seccomp executable-field and
+  stable/nightly action-kind coverage, wrapper-as-test-executable and explicit
+  pre-payload Bazel setup scope, no-`--run_under`/pre-wrapper/
+  unsandboxed/stage-fallback results, inherited socket/ring/SQPOLL/
+  fixed-socket plants, all eight socket/io_uring plants, every fixed-code stage
+  diagnostic, external-egress and live-index results, and the pinned
   repository-rule fetch inventory;
 - exact same-commit non-advisory Cargo compatibility-carrier passes for every
   mandatory socket-using test;
@@ -1112,6 +1159,7 @@ committed last.
 | `spec003w5-promotion-manifest` | `tests/unit/meta/ci-runner-regression.py`, `tests/layer1-jobs.json`, `tests/tools/layer1-jobs.py`, `tests/ci/layer1-workflow.template.yml` |
 | `spec003w5-cache` | `packages/xtask/src/bazel_cache.rs`, `packages/xtask/src/post_promotion_observations.rs`, `packages/xtask/src/promotion_record.rs`, `packages/xtask/src/release_containment.rs`, `packages/xtask/tests/bazel_cache.rs`, `packages/xtask/tests/post_promotion_observations.rs`, `packages/xtask/tests/promotion_record.rs`, `packages/xtask/tests/release_containment.rs`, `packages/xtask/tests/policy_ci.rs`, `packages/xtask/tests/fixtures/ci/promoted-cache-valid.yml`, `packages/xtask/tests/fixtures/ci/promoted-cache-prefix-run-id.yml`, `packages/xtask/tests/fixtures/ci/promoted-cache-prefix-sha.yml`, `packages/xtask/tests/fixtures/ci/promoted-cache-delete-newest.yml` |
 | `spec003w5-interface-tests` | `packages/d2b-bazel-runner/tests/make_interface.rs` |
+| `spec003w5-hybrid-policy` | `packages/d2b-contract-tests/tests/policy_bazel_hybrid_docs.rs`, `tests/lib.sh` |
 | `spec003w5-binding-docs` | `AGENTS.md`, `tests/AGENTS.md`, `docs/contributing/gates-and-lints.md`, `tests/README.md`, `docs/reference/test-execution-manifest.md` |
 | Integrator | `packages/xtask/src/main.rs`, `.github/workflows/pr-l1-static-fast.yml`, deletion of `.github/workflows/pr-bazel-rust.yml`, `specs/003-adr052-bazel-rust/evidence/promotion-record.json`, `specs/003-adr052-bazel-rust/evidence/post-promotion.json`, `changelog.d/adr052-bazel-promotion.md` |
 
@@ -1163,6 +1211,13 @@ input.
   behind `test-rust` instead of eight Cargo leaves, list the exact permanently
   hybrid surface IDs and retained socket-using Cargo cases, state separate
   authorization is required for retirement, and contain no process markers;
+- the enforcing fixture-independent type-5 policy derives the exact nonempty
+  full compatibility-carrier census from the coverage map, retaining surface,
+  selector, test identity, and socket class, and compares it bidirectionally
+  with all five fixed hybrid docs and the present semantic fragment; distinct
+  same-surface cases remain distinct, independent missing and extra
+  full-identity fixtures fail, `make test-policy` runs the lint, and fixture
+  contracts exclude it;
 - `test-flake-aarch64`, all four generated Rust slices, and the `test-rust`
   rollup are non-advisory, and each advisory-classification mutation fails;
 - `cargo xtask bazel-qualification-validate` succeeds against the sealed
@@ -1200,44 +1255,23 @@ set -euo pipefail
 
 The second command implements this derivation:
 
-```bash
-set -euo pipefail
-promotion_sha=$(git rev-parse --verify "<promotion-commit>^{commit}")
-tag=
-while IFS= read -r candidate; do
-  git merge-base --is-ancestor "$promotion_sha" "$candidate^{commit}" \
-    || continue
-  remote_commit=$(
-    git ls-remote --exit-code --tags origin \
-      "refs/tags/$candidate" "refs/tags/$candidate^{}" \
-      | awk '
-          $2 ~ /\^\{\}$/ { peeled = $1 }
-          $2 !~ /\^\{\}$/ { direct = $1 }
-          END { print peeled != "" ? peeled : direct }
-        '
-  ) || continue
-  test -n "$remote_commit" || continue
-  test "$(git rev-parse "$candidate^{commit}")" = "$remote_commit" || continue
-  release_state=$(
-    gh release view "$candidate" --json isDraft,isPrerelease \
-      --jq '[.isDraft, .isPrerelease] | @tsv' 2>/dev/null
-  ) || continue
-  test "$release_state" = "$(printf 'false\tfalse')" || continue
-  tag=$candidate
-  break
-done < <(
-  git tag --contains "$promotion_sha" \
-    | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' \
-    | sort -V
-)
-test -n "$tag"
-```
+1. Read and validate the fixed promotion record.
+2. Enumerate local tag references matching
+   `^v[0-9]+\.[0-9]+\.[0-9]+$`.
+3. Prove promotion ancestry for each transient candidate.
+4. Query and compare the peeled origin tag object.
+5. Query release metadata and require present, non-draft, and non-prerelease.
+6. Persist only a successful tag-reference digest, never the candidate name.
 
 Any containing tag that does not match `^v[0-9]+\.[0-9]+\.[0-9]+$` is not a
 release tag; the repository already carries two-component tags such as
 `v1.0`, `v1.1`, and `v1.2` that must not satisfy entry. An unpushed tag, a
 divergent same-named local and remote tag, a draft release, or a prerelease
 also fails entry. The typed promotion-record validator must pass first.
+Every `git` and `gh` operation returns a typed result: query errors produce
+their own degraded code and exact identifier-free remedy and are never
+suppressed, skipped, or treated as absence. The complete closed query/refusal
+table in `contracts/make-target-compatibility.md` is binding.
 Green-run count is irrelevant.
 
 ### Ownership
@@ -1257,7 +1291,8 @@ The interface test is updated and observed failing before alias removal, then
 passes after the Make edit. Only Bazel-specific aliases are removed;
 `make bazel-shutdown`,
 `make test-rust`, and all eight public leaf names remain; no workflow names a
-removed alias; validation and fixture contracts pass; panel, seal
+removed alias; the type-5 hybrid disclosure census matches every governed doc
+and the alias-removal fragment; validation and fixture contracts pass; panel, seal
 `spec003w6`, and merge complete.
 
 ## spec003w7 - Cargo Implementation Retirement
@@ -1293,7 +1328,9 @@ Only Cargo implementations for the eighteen surfaces and unreachable
 Cargo-only plumbing are removed. Every public Rust Make name, all Bazel
 carriers, fixture mode, fixture IDs, and exact socket-using Cargo compatibility
 cases remain. Retirement docs and the semantic changelog list the permanently
-hybrid surface IDs and the separate authorization requirement. `make check`,
+hybrid surface IDs and the separate authorization requirement, and the type-5
+policy proves each governed doc and the retirement fragment exactly matches
+the nonempty source census. `make check`,
 Rust, policy, drift, and fixture validation pass; panel, seal `spec003w7`, and
 merge complete.
 
@@ -1332,11 +1369,11 @@ old-rerun-after-failure fixtures prove both rules.
 | Walker repin changes during product merge. | Byte-identity check on walker manifest, lock, and Bazel-side lock. |
 | Dedicated binary isolation disappears in a broad Nix build. | Separate derivations, explicit package flags, ELF, size, and closure checks. |
 | A broker suite loses `exclusive` and races another test's signal/reap state. | Literal-tag guard, overlap plant, and twenty runs per context. |
-| A namespace still permits IPv4/IPv6/netlink/packet/Unix/socketpair creation, or io_uring bypasses ordinary socket calls. | Outermost inherited seccomp provider, full syscall set, stable/nightly action-kind inventory, eight real plants, inherited-socket preflight, and no filter-load/unsandboxed fallback. |
+| A Bazel setup shim runs before the wrapper, or inherited socket/ring authority bypasses ordinary syscall denial. | Generated rule/toolchain plus `aquery` executable-field inventory, wrapper-as-test-executable binding, explicit exclusion of pre-payload Bazel setup from the claim, socket/ring/SQPOLL/fixed-socket preflight, full syscall set, binding/removal/pre-wrapper plants, and no stage/strategy fallback. |
 | A mandatory socket test is moved into Bazel and weakens ADR 0052, or is omitted to keep actions offline. | The exact same-commit non-advisory Cargo compatibility census preserves the cases, and promotion/retirement docs and changelog list the permanently hybrid surfaces and separate authorization requirement. |
 | Root-lock Nix migration drops the git output hash from one derivation. | Exact key/value assertion and one-sided-pin mutation. |
 | A contributor follows Bazel's bare module remediation and starts a second server outside worktree scratch. | Repository-owned lock-only module refresh with absolute startup options and exact remediation. |
-| A provider is verified by descriptor but executed through a rebound path, or a runfiles leaf symlink is rejected by strict result-path flags. | One `O_RDONLY|O_CLOEXEC` handle with only `RESOLVE_NO_MAGICLINKS`, same-handle `execveat`, leaf-symlink and rebound tests, a mutation rejecting provider `RESOLVE_BENEATH`, and no fallback. |
+| A provider is verified by descriptor but executed through a rebound path, or a runfiles leaf symlink is rejected by strict result-path flags. | One `O_RDONLY|O_CLOEXEC` handle with only `RESOLVE_NO_MAGICLINKS`, private-CLOEXEC same-open-file-description `execveat`, leaf-symlink and rebound tests, a mutation rejecting provider `RESOLVE_BENEATH`, and no fallback. |
 | A blocking observation or early reap defeats the independent grace timer. | Recording backend requires repeated `EXITED|NOWAIT|NOHANG`, full grace, unconditional kill, then reap. |
 | Cache restore prefixes become unique and never restore, or maintenance deletes the newest entry. | Run/SHA-free prefix fixtures and newest-generation retention test. |
 | A shadow Make target is introduced without an allowlist entry, so a shadow workflow escapes the ci-uses-make guard. | All six shadow names enter `APPROVED_MAKE_TARGETS` in the same wave, with an unapproved-call negative and an approved-name-without-Makefile-rule negative. |
@@ -1348,13 +1385,16 @@ old-rerun-after-failure fixtures prove both rules.
 | A rerun of an old run inflates the streak or reorders behind newer failures. | Streak positions are distinct push-created (run ID, head SHA) units ordered by `createdAt` then run ID, with repeated-attempt and old-rerun-after-failure fixtures. |
 | The pre-merge rollback rehearsal reads a promotion record that does not exist yet and silently rehearses nothing. | Rehearsal resolves the candidate from verified candidate HEAD and the recorded spec003w5 parent; promotion-record reads are post-merge only. |
 | A verified executable becomes forgeable or descriptor-revealing through a harmless-looking trait, formatter, serializer, constructor, or accessor. | Compiler-derived closed public/hidden/inherent/explicit/auto/blanket API snapshots plus focused rustdoc compile-fail examples. |
-| A multithreaded fork child deadlocks or requires a product unsafe-lint exception. | No repository post-fork child exists: safe `Command` consumes the open file description into the no-fork, no-path, `unsafe_code = "forbid"` execveat helper. |
+| A path helper is rebound, fd 0 stops being stdin, or a multithreaded fork child allocates before exec. | No helper exists. The safe layer consumes the capability; the runner's single broker-convention `sys.rs` boundary receives parent-prepared pointers and collision-free CLOEXEC fds, performs only async-signal-safe child operations, preserves declared stdio, and execs the same open file description. |
 | A cache API page interleaves a foreign prefix and maintenance adopts it. | Closed typed prefix enum, mixed-page fixtures, preservation checks, and zero delete calls on every authorization refusal. |
 | Tests pass while forbidden values persist in `test.log` or exporter output. | Pre-sink streaming sanitization, committed measured bounds, planted-value absence across every sink, and typed degraded evidence rejected by qualification. |
 | Old or excessive diagnostics accumulate after passing sanitizer bounds. | Four closed age/count retention classes, descriptor-relative expiry before publication, and injected boundary/failure tests. |
 | A binary growth allowance is copied to another artifact or accepted without review. | Exactly four baseline rows and a candidate/review-digest-bound closed authorization with positive and replay/stale/wrong-row/size-plus-one negatives. |
 | A diagnostic or checkpoint leaks a store path or API cursor. | Transient full validation, persisted closed states/counts/digests only, and fixed-code repository-relative digest-only failure tests. |
 | A stale but valid promotion SHA unlocks retirement. | Typed record validation against the actual protected-`v3` PR merge and exact `spec003w5` seal before both eligibility paths. |
+| One hybrid document silently omits a retained Cargo surface. | Enforcing type-5 bidirectional comparison from the nonempty compatibility census to every governed doc and semantic migration fragment, with independent missing and extra plants. |
+| A `git` or `gh` failure looks like no release. | Closed typed degraded query outcomes distinct from semantic refusals, exact identifier-free remedies, and raw-output/query-as-absence negatives. |
+| A size or sink record carries two contradictory authorities, or unrelated size arithmetic authorizes growth. | Size delta derives only from an authorization whose prior/new bytes equal the baseline and realized artifact; sink kind and retention occur once in the common evidence record; wrong-measurement, duplicate-source, and cross-variant fixtures refuse. |
 
 ## Final Cross-Artifact Verification
 
@@ -1385,9 +1425,9 @@ After the desired waves:
     last and states which hub's inputs are proved byte-identical.
 12. the read-only plan-structure validator passes with unique IDs, existing and
     earlier dependencies, exact adjacency, an acyclic graph, literal exact
-    ownership, complete parsing, and no conflict among incomparable
-    concurrently ready scopes; its positive and all five negative fixture
-    classes pass.
+    ownership, complete checkbox census and parsing, exact canonical headers,
+    and no conflict among incomparable concurrently ready scopes; its positive
+    and all fifteen negative fixtures and fixed-code diagnostic contract pass.
 13. process references use exactly `spec003w0` through `spec003w7` plus
     `spec003w5fu1`; no other qualified Spec 003 wave is accepted.
 14. every authoritative native inventory is six checks per system, artifact
@@ -1397,3 +1437,19 @@ After the desired waves:
     scan-record counts equal governed-source count.
 16. promotion and retirement documentation and semantic changelog fragments
     list the exact permanently hybrid surfaces and retained Cargo socket cases.
+17. the enforcing type-5 hybrid-disclosure policy derives a nonempty exact
+    compatibility census and every governed doc/fragment matches it in both
+    directions; missing and extra negatives fail.
+18. no helper/path/fd-0 execution design remains outside explicit rejected
+    mutations; the runner uses only the safe-by-value API and one
+    broker-convention quarantined `sys.rs`, with same-open-file-description,
+    stdio, CLOEXEC, rebind-absence, and mutation coverage.
+19. compile/build process executable fields and configured test target
+    executables bind the seccomp wrapper without `--run_under`, while
+    Bazel-owned test setup stays explicitly outside the claim; inherited
+    ring/SQPOLL/fixed-socket plants and every fixed-code seccomp stage
+    diagnostic pass.
+20. release query errors remain typed degraded outcomes, qualification and
+    planning-validator failures have exact closed remedies, and no tested
+    diagnostic leaks runtime paths, descriptors, OS text, raw output, or
+    dynamic identifiers.
