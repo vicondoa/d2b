@@ -295,16 +295,34 @@ diagnostics above are byte-unchanged and are not rewritten into this table.
 
 ADR 0052's no-network action invariant remains literal. Rust build and test
 actions may open no network or Unix socket, including a loopback listener or
-connection. `CARGO_NET_OFFLINE=1` is defense in depth, not the proof. Every
-action receives tools, sources, the yanked snapshot, and the pinned RustSec
-database as declared inputs.
+connection. `CARGO_NET_OFFLINE=1` and a Linux network namespace are defense in
+depth, not proof. A network namespace does not deny socket creation.
 
-Rust actions use the Linux sandbox with networking disabled and may not fall
-back to an unsandboxed local strategy. Network namespaces enforce the
-action-wide no-network boundary; they do not and cannot enforce per-endpoint
-declarations. The plan defines no endpoint declaration mechanism and makes no
-claim that namespace isolation can distinguish one loopback or Unix endpoint
-from another.
+The proof is the outermost repository-owned `d2b-bazel-seccomp-exec` action
+wrapper defined in `coverage-map.md`. It preflights inherited descriptors,
+sets `no_new_privs`, loads the fixed seccomp filter, and only then executes the
+declared delegate. It has no unsandboxed or filter-load fallback. The pinned
+`rules_rust` patch covers stable and nightly `Rustc`, `RustcMetadata`, Clippy,
+rustdoc, rustdoc-test compile, rustfmt, unpretty, and Cargo build-script
+actions. The repository action factory covers every generated Rust-gate
+action, and the fixed test `--run_under` covers all test actions. Linkers, proc
+macros, build scripts, doctest runners, and test children inherit the filter.
+
+The filter denies the complete socket-operation set, all socket domains
+through `socket`, `socketpair`, descriptor import through `pidfd_getfd`, and
+all three io_uring entry points. The exact syscall and eight-plant inventories
+are closed in `coverage-map.md`. Every action receives the wrapper, tools,
+sources, yanked snapshot, and pinned RustSec database as declared inputs.
+Strategy inventory rejects `local`, `standalone`, `no-sandbox`, a
+network-enabling tag, or any fallback from sandboxed execution.
+
+`d2b-bazel-seccomp-exec` is a product-workspace crate and inherits
+`unsafe_code = "forbid"`. It uses no local unsafe code. The exact pinned
+`libseccomp` Rust crate, native static library, source hashes, and Nix-built
+wrapper digest form a separately reviewed FFI dependency boundary. The
+wrapper is materialized transiently under `.scratch/bazel/` and passed as a
+declared external tool; no Nix store path is committed or persisted in
+evidence.
 
 Only repository-rule fetches are permitted, and every such fetch is pinned:
 registry archives use the URL and checksum from `packages/Cargo.lock`;
@@ -314,19 +332,18 @@ socket, and no unpinned repository-rule fetch exists.
 
 Enforcement includes:
 
-- a structural inventory proving every fetch site is a repository rule and
-  carries its required pin;
-- behavioral Bazel-action plants for loopback TCP and Unix socket creation,
-  both denied;
-- a planted build/test action that attempts external egress and must fail
-  under the action network policy;
-- a live-index plant supplied to the offline yanked validator that must refuse
-  before name resolution or a socket call; and
+- a structural inventory proving every action kind and both Rust toolchains
+  use the outer wrapper and every fetch site is a pinned repository rule;
+- the eight IPv4, IPv6, netlink, packet, pathname Unix, abstract Unix,
+  socketpair, and io_uring plants, each observing the fixed policy errno;
+- a planted build/test action that attempts external egress and must fail;
+- a live-index plant that refuses before name resolution or socket use; and
 - an exact generated census of committed mandatory socket-using tests that
   remain under their current Cargo compatibility carriers, with same-commit
   non-advisory verdicts attributed to their existing surface IDs.
 
-Qualification contains all four denial plants, the exact repository-rule fetch
+Qualification contains all eight socket/io_uring plants plus the
+external-egress and live-index results, the exact repository-rule fetch
 inventory, and the complete Cargo compatibility census. Promotion describes
 affected surfaces as hybrid. The Cargo compatibility carriers cannot be
 retired until a separate authorized design changes the no-network invariant.
@@ -579,8 +596,9 @@ and carry missing-key, wrong-value, one-derivation-only, non-PIE/`ET_EXEC`, and
 wrong-machine mutations.
 
 `tests/golden/bazel-rust-artifact-baselines.json` is the committed artifact
-authority per native system and derivation. The integrator generates it only
-after realizing the actual broker and guest derivations. Each row records:
+authority. It contains exactly four rows: broker and guest for each of
+`x86_64-linux` and `aarch64-linux`. The integrator generates it only after
+realizing the actual derivations. Each row records:
 
 - the measured executable byte size;
 - a separately committed `allowedGrowthBytes`, initially zero;
@@ -588,27 +606,59 @@ after realizing the actual broker and guest derivations. Each row records:
 - for the broker, the exact interpreter basename and sorted `DT_NEEDED`
   SONAME set;
 - for the guest, absent interpreter and empty `DT_NEEDED`;
-- the exact sorted recursive Nix closure path set and its SHA-256;
+- the recursive Nix closure count and SHA-256 computed transiently from the
+  exact sorted path set, but no path;
 - the exact selected package-policy graph digest; and
 - the measurement command and candidate commit.
 
-No fixed byte threshold is invented in prose. A size increase passes only when
-the same change records the prior measured bytes, new measured bytes,
-`allowedGrowthBytes = new - prior`, a repository-relative rationale, and
-review approval; a later accepted baseline folds that reviewed delta into the
-new measured baseline and returns the allowance to zero. A first native
-aarch64 baseline is accepted only with its realized artifact and zero
-allowance. Mutations add one byte beyond baseline plus allowance, remove or add
-one closure path, connect the other product artifact or an unrelated sibling,
-change one broker SONAME or interpreter, make the broker static, and make the
-guest dynamic or non-PIE. Each fails its owning predicate.
+No fixed byte threshold is invented in prose. A zero-growth row has
+`sizeGrowthAuthorization = null`. A positive delta passes only with a closed
+authorization object in the same change:
+
+```text
+system
+artifact
+priorBinaryBytes
+newBinaryBytes
+allowedGrowthBytes
+rationalePath
+candidateContentSha256
+reviewRecordSha256
+decision = "approved"
+```
+
+`allowedGrowthBytes` must equal `newBinaryBytes - priorBinaryBytes`;
+`rationalePath` is normalized and repository-relative; both digests bind the
+candidate and review record; and the system/artifact pair must equal the row.
+A later accepted baseline folds the authorized delta into `binaryBytes`,
+returns the allowance to zero, and removes the authorization. A first native
+baseline is accepted only with its realized artifact and zero allowance.
+
+Positive fixtures cover unchanged size without authorization and exact growth
+with a matching approved authorization. Negative fixtures cover missing
+authorization, a denied decision, wrong system or artifact, stale candidate or
+review digest, absolute rationale, arithmetic mismatch, replay against another
+row, and one byte beyond the authorized allowance. Qualification references
+all four baseline-row digests and every nonzero authorization digest and
+refuses a row whose authorization was not part of the candidate review.
+Closure-add/remove, cross-artifact, unrelated-sibling, changed broker
+SONAME/interpreter, static-broker, dynamic-guest, non-PIE, and wrong-machine
+mutations remain.
+
+Artifact refusals use only `D2B-BZLARTIFACT-IDENTITY`,
+`D2B-BZLARTIFACT-LINKAGE`, `D2B-BZLARTIFACT-CLOSURE`, or
+`D2B-BZLARTIFACT-SIZE-AUTH`. A message names the repository-relative baseline
+row and candidate/measurement SHA-256 only, followed by the exact rerun
+`make test-flake`. It never contains `$!`, an absolute or Nix store path, an
+exact closure member, raw tool output, a process identifier, or an opaque
+handle. Table-driven tests cover every code and reject a borrowed remedy.
 
 The native realized set therefore contains the four package-policy checks,
 `broker-host-artifact-contract`, and the extended `guest-static-elf` check.
 Those final two realize the actual dedicated derivations and validate linkage,
-size, closure, and selected-policy binding. Qualification references both
-baseline rows, both realization results, every mutation, and the same stable
-head.
+size, closure, and selected-policy binding. Qualification references all four
+baseline rows, all four artifact realization results, every size-authorization
+result, every mutation, and the same stable head.
 
 The product lock is regenerated only by the contributor command
 `cargo generate-lockfile --offline` from `packages/`. It is not a Make target
@@ -617,13 +667,15 @@ assertions and fails if the committed candidate changes.
 
 ## Dual-system checks
 
-For both `x86_64-linux` and `aarch64-linux`:
+For both `x86_64-linux` and `aarch64-linux`, the authoritative native
+inventory contains exactly six checks:
 
 ```text
 broker-production-dependency-policy
 guest-shell-runner-static-dependency-policy
 broker-production-package-policy
 guest-real-libshpool-package-policy
+broker-host-artifact-contract
 guest-static-elf
 ```
 

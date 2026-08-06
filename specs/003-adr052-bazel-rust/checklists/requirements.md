@@ -47,10 +47,12 @@
   `cargoLock.outputHashes."wl-proxy-0.1.2"` value and mutations.
 - [x] Binary size, closure isolation, broker dynamic linkage, guest `ET_DYN`
   PIE, native `e_machine`, interpreter, and `NEEDED` checks remain enforcing,
-  with both dedicated derivations realized on both native systems, exact
-  broker interpreter/SONAME and recursive-closure baselines, measured
-  zero-delta size baselines, and linkage/closure/size/non-PIE/wrong-machine
-  plants.
+  with broker and guest derivations realized on each native system, exactly
+  four broker/guest-by-system baseline rows, exact broker
+  interpreter/SONAME and recursive-closure count/digest baselines with no
+  persisted store path, measured zero-delta size baselines, closed
+  size-growth authorization positives/negatives, and
+  linkage/closure/size/non-PIE/wrong-machine plants.
 - [x] Libshpool is normal while code activation stays feature-gated.
 - [x] Unsupported `crate.spec` use is forbidden.
 - [x] The selected-context oracle is a three-way join: target-filtered locked
@@ -103,18 +105,22 @@
   projections.
 - [x] The reviewed networked refresh and offline exact-key check remain
   separate, with live-index and key-set plants.
-- [x] Every Bazel action remains no-network, including loopback TCP and Unix
-  sockets, without claiming namespace enforcement of endpoint declarations.
+- [x] Every Bazel action uses the outermost repository seccomp provider with
+  exact stable/nightly action-kind coverage, full socket/io_uring denial,
+  inherited-socket preflight, and no filter-load/unsandboxed fallback;
+  namespaces are defense in depth only.
 - [x] Mandatory socket-using tests remain on exact same-commit non-advisory
   Cargo compatibility carriers under their existing surface IDs.
-- [x] Loopback, Unix-socket, external-egress, and live-index Bazel plants plus
-  the compatibility census enter qualification evidence.
+- [x] All eight IPv4/IPv6/netlink/packet/pathname-Unix/abstract-Unix/
+  socketpair/io_uring plants, external-egress/live-index results, provider
+  inventory, and compatibility census enter qualification evidence.
 - [x] Cargo current enforcing status and normalized findings are compared with
   the decomposed deny/audit/yanked union for main, broker, and guest.
 
 ## Dual Architecture
 
-- [x] The same four package checks and guest ELF check exist for both systems.
+- [x] Exactly six native checks exist per system: four package checks, broker
+  artifact contract, and guest ELF contract.
 - [x] Native x86 and native arm realization is required.
 - [x] `test-flake-aarch64` retains its ID and required rollup role.
 - [x] `ubuntu-24.04-arm` and a 60-minute bound are specified.
@@ -122,7 +128,7 @@
   coverage and stable-head evidence.
 - [x] Foreign-system, wrong-runner, and remote-builder refusals are distinct.
 - [x] Aarch64 build evidence does not expand broker runtime support.
-- [x] Native arm and x86 each realize six checks, including the broker
+- [x] Native arm and x86 each realize exactly six checks, including the broker
   artifact contract, and `test-flake-aarch64` is non-advisory with a mutation.
 
 ## Repin and Mutation Safety
@@ -167,8 +173,9 @@
 - [x] Provider `RESOLVE_NO_MAGICLINKS`-only opens, deliberate absence of
   `RESOLVE_BENEATH`/`RESOLVE_NO_SYMLINKS`, permissive fallback leaf,
   strict result/cleanup flags, same-descriptor
-  `execveat(AT_EMPTY_PATH)`, `ENOSYS` refusal, and behavioral CLOEXEC coverage
-  are explicit.
+  `execveat(AT_EMPTY_PATH)`, `ENOSYS` refusal, safe no-fork helper transfer,
+  workspace unsafe-lint preservation, and behavioral CLOEXEC coverage are
+  explicit.
 - [x] Repeated non-consuming nonblocking grace observations, unconditional
   group kill, final reap, blocking-wait mutation, and early-reap mutation are
   explicit, with missing-process-group, wrapper-group, group-zero,
@@ -184,8 +191,10 @@
 - [x] Manifest/JUnit prior invalidation, multi-carrier attribution, sorted
   atomic partial evidence, original-verdict preservation, ignored fidelity,
   full forbidden-value absence and bounds across JUnit, `test.log`, emitted
-  evidence and exporter diagnostics, typed degraded evidence, no-shell
-  enforcement, and combined budget mutations are explicit.
+  evidence and exporter diagnostics, structurally closed tagged evidence with
+  unchanged manifest v1, `junit-v1`, `test-log-v1`, `evidence-v1`, and
+  `exporter-diagnostic-v1` age/count retention, no-shell enforcement, and
+  combined budget mutations are explicit.
 - [x] Every cache key input has an action/repository applicability row and a
   table-driven mutation of every applicable primary key and restore prefix.
 - [x] Four authoritative promoted slice targets and exact mappings for all
@@ -211,25 +220,36 @@
   validator, and quickstart invokes it before any informational `jq`.
 - [x] No-shell is bound to exact equal nonempty governed/declared sets, one
   successful scan result per governed source including zero-site sources, and
-  an exact governed spawn-site subset, with all relationship negatives.
+  an exact governed spawn-site subset, with raw and unique scan counts each
+  equal governed-source count and exactly
+  `no-shell-inventory-empty`, `no-shell-inventory-missing-entry`,
+  `no-shell-inventory-extra-entry`,
+  `no-shell-inventory-unguarded-spawn`,
+  `no-shell-inventory-missing-zero-site-record`, and
+  `no-shell-inventory-planted-shell`.
 - [x] All six shadow Make targets enter `APPROVED_MAKE_TARGETS` in
   `packages/xtask/tests/policy_ci.rs` in the same wave, with positive and
   negative policy tests.
 - [x] spec003w6 entry requires a containing published semantic release tag
   matching `v<major>.<minor>.<patch>`, proved by an anchored tag filter,
   ancestry, equal peeled local/origin tag commits, and a non-draft release,
-  with both draft and prerelease false and an exact command and validation
-  contract.
-- [x] VerifiedExecutable has compile-fail construction, conversion, accessor,
-  trait, clone/copy/default, and minting seals.
-- [x] Post-fork execution uses only async-signal-safe operations over
-  parent-prepared argv/envp/descriptors and a fixed close-on-exec error pipe.
+  with both draft and prerelease false and a no-argument contributor-only
+  validator with exact fixed-code command blocks.
+- [x] VerifiedExecutable has compiler-derived closed public/hidden/inherent/
+  explicit/auto/blanket API snapshots and focused rustdoc compile-fail
+  construction, descriptor-access, trait, formatting/serialization,
+  clone/copy/default, conversion, and minting seals, with no Cargo-shelling
+  fixture.
+- [x] Same-descriptor execution consumes the verified open file description
+  into a safe `unsafe_code = "forbid"` no-fork helper and rejects `pre_exec`,
+  target paths, reopen, `/proc`, `fexecve`, local unsafe, and lint overrides.
 - [x] Cache deletion uses a closed typed prefix enum and mixed pagination
   negatives preserve unauthorized entries.
 - [x] The promotion record is typed and bound to the actual sealed merge before
   either post-promotion eligibility check.
 - [x] Persisted post-promotion evidence is bounded while every decision derives
-  from the complete transient protected stream.
+  from the complete transient protected stream; only complete state,
+  page/stream counts, and digests persist, never a raw cursor.
 
 ## Plan and Task Quality
 
@@ -256,7 +276,8 @@
   walk/read/parse census tests.
 - [x] Schema, stub, inventory, and no-bash spec003w1 carriers are file-disjoint and
   carry their empty/mismatch/missing/extra/identity/state and no-shell
-  relationship plants; socket denial belongs to the hermeticity carrier.
+  relationship plants; all socket denial belongs only to the
+  hermeticity/action-network carrier and never the stub carrier.
 - [x] spec003w0 updates the release workflow and both existing fail-closed gate
   scripts rather than deleting either gate.
 - [x] spec003w0 and spec003w5 include same-change binding-doc tasks without
@@ -279,8 +300,9 @@
   and merge depend on merged spec003w6 and then rebase, revalidate, and
   re-panel.
 - [x] Task IDs, inline dependencies, and the adjacency graph pass the
-  read-only plan-structure validator, which also checks acyclicity and
-  concurrent ownership conflicts.
+  read-only plan-structure validator, which rejects dynamic ownership, checks
+  complete parsing, exact paths, acyclicity, and concurrent ownership
+  conflicts, and ships positive plus five negative fixture classes.
 
 ## Documentation Hygiene
 
@@ -298,6 +320,13 @@
 - [x] No shipped artifact is modified by this amendment.
 - [x] ASCII hyphens are used.
 - [x] No unresolved clarification marker remains.
+- [x] Provider, publication, qualification, release, artifact, and plan
+  failures use fixed codes, repository-relative/digest-only identifiers, exact
+  closed commands, and leak no `$!`, absolute/store path, raw cursor, or opaque
+  handle.
+- [x] Promotion and retirement docs and semantic changelog tasks disclose the
+  exact permanently hybrid surfaces and retained Cargo socket cases until
+  separately authorized.
 - [x] Required repository validation commands and artifact scans pass.
 - [ ] Ten-role Track A plan panel returns unanimous signoff with empty
   recommendations.

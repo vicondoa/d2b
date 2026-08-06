@@ -353,17 +353,33 @@ census and same-commit non-advisory verdict. Promotion identifies those
 surfaces as hybrid, and Cargo retirement retains the compatibility carriers
 until a separately authorized design exists.
 
-Every Bazel action remains no-network, including loopback and Unix sockets.
-Linux network namespaces enforce that action-wide rule and cannot distinguish
-a declared endpoint from an undeclared one; no per-endpoint enforcement claim
-is made. Pinned repository-rule fetches are the only network-capable fetch
+Every Bazel action remains no-network. A network namespace does not deny socket
+creation and is only defense in depth. The enforcing boundary is a
+repository-owned static `d2b-bazel-seccomp-exec` provider used as the outermost
+executable for stable/nightly Rustc and metadata, Clippy, rustdoc, doctest,
+rustfmt, unpretty, Cargo build-script, generated repository, and Bazel test
+actions. It rejects inherited socket descriptors, sets `no_new_privs`, loads a
+fixed syscall filter, and has no filter-load or unsandboxed fallback.
+
+The filter denies `socket` and `socketpair` for every domain, the complete
+ordinary socket operation set, `pidfd_getfd`, `socketcall` where present, and
+all three io_uring entry points. Linkers, proc macros, build scripts, doctest
+runners, test binaries, and their descendants inherit it. Eight real
+in-action plants cover IPv4, IPv6, netlink, packet, pathname Unix, abstract
+Unix, socketpair, and io_uring. External-egress and live-index plants are
+additional. Pinned repository-rule fetches are the only network-capable fetch
 phase:
-registry archives bind the root lock checksum, and `wl-proxy` binds both
+registry archives bind the root lock checksum, and `wl-proxy` binds the
 revision and archive sha256. Actions receive all resulting sources, policy
-snapshots, databases, and tools as declared inputs. Loopback-TCP, Unix-socket,
-forbidden-external-egress, and live-index plants prove the Bazel boundary; the
-Cargo compatibility census proves mandatory coverage was preserved rather than
-silently dropped.
+snapshots, databases, and tools as declared inputs.
+
+The wrapper is a member of the product workspace and inherits
+`unsafe_code = "forbid"`. It uses the safe pinned `libseccomp` API. The
+separately reviewed unsafe/FFI boundary is the pinned Rust binding and native
+static libseccomp input, with exact source hashes and Nix-built wrapper digest
+in qualification. No product crate weakens or overrides the workspace lint.
+The Cargo compatibility census proves mandatory socket-using coverage was
+preserved rather than silently dropped.
 
 ## Decision 9: Keep deny and audit package-scoped and offline
 
@@ -423,13 +439,14 @@ broker-production-dependency-policy
 guest-shell-runner-static-dependency-policy
 broker-production-package-policy
 guest-real-libshpool-package-policy
+broker-host-artifact-contract
 guest-static-elf
 ```
 
 X86 realizes these natively on the x86 runner. The existing
 `test-flake-aarch64` job keeps its ID but changes to native
-`ubuntu-24.04-arm`, a 60-minute timeout, and six aarch64 checks, adding the
-broker artifact contract to the four package checks and guest static check.
+`ubuntu-24.04-arm`, a 60-minute timeout, and exactly six aarch64 checks: the
+four package checks, broker artifact contract, and guest static check.
 Neither lane supplies a foreign system, `--builders`, or a remote builder.
 The arm job also runs `make test-rust-supply-chain`. The layer1 renderer test
 must assert that command is present, and both the six-check realization and
@@ -475,17 +492,25 @@ paths retain `RESOLVE_BENEATH|RESOLVE_NO_SYMLINKS|RESOLVE_NO_MAGICLINKS`.
 Every auxiliary descriptor is close-on-exec and a child descriptor-table test
 proves inheritance behavior.
 
-The verified handle is also sealed at compile time. External compile-fail
-fixtures must be unable to construct it, recover a path, convert an unchecked
-path or descriptor into it, duplicate/default it, or implement its private
-minting trait. Runtime tests alone cannot prove an API is absent.
+The verified handle is sealed at compile time. The existing compiler-derived
+API census becomes authoritative for its opaque public type, empty inherent
+API, empty locally-authored explicit trait-impl allowlist, and exact
+compiler-emitted auto/blanket set. It rejects descriptor extraction or access,
+`Deref`, descriptor `Borrow`, fd traits, `Debug`/`Display`, serialization,
+construction, conversion, duplication, defaulting, or minting. Focused rustdoc
+`compile_fail` examples prove downstream type-system absence; Cargo-shelling
+fixtures are not used.
 
-The runner is multithreaded, so all argv, envp, descriptor mapping, and
-fixed-size exec-error data is prepared in the parent. Between fork and
-`execveat`, the child uses only async-signal-safe raw descriptor operations,
-the `execveat` call, one fixed-record write to a close-on-exec pipe on failure,
-and `_exit`. Allocation, formatting, logging, locking, path lookup, panic, and
-unwinding are forbidden and mutation-tested.
+The repository does not hand-write a post-fork unsafe boundary. The
+multithreaded runner consumes the verified descriptor into fd 0 of the
+exact-digest `d2b-bazel-execveat` helper using safe
+`std::process::Command`, with no `pre_exec`. The helper is a fresh,
+single-threaded workspace process under `unsafe_code = "forbid"`; it accepts no
+target path, does not fork, prepares its arguments safely, and calls the safe
+`nix::unistd::execveat` wrapper on that same verified open file description
+with an empty path and `AT_EMPTY_PATH`. `ENOSYS` refuses. Tests reject
+`pre_exec`, `fork`, target-by-path `Command`, `/proc/self/fd`, `fexecve`,
+reopen, local unsafe, or a workspace-lint override.
 
 On expiry, the independently timed full grace contains repeated non-consuming
 nonblocking `waitid(EXITED|NOWAIT|NOHANG)` observations. They are
@@ -597,11 +622,21 @@ exporter diagnostics.
 Sanitization happens before every sink, under a committed generated policy
 whose byte and record limits come from measured sanitized fixtures. No raw
 child output is persisted. The underlying `testVerdict` is independent of
-`evidenceStatus`. An exporter or publication failure preserves the verdict,
-emits a closed bounded degraded code, and is rejected separately by surface
-completion and qualification. A protected-`v3` push where either or both
+the closed tagged `evidenceStatus`. Complete and degraded variants have
+disjoint required fields. An exporter or publication failure preserves the
+verdict, emits the structurally valid degraded variant, and is rejected
+separately by surface completion and qualification. Manifest v1 is unchanged.
+A protected-`v3` push where either or both
 workflows reach no verdict emits a degraded record and resets the streak
 instead of disappearing.
+
+The sink policy also closes retention: `junit-v1` is 14 days/128 files per
+slice, `test-log-v1` is 14 days/128, `evidence-v1` is 30 days/32 per
+workflow/head digest, and `exporter-diagnostic-v1` is 7 days/64.
+Descriptor-relative expiry runs before publication and refuses on unknown
+class or failed cleanup.
+Injected clocks and filesystems prove age and count boundaries, newest
+retention, and no publication after expiry failure.
 
 Repository-owned execution paths use no shell. `D2B_RUST_BUDGET` is parsed
 once and propagated to Bazel scheduling and suite concurrency as one combined
@@ -623,7 +658,9 @@ implied set cannot detect a new runner source that spawns a shell and is never
 scanned. Governed sources and declared carrier inputs are nonempty and equal
 in both directions. Every spawn-site source is governed, but a governed source
 may validly have zero spawn sites; exactly one successful scan record is
-required for every governed source, including a zero-site record. A fresh
+required for every governed source, including a zero-site record. Both the raw
+scan-record count and the unique scan-source count equal the governed-source
+count, so a duplicate cannot hide behind set projection. A fresh
 scan's keyed spawn-site set equals the committed `spawnSites` set in both
 directions,
 with `no-shell-inventory-empty`, `no-shell-inventory-missing-entry`,
@@ -733,12 +770,13 @@ distinct ordered units to be successful with no intervening failure or
 cancellation.
 
 The complete paginated stream is transient and is fetched again for every
-derivation. `post-promotion.json` persists only a fixed checkpoint digest and
-cursor plus the final ten normalized units, each with attempt count and
-attempt-history digest rather than an attempt array. The schema bounds records
-and bytes, and refresh atomically replaces rather than appends. An oversized
-transient fixture proves the bounded record and complete in-memory oracle
-derive the same verdict.
+derivation. `post-promotion.json` persists only
+`paginationState = "complete"`, page/stream counts, a fixed checkpoint digest,
+and the final ten normalized units, each with attempt count and
+attempt-history digest rather than an attempt array. It persists no raw cursor.
+The schema bounds records and bytes, and refresh atomically replaces rather
+than appends. An oversized transient fixture proves the bounded record and
+complete in-memory oracle derive the same verdict.
 
 Alias removal has a separate clock: entry requires a containing published
 semantic release tag matching `v<major>.<minor>.<patch>`. Containment alone is
@@ -746,7 +784,10 @@ insufficient because the repository already carries two-component tags
 `v1.0`, `v1.1`, and `v1.2`; entry filters `git tag --contains` through
 `^v[0-9]+\.[0-9]+\.[0-9]+$`, proves ancestry, proves the tag resolves on
 origin, and proves a release exists with both `isDraft` and `isPrerelease`
-false.
+false. The contributor-only no-argument
+`cargo xtask bazel-release-containment-validate` command performs this
+derivation and owns the fixed-code exact-command refusal table; Make and
+workflows cannot reach it.
 
 spec003w5 output is integrated or squashed into one atomic promotion commit relative
 to the recorded spec003w5 parent. The integrator asserts its complete path diff and
@@ -790,13 +831,18 @@ Make and workflows.
 ## Decision 21: Seal artifacts, cache authority, and enforcement classification
 
 ADR 0054 preserves dedicated broker and guest derivations, so qualification
-must realize both rather than infer their artifacts from policy checks. A
-committed per-system baseline generated from each realization records exact
-binary bytes, closure paths and digest, selected-policy digest, ELF type and
-machine, exact broker interpreter and `DT_NEEDED` SONAMEs, and absent guest
+must realize each rather than infer artifacts from policy checks. The
+committed baseline contains exactly four rows, one broker and guest row per
+native system. Each row records exact binary bytes, a transiently derived
+closure count and digest without store paths, selected-policy digest, ELF type
+and machine, exact broker interpreter and `DT_NEEDED` SONAMEs, and absent guest
 interpreter and `DT_NEEDED`. Initial allowed growth is zero. A later growth
-delta is accepted only when measured old and new bytes, their exact difference,
-rationale, and review land together. No byte ceiling is invented in prose.
+delta is accepted only with the closed same-change authorization binding
+measured old/new bytes, exact difference, repository-relative rationale,
+system/artifact, candidate digest, review digest, and approved decision.
+Positive unchanged/authorized-growth fixtures and missing, denied, stale,
+replayed, wrong-row, arithmetic, absolute-rationale, and size-plus-one
+negatives bind qualification. No byte ceiling is invented in prose.
 
 Cache deletion uses a closed typed prefix enum. Neither API data nor a caller
 can supply authorization. Mixed-page fixtures interleave retired,
@@ -807,6 +853,33 @@ pagination refusal records zero delete calls.
 `test-flake-aarch64`, every promoted Rust slice, and `test-rust` are enforcing.
 Renderer and manifest tests mutate each class to advisory and require failure,
 because an advisory job can skip and cannot qualify evidence.
+
+## Decision 22: Keep diagnostics and planning evidence non-identifying
+
+Exact Nix closure paths and pagination cursors are transient validation inputs.
+Artifact baselines persist only fixed counts, SHA-256 digests, and closed
+linkage/policy states. Post-promotion checkpoints persist only complete state,
+page/stream counts, a stream digest, and the bounded final suffix. Fixed-code
+artifact and validator failures name repository-relative policy rows and
+digests only. They never emit `$!`, absolute or Nix store paths, raw cursors,
+descriptors, workflow attempt handles, or opaque API handles.
+
+The Spec 003 validator now parses every task record, accepts only literal
+normalized repository-relative owned paths, and rejects aggregate or generated
+ownership prose rather than truncating it. Its self-test corpus has one
+positive fixture and negative parser-omission, adjacency-mismatch, cycle,
+concurrent-conflict, and dynamic-ownership fixtures. This remains a planning
+tool under the specification directory and is not a repository gate.
+
+## Decision 23: Disclose retained hybrid execution
+
+Promotion and retirement documentation and semantic changelog fragments list
+the exact surface IDs whose mandatory socket-using tests remain Cargo
+compatibility carriers. Those surfaces are permanently hybrid under this
+specification. The ten-green-run retirement step retains their cases, census,
+public executor, and same-commit verdict contribution. Only a separately
+reviewed authorization that changes ADR 0052's action invariant may retire
+them.
 
 ## Seeded refusal classes
 
@@ -841,9 +914,10 @@ for:
   a newer failure.
 - advisory arm, Rust slice, or rollup classification;
 - unknown, caller-supplied, ambiguous, or mixed-page cache prefix;
-- forged `VerifiedExecutable` API, unsafe post-fork child operation, unsealed
-  promotion SHA, sink value leak, sink bound overflow, or success-shaped
-  exporter degradation.
+- forged `VerifiedExecutable` API, `pre_exec`/fork/path-reopen helper
+  regression, seccomp provider/toolchain gap, filter-load fallback, unsealed
+  promotion SHA, sink value leak, sink bound or retention overflow, or
+  malformed/success-shaped exporter degradation.
 
 The harness fails if a mutation reaches a later predicate, returns zero, or
 reuses another mutation's diagnostic.

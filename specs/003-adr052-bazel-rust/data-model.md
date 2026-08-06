@@ -12,10 +12,13 @@ data. Execution-manifest v1 remains authoritative for Rust gate evidence.
 - Repository-relative paths are normalized and sorted.
 - An absence predicate is evaluated only after its root and complete nonempty
   census are established.
-- Bazel Rust actions are no-network, including loopback TCP and Unix sockets.
-  Mandatory socket-using tests remain exact non-advisory Cargo compatibility
-  carriers under their existing surface IDs. Fetches exist only in explicitly
-  invoked contributor updaters and pinned repository rules.
+- Bazel Rust actions are no-network under an outermost inherited seccomp
+  filter, including IPv4, IPv6, netlink, packet, pathname/abstract Unix,
+  socketpair, and io_uring networking paths. Network namespaces are defense in
+  depth and are not socket-creation proof. Mandatory socket-using tests remain
+  exact non-advisory Cargo compatibility carriers under their existing surface
+  IDs. Fetches exist only in explicitly invoked contributor updaters and
+  pinned repository rules.
 - Underlying test verdict and evidence status are separate. Degraded evidence
   preserves the verdict and is rejected by surface completion and
   qualification.
@@ -297,8 +300,8 @@ Non-PIE and wrong-machine artifacts are required invalid variants.
 
 ## Native Artifact Baseline
 
-One row per Nix Artifact Context and native system is generated only from a
-realized derivation.
+Exactly four rows exist: broker and guest for each native system. A row is
+generated only from a realized derivation.
 
 | Field | Rule |
 | --- | --- |
@@ -306,14 +309,19 @@ realized derivation.
 | `allowedGrowthBytes` | Separately reviewed measured delta, initially zero. |
 | `elfType`, `elfMachine` | Exact realized values. |
 | `interpreter`, `needed` | Exact broker interpreter and sorted SONAMEs, or absent and empty for guest. |
-| `closurePaths`, `closureSha256` | Exact sorted recursive Nix closure and digest. |
+| `closureCount`, `closureSha256` | Count and digest derived transiently from the exact sorted recursive Nix closure; no store path is persisted. |
 | `selectedPolicyDigest` | Exact selected package-policy graph digest. |
 | `measurementCommand`, `candidateCommit` | Immutable measurement provenance. |
+| `sizeGrowthAuthorization` | Null for zero growth, otherwise the closed approved object below. |
 
 The size predicate is `actual <= binaryBytes + allowedGrowthBytes`. A changed
 allowance is valid only with measured prior/new bytes, their exact difference,
-a repository-relative rationale, and review in the same change. No prose byte
-ceiling exists.
+a repository-relative rationale, candidate-content digest, review-record
+digest, matching system/artifact, and `decision = "approved"` in the same
+change. No prose byte ceiling exists. The positive fixtures are unchanged
+size without authorization and exact authorized growth. Missing, denied,
+stale, replayed, wrong-system/artifact, absolute-rationale,
+arithmetic-mismatch, and size-plus-one authorizations are invalid.
 
 ## Flake Check Wrapper
 
@@ -337,9 +345,9 @@ guest-static-elf
 | `builder_args` | Empty. |
 | `realized` | Required. |
 
-The package wrapper set has eight entries, four policy checks times two
-systems. `broker-host-artifact-contract` and `guest-static-elf` add two native
-artifact realizations per system.
+The authoritative wrapper set has exactly twelve entries: six checks per
+system. Eight are package-policy wrappers and four are artifact-baseline
+wrappers.
 
 ## Rust Surface
 
@@ -416,12 +424,18 @@ count of twenty consecutive executions for its own context.
 | `execution` | `execveat(descriptor, "", argv, envp, AT_EMPTY_PATH)` on that same descriptor. |
 | `enosys` | Named refusal requiring a kernel with `execveat`; no fallback. |
 | `auxiliary_descriptors` | All close-on-exec and proven by child descriptor-table behavior. |
-| `api_seal` | Private fields and minting trait; no unchecked constructor, path accessor/conversion, `Default`, `From`, `Into`, `AsRef`, `Clone`, or `Copy`. |
-| `post_fork` | Parent-prepared argv/envp/descriptors/error record; child uses only async-signal-safe raw operations, fixed error-pipe write, `execveat`, and `_exit`. |
+| `api_seal` | Private fields and minting trait; empty public inherent API and empty locally-authored explicit trait-impl allowlists; exact compiler-derived public, hidden, auto, and blanket API snapshots; no descriptor/path accessor or extraction, `Deref`, descriptor `Borrow`, `AsFd`, raw-fd trait, formatting, serialization, conversion, default, or duplication API. |
+| `execution_transfer` | Execution consumes the handle into fd 0 of the exact-digest `d2b-bazel-execveat` helper as the same verified open file description. |
+| `helper` | Workspace `unsafe_code = "forbid"`, no `fork` or `pre_exec`, no target path, safe `nix::unistd::execveat` call, fixed typed error. |
 
 There is no path accessor or public unchecked constructor. No
 `std::process::Command` by path, `fexecve`, `/proc/self/fd`, reopen, or
 post-`ENOSYS` fallback exists.
+
+The public API census is primary. Focused rustdoc `compile_fail` examples prove
+downstream construction, descriptor access/extraction, trait coercion,
+formatting/serialization, duplication/conversion, and mint-trait absence.
+Cargo-shelling compile fixtures are not part of this entity.
 
 Strict result, execution-manifest, JUnit-parent, and cleanup entities are a
 different path variant and retain
@@ -491,13 +505,16 @@ qualification, and promotion.
 
 | Field | Rule |
 | --- | --- |
-| `bazel_loopback_denial` | A Bazel action attempts loopback TCP socket use and is denied. |
-| `bazel_unix_denial` | A Bazel action attempts Unix socket use and is denied. |
+| `wrapperProvider` | Exact static `d2b-bazel-seccomp-exec` digest and pinned libseccomp Rust/C identities. |
+| `actionKinds` | Exact stable/nightly Rustc, metadata, Clippy, rustdoc, doctest compile/run, rustfmt, unpretty, build-script, repository action-factory, and test-action coverage. |
+| `syscalls` | Closed denied socket-operation, `pidfd_getfd`, `socketcall` when present, and three-io_uring-entry-point set. |
+| `plants` | Exact eight IPv4, IPv6, netlink, packet, pathname Unix, abstract Unix, socketpair, and io_uring in-action results, each returning the fixed policy errno. |
+| `strategy` | Sandboxed only; no local, standalone, no-sandbox, or unsandboxed fallback. |
 | `external_egress_plant` | A build/test action attempts host/external egress and is denied. |
 | `live_index_plant` | The offline yanked validator receives a live-index source and refuses before resolution or socket use. |
 | `repository_fetch_inventory` | Exact fetch sites, each a repository rule pinned by lock checksum or git revision plus archive sha256. |
 | `cargo_compatibility_carriers` | Exact generated test identities, Cargo selectors, existing surface IDs, same-commit verdicts, and non-advisory classification for mandatory socket users. |
-| `qualification_result` | All four Bazel denial plants fail at their own predicate, the inventory is complete, and every compatibility carrier passes on the same head. |
+| `qualification_result` | All eight socket/io_uring plants plus external-egress and live-index fail at their own predicates, the provider/toolchain/strategy inventory is complete, filter-load and wrapper-removal mutations fail, and every compatibility carrier passes on the same head. |
 
 There is no endpoint declaration field. A network namespace cannot enforce
 one, and no such claim is part of qualification.
@@ -540,17 +557,18 @@ Qualification additionally binds:
 
 - product and walker hub generation;
 - all four Package Policy Contexts;
-- eight package check wrappers;
+- exactly twelve native check wrappers, six per system;
 - native x86_64 and aarch64 six-check realization sets;
 - the selected-source and checksum refusal matrix;
 - the narrow six-entry guest license policy.
 - module-refresh mutation and remediation evidence;
-- exact `wl-proxy` output-hash evidence for both Nix derivations;
+- exact `wl-proxy` output-hash evidence for the broker and guest Nix
+  derivations;
 - broker `exclusive` tags, no-overlap mutation, and twenty-run result for each
   context;
-- action-network and live-index plants;
-- all four Bazel socket/egress denial plants and the exact Cargo compatibility
-  census;
+- the outermost seccomp wrapper, stable/nightly action-kind inventory,
+  no-unsandboxed-fallback result, eight socket/io_uring plants,
+  external-egress and live-index plants, and exact Cargo compatibility census;
 - product-only yanked authority and exact broker/guest projections;
 - all three Supply Chain Equivalence Results;
 - native arm `make test-rust-supply-chain` and stable-head renderer evidence.
@@ -629,7 +647,7 @@ array.
 
 | Field | Rule |
 | --- | --- |
-| `streamCount`, `finalCursor`, `streamSha256` | Fixed-shape checkpoint of the complete transient stream. |
+| `paginationState`, `pageCount`, `streamCount`, `streamSha256` | Closed `complete` state, counts, and digest of the complete transient stream; no raw cursor is persisted. |
 | `promotionCommit` | Validated by the typed Promotion Record validator. |
 | `lastTen` | At most the final ten normalized units, in immutable order. |
 | `attemptCount`, `attemptHistorySha256` | Fixed-size summary per persisted unit. |
@@ -658,24 +676,27 @@ bounded and complete-stream verdicts equal.
 | `path` | `bazel/generated/no-shell-inventory.json`, generated, integrator-committed, drift-checked. |
 | `governedSources` | Every repository-owned runner, cleanup, timeout, and process-control source derived from the first-party configured-target census. |
 | `declaredInputs` | The exact declared inputs of the no-shell carrier. |
-| `scanResults` | Exactly one successful scan record per governed source, including zero-site sources. |
+| `scanResults` | Exactly one successful scan record per governed source, including zero-site sources; raw record count and unique-source count each equal the governed-source count. |
 | `spawnSites` | Every discovered spawn construct with its governed source, span, spawned program expression, and typed `shellInvocation` verdict; any true verdict refuses. |
 | `nonempty` | `governedSources` and `declaredInputs` are nonempty. A source may validly record zero spawn sites. |
 | `set_relationships` | Governed and declared source sets are equal; every spawn source is governed; scan-result sources equal governed sources; fresh and committed spawn-site keys are equal. |
-| `plants` | `no-shell-inventory-empty`, `no-shell-inventory-missing-entry`, `no-shell-inventory-extra-entry`, and `no-shell-inventory-planted-shell`. |
+| `plants` | Exactly `no-shell-inventory-empty`, `no-shell-inventory-missing-entry`, `no-shell-inventory-extra-entry`, `no-shell-inventory-unguarded-spawn`, `no-shell-inventory-missing-zero-site-record`, and `no-shell-inventory-planted-shell`. |
 
 ## Evidence Sink Result
 
 | Field | Rule |
 | --- | --- |
 | `testVerdict` | Underlying passed, failed, ignored, or interrupted result. |
-| `evidenceStatus` | `complete` or `degraded`; never inferred from `testVerdict`. |
-| `degradationCode` | Closed bounded code, present only when degraded. |
+| `evidenceStatus` | Closed tagged `Complete` or `Degraded` variant; never inferred from `testVerdict`. |
+| `Complete` | Requires `sinkPolicySha256` and one closed retention class; rejects degradation fields. |
+| `Degraded` | Requires closed code, sink kind, policy-row SHA-256, and closed retry command; rejects complete fields. |
 | `sinkKind` | JUnit, `test.log`, execution evidence, qualification evidence, or exporter diagnostic. |
 | `bytes`, `records` | At or below the committed measured sink-policy limits. |
+| `retention` | Exactly `junit-v1` (14 days/128), `test-log-v1` (14 days/128), `evidence-v1` (30 days/32), or `exporter-diagnostic-v1` (7 days/64), under the scope defined in `runner-environment.md`. |
 
 Every forbidden planted value is absent from every sink. Qualification accepts
-only complete evidence but never rewrites the underlying verdict.
+only the structurally valid complete variant but never rewrites the underlying
+verdict. Execution-manifest v1 contains neither status variant.
 
 ## Promotion Record
 
@@ -689,6 +710,17 @@ only complete evidence but never rewrites the underlying verdict.
 
 A candidate head, older containing SHA, wrong seal, or unsealed merge is
 invalid.
+
+## Release Containment Result
+
+| Field | Rule |
+| --- | --- |
+| `command` | No-argument `cargo xtask bazel-release-containment-validate`, unreachable from Make and workflows. |
+| `tag` | Validated `v<major>.<minor>.<patch>` value only. |
+| `containment` | Promotion commit is an ancestor of the peeled tag commit. |
+| `origin` | Peeled local and origin tag commits agree. |
+| `release` | Present, not draft, and not prerelease. |
+| `refusal` | One fixed code and exact closed command block; no raw identifier, output, path, cursor, or handle. |
 
 ## Lifecycle
 

@@ -50,6 +50,7 @@ cargo xtask gen-package-policy-inputs --check
 cargo xtask bazel-evidence prepare-cold-local
 cargo xtask bazel-qualification-validate
 cargo xtask bazel-promotion-record-validate
+cargo xtask bazel-release-containment-validate
 cargo generate-lockfile --offline
 cargo generate-lockfile --offline --manifest-path ../tests/tools/no-bash-ast-walker/Cargo.toml
 ```
@@ -69,6 +70,11 @@ fixed promotion record to the actual protected-`v3` pull-request merge commit
 and the sealed `spec003w5` delivery identities. Alias-removal and
 Cargo-retirement entry run it before consulting their own eligibility
 evidence.
+
+`cargo xtask bazel-release-containment-validate` takes no arguments, reads the
+fixed promotion record, performs the semantic-tag/origin/final-release
+derivation below, and renders the closed release refusal table. It is
+unreachable from Make and workflows.
 
 `main`, `broker`, and `guest` repin identifiers are retired and fail with the
 exact product remediation contract before Bazel starts.
@@ -144,7 +150,11 @@ hub repin, yanked refresh/check, policy generation, or evidence mutation.
   four Bazel slices while retaining the stable rollup language. The last two
   are included because they also describe the eight CI jobs.
 - Promotion documentation and its semantic changelog fragment list every exact
-  replacement above.
+  replacement above. They also list the exact surface IDs reported by
+  `cargoCompatibilityCarriers`, call those surfaces permanently hybrid under
+  this specification, and state that their socket-using Cargo cases and public
+  executor survive spec003w7 until a separately reviewed authorization changes
+  ADR 0052's invariant.
 
 ## Removal
 
@@ -189,6 +199,23 @@ release tag: the repository already carries two-component tags such as
 `v1.0`, `v1.1`, and `v1.2`. An unpushed tag, a divergent same-named local and
 remote tag, a draft release, or a prerelease also fails entry.
 
+The release-containment checker renders one fixed code and one exact command
+block. `{tag}` below is substituted only from a validated
+`v<major>.<minor>.<patch>` value; it is not free-form input.
+
+| Refusal | Code | Exact rendered commands |
+| --- | --- | --- |
+| No containing semantic release tag | `D2B-BZLRELEASE-NO-TAG` | `make pre-tag`; `make test-changelog`; `git fetch --tags origin`; `(cd packages && cargo xtask bazel-promotion-record-validate)`; after the protected `v3` version-release change completes, `(cd packages && cargo xtask bazel-release-containment-validate)`. |
+| Containing tag is local only | `D2B-BZLRELEASE-UNPUSHED` | `git push origin refs/tags/{tag}`; `git fetch --tags origin`; `(cd packages && cargo xtask bazel-release-containment-validate)`. |
+| Local and origin tag commits differ | `D2B-BZLRELEASE-DIVERGENT` | `git fetch --tags origin`; inspect and correct the protected tag through repository release policy; `(cd packages && cargo xtask bazel-release-containment-validate)`. No force-push command is emitted. |
+| Release object is absent | `D2B-BZLRELEASE-NO-RELEASE` | `gh release create {tag} --verify-tag --notes-from-tag`; `(cd packages && cargo xtask bazel-release-containment-validate)`. |
+| Release is draft or prerelease | `D2B-BZLRELEASE-NOT-FINAL` | `gh release edit {tag} --draft=false --prerelease=false`; `(cd packages && cargo xtask bazel-release-containment-validate)`. |
+
+Failures contain only the fixed code, semantic tag when one has been validated,
+and the promotion-record SHA-256. They contain no `$!`, commit SHA, run or
+attempt identifier, absolute or Nix store path, raw cursor, opaque handle, or
+raw `git`/`gh` output. Exact-message tests cover every row.
+
 spec003w6 first updates
 `packages/d2b-bazel-runner/tests/make_interface.rs` to expect removal and
 observes that test fail, then removes the aliases and makes it pass.
@@ -204,6 +231,10 @@ remove:
 - the exact Cargo compatibility carriers for mandatory socket-using tests,
   their census, or their same-commit verdict contribution to existing surface
   IDs.
+
+The retirement documentation and semantic changelog repeat the exact hybrid
+surface inventory and explicitly state that these retained Cargo cases are not
+retired by the ten-green-run condition.
 
 ## Guards
 

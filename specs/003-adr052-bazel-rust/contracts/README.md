@@ -16,14 +16,16 @@ Contracts:
   repin, module refresh, yanked authority, selected-context oracle,
   local-socket/external-egress boundary, package-policy equivalence,
   source-census, Nix selection, generated ownership, release wiring, and
-  tool-pinning contract.
+  tool-pinning contract, including the action-wide seccomp wrapper and exact
+  four-row artifact baseline.
 - `coverage-map.md` - eighteen-surface carrier coverage, native first-party
   targets, selected-context censuses, and guard placement.
 - `make-target-compatibility.md` - shadow, contributor mutation, promotion,
   and retirement command surface.
 - `runner-environment.md` - test topology, provider, environment, and
   sanitized bounded per-case evidence contract, compile-sealed verified
-  executable, and async-signal-safe same-descriptor kernel execution.
+  executable, safe helper-process same-open-file-description execution,
+  retention classes, and closed complete/degraded evidence.
 - `execution-manifest-binding.md` - Bazel carrier results bound to existing
   execution-manifest v1.
 - `shadow-promotion-evidence.md` - qualification, the typed qualification

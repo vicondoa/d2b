@@ -18,8 +18,11 @@ the injected filesystem boundary.
 | `D2B-BZLCLEAN-LIVE` | Close other Bazel clients running against this worktree; run `make bazel-shutdown`; run `make clean`. Do not dry-run, inspect, or correct `.scratch/bazel/` first. |
 | `D2B-BZLSERVER-STUCK` | Close other Bazel clients running against this worktree; run `make bazel-shutdown`. Do not delete `.scratch/bazel/` or signal any process identifier by hand. |
 
-Messages contain no absolute path, user or process identifier, output hash, raw
-deadline, handle, recursive-removal command, or another code's remedy.
+Messages contain no `$!`, absolute or Nix store path, user or process
+identifier, raw deadline, raw pagination cursor, opaque handle,
+recursive-removal command, or another code's remedy. When an artifact must be
+identified, the message carries only its repository-relative contract row and
+SHA-256.
 They do not instruct the operator to replace a refused entry with a directory.
 Table-driven tests assert the exact command tokens and ordered steps for each
 code. Redaction, omitted-remedy, borrowed-remedy, external-target removal,
@@ -41,11 +44,17 @@ Provider and evidence failures use the exact tables in
 `runner-environment.md`. Provider rows name the stable declared
 runfiles-relative key, corrective action, and owning slice rerun.
 `D2B-BZLEVIDENCE-SANITIZE`, `D2B-BZLEVIDENCE-LIMIT`,
-`D2B-BZLEVIDENCE-PUBLISH`, and `D2B-BZLEVIDENCE-NO-VERDICT` name their stable
-repository-relative policy row, carrier, or workflow plus the exact correction
-and rerun. They emit no planted forbidden value and do not rewrite the
-underlying `testVerdict`; they produce typed degraded evidence that completion
-and qualification reject.
+`D2B-BZLEVIDENCE-RETENTION`, `D2B-BZLEVIDENCE-PUBLISH`, and
+`D2B-BZLEVIDENCE-NO-VERDICT` name their stable repository-relative policy row,
+carrier, or workflow plus the exact literal correction and rerun command.
+The provider matrix renders each reason for each of the four closed slice
+commands; a generic `owning slice` placeholder is not accepted. Qualification
+failures use the fixed-code command table in
+`shadow-promotion-evidence.md`. Release-containment failures use the
+fixed-code command table in `make-target-compatibility.md`. They emit no
+planted forbidden value and do not rewrite the underlying `testVerdict`; they
+produce a structurally valid typed degraded status that completion and
+qualification reject.
 
 ## Deadline
 

@@ -32,9 +32,9 @@ to the same file are explicitly sequential.
   and changed-path inventories for the parked historical branches under
   `.scratch/spec003w0-parked-evidence/`; prove none is an ancestor of the base.
 - [ ] T003 [owner: integrator] [files: none] [depends: T002] Run the amended
-  read-only plan-structure validator, then run the Track A plan panel over
-  every artifact in this directory and require ten signoffs with empty
-  recommendations.
+  read-only plan-structure validator self-tests and positive plan check, then
+  run the Track A plan panel over every artifact in this directory and require
+  ten signoffs with empty recommendations.
 
 ## spec003w0 product workspace and foundation
 
@@ -44,22 +44,29 @@ to the same file are explicitly sequential.
 - [ ] T005 [owner: spec003w0-prep] [files:
   packages/d2b-bazel-support/tests/provider_handle.rs,
   packages/d2b-bazel-support/tests/verified_executable_api.rs,
-  packages/d2b-bazel-support/tests/compile_fail/verified_construct.rs,
-  packages/d2b-bazel-support/tests/compile_fail/verified_convert.rs,
-  packages/d2b-bazel-support/tests/compile_fail/verified_traits.rs,
-  packages/d2b-bazel-support/tests/compile_fail/verified_mint_trait.rs,
   packages/d2b-bazel-support/tests/startup.rs,
+  packages/d2b-bazel-seccomp-exec/tests/filter.rs,
+  packages/d2b-bazel-runner/tests/exec_helper.rs,
   packages/xtask/tests/policy_workspace.rs] [depends: T004] Add failing prep
   tests for the unified workspace and for the complete provider, runfiles,
   startup, fake-filesystem, same-descriptor, provider
   `RESOLVE_NO_MAGICLINKS`-only open, escaping runfiles leaf, intermediate
   `O_NOFOLLOW`, permissive provider leaf, `ENOSYS`, and close-on-exec
-  contracts. Add compile-fail API seals for private `VerifiedExecutable`
-  construction and minting, no path accessor/conversion, and no `Default`,
-  `From`, `Into`, `AsRef`, `Clone`, or `Copy`. Add parent-prepared argv/envp,
-  descriptor-map, fixed-record close-on-exec error-pipe, async-signal-safe
-  post-fork operation, and `_exit` tests with allocator/logger/variable-write/
-  panic mutations. Add a mutation that rejects reintroducing
+  contracts. Make `VerifiedExecutable` a compiler-derived capability root with
+  an empty inherent API and empty locally-authored explicit-trait allowlist;
+  pin its public/hidden and compiler auto/blanket surface and add focused
+  rustdoc compile-fail examples for construction, descriptor extraction/access,
+  Deref/Borrow/fd traits, Debug/Display, serialization, conversion,
+  duplication/default, and minting. Add no Cargo-shelling compile fixture.
+  Add safe helper-process tests proving the consumed verified open file
+  description arrives on fd 0, no target path exists, no repository post-fork
+  code runs, and a Linux conformance trace permits only the standard library's
+  async-signal-safe descriptor/signal/exec operations before the helper image.
+  Reject `pre_exec`, repository fork, reopen, `/proc`, `fexecve`, local unsafe,
+  or a lint override. Add seccomp filter tests for inherited
+  sockets, full socket-operation and three-io_uring denial, fixed errno,
+  no-fallback load failure, and the pinned safe libseccomp boundary. Add a
+  mutation that rejects reintroducing
   `RESOLVE_BENEATH` on
   provider opens and retain all three strict resolve flags in result/cleanup
   tests. Do not add future coverage, topology, deadline, cleanup, or recovery
@@ -75,8 +82,13 @@ to the same file are explicitly sequential.
   packages/d2b-bazel-support/src/fsops.rs,
   packages/d2b-bazel-support/src/runfiles.rs,
   packages/d2b-bazel-support/src/startup.rs,
+  packages/d2b-bazel-support/src/verified_executable.rs,
+  packages/d2b-bazel-seccomp-exec/Cargo.toml,
+  packages/d2b-bazel-seccomp-exec/src/main.rs,
+  packages/d2b-bazel-seccomp-exec/src/filter.rs,
   packages/d2b-bazel-runner/Cargo.toml,
   packages/d2b-bazel-runner/src/lib.rs,
+  packages/d2b-bazel-runner/src/bin/d2b-bazel-execveat.rs,
   packages/d2b-test-locator/Cargo.toml,
   packages/d2b-test-locator/src/lib.rs,
   packages/xtask/Cargo.toml,
@@ -87,7 +99,10 @@ to the same file are explicitly sequential.
   complete future dependencies and stable spec003w0 crate roots before their first
   tests, declare the complete spec003w0 xtask dependency set, retain a green xtask
   root without declaring not-yet-present modules,
-  and implement enough neutral support behavior for every T005 test to pass.
+  implement the safe no-fork same-open-file-description helper and the
+  `unsafe_code = "forbid"` seccomp wrapper, and implement enough neutral
+  support behavior for every T005 test to pass. No general product crate may
+  override the workspace unsafe lint.
 - [ ] T007 [owner: spec003w0-prep] [files: none] [depends: T006] Commit and
   validate prep with locked offline metadata and all T005 tests; open only the
   generator scope from this exact green tip.
@@ -98,6 +113,7 @@ to the same file are explicitly sequential.
   packages/xtask/tests/bazel_foundation.rs,
   packages/xtask/tests/bazel_module_refresh.rs,
   packages/xtask/tests/package_policy_refusals.rs,
+  packages/xtask/tests/bazel_action_network.rs,
   packages/xtask/src/bazel.rs,
   packages/xtask/src/package_policy.rs,
   packages/xtask/src/bazel_yanked.rs] [depends: T007] Add tests before
@@ -117,20 +133,27 @@ to the same file are explicitly sequential.
   metadata-sourced checksums, and post-filtered dev edges; the shared-dependency
   feature union refusal, generic/dedicated context selection,
   product-only yanked authority, separate networked refresh and offline check,
-  Bazel loopback/Unix/external/live-index denials, exact Cargo compatibility
-  census, the
+  outermost seccomp provider coverage for every stable/nightly Rust and test
+  action kind, inherited-socket refusal, no filter-load or unsandboxed
+  fallback, all eight IPv4/IPv6/netlink/packet/pathname-Unix/abstract-Unix/
+  socketpair/io_uring action plants, external/live-index refusals, exact Cargo
+  compatibility census, the
   complete ADR-0054 drift/refusal message table, and no-argument module refresh with
   lock-only mutation, startup-option identity, idempotence, exact remediation,
   and no Make/workflow reachability.
 - [ ] T009 [owner: spec003w0-bazel-generator] [files: .bazelversion, .bazelrc,
   MODULE.bazel, BUILD.bazel, bazel/BUILD.bazel,
-  bazel/defs.bzl, bazel/toolchains.bzl, bazel/cargo/README.md,
+  bazel/defs.bzl, bazel/toolchains.bzl, bazel/rules/seccomp_action.bzl,
+  bazel/patches/rules_rust-seccomp-wrapper.patch, bazel/cargo/README.md,
   bazel/cargo/BUILD.bazel, bazel/cargo/cargo_bazel.bzl,
   packages/xtask/src/bazel.rs, packages/xtask/src/package_policy.rs,
   packages/xtask/src/bazel_yanked.rs, packages/xtask/src/schema.rs,
   packages/xtask/src/hermeticity.rs] [depends: T008] Implement the tested
   generator, repin, module-refresh, policy-input, yanked, schema, and
-  hermeticity behavior. Emit previews only under `.scratch/`; do not create
+  hermeticity behavior. Patch the pinned rules_rust action providers, route
+  repository actions through the required factory, set the fixed test
+  `--run_under`, and reject direct action/fallback gaps. Emit previews only
+  under `.scratch/`; do not create
   the module lock, either hub lock, any BUILD output, pin, or golden.
 - [ ] T010 [owner: integrator] [files: none] [depends: T009] Merge the
   generator scope without editing its owned files.
@@ -221,15 +244,21 @@ to the same file are explicitly sequential.
   no `PT_INTERP`, no `DT_NEEDED`, and all missing/wrong/one-sided pin,
   non-PIE, and wrong-machine mutations. Add failing tests for realization of
   both dedicated derivations, exact broker interpreter and sorted `DT_NEEDED`
-  SONAME set, exact recursive broker/guest Nix closures, selected-policy
-  digests, and measured executable baselines plus separately reviewed allowed
-  deltas. Add size-plus-one, changed-SONAME/interpreter, static-broker,
-  dynamic-guest, closure-add/remove, cross-artifact, and unrelated-sibling
-  mutations. Assert that neither deleted nested
+  SONAME set, transient exact recursive broker/guest Nix closures with only
+  persisted counts/digests, selected-policy digests, and exactly four measured
+  executable baseline rows. Add unchanged-size and exact-approved-growth
+  positives plus missing/denied/stale/replayed/wrong-system-or-artifact/
+  arithmetic/absolute-rationale/size-plus-one authorization negatives. Add
+  changed-SONAME/interpreter, static-broker, dynamic-guest,
+  closure-add/remove, cross-artifact, and unrelated-sibling mutations. Assert
+  that no diagnostic emits a store path and neither deleted nested
   lock path remains an input to the aggregate flake audit or to the
   guest-shell-runner static dependency policy, and that the aggregate
   `packages/Cargo.lock` and `packages/Cargo.guest.lock` deny and audit
-  checks remain independent and enforcing.
+  checks remain independent and enforcing. Add the Nix-built static
+  `d2b-bazel-seccomp-exec` tool test, exact pinned libseccomp Rust/C source
+  identities, transient scratch materialization, digest binding, and
+  no-persisted-store-path checks.
 - [ ] T019 [owner: spec003w0-nix-policy] [files:
   nixos-modules/host-broker.nix, flake.nix,
   packages/d2b-guest-shell-runner/deny.toml] [depends: T018] Implement the
@@ -239,10 +268,13 @@ to the same file are explicitly sequential.
   guest-shell-runner static dependency policy at
   `guest-real-libshpool/production/{closure.json,Cargo.lock}` while reserving
   `policy/{metadata.json,Cargo.lock}` for deny and audit, keep the aggregate
-  root and `Cargo.guest.lock` checks independent, and make the T018 tests pass.
+  root and `Cargo.guest.lock` checks independent, add the static seccomp
+  wrapper derivation used only to materialize the declared Bazel tool under
+  scratch, and make the T018 tests pass.
   Add `broker-host-artifact-contract`; extend `guest-static-elf` to realize the
-  actual guest derivation and enforce the exact artifact-baseline row. Do not
-  invent a byte ceiling.
+  actual guest derivation and enforce the exact artifact-baseline row and
+  closed size-growth authorization. Do not persist a store path or invent a
+  byte ceiling.
 - [ ] T020 [owner: integrator] [files:
   tests/unit/nix/pinned/common.txt,
   tests/unit/nix/pinned/x86_64-linux.txt,
@@ -325,15 +357,32 @@ to the same file are explicitly sequential.
   tests/golden/bazel-rust-artifact-baselines.json]
   [depends: T025] Generate and review the exact four production/policy context
   trees; realize both dedicated derivations on both native systems; generate
-  the exact linkage, closure, selected-policy, and measured binary-size
-  baseline rows with zero initial allowed growth; rerun `--check` and require a
-  clean diff.
+  exactly four linkage, closure-count/digest, selected-policy, and measured
+  binary-size baseline rows with zero initial allowed growth and no store
+  paths; run both size-authorization positives and every negative; rerun
+  `--check` and require a clean diff.
 - [ ] T027 [owner: integrator] [files: .bazelignore,
-  bazel/generated/output-manifest.json and every exact generated path listed
-  in that manifest, tests/golden/bazel-rust-coverage.json,
+  bazel/generated/BUILD.bazel,
+  bazel/generated/action-network-policy.json,
+  bazel/generated/configured-targets.json,
+  bazel/generated/evidence-sink-policy.json,
+  bazel/generated/no-shell-inventory.json,
+  bazel/generated/output-manifest.json,
+  bazel/generated/package-policy-targets.bzl,
+  bazel/generated/product-targets.bzl,
+  bazel/generated/source-census.json,
+  tests/golden/api-surface/roots.json,
+  tests/golden/api-surface/capability-api.txt,
+  tests/golden/api-surface/capability-trait-impls.txt,
+  tests/golden/api-surface/hidden-public-api.txt,
+  tests/golden/api-surface/public-api.txt,
+  tests/golden/bazel-rust-coverage.json,
   tests/golden/bazel-rust-query.json] [depends: T025] Generate first-party
-  BUILD output and coverage/query seeds once as integrator-owned outputs;
-  rerun `gen-bazel --check` and require a clean diff.
+  target definitions and coverage/query seeds once as the closed exact
+  integrator-owned output set; run `make api-surface-pin` so
+  `VerifiedExecutable` becomes a capability root with the reviewed exact
+  snapshots, rerun `gen-bazel --check` and the API checker, and require a clean
+  diff.
 - [ ] T028 [owner: integrator] [files:
   tests/golden/flake-check-matrix/x86_64-linux.txt,
   tests/golden/flake-check-matrix/aarch64-linux.txt,
@@ -420,8 +469,13 @@ to the same file are explicitly sequential.
   packages/xtask/tests/bazel_yanked.rs,
   packages/xtask/tests/bazel_action_network.rs] [depends: T035] Add failing
   product-only snapshot, full-main, exact broker/guest projection, reviewed
-  refresh, offline check, Bazel loopback-TCP denial, Bazel Unix-socket denial,
-  live-index, forbidden external-egress, exact mandatory socket-test Cargo
+  refresh, offline check, exact outermost wrapper/provider coverage for
+  stable/nightly Rustc, metadata, Clippy, rustdoc, doctest compile/run,
+  rustfmt, unpretty, build-script, repository, and test actions; inherited
+  socket refusal; no filter-load/unsandboxed fallback; the eight
+  IPv4/IPv6/netlink/packet/pathname-Unix/abstract-Unix/socketpair/io_uring
+  in-action plants; live-index and forbidden external-egress; exact mandatory
+  socket-test Cargo
   compatibility census, same-commit non-advisory verdict, missing/skipped/
   advisory/wrong-head/misattributed compatibility negatives, pinned-fetch
   inventory, source-census, deny,
@@ -432,10 +486,11 @@ to the same file are explicitly sequential.
   bazel/vendor/repositories.bzl, bazel/supply_chain/BUILD.bazel,
   bazel/supply_chain/defs.bzl,
   packages/xtask/src/bazel_yanked.rs] [depends: T044] Implement the offline
-  supply-chain carriers, equivalence comparison, literal no-network Bazel
-  action boundary, and exact Cargo compatibility carriers. Do not define or
-  claim per-endpoint enforcement. Emit the yanked snapshot only as a scratch
-  preview.
+  supply-chain carriers, equivalence comparison, action-network evidence, and
+  exact Cargo compatibility carriers. Require the wrapper and action factory
+  already landed in spec003w0; do not assign a socket plant to the stub carrier
+  or claim namespaces deny socket creation. Emit the yanked snapshot only as a
+  scratch preview.
 - [ ] T046 [owner: spec003w1-runner] [files:
   packages/d2b-bazel-runner/tests/coverage.rs,
   packages/d2b-bazel-runner/tests/result_publication.rs,
@@ -445,11 +500,15 @@ to the same file are explicitly sequential.
   manifest v1 publication, original-status preservation, ignored-case
   fidelity, every-forbidden-value redaction fixture across JUnit, bounded
   `test.log`, emitted manifest/qualification evidence, and exporter
-  diagnostics, typed `testVerdict` plus complete/degraded `evidenceStatus`,
-  sink byte/record limits, exact publication-remediation rows, enforcing
+  diagnostics, typed `testVerdict` plus structurally closed tagged
+  complete/degraded `evidenceStatus`, unchanged manifest-v1 schema, sink
+  byte/record limits, `junit-v1`, `test-log-v1`, `evidence-v1`, and
+  `exporter-diagnostic-v1` age/count retention and expiry failures, exact
+  publication-remediation rows, enforcing
   complete evidence,
   no-shell, `D2B_RUST_BUDGET` validation/propagation/combined-limit,
-  same-descriptor, `RESOLVE_NO_MAGICLINKS`-only provider,
+  same-open-file-description safe-helper execution,
+  `RESOLVE_NO_MAGICLINKS`-only provider,
   provider-`RESOLVE_BENEATH` rejection, permissive fallback leaf,
   auxiliary-CLOEXEC, and no-fallback mutations.
   Each test loads its scope-owned not-yet-wired implementation modules through
@@ -460,8 +519,9 @@ to the same file are explicitly sequential.
   packages/d2b-bazel-runner/src/runner_env.rs,
   packages/d2b-bazel-runner/src/junit.rs,
   packages/d2b-bazel-runner/src/manifest.rs] [depends: T046] Implement the
-  runner behavior, pre-sink streaming sanitizer, typed degraded evidence, and
-  bounded sink policy and satisfy T046.
+  runner behavior, pre-sink streaming sanitizer, tagged evidence union,
+  descriptor-relative retention expiry, and bounded sink policy and satisfy
+  T046 without changing manifest v1.
 - [ ] T048 [owner: spec003w1-locator] [files:
   packages/d2b-test-locator/tests/locator.rs] [depends: T035] Add failing
   tests for every prep-frozen migration disposition, Bazel miss, stale Cargo
@@ -469,9 +529,10 @@ to the same file are explicitly sequential.
   The test loads `src/locator.rs` through a test-local path until integration
   wires it into the crate root.
 - [ ] T049 [owner: spec003w1-locator] [files:
-  packages/d2b-test-locator/src/locator.rs and every source path listed in
-  bazel/generated/locator-migration-files.json] [depends: T048] Implement the
-  locator and migrate exactly the frozen inventory; do not edit the inventory.
+  packages/d2b-test-locator/src/locator.rs] [depends: T048] Implement the
+  locator. Verify the prep-frozen inventory marks existing Cargo-only call
+  sites retained and names no additional changed path; do not edit the
+  inventory.
 - [ ] T050 [owner: spec003w1-no-bash] [files:
   tests/tools/no-bash-ast-walker/src/main.rs] [depends: T035] Add inline
   failing tests for walk, open, read, and parse errors and for equality among
@@ -490,7 +551,8 @@ to the same file are explicitly sequential.
   tests for the generated no-shell inventory: governed and declared sets are
   nonempty and equal in both directions; every spawn source is governed; every
   governed source has exactly one successful scan record, including planted
-  zero-site sources; a fresh scan's
+  zero-site sources; raw scan-record count and unique scan-source count each
+  equal governed-source count; a fresh scan's
   exact keyed spawn-site set equals the committed `spawnSites` set in both
   directions; every spawn site has a false `shellInvocation` verdict; every
   governed source records a scan result; and the `no-shell-inventory-empty`,
@@ -498,7 +560,8 @@ to the same file are explicitly sequential.
   `no-shell-inventory-unguarded-spawn`,
   `no-shell-inventory-missing-zero-site-record`, and
   `no-shell-inventory-planted-shell` plants each fail at their own
-  diagnostic.
+  diagnostic. Assert that all socket-denial plants belong only to the
+  hermeticity/action-network carrier and none belongs to `stub.bzl`.
 - [ ] T053 [owner: spec003w1-census-generator] [files:
   packages/xtask/src/bazel.rs, packages/xtask/src/schema.rs,
   bazel/carriers/schema.bzl,
@@ -516,7 +579,9 @@ to the same file are explicitly sequential.
   guards for exactly eighteen surfaces, total carriers, exact censuses,
   broker tags, narrowed action-network fields, separate schema/stub/inventory/
   no-bash files, fragments, queries, the no-bash census, and the nonempty
-  governed/declared-equal, spawn-subset, zero-site-record no-shell inventory.
+  governed/declared-equal, spawn-subset, zero-site-record, raw-count, and
+  unique-count no-shell inventory. Reject any socket plant assigned to the
+  stub carrier.
   In `policy_ci.rs`, add all six shadow
   targets (`test-bazel-rust`, `test-bazel-rust-main`,
   `test-bazel-rust-api`, `test-bazel-rust-broker`, `test-bazel-rust-aux`,
@@ -541,18 +606,27 @@ to the same file are explicitly sequential.
   runner, locator, generator, schema, and manifest modules into their
   prep-owned roots, and keep Cargo authoritative.
 - [ ] T057 [owner: integrator] [files: .bazelignore,
-  bazel/generated/output-manifest.json and every exact generated path listed
-  in that manifest, tests/golden/bazel-rust-coverage.json,
+  bazel/generated/BUILD.bazel,
+  bazel/generated/action-network-policy.json,
+  bazel/generated/configured-targets.json,
+  bazel/generated/evidence-sink-policy.json,
+  bazel/generated/no-shell-inventory.json,
+  bazel/generated/output-manifest.json,
+  bazel/generated/package-policy-targets.bzl,
+  bazel/generated/product-targets.bzl,
+  bazel/generated/source-census.json,
+  tests/golden/bazel-rust-coverage.json,
   tests/golden/bazel-rust-query.json,
   bazel/supply_chain/yanked-snapshot.json,
   changelog.d/adr052-bazel-carriers.md] [depends: T056] Regenerate
   integrator-owned shared outputs once, including
-  `bazel/generated/no-shell-inventory.json` listed by the output manifest, add
-  `bazel/generated/evidence-sink-policy.json` with measured bounds, add the
-  semantic spec003w1 fragment, commit the candidate, rerun checks, and require
-  a clean diff.
+  the exact closed nine-file generated set, add measured bounds and the four
+  retention classes, add the semantic spec003w1 fragment, commit the candidate,
+  rerun checks, and require a clean diff.
 - [ ] T058 [owner: integrator] [files: none] [depends: T057] Run all
-  spec003w1 validation, every carrier mutation, all four action-network plants,
+  spec003w1 validation, every carrier mutation, all eight socket/io_uring
+  plants plus external-egress/live-index, the provider/toolchain/strategy
+  inventory and fallback mutations,
   exact Cargo compatibility carriers, exact
   Cargo/Bazel census and
   supply-chain-equivalence comparisons, and fixture contracts; then run the
@@ -626,8 +700,12 @@ to the same file are explicitly sequential.
   command/review/rerun sequence plus exact-message, wrong-remedy, and redaction
   plants.
   Add exact redacted provider, sanitizer, sink-limit, exporter, publication,
-  and no-verdict qualification rows, each naming its stable
-  repository-relative input, corrective action, and exact rerun command.
+  retention, and no-verdict qualification rows, each naming its stable
+  repository-relative input, corrective action, and exact literal rerun
+  command. Cover every provider reason in every closed slice and all
+  qualification/release refusal rows. Reject `$!`, absolute and Nix store
+  paths, raw cursors, opaque handles, raw tool/API output, generic owning-slice
+  placeholders, and free-form commands.
   Load the not-yet-wired recovery module through a test-local path.
 - [ ] T068 [owner: spec003w2-recovery] [files:
   packages/d2b-bazel-runner/src/recovery.rs] [depends: T067] Implement the
@@ -642,8 +720,11 @@ to the same file are explicitly sequential.
 - [ ] T071 [owner: integrator] [files:
   packages/d2b-bazel-runner/src/lib.rs,
   packages/xtask/src/main.rs,
-  bazel/generated/output-manifest.json and every exact generated BUILD path
-  listed in that manifest, changelog.d/adr052-bazel-safety.md]
+  bazel/generated/BUILD.bazel,
+  bazel/generated/output-manifest.json,
+  bazel/generated/package-policy-targets.bzl,
+  bazel/generated/product-targets.bzl,
+  changelog.d/adr052-bazel-safety.md]
   [depends: T062,T064,T066,T068,T070] Merge scope results, wire the completed
   spec003w2 runner and evidence modules into their prep-owned roots, regenerate
   integrator-owned BUILD output once, add the semantic fragment, and commit
@@ -668,9 +749,12 @@ to the same file are explicitly sequential.
   `bazelRestoreCount`, `bazelSaveCount`, and `bazelPublicationCount`, four
   `sliceDurationsSeconds` entries in every cold record, fixture verdict, and
   streak reset rules; a protected push with either or both workflows missing a
-  verdict emits a bounded typed degraded record preserving available
-  `testVerdict` values and resets the streak; a missing count or duration is a
-  refusal, never an implied zero. Add failing tests for the typed validator:
+  verdict emits the structurally valid degraded tagged variant preserving
+  available `testVerdict` values and resets the streak; complete/degraded
+  opposite fields and unknown fields/codes/commands refuse without changing
+  manifest v1; a missing count or duration is a refusal, never an implied zero.
+  Add fixed-code repository-relative digest-only diagnostic and exact command
+  tests for every qualification refusal. Add failing tests for the typed validator:
   every threshold is
   derived from complete paginated Cargo, Bazel, and fixture run inventories
   plus immutable content references. Run references bind run ID, positive
@@ -751,7 +835,8 @@ to the same file are explicitly sequential.
   `bazel/generated/no-shell-inventory.json` path and digest, its nonempty
   governed/declared equality result, governed-spawn result, complete
   per-source scan records including zero-site sources, the fresh-scan/
-  committed spawn-site-key equality result, and the
+  committed spawn-site-key equality result, raw and unique scan-record counts
+  each equal to governed-source count, and the
   `no-shell-inventory-empty`,
   `no-shell-inventory-missing-entry`, `no-shell-inventory-extra-entry`,
   `no-shell-inventory-unguarded-spawn`,
@@ -771,15 +856,20 @@ to the same file are explicitly sequential.
   Add four package-policy results, one product-only yanked snapshot with exact
   main/broker/guest semantics, Cargo/decomposed-Bazel status and normalized
   finding equality for all three contexts, both Nix hash proofs,
-  module-refresh evidence, both exact artifact-baseline rows, both dedicated
-  derivation realizations, exact broker linkage, both exact closures and sizes,
-  all artifact mutations, and every policy refusal.
+  module-refresh evidence, exactly four artifact-baseline row digests, all four
+  dedicated artifact realizations, exact broker linkage, transient closure
+  validation with persisted counts/digests only, all four sizes, every
+  size-authorization positive/negative, all artifact mutations, and every
+  policy refusal.
 - [ ] T090 [owner: spec003w4-curator] [files:
   specs/003-adr052-bazel-rust/evidence/qualification.json] [depends: T089]
   Add native x86 and arm six-realization evidence, including arm supply-chain
   plus renderer on the same stable head, expected native `e_machine`, `ET_DYN`,
   exact broker interpreter/SONAMEs, no guest interpreter or `DT_NEEDED`,
-  non-PIE/wrong-machine plants, all four Bazel network-denial plants, exact
+  non-PIE/wrong-machine plants, outermost seccomp provider and
+  stable/nightly action-kind inventory, no-unsandboxed/filter-load-fallback
+  results, all eight socket/io_uring plants plus external-egress/live-index,
+  exact
   same-commit non-advisory Cargo compatibility-carrier results, and the
   fetch inventory. Add non-advisory manifest evidence and advisory mutations
   for `test-flake-aarch64`, all four Rust slices, and `test-rust`.
@@ -788,8 +878,9 @@ to the same file are explicitly sequential.
   Run `cargo xtask bazel-qualification-validate` so every threshold is
   derived from the record's immutable evidence references, require its success
   with no pending item and no boolean mirror disagreeing with the derived
-  verdict, commit the immutable record, and validate both Rust aggregates,
-  policy, drift, and fixture companions.
+  verdict, require all four sink retention classes and unchanged manifest-v1
+  compatibility, commit the immutable record, and validate both Rust
+  aggregates, policy, drift, and fixture companions.
 - [ ] T092 [owner: integrator] [files: none] [depends: T091] Run the
   integrated-diff panel, seal `spec003w4`, merge, verify the merged digest,
   collect garbage, and remove measurement worktrees.
@@ -835,6 +926,7 @@ to the same file are explicitly sequential.
   packages/xtask/tests/bazel_cache.rs,
   packages/xtask/tests/post_promotion_observations.rs,
   packages/xtask/tests/promotion_record.rs,
+  packages/xtask/tests/release_containment.rs,
   packages/xtask/tests/policy_ci.rs,
   packages/xtask/tests/fixtures/ci/promoted-cache-valid.yml,
   packages/xtask/tests/fixtures/ci/promoted-cache-prefix-run-id.yml,
@@ -855,19 +947,24 @@ to the same file are explicitly sequential.
   failure still resets the streak, a
   missing-attempt rejection, and a conflicting head/provenance rejection.
   Add persisted-evidence fixtures proving the full protected stream is fetched
-  transiently while only a fixed checkpoint and final ten normalized units
-  with attempt-history digests are atomically persisted within record and byte
-  bounds. Add promotion-record fixtures for actual sealed merge, old SHA,
-  candidate SHA, wrong seal, unsealed merge, and wrong PR merge SHA.
+  transiently while only closed complete state, page/stream counts, a fixed
+  digest, and final ten normalized units with attempt-history digests are
+  atomically persisted within record and byte bounds. Reject persisted raw
+  cursors. Add promotion-record fixtures for actual sealed merge, old SHA,
+  candidate SHA, wrong seal, unsealed merge, and wrong PR merge SHA. Add
+  fixed-code exact-command release-containment fixtures for no semantic tag,
+  unpushed tag, divergent tag, absent release, draft, and prerelease.
   Load the not-yet-wired cache and run-unit modules through test-local
   paths.
 - [ ] T099 [owner: spec003w5-cache] [files:
   packages/xtask/src/bazel_cache.rs,
   packages/xtask/src/post_promotion_observations.rs,
   packages/xtask/src/promotion_record.rs,
+  packages/xtask/src/release_containment.rs,
   packages/xtask/tests/policy_ci.rs] [depends: T098] Implement ordered
   protected-`v3` maintenance, separate action/repository cache publication,
-  closed-prefix authorization, typed sealed-merge promotion validation, and
+  closed-prefix authorization, typed sealed-merge promotion validation,
+  no-argument closed-diagnostic release-containment validation, and
   typed complete transient post-promotion run-unit validation and derivation,
   with bounded fixed-shape persistence, where a
   unit is one distinct push-created (run ID, head SHA) pair with complete
@@ -885,7 +982,9 @@ to the same file are explicitly sequential.
   Update binding docs from eight Cargo leaves to four Bazel
   slices in the same promotion change, including `tests/README.md` and
   `docs/reference/test-execution-manifest.md` because both describe the eight
-  CI jobs, document every exact alias replacement and retained public leaf, and
+  CI jobs, document every exact alias replacement and retained public leaf,
+  list every exact permanently hybrid surface and socket-using Cargo case,
+  state that separate authorization is required before their retirement, and
   use no process markers.
 - [ ] T102 [owner: integrator] [files:
   packages/xtask/src/main.rs,
@@ -896,8 +995,10 @@ to the same file are explicitly sequential.
   atomic promotion candidate relative to that parent, wire the completed cache
   and run-unit modules into xtask, generate the required workflow, delete
   the shadow workflow, remove only the temporary cold-local helper routing,
-  add every exact replacement to the semantic fragment, assert the candidate's
-  complete changed-path diff, and commit its one SHA.
+  add every exact replacement plus the exact permanently hybrid surface and
+  retained Cargo socket-case inventory and separate authorization requirement
+  to the semantic fragment, assert the candidate's complete changed-path diff,
+  and commit its one SHA.
 - [ ] T103 [owner: integrator] [files: none] [depends: T102] Run
   `cargo xtask bazel-qualification-validate` against the sealed spec003w4
   record at this candidate and require success, then run
@@ -921,9 +1022,10 @@ to the same file are explicitly sequential.
   `cargo xtask bazel-promotion-record-validate` and require the recorded
   promotion SHA to equal the actual protected-`v3` PR merge and the exact
   sealed `spec003w5` identities. Derive from the complete transient run stream,
-  but persist only the fixed checkpoint and final ten normalized units with
-  attempt-history digests within schema byte/record bounds; do not write or
-  trust eligible/count/run-ID summaries or append complete attempt history.
+  but persist only complete pagination state, page/stream counts, the fixed
+  checkpoint digest, and final ten normalized units with attempt-history
+  digests within schema byte/record bounds; do not write a raw cursor, trust
+  eligible/count/run-ID summaries, or append complete attempt history.
   This is the first task that may read `promotion-record.json`. Run the
   follow-up panel, seal
   `spec003w5fu1`, merge, and collect garbage.
@@ -934,7 +1036,8 @@ to the same file are explicitly sequential.
 
 - [ ] T106 [owner: spec003w6-alias-removal] [files: none] [depends: T105]
   First require `cargo xtask bazel-promotion-record-validate` to bind the
-  promotion commit to the actual sealed merge. Then prove a published semantic
+  promotion commit to the actual sealed merge. Then run the no-argument
+  `cargo xtask bazel-release-containment-validate` to prove a published semantic
   release tag contains that commit by
   filtering `git tag --contains <promotion-sha>` through
   `^v[0-9]+\.[0-9]+\.[0-9]+$`, requiring a nonempty match, proving ancestry
@@ -953,7 +1056,9 @@ to the same file are explicitly sequential.
   published-semantic-release-containment, removed-alias, workflow-use, and
   public-name assertions, including two-component-tag, unpushed-tag,
   divergent-local/remote-tag, draft-release, prerelease, and wrong-promotion-
-  SHA negatives.
+  SHA negatives. Bind each release refusal to its fixed code and exact rendered
+  command block and reject `$!`, commit/run identifiers, absolute/store paths,
+  raw cursors/handles/output, free-form commands, and borrowed remedies.
 - [ ] T108 [owner: spec003w6-alias-removal] [files: Makefile,
   packages/xtask/tests/policy_ci.rs] [depends: T107]
   Remove only Bazel-specific aliases and their approved-target entries.
@@ -963,7 +1068,9 @@ to the same file are explicitly sequential.
   docs/reference/test-execution-manifest.md,
   changelog.d/adr052-bazel-alias-removal.md,
   specs/003-adr052-bazel-rust/evidence/post-promotion.json] [depends: T108]
-  Update semantic docs, fragment, and alias evidence fields.
+  Update semantic docs, fragment, and alias evidence fields while repeating
+  the exact permanently hybrid surface and retained Cargo socket-case
+  inventory and separate authorization requirement.
 - [ ] T110 [owner: spec003w6-alias-removal] [files: none] [depends: T109]
   Validate every public Rust leaf, policy, tier0, drift, and fixture target;
   run the integrated-diff panel; seal `spec003w6`; then merge and collect
@@ -1007,8 +1114,10 @@ to the same file are explicitly sequential.
   specs/003-adr052-bazel-rust/evidence/post-promotion.json] [depends: T110,T113]
   Update semantic docs, fragment, and typed run-unit evidence while
   preserving every public Make name, fixture mode, and mandatory socket-test
-  Cargo compatibility carrier; persist only the bounded checkpoint and
-  final-ten suffix and do not add trusted eligible/count/run-ID fields.
+  Cargo compatibility carrier. List the exact permanently hybrid surfaces and
+  separate authorization requirement; persist only complete pagination state,
+  page/stream counts, the bounded digest checkpoint and final-ten suffix, add
+  no raw cursor, and do not add trusted eligible/count/run-ID fields.
 - [ ] T115 [owner: spec003w7-cargo-retirement] [files: none] [depends: T114]
   Run `make check`, Rust, four slices, policy, drift, fixture contracts, and
   the retirement inventory; run the integrated-diff panel; seal `spec003w7`;
@@ -1023,11 +1132,18 @@ to the same file are explicitly sequential.
 - [ ] T117 [owner: integrator] [files: none] [depends: T116] Scan all Spec 003
   and implementation artifacts for stale workspace, hub, nested-lock,
   yanked-authority, provider-`RESOLVE_BENEATH`, provider fallback,
-  blanket-socket denial, old slice target, generated-slice ownership,
+  namespace-as-socket-enforcement, missing seccomp action provider,
+  unsandboxed/filter-load fallback, socket plant in the stub carrier, unsafe
+  or post-fork exec helper, open VerifiedExecutable API/trait surface, old
+  slice target, generated-slice ownership,
   self-asserted post-promotion eligibility, attempt-counted streak,
   rerun-start-time ordering, trusted qualification boolean, two-view context
   oracle, single lock-refresh order, snake_case cache-count, nested-lock gate
-  input, or unqualified wave assumptions; require every process reference to
+  input, stale native-check/artifact-row cardinality, incomplete no-shell plant
+  list, raw/unique scan-count omission, persisted store path/raw cursor,
+  unclosed evidence status, missing retention class, generic refusal remedy,
+  undisclosed hybrid Cargo case, or unqualified wave assumptions; require
+  every process reference to
   use exactly `spec003w0` through `spec003w7` plus `spec003w5fu1` and allow
   historical branch literals only where explicitly labelled parked evidence.
 - [ ] T118 [owner: integrator] [files: none] [depends: T117] Verify every wave

@@ -48,6 +48,9 @@ Each row contains:
 - generated BUILD digest.
 - `actionNetwork = "none"` for every Bazel action, plus the declared-input
   source for every tool, advisory database, yanked record, and vendored crate;
+- `actionWrapper`, naming the outermost seccomp wrapper provider for every
+  action and the stable or nightly Rust toolchain/configuration edge that
+  supplies it;
 - `cargoCompatibilityCarriers`, an exact sorted census of mandatory
   socket-using Rust tests that cannot run as Bazel actions under ADR 0052.
   Each entry binds its existing surface ID, Cargo selector, test identity,
@@ -88,17 +91,66 @@ present; every run must show the broker suite alone.
 
 ## Action network inventory
 
-ADR 0052's action no-network rule remains absolute: no Bazel Rust action may
-open an IPv4, IPv6, netlink, packet, or Unix socket, including loopback and
-sandbox-local listeners. Network namespaces prevent host and external egress;
-they do not enforce per-endpoint declarations, and this contract makes no such
-claim. Structural inventory and sandbox strategy checks reject an action-level
-URL, live-index input, downloader, network-enabling tag, local-strategy
-fallback, or missing declared offline input. Behavioral plants attempt one
-loopback TCP socket and one Unix socket from a Bazel action and must both fail.
-The existing external-egress and live-index plants remain additional
-failures. The only fetch rows are repository rules pinned by a Cargo checksum
-or the `wl-proxy` revision plus archive sha256.
+ADR 0052's action no-network rule remains absolute. Linux network namespaces
+remain defense in depth for external reachability, but are not socket-creation
+enforcement and are never cited as such.
+
+Every Rust compile, metadata, Clippy, rustdoc, rustdoc-test compile, rustfmt,
+unpretty, Cargo build-script, repository-owned generated action, and Bazel test
+action executes through the repository-owned
+`d2b-bazel-seccomp-exec` provider as its outermost executable. The stable and
+nightly Rust toolchains use the same provider. The pinned `rules_rust` patch
+routes `Rustc`, `RustcMetadata`, Clippy, rustdoc, rustdoc-test compile,
+rustfmt, unpretty, and `CargoBuildScript` actions through it. The generated
+repository action factory refuses a direct `ctx.actions.run`. Bazel test
+actions use the provider through the fixed `--run_under` setting. Linkers,
+proc macros, build scripts, compiler children, test children, and every other
+descendant inherit the loaded filter.
+
+The wrapper rejects any inherited socket descriptor before loading the filter,
+sets `no_new_privs`, and loads one fail-closed seccomp filter before starting
+the delegate. Filter construction or load failure exits with
+`D2B-BZLNET-FILTER`; there is no unfiltered delegate path. The filter returns
+the fixed `EACCES` sentinel for `socket`, `socketpair`, `connect`, `bind`,
+`listen`, `accept`, `accept4`, `sendto`, `sendmsg`, `sendmmsg`, `recvfrom`,
+`recvmsg`, `recvmmsg`, `shutdown`, `getsockname`, `getpeername`,
+`setsockopt`, `getsockopt`, `pidfd_getfd`, `io_uring_setup`,
+`io_uring_enter`, and `io_uring_register`, plus `socketcall` where the native
+architecture exposes it. Denying all three io_uring entry points prevents
+networking opcodes and inherited-ring use from bypassing the ordinary socket
+syscall rules.
+
+The wrapper is a workspace member and inherits
+`workspace.lints.rust.unsafe_code = "forbid"`. Its repository source contains
+no unsafe block and uses the pinned safe `libseccomp` API. The separately
+reviewed FFI boundary is the exact pinned `libseccomp` Rust/C dependency and
+its native Nix input. Qualification binds their versions, source hashes,
+static wrapper artifact digest, and package-policy verdict. No general product
+crate changes or overrides the workspace unsafe lint.
+
+The action inventory rejects a missing wrapper, a wrapper placed inside the
+delegate, a stable/nightly toolchain gap, an uncovered build-script or doctest
+action, an action-level URL, live-index input, downloader, network-enabling
+tag, local/standalone/no-sandbox strategy, unsandboxed fallback, or missing
+declared offline input. These eight real in-action plants must each observe
+the fixed seccomp errno and fail if the wrapper is removed:
+
+```text
+action-network-ipv4
+action-network-ipv6
+action-network-netlink
+action-network-packet
+action-network-unix-pathname
+action-network-unix-abstract
+action-network-socketpair
+action-network-io-uring
+```
+
+The external-egress and live-index plants remain additional failures. All
+socket-denial plants belong only to the hermeticity/action-network carrier.
+The stub carrier tests executable identity and runtime state and owns no
+socket-denial plant. The only fetch rows are repository rules pinned by a
+Cargo checksum or the `wl-proxy` revision plus archive sha256.
 
 Committed mandatory tests that use sockets remain on the existing
 non-Bazel Cargo compatibility path until a separately authorized design
@@ -118,7 +170,7 @@ The generated carrier files are deliberately disjoint:
 | Carrier file | Surface |
 | --- | --- |
 | `bazel/carriers/schema.bzl` | One action runs two sequential generations into distinct directories, proving two independent nonempty exact censuses before comparison; mismatch and empty-output plants. |
-| `bazel/carriers/stub.bzl` | Stub-no-socket executable identity and runtime-state checks; missing executable, wrong identity, and state-creation plants. |
+| `bazel/carriers/stub.bzl` | Stub-no-socket executable identity and runtime-state checks; missing executable, wrong identity, and state-creation plants. It owns no socket-denial plant. |
 | `bazel/carriers/inventory.bzl` | Pinned test inventory; empty, missing, and extra inventory plants. |
 | `bazel/carriers/no_bash.bzl` | No-bash walker input and parsed-census wiring, separate from main. |
 
@@ -161,11 +213,13 @@ their current surface semantics and forward to these exact carrier subsets:
 | Hub and lock containment | Selected-context query checks |
 | Generated BUILD and policy output current | `test-drift` |
 | Broker suite keeps `tags = ["exclusive"]` and cannot overlap any test | Coverage test plus scheduling mutation |
-| Every Bazel action is no-network; mandatory socket tests remain exact same-commit Cargo compatibility carriers; every fetch is a pinned repository rule | Linux-sandbox and strategy inventory, loopback-TCP and Unix-socket denial plants, external-egress/live-index plants, compatibility census, and `test-policy` |
+| Every Bazel action is no-network; mandatory socket tests remain exact same-commit Cargo compatibility carriers; every fetch is a pinned repository rule | Outermost seccomp-wrapper/provider and stable/nightly toolchain inventory, no-unsandboxed-fallback strategy inventory, all eight socket/io_uring plants, external-egress/live-index plants, compatibility census, and `test-policy` |
 | No-bash parsed-file census equals governed manifest and declared inputs | Walker unit tests plus coverage test |
 | Generated `bazel/generated/no-shell-inventory.json` has equal nonempty governed and declared sets, one scan record per governed source including zero-site records, only governed spawn sites, and exact fresh-scan/committed spawn-site keys | Census-generator tests, coverage test, and `test-drift` |
 
-No Bazel test invokes `bazel query` or starts a nested server.
+The raw `scanResults` length and its unique-source length must each equal the
+governed-source count. No Bazel test invokes `bazel query` or starts a nested
+server.
 
 ## Required hand-written fragments
 
@@ -188,11 +242,20 @@ census; stale query or BUILD output; missing fragment; empty scan or companion
 sets; mismatched configured native target dependencies, cfgs, or features;
 wrong product or walker containment; cross-context edges; unrelated
 first-party siblings; any first-party target represented as an external
-generated crate; a broker tag removal or overlap; any Bazel socket use,
-forbidden external egress, a live-index input, or missing, stale, advisory, or
-wrong-head Cargo compatibility evidence; a no-bash walk, read, or parse
+generated crate; a broker tag removal or overlap; a missing/inner wrapper,
+stable/nightly/build-script/doctest provider gap, unsandboxed fallback, filter
+load fallback, inherited socket descriptor, any of the eight socket/io_uring
+plants succeeding or returning a non-policy errno, forbidden external egress,
+a live-index input, or missing, stale, advisory, or wrong-head Cargo
+compatibility evidence; a no-bash walk, read, or parse
 failure or mismatch among
 the governed manifest, declared inputs, and parsed-file census; and an empty,
 missing-entry, extra-entry, planted-shell, governed/declared mismatch,
 unguarded-spawn-site, missing-zero-site-scan-record, or
-fresh-scan/committed-spawn-mismatch no-shell inventory.
+fresh-scan/committed-spawn-mismatch no-shell inventory, including duplicate
+raw scan records whose unique projection would otherwise hide the duplicate.
+The six named plant records are exactly `no-shell-inventory-empty`,
+`no-shell-inventory-missing-entry`, `no-shell-inventory-extra-entry`,
+`no-shell-inventory-unguarded-spawn`,
+`no-shell-inventory-missing-zero-site-record`, and
+`no-shell-inventory-planted-shell`.

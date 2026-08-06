@@ -53,26 +53,57 @@ No provider path is returned. No `Command` by path, `fexecve`, or
 `/proc/self/fd` fallback is permitted.
 
 `VerifiedExecutable` is an API seal, not only a runtime convention. Its fields
-and minting trait remain private to the provider module. It exposes no
-unchecked constructor, path conversion, path accessor, `Default`, `From`,
-`Into`, `AsRef`, `Clone`, or `Copy` implementation. Compile-fail fixtures
-outside the defining module must fail to construct it, recover a path, convert
-an unverified descriptor or path into it, duplicate it, or implement the
-sealed minting trait. A positive compile fixture proves only the provider can
-mint a handle and the execution API consumes that handle.
+and minting trait remain private to the provider module. Its public inherent
+API allowlist is empty: callers receive it from the provider and can only pass
+it by value to the execution function. The defining crate exposes no
+descriptor extraction or access, unchecked constructor, path conversion or
+accessor, `Deref`, `Borrow<OwnedFd>`, `AsFd`, `AsRawFd`, `IntoRawFd`,
+`Default`, `From`, `Into`, `AsRef`, `Clone`, `Copy`, `Debug`, `Display`,
+`Serialize`, or `Deserialize`.
 
-The multithreaded runner prepares argv, envp, descriptor mappings, and the
-fixed exec-error record completely in the parent. Between `fork` and
-`execveat`, the child performs only async-signal-safe raw operations needed to
-install already-open descriptors, close inherited descriptors, call
-`execveat`, write one fixed-size error record to a raw close-on-exec pipe on
-failure, and call `_exit`. It performs no allocation, formatting, logging,
-locking, environment lookup, path lookup, trait dispatch, or Rust unwinding.
-The parent reads the typed error record after child creation and maps it to the
-redacted provider diagnostic. Compile and recording-backend mutations reject
-parent preparation moved into the child, a non-close-on-exec error pipe, a
-library logger or allocator after fork, a variable-length error write, and
-return or panic instead of `_exit`.
+The compiler-derived API census under `packages/d2b-api-surface/` is the
+authority. `VerifiedExecutable` is a capability root. Its public item snapshot
+must contain only the opaque type and the by-value provider/execution
+signatures, its explicit locally-authored trait-implementation allowlist is
+empty, and its compiler-emitted auto/blanket implementation set is pinned
+exactly for the selected toolchain. Any added public field, method, associated
+item, re-export, explicit trait implementation, or changed auto/blanket set is
+an API-surface failure. Focused rustdoc `compile_fail` examples prove the
+downstream type-system properties that the census alone cannot: callers cannot
+construct the type, access or extract its descriptor, coerce it through
+`Deref`/`Borrow`/`AsFd`, clone it, serialize or format it, convert an
+unverified path or descriptor into it, or implement the sealed minting trait.
+There are no Cargo-shelling compile fixtures.
+
+The multithreaded runner never runs repository code in a post-fork child. It
+consumes `VerifiedExecutable` into `Stdio` for fd 0 of the separately declared
+`d2b-bazel-execveat` helper using safe `std::process::Command`; it registers no
+`pre_exec` closure. The existing standard-library spawn implementation is the
+only child-creation boundary; the repository adds no callback to it. A Linux
+host conformance trace permits only the standard library's descriptor
+dup/close, signal-mask/reset, and exec operations between child creation and
+the helper image, and rejects allocation, logging, path lookup, or any
+repository symbol in that interval. The consumed descriptor may be duplicated to fd 0 by the
+standard library, but remains the same verified open file description and is
+never reopened. The helper itself is a normal workspace binary, inherits
+`unsafe_code = "forbid"`, is an exact-digest declared runfile, accepts no path,
+and performs no fork. In its fresh single-threaded process it prepares C
+strings and invokes the safe `nix::unistd::execveat` wrapper on fd 0 with an
+empty path and `AT_EMPTY_PATH`. `ENOSYS` and every other exec error produce a
+fixed typed status; there is no `fexecve`, `/proc/self/fd`, `Command`-by-target
+path, or path fallback.
+
+This process boundary removes the unsafe after-fork window instead of
+hand-writing one. Tests prove the execution API consumes the handle, the
+helper receives the verified open file description on fd 0, provider and
+auxiliary descriptors are absent after target exec, argv and environment
+contain no provider path, the target executes twice from the same verified
+open file description, and a path-rebind mutation cannot affect it. Separate
+policy tests reject `pre_exec`, `fork`, a locally-authored unsafe block, a
+workspace-lint override, direct target `Command`, `/proc/self/fd`, `fexecve`,
+or any reopen. The only unsafe/FFI boundary involved is the existing standard
+library and pinned `nix` implementation; no product crate receives an unsafe
+lint exemption.
 
 All absent, non-regular, non-executable, stale, wrong-digest, rebound-path,
 short-read, metadata-change, and exec errno cases are injected. The one
@@ -100,20 +131,22 @@ Every provider refusal is nonzero, redacted, and actionable:
 
 | Reason | Stable input named | Exact recovery |
 | --- | --- | --- |
-| Runfiles entry missing in Bazel mode | Declared runfiles-relative provider key | Declare that key as `data` on the named repository-relative target, then rerun the owning `make test-bazel-rust-<slice>` target. |
-| Provider is not a regular file | Declared runfiles-relative provider key | Correct the target's `data` declaration, then rerun the owning slice target. |
-| Provider is not executable | Declared runfiles-relative provider key and mode | Rebuild the named target, then rerun the owning slice target. |
-| Provider is older than its newest declared input | Declared runfiles-relative provider key | Rebuild the named target, then rerun the owning slice target. |
-| Provider digest differs from the coverage map | Declared runfiles-relative provider key and coverage-map row | Rebuild the target, regenerate and review the coverage map, then rerun the owning slice target. |
-| Handle metadata changed across digest read | Declared runfiles-relative provider key | Rerun the owning slice target; if it repeats, correct the writer that mutates the declared provider. |
-| `execveat` returned `ENOSYS` | Stable kernel requirement | Run the owning slice on a supported kernel providing `execveat`; no path fallback is available. |
-| Other typed exec errno | Declared runfiles-relative provider key and errno class | Rebuild the named target, then rerun the owning slice target. |
+| Runfiles entry missing in Bazel mode | Declared runfiles-relative provider key | `make test-bazel-rust-main`, `make test-bazel-rust-api`, `make test-bazel-rust-broker`, or `make test-bazel-rust-aux`, selected only by the closed coverage-map slice enum after declaring the key as `data`. |
+| Provider is not a regular file | Declared runfiles-relative provider key | The same exact closed slice command after correcting the named target's `data` declaration. |
+| Provider is not executable | Declared runfiles-relative provider key and mode | The same exact closed slice command after rebuilding the named target. |
+| Provider is older than its newest declared input | Declared runfiles-relative provider key | The same exact closed slice command after rebuilding the named target. |
+| Provider digest differs from the coverage map | Declared runfiles-relative provider key and coverage-map row | `(cd packages && cargo xtask gen-bazel --check)`, then the exact closed slice command after regenerating and reviewing the coverage map. |
+| Handle metadata changed across digest read | Declared runfiles-relative provider key | The exact closed slice command; if it repeats, correct the writer named by the repository-relative coverage row and rerun that same command. |
+| `execveat` returned `ENOSYS` | Stable kernel requirement | The exact closed slice command on a supported kernel providing `execveat`; no path fallback is available. |
+| Other typed exec errno | Declared runfiles-relative provider key and errno class | The exact closed slice command after rebuilding the named target. |
 
-The declared runfiles-relative provider key is repository content and is
-permitted in the refusal. The runfiles root, resolved absolute location,
-descriptor number, argv, environment value, and child output remain forbidden.
-Exact-message tests reject an omitted key, omitted action, omitted rerun,
-borrowed remedy, or leaked local value.
+The renderer accepts only the four literal commands shown in the table; there
+is no free-form command string. The declared runfiles-relative provider key is
+repository content and is permitted in the refusal. The runfiles root,
+resolved absolute location, descriptor number, argv, environment value, and
+child output remain forbidden. Exact-message tests cover every reason in every
+slice and reject an omitted key, omitted action, omitted rerun, borrowed
+remedy, nonliteral command, or leaked local value.
 
 Provider resolution is intentionally distinct from evidence and cleanup
 resolution. Per-case directories, JUnit parents, execution-manifest parents,
@@ -148,7 +181,25 @@ No sink receives raw child output. The runner sanitizes and bounds the stream
 before writing JUnit, Bazel `test.log`, or emitted execution and qualification
 evidence. `bazel/generated/evidence-sink-policy.json` is the committed
 authority for each sink's maximum bytes, maximum records, closed permitted
-fields, truncation code, and retention class. Initial limits are generated
+fields, truncation code, and retention class. Retention classes are closed:
+
+| Class | Sink | Maximum age | Maximum count and scope |
+| --- | --- | ---: | --- |
+| `junit-v1` | JUnit | 14 days | 128 files per slice output root |
+| `test-log-v1` | `test.log` | 14 days | 128 files per slice output root |
+| `evidence-v1` | unsealed execution and qualification evidence | 30 days | 32 files per workflow and head digest |
+| `exporter-diagnostic-v1` | exporter diagnostics | 7 days | 64 records per workflow and head digest |
+
+Sealed, schema-bounded source records under this specification are state
+documents, not raw sink payloads; they remain one atomically replaced record
+per declared path. Every other persisted sink must name exactly one class.
+Before publication, descriptor-relative expiry removes owned entries older
+than the class age and then retains only the newest permitted count. Failure
+to classify, inspect, or expire refuses publication. CI upload configuration
+uses the same literal age. Injected-clock tests cover just-inside, exact-bound,
+and expired ages; count-minus-one, exact-count, and count-plus-one inventories;
+newest retention; unowned/link refusal; and expiry failure with no
+publication. Initial limits are generated
 from measured sanitized fixtures and committed with the measurements; a limit
 or permitted-field change requires the measured old and new values, an
 explicit allowed delta, and review in the same change. Truncation emits only
@@ -162,31 +213,42 @@ pre-sanitization stream, then proves every value is absent from JUnit,
 all exporter diagnostics. Each sink is also proved at or below its committed
 byte and record limit.
 
-Test outcome and evidence publication are separate typed results:
+Test outcome and evidence publication are separate typed results.
+`testVerdict` is the underlying `passed`, `failed`, `ignored`, or
+`interrupted` result and is never rewritten by an exporter. `evidenceStatus`
+is a closed tagged union:
 
-- `testVerdict` is the underlying `passed`, `failed`, `ignored`, or
-  `interrupted` result and is never rewritten by an exporter;
-- `evidenceStatus` is `complete` or `degraded`;
-- a sanitizer, bound, write, rename, exporter, or workflow-publication failure
-  preserves `testVerdict`, sets `evidenceStatus = "degraded"`, and records one
-  bounded closed degradation code;
-- surface completion and qualification reject degraded evidence, but report
-  the evidence rejection separately rather than claiming the underlying test
-  failed.
+- `{"kind":"complete","sinkPolicySha256":"<sha256>","retentionClass":"<closed>"}`;
+- `{"kind":"degraded","code":"<closed-code>","sinkKind":"<closed>",
+  "policyRowSha256":"<sha256>","retryCommand":"<closed-command>"}`.
+
+The complete variant rejects degradation-only fields. The degraded variant
+requires every field above and rejects complete-only fields, unknown fields,
+unknown codes, and free-form commands. A sanitizer, bound, retention, write,
+rename, exporter, or workflow-publication failure preserves `testVerdict` and
+produces the structurally valid degraded variant. Surface completion and
+qualification reject degraded evidence but report the evidence refusal
+separately rather than claiming the underlying test failed. Execution-manifest
+v1 remains byte- and schema-compatible: the tagged status is a sidecar
+publication result and is never added to manifest v1.
 
 The exact redacted remediation table is:
 
 | Code | Stable input named | Exact recovery |
 | --- | --- | --- |
-| `D2B-BZLEVIDENCE-SANITIZE` | Repository-relative carrier definition and sink kind | Correct the sanitizer or closed permitted-field table, then rerun the owning `make test-bazel-rust-<slice>` target. |
-| `D2B-BZLEVIDENCE-LIMIT` | Repository-relative `bazel/generated/evidence-sink-policy.json` row and sink kind | Reduce the emitted diagnostic, or regenerate the row from measured sanitized fixtures and review the measured delta, then rerun the owning slice target. |
-| `D2B-BZLEVIDENCE-PUBLISH` | Stable carrier label and sink kind | Correct the injected publication backend failure, then rerun the owning slice target and require `evidenceStatus = "complete"`. |
-| `D2B-BZLEVIDENCE-NO-VERDICT` | Stable workflow name and protected branch | Rerun the named protected-`v3` workflow attempt at the same head; if that head cannot complete, merge a new `v3` commit and restart the qualification streak. |
+| `D2B-BZLEVIDENCE-SANITIZE` | Repository-relative carrier definition and sink kind | Correct the sanitizer or closed permitted-field table, then run the exact closed slice command selected from the provider table. |
+| `D2B-BZLEVIDENCE-LIMIT` | Repository-relative `bazel/generated/evidence-sink-policy.json` row and sink kind | Reduce the emitted diagnostic, or run `(cd packages && cargo xtask gen-bazel --check)` after reviewing measured policy changes, then run the exact closed slice command. |
+| `D2B-BZLEVIDENCE-RETENTION` | Repository-relative sink-policy row and retention class | Correct the owned retention inventory, then run the exact closed slice command. |
+| `D2B-BZLEVIDENCE-PUBLISH` | Stable carrier label and sink kind | Correct the publication backend, run the exact closed slice command, and require the complete tagged variant. |
+| `D2B-BZLEVIDENCE-NO-VERDICT` | Stable workflow name and protected branch | `git fetch origin v3`, then `(cd packages && cargo xtask bazel-qualification-validate)`; if the fixed record remains incomplete, merge a new protected `v3` commit and rerun the same validator. |
 
-Messages contain none of the forbidden planted values, no run ID, attempt ID,
-absolute path, cache key, token, or raw exporter error. Exact-message tests
-reject an omitted stable input, omitted command, borrowed remedy, leaked
-value, or success-shaped `evidenceStatus`.
+Messages contain none of the forbidden planted values, no `$!`, run ID,
+attempt ID, absolute path, Nix store path, cache key, token, opaque handle, or
+raw exporter error. Artifact and validator failures render a fixed code,
+repository-relative policy row, and SHA-256 only. Exact-message tests cover
+every code/slice combination and reject an omitted stable input, omitted
+command, borrowed remedy, leaked value, free-form command, or malformed or
+success-shaped status variant.
 
 Runner tests explicitly cover:
 
@@ -250,14 +312,20 @@ spawned-program expression; that set and the committed `spawnSites` set are
 equal in both directions. A walk, open, read, or parse failure produces a
 failed scan result and refuses rather than shrinking either comparison.
 
-Four plants are mandatory and each must fail at its own diagnostic:
+Six plants are mandatory and each must fail at its own diagnostic:
 
 ```text
 no-shell-inventory-empty
 no-shell-inventory-missing-entry
 no-shell-inventory-extra-entry
+no-shell-inventory-unguarded-spawn
+no-shell-inventory-missing-zero-site-record
 no-shell-inventory-planted-shell
 ```
+
+Both the raw `scanResults` record count and the unique scan-source count must
+equal the governed-source count. A duplicate record is a refusal even when the
+unique projection still matches.
 
 The integrator commits the generated inventory with the rest of
 `bazel/generated/`; slices produce `.scratch/` previews only. Its digest and

@@ -99,14 +99,14 @@ Layer-1 surfaces. No new top-level shell gate or Layer-1 job.
 | Main Clippy included broker and guest after merge. | ADR 0054 requires generic main Clippy to exclude broker and guest while retaining contract Clippy. | Add explicit exclusions and dedicated package Clippy/test lanes. |
 | Current standalone paths in `tests/test-rust.sh`, Nix, and CI remain valid after merge. | Committed code is the pre-merge baseline, not the target state. | Update them in spec003w0 while preserving selectors, target isolation, and job IDs. |
 | The amendment summarized broker serialization without its Bazel mechanism. | ADR 0052 requires all three suites to carry `tags = ["exclusive"]`, overlap no test, and pass twenty executions per context. | Restore tag, mutation, scheduler, and qualification requirements in spec003w1 and spec003w4. |
-| The amendment described offline tools without preserving the binding action no-network rule. | ADR 0052 prohibits every socket in a Bazel action. Linux network namespaces do not enforce per-endpoint declarations. | Deny loopback TCP, Unix sockets, external egress, and live-index access in Bazel actions. Keep the exact mandatory socket-using tests on same-commit non-advisory Cargo compatibility carriers under their existing surface IDs until separately authorized. |
+| The amendment described offline tools without preserving the binding action no-network rule. | ADR 0052 prohibits every socket in a Bazel action. Linux network namespaces do not deny socket creation. | Use the outermost seccomp provider, full socket/io_uring set, eight in-action socket plants, external-egress/live-index plants, and no fallback; keep exact mandatory socket-using tests on same-commit non-advisory Cargo compatibility carriers until separately authorized. |
 | Moving both Nix packages to the root lock made the git output hash look implicit. | ADR 0054 says both dedicated derivations retain the pinned git output hash. | Assert the exact `wl-proxy-0.1.2` key and value in both derivations. |
 | Module lock drift named no complete repository path. | Measured Bazel remediation lacks worktree startup options. | Test then implement no-argument, lock-only, idempotent `bazel-module-refresh` with exact repository remediation. |
 | Current amended recovery prose shortened command sequences. | ADR 0052 fixes exact per-code commands and forbidden cross-code remedies. | Restore literal commands and redaction/wrong-remedy mutations. |
 | The post-promotion children were both concurrently ready while owning the same binding docs and evidence file. | Eligibility clocks are independent, but concurrently ready scopes must be file-disjoint. | Permit spec003w7 qualification and code preparation in parallel, then make its shared documentation/evidence task and merge depend on merged spec003w6, followed by revalidation and a new panel. |
 | The amended cache record retained only a zero-write summary. | ADR 0052 requires explicit restore, save, publication, duration, key, prefix, and retention semantics. | Restore fields and their fixtures in spec003w3 through spec003w5. |
 | Provider and expiry summaries omitted load-bearing kernel detail. | Same-descriptor `execveat`, close-on-exec behavior, and non-consuming grace observations are binding. | Restore exact flags, fallback semantics, mutations, and host conformance. |
-| Provider behavior tests alone proved the verified-handle seal. | Runtime behavior cannot prove an API is absent, and a multithreaded fork child cannot allocate or lock safely. | Add compile-fail `VerifiedExecutable` construction/conversion/trait seals and parent-prepared async-signal-safe post-fork/exec-error constraints with mutations. |
+| Provider behavior tests alone proved the verified-handle seal. | Runtime behavior cannot prove an API is absent, and repository post-fork code would conflict with the workspace safety policy. | Use the compiler-derived closed API/trait census plus focused rustdoc compile-fail examples, and consume the verified open file description into the safe no-fork execveat helper. |
 | Provider opens reused strict result-path resolution. | Bazel runfiles leaf symlinks may leave the anchor. Provider opens therefore use `O_RDONLY|O_CLOEXEC` with `RESOLVE_NO_MAGICLINKS` only; forced walks use `O_NOFOLLOW` only on intermediates. Strict result and cleanup paths retain all three strict resolve flags. | Remove `RESOLVE_BENEATH` and `RESOLVE_NO_SYMLINKS` from provider opens, retain them on result/cleanup paths, and add a mutation rejecting provider `RESOLVE_BENEATH`. |
 | Guest static ELF evidence accepted `ET_EXEC` and did not bind machine identity. | ADR 0054 keeps static PIE, and the native system decides the expected `e_machine`. | Require `ET_DYN`, expected native `e_machine`, no `PT_INTERP`, and no `DT_NEEDED`; add non-PIE and wrong-machine plants. |
 | spec003w0 foundation tasks proposed failing future-behavior tests behind inert seams. | A merged wave must be green. | Implement spec003w0 behavior tested there; defer spec003w1/spec003w2 tests with their implementations. |
@@ -131,8 +131,21 @@ Layer-1 surfaces. No new top-level shell gate or Layer-1 job.
 | Raw child output remained in `test.log`, and publication failure rewrote a passing test as failed. | Every persistent or emitted sink must be sanitized and bounded; exporter state is not the test verdict. | Sanitize and bound JUnit, `test.log`, execution evidence, qualification evidence, and exporter diagnostics. Preserve `testVerdict`, emit typed degraded evidence, and make surface completion and qualification reject degradation separately. |
 | Cache deletion authority was an undefined authorized-prefix predicate. | Destructive maintenance requires a closed committed authority. | Use a typed prefix enum, preserve unknown entries, and test mixed authorized/unauthorized pagination with zero delete calls on refusal. |
 | No-shell required every governed source to contain a spawn site. | A governed source can validly contain zero sites. | Make governed and declared sets equal, make spawn sources a subset, require one scan result per governed source including zero-site records, and compare fresh and committed spawn keys exactly. |
-| Artifact requirements named size and closure checks without realizations, baselines, or exact broker linkage. | ADR 0054 preserves dedicated derivations and their security checks. | Realize both derivations on both native systems, commit measured zero-delta baselines and exact closures/linkage, mutation-test them, and bind them into qualification. |
+| Artifact requirements named size and closure checks without realizations, baselines, or exact broker linkage. | ADR 0054 preserves dedicated derivations and their security checks. | Realize four broker/guest-by-system artifacts, commit exactly four measured zero-delta baseline rows with transient closure validation, mutation-test them, and bind them into qualification. |
 | A promotion record could name any containing commit. | Post-promotion eligibility must bind the actual sealed merge. | Add a typed validator tying the record to the protected-`v3` PR merge and the exact `spec003w5` seal before either child enters. |
+| Network namespaces were described as action-wide no-socket enforcement. | A namespace does not deny socket creation, socketpair, or io_uring networking. | Add the outermost repository-owned seccomp provider, stable/nightly and action-kind coverage, inherited-socket preflight, full syscall set, eight in-action plants, and no unsandboxed/filter-load fallback. |
+| The runner planned a repository-authored post-fork raw-syscall child under a workspace that forbids unsafe code. | Existing repository convention keeps product crates at `unsafe_code = "forbid"` and isolates necessary low-level boundaries. | Consume the verified open file description into fd 0 of a safe no-fork `d2b-bazel-execveat` helper, use the safe `nix` execveat API, and reject `pre_exec`, fork, target paths, reopen, unsafe, or lint overrides. |
+| Ad hoc Cargo-shelling compile fixtures were the VerifiedExecutable API proof. | `tests/AGENTS.md` makes the compiler-derived API census primary and reserves rustdoc compile-fail for downstream type properties. | Make VerifiedExecutable a capability root with empty public-inherent and locally-authored explicit-trait allowlists, pin compiler auto/blanket impls, and use focused rustdoc compile-fail examples only. |
+| The plan validator truncated aggregate ownership prose after `and every`. | A truncated ownership expression can hide a concurrent write. | Require literal normalized exact owned paths, reject dynamic expressions, and add positive plus parser/adjacency/cycle/conflict/dynamic self-test fixtures. |
+| Native inventory prose alternated between five checks, two artifact rows, and six checks. | There are exactly six native checks per system and exactly four artifact baseline rows. | Normalize every inventory, task, evidence threshold, quickstart check, and checklist item to those cardinalities. |
+| Size growth relied on prose review without a typed authorization. | A changed baseline must bind its exact candidate and review. | Add closed positive/negative size-growth authorization fixtures and require all four row digests plus every nonzero authorization digest in qualification. |
+| Artifact baselines persisted exact Nix closure paths and post-promotion checkpoints persisted a cursor. | Exact store paths and pagination tokens are transient validation data. | Persist only closed states, counts, and SHA-256 digests; make fixed-code diagnostics repository-relative and digest-only. |
+| Sink policy named a retention class but defined no closed limits or expiry. | JUnit, `test.log`, unsealed evidence, and exporter diagnostics need enforced age and count limits. | Add `junit-v1`, `test-log-v1`, `evidence-v1`, and `exporter-diagnostic-v1` with injected age/count/expiry tests before publication. |
+| No-shell prose sometimes listed four plants and checked only a unique scan projection. | The exact six plants and both raw and unique scan counts are binding. | List all six everywhere and require both counts to equal governed-source count. |
+| Socket plants leaked into stub-carrier acceptance language. | Socket denial belongs only to hermeticity/action-network. | Remove forbidden-listener/socket plants from the stub carrier and enforce carrier ownership. |
+| Evidence status was a string with optional fields. | Complete and degraded states must be structurally closed without changing manifest v1. | Use a tagged sidecar union with disjoint fields, closed codes/commands, and schema-valid unchanged manifest-v1 output. |
+| Provider, publication, qualification, and release refusal prose used generic rerun placeholders. | Operator refusal UX must render exact commands without leaking identifiers. | Add closed reason-by-slice and qualification/release command tables with fixed-code, repository-relative, digest-only diagnostics. |
+| Promotion docs named aliases but not retained Cargo coverage. | Socket-using compatibility cases survive Cargo retirement. | Require promotion and retirement docs and semantic changelog fragments to list exact hybrid surfaces and state separate authorization is required for retirement. |
 
 ## Shared Design Invariants
 
@@ -149,18 +162,19 @@ Layer-1 surfaces. No new top-level shell gate or Layer-1 job.
 9. Selected-source identities and checksums are exact and verified before deny
    or audit.
 10. Package audit is pinned and no-fetch.
-11. Native x86 and arm lanes realize the same five system-specific checks
+11. Native x86 and arm lanes realize the same six system-specific checks
     without foreign-system or remote-builder arguments.
 12. Contributor mutations are unavailable from Make and workflows.
 13. All existing ADR 0052 coverage, runner, cache, deadline, and promotion
     invariants remain.
 14. The three broker suites are exclusive against every other test and each
     qualifies with twenty consecutive executions.
-15. Every Bazel Rust action is no-network, including loopback and Unix
-    sockets. Mandatory socket-using tests remain exact same-commit
-    non-advisory Cargo compatibility carriers. Network namespaces are never
-    claimed to enforce endpoint declarations; only pinned repository rules
-    fetch.
+15. Every Bazel Rust action uses the outermost seccomp provider with exact
+    stable/nightly action-kind coverage, inherited-socket refusal, full
+    socket/io_uring denial, and no filter-load or unsandboxed fallback.
+    Network namespaces are defense in depth only. Mandatory socket-using tests
+    remain exact same-commit non-advisory Cargo compatibility carriers; only
+    pinned repository rules fetch.
 16. Both dedicated Nix derivations carry the exact committed `wl-proxy` output
     hash.
 17. Provider execution opens with `O_RDONLY|O_CLOEXEC` and
@@ -188,24 +202,31 @@ Layer-1 surfaces. No new top-level shell gate or Layer-1 job.
     references; no boolean field can qualify a record.
 25. No-shell is bound to a generated, drift-checked, nonempty inventory whose
     governed and declared source sets agree, whose scan records cover every
-    governed source including zero-site sources, and whose spawn sites are an
-    exact governed subset.
+    governed source including zero-site sources, whose raw and unique record
+    counts each equal governed-source count, and whose spawn sites are an exact
+    governed subset.
 26. A shadow Make target is approved in `APPROVED_MAKE_TARGETS` by the same
     wave that introduces it.
 27. A post-promotion streak position is one distinct push-created
     (run ID, head SHA) unit ordered by immutable creation order; an attempt
     never adds a position.
-28. `VerifiedExecutable` is compile-sealed and the post-fork child uses only
-    async-signal-safe operations over parent-prepared data.
+28. `VerifiedExecutable` has compiler-derived closed public/trait allowlists,
+    and execution consumes its open file description into a safe
+    workspace-lint-preserving no-fork helper with no path fallback.
 29. Every evidence sink is sanitized and bounded before writing. Exporter
     degradation preserves the underlying test verdict and blocks qualification
     separately.
 30. Cache deletion authority is a closed typed prefix set; caller data cannot
     widen it.
-31. Both dedicated Nix derivations realize with exact linkage, closure, and
-    measured size-baseline evidence on both native systems.
+31. Four broker/guest-by-system Nix artifacts realize with exact linkage,
+    closure count/digest, and measured size-baseline evidence.
 32. The promotion record must validate against the actual sealed
     protected-`v3` merge before either post-promotion child enters.
+33. Native artifact authority is exactly four rows with no persisted store
+    path and with closed authorization for every nonzero size delta.
+34. Evidence status is a closed sidecar union, manifest v1 is unchanged, and
+    `junit-v1`, `test-log-v1`, `evidence-v1`, and
+    `exporter-diagnostic-v1` enforce age and count before publication.
 
 ## Expected Implementation Locations
 
@@ -219,7 +240,8 @@ BUILD.bazel
 bazel/
   cargo/{product.lock,walker.lock}
   carriers/
-  generated/
+  generated/{BUILD.bazel,action-network-policy.json,configured-targets.json,evidence-sink-policy.json,no-shell-inventory.json,output-manifest.json,package-policy-targets.bzl,product-targets.bzl,source-census.json}
+  patches/rules_rust-seccomp-wrapper.patch
   rules/
   supply_chain/yanked-snapshot.json
   vendor/
@@ -231,10 +253,11 @@ packages/
   policy-inputs/
   d2b-bazel-support/
   d2b-bazel-runner/
+  d2b-bazel-seccomp-exec/
   d2b-test-locator/
   d2b-priv-broker/Cargo.toml
   d2b-guest-shell-runner/{Cargo.toml,deny.toml}
-  xtask/src/{bazel,bazel_evidence,bazel_qualification,bazel_yanked,hermeticity,package_policy,schema}.rs
+  xtask/src/{bazel,bazel_evidence,bazel_qualification,bazel_yanked,hermeticity,package_policy,release_containment,schema}.rs
   xtask/tests/policy_ci.rs
 bazel/generated/no-shell-inventory.json
 tests/
@@ -260,10 +283,13 @@ tests/AGENTS.md
 docs/contributing/gates-and-lints.md
 docs/reference/test-execution-manifest.md
 specs/003-adr052-bazel-rust/tools/validate-plan-structure.pl
+specs/003-adr052-bazel-rust/tools/validator-fixtures/
 ```
 
-Generated outputs are integrator-owned. A parallel slice may generate a
-scratch preview but never commits a shared generated output.
+The generated output set above is closed and exact. Generated outputs are
+integrator-owned. A parallel slice may generate a scratch preview but never
+commits a shared generated output. No task may replace this list with a
+manifest expansion or other dynamic ownership expression.
 
 ## Wave Graph
 
@@ -310,11 +336,16 @@ own the same file.
   no delivery process markers.
 - Run `nix-collect-garbage` after every wave merge.
 - Before every plan panel, run
+  `perl specs/003-adr052-bazel-rust/tools/validate-plan-structure.pl
+  --self-test`, then
   `perl specs/003-adr052-bazel-rust/tools/validate-plan-structure.pl`.
   The read-only command checks task-ID uniqueness, dependency existence and
-  textual order, exact adjacency-list equality, acyclicity, and file ownership
-  conflicts between tasks that are incomparable in the dependency graph and
-  therefore concurrently ready. A nonzero result blocks dispatch.
+  textual order, exact adjacency-list equality, acyclicity, literal exact file
+  ownership, complete task parsing, and conflicts between tasks that are
+  incomparable in the dependency graph and therefore concurrently ready. Its
+  positive and five negative fixture classes must pass. A nonzero result
+  blocks dispatch. It remains a planning tool under this directory and is not
+  added to a repository gate.
 
 ## spec003w0 - Product Workspace and Reversible Foundation
 
@@ -363,15 +394,17 @@ packages/d2b-bazel-support/src/lib.rs
 packages/d2b-bazel-support/src/fsops.rs
 packages/d2b-bazel-support/src/runfiles.rs
 packages/d2b-bazel-support/src/startup.rs
+packages/d2b-bazel-support/src/verified_executable.rs
 packages/d2b-bazel-support/tests/provider_handle.rs
 packages/d2b-bazel-support/tests/verified_executable_api.rs
-packages/d2b-bazel-support/tests/compile_fail/verified_construct.rs
-packages/d2b-bazel-support/tests/compile_fail/verified_convert.rs
-packages/d2b-bazel-support/tests/compile_fail/verified_traits.rs
-packages/d2b-bazel-support/tests/compile_fail/verified_mint_trait.rs
 packages/d2b-bazel-support/tests/startup.rs
+packages/d2b-bazel-seccomp-exec/Cargo.toml
+packages/d2b-bazel-seccomp-exec/src/main.rs
+packages/d2b-bazel-seccomp-exec/src/filter.rs
+packages/d2b-bazel-seccomp-exec/tests/filter.rs
 packages/d2b-bazel-runner/Cargo.toml
 packages/d2b-bazel-runner/src/lib.rs
+packages/d2b-bazel-runner/src/bin/d2b-bazel-execveat.rs
 packages/d2b-test-locator/Cargo.toml
 packages/d2b-test-locator/src/lib.rs
 packages/xtask/Cargo.toml
@@ -387,6 +420,16 @@ The prep commit:
 - creates and registers the complete neutral support crate, including the
   filesystem, runfiles, startup interfaces, fakes, and provider behavior that
   runner, locator, xtask, and policy slices read;
+- adds `VerifiedExecutable` as a compiler-derived capability root with an
+  empty inherent API and empty locally-authored explicit-trait allowlist, exact
+  auto/blanket snapshot, and focused rustdoc compile-fail examples; no
+  Cargo-shelling compile fixture is created;
+- creates the `unsafe_code = "forbid"` seccomp wrapper and safe
+  same-open-file-description execveat helper. The wrapper uses the pinned safe
+  libseccomp API, while its external Rust/C FFI dependencies receive a
+  separate package-policy and source-hash review. The helper accepts the
+  consumed descriptor on fd 0, performs no fork or `pre_exec`, and accepts no
+  target path;
 - creates and registers green runner and locator crate skeletons before any
   runner or locator test, with their complete future dependency sets and
   stable crate-root contract seams. Scope tests load their not-yet-wired
@@ -409,7 +452,7 @@ additional prep commit lands before scopes resume.
 | Slice | Owned files |
 | --- | --- |
 | `spec003w0-cargo-gates` | `tests/test-rust.sh`, `tests/tools/assert-pinned-tests.sh`, `tests/golden/pinned/kernel-canaries.txt`, `tests/golden/pinned/usbip-firewall-skeleton.txt`, `tests/golden/pinned/host-prepare-network.txt`, `tests/golden/pinned/broker-socket-acl.txt`, `tests/golden/pinned/broker-export-audit.txt` |
-| `spec003w0-bazel-generator` | `.bazelversion`, `.bazelrc`, `MODULE.bazel`, `BUILD.bazel`, `bazel/BUILD.bazel`, `bazel/defs.bzl`, `bazel/toolchains.bzl`, `bazel/cargo/README.md`, `bazel/cargo/BUILD.bazel`, `bazel/cargo/cargo_bazel.bzl`, `packages/xtask/src/bazel.rs`, `packages/xtask/src/package_policy.rs`, `packages/xtask/src/bazel_yanked.rs`, `packages/xtask/src/schema.rs`, `packages/xtask/src/hermeticity.rs`, `packages/xtask/tests/bazel_foundation.rs`, `packages/xtask/tests/bazel_module_refresh.rs`, `packages/xtask/tests/package_policy_refusals.rs` |
+| `spec003w0-bazel-generator` | `.bazelversion`, `.bazelrc`, `MODULE.bazel`, `BUILD.bazel`, `bazel/BUILD.bazel`, `bazel/defs.bzl`, `bazel/toolchains.bzl`, `bazel/rules/seccomp_action.bzl`, `bazel/patches/rules_rust-seccomp-wrapper.patch`, `bazel/cargo/README.md`, `bazel/cargo/BUILD.bazel`, `bazel/cargo/cargo_bazel.bzl`, `packages/xtask/src/bazel.rs`, `packages/xtask/src/package_policy.rs`, `packages/xtask/src/bazel_yanked.rs`, `packages/xtask/src/schema.rs`, `packages/xtask/src/hermeticity.rs`, `packages/xtask/tests/bazel_foundation.rs`, `packages/xtask/tests/bazel_module_refresh.rs`, `packages/xtask/tests/package_policy_refusals.rs`, `packages/xtask/tests/bazel_action_network.rs` |
 | `spec003w0-runner-foundation` | `packages/d2b-bazel-runner/src/exec_handle.rs`, `packages/d2b-bazel-runner/src/bin/d2b-exec-probe.rs`, `packages/d2b-bazel-runner/tests/exec_handle.rs` |
 | `spec003w0-locator-foundation` | `packages/d2b-test-locator/src/mode.rs`, `packages/d2b-test-locator/tests/mode_selection.rs` |
 | `spec003w0-nix-policy` | `nixos-modules/host-broker.nix`, `flake.nix`, `tests/unit/nix/cases/bazel-package-policy.nix`, `packages/d2b-contract-tests/tests/policy_bazel_nix.rs`, `packages/d2b-contract-tests/tests/policy_bazel_supply_chain.rs`, `packages/d2b-guest-shell-runner/deny.toml` |
@@ -440,14 +483,26 @@ packages/Cargo.toml
 packages/Cargo.lock
 .bazelignore
 MODULE.bazel.lock
+bazel/generated/BUILD.bazel
+bazel/generated/action-network-policy.json
+bazel/generated/configured-targets.json
+bazel/generated/evidence-sink-policy.json
+bazel/generated/no-shell-inventory.json
 bazel/generated/output-manifest.json
-every exact generated BUILD and manifest path listed by that output manifest
+bazel/generated/package-policy-targets.bzl
+bazel/generated/product-targets.bzl
+bazel/generated/source-census.json
 bazel/cargo/product.lock
 bazel/cargo/walker.lock
 the sixteen exact package-policy files enumerated in tasks T026
 tests/unit/nix/pinned/common.txt
 tests/unit/nix/pinned/x86_64-linux.txt
 tests/unit/nix/pinned/aarch64-linux.txt
+tests/golden/api-surface/roots.json
+tests/golden/api-surface/capability-api.txt
+tests/golden/api-surface/capability-trait-impls.txt
+tests/golden/api-surface/hidden-public-api.txt
+tests/golden/api-surface/public-api.txt
 tests/golden/bazel-rust-coverage.json
 tests/golden/bazel-rust-artifact-baselines.json
 tests/golden/bazel-rust-query.json
@@ -553,11 +608,19 @@ All must be true:
   uses matching absolute startup options, emits the exact remediation, and is
   unreachable from Make and workflows;
 - retired hubs pass exact injected argv/cwd refusal tests;
-- compile-fail API fixtures prove external callers cannot construct, convert,
-  inspect, duplicate, default, or mint `VerifiedExecutable`; recording tests
-  prove all argv/envp/error data is parent-prepared and the post-fork child uses
-  only async-signal-safe raw operations with a close-on-exec fixed-record error
-  pipe and `_exit`;
+- the compiler-derived API census proves the closed `VerifiedExecutable`
+  public/hidden/inherent/trait surface, and focused rustdoc compile-fail
+  examples prove downstream construction, descriptor access, coercion,
+  formatting/serialization, duplication/conversion, and minting are absent;
+  no Cargo-shelling compile fixture exists;
+- execution consumes the verified open file description into fd 0 of the
+  exact-digest `d2b-bazel-execveat` helper; runner and helper inherit
+  `unsafe_code = "forbid"` and tests reject `pre_exec`, fork, target paths,
+  reopen, `/proc`, `fexecve`, local unsafe, and lint overrides;
+- the Nix-built `d2b-bazel-seccomp-exec` digest and pinned libseccomp Rust/C
+  inputs are reviewed; every stable/nightly Rust and test action kind uses it
+  outermost, filter-load failure has no delegate, no strategy falls back
+  unsandboxed, and all eight socket/io_uring plants return the policy errno;
 - `gen-bazel --check` and `gen-package-policy-inputs --check` pass;
 - the selected-context oracle joins locked offline target-filtered root
   metadata (identities, sources, candidate edges, `cfg`),
@@ -584,14 +647,17 @@ All must be true:
   root-lock shape;
 - generic Cargo and Nix build/test and Clippy contexts exclude broker and guest
   exactly, while each dedicated context retains its selectors;
-- the exact four policy contexts and eight package check wrappers exist;
+- the exact four policy contexts and twelve native check wrappers exist, six
+  per system;
 - both dedicated Nix derivations retain the exact committed
   `wl-proxy-0.1.2` output hash and all three pin mutations fail;
-- both dedicated derivations realize natively; the artifact baseline records
-  the exact broker interpreter and sorted `DT_NEEDED` set, guest static
-  linkage, both executable sizes, both exact recursive closures, selected
-  policy digests, and zero initial allowed growth; size-plus-one, linkage,
-  closure, sibling-leakage, static-broker, and dynamic-guest mutations fail;
+- broker and guest derivations realize on each native system; exactly four
+  artifact baseline rows record broker interpreter/`DT_NEEDED`, guest static
+  linkage, executable sizes, closure counts/digests without store paths,
+  selected-policy digests, and zero initial allowed growth. Unchanged and
+  authorized-growth positives pass; missing/denied/stale/replayed/wrong-row/
+  arithmetic/absolute-rationale/size-plus-one, linkage, closure,
+  sibling-leakage, static-broker, and dynamic-guest mutations fail;
 - every guest static artifact is `ET_DYN`, reports the expected native
   `e_machine`, has no `PT_INTERP` and no `DT_NEEDED`, and the non-PIE and
   wrong-machine plants fail;
@@ -605,7 +671,8 @@ All must be true:
   `tests/lib.sh`, run under `make test-policy`, and are excluded from fixture
   contracts by the regression test;
 - the six guest license exceptions are exact and different-package plants fail;
-- both native six-check CI sets pass and the arm stable head also passes
+- the six-check x86 inventory and six-check arm inventory pass and the arm
+  stable head also passes
   `make test-rust-supply-chain`;
 - `test-flake-aarch64` is enforcing, not advisory, and the advisory mutation
   fails the renderer/manifest guard;
@@ -671,16 +738,17 @@ slice integration.
 | `spec003w1-guest` | `bazel/carriers/guest.bzl`, `packages/d2b-bazel-runner/tests/guest_topology.rs` |
 | `spec003w1-supply-chain` | `bazel/vendor/repositories.bzl`, `bazel/supply_chain/BUILD.bazel`, `bazel/supply_chain/defs.bzl`, `packages/xtask/src/bazel_yanked.rs`, `packages/xtask/tests/bazel_yanked.rs`, `packages/xtask/tests/bazel_action_network.rs` |
 | `spec003w1-runner` | `packages/d2b-bazel-runner/src/coverage.rs`, `packages/d2b-bazel-runner/src/topology.rs`, `packages/d2b-bazel-runner/src/runner_env.rs`, `packages/d2b-bazel-runner/src/junit.rs`, `packages/d2b-bazel-runner/src/manifest.rs`, `packages/d2b-bazel-runner/tests/coverage.rs`, `packages/d2b-bazel-runner/tests/result_publication.rs`, `packages/d2b-bazel-runner/tests/provider_execution.rs` |
-| `spec003w1-locator` | `packages/d2b-test-locator/src/locator.rs`, `packages/d2b-test-locator/tests/locator.rs`, and every source path listed in prep-owned `bazel/generated/locator-migration-files.json`; the inventory file itself is not owned |
+| `spec003w1-locator` | `packages/d2b-test-locator/src/locator.rs`, `packages/d2b-test-locator/tests/locator.rs`; the prep-owned disposition inventory records existing Cargo-only call sites as retained and requires no dynamic source-file ownership |
 | `spec003w1-no-bash` | `bazel/carriers/no_bash.bzl`, `tests/tools/no-bash-ast-walker/src/main.rs`, including its inline unit tests |
 | `spec003w1-census-generator` | `bazel/carriers/schema.bzl`, `bazel/carriers/inventory.bzl`, `bazel/carriers/stub.bzl`, `packages/d2b-bazel-runner/tests/schema_inventory.rs`, `packages/xtask/src/bazel.rs`, `packages/xtask/src/schema.rs`, `packages/xtask/tests/bazel_generation.rs` |
 | `spec003w1-coverage` | `bazel/carriers/coverage.bzl`, `packages/d2b-bazel-runner/tests/coverage_map.rs`, `packages/xtask/tests/policy_ci.rs` |
-| Integrator | `Makefile`, `ci/rust/BUILD.bazel`, `packages/d2b-bazel-runner/src/lib.rs`, `packages/d2b-test-locator/src/lib.rs`, `packages/xtask/src/main.rs`, `bazel/generated/output-manifest.json` and every exact path it lists, `tests/golden/bazel-rust-coverage.json`, `tests/golden/bazel-rust-query.json`, `bazel/supply_chain/yanked-snapshot.json`, `changelog.d/adr052-bazel-carriers.md` |
+| Integrator | `Makefile`, `ci/rust/BUILD.bazel`, `packages/d2b-bazel-runner/src/lib.rs`, `packages/d2b-test-locator/src/lib.rs`, `packages/xtask/src/main.rs`, the exact nine generated paths listed under Expected Implementation Locations, `tests/golden/bazel-rust-coverage.json`, `tests/golden/bazel-rust-query.json`, `bazel/supply_chain/yanked-snapshot.json`, `changelog.d/adr052-bazel-carriers.md` |
 
-The locator file inventory is generated and committed in prep. It is the exact
-file-ownership expansion for `spec003w1-locator`; no other slice edits a listed
-path. The no-bash tests in `main.rs` are added before its implementation change
-and are sequential because they edit the same file.
+The locator disposition inventory is generated and committed in prep. It
+records existing Cargo-only call sites as retained and the two exact
+scope-owned locator files above as the only changed paths; it is not a dynamic
+ownership expansion. The no-bash tests in `main.rs` are added before its
+implementation change and are sequential because they edit the same file.
 
 The integrator alone regenerates BUILD files, `.bazelignore`, module and hub
 locks, `bazel/supply_chain/yanked-snapshot.json`, all files beneath
@@ -732,9 +800,11 @@ selected broker and guest projections. Any difference fails validation.
 - main, guest, and broker topology tests pass;
 - all broker suites carry `tags = ["exclusive"]`, overlap no test, and the
   tag-removal mutation fails;
-- every Bazel action remains no-network; loopback TCP, Unix-socket,
-  external-egress, and live-index plants fail; every repository-rule fetch is
-  pinned; and every mandatory socket-using case appears in the exact
+- every Bazel action has the outermost seccomp provider, stable/nightly and
+  action-kind coverage is exact, no unsandboxed/filter-load fallback exists,
+  all eight socket/io_uring plants return the policy errno, external-egress and
+  live-index plants fail, every repository-rule fetch is pinned, and every
+  mandatory socket-using case appears in the exact
   same-commit non-advisory Cargo compatibility census;
 - package carriers use the four spec003w0 policy contexts, the one product-lock
   yanked snapshot with exact main/broker/guest semantics, and pinned no-fetch
@@ -744,17 +814,23 @@ selected broker and guest projections. Any difference fails validation.
 - `bazel/generated/no-shell-inventory.json` is committed, nonempty in each of
   its governed and declared sets, and drift-checked; those two source sets are
   equal; every spawn-site source is governed; every governed source has one
-  successful scan record including zero-site sources; a fresh scan's exact
+  successful scan record including zero-site sources; raw and unique
+  scan-record counts each equal governed-source count; a fresh scan's exact
   keyed spawn-site set equals the committed `spawnSites` set; and the empty,
   missing-entry, extra-entry, ungoverned-spawn, missing-zero-site-record, and
-  planted-shell plants each fail;
+  planted-shell plants each fail as exactly
+  `no-shell-inventory-empty`, `no-shell-inventory-missing-entry`,
+  `no-shell-inventory-extra-entry`,
+  `no-shell-inventory-unguarded-spawn`,
+  `no-shell-inventory-missing-zero-site-record`, and
+  `no-shell-inventory-planted-shell`;
 - all six shadow Make targets appear in `APPROVED_MAKE_TARGETS`, each
   resolves to a real Makefile rule, an unapproved `test-bazel-rust-<name>`
   call fails, and an approved shadow name with no Makefile rule fails;
 - schema performs two independent nonempty exact-census generations and its
   mismatch and empty-output plants fail;
-- stub-no-socket rejects missing executable, wrong binary identity, runtime
-  state, and forbidden listener creation;
+- stub-no-socket rejects missing executable, wrong binary identity, and
+  runtime state, and owns no socket-denial plant;
 - pinned inventory rejects empty, missing, and extra inventories;
 - runner tests cover prior-evidence invalidation, multi-carrier attribution,
   sorted atomic manifest v1 evidence for success, failure, and handled
@@ -763,7 +839,8 @@ selected broker and guest projections. Any difference fails validation.
   and exporter diagnostics, typed degraded evidence, required complete
   publication, and no shell;
 - `bazel/generated/evidence-sink-policy.json` carries measured byte and record
-  bounds, and every sink and limit mutation passes;
+  bounds and the four closed age/count retention classes; every sink, limit,
+  age, count, and expiry mutation passes;
 - `D2B_RUST_BUDGET` validation and propagation bound Bazel jobs and suite
   concurrency as one combined limit; invalid and multiplicative mutations
   fail;
@@ -958,9 +1035,10 @@ under `.scratch/`.
   and normalized-finding equality for main, broker, and guest;
 - one product-lock yanked snapshot, full main evaluation, exact broker/guest
   projections, reviewed refresh, and offline check;
-- both native architecture six-check realization sets, including realization
-  of both dedicated derivations, exact broker linkage, selected closures, and
-  measured size baselines;
+- the x86 and arm six-check realization sets, including four dedicated
+  artifact realizations, exact broker linkage, selected closure
+  counts/digests, exactly four measured baseline rows, and size-authorization
+  fixtures;
 - native arm supply-chain and renderer results from the same stable head;
 - all safety and workflow plants;
 - explicit `bazelRestoreCount` of zero, `bazelSaveCount`, and
@@ -971,8 +1049,10 @@ under `.scratch/`.
   refusals;
 - module-refresh lock-only/idempotence/remediation evidence and both exact Nix
   output-hash results;
-- loopback TCP, Unix-socket, external-egress, and live-index Bazel denial
-  plants plus the pinned repository-rule fetch inventory;
+- outermost seccomp provider and stable/nightly action-kind coverage,
+  no-unsandboxed/filter-load-fallback results, all eight socket/io_uring
+  plants, external-egress and live-index results, and the pinned
+  repository-rule fetch inventory;
 - exact same-commit non-advisory Cargo compatibility-carrier passes for every
   mandatory socket-using test;
 - expected native `e_machine`, `ET_DYN`, no-interpreter and no-`DT_NEEDED`
@@ -982,7 +1062,8 @@ under `.scratch/`.
   and combined Bazel-plus-suite budget mutations;
 - the committed `bazel/generated/no-shell-inventory.json` digest with its
   equal nonempty governed/declared sets, governed spawn sources, complete
-  per-source scan records including zero-site sources,
+  per-source scan records including zero-site sources, raw and unique
+  scan-record counts each equal governed-source count,
   fresh-scan/committed spawn-site-key equality, and all six relationship and
   planted-shell results.
 - enforcement records and advisory-classification mutations for
@@ -1029,7 +1110,7 @@ committed last.
 | --- | --- |
 | `spec003w5-promotion-make` | `Makefile`, `tests/test-rust.sh` |
 | `spec003w5-promotion-manifest` | `tests/unit/meta/ci-runner-regression.py`, `tests/layer1-jobs.json`, `tests/tools/layer1-jobs.py`, `tests/ci/layer1-workflow.template.yml` |
-| `spec003w5-cache` | `packages/xtask/src/bazel_cache.rs`, `packages/xtask/src/post_promotion_observations.rs`, `packages/xtask/src/promotion_record.rs`, `packages/xtask/tests/bazel_cache.rs`, `packages/xtask/tests/post_promotion_observations.rs`, `packages/xtask/tests/promotion_record.rs`, `packages/xtask/tests/policy_ci.rs`, `packages/xtask/tests/fixtures/ci/promoted-cache-valid.yml`, `packages/xtask/tests/fixtures/ci/promoted-cache-prefix-run-id.yml`, `packages/xtask/tests/fixtures/ci/promoted-cache-prefix-sha.yml`, `packages/xtask/tests/fixtures/ci/promoted-cache-delete-newest.yml` |
+| `spec003w5-cache` | `packages/xtask/src/bazel_cache.rs`, `packages/xtask/src/post_promotion_observations.rs`, `packages/xtask/src/promotion_record.rs`, `packages/xtask/src/release_containment.rs`, `packages/xtask/tests/bazel_cache.rs`, `packages/xtask/tests/post_promotion_observations.rs`, `packages/xtask/tests/promotion_record.rs`, `packages/xtask/tests/release_containment.rs`, `packages/xtask/tests/policy_ci.rs`, `packages/xtask/tests/fixtures/ci/promoted-cache-valid.yml`, `packages/xtask/tests/fixtures/ci/promoted-cache-prefix-run-id.yml`, `packages/xtask/tests/fixtures/ci/promoted-cache-prefix-sha.yml`, `packages/xtask/tests/fixtures/ci/promoted-cache-delete-newest.yml` |
 | `spec003w5-interface-tests` | `packages/d2b-bazel-runner/tests/make_interface.rs` |
 | `spec003w5-binding-docs` | `AGENTS.md`, `tests/AGENTS.md`, `docs/contributing/gates-and-lints.md`, `tests/README.md`, `docs/reference/test-execution-manifest.md` |
 | Integrator | `packages/xtask/src/main.rs`, `.github/workflows/pr-l1-static-fast.yml`, deletion of `.github/workflows/pr-bazel-rust.yml`, `specs/003-adr052-bazel-rust/evidence/promotion-record.json`, `specs/003-adr052-bazel-rust/evidence/post-promotion.json`, `changelog.d/adr052-bazel-promotion.md` |
@@ -1079,7 +1160,9 @@ input.
   complete generation;
 - binding docs, including `tests/README.md` and
   `docs/reference/test-execution-manifest.md`, describe four Bazel slices
-  behind `test-rust` instead of eight Cargo leaves, with no process markers;
+  behind `test-rust` instead of eight Cargo leaves, list the exact permanently
+  hybrid surface IDs and retained socket-using Cargo cases, state separate
+  authorization is required for retirement, and contain no process markers;
 - `test-flake-aarch64`, all four generated Rust slices, and the `test-rust`
   rollup are non-advisory, and each advisory-classification mutation fails;
 - `cargo xtask bazel-qualification-validate` succeeds against the sealed
@@ -1096,8 +1179,9 @@ input.
   the actual protected-`v3` PR merge and re-derives the exact sealed candidate,
   content, and snapshot identities; old-SHA, candidate-SHA, wrong-seal, and
   unsealed-merge mutations fail;
-- `post-promotion.json` is a bounded atomically replaced checkpoint and
-  final-ten suffix derived from the complete transient protected-`v3` stream,
+- `post-promotion.json` is a bounded atomically replaced complete-state,
+  page/stream-count, digest checkpoint and final-ten suffix derived from the
+  complete transient protected-`v3` stream, persists no raw cursor, and is
   never an append-only full attempt history;
 - follow-up promotion record is panel-signed, sealed as `spec003w5fu1`, and
   merged.
@@ -1107,6 +1191,14 @@ input.
 ### Entry
 
 A containing published semantic release tag exists. Entry runs exactly:
+
+```bash
+set -euo pipefail
+(cd packages && cargo xtask bazel-promotion-record-validate)
+(cd packages && cargo xtask bazel-release-containment-validate)
+```
+
+The second command implements this derivation:
 
 ```bash
 set -euo pipefail
@@ -1199,9 +1291,11 @@ ten-seat panel verdict before merge.
 
 Only Cargo implementations for the eighteen surfaces and unreachable
 Cargo-only plumbing are removed. Every public Rust Make name, all Bazel
-carriers, fixture mode, and fixture IDs remain. `make check`, Rust, policy,
-drift, and fixture validation pass; panel, seal `spec003w7`, and merge
-complete.
+carriers, fixture mode, fixture IDs, and exact socket-using Cargo compatibility
+cases remain. Retirement docs and the semantic changelog list the permanently
+hybrid surface IDs and the separate authorization requirement. `make check`,
+Rust, policy, drift, and fixture validation pass; panel, seal `spec003w7`, and
+merge complete.
 
 The eligibility check inventories every promoted protected-`v3` `test-rust`
 run unit. A unit is one distinct push-created (run ID, head SHA) pair carrying
@@ -1238,7 +1332,8 @@ old-rerun-after-failure fixtures prove both rules.
 | Walker repin changes during product merge. | Byte-identity check on walker manifest, lock, and Bazel-side lock. |
 | Dedicated binary isolation disappears in a broad Nix build. | Separate derivations, explicit package flags, ELF, size, and closure checks. |
 | A broker suite loses `exclusive` and races another test's signal/reap state. | Literal-tag guard, overlap plant, and twenty runs per context. |
-| A mandatory socket test is moved into Bazel and weakens ADR 0052, or is omitted to keep actions offline. | Every Bazel action is no-network; loopback/Unix/external/live plants fail; the exact same-commit non-advisory Cargo compatibility census preserves the omitted cases and promotion reports hybrid surfaces honestly. |
+| A namespace still permits IPv4/IPv6/netlink/packet/Unix/socketpair creation, or io_uring bypasses ordinary socket calls. | Outermost inherited seccomp provider, full syscall set, stable/nightly action-kind inventory, eight real plants, inherited-socket preflight, and no filter-load/unsandboxed fallback. |
+| A mandatory socket test is moved into Bazel and weakens ADR 0052, or is omitted to keep actions offline. | The exact same-commit non-advisory Cargo compatibility census preserves the cases, and promotion/retirement docs and changelog list the permanently hybrid surfaces and separate authorization requirement. |
 | Root-lock Nix migration drops the git output hash from one derivation. | Exact key/value assertion and one-sided-pin mutation. |
 | A contributor follows Bazel's bare module remediation and starts a second server outside worktree scratch. | Repository-owned lock-only module refresh with absolute startup options and exact remediation. |
 | A provider is verified by descriptor but executed through a rebound path, or a runfiles leaf symlink is rejected by strict result-path flags. | One `O_RDONLY|O_CLOEXEC` handle with only `RESOLVE_NO_MAGICLINKS`, same-handle `execveat`, leaf-symlink and rebound tests, a mutation rejecting provider `RESOLVE_BENEATH`, and no fallback. |
@@ -1252,10 +1347,13 @@ old-rerun-after-failure fixtures prove both rules.
 | A two-component or unpushed tag containing the promotion commit is accepted as a release. | Anchored `^v[0-9]+\.[0-9]+\.[0-9]+$` match plus origin resolution and non-draft release checks. |
 | A rerun of an old run inflates the streak or reorders behind newer failures. | Streak positions are distinct push-created (run ID, head SHA) units ordered by `createdAt` then run ID, with repeated-attempt and old-rerun-after-failure fixtures. |
 | The pre-merge rollback rehearsal reads a promotion record that does not exist yet and silently rehearses nothing. | Rehearsal resolves the candidate from verified candidate HEAD and the recorded spec003w5 parent; promotion-record reads are post-merge only. |
-| A verified executable becomes forgeable through a harmless-looking trait or constructor. | External compile-fail API fixtures cover construction, conversion, path recovery, cloning, defaulting, and mint-trait implementation. |
-| A fork child deadlocks on an allocator or logger held by another thread. | Parent-prepared argv/envp and fixed error records plus an async-signal-safe child operation recorder and unsafe-operation mutations. |
+| A verified executable becomes forgeable or descriptor-revealing through a harmless-looking trait, formatter, serializer, constructor, or accessor. | Compiler-derived closed public/hidden/inherent/explicit/auto/blanket API snapshots plus focused rustdoc compile-fail examples. |
+| A multithreaded fork child deadlocks or requires a product unsafe-lint exception. | No repository post-fork child exists: safe `Command` consumes the open file description into the no-fork, no-path, `unsafe_code = "forbid"` execveat helper. |
 | A cache API page interleaves a foreign prefix and maintenance adopts it. | Closed typed prefix enum, mixed-page fixtures, preservation checks, and zero delete calls on every authorization refusal. |
 | Tests pass while forbidden values persist in `test.log` or exporter output. | Pre-sink streaming sanitization, committed measured bounds, planted-value absence across every sink, and typed degraded evidence rejected by qualification. |
+| Old or excessive diagnostics accumulate after passing sanitizer bounds. | Four closed age/count retention classes, descriptor-relative expiry before publication, and injected boundary/failure tests. |
+| A binary growth allowance is copied to another artifact or accepted without review. | Exactly four baseline rows and a candidate/review-digest-bound closed authorization with positive and replay/stale/wrong-row/size-plus-one negatives. |
+| A diagnostic or checkpoint leaks a store path or API cursor. | Transient full validation, persisted closed states/counts/digests only, and fixed-code repository-relative digest-only failure tests. |
 | A stale but valid promotion SHA unlocks retirement. | Typed record validation against the actual protected-`v3` PR merge and exact `spec003w5` seal before both eligibility paths. |
 
 ## Final Cross-Artifact Verification
@@ -1286,7 +1384,16 @@ After the desired waves:
 11. every lock-refresh sequence in every artifact commits `MODULE.bazel.lock`
     last and states which hub's inputs are proved byte-identical.
 12. the read-only plan-structure validator passes with unique IDs, existing and
-    earlier dependencies, exact adjacency, an acyclic graph, and no ownership
-    conflict among incomparable concurrently ready scopes.
+    earlier dependencies, exact adjacency, an acyclic graph, literal exact
+    ownership, complete parsing, and no conflict among incomparable
+    concurrently ready scopes; its positive and all five negative fixture
+    classes pass.
 13. process references use exactly `spec003w0` through `spec003w7` plus
     `spec003w5fu1`; no other qualified Spec 003 wave is accepted.
+14. every authoritative native inventory is six checks per system, artifact
+    authority is exactly four rows, and no persisted artifact contains a Nix
+    store path or raw pagination cursor.
+15. all six no-shell plants appear everywhere, and both raw and unique
+    scan-record counts equal governed-source count.
+16. promotion and retirement documentation and semantic changelog fragments
+    list the exact permanently hybrid surfaces and retained Cargo socket cases.

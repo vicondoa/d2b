@@ -35,7 +35,8 @@ duration makes the record non-qualifying; it is never read as zero.
 Differing verdicts reset the streak. For every protected-`v3` push, a missing
 Cargo, Bazel, fixture, exporter, or publication verdict produces a bounded
 record with the available underlying `testVerdict` values,
-`evidenceStatus = "degraded"`, and one closed degradation code. This includes
+the structurally valid degraded `evidenceStatus` variant, and one closed
+degradation code. This includes
 a push where neither workflow reaches a verdict. Degraded records never extend
 the streak and reset it. Pull-request, `main`, scheduled, and dispatched runs
 remain non-records.
@@ -89,6 +90,22 @@ record, promotion validation runs it against the sealed record at the promotion
 candidate, and contributor validation runs it before any informational
 inspection of the record.
 
+Every validator refusal has one fixed code and exact rendered command block:
+
+| Refusal class | Code | Exact command block |
+| --- | --- | --- |
+| Pagination gap, missing attempt, or omitted protected push | `D2B-BZLQUAL-INVENTORY` | `git fetch origin v3`, then `(cd packages && cargo xtask bazel-qualification-validate)` after refreshing the fixed record from the complete protected stream. |
+| Omitted or malformed reference | `D2B-BZLQUAL-REFERENCE` | `(cd packages && cargo xtask bazel-qualification-validate)` after correcting the repository-relative record row. |
+| Duplicate or inconsistent reference | `D2B-BZLQUAL-CONSISTENCY` | `(cd packages && cargo xtask bazel-qualification-validate)` after removing the duplicate or replacing the inconsistent repository-relative row. |
+| Wrong candidate or stale head | `D2B-BZLQUAL-CANDIDATE` | `git fetch origin v3`, then `(cd packages && cargo xtask bazel-qualification-validate)` against evidence recaptured for the candidate. |
+| Degraded evidence | `D2B-BZLQUAL-DEGRADED` | Run the exact closed slice retry command carried by the degraded variant, then `(cd packages && cargo xtask bazel-qualification-validate)`. |
+
+The renderer accepts no other command. Messages include only the fixed code,
+repository-relative row, and SHA-256 references. They never include `$!`, an
+absolute or Nix store path, raw pagination cursor, workflow attempt handle,
+descriptor, or raw API/exporter text. Table-driven tests cover every row and
+reject a borrowed or free-form remedy.
+
 ## Workspace and hub evidence
 
 Qualification proves:
@@ -106,7 +123,7 @@ Qualification proves:
 - module refresh proving exact `MODULE.bazel.lock`-only mutation, second-run
   idempotence, absolute startup-option identity, exact drift remediation, and
   no Make or workflow reachability;
-- both dedicated Nix derivations retaining the exact
+- the broker and guest Nix derivations retaining the exact
   `cargoLock.outputHashes."wl-proxy-0.1.2"` value.
 
 ## Package policy evidence
@@ -145,7 +162,8 @@ and promotion.
 
 ## Native architecture evidence
 
-For each native runner, qualification contains realization references for:
+For each native runner, qualification contains realization references for
+exactly these six checks:
 
 ```text
 broker-production-dependency-policy
@@ -164,7 +182,7 @@ It also proves:
 - no `--builders`;
 - no remote builder;
 - both generated system inventories current.
-- realization of both dedicated Nix derivations;
+- four broker/guest-by-system artifact realizations;
 - exact broker interpreter and `DT_NEEDED` SONAME set;
 - broker and guest binary sizes checked against committed measured baselines
   and separately reviewed allowed deltas;
@@ -192,15 +210,17 @@ It also proves:
    `--runs_per_test=20` and exclusivity in force;
 7. warm local, cold local, and cold CI performance sets;
 8. complete package policy evidence above;
-9. both native architecture realization sets above;
+9. the x86 and arm six-check realization sets above;
 10. `bazelRestoreCount`, `bazelSaveCount`, and `bazelPublicationCount` of
     zero in every shadow record, with five cold records each carrying four
     complete `sliceDurationsSeconds` entries;
 11. complete locator and per-case evidence guards;
 12. all workflow, cache, deadline, cleanup, repin, and seeded policy
     refusals.
-13. loopback-TCP, Unix-socket, external-egress, and live-index Bazel plants
-    denied, and every permitted fetch a pinned repository rule;
+13. all eight IPv4, IPv6, netlink, packet, pathname Unix, abstract Unix,
+    socketpair, and io_uring Bazel plants denied, the external-egress and
+    live-index plants refused, every action/provider inventory complete, and
+    every permitted fetch a pinned repository rule;
 14. exact Cargo/decomposed-Bazel supply-chain equivalence for all three
     contexts;
 15. manifest/JUnit/bounded-test.log/emitted-evidence/exporter redaction,
@@ -208,9 +228,14 @@ It also proves:
     and combined-budget mutations;
 16. the committed `bazel/generated/no-shell-inventory.json` reference and
     digest, equal nonempty governed/declared sets, governed spawn sources,
+    raw and unique scan-record counts each equal to the governed-source count,
     complete per-source scan records including zero-site sources,
-    fresh-scan/committed spawn-site-key equality, and all six relationship and
-    planted-shell results;
+    fresh-scan/committed spawn-site-key equality, and exactly
+    `no-shell-inventory-empty`, `no-shell-inventory-missing-entry`,
+    `no-shell-inventory-extra-entry`,
+    `no-shell-inventory-unguarded-spawn`,
+    `no-shell-inventory-missing-zero-site-record`, and
+    `no-shell-inventory-planted-shell`;
 17. a successful `cargo xtask bazel-qualification-validate` verdict derived
     from the references above.
 18. manifest evidence that `test-flake-aarch64`, all four promoted Rust slice
@@ -221,7 +246,15 @@ It also proves:
     "none"`;
 20. complete evidence-sink sanitization and bound results, with no forbidden
     planted value in JUnit, `test.log`, emitted evidence, or exporter
-    diagnostics and no degraded evidence in the qualified set.
+    diagnostics, `junit-v1`, `test-log-v1`, `evidence-v1`, and
+    `exporter-diagnostic-v1` age/count retention enforced, and no degraded
+    evidence in the qualified set;
+21. exactly four artifact-baseline row digests, all four artifact realization
+    results, and every nonzero size-growth authorization digest and positive
+    and negative authorization fixture;
+22. the outermost seccomp wrapper digest, pinned `libseccomp` Rust/C boundary,
+    stable/nightly toolchain coverage, no-unsandboxed-fallback result, and
+    wrapper/filter-load mutation results.
 
 Candidate-specific evidence binds one integrated commit. A content change
 invalidates affected evidence. The qualified record merges before promotion
@@ -247,6 +280,12 @@ pull-request merge SHA each fail. The command has no override and runs before
 `spec003w5fu1` seals, before alias-removal entry, and before Cargo-retirement
 entry.
 
+Promotion documentation and its semantic changelog fragment list the exact
+surface IDs whose mandatory socket-using tests remain Cargo compatibility
+carriers. They call those surfaces permanently hybrid under this
+specification, state that spec003w7 retains the cases and their public
+executor, and name separate authorization as the only retirement path.
+
 Post-promotion run-unit inventory keeps independent release-containment and
 green-run clocks. Alias removal depends only on containment in a published
 semantic release tag matching `v<major>.<minor>.<patch>`. Cargo implementation
@@ -265,12 +304,14 @@ stream on every run. `post-promotion.json` is not the input authority and does
 not persist the complete stream.
 
 The persisted record contains only a fixed-shape checkpoint
-(`streamCount`, final cursor, complete-stream SHA-256, promotion SHA, and
-validation time), the final ten normalized run units needed for the eligibility
-decision, and for each persisted unit an attempt-history count and SHA-256
-rather than the attempt array. The schema sets a fixed maximum record count
-and byte size and rejects unknown fields or overflow before atomic rename.
-Refreshing evidence replaces the prior bounded record; it never appends.
+(`paginationState = "complete"`, `pageCount`, `streamCount`,
+complete-stream SHA-256, promotion SHA, and validation time), the final ten
+normalized run units needed for the eligibility decision, and for each
+persisted unit an attempt-history count and SHA-256 rather than the attempt
+array. It persists no raw page token or cursor. The schema sets a fixed
+maximum record count and byte size and rejects unknown fields or overflow
+before atomic rename. Refreshing evidence replaces the prior bounded record;
+it never appends.
 Tests feed a complete transient stream larger than the persistence limit,
 derive the same verdict as the unbounded in-memory oracle, and prove the saved
 file remains within both limits.

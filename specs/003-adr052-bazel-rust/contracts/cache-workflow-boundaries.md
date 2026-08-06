@@ -68,6 +68,11 @@ change that cache's fetched-byte identity and need not invalidate it.
 | symlink prefix | A | - |
 | build-script annotations | A | - |
 | action-environment allowlist | A | - |
+| seccomp syscall-policy digest | A | - |
+| seccomp wrapper source and static artifact digest | A | R |
+| pinned libseccomp Rust/C source identities | A | R |
+| rules_rust seccomp-wrapper patch digest | A | R |
+| stable/nightly action-provider coverage digest | A | - |
 | generated BUILD digest | A | - |
 | configured native-target digest | A | - |
 | native runner architecture and exact system/target mapping | A | R |
@@ -138,6 +143,14 @@ generation. Separate mutations drop the middle page, repeat a cursor, move an
 unauthorized entry between pages, supply a prefix through the record, and make
 one entry match two enum variants. Each refuses before any delete call; a
 recording API proves the delete-call list is empty on refusal.
+
+Page tokens and cursors exist only inside the injected API session. No cache,
+qualification, post-promotion, diagnostic, or validator artifact persists or
+prints them. Persisted completion is the closed state `complete` plus page and
+entry counts and a complete-stream SHA-256. Pagination failures render a fixed
+code, the repository-relative cache-policy row, and the stream digest if one
+was completed; they never include `$!`, an absolute or Nix store path, cache
+entry path, raw cursor, or opaque API handle.
 
 ## Policy fixtures
 
