@@ -230,10 +230,13 @@ budget, including budget 1. Top-level Make `-j` is not the Rust budget knob.
 ### Nix-unit execution
 
 `make test-nix-unit` uses `nix-eval-jobs --no-instantiate` against the locked
-`nixUnitJobs.<system>` output. The output contains exactly one aggregate job
-per current `*.nix` case file, named bijectively as
-`case-<basename>`, plus the `nix-unit` shard/pin integrity job. The `fileJobs`
-constructor reuses the same
+`nixUnitJobShards.<system>` output for the complete local pass. The underlying
+`nixUnitJobs.<system>` surface still contains exactly one aggregate job per
+current `*.nix` case file, named bijectively as `case-<basename>`, plus the
+`nix-unit` shard/pin integrity job. `nixUnitJobShards.<system>` presents those
+per-file aggregates as one local shard attr at a time, plus the integrity
+shard, so each evaluator process handles one file aggregate rather than the
+whole corpus. The `fileJobs` constructor reuses the same
 `casesFor`/`resultsFor`/failure-report semantics as the seven existing flake
 shard checks, so every file job reports all of its real
 `FAIL <case>: <detail>` lines. No installable is submitted and no derivation
@@ -277,8 +280,10 @@ message naming `D2B_NIX_UNIT_WORKERS`. Use that bounded operator-intent
 control. Its effective count is capped by four workers, logical CPUs, any
 finite cgroup CPU quota, and available memory after a 3 GiB host reserve at
 the evaluator limit plus 2048 MiB of process and flake overhead per worker.
-The full local runner defaults to four workers and a 4096 MiB evaluator limit.
-`D2B_NIX_UNIT_MEMORY_MB` may set the limit from 512 through 4096 MiB.
+The full local runner requests four workers and a 4096 MiB evaluator limit by
+default, but it still keeps at most **two** `nix-eval-jobs` shard processes
+resident at once after those caps are applied. `D2B_NIX_UNIT_MEMORY_MB` may
+set the limit from 512 through 4096 MiB.
 Successful full runs suppress raw JSONL output. Every real `FAIL <case>:
 <detail>` line from an aggregate error is parsed and printed as one concise,
 path-sanitized stderr entry. Repository and home roots become fixed
@@ -301,10 +306,12 @@ records. Do not force an internal `_index` value or materialize hundreds of
 typed submodules solely to test a fixed count.
 
 `D2B_NIX_UNIT_CHECK` remains the manual single-shard selector. When
-set, it exits through the selected Nix check before eval-jobs bootstrap or
-resource accounting. Hosted CI retains the pre-change discovery and
-per-check matrix because the full eval-jobs path did not fit the hosted
-runner envelope. When
+set, the runner discovers that one of the seven stable topical checks, reads
+its per-file jobs from `nixUnitCheckJobShards.<system>`, and instantiates each
+selected job's `drvPath` one at a time before eval-jobs bootstrap or the full
+local resource-accounting path. Hosted CI retains the seven topical check
+names and the per-check matrix because the full eval-jobs path did not fit the
+hosted runner envelope. When
 `D2B_EXECUTION_MANIFEST` is set, enter the shared secure lifecycle before Nix
 discovery or toolchain entry. A full pass records exactly these seven leaves:
 `nix-unit`, `nix-unit-daemon`, `nix-unit-guest`, `nix-unit-misc`,
