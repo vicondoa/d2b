@@ -19,10 +19,13 @@ requires a separate request. This specification is that request.
 Two of the nine delivery waves are complete and merged. Wave W0 landed the identity,
 object-model, store-contract, and resource-API foundations. Wave W1 landed the
 reconciliation toolkit, ComponentSession runtime, transport substrate, Zone message bus,
-and the storage feasibility proof. Fourteen of 545 enumerated work items are `Merged`; 531
-remain `Planned` across waves W2 through W7. The terminal wave W8 has no work items yet by
-design: its contents are the delivery friction accumulated across the program and are
-recorded at W7 close, so the program's final total exceeds 545.
+and the storage feasibility proof. At program opening, 14 of 545 enumerated work items were
+`Merged` and 531 were `Planned` across waves W2 through W7. That 531-item initial scope is
+preserved in the primary task set. At committed HEAD
+`868469bf9c293cd48fff483717f14cb88c246821`, the authoritative manifest records 68 `Merged`
+and 477 `Planned`. The terminal wave W8 has no work items yet by design: its contents are the
+delivery friction accumulated across the program and are recorded at W7 close, so the
+program's final total exceeds 545.
 
 The decisive gap is that **none of the delivered foundation is reachable by an operator**.
 Every W0/W1 crate is deliberately test-only and unwired from production: the bus
@@ -234,8 +237,10 @@ intact and no remnants of the superseded plane.
 5. **Given** an operator-set hold during a cutover window, **When** a destructive step is
    reached, **Then** it is blocked until the hold is cleared.
 6. **Given** a cutover that has reached its rollback boundary, **When** the operator has not
-   attested that a host recovery point exists, **Then** no further step executes and the
-   reason is stated plainly.
+   supplied one current, qualified recovery-point attestation bound to the exact candidate,
+   commit, tree, preview inventory, and daily-driver host, **Then** no further step executes
+   and the refusal names the missing or mismatched field and the action to create, verify,
+   and attest a new recovery point.
 
 ---
 
@@ -581,7 +586,64 @@ artifacts, complete Story 1, and exercise each desktop companion against it.
   The preview MUST state the rollback boundary and this obligation before the operator
   commits to anything. The W7 close path MUST require T580 to be complete and its passing,
   candidate-bound primary recovery-guard evidence to be current before panel request, seal,
-  or merge, and MUST refuse each boundary when that evidence is absent, failed, or stale.
+  or merge, and MUST refuse each boundary when that evidence is absent, failed, stale,
+  malformed, duplicated, or bound to any other candidate, commit, tree, preview, or host.
+
+  A qualifying recovery point is an operator-owned, d2b-external full-host snapshot or
+  restorable full-host backup. It MUST cover the boot and system configuration, the active
+  NixOS generation, every artifact in the exact non-mutating cutover preview inventory, and
+  all designated preserved identity state. It MUST target restoration to the same host, be
+  retained read-only through its attestation expiration, have available restore instructions,
+  and pass the external mechanism's non-mutating readback or integrity verification after
+  capture. A d2b state export, a repository checkout, an unverified file copy, or a point
+  covering only d2b paths does not qualify.
+
+  The external canonical `d2b-recovery-point-attestation` version 1 record MUST contain
+  exactly these fields: `artifactKind`, `schemaVersion`, `program`, `wave`, `candidateId`,
+  `commitOid`, `treeOid`, `hostIdentitySha256`, `operatorSubjectSha256`, `previewSha256`,
+  `recoveryPointKind`, `recoveryPointLocatorSha256`, `restoreInstructionsSha256`,
+  `previewedAtUnix`, `capturedAtUnix`, `verifiedAtUnix`, `attestedAtUnix`,
+  `retentionUntilUnix`, `expiresAtUnix`, `verificationMethod`, `verificationResult`,
+  `qualification`, and `result`. `artifactKind` MUST equal
+  `d2b-recovery-point-attestation`, `schemaVersion` MUST equal 1, `program` and `wave` MUST
+  identify ADR046 and W7, and `recoveryPointKind` MUST be `full-host-snapshot` or
+  `full-host-backup`. `verificationMethod` MUST be `snapshot-readback` or `backup-verify`;
+  `verificationResult` and `result` MUST both be `passed`. `qualification` MUST contain only
+  `bootAndSystemStateCovered`, `affectedArtifactInventoryCovered`,
+  `preservedIdentityStateCovered`, `sameHostRestoreTarget`, and `readOnlyUntilExpiry`, all
+  set to `true`. Canonical record bytes MUST be UTF-8 JSON serialized with the RFC 8785 JSON
+  Canonicalization Scheme and no trailing bytes.
+
+  `candidateId`, full `commitOid`, and full `treeOid` MUST equal frozen F7. `previewSha256`
+  MUST digest the exact canonical preview bytes used for that run.
+  `hostIdentitySha256` MUST be the lowercase SHA-256 of the UTF-8 domain
+  `d2b:recovery-host:v1`, one zero byte, and the lowercase contents of `/etc/machine-id` from
+  the daily-driver host; the raw machine id MUST NOT enter the record.
+  `operatorSubjectSha256` MUST use domain `d2b:recovery-operator:v1`, one zero byte, and the
+  base-10 `SO_PEERCRED` uid. `recoveryPointLocatorSha256` MUST use domain
+  `d2b:recovery-point-locator:v1`, one zero byte, and the opaque external locator.
+  `restoreInstructionsSha256` MUST use domain `d2b:recovery-restore-instructions:v1`, one
+  zero byte, and the exact external restore-instruction bytes. Each stores only the lowercase
+  SHA-256, not a raw locator, recovery payload, restore text, username, or uid.
+
+  Freshness is exact:
+  `previewedAtUnix <= capturedAtUnix <= verifiedAtUnix <= attestedAtUnix`;
+  capture and verification MUST each be no more than 86,400 seconds old at attestation;
+  and `expiresAtUnix` MUST equal the minimum of `capturedAtUnix + 86,400`,
+  `verifiedAtUnix + 86,400`, and `retentionUntilUnix`. Import and every post-rollback
+  boundary step, T555 check, panel request, seal, and merge eligibility check MUST occur
+  strictly before `expiresAtUnix`. Candidate, commit, tree, preview, host identity, record
+  bytes, or clock-order change invalidates the record. Expiration after a binding panel
+  request fails that immutable candidate; evidence is not refreshed in place.
+
+  T580 MUST import exactly one existing delivery `EvidenceRecord` with
+  `validation = "recovery-point-attestation"` and `result = "passed"`, bound through its
+  `candidate_id`, `content_id`, and `snapshot_sha256` to F7. Its `output.sha256` and
+  `output.bytes` MUST identify the exact canonical external attestation record, its
+  `command` MUST name the verifier command without output, and its opaque `locator` MUST
+  resolve the external record without embedding a raw host or recovery-point identifier.
+  This feature specifies verification and refusal only. It does not implement, create,
+  retain, or restore the external host snapshot or backup.
 - **FR-023**: Each superseded path scheduled for removal MUST be removed only after its
   replacement is integrated and covered by tests, MUST pass an explicit removal proof, and
   MUST be removed in its own change separate from the change that introduced the
@@ -1136,10 +1198,14 @@ Delegation is not omission. Every delegated obligation is enumerated in
 - **SC-016**: A cutover interrupted before its stated rollback boundary can be rolled back
   to a working prior control plane in 100 percent of tested interruption points.
 - **SC-025**: In 100 percent of tested attempts, the cutover refuses to execute any step
-  past its rollback boundary until the operator has attested that a host recovery point
-  exists, and every such attestation is recorded. The candidate-bound primary recovery guard
-  passes and T580 is complete before W7 panel request, seal, or merge; missing, failed, or
-  stale evidence rejects each boundary.
+  past its rollback boundary until the operator has supplied exactly one FR-043 version 1
+  record for a qualified recovery point. The record's candidate, commit, tree, preview,
+  daily-driver host digest, qualification fields, chronological order, 86,400-second
+  freshness, and expiration all match, and every such attestation is recorded through the
+  bound delivery `EvidenceRecord`. The candidate-bound primary recovery guard passes and
+  T580 is complete before W7 panel request, seal, or merge; every missing, extra, duplicate,
+  failed, malformed, wrong-host, wrong-candidate, wrong-commit, wrong-tree, wrong-preview,
+  expired, or externally unresolvable record rejects each boundary.
 - **SC-017**: Zero superseded control-plane units, command surfaces, or configuration
   namespaces scheduled for removal remain in the released tree, verified by their removal
   proofs.
@@ -1148,10 +1214,11 @@ Delegation is not omission. Every delegated obligation is enumerated in
 
 #### Program completion
 
-- **SC-019**: Every work item in the specification set is recorded as merged. That is the 545
-  enumerated today (14 merged, 531 planned across W2 through W7) plus every item recorded for
-  the terminal wave at W7 close. The count is read from the manifest at release time and is
-  not fixed at 545.
+- **SC-019**: Every work item in the specification set is recorded as merged. The initial
+  545-item census was 14 merged and 531 planned; the current manifest census at the receipt
+  HEAD is 68 merged and 477 planned. Release also includes every item recorded for the
+  terminal wave at W7 close. The count is read from the manifest at release time and is not
+  fixed at 545.
 - **SC-020**: Every wave from W2 through W8 carries a seal bound to its exact snapshot, with
   unanimous ten-role panel sign-off and zero outstanding recommendations. W0 and W1 carry a
   written delivered-without-seal waiver instead, and no wave from W2 onward relies on that
@@ -1241,9 +1308,10 @@ Delegation is not omission. Every delegated obligation is enumerated in
 - The target remains a single trusted host with one human operator. Multi-tenant isolation,
   a general-purpose container or VM manager, and support for non-NixOS hosts stay out of
   scope.
-- Effort and calendar duration are deliberately not estimated here. The remaining 531 work
-  items span nine specifications' worth of resource types plus 27 Provider dossiers, and
-  sequencing is governed by the dependency graph rather than by a date.
+- Effort and calendar duration are deliberately not estimated here. The initial program
+  scope was 531 work items; 477 remain `Planned` in the current manifest. They span nine
+  specifications' worth of resource types plus 27 Provider dossiers, and sequencing is
+  governed by the dependency graph rather than by a date.
 
 ## Out of Scope
 

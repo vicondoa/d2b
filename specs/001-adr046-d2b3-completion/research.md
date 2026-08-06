@@ -19,13 +19,17 @@ with zero file-overlap edges between them.
 | `wi:ADR-046-primitive-resource-composition` | `ADR046-primitives-001..003` (3) | The nine v3 primitive resource contract modules; systemd and minijail system Providers; volume Provider schema half |
 | `wi:ADR-046-zone-routing` | `ADR046-routing-001..016` (16) | Zone routing engine, resolver, service; bus session/transport/zone-route/relay; Zone Nix option generation; resource client |
 
-**Rationale**: W2 entry criteria are already satisfied. All 14 prior work items are `Merged`,
-which is the condition wave entry actually tests. The graph records **zero
-`file-overlap-order` edges and zero `shared-contract` edges touching W2**, and the generated
+**Rationale correction (2026-08-06)**: the original research declared W2 entry satisfied
+because all 14 prior work items were `Merged`. That proves the predecessor-state exit
+condition only; it does not prove T008's candidate-recovery prerequisite or the other
+pre-dispatch facts. Downstream W2 implementation now exists while T008 remains unchecked.
+T008 is therefore a historical entry attestation and may close only from retained evidence
+bound to the actual entry base. Otherwise it stays open and exact F2 must pass the named
+remedial requalification before W2 close. The graph still records zero
+`file-overlap-order` edges and zero `shared-contract` edges touching W2, and the generated
 index states plainly that "W2 has one writer" for the single contended file
-(`nixos-modules/assertions.nix`, written only by `ADR046-routing-011`). The two groups are
-therefore genuinely file-disjoint and MUST be launched in the same coordination cycle per
-FR-028.
+(`nixos-modules/assertions.nix`, written only by `ADR046-routing-011`). The two groups were
+genuinely file-disjoint; that fact does not retroactively attest entry.
 
 Within `zone-routing` there are 22 intra-wave dependency edges forming a chain rooted at
 `ADR046-routing-001` (the `zone_routing.rs` contract) and `ADR046-routing-007` (the bus
@@ -220,7 +224,7 @@ formatter, or overlay is introduced (Principle: constitution "Additional Constra
 | Target platform | `x86_64-linux` NixOS with KVM; graphics gated to x86_64 | `checkVmPlatform`, flake checks |
 | Test layers | nix-unit eval cases, cargo unit/integration, rendered-artifact contract tests, policy lints, flake checks; podman containers and `runNixOSTest` for Layer 2 | `tests/AGENTS.md` |
 | Hard scale fixtures | 10,000 resources; 100 live watches | §10.4 |
-| Program size | 531 remaining work items, 53 remaining specs, 27 Provider crates, 7 waves | implementation graph |
+| Program size | Initial scope 531 work items across 53 specs and 7 waves; current manifest 477 `Planned` across 43 specs and 68 `Merged` total; 27 Provider crates | implementation graph plus work-item manifest at `868469bf9c293cd48fff483717f14cb88c246821` |
 
 ---
 
@@ -230,7 +234,7 @@ formatter, or overlay is introduced (Principle: constitution "Additional Constra
 | --- | --- | --- | --- |
 | RK-1 | The RSS corrections may not recover 640 KiB | Blocks W5 and every wave after it; the gate cannot be moved | Prototype the fan-out and range-seek corrections in the existing proof workspace *before* W5 opens, so the rerun is a confirmation rather than a discovery |
 | RK-2 | Companion adaptation stalls the release | FR-039 makes external repositories a release blocker while FR-045 forbids publishing a preview they could build against | Publish the companion inventory and replacement contracts early (W5, with the CLI spec); track each companion's status as a release checklist item |
-| RK-3 | W6 is 257 items across 27 crates | Nearly half the program in one wave | The specs guarantee each Provider's hermetic suite compiles without any other Provider; exploit the five file-disjoint families |
+| RK-3 | W6 is 258 items across 27 crates | Nearly half the program in one wave | The specs guarantee each Provider's hermetic suite compiles without any other Provider; exploit the five file-disjoint families |
 | RK-4 | Destructive validation on the daily driver | A bad cutover costs the working environment | FR-043 recovery-point attestation is the primary control; rehearse cutover phases on disposable Zone state first |
 | RK-5 | 13 of 16 DELETE rows lack removal proofs | FR-023 requires one per path | Author proofs with the removing wave, not at W7 |
 | RK-6 | The W0/W1 waiver hides unverified foundation | Waived waves carry the contracts every later wave builds on | SC-021 forces the unwired surfaces to become reachable, which re-tests them in anger |

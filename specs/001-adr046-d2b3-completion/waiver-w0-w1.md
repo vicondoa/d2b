@@ -42,9 +42,11 @@ In place of the sealed records, delivery of W0 and W1 rests on:
    | W0 | `ADR046-api-001`, `ADR046-api-002`, `ADR046-decisions-001`, `ADR046-feasibility-001`, `ADR046-identities-001`, `ADR046-identities-002`, `ADR046-object-001`, `ADR046-store-001` | 8 | all `Merged` |
    | W1 | `ADR046-bus-001`, `ADR046-object-002`, `ADR046-reconcile-001`, `ADR046-reconcile-002`, `ADR046-session-001`, `ADR046-session-002` | 6 | all `Merged` |
 
-   Across the entire manifest of 545 ADR-046 work items, exactly 14 carry
-   `implementationState = "Merged"`, and those 14 are precisely the W0 and W1
-   assignments above. Every other item is `Planned`.
+   At this waiver's capture point, across the entire manifest of 545 ADR-046 work items,
+   exactly 14 carried `implementationState = "Merged"`, and those 14 were precisely the W0
+   and W1 assignments above. The current manifest has advanced to 68 `Merged` and 477
+   `Planned`; that later progress does not change the waiver's historical evidence or its
+   fixed W0/W1 set.
 
 2. **The work landed through reviewed pull requests**, not by direct push or
    local merge. The integration lineage records:
@@ -66,10 +68,10 @@ a later auditor can re-verify against the exact delivered tree.
 
 ### Note on the claimed count
 
-The specification prose states "all 14 assigned work items". The generated
-manifests confirm that number exactly: 8 items in W0 plus 6 items in W1 equals
-14, and all 14 are `Merged`. No discrepancy was found, so no FR-046 amendment
-arises from this waiver.
+The specification prose states "all 14 assigned work items". The generated manifests confirm
+that fixed W0/W1 number exactly: 8 items in W0 plus 6 items in W1 equals 14, and all 14 remain
+`Merged`. The current whole-manifest census is intentionally larger, so the waiver no longer
+describes 14 as the current repository-wide total.
 
 ## 4. Timing relative to W2 entry
 

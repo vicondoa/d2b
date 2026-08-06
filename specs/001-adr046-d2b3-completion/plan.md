@@ -13,10 +13,13 @@ one-time destructive cutover, and release the result as d2b 3.0.
 
 The design work is already done and Accepted: 55 normative specs, a 600-node implementation
 graph, and 545 work items with exact destination paths and validation obligations. This plan
-therefore does **not** re-derive architecture. It sequences the remaining 531 work items
-across waves W2 through W8, resolves the four unknowns that block starting (next-wave scope,
-the failed footprint gate, the companion release blocker, and the parity/retirement split),
-and defines how each wave passes its gate.
+therefore does **not** re-derive architecture. It preserves the 531 work items that were
+`Planned` at program opening as the primary W2-W7 task scope. At committed HEAD
+`868469bf9c293cd48fff483717f14cb88c246821`, the authoritative manifest records 68 `Merged`
+and 477 `Planned`; 54 of the initial 531 have moved to `Merged`, while the 14 W0/W1 items were
+already `Merged` before this plan. The plan resolves the four unknowns that block delivery
+(next-wave scope, the failed footprint gate, the companion release blocker, and the
+parity/retirement split) and defines how each wave passes its gate.
 
 The approach is delivery-shaped, not design-shaped: launch each wave's file-disjoint parallel
 groups together, converge every repository change before exact-candidate evidence, gate every
@@ -83,8 +86,10 @@ path remains unmeasured until T601 measures final candidate F frozen by T220; ag
 RSS <=64 MiB; per-component budgets 22 MiB for `Provider/system-core` and 12 MiB for
 `Provider/system-minijail`; per-Provider-crate hermetic suite aggregate process-CPU p95 <=3 s
 
-**Scale/Scope**: 531 remaining work items across 53 specs and 7 waves; 27 Provider crates;
-19 standard ResourceTypes; hard fixtures at 10,000 resources and 100 concurrent watches
+**Scale/Scope**: initial program scope 531 work items across 53 specs and 7 waves; current
+manifest state 477 `Planned` work items across 43 specs and 68 `Merged` total; 27 Provider
+crates; 19 standard ResourceTypes; hard fixtures at 10,000 resources and 100 concurrent
+watches
 
 ## Constitution Check
 
@@ -97,7 +102,7 @@ RSS <=64 MiB; per-component budgets 22 MiB for `Provider/system-core` and 12 MiB
 | **III. Reasonable Isolation Over Convenience** | FR-009 default-denies cross-Zone reference; FR-014 fails closed on missing identity state rather than reinitializing; FR-066 requires authoritative registrar-derived subjects; FR-069 forbids partial publication; FR-071 isolates a failed Zone without making it ready. virtiofsd zero-capability and per-VM store-farm invariants are untouched. | PASS |
 | **IV. Contract-Driven Compatibility** | 3.0 is a deliberate major-version clean break with v3 schemas, versioned artifacts, and fail-closed drift gates (FR-031). Constitution 2.2.0 authorizes this coordinated correction of an approved contract defect before the first d2b 3.0/v3 release. T605 owns the two omitted `ZoneHandlerName` values plus its normative, test, API-snapshot, guard, and reference artifacts; T595 owns emission, T599 owns downstream consumers, and T220 owns generated-manifest reconciliation and the full drift gate. Those stages land together in one Wave 5 PR. The Zone desired-state schema is unchanged. | PASS - C1 resolved in artifacts, implementation pending |
 | **V. Test-Layer Discipline** | FR-032 pins coverage to the lowest hermetic layer and forbids a new top-level shell gate; FR-029 routes every heavy lane through the single semaphore; FR-033 retires superseded suites. | PASS |
-| **VI. Panel-Gated Multi-Phase Work** | Every immutable candidate receives at most one unanimous binding ten-role panel with zero recommendations. Panels run as 10 read-only subagent lanes on `gpt-5.6-sol` at `xhigh`. A nonunanimous candidate remains immutable and failed; scoped fixes, delta/full-context follow-up panels iterated to unanimous closure, convergence, and validation produce a distinct successor with its own one request. Constitution 2.1.0 authorizes pipelined implementation start at 5 of 10 predecessor reviews while panel, seal, and merge stay strictly ordered. The external ADR/tooling still says once per wave, so versioned feature-local prerequisite `adr046-candidate-recovery-prerequisite/v1` assigns T008 the pre-W2 refusal until the external ADR/spec/tooling/docs alignment is accepted and merged. W0/W1 delivered without panel/seal remains the existing tracked exception. | PASS for the design; T008 blocks execution until candidate-recovery v1 is externally accepted |
+| **VI. Panel-Gated Multi-Phase Work** | Every immutable candidate receives at most one unanimous binding ten-role panel with zero recommendations. Panels run as 10 read-only subagent lanes on `gpt-5.6-sol` at `xhigh`. A nonunanimous candidate remains immutable and failed; scoped fixes, delta/full-context follow-up panels iterated to unanimous closure, convergence, and validation produce a distinct successor with its own one request. Constitution 2.1.0 authorizes pipelined implementation start at 5 of 10 predecessor reviews while panel, seal, and merge stay strictly ordered. The external ADR/tooling still says once per wave, so versioned feature-local prerequisite `adr046-candidate-recovery-prerequisite/v1` remains binding. T008 and T037 are now historical entry attestations because dependent implementation already exists; neither may be checked from a current rerun. T029 and T071 fail closed unless exact contemporaneous entry evidence exists or the frozen candidate carries the named remedial requalification record. W0/W1 delivered without panel/seal remains the existing tracked exception. | PASS for the design; historical drift is explicit and wave close is fail-closed |
 | **VII. Traceable, Marker-Free Shipped Artifacts** | Wave tags stay in commits and planning artifacts; SC-018 requires the release notes carry zero process markers; FR-019 lands docs with their behavior. ASCII-hyphen rule observed throughout. | PASS |
 
 **Gate result**: **PASS for pre-T603 read-only analysis**. The one tracked Principle VI
@@ -201,10 +206,12 @@ which is a worse failure than referencing the authoritative bytes. Instead:
 - It closes with a detail-preservation checklist to run against `tasks.md` before
   implementation starts.
 
-**Completeness reconciles**: 55 specs, 545 items, 14 `Merged` and 531 `Planned`, splitting
-8/6/19/4/32/146/257/73 across W0-W7 with W8 recorded at W7 close. Every item carries a
-non-empty `removalProof`, so FR-023's per-path proof obligation is already itemized rather
-than needing to be invented.
+**Completeness reconciles**: the initial 545-item census was 14 `Merged` and 531 `Planned`.
+At the receipt HEAD it is 68 `Merged` and 477 `Planned`, splitting
+8/6/19/4/31/146/258/73 across W0-W7 with W8 recorded at W7 close. The graph moved
+`ADR046-process-002` from W4 to W6 and leaves it `Planned`; T039 follows that state and wave
+without renumbering. Every item carries a non-empty `removalProof`, so FR-023's per-path
+proof obligation is already itemized rather than needing to be invented.
 
 A `tasks.md` that does not cover every `Planned` id in `spec-coverage.md` is incomplete by
 definition.
@@ -269,11 +276,11 @@ applies without modification.
 
 | Wave | Specs | Items | Parallel groups | Gate note |
 | --- | --- | --- | --- | --- |
-| W2 | 2 | 19 | 2, file-disjoint, zero overlap edges | Blocked until T008 validates `adr046-candidate-recovery-prerequisite/v1` |
+| W2 | 2 | 19 | 2, file-disjoint, zero overlap edges | 19 manifest `Merged`; T008 historical attestation or F2 remedial requalification required before close |
 | W3 | 1 | 4 | 1, strictly serial | Every Provider dossier depends on it |
-| W4 | 5 | 32 | 6 parallel | |
+| W4 | 5 | 31 | 6 parallel | 31 manifest `Merged`; T037 historical attestation or F4 remedial requalification required before close |
 | W5 (`adr046w5` delivery address) | 7 | 146 + 17 local completion/resume tasks | 12 manifest groups + the serialized completion graph below | Store exists; production publication and exact-tip evidence remain; pre-T603 A/P0 gates and post-T603 B/P gates precede resume |
-| W6 | 27 | 257 | 5 file-disjoint families | Largest wave; hermetic suites are independent |
+| W6 | 27 | 258 | 5 file-disjoint families | Includes deferred `ADR046-process-002`; largest wave; hermetic suites are independent |
 | W7 | 5 | 73 | 5 parallel | Destructive cutover |
 | W8 | 0 | TBD | friction closure | Terminal; release gate evaluated here |
 
@@ -430,7 +437,7 @@ route, watch, audit export, controller, or the exact system-core Provider owners
 | Stage | Task(s) | Ownership and concurrency |
 | --- | --- | --- |
 | Resume reconciliation | T603 | Pre-T603 analysis and plan panel at A/P0 authorize only `packages/xtask/src/delivery/{mod.rs,resume.rs}`. T603 lands dedicated validator commit V with sole parent A and no other repository change, freezes B exactly at V and P byte-identical to P0, reruns analysis and the plan panel at B/P, then and only then writes the immutable authorization receipt at `.scratch/autopilot/adr046w5/reconciliation.json` and routes the sole receipt-bound checkbox transition through `/d2b-spec-edit`. It writes no feature prose; the Wave 5 integrator alone owns dedicated checkbox commit C. |
-| Integrator prep | T589 | Its sole direct prerequisite is T603; the candidate-recovery v1 external alignment was already a hard T008 pre-W2 gate. T589 remains blocked until the finalized editor progress receipt exists, T073-T218 and T603 are checked, and HEAD is the clean dedicated checkbox commit. It lands the shared sealed capability, transactional audit-journal, mutation-response wire, typed `InspectOperation` store/API/protobuf contract, typed broker audit-drain op, and typed/redacted `StoreSyncRequest`/`StoreSyncResponse` wire definitions plus schemas and snapshots. It also owns the `adr046w5` closed-evidence profile and candidate-scoped strict state in `packages/xtask/src/delivery/{evidence,panel,seal,eligibility,history_proof,storage}.rs`: one fd-anchored, file-and-directory-durable, no-replace active reservation per program/wave; fixed redacted state/errors; fd-relative durable orphan cleanup; one request per immutable candidate; synchronized cross-candidate exclusion; the point-specific zero/zero-or-one/exactly-one crash oracle; durable failed closure before active-slot release; and successor admission only with complete predecessor/program-wave/recommendations/successor-commit-tree/convergence/validation identities. Crash injection covers panel-request publication, closure, release, and successor admission. Post-request moves and retries fail at panel, seal, and eligibility. No implementation slice branches before this commit. |
+| Integrator prep | T589 | Its sole direct prerequisite is T603. Candidate-recovery v1 must be accepted on T589's actual base, but T008 is a separate historical W2 attestation and is not retroactively completed by T589. T589 remains blocked until the finalized editor progress receipt exists, T073-T218 and T603 are checked, and HEAD is the clean dedicated checkbox commit. It lands the shared sealed capability, transactional audit-journal, mutation-response wire, typed `InspectOperation` store/API/protobuf contract, typed broker audit-drain op, and typed/redacted `StoreSyncRequest`/`StoreSyncResponse` wire definitions plus schemas and snapshots. It also owns the `adr046w5` closed-evidence profile and candidate-scoped strict state in `packages/xtask/src/delivery/{evidence,panel,seal,eligibility,history_proof,storage}.rs`: one fd-anchored, file-and-directory-durable, no-replace active reservation per program/wave; fixed redacted state/errors; fd-relative durable orphan cleanup; one request per immutable candidate; synchronized cross-candidate exclusion; the point-specific zero/zero-or-one/exactly-one crash oracle; durable failed closure before active-slot release; and successor admission only with complete predecessor/program-wave/recommendations/successor-commit-tree/convergence/validation identities. Crash injection covers panel-request publication, closure, release, and successor admission. Post-request moves and retries fail at panel, seal, and eligibility. No implementation slice branches before this commit. |
 | Serialized implementation | T590-T594, T605 | T590, T591, and T594 start together from T589. T592 starts only after T591 because both own `transaction.rs`; T593 starts after T592 because both own `packages/Cargo.lock`; T605 starts after T593 and regenerates the shared API snapshots. T592 owns `d2b-audit`; every StoreSync producer/consumer of T589's typed wire DTOs; the broker drain; `packages/d2b-contracts/src/generation_bundle.rs` as authoritative `ZoneBundle`; retirement of the duplicate full envelope; and a nonempty structural/API poison guard rejecting any second envelope or alias, version authority, hash implementation/entry point, or re-export. T593 owns the session adapter, descriptor, socket, bus Unix transport, session seam and tests, all consuming one accepted-socket evidence object through a reviewed safe exact-optlen dependency returning `OwnedFd`; a local unsafe/syscall fallback is forbidden. T605 owns its Zone enum, governing specs, paired reference, and final API snapshots; generated manifests remain T220-only. No slice edits `d2bd/src/resource_runtime.rs` or `d2bd/src/lib.rs`. |
 | Serial daemon composition | T595 | Sole writer for `d2bd/src/resource_runtime.rs`, `d2bd/src/lib.rs`, `d2bd/Cargo.toml`, and `nixos-modules/{bundle-zones,host-daemon}.nix`; begins only after T590, T592, T594, and T605 converge. It owns startup ingestion, the daemon/client `InspectOperation` path, the existing-service bundle trigger, exact 4/2 carrier consumption, and the atomic installed-host 3/1-to-4/2 Nix rebuild with durable replayable handoff, restart-failure rollback, matching-generation checks, and identical-switch idempotency. Runtime version refusal has fixed redacted `Debug` and only closed action `rebuild-host-generation`; the exact command is documentation-only. It adds no unit. |
 | File-disjoint acceptance and docs | T596-T599, T604 | T599 owns the ResourceService-backed operation-inspection CLI, retained `--deadline`/`--no-deadline` controls, safe static human guidance, version-2 DTO/schema and contract tests, the coordinated `ADR-046-cli-and-operations` version amendment and migration guidance, and downstream status reconciliation with T595/T605. T604 owns new `packages/d2b-contract-tests/tests/resource_operator_activation.rs`, `packages/d2bd/tests/resource_operator_activation.rs`, `tests/host-integration/resource-operator-activation.nix`, and only the host-integration discovery/build recipe in `Makefile`. Its evidence must enumerate and build `vmChecks.x86_64-linux.resource-operator-activation`; skip or empty discovery is ineligible. The other tasks retain their named files. All five tasks may proceed together after T595 and share no file. |
@@ -442,7 +449,8 @@ route, watch, audit export, controller, or the exact system-core Provider owners
 The implementation and close dependency chain is exactly:
 
 ```text
-candidate-recovery prerequisite v1 external acceptance -> T008 -> W2 -> W3 -> W4
+W2 implementation exists -> {T008 exact historical attestation OR F2 remedial requalification} -> T029 W2 close
+W3 close -> W4 implementation exists -> {T037 exact historical attestation OR F4 remedial requalification} -> T071 W4 close
 W4 close -> pre-T603 analysis + plan panel at A/P0
 pre-T603 analysis + plan panel at A/P0 -> T603 validator commit V
 V = B -> post-T603 analysis + plan panel at B/P -> receipt/editor transition C
@@ -778,14 +786,25 @@ wave, while the repository panel recovery contract requires scoped fix and follo
 after recommendations. The current delivery tooling also has no candidate-scoped strict
 reservation/recovery profile; T589 is future work and cannot govern W2-W4 retroactively.
 The versioned feature-local
-`contracts/README.md#candidate-recovery-prerequisite-v1` therefore makes T008 the owner and
-places the external alignment before W2, not merely before T589. T008 stays open until a
-separate accepted ADR plus index, validation/delivery spec and generated manifests, delivery
-tooling, and contributor guidance all merge and its nonempty candidate-recovery tests pass.
-Only then may W2-W4 use successor recovery. T589 consumes that accepted v1 contract and adds
-the stricter `adr046w5` storage profile. This batch records the external scope escalation in
-`friction-log.md` but does not edit the external ADR, ADR index, normative specification,
-delivery source, `AGENTS.md`, contributor guidance, or panel tooling.
+`contracts/README.md#candidate-recovery-prerequisite-v1` therefore made T008 the intended W2
+entry owner. The committed history now contains downstream W2 and W4 implementation while
+T008 and T037 remain unchecked. That is historical drift, not evidence that either gate
+passed. Both tasks are reclassified as historical entry attestations: only exact retained
+evidence from the actual first-dispatch base may check them. If that evidence is unavailable,
+T008 or T037 stays unchecked and the frozen F2 or F4 candidate must instead carry the named
+passing remedial requalification record before T029 or T071 may request a panel, seal, or
+merge. A current rerun never masquerades as historical compliance. T589 consumes accepted v1
+on its own actual base and adds the stricter `adr046w5` storage profile; it does not close
+T008 retroactively. This batch records the external scope escalation in `friction-log.md` but
+does not edit the external ADR, ADR index, normative specification, delivery source,
+`AGENTS.md`, contributor guidance, or panel tooling.
+
+The feature-local census also drifted after initial task generation. The initial program
+scope remains 531 primary work-item tasks, but the authoritative manifest at
+`868469bf9c293cd48fff483717f14cb88c246821` records 68 `Merged` and 477 `Planned`.
+The regenerated feature census checks the 54 newly merged primary tasks, leaves all 477
+planned primary tasks open, moves T039 with `ADR046-process-002` to its authoritative W6
+group, and treats completed process tasks that merely cite work-item ids as non-primary.
 
 `ADR-046-telemetry-audit-and-support` work item `ADR046-reuse-005` required the
 `observability-otel` Provider to emit authoritative `SessionConnect` records "via `d2b-audit`".
@@ -961,5 +980,5 @@ These rows are not Constitution Principle VI deviations.
 
 | Risk | Why Tracked | Guard and Rejected Alternative |
 | --- | --- | --- |
-| FR-043 (recovery-point attestation) is tracked program-local, outside the work-item manifest, so the manifest census alone cannot enforce it | FR-043 is locally added and **stricter** than `ADR-046-reset-and-cutover`, which permits proceeding past the rollback boundary without attestation. Creating a manifest work item would require amending that member spec, which re-opens its validation and panel evidence and re-triggers Gate 0. | Keep it program-local, but close the safety gap at the W7 exit boundary: before T580 records evidence, the integrator merges every W7 slice, resolves all content-changing integration and CI results, and freezes one clean candidate F7. T580 emits the exact F7-bound `recovery-point-attestation` only after the refusal/recording matrix passes; T555 reviews, panels, seals, and approves that unchanged F7; T556 is merge-only, preserves F7's tree, runs no second panel, and refuses any late slice merge or content/history change. A manifest-only green result therefore cannot authorize W7 close. |
+| FR-043 (recovery-point attestation) is tracked program-local, outside the work-item manifest, so the manifest census alone cannot enforce it | FR-043 is locally added and **stricter** than `ADR-046-reset-and-cutover`, which permits proceeding past the rollback boundary without attestation. Creating a manifest work item would require amending that member spec, which re-opens its validation and panel evidence and re-triggers Gate 0. An unqualified "backup exists" assertion permits a partial, old, wrong-host, or unverifiable point to become success-shaped. | Keep it program-local, but close the safety gap at the W7 exit boundary. Before T580 records evidence, the integrator freezes clean F7 and the exact preview inventory. T580 accepts only one external version 1 record for a verified full-host snapshot or backup covering boot/system state, the active generation, the preview inventory, and preserved identity state. It binds F7 candidate/commit/tree, the preview digest, and a domain-separated daily-driver host digest; records the exact closed fields in FR-043; enforces ordered timestamps, 86,400-second capture and verification freshness, and explicit expiration; and imports only its digest and opaque locator through the existing `EvidenceRecord`. T555 rechecks qualification, identity, resolution, and non-expiration before every close boundary. T556 is merge-only and refuses refresh or expiry after request. Missing, duplicate, malformed, partial, stale, expired, wrong-host, wrong-candidate, wrong-commit, wrong-tree, wrong-preview, or unresolvable evidence blocks. The external operator-owned backup/snapshot and restore mechanism remains outside this feature; no host implementation is claimed. |
 | Pipelined dispatch can create successor rework when a predecessor panel finding invalidates in-flight work | Constitution 2.1.0 expressly authorizes implementation of wave N+1 to begin at 5 of 10 wave-N panel returns plus green integration. It is therefore current policy, not a constitution deviation. | Unanimity, roster, seal ordering, and merge ordering remain unchanged. The successor rebases onto the merged predecessor before its own panel, so no panel reviews a tree built on unreviewed contracts. Strict serialization was rejected because it adds idle time without strengthening the exit gate. FR-050 forbids citing rework as grounds to shorten a panel. |

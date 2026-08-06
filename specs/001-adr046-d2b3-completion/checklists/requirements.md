@@ -69,7 +69,11 @@ Five decisions were recorded and applied:
   successor was promised, and FR-042 permits retirement only with an explicit listing,
   justification, and release-note entry.
 - **Recovery-point attestation gates the irreversible cutover phase.** Added FR-043,
-  SC-025, and a sixth US3 acceptance scenario.
+  SC-025, and a sixth US3 acceptance scenario. FR-043 now closes CHK019 with an exact
+  full-host qualification, F7 candidate/commit/tree and daily-driver host binding, closed
+  attestation fields, 86,400-second freshness and expiration, digest-bound evidence import,
+  and fail-closed negative matrix. External snapshot/backup implementation remains outside
+  the feature.
 - **Live and hardware validation runs on the daily-driver host.** SC-022 now names the
   target, and a new assumption records this as deliberate risk acceptance that makes FR-043
   the primary safety net rather than a formality.

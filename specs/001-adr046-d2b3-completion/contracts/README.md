@@ -20,7 +20,7 @@ third source of truth that the drift gates do not check.
 | [nix-configuration.md](./nix-configuration.md) | `d2b.zones.<zone>.resources.*` option schema | Host configurations | W2, W5 |
 | [generated-artifacts.md](./generated-artifacts.md) | Schemas, per-Zone bundles, UI colors, delivery artifacts | Broker, daemon, companions, drift gates | W2-W7 |
 | [companion-contracts.md](./companion-contracts.md) | What the five desktop companions consume | Sibling repositories | W5 publish, W8 verify |
-| [Candidate recovery prerequisite v1](#candidate-recovery-prerequisite-v1) | Immutable-candidate failure closure and successor admission | Plan integrator, delivery tooling, panel process | Before W2 |
+| [Candidate recovery prerequisite v1](#candidate-recovery-prerequisite-v1) | Immutable-candidate failure closure and successor admission | Plan integrator, delivery tooling, panel process | Historical W2 entry; requalified at close if unattested |
 
 ## Candidate recovery prerequisite v1
 
@@ -28,7 +28,8 @@ third source of truth that the drift gates do not check.
 
 **Owner**: T008 and the ADR046 plan integrator
 
-**Status**: blocking before W2
+**Status**: historical W2 entry attestation; fail-closed remedial disposition required before
+W2 close when contemporaneous entry evidence is absent
 
 The feature-local sequencing contract is:
 
@@ -64,9 +65,23 @@ make test-lint
 ```
 
 A skipped test, zero discovered `candidate_recovery_v1` tests, an unmerged scope, or wording
-that still permits only one request for the whole wave leaves T008 open. T589 later hardens
-this accepted v1 contract with the `adr046w5` strict storage profile; it does not retroactively
-make W2-W4 safe.
+that still permits only one request for the whole wave leaves T008 open. Downstream W2 work
+now exists while T008 remains unchecked, so a successful current rerun cannot be presented as
+historical entry evidence. T008 may close only from a retained receipt bound to the actual W2
+entry base and first dispatch.
+
+If that receipt does not exist, T008 remains unchecked. Exact frozen F2 must instead carry one
+passing `EvidenceRecord` with validation `historical-entry-remediation-t008`; its external
+receipt records `historicalEntry: "unproven"`, binds the F2 candidate/commit/tree, names the
+accepted prerequisite commits, proves every W2 implementation head is an ancestor, and
+records successful nonempty execution of the command set above plus current lineage,
+destination, cleanliness, and fast-suite checks. T029 refuses panel request, seal, or merge
+when neither the exact historical receipt nor this single remedial record exists, or when
+either record is duplicated, malformed, failed, or bound to another commit or tree. This
+requalification does not assert that original W2 entry complied.
+
+T589 later hardens accepted v1 with the `adr046w5` strict storage profile. It must see accepted
+v1 on its own actual base, but it does not retroactively complete T008 or T037.
 
 ## Rules that apply to every surface
 

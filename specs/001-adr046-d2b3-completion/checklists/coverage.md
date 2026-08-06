@@ -47,7 +47,7 @@ Can these requirements be objectively assessed as written?
 - [x] CHK016 Are the hard numeric targets that FR-030 governs enumerated in the spec itself? None of the ten targets appears in spec.md; they exist only in plan.md and spec-coverage.md. [Measurability, Spec §FR-030]
 - [ ] CHK017 Is "operator-facing capability" defined precisely enough to make the parity criterion checkable? [Clarity, Spec §SC-003]
 - [x] CHK018 Is "desktop companion that consumes d2b's public operator contracts" defined by an objective test, so the release-blocking set cannot be argued? [Clarity, Spec §FR-039]
-- [ ] CHK019 Is "host recovery point" defined - what qualifies, and what evidence constitutes attestation? [Ambiguity, Spec §FR-043]
+- [x] CHK019 Is "host recovery point" defined - what qualifies, and what evidence constitutes attestation? [Ambiguity, Spec §FR-043]
 - [x] CHK020 Is "actionable next step" specified well enough to be assessed without reviewer judgment? [Measurability, Spec §FR-017, §SC-004]
 - [x] CHK021 Is "reachable through the operator surface" defined well enough to decide when a foundation surface has stopped being deliberately unwired? [Clarity, Spec SC-021]
 - [x] CHK022 Is "compatible version verified against the release candidate" defined with a pass condition? [Measurability, Spec §SC-024]
@@ -132,7 +132,7 @@ list*, not merely an incomplete one.
 | --- | --- |
 | CHK001 | Delegation boundary section added to spec.md naming all 19 ResourceTypes and stating that FR-001 through FR-009 apply to them uniformly. |
 | CHK002 | `Quota`, `EmergencyPolicy`, `Endpoint`, `ResourceExport`, and `ResourceImport` are now named explicitly, so they are visible rather than silently absent. |
-| CHK023 | SC-019 no longer fixes the total at 545. It reads the manifest at release time and accounts for terminal-wave items recorded at W7 close. The Context paragraph was corrected to say 531 planned across W2-W7, not W2-W8. |
+| CHK023 | SC-019 no longer fixes the total at 545. It reads the manifest at release time and accounts for terminal-wave items recorded at W7 close. The Context preserves 531 as the initial W2-W7 scope and separately records the current 68 `Merged` / 477 `Planned` census. |
 | CHK029 | FR-046 added: generated manifests are authoritative over spec prose on wave assignment, destination, and work-item identity; drift is raised as a separate amendment and never corrected inside a wave. |
 | CHK040 | FR-to-owner and SC-to-owner traceability tables added to spec-coverage.md, including work-item prefixes and a `jq` retrieval command. |
 | CHK042 | Delegation boundary stated explicitly, with the standing rule that delegation is not omission. |
@@ -179,7 +179,7 @@ a number, which is a product decision rather than a defect with an obvious corre
 
 | Decision | Outcome |
 | --- | --- |
-| FR-043 governance | **Program-local**, outside the work-item manifest. T580 owns the candidate-bound primary recovery guard; T555/T556 make missing, failed, or stale evidence refuse W7 panel, seal, or merge. |
+| FR-043 governance | **Program-local**, outside the work-item manifest. A qualifying point is an externally verified full-host snapshot or backup bound to exact F7 candidate/commit/tree, preview, and daily-driver host with closed record fields, 86,400-second freshness, and explicit expiration. T580 imports one digest-bound record; T555/T556 refuse missing, duplicate, malformed, partial, failed, stale, expired, wrong-identity, or unresolvable evidence. No external backup implementation is claimed. |
 | CHK014 - SC-002 scale | **Resolved**: a single-Zone declaration of 10 to 20 resources. |
 | Panel model | **`gemini-3.1-pro-preview`**, run as 10 read-only subagent lanes. Requires a spec amendment plus a code change (T581-T584) before any wave can seal. |
 
@@ -228,7 +228,7 @@ the row reads **needs integrator** rather than guessing.
 | CHK012 | Incident-hold scope - Zone-wide versus per-Volume | W7 | `ADR046-reset-*` items are W7 |
 | CHK017 | "Operator-facing capability" parity criterion | W7 | Parity is evaluated at cutover, so the definition must bind no later than W7 |
 | CHK018 | Objective test for "desktop companion consuming public operator contracts" | W5 | **closed** - FR-064; see the companion-membership gate below |
-| CHK019 | "Host recovery point" definition and attestation evidence | W7 | FR-043 is program-local (outside the work-item manifest per the recorded operator decision) but is exercised by the W7 destructive runs |
+| CHK019 | "Host recovery point" definition and attestation evidence | W7 - **closed** | FR-043 defines qualification, exact record fields, candidate/commit/tree and host binding, freshness/expiration, evidence import, and fail-closed refusal; T580/T555/T556 exercise it without claiming the external backup implementation |
 | CHK021 | "Reachable through the operator surface" for deliberately unwired foundations | W5 - **closed** | FR-066-FR-072 define the complete production boundary; T603 binds amended-plan resume and T600-T602 bind exact-candidate evidence before T219 |
 | CHK022 | Pass condition for "compatible version verified against the release candidate" | W5 | **closed** - FR-065; see the companion-membership gate below |
 | CHK024 | 2-second operator envelope versus component-level budgets | W5 | The component budgets are measured against the W5 storage engine and its watch consumer |
