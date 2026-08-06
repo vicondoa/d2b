@@ -1,917 +1,924 @@
-# Feature Specification: Implement ADR 0052 Bazel Rust Gate
+# Feature Specification: Implement ADR 0052 Under ADR 0054
 
-**Feature Branch**: `adr052-bazel-rust-spec`
+**Delivery track**: Track A
+
+**Feature branch**: `spec003-adr0054-amend`
 
 **Created**: 2026-08-02
 
-**Status**: Approved
+**Amended**: 2026-08-05
 
-**Input**: User description: "create a spec for adr 052 on a sepwrate worktree"
+**Status**: Draft amendment awaiting a new plan panel
+
+**Authority**: [ADR 0052](../../docs/adr/0052-bazel-rust-build-and-test.md),
+as amended by
+[ADR 0054](../../docs/adr/0054-single-product-cargo-workspace.md)
 
 ## Context
 
-ADR 0052 is accepted, was amended on 2026-08-03 after an upstream review of the
-build substrate, and defines a staged migration of d2b's Rust build and test
-gate from its current Cargo-based execution path to Bazel. The amended record
-is settled authority for this feature: it fixes the promotion lineage, the
-qualification-record definition, the binary and fixture location rules, the
-nightly-channel mechanism, the vendored supply-chain materialization, and the
-closed list of deliberate differences. The migration is intended to remove
-duplicated compilation and scheduling work while preserving the exact coverage,
-failure, test-isolation, supply-chain, and execution-evidence contracts that
-protect the repository today.
+Spec 003 migrates the eighteen Rust execution-manifest surfaces behind
+`test-rust` from Cargo scheduling to Bazel scheduling through a reversible
+shadow period. The product goal is unchanged: remove duplicated compilation
+and scheduling while preserving exact coverage, test topology, supply-chain
+policy, failure attribution, performance ceilings, cache boundaries, and the
+public Make interface.
 
-The existing `make test-rust` path and required `test-rust`
-continuous-integration context remain authoritative during a shadow period. A separate
-Bazel path must demonstrate complete equivalence, enforce its own failure
-conditions, satisfy fixed performance ceilings, and operate within the
-repository's disk and cache budgets before promotion. Promotion changes the
-executor beneath the Rust gate without changing the required context name or
-silently removing contributor-facing entry points.
+ADR 0054 changes the dependency model beneath that goal. Product Rust now has
+one resolver-v2 Cargo workspace rooted at `packages/Cargo.toml`, one
+authoritative `packages/Cargo.lock`, and one `crate_universe` hub named
+`product`. The workspace includes the existing main members,
+`d2b-priv-broker`, and `d2b-guest-shell-runner`. The no-bash AST walker remains
+a separate workspace with its own Cargo lock and one hub named `walker`.
+`packages/Cargo.guest.lock` remains a generated static-guest closure input. It
+is not a Cargo workspace lock for this migration and is not a
+`crate_universe` authority.
 
-This feature is Rust-only. It does not migrate Nix evaluation, Nix packaging,
-VM or image work, fixture materialization, release artifacts, static guest
-binaries, cross-compilation, remote execution, or any Layer-1 job outside the
-Rust rollup. The detailed mechanisms and safety invariants in
-`docs/adr/0052-bazel-rust-build-and-test.md` remain binding.
+The single product lock is a dependency-resolution union, not a build-closure
+claim. Broker and guest isolation remains enforced by package, feature, and
+target selected Cargo commands; dedicated Nix derivations; package-scoped
+selected-closure policy; static ELF checks; and native first-party Bazel
+targets with explicit dependencies. The product external repository may be a
+third-party package and feature superset. It does not define actual
+first-party edges.
+
+At committed base `a7093601`, no Spec 003 implementation is merged. The root
+workspace still excludes broker and guest, both remain nested workspaces with
+their own locks, and no Bazel workspace file exists. Parked historical
+branches `spec003-w0-*` and `spec003-w0`, plus the unified Bazel spike, are
+evidence about a validated shape,
+not ancestors to merge or assumptions about the base. Implementation restarts
+from the merged `v3` lineage after this amended artifact set passes a new plan
+panel.
+
+This remains a Track A feature because it changes the required Rust gate,
+dependency and policy authority, workflow structure, cache behavior, and
+promotion path. It does not change daemon behavior, broker operations, guest
+runtime behavior, public wire schemas, or the daemon-only control-plane
+invariant.
+
+## Scope
+
+In scope:
+
+- the eighteen Rust execution-manifest surfaces behind `test-rust`;
+- one product Cargo workspace and lock plus the separate walker workspace and
+  lock;
+- package-selected broker and guest Cargo lanes;
+- dedicated broker and static guest Nix derivations using the root product
+  lock;
+- one `product` and one `walker` `crate_universe` hub;
+- native first-party Bazel targets for product crates and configured broker and
+  guest contexts;
+- package-scoped broker GNU and guest musl policy inputs for
+  `x86_64-linux` and `aarch64-linux`;
+- exact selected-source identity and checksum enforcement;
+- pinned RustSec `--no-fetch` package audits;
+- native realization of package policy and guest static ELF checks on both
+  architectures;
+- the shadow, qualification, promotion, compatibility, and retirement
+  lifecycle decided by ADR 0052.
+
+Out of scope:
+
+- Bazel building Nix outputs or replacing Nix derivations;
+- VM images, NixOS module behavior, fixture materialization, or release
+  artifact redesign;
+- remote execution or a remote Bazel cache;
+- a new Layer-1 job, required context, linter, formatter, or hook;
+- merging the no-bash walker into the product workspace;
+- treating `packages/Cargo.guest.lock` as a Cargo or Bazel dependency
+  authority;
+- weakening dependency, license, advisory, static ELF, binary-size, or closure
+  isolation policy.
 
 ## Clarifications
 
-### Session 2026-08-02
+### Workspace and dependency authority
 
-- Q: Which branch owns promotion evidence, cache maintenance, and publication?
-  -> A: The protected `v3` integration lineage.
-- Q: Which runs supply the cold continuous-integration measurement set?
-  -> A: The five most recent qualifying cold Bazel runs drawn from the
-  qualification-record stream on protected `v3`.
+- The product workspace uses resolver version 2 and contains main, broker, and
+  guest packages.
+- `packages/Cargo.lock` is the only authoritative product Cargo lock.
+- The walker keeps
+  `tests/tools/no-bash-ast-walker/{Cargo.toml,Cargo.lock}`.
+- The nested broker and guest `[workspace]` and `[profile.*]` tables and locks
+  are removed. No forwarding lock or synthetic splice workspace remains.
+- Lock refresh follows the authority that changed. A product manifest change
+  regenerates `packages/Cargo.lock`, then the product hub lock, then
+  `MODULE.bazel.lock` last, and leaves the walker Cargo lock and
+  `bazel/cargo/walker.lock` byte-identical. A walker manifest or lock change
+  regenerates the walker Cargo lock, then `bazel/cargo/walker.lock`, then
+  `MODULE.bazel.lock` last, and leaves `packages/Cargo.lock` and
+  `bazel/cargo/product.lock` byte-identical. Initial or combined setup
+  generates the product hub lock, then the walker hub lock, then
+  `MODULE.bazel.lock` last. The module lock is always refreshed last.
+- `libshpool` is a normal `libshpool = "0.11.0"` dependency. The
+  `real-libshpool` feature remains, with an empty dependency activation list,
+  and continues to gate code through `cfg(feature = "real-libshpool")`.
+- Generated Bazel metadata must not use `crate.spec` for `libshpool`.
 
-### Session 2026-08-03
+### Selected build contexts
 
-- Q: What is a qualification record, given that a pull-request merge reference
-  is recomputed against a moving base and both paths must test one tree?
-  -> A: A qualification record is a push event on protected `v3` produced by a
-  merged pull request. Both the Cargo and the Bazel workflow runs are
-  identified by the same head commit under that push event, so "both paths
-  tested the same commit" is mechanically true. Pull-request runs are
-  diagnostic only and never enter a streak or a measurement set.
-- Q: What must each qualification record carry beyond the two compared
-  verdicts?
-  -> A: A passing `D2B_SKIP_FIXTURE_BUILD=1` Rust rollup equivalence result for
-  both executors and a passing same-commit fixture-contract companion verdict.
-  The fixture surfaces stay outside the Bazel comparison, but they cannot
-  regress invisibly behind a qualifying record.
-- Q: How does the streak treat a run that reaches no verdict?
-  -> A: A Bazel run that reaches no verdict while its paired Cargo run reaches
-  one counts as a mismatch and resets the streak. A push where neither side
-  reaches a verdict is not a record and neither extends nor resets.
-- Q: Are the migration's exact censuses committed literals?
-  -> A: No. Every census is derived by the repository-owned generator from the
-  same selector the current Cargo gate uses, committed as a generated artifact,
-  and drift-checked. Literal counts in planning prose are descriptive only.
-- Q: If the recorded supply-chain comparison finds no yanked-state difference,
-  is the yanked carrier still built?
-  -> A: Yes. The committed lock-bounded yanked snapshot and its three carriers
-  under the existing `rust-deny-*` identifiers land in the shadow stage
-  unconditionally. The comparison is one observation of one lock set at one
-  moment; a capability conditioned on that observation is absent exactly when
-  the first real finding arrives, after promotion has retired the Cargo
-  executor that used to carry the outcome. Promotion still records the
-  comparison and still blocks on any differing enforcing outcome, refresh stays
-  an explicit reviewed networked update outside the gate, and the gate's drift
-  check stays offline key-set equality run by one repository-owned validator
-  that a contributor can run in a shell and get the same message from.
-- Q: How is a committed dependency-resolution lock regenerated if the
-  re-resolution environment controls are forbidden?
-  -> A: Through one repository-owned command that names a single hub from the
-  closed hub set, sets the re-resolution controls only in the environment of
-  the one child process it spawns, reuses the wrapper's absolute startup values
-  and output root, writes only that hub's committed lock, and fails when any
-  other generated or committed derived artifact changed. It is not a build
-  entry point and no workflow may reach it. The prohibition on setting those
-  controls in a build entry point or continuous-integration environment is
-  unchanged; a supported narrow path exists so the prohibition is not routed
-  around under deadline.
-- Q: The build-system module lock is a different mechanism from a hub lock. How
-  is that one regenerated?
-  -> A: Through its own repository-owned command, which takes no arguments,
-  reuses the same absolute startup values, writes only the module lock, refuses
-  when any other tracked derived file changed, and changes nothing on a tree
-  that is already current. It is the exact remediation the module-lock refusal
-  names, so the refusal never leaves a contributor to reconstruct an invocation
-  from an upstream diagnostic that omits every startup option this repository
-  requires.
+- Broker default, `layer1-bootstrap`, and `fake-backends` remain three serial
+  `cargo test` contexts with default features disabled and distinct target
+  directories.
+- Their Bazel suites carry exactly `tags = ["exclusive"]`, run after all
+  ordinary tests, and cannot overlap each other or any other test. Removing
+  the tag is a required scheduling mutation. Qualification runs each context
+  twenty consecutive times with `--runs_per_test=20`.
+- Guest production uses package
+  `d2b-guest-shell-runner`, default features disabled, and feature
+  `real-libshpool`.
+- Guest formatting is exactly package-scoped
+  `cargo fmt -p d2b-guest-shell-runner --check`; it takes no `--locked`,
+  default-feature, or feature selector.
+- Generic main Clippy and tests exclude broker and guest. Generic tests also
+  retain the existing `d2b-contract-tests` exclusion and companion fixture
+  lane. Generic main Clippy continues to compile `d2b-contract-tests`.
+- Generic Nix build/test and Clippy contexts exclude broker and guest exactly.
+  Dedicated broker and guest contexts retain their exact package,
+  default-feature, feature, target, and dependency-kind selection.
+- Nix builds name the package, binary, default-feature state, and guest feature
+  explicitly. They remain dedicated derivations so binary size, dynamic
+  linkage, static PIE posture, and closure isolation stay independently
+  reviewable.
+- Both dedicated Nix derivations retain
+  `cargoLock.outputHashes."wl-proxy-0.1.2" =
+  "sha256-1yO1zgzSyzQ2DnDMpVxcnI5BsTNvXfzIUS+RNlPj4A8="`.
 
-## User Scenarios & Testing *(mandatory)*
+### Hubs and contributor mutation
 
-### User Story 1 - Run a complete Bazel Rust gate beside Cargo (Priority: P1)
+- The only accepted hub identifiers are `product` and `walker`.
+- `main`, `broker`, and `guest` are retired, not aliases.
+- Each retired identifier fails before Bazel starts and emits the exact ADR
+  0054 diagnostic for that identifier.
+- Tests use an injected non-mutating executor. They assert argv
+  `cargo xtask bazel-repin --hub product` and cwd `packages/`; they never run a
+  genuine repin.
+- A duplicated `cd packages` or `packages/` path prefix is rejected because it
+  would resolve to `packages/packages`.
+- Contributor repin and policy generation are entered from repository root
+  with `nix develop`, followed by `cd packages` and the documented
+  `cargo xtask` command. They remain unreachable from workflows and Make.
+- `cargo xtask bazel-module-refresh` is the only module-lock mutation. It
+  takes no arguments, uses the same absolute server-selecting startup options,
+  changes only `MODULE.bazel.lock`, is idempotent, and is the exact
+  remediation for module drift.
+- `cargo generate-lockfile --offline` is the only product-lock regeneration
+  command. It is contributor-only and is unreachable from Make and workflows.
+- Final validation surrounds every generate or repin command with clean
+  worktree assertions and fails if the committed candidate changes.
 
-As a d2b contributor, I can run one Bazel-backed Rust validation entry point
-that covers every Rust surface currently represented by the required Rust
-gate, while the existing Cargo path remains available as the authoritative
-comparison.
+### Action network and yanked authority
 
-**Why this priority**: The migration has no value unless the new path can run
-the complete Rust contract without weakening the existing gate. The shadow
-path is the minimum independently useful slice and the basis for every later
-promotion decision.
+- Bazel Rust actions may open only declared sandbox-local Unix sockets and
+  loopback TCP listeners or connections required by the committed tests.
+  Host or external egress, DNS, live package or advisory indexes, and
+  undeclared listeners are forbidden.
+- Only pinned repository rules may fetch: registry sources use the root lock
+  URL and checksum, and `wl-proxy` uses its pinned revision and archive
+  sha256.
+- Plants exercise forbidden external egress and live-index access. They do not
+  reject all socket syscalls. Qualification proves the narrowed boundary while
+  the canonical loopback and Unix-socket tests remain unchanged.
+- One committed yanked snapshot has the exact key set derived only from
+  `packages/Cargo.lock`; the walker lock and `Cargo.guest.lock` are excluded.
+- `rust-deny-main` evaluates the full product snapshot. Broker and guest deny
+  carriers evaluate exact projections of their selected root-dev-inclusive
+  package-policy graphs against the same snapshot.
+- `bazel-yanked-refresh` is the reviewed networked contributor mutation;
+  `bazel-yanked-check` is the offline exact-key validator. Neither is
+  reachable from Make or workflows.
 
-**Independent Test**: Run the Bazel aggregate and each named slice on a
-committed tree, compare the published execution-manifest identifiers and
-verdict with the Cargo path, and confirm the Cargo path is unchanged.
+### Package-scoped policy
 
-**Acceptance Scenarios**:
+- Four selected production contexts exist: broker GNU and guest musl for each
+  of the root flake's two systems.
+- Each context has a production graph and a root-dev-inclusive policy graph.
+  Both are generated from locked, offline root metadata.
+- Before policy evaluation, each checker proves one selected root, a nonempty
+  complete graph, exact edge kinds, exact system and target, the exact sorted
+  selected-source identity set, the exact source count, readability, and every
+  registry checksum or pinned git revision and archive checksum.
+- Metadata and filtered locks must contain equal
+  `(name, version, source)` identity sets before `cargo-deny` or `cargo-audit`
+  starts.
+- Package audits use the pinned RustSec database and `--no-fetch`. Broker has
+  no ignore. Guest has exactly `RUSTSEC-2024-0384`.
+- The six current guest real-libshpool license findings are an implementation
+  task, not a waiver: BSD-3-Clause for `bindgen` and `instant`, ISC for
+  `inotify`, `inotify-sys`, and `libloading`, and CC0-1.0 for `notify`.
+  The guest policy update is package-scoped to those six package and license
+  pairs. Adding a license to the global allowlist does not satisfy this
+  requirement.
 
-1. **Given** a passing committed tree, **When** a contributor runs the Bazel
-   Rust aggregate, **Then** all eighteen baseline Rust surfaces complete and
-   publish the same versioned surface identifiers expected from the current
-   Layer-1 Rust path.
-2. **Given** a failure in any one mapped Rust surface, **When** the Bazel
-   aggregate runs, **Then** the command fails, names that surface, and
-   preserves partial completion evidence for the other observed surfaces.
-3. **Given** the shadow stage is active, **When** contributors or continuous
-   integration run the existing Rust target, **Then** it continues to use the
-   current Cargo path and remains the authoritative required verdict.
-4. **Given** fixture-backed contract surfaces are available, **When** the
-   local Rust target runs, **Then** those surfaces remain on their existing
-   Cargo and Nix path rather than being silently absorbed into the Bazel
-   migration.
+### Architecture realization
 
----
+- Broker package contexts use matching GNU targets:
+  `x86_64-unknown-linux-gnu` and `aarch64-unknown-linux-gnu`.
+- Guest static contexts use matching musl targets:
+  `x86_64-unknown-linux-musl` and `aarch64-unknown-linux-musl`.
+- The four package checks and `guest-static-elf` realize natively on both
+  architectures. No lane passes a foreign `--system`, configures
+  `--builders`, or depends on a remote builder.
+- The existing `test-flake-aarch64` job ID and rollup context remain. Its
+  implementation changes from x86-hosted eval-only smoke to native
+  `ubuntu-24.04-arm` realization with a 60-minute bound.
+- That native job also runs `make test-rust-supply-chain`. Renderer tests bind
+  the command, and realization plus supply-chain evidence must come from one
+  unchanged stable PR head.
+- Aarch64 broker artifacts prove evaluation and build support only. They do
+  not expand ADR 0008 runtime support.
 
-### User Story 2 - Preserve exact coverage and test isolation (Priority: P1)
+## User Scenarios and Testing
 
-As a maintainer, I can prove that the Bazel path executes the same tests,
-policy checks, doctests, harness-free companions, scans, and generated-output
-checks with the same isolation properties as the current gate.
+### User Story 1 - Run a complete Bazel Rust gate beside Cargo - P1
 
-**Why this priority**: A faster green result is harmful if it comes from
-missing tests, empty scans, stale binaries, changed process topology, or
-collapsed failure reporting. Exact census and topology are release-blocking
-properties.
+As a contributor, I can run a Bazel-backed aggregate and four attributed
+slices covering the same eighteen Rust surfaces while the Cargo path remains
+authoritative during shadow.
 
-**Independent Test**: Compare exact per-surface and per-suite censuses,
-ignored-case counts, companion discovery, process topology, and planted
-negative controls between the current and Bazel paths.
+Acceptance:
 
-**Acceptance Scenarios**:
+1. A passing aggregate publishes all eighteen existing v1 surface IDs.
+2. A carrier failure names its surface and leaves schema-valid partial
+   evidence.
+3. Fixture-backed contract surfaces remain on the Cargo and Nix fixture lane.
+4. The root Cargo workspace and lock are used with explicit package and feature
+   selectors for main, broker, and guest.
+5. Product and walker are the only dependency hubs.
 
-1. **Given** the committed baseline of eighteen surface identifiers, **When**
-   the coverage guard runs, **Then** every identifier maps to a nonempty set of
-   existing carriers, every carrier belongs to exactly one identifier, and no
-   Rust test target or hand-written build fragment is left unmapped.
-2. **Given** a repository-scanning or generated-output check, **When** its
-   declared input or output set is empty, incomplete, unreadable, unparsable,
-   or different from the committed census, **Then** the check fails before it
-   can report a clean or reproducible result.
-3. **Given** the main workspace or guest shell runner test suites, **When**
-   their tests run, **Then** each test case executes in a fresh process, each
-   case reports its own outcome in the structured per-case result the runner
-   publishes, and ignored cases remain counted as ignored rather than passed.
-4. **Given** any of the three privileged broker feature suites, **When** they
-   run, **Then** they use the existing one-process-per-binary topology with
-   bounded internal threads and never overlap another broker suite or
-   unrelated test.
-5. **Given** doctests or harness-free test binaries, **When** the Bazel path
-   discovers companions, **Then** each required companion runs as its own
-   named surface, the executed harness-free set matches the selector the Cargo
-   gate uses today, and an unexpectedly empty discovery fails.
-6. **Given** a test that must locate a first-party binary or fixture, **When**
-   it runs under either executor, **Then** it resolves that binary or fixture
-   through the declared mechanism for the executor it is actually running
-   under, never falls back to the other executor's mechanism, and fails naming
-   the expected location when the declared entry is missing.
+### User Story 2 - Preserve exact coverage and test isolation - P1
 
----
+As a maintainer, I can prove Bazel executes the complete Rust test and policy
+surface with the current process-isolation properties.
 
-### User Story 3 - Keep policy and supply-chain checks enforcing (Priority: P1)
+Acceptance:
 
-As a security or release maintainer, I can rely on the Bazel path to preserve
-the repository's dependency, advisory, source, license, API, no-bash, schema,
-and pinned-test policies without network-dependent or empty-success behavior.
+1. Every baseline ID has a nonempty carrier set and every carrier belongs to
+   exactly one ID.
+2. Repository scans and generated-output checks refuse empty, incomplete,
+   unreadable, unparsable, or stale censuses.
+3. Main and guest tests run one fresh process per case with ignored-case
+   accounting and structured per-case evidence.
+4. Broker feature contexts retain one process per test binary, bounded threads,
+   target isolation, exact `exclusive` tags, and non-overlap with every test.
+5. Doctest and harness-free companions remain independently discovered and
+   refuse an unexpectedly empty set.
+6. First-party binaries and fixtures are declared inputs, resolved once, and
+   never silently taken from another executor.
 
-**Why this priority**: Half of the Rust execution-manifest surfaces are policy
-or reproducibility checks rather than ordinary tests. Treating them as
-incidental build steps would create silent security and compatibility gaps.
+### User Story 3 - Keep supply-chain policy enforcing - P1
 
-**Independent Test**: Run each policy surface against its expected input and
-against a planted violating input, then compare the combined supply-chain
-findings with the current Cargo path for all three lock files.
+As a security or release maintainer, I can prove the selected broker and guest
+closures, sources, licenses, and advisories for each supported flake system.
 
-**Acceptance Scenarios**:
+Acceptance:
 
-1. **Given** the three Rust dependency locks and policy configurations,
-   **When** supply-chain validation runs, **Then** dependency bans, licenses,
-   sources, and advisories remain enforcing, the materialized dependency tree
-   contains exactly the packages the locks record, and the Bazel actions
-   require no network access.
-2. **Given** a known advisory ignore, **When** advisory validation runs,
-   **Then** the ignore applies to the same workspace and advisory as today and
-   does not create a broader waiver.
-3. **Given** schema generation, **When** reproducibility is checked, **Then**
-   two independent generations each produce the exact generated and committed
-   nonempty schema census before their contents are compared.
-4. **Given** the governed Rust source inventory, **When** the no-bash scan
-   runs, **Then** its declared inputs and successfully parsed files equal the
-   exact committed manifest in both directions.
-5. **Given** a nightly API census or pinned test inventory, **When** the
-   toolchain the census work actually used, or its observed census, differs
-   from the committed pin, **Then** the corresponding surface fails with the
-   difference identified.
-6. **Given** the dependency policy tools, **When** any of them would need
-   network access at check time, **Then** the required state is instead a
-   committed, drift-checked input and the check runs offline.
-7. **Given** a shadow-stage tree, **When** the supply-chain carriers are
-   inventoried, **Then** the committed lock-bounded yanked-state snapshot and
-   its three carriers are present under the existing dependency-policy
-   identifiers whether or not the recorded comparison found a yanked
-   difference, and the snapshot's offline key set equals the three locks' key
-   set exactly as proved by the repository-owned offline validator the carriers
-   and a contributor shell both run.
-8. **Given** a committed dependency-resolution lock that no longer matches its
-   Cargo lock, **When** a contributor regenerates it, **Then** the only
-   supported path is the repository-owned single-hub command, that command
-   changes only the named hub's lock, and the same regeneration control set in
-   a build entry point or continuous-integration environment is still
-   rejected.
-9. **Given** a build-system module resolution the committed module lock does
-   not cover, **When** any build entry point runs, **Then** the run fails
-   without rewriting the lock and names the repository-owned no-argument
-   refresh command as the recovery, and running that command updates only the
-   module lock, leaves every other tracked derived file unchanged, and changes
-   nothing when it is run a second time.
-10. **Given** a repository-owned lock regeneration that also modified a tracked
-    file it does not own, **When** the command completes its post-check, **Then**
-    it fails, lists the unrelated changed paths repository-relative and never
-    absolute, and names committing or restoring those paths followed by
-    rerunning the same scoped command as the recovery.
-11. **Given** an exported dependency-regeneration control in the ambient
-    environment, **When** either the single-hub lock regeneration command or
-    the no-argument module-lock refresh command is run, **Then** each refuses
-    to start, names the three variables to unset, and ends its own recovery on
-    the exact command that was refused rather than on a shared alternative that
-    would have to ask for an argument the refused command does not take.
-12. **Given** the reviewed networked snapshot updater, **When** its handling of
-    index answers is tested, **Then** every answer is supplied through an
-    injectable boundary and no test opens a socket, and the offline validator
-    can reach neither that boundary nor its networked implementation.
+1. Broker GNU and guest musl production and policy graphs are generated from
+   the root lock for both systems.
+2. The exact selected-source census and every checksum or pinned git identity
+   is verified before policy tools run.
+3. Package deny checks run over root-dev-inclusive metadata without
+   `--exclude-dev`.
+4. Package audits use the pinned RustSec database with `--no-fetch`.
+5. Broker has no advisory ignore and guest has only
+   `RUSTSEC-2024-0384`.
+6. The six existing guest license findings require a narrow package-scoped
+   update and no global license-policy expansion.
+7. Aggregate root-lock and `Cargo.guest.lock` checks remain enforcing and may
+   block independently.
+8. Missing root, empty closure, wrong system, wrong target, wrong edge kind,
+   source identity, checksum, policy, and cross-context plants each fail at the
+   predicate they mutate.
 
----
+### User Story 4 - Get faster, bounded local feedback - P2
 
-### User Story 4 - Get faster, bounded local feedback (Priority: P2)
+As a contributor, I receive bounded concurrency, persistent incremental reuse,
+predictable disk use, safe cleanup, and actionable failure reporting.
 
-As a contributor, I can run the Bazel Rust gate locally with bounded
-concurrency, persistent incremental reuse, predictable disk consumption, and
-actionable failure reporting.
+Acceptance:
 
-**Why this priority**: The migration is justified by faster feedback, but
-unbounded workers, uncontrolled caches, or unsafe cleanup would trade test
-latency for workstation instability and data-loss risk.
+1. Warm and cold local profiles retain the ADR 0052 ceilings and measurement
+   rules.
+2. `D2B_RUST_BUDGET` remains the only resource control.
+3. Local Bazel state stays under `.scratch/bazel/` with soft and hard limits.
+4. Unsafe or live cleanup layouts refuse before deletion.
+5. Deadline, filesystem, provider, and result-publication negatives use
+   injected boundaries rather than ambient host failures.
+6. Provider execution uses one verified descriptor and no fallback; expiry
+   observes without consuming throughout the full grace, kills the group, and
+   only then reaps.
+7. Each cleanup or server code emits its exact ADR 0052 recovery commands and
+   no other code's remedy.
 
-**Independent Test**: Measure three cold and three warm local runs on the
-reference host, exercise soft and hard disk limits, and run every cleanup and
-shutdown refusal case against planted scratch trees and processes.
+### User Story 5 - Compare safely in continuous integration - P2
 
-**Acceptance Scenarios**:
+As a maintainer, I can collect trustworthy shadow and dual-architecture
+evidence without evicting required caches, exposing credentials, or granting
+pull requests write capability.
 
-1. **Given** the reference development host, **When** the aggregate runs
-   three times under the defined warm profile, **Then** the median completes
-   within ten minutes and no run exceeds twelve minutes.
-2. **Given** a fresh build state with a populated download cache, **When** the
-   aggregate runs three times under the defined cold profile, **Then** the
-   median completes within fifteen minutes and no run exceeds eighteen
-   minutes.
-3. **Given** limited CPU or memory availability, **When** the aggregate
-   starts, **Then** it derives a bounded worker budget from the existing Rust
-   budget control rather than creating a second independent resource policy.
-4. **Given** local Bazel state reaches its soft size limit, **When** a run
-   starts, **Then** the contributor receives the measured size and exact
-   repository-relative reclaim command without losing the warm state.
-5. **Given** local Bazel state reaches its hard size limit, **When** a run
-   starts, **Then** the run refuses before build work begins and identifies
-   the safe reclaim action.
-6. **Given** a tracked file, symlink, magic link, escaping layout, or live
-   Bazel server under the managed scratch tree, **When** cleanup is requested,
-   **Then** cleanup deletes nothing, reaches nothing outside the managed
-   subtree, and reports the condition with its specific redacted recovery
-   steps.
-7. **Given** the cleanup, result-file, and deadline paths, **When** their
-   planted negatives run, **Then** every filesystem effect and every reading
-   of current time is taken through an injectable boundary, so the negatives
-   reproduce on any host without a full disk, a privileged mount, or a
-   manipulated host clock.
+Acceptance:
 
----
+1. Shadow CI is non-required and publishes no Bazel cache.
+2. Pull-request-reachable jobs have read-only permissions and no cache writer.
+3. Qualification records pair Cargo and Bazel verdicts on the same protected
+   `v3` push commit, include the fixture companion, and carry explicit
+   `bazelRestoreCount`, `bazelSaveCount`, and `bazelPublicationCount`
+   plus four complete `sliceDurationsSeconds` entries.
+4. Native x86_64 and aarch64 lanes each realize their own five package and ELF
+   checks without foreign-system or remote-builder arguments; the arm lane
+   also runs the native package supply-chain target on the same stable head.
+5. Cache maintenance remains a separate verdict and credentials never enter
+   Bazel or repository code.
 
-### User Story 5 - Compare safely in continuous integration (Priority: P2)
+### User Story 6 - Promote and retire without breaking contracts - P3
 
-As a maintainer, I can observe a non-required Bazel Rust workflow beside the
-required Cargo workflow without evicting required caches, exposing
-credentials, granting pull requests write capability, or confusing cache
-maintenance failures with Rust test failures.
+As a maintainer, I can promote only after complete evidence exists, keep the
+required context and public Make names stable, and retire the Cargo
+implementation in separately reversible steps.
 
-**Why this priority**: The shadow period must generate trustworthy evidence
-without degrading the required path or widening the privilege available to
-untrusted pull-request code.
+Acceptance:
 
-**Independent Test**: Run the shadow workflow on its supported triggers,
-inspect all cache and permission decisions, exercise positive and negative
-workflow-policy fixtures, and confirm that only push events on protected `v3`
-produced by merged pull requests yield qualification records.
+1. Incomplete coverage, failure plants, topology, package policy,
+   architecture realization, or performance evidence blocks promotion.
+2. Promotion keeps the required context `test-rust` and the fixture lane.
+3. Bazel-specific aliases forward with status preservation until a published
+   semantic release tag contains promotion.
+4. Cargo implementation retirement waits for ten distinct ordered green
+   promoted `v3` run units and removes no public target name.
 
-**Acceptance Scenarios**:
+## Functional Requirements
 
-1. **Given** the shadow stage, **When** the Bazel workflow runs, **Then** it
-   publishes no shared cache entry and does not alter the required Rust
-   context.
-2. **Given** a pull-request-triggered job, **When** workflow policy is
-   evaluated, **Then** the job has read-only repository permission, cannot
-   write Actions cache state, and cannot request `actions: write`.
-3. **Given** a `v3` promotion run, **When** retired caches must be
-   removed, **Then** a separate maintenance verdict deletes only authorized
-   cache generations, verifies repository headroom, and remains outside the
-   Rust test verdict.
-4. **Given** any Rust build or test action, **When** it executes third-party
-   code, **Then** cache service credentials are absent from its environment.
-5. **Given** a promoted Bazel Rust job, **When** it runs, **Then** its
-   enforceable deadline covers the complete measured job window and can fail
-   actionably before the outer timeout backstop.
-6. **Given** a push to protected `v3` produced by a merged pull request,
-   **When** both the Cargo and Bazel workflows run, **Then** both are
-   identified by the same head commit, both verdicts and the same-commit
-   fixture-contract verdict are recorded as one qualification record, and a
-   pull-request run produces no record at all.
-
----
-
-### User Story 6 - Promote and retire without breaking contributor contracts (Priority: P3)
-
-As a maintainer, I can promote Bazel only after complete equivalence evidence
-exists, preserve the stable required context and familiar Make entry points,
-and retire the Cargo implementation in separately reversible steps.
-
-**Why this priority**: Promotion is the point of the feature, but it must
-follow evidence rather than anticipation. Separating promotion, compatibility,
-and retirement keeps rollback possible and prevents interface breakage from
-being confused with executor failures.
-
-**Independent Test**: Evaluate the complete promotion evidence set, perform a
-promotion rehearsal, verify all aliases and context names, then confirm that
-retirement conditions independently block premature deletion.
-
-**Acceptance Scenarios**:
-
-1. **Given** fewer than ten consecutive matching qualification records, an
-   incomplete seeded-failure matrix, a missed performance ceiling, or any
-   failed census or topology proof, **When** promotion is evaluated, **Then**
-   promotion is blocked.
-2. **Given** all promotion criteria are satisfied, **When** the promotion
-   change lands, **Then** the required context remains named `test-rust`, the
-   authoritative Rust target uses Bazel for the eighteen baseline surfaces,
-   and fixture-backed contract surfaces remain on their existing path.
-3. **Given** a contributor invokes a pre-promotion Bazel target name after
-   promotion, **When** the compatibility alias runs, **Then** it forwards to
-   the authoritative target, returns the same status, and prints the named
-   replacement.
-4. **Given** the promotion commit has not shipped in a release, **When** alias
-   removal is proposed, **Then** alias removal is blocked independently of the
-   promoted-run count.
-5. **Given** the promoted `v3` lineage has not completed ten consecutive green
-   runs, **When** Cargo implementation retirement is proposed, **Then**
-   retirement is blocked independently of release containment or alias state.
-6. **Given** Cargo implementation retirement has landed, **When** a
-   contributor runs the public Rust target or any documented Rust leaf name,
-   **Then** the name still exists and invokes the authoritative Bazel carrier,
-   and the fixture-contract mode still runs on its existing path.
-
-### Edge Cases
-
-- A baseline surface is removed from the map while its aggregate still exits
-  successfully.
-- A new Rust test target or hand-written build fragment is present but no
-  surface claims it.
-- A scan sees declared files but silently skips one because it cannot be read
-  or parsed.
-- Two schema generations both produce empty trees and therefore have matching
-  digests.
-- A binary-locating test resolves to a missing, non-executable, stale, or
-  wrong binary.
-- A binary-locating test verifies one binary and executes another, because the
-  provider path was rebound between the check and the spawn.
-- A binary-locating test misses its declared entry under the new executor and
-  silently falls back to a stale artifact left by the other executor.
-- A broker suite is accidentally allowed to overlap another test process.
-- An ignored test is counted as passed or omitted from the census.
-- Every test case passes but the structured per-case result cannot be
-  published, so the run looks green with no per-case evidence.
-- A structured per-case result carries an environment value, an absolute path,
-  or raw child output that the redaction rules forbid.
-- A partially written structured result is left behind after a full disk, or a
-  path the runner did not create is removed during cleanup of its own
-  temporary file.
-- The top-level validation process exits during timeout handling while one of
-  its descendants remains alive.
-- A deadline is absent, expired, malformed, overflowing, or rounded later
-  than the allowed ceiling.
-- Cleanup encounters a tracked file, a symlink or magic link, a path escape,
-  a subtree replacement race, or a server that did not shut down.
-- Cache enumeration is incomplete, an entry matches more than one authorized
-  prefix, or repository usage changes between headroom verification and save.
-- A cache key input changes without changing the key, so a subtly stale cache
-  is restored.
-- Cache trimming is requested but has not finished when size is measured, so a
-  compliant run refuses to publish forever.
-- A pull-request workflow can reach a cache writer indirectly through a
-  post-step or inherited permission.
-- A qualification streak is inflated by pairing runs that tested different
-  trees, or by cancelling a run that was about to fail.
-- A dependency policy check runs against a materialized tree that is quietly
-  short a package, so it reports fewer findings and exits zero.
-- The migration comparison finds no yanked crate today, so no yanked detection
-  is built, and the first crate yanked after promotion is invisible on every
-  path.
-- A committed dependency-resolution lock is regenerated by an ad hoc
-  environment override instead of the reviewed repository-owned command, so a
-  lock is rewritten silently, a second build server is started, or an unrelated
-  generated artifact changes in the same operation.
-- The build system's own drift diagnostic names a raw refresh invocation that
-  carries none of the server-selecting startup values this repository requires,
-  so following the diagnostic literally starts a second build server and
-  populates persistent state outside the managed scratch subtree.
-- A declared direct build-system dependency disagrees with the resolved graph,
-  and the resolution absorbs the difference with a warning and a zero exit, so
-  the committed lock records a version nobody declared as though it were
-  intended.
-- A yanked-state snapshot is refreshed by the networked updater and committed
-  without anyone running the offline validator, so a snapshot whose key set
-  does not match the locks reaches continuous integration instead of the
-  contributor's shell.
-- A regeneration intended for one dependency hub rewrites another hub's lock or
-  rewrites the authoritative Cargo lock the migration froze.
-- A cleanup, result-file, or deadline guard depends on live host filesystem
-  state or the host clock, so the planted negative it claims to reject cannot
-  actually be produced on the reference host.
-- A documentation policy guard enumerates the directory it polices with the
-  standard library and reads each entry by a reconstructed path, so it follows
-  a symlink out of that directory and resolves it a second time between
-  enumeration and read.
-- A refusal renders the remedy of a different condition, so a contributor
-  fixing a permission denial is told to rewrite a line that is not the
-  problem.
-- The networked snapshot updater is written against a client it constructs
-  itself, so no test can supply a partial, revisionless, or malformed index
-  answer, and every refusal path it owns stays unproven until it first fires in
-  a contributor's shell.
-- The offline snapshot validator can reach the same networked client the
-  updater uses, so a future change makes the gate's drift check open a socket
-  without any guard noticing.
-- The nightly toolchain selection fails to apply to the census, or applies to
-  the whole build so every first-party crate compiles off the stable pin.
-- Graph discovery traverses scratch or Cargo output directories inside the
-  worktree and either fails or silently absorbs generated files.
-- A performance ceiling is missed even though all coverage and correctness
-  checks pass.
-- A fixture-backed contract surface is accidentally counted among the
-  eighteen Rust-only migration surfaces.
-- Retirement of the Cargo implementation removes a public entry point name
-  that contributors and documentation still use.
-
-## Requirements *(mandatory)*
-
-### Functional Requirements
-
-- **FR-001**: The feature MUST implement the accepted ADR 0052 decision for
-  the Rust gate and MUST NOT infer authority over any explicitly excluded Nix,
-  packaging, image, release, static-binary, cross-compilation, remote-cache,
-  remote-execution, or non-Rust Layer-1 surface.
-- **FR-002**: Cargo manifests, Cargo lock files, dependency policy files, and
-  the committed Rust toolchain pins MUST remain the authoritative dependency,
-  feature-selection, policy, and compiler inputs. Every independent Rust
-  workspace whose output the Rust gate executes, including the no-bash scanner
-  tool workspace, MUST keep its own lock as the authoritative resolution and
-  MUST NOT be re-resolved into another workspace's dependency set.
-- **FR-003**: A dependency or toolchain change MUST be initiated through the
-  authoritative Cargo or toolchain files and MUST fail validation when the
-  derived Bazel state has not been regenerated. The derived state MUST include
-  the enumerated set of third-party packages that run build scripts, the
-  configuration each of them requires, and the explicit minimal set of host
-  environment values any build action is allowed to observe.
-- **FR-004**: The build system, its dependency generator, its rule sets, and
-  every companion tool used by the feature MUST be pinned by version and
-  content, reviewable, provided by the pinned development environment, and
-  unavailable through an unpinned fallback, an unpinned source bootstrap, or a
-  re-resolution escape hatch in any local or continuous-integration
-  environment. Transitive build-system modules MUST be pinned by a committed
-  resolution lock that fails closed rather than silently updating, including
-  when a declared direct dependency disagrees with the resolved graph.
-  Regenerating
-  a committed dependency-resolution lock MUST be possible only through a
-  repository-owned command that names exactly one dependency hub from a closed
-  set, applies the re-resolution control solely to the environment of the
-  single child process it spawns, reuses the same absolute server-selecting
-  startup values the wrapper supplies, writes only that hub's committed lock,
-  and fails when any other generated or committed derived artifact changes.
-  Regenerating the committed build-system module resolution lock MUST likewise
-  be possible only through a separate repository-owned command that takes no
-  arguments, reuses the same absolute server-selecting startup values, writes
-  only that lock, fails when any other tracked derived artifact changes,
-  completes with no change on an already-current tree, and is the exact
-  remediation the module-lock refusal names. Neither command MAY be reachable
-  from a build entry point or a workflow, and no build entry point or
-  continuous-integration environment MAY set a re-resolution control.
-- **FR-005**: The feature MUST add a local Bazel Rust aggregate and the
-  ADR-defined slice and shutdown entry points while leaving the existing
-  authoritative Rust target unchanged during the shadow stage.
-- **FR-006**: Every workflow entry point introduced by the feature MUST invoke
-  an approved Make target rather than invoking the underlying scheduler
-  directly.
-- **FR-007**: The Bazel aggregate MUST represent all eighteen baseline
-  execution-manifest surfaces and no fixture-backed conditional surface.
-- **FR-008**: A committed coverage map MUST associate each baseline surface
-  with a nonempty carrier set, exactly one continuous-integration slice, an
-  exact derived census, and a declared test process topology where applicable,
-  and every carrier MUST belong to exactly one baseline surface.
-- **FR-009**: Coverage validation MUST fail on an unmapped identifier, missing
-  carrier, carrier claimed by more than one surface, unmapped Rust test target,
-  missing process topology, missing exact census, or unlisted hand-written
-  build fragment. Carrier existence MUST be proven by real declared dependency
-  edges at graph-analysis time rather than by a query issued from inside a
-  test, and graph-completeness and query-drift checks MUST run outside the
-  test over a committed drift-checked or declared query result.
+- **FR-001**: The feature MUST remain limited to the Rust gate and the narrow
+  Cargo, Nix derivation, package-policy, and dual-system realization changes
+  ADR 0054 requires.
+- **FR-002**: `packages/Cargo.toml` MUST be one resolver-v2 product workspace
+  containing main, broker, and guest, and `packages/Cargo.lock` MUST be its only
+  authoritative product lock. The no-bash walker MUST retain its separate
+  manifest and lock. `packages/Cargo.guest.lock` MUST be treated only as a
+  generated static-guest closure input.
+- **FR-003**: Guest format MUST be exactly package-only
+  `cargo fmt -p d2b-guest-shell-runner --check`, without `--locked` or feature
+  selectors. Every dependency-resolving broker and guest command MUST use
+  `--locked`, exact package/default-feature/feature selectors, and the
+  gate-owned target directory. Generic main Clippy and tests MUST use the exact
+  distinct ADR 0054 exclusion sets.
+- **FR-004**: Bazel, Bzlmod, `rules_rust`, `cargo-bazel`, Rust toolchains,
+  module locks, and Bazel-side hub locks MUST remain pinned and MUST have only
+  repository-owned regeneration paths.
+- **FR-005**: Shadow MUST add the Bazel aggregate, four slices, and shutdown
+  entry point while keeping Cargo authoritative.
+- **FR-006**: Workflows MUST call approved Make targets and MUST NOT invoke
+  Bazel or contributor mutation commands directly.
+- **FR-007**: The aggregate MUST represent exactly the eighteen baseline Rust
+  surface IDs and no fixture-backed conditional ID.
+- **FR-008**: The coverage map MUST associate every surface with a nonempty
+  carrier set, one slice, an exact derived census, and a topology where
+  applicable.
+- **FR-009**: Coverage validation MUST fail on missing or duplicate IDs,
+  carriers, test targets, censuses, topologies, queries, or hand-written
+  fragments. No Bazel test may start a nested Bazel server.
 - **FR-010**: Every logical check MUST retain an independently attributable
-  verdict; no aggregate wrapper may collapse several surfaces into one
-  indistinguishable result.
-- **FR-011**: The existing versioned execution-manifest contract MUST retain
-  the same surface identifiers, completed-surface semantics, failed-surface
-  semantics, and partial evidence on failure or handled interruption.
-- **FR-012**: The main workspace and guest shell runner suites MUST preserve
-  one fresh process per test case, exact per-binary test census, and faithful
-  ignored-case reporting.
-- **FR-013**: The three broker feature suites MUST preserve one process per
-  test binary with bounded internal threads and MUST execute exclusively until
-  a separate isolation review authorizes a change.
-- **FR-014**: Doctests and harness-free companions MUST remain independently
-  discovered and executed, the executed harness-free set MUST be derived from
-  the same selector the current gate uses rather than from a manifest count,
-  every excluded manifest entry MUST be recorded with its exclusion reason, and
-  an unexpectedly empty discovery MUST fail.
-- **FR-015**: Repository-scanning and generated-output checks MUST assert
-  exact nonempty input and output censuses before accepting a clean or
-  reproducible result.
-- **FR-016**: The schema reproducibility surface MUST compare two independent
-  generations, each containing the exact generated and committed schema census
-  with nonempty valid content, and that census MUST be a drift-checked
-  generator output rather than a hand-maintained count.
-- **FR-017**: The no-bash scan MUST prove equality between the committed
-  governed-source manifest, declared scan inputs, and successfully parsed
-  files.
-- **FR-018**: Every test that locates a first-party binary or reads a
-  repository fixture MUST resolve it through the declared mechanism for the
-  executor it is running under, MUST select that mechanism once with no
-  fallback to the other executor's mechanism, MUST NOT resolve anything by an
-  absolute build-execution-root path, MUST declare each located binary and
-  fixture as a declared input, and MUST prove that the selected binary exists,
-  is executable, is no older than its newest declared input, and has the
-  expected identity before exercising it. Those proofs and the execution MUST
-  bind to a **single** resolution of the binary: the locator MUST open the
-  provider exactly once through the injected filesystem boundary, MUST perform
-  every check against that open handle, MUST NOT expose a path a caller could
-  spawn by, and MUST execute that same handle. Re-resolving the provider by
-  name at execution time, spawning it by path, or recovering a path from a
-  verified handle is a defect, not a style choice. A check that needs the
-  repository inventory rather than a specific file MUST consume a generated
-  drift-checked manifest as a declared input.
-- **FR-019**: Dependency bans, licenses, sources, and advisories MUST remain
-  enforcing across the three Rust workspace locks they cover today, with no
-  network access from any build or test action. The dependency tree the policy
-  tools read MUST be materialized only from pinned, content-verified sources,
-  MUST classify every lock entry or refuse by name, and MUST assert that the
-  materialized package count equals the lock's before any policy tool runs.
-- **FR-020**: The feature MUST compare the current combined supply-chain
-  outcomes with the migrated checks for all three workspace locks and MUST
-  block promotion on any differing enforcing outcome. An offline
-  yanked-dependency-state carrier reporting under the existing
-  dependency-policy identifiers MUST land during the shadow stage regardless of
-  what that comparison finds, so the detection capability exists before the
-  first difference rather than in response to it; dropping the outcome is not
-  authorized, and an all-clear snapshot is a valid committed baseline rather
-  than a reason to omit the carrier.
-- **FR-021**: Advisory database freshness, advisory ignores, and the
-  yanked-state snapshot MUST be explicit committed inputs; an ignore MUST
-  retain its current workspace and advisory scope; refreshing a snapshot MUST
-  be an explicit reviewed networked operation outside the gate through one
-  repository-owned command; that command MUST reach the index through a single
-  injectable boundary whose one networked implementation is the only site
-  permitted to open a socket for it, so every refusal it can produce is
-  provable from supplied responses; and the gate's own drift check MUST be a
-  separate offline repository-owned command that proves exact key-set equality
-  with the committed locks rather than regenerating state, MUST NOT be able to
-  reach that boundary or its networked implementation at all, is the single
-  implementation and the single message for that comparison, and is runnable
-  unchanged both by the gate carriers and by a contributor in a shell.
-- **FR-022**: The API census, pinned test inventory, scanner controls, and
-  other non-compilation checks MUST each have a planted failure that proves
-  the check can reject a violating input.
-- **FR-023**: Local concurrency MUST use the existing memory-aware Rust budget
-  control and MUST remain bounded across scheduler-level and per-suite
-  concurrency.
-- **FR-024**: Persistent local build state MUST live only beneath the
-  worktree's ignored scratch tree, MUST have documented size and age bounds,
-  and MUST be reclaimed by an explicit synchronous operation whose completion
-  is observable before any size measurement or publication decision.
-- **FR-025**: The local runner MUST warn at the configured soft output-state
-  limit and MUST refuse to start build work at the configured hard limit.
-- **FR-026**: Cleanup MUST operate only within the managed scratch subtree,
-  MUST refuse ambiguous or unsafe layouts and live ownership, and MUST
-  guarantee that no refused or successful cleanup reaches tracked content or
-  any external target.
-- **FR-027**: Cleanup safety MUST remain effective across every supported host
-  path and across child process execution, with behavioral evidence that a
-  planted unsafe variant is rejected.
-- **FR-028**: Every cleanup or shutdown refusal MUST delete nothing and emit a
-  stable static code with the exact repository-relative recovery for that
-  condition.
-- **FR-029**: Refusal and timeout messages MUST exclude absolute paths,
-  output-state hashes, user identifiers, process identifiers, raw deadline
-  values, opaque handles, and unsafe recursive-removal instructions, MUST NOT
-  echo the offending value a scan refused, and MUST carry the remedy for the
-  condition actually observed and no other condition's remedy. A
-  repository-relative path and a declared runfiles-relative path are not
-  absolute paths and MAY appear where one is the subject of the remedy; the
-  runfiles root, any resolved absolute runfiles or worktree location, and any
-  path a message derives by resolving one of the former against a local root
-  MUST NOT. A refusal that names no directory when the directory is what the
-  contributor must repair does not satisfy the remedy requirement.
-- **FR-030**: The shadow continuous-integration workflow MUST remain
-  non-required, MUST keep the existing required graph unchanged, and MUST
-  publish no shared cache entry.
-- **FR-031**: Pull-request-reachable jobs MUST be read-only, MUST NOT request
-  `actions: write`, and MUST NOT save through direct, indirect, or post-step
-  cache writers.
-- **FR-032**: Cache credentials MUST remain unavailable to repository and
-  third-party build or test code.
-- **FR-033**: Promotion caching MUST keep the action cache and download cache
-  separate, MUST never cache the build system's output base, and MUST bind
-  cache keys to every dependency, toolchain, policy, module-resolution,
-  per-workspace generated-dependency, generator-binary, workspace-boundary,
-  build-script-configuration, action-environment, and generated-build input
-  the migration reads, so that changing any of them produces a different key.
-- **FR-034**: A `v3`-only maintenance verdict MUST remove only
-  authorized retired or superseded cache generations, paginate completely,
-  verify headroom, and remain independent of the Rust test verdict.
-- **FR-035**: Pull requests MUST restore caches read-only, and exactly one
-  authorized protected-`v3` job MAY publish a new cache generation.
-- **FR-036**: Repository cache usage plus the planned promoted snapshot MUST
-  be at or below 8 GiB before publication, and publication MUST refuse if
-  headroom changes before save.
-- **FR-037**: The aggregate MUST satisfy wall-clock ceilings of ten minutes
-  warm local, fifteen minutes cold local, and fifteen minutes cold continuous
-  integration under the ADR-defined reference profiles. The cold
-  continuous-integration ceiling MUST NOT become binding until a recorded
-  feasibility measurement on the real runner class demonstrates it is
-  attainable, and a feasibility shortfall MUST be answered only by a larger
-  runner class or a further disjoint slice split.
-- **FR-038**: Each performance profile MUST be evaluated using all required
-  measurements, with a passing median at or below the ceiling and no
-  individual measurement above 1.2 times the ceiling. A measurement taken
-  under streamed test output, an altered cache state, or any other condition
-  that changes scheduling MUST be invalidated and replaced rather than
-  averaged in.
-- **FR-039**: Promoted continuous-integration jobs MUST enforce an actionable
-  in-band deadline that covers the complete measured job window and retains a
-  slightly higher outer timeout only as a dead-runner backstop.
-- **FR-040**: Deadline calculations MUST fail safely on invalid or
-  unrepresentable input, MUST not disclose the rejected value, and MUST never
-  grant more time than the applicable ceiling.
-- **FR-041**: An expired deadline MUST be reported as a normal budget expiry,
-  not malformed input, and a missing deadline MUST remain an unbounded local
-  default while being forbidden in promoted jobs.
-- **FR-042**: On deadline expiry, the runner MUST give the validation work a
-  fixed graceful-stop interval, MUST terminate any surviving descendants
-  after that interval, and MUST finish with no orphaned validation process.
-- **FR-043**: Timeout handling MUST affect only processes owned by the current
-  validation run and MUST leave the caller, unrelated processes, and detached
-  server processes untouched.
-- **FR-044**: A missed performance ceiling MUST block promotion or fail the
-  promoted job and MUST authorize only a larger runner class or a further
-  disjoint slice split; it MUST NOT authorize weaker coverage, lower
-  enforcement, surface removal, or a relaxed ceiling.
-- **FR-045**: Promotion MUST be blocked until all coverage, census, topology,
-  supply-chain, cache, and performance requirements pass, ten consecutive
-  qualification records show matching Bazel and Cargo rollup verdicts at the
-  same head commit with a passing same-commit fixture-contract companion, and
-  an eighteen-surface seeded-failure matrix proves each carrier fails
-  independently. A qualification record MUST be a push event on protected `v3`
-  produced by a merged pull request; pull-request, other-branch, scheduled, and
-  manually dispatched runs are diagnostic and MUST NOT enter a streak or a
-  measurement set. A differing verdict MUST reset the streak, a Bazel run that
-  reaches no verdict while its paired Cargo run does MUST reset the streak, and
-  a push where neither side reaches a verdict MUST NOT be a record.
-- **FR-046**: Promotion MUST preserve the required context name `test-rust`,
-  route the eighteen baseline surfaces through Bazel, and leave the two
-  fixture-backed contract surfaces on their existing path.
-- **FR-047**: Existing Rust leaf target names MUST continue to work after
-  promotion, and the Bazel-specific names MUST become status-preserving
-  compatibility aliases with an actionable deprecation message.
-- **FR-048**: No workflow MAY call a deprecated compatibility alias after
-  promotion.
-- **FR-049**: Compatibility aliases MUST NOT be removed before the promotion
-  has shipped in at least one release, and their removal MUST be a separate
-  documented change.
-- **FR-050**: The Cargo implementation for the eighteen migrated surfaces MUST
-  NOT be retired until the promoted path has completed ten consecutive green
-  `v3` runs. Retirement MUST remove only Cargo implementations and unreachable
-  Cargo-only plumbing; it MUST NOT remove the public Rust target name or any
-  documented Rust leaf name, which MUST continue to invoke the authoritative
-  Bazel carriers, and it MUST leave the fixture-contract mode intact.
-- **FR-051**: The enforcing guards for cleanup, timeout, deadline, recovery
-  messages, workflow permissions, cache writers, and required deadline
-  controls MUST land with the plumbing they constrain.
-- **FR-052**: Every new guard MUST include a positive case and a planted
-  negative fixture or mutation that proves the guard fails when its protected
-  invariant is removed. Guards over filesystem effects, over elapsed or
-  absolute time, and over networked registry-index responses MUST be exercised
-  through injectable boundaries, so every planted negative is reproducible
-  without depending on live host filesystem state, a full disk, a privileged
-  mount, the host clock, or a reachable network. A guard that reads a
-  repository directory MUST read it through that filesystem boundary, anchored
-  and refusing symlinks and magic links at every path component **including the
-  final one**, rather than by enumerating and
-  concatenating paths through the standard library, and that refusal MUST hold
-  identically on every resolution route the boundary offers rather than on the
-  preferred one only. Such a guard MUST order its directory enumeration
-  deterministically before deriving any positional identifier, ordinal label,
-  or report ordering from it, because directory order differs by filesystem and
-  a message no other host reproduces is not evidence. The one networked
-  implementation of an index boundary MUST be exercised only by the explicit
-  contributor-run operation that owns it, outside the gate, and that run MUST
-  be recorded as a measured observation rather than repeated as a gate
-  assertion.
-- **FR-053**: The feature MUST use existing Rust, policy, and workflow test
-  surfaces for its guards and MUST NOT add a new top-level shell gate,
-  Layer-1 job, or independent required context.
-- **FR-054**: Every migrated test suite MUST publish a structured per-case
-  result to the location the executor designates, containing one entry per
-  enumerated case with explicit passed, failed, and ignored outcomes and only
-  the stable case name, outcome, bounded duration, and bounded sanitized
-  failure text. Environment values, command-line arguments, absolute paths,
-  store paths, socket paths, the runfiles root and any resolved absolute
-  runfiles or worktree location, unit names,
-  process identifiers, user identifiers, opaque handles, terminal bytes, shell
-  names, and raw child output MUST be absent from it, while raw child output
-  remains available in the executor's ordinary per-target log artifact. Each
-  case MUST receive its own temporary directory beneath the executor-supplied
-  temporary root, its binary MUST be resolved through declared runfiles, and
-  only the declared test environment MUST be forwarded. Result publication is
-  enforcing: an otherwise passing suite whose result cannot be published MUST
-  fail, and where a test already failed the test failure MUST remain the
-  primary diagnosis with the publication failure reported additionally.
-- **FR-055**: The repository MUST declare its build-graph boundary and its
-  persistent state locations explicitly: scratch state and every Cargo output
-  directory in the worktree MUST be excluded from graph discovery by a
-  generated, drift-checked exclusion list; convenience links MUST be placed
-  beneath the scratch tree by an absolute prefix the wrapper supplies; and all
-  server-selecting startup paths MUST be supplied as absolute values by the
-  wrapper, byte-identical across build, test, query, information, shutdown, and
-  clean invocations, rather than written into the checked-in configuration
-  file.
-
-### Key Entities
-
-- **Rust Surface**: One versioned execution-manifest identifier representing a
-  required compilation, test, policy, scan, or reproducibility outcome.
-- **Carrier Target**: The independently reported build target responsible for
-  one Rust surface and its declared inputs, outputs, census, and failure.
-- **Coverage Map**: The committed total and unambiguous relationship between
-  baseline surfaces, carrier sets, continuous-integration slices, derived
-  censuses, process topologies, hand-written build fragments, and deliberate
-  execution differences.
-- **Execution Manifest**: The versioned evidence for completed and failed Rust
-  surfaces, including partial evidence from failed or interrupted runs.
-- **Per-Case Result Document**: The structured, redacted, per-test-case record
-  the runner publishes for each carrier, carrying case name, outcome, bounded
-  duration, and bounded sanitized failure text and nothing else.
-- **Test Topology**: The required process-isolation model for a suite,
-  including per-case or per-binary execution, thread bounds, exclusivity, and
-  ignored-case accounting.
-- **Test Locator Migration**: The enumerated set of first-party test files that
-  stop resolving binaries and repository paths through compile-time Cargo
-  environment expansion, each recorded either as migrated or as needing no
-  migration with the reason.
-- **Qualification Record**: One push event on protected `v3` produced by a
-  merged pull request, carrying the head commit, both workflow run
-  identifiers, both rollup verdicts, the same-commit fixture-contract verdict,
-  and, for a cold sample, the four slice durations.
-- **Performance Profile**: A reproducible warm local, cold local, or cold
-  continuous-integration measurement with a defined host, cache state, start,
-  stop, and ceiling.
-- **Cache Generation**: One bounded, keyed action-cache or download-cache
-  snapshot with an authorized writer and retention policy.
-- **Promotion Evidence Set**: The complete coverage, equivalence, seeded
-  failure, census, topology, performance, supply-chain, and cache evidence
-  required to change the authoritative executor.
-- **Recovery Condition**: A stable refusal or timeout classification with
-  redacted output and condition-specific repository-relative remediation.
-
-## Success Criteria *(mandatory)*
-
-### Measurable Outcomes
-
-- **SC-001**: All 18 baseline Rust surface identifiers have a nonempty valid
-  carrier set, every carrier belongs to exactly one identifier, and the
-  coverage guard reports zero unmapped identifiers, targets, test targets,
-  process topologies, exact censuses, or hand-written fragments.
-- **SC-002**: Ten consecutive qualification records produce the same pass or
-  fail verdict from the Bazel and Cargo Rust rollups at the same head commit,
-  each with a passing same-commit fixture-contract companion verdict.
-- **SC-003**: An 18-case seeded-failure matrix causes the intended carrier to
-  fail in all 18 cases and causes zero unrelated Rust surfaces to fail.
-- **SC-004**: The Bazel and Cargo paths report identical test-case,
-  ignored-case, doctest, harness-free companion, API, schema, scanner, and
-  pinned-inventory censuses for every migrated suite, and every one of those
-  censuses is a generated drift-checked artifact rather than a hand-maintained
-  count.
-- **SC-005**: The three broker suites pass 20 consecutive executions under
-  the required exclusive topology.
-- **SC-006**: Three warm local measurements have a median of at most 10
-  minutes and a maximum of at most 12 minutes.
-- **SC-007**: Three cold local measurements have a median of at most 15
-  minutes and a maximum of at most 18 minutes.
-- **SC-008**: A recorded feasibility measurement on the real runner class
-  exists, and the five most recent qualifying cold Bazel qualification records
-  each define their record duration as the maximum of the four slice job
-  durations; those five record durations have a median of at most 15 minutes
-  and no record duration above 18 minutes.
-- **SC-009**: The shadow stage creates zero shared Bazel cache entries, and
-  pull-request-reachable jobs create zero cache writes and request zero
-  `actions: write` permissions.
-- **SC-010**: Before the first promoted cache save, measured repository cache
-  usage plus the planned snapshot is at most 8 GiB after an explicit
-  synchronous trim has completed, with one authorized protected-`v3` writer and
-  zero cached output-base trees.
-- **SC-011**: All three supply-chain workspaces produce identical enforcing
-  findings before and after decomposition, with zero network-dependent build or
-  test actions, zero broadened advisory ignores, a materialized package count
-  equal to each lock's, and a committed lock-bounded yanked-state snapshot
-  whose offline key-set drift check passes for all three locks.
-- **SC-012**: Every cleanup, timeout, deadline, message-redaction,
-  per-case-result redaction, result-file filesystem, binary-locator,
-  provider-handle, wave-note-lint, cache-policy, and workflow-policy guard
-  rejects all of its planted negative variants and accepts its compliant
-  positive case. For the provider-handle guard that set includes a provider
-  path rebound to a different file after the open, and a fallback resolution
-  route that applies the final-component link refusal from the wrong resolve
-  policy in either direction. For the wave-note lint it includes each variant's
-  remedy rendered for the wrong variant, a corpus error rendering a resolved
-  absolute directory instead of the fixed repository-relative one, and an
-  enumeration whose order is taken from the filesystem rather than sorted.
-- **SC-013**: In every observed Bazel failure, contributors can identify the
-  failing surface from the same invocation without rerunning the complete
-  aggregate and, for a per-case suite, can also identify the failing test case.
-- **SC-014**: Promotion changes zero required context names and leaves all
-  documented Rust leaf entry points callable with status equivalent to their
-  authoritative replacement, and Cargo implementation retirement removes zero
-  public entry point names.
-- **SC-015**: The migration can be rolled back before Cargo retirement by
-  reverting the promotion change without reconstructing deleted Rust gate
+  verdict.
+- **FR-011**: Execution-manifest v1 identifiers, completion, failure, and
+  interruption semantics MUST remain unchanged.
+- **FR-012**: Main and guest test suites MUST retain one fresh process per
+  case, exact census, and faithful ignored-case reporting.
+- **FR-013**: Broker default, layer1, and fake contexts MUST retain one process
+  per test binary, bounded threads, distinct target directories, literal
+  `tags = ["exclusive"]`, and non-overlap with every other test.
+- **FR-014**: Doctest and harness-free companions MUST be derived from the
+  current selectors, independently executed, and nonempty where required.
+- **FR-015**: Every repository scan and generated-output comparison MUST prove
+  an exact nonempty census before evaluating an absence or equality predicate.
+- **FR-016**: Schema reproducibility MUST compare two independent generations
+  against the generator-returned exact census.
+- **FR-017**: The no-bash scan MUST prove equality among the governed manifest,
+  declared inputs, and parsed files while remaining in the separate walker
+  workspace. Walk, read, or parse failure MUST refuse rather than skip.
+- **FR-018**: First-party tests MUST resolve declared binaries and fixtures
+  through the executor-specific arm selected once, verify one opened provider
+  handle opened `O_RDONLY|O_CLOEXEC` with
+  `RESOLVE_NO_MAGICLINKS` and deliberately no `RESOLVE_BENEATH` or
+  `RESOLVE_NO_SYMLINKS`, and execute that same handle using
+  `execveat(..., AT_EMPTY_PATH)` without a path, `fexecve`, `/proc`, or
+  `ENOSYS` fallback. The forced walk MUST use `O_NOFOLLOW` on intermediate
+  components but not on the provider leaf. Strict result, cleanup, and
+  evidence paths MUST retain
+  `RESOLVE_BENEATH|RESOLVE_NO_SYMLINKS|RESOLVE_NO_MAGICLINKS`. Every auxiliary
+  descriptor MUST be close-on-exec and behaviorally tested.
+- **FR-019**: `crate_universe` MUST declare exactly `product` from
+  `packages/{Cargo.toml,Cargo.lock}` and `walker` from the no-bash walker
+  manifest and lock. Product first-party crates MUST be native Bazel targets.
+- **FR-020**: Broker and guest configured native targets MUST declare their
+  own direct first-party and `@product` dependencies, cfgs, and features.
+  Exact third-party feature parity with the product external union MUST NOT be
+  required.
+- **FR-021**: `libshpool` MUST be a normal dependency while code activation
+  remains behind `real-libshpool`; generated or hand-written `crate.spec` use
+  for it MUST be rejected.
+- **FR-022**: The only accepted repin hubs MUST be `product` and `walker`.
+  Retired `main`, `broker`, and `guest` inputs MUST fail before Bazel starts
+  with their exact ADR 0054 diagnostics.
+- **FR-023**: Repin refusal tests MUST use an injected non-mutating executor,
+  exact product argv, and cwd `packages/`, and MUST reject a duplicated
+  packages prefix.
+- **FR-024**: Contributor repin, module refresh, yanked refresh/check, policy
+  generation, product-lock `cargo generate-lockfile --offline`, and evidence
+  mutation commands MUST remain unreachable from workflows and Make.
+- **FR-025**: Package policy inputs MUST be generated for broker GNU and guest
+  musl on x86_64-linux and aarch64-linux from locked, offline root metadata.
+- **FR-026**: Every production and policy graph MUST bind selected root,
+  system, target, package identity, version, source, checksum, edge kind, cfg,
+  and resolved features.
+- **FR-027**: Before deny or audit, the checker MUST prove the exact nonempty
+  selected-source set, count, readability, identity, checksums, and equality
+  between metadata and filtered-lock identities.
+- **FR-028**: Package deny MUST evaluate the root-dev-inclusive policy graph
+  without `--exclude-dev`; package audit MUST use the pinned RustSec database
+  with `--no-fetch`.
+- **FR-029**: Broker package audit MUST have no ignore. Guest package audit
+  MUST have exactly `RUSTSEC-2024-0384`. Existing aggregate ignores MUST remain
+  unchanged.
+- **FR-030**: Guest real-libshpool license policy MUST be updated only for the
+  six named package and license pairs. A global license allowlist expansion is
+  forbidden.
+- **FR-031**: Dedicated broker and guest Nix derivations MUST consume the root
+  source and root lock with explicit package, binary, default-feature, and
+  guest feature selectors, and both MUST retain the exact pinned
+  `cargoLock.outputHashes."wl-proxy-0.1.2"` value.
+- **FR-032**: Broker dynamic-host and guest static-PIE, interpreter,
+  `NEEDED`, native `e_machine`, binary-size, and closure-isolation checks MUST
+  remain independently enforcing. Guest ELF checks MUST require `ET_DYN` and
+  reject a non-PIE or wrong-machine artifact.
+- **FR-033**: The four package checks and `guest-static-elf` MUST exist and
+  realize for both root flake systems, each reading only its exact
+  system-and-target policy input.
+- **FR-034**: `test-flake-aarch64` MUST retain its job ID and required rollup
+  role while moving to native `ubuntu-24.04-arm` realization with no foreign
+  system or remote builder, and MUST run `make test-rust-supply-chain` on that
+  arm runner.
+- **FR-035**: `make test-rust-supply-chain`, `make test-drift`, and
+  `make test-flake` MUST carry recurring source, policy, mapping, refusal,
+  inventory, pin, and realization enforcement without adding a Layer-1 job.
+- **FR-036**: Local concurrency MUST use `D2B_RUST_BUDGET` and remain bounded
+  across scheduler and suite concurrency.
+- **FR-037**: Local Bazel state MUST remain beneath ignored worktree scratch,
+  have size and age bounds, and use synchronous trimming before measurement.
+- **FR-038**: Cleanup MUST be descriptor-relative, refuse unsafe or live
+  ownership before deletion, reach no tracked or external content, and emit
+  the exact ADR 0052 command sequence for its own code.
+- **FR-039**: Refusal and result messages MUST omit local identifiers, secrets,
+  raw paths, handles, and cross-condition remedies while naming exact
+  repository-relative remediation.
+- **FR-040**: The shadow workflow MUST remain non-required, keep the required
+  graph unchanged, and publish no cache.
+- **FR-041**: Pull-request jobs MUST remain read-only, request no
+  `actions: write`, and reach no direct, indirect, post-step, or unknown cache
+  writer.
+- **FR-042**: Cache credentials MUST remain unavailable to Bazel, build
+  scripts, proc macros, and repository run steps.
+- **FR-043**: Promotion caching MUST keep action and download caches separate,
+  exclude output bases, and bind every Cargo, hub, policy, toolchain, generated
+  graph, target-map, and action-environment input. Primary keys MUST be unique
+  per successful protected-`v3` run; restore prefixes MUST omit run ID and
+  commit SHA; retention MUST preserve the newest complete generation.
+- **FR-044**: Cache maintenance MUST run only on protected `v3`, paginate
+  completely, delete only authorized generations, verify headroom twice, and
+  remain outside the Rust verdict.
+- **FR-045**: Warm local, cold local, and cold CI profiles MUST retain ADR
+  0052's 10, 15, and 15 minute ceilings and 1.2 maximum multiplier.
+- **FR-046**: A promoted job MUST enforce the ADR 0052 in-band deadline and
+  process-group cleanup, with the outer timeout only as a backstop.
+- **FR-047**: A missed ceiling MUST authorize only a larger runner or a further
+  disjoint slice split, never weaker coverage or a relaxed ceiling.
+- **FR-048**: Promotion MUST require exact coverage, the isolated
+  eighteen-surface failure matrix, topology, selected package policy, native
+  dual-architecture realization, performance, cache, and ten-record
+  equivalence evidence, including the three explicit camelCase cache counts,
+  broker twenty-run exclusivity, action-network plants, and arm
+  supply-chain stable-head evidence.
+- **FR-049**: Promotion MUST preserve required context `test-rust`, public
+  `test-rust-*` names, and the fixture lane.
+- **FR-050**: Bazel-specific aliases MUST forward with status preservation and
+  MUST NOT be called by workflows after promotion.
+- **FR-051**: Alias removal MUST wait for a release containing promotion and
+  MUST be a separate change.
+- **FR-052**: Cargo implementation retirement MUST wait for ten consecutive
+  green promoted `v3` runs and MUST remove no public Make name or fixture
   behavior.
+- **FR-053**: Every guard MUST land with a positive case and a planted negative
+  or mutation in an existing Rust, policy, drift, or workflow-policy carrier.
+- **FR-054**: Migrated test suites MUST publish enforcing, redacted per-case
+  result documents while retaining raw child output only in the ordinary
+  per-target test log.
+- **FR-055**: No new top-level shell gate, Layer-1 job, required context,
+  linter, formatter, hook, remote cache, or remote execution surface may be
+  added.
+- **FR-056**: Qualification MUST run each broker context twenty consecutive
+  times with `--runs_per_test=20`, exclusivity in force, and a passing
+  tag-removal/overlap mutation.
+- **FR-057**: Bazel Rust actions MAY use only declared sandbox-local Unix
+  sockets and loopback TCP required by committed tests. Host or external
+  egress, DNS, live indexes, advisory fetches, and undeclared listeners MUST
+  be denied. Only pinned repository-rule fetches are permitted. Separate
+  forbidden-external-egress and live-index plants MUST fail and enter
+  qualification evidence without redesigning canonical tests.
+- **FR-058**: `cargo xtask bazel-module-refresh` MUST be test-first,
+  no-argument, `MODULE.bazel.lock`-only, idempotent, and use the same absolute
+  server-selecting startup options. Module drift MUST name its exact
+  repository remediation and no Make or workflow path may reach it.
+- **FR-059**: Recovery messages MUST preserve ADR 0052's per-code command
+  sequences and external-content prohibitions. Redaction, missing-remedy,
+  borrowed-remedy, wrong-external-target, replacement-directory,
+  recursive-removal, and manual-signal mutations MUST fail.
+- **FR-060**: `spec003w6` and `spec003w7` MUST remain independent children of
+  promotion. Either may land first; the second shared-file editor MUST rebase,
+  revalidate, and receive a new panel result.
+- **FR-061**: Every qualification record MUST carry the explicit camelCase
+  fields `bazelRestoreCount`, `bazelSaveCount`, and
+  `bazelPublicationCount`. Every cold record MUST additionally carry
+  `sliceDurationsSeconds` with exactly four complete durations and
+  `bazelRestoreCount` of zero. A missing field is a refusal, never an implied
+  zero.
+- **FR-062**: Deadline expiry MUST repeatedly perform non-consuming,
+  nonblocking `waitid(EXITED|NOWAIT|NOHANG)` observations throughout an
+  independently timed full grace, treat them as informational only, send
+  unconditional group SIGKILL, then reap the direct child. Blocking-wait and
+  early-reap mutations MUST fail.
+- **FR-063**: The spec003w0 implementation MUST own Nix-unit pin regeneration,
+  run `make test-nix-unit`, add new fixture-independent policy binaries to the
+  shared `tests/lib.sh` list, prove `make test-policy` runs them, and prove the
+  fixture-contract lane excludes them.
+- **FR-064**: Final validation MUST run clean-diff assertions before and after
+  every generate, repin, refresh, or product-lock regeneration command and
+  fail if the committed candidate mutates.
+- **FR-065**: The spec003w0 implementation change MUST update `AGENTS.md`,
+  `tests/AGENTS.md`, and `docs/contributing/gates-and-lints.md` for the unified
+  product workspace. The spec003w5 promotion change MUST update the same files
+  plus `tests/README.md` and
+  `docs/reference/test-execution-manifest.md` from eight Rust leaves to four
+  Bazel slices, because those two reference documents also describe the eight
+  CI jobs. These shipped docs MUST contain no process markers.
+- **FR-066**: The spec003w1 no-bash scope MUST own
+  `tests/tools/no-bash-ast-walker/src/main.rs` and its tests, fail closed on
+  walk/read/parse errors, and prove parsed-file census equality with both the
+  governed manifest and declared inputs.
+- **FR-067**: The post-merge yanked authority MUST be one committed snapshot
+  keyed exactly from `packages/Cargo.lock`. Main MUST evaluate the full
+  snapshot; broker and guest MUST evaluate exact selected-policy-graph
+  projections. Walker and `Cargo.guest.lock` MUST remain excluded.
+- **FR-068**: The spec003w0 runner and locator foundation MUST leave no intentionally
+  failing test behind an inert implementation. It MUST either implement the
+  behavior required for its spec003w0 tests or defer both test and behavior to the
+  owning later wave.
+- **FR-069**: spec003w0 prep MUST create and register green runner and locator crate
+  manifests and roots, with complete future dependencies and stable module
+  contract seams, before any runner or locator test starts. Each later prep
+  MUST own the relevant crate roots and xtask dependency and contract seams
+  without declaring not-yet-present implementation modules. Scope tests MUST
+  load their implementation through test-local paths, and only the integrator
+  may wire completed modules after the parallel frontier closes.
+- **FR-070**: Lock refresh MUST follow the authority that changed. A product
+  manifest change MUST regenerate `packages/Cargo.lock`, then repin and commit
+  `bazel/cargo/product.lock`, then refresh and commit `MODULE.bazel.lock`
+  last, and MUST prove the walker Cargo lock and `bazel/cargo/walker.lock`
+  byte-identical. A walker manifest or lock change MUST regenerate the walker
+  Cargo lock, then repin and commit `bazel/cargo/walker.lock`, then refresh
+  and commit `MODULE.bazel.lock` last, and MUST prove `packages/Cargo.lock`
+  and `bazel/cargo/product.lock` byte-identical. Initial or combined setup
+  MUST commit the product hub lock, then the walker hub lock, then
+  `MODULE.bazel.lock` last. The two initial repins MUST use command-local
+  `--lockfile_mode=off` only while the module lock is absent; neither may
+  create the module lock, and that mode MUST refuse after bootstrap. Every
+  order MUST end in clean no-op validation.
+  Hub locks, module locks, Nix pins, generated BUILD files, generated
+  inventories, and coverage/query goldens are integrator-generated only.
+- **FR-071**: Exact selected package contexts MUST be proved by a three-way
+  join. Target-filtered locked offline root Cargo metadata supplies package
+  identities, sources, candidate edges, and their `cfg` predicates;
+  `packages/Cargo.lock` plus the committed git archive pin supplies registry
+  and git checksums; package-selected stable `cargo tree` traversals supply
+  the exact root, dependency-kind reach, and resolved features. Metadata
+  supplies no checksums, and plain `cargo tree` output MUST NOT be assumed
+  machine-readable: every traversal MUST pin `--locked --offline -p <package>
+  --target <target> --no-default-features` with explicit `--features`,
+  `--charset ascii`, `--prefix depth`, `--no-dedupe`, and a
+  repository-pinned `--format` carrying package identity and feature columns
+  behind a leading delimiter. Production and dev-inclusive edges MUST be
+  traversed separately wherever dependency kind matters, and every traversal
+  identity MUST be cross-checked against metadata and the lock. The oracle MUST
+  NOT use a synthetic manifest or splice.
+- **FR-072**: A feature canary MUST prove feature union cannot leak into broker
+  or guest graphs. The canary MUST be an unrelated workspace member that
+  enables an otherwise-absent feature on a dependency shared with broker or
+  guest, and that feature MUST remain absent from the selected broker and guest
+  output. Generic Cargo and Nix build/test and Clippy contexts MUST exclude
+  broker and guest exactly, while dedicated contexts retain exact selection.
+- **FR-073**: Schema, stub-no-socket, pinned inventory, and no-bash carriers
+  MUST be distinct, file-disjoint spec003w1 carriers. Schema MUST run two independent
+  nonempty exact-census generations and reject mismatch and empty output.
+  Stub and inventory carriers MUST reject every planted missing, wrong,
+  empty, extra, runtime-state, and forbidden-listener case assigned to them.
+- **FR-074**: The runner MUST explicitly test prior-evidence invalidation,
+  multi-carrier attribution, sorted atomic partial manifest v1 evidence for
+  success, failure, and handled interruption, original-status preservation,
+  ignored-case fidelity, and a planted result containing every forbidden
+  redaction value. Repository-owned runner paths MUST invoke no shell, bound to
+  the generated inventory of FR-087.
+- **FR-075**: `D2B_RUST_BUDGET` MUST be validated once, propagated to Bazel
+  scheduling and suite concurrency, and bounded as one combined limit.
+  Missing local, invalid, scheduler-only, suite-only, and multiplicative
+  combined-limit mutations MUST be covered.
+- **FR-076**: Cache tests MUST table-drive every key input named in
+  `cache-workflow-boundaries.md` and prove that each applicable action or
+  repository primary key and restore prefix changes while the two cache
+  namespaces remain distinct.
+- **FR-077**: Promotion MUST compare Cargo's current enforcing exit status and
+  normalized finding set with the union of decomposed Bazel deny, audit, and
+  yanked results for main, broker, and guest. Main uses the full product;
+  broker and guest use exact selected projections. Any difference blocks the
+  wave and promotion.
+- **FR-078**: spec003w0 MUST update
+  `.github/workflows/release-host-binaries.yml` for the root manifest, locked
+  explicit package/bin/default-feature selectors, root release copy path,
+  collapsed workspace cache mapping, and explicit gate target directories.
+  It MUST update, not delete,
+  `tests/unit/gates/flake-check-matrix-sync.sh` and
+  `tests/unit/gates/ci-rust-cache-sync.sh`.
+- **FR-079**: The future spec003w0 binding-doc scope MUST update `CONTRIBUTING.md`,
+  `docs/contributing/workflow.md`,
+  `docs/contributing/critical-subsystems.md`, and
+  `packages/d2b-contract-tests/tests/policy_modules.rs` in addition to the
+  three existing binding-doc paths. It MUST also correct
+  `docs/adr/0052-bazel-rust-build-and-test.md`, `docs/adr/README.md`, and
+  `changelog.d/adr0054-broker-hub.md` to call ADR 0054 accepted and describe
+  the two-hub model. ADR 0038 MUST remain unchanged; ADR 0054 governs the
+  newer workspace shape.
+- **FR-080**: Failure contracts MUST define exact nonzero, redacted,
+  repository-relative remediation for stale product and walker hub locks,
+  module lock drift, generator drift, package-policy drift, yanked snapshot
+  drift, ambient repin controls, and unexpected tracked mutation. Each remedy
+  MUST include the `nix develop`, `cd packages`, exact command,
+  review/commit, and rerun sequence. Exact retired-hub diagnostics remain
+  unchanged.
+- **FR-081**: Promotion MUST introduce authoritative
+  `test-rust-slice-main`, `test-rust-slice-api`,
+  `test-rust-slice-broker`, and `test-rust-slice-aux` targets. Generated CI
+  calls only those targets. The eight existing public leaves retain their
+  exact semantics and map to exact Bazel subsets, including
+  `test-rust-main` conditional fixture behavior.
+- **FR-082**: Compatibility aliases MUST map `test-bazel-rust` to
+  `test-rust` and each `test-bazel-rust-<slice>` to the matching
+  `test-rust-slice-<slice>`, print the exact contract line on stderr, and
+  preserve status. Promotion docs and changelog announce every replacement,
+  and the spec003w6 interface test updates before alias removal.
+- **FR-083**: Post-promotion evidence MUST inventory every promoted protected
+  `v3` `test-rust` run unit, where a unit is a distinct push-created
+  (run ID, head SHA) pair and never an attempt. Attempts `1..max` MUST form
+  the complete nested history of exactly one unit; a missing attempt, or
+  attempts with conflicting head SHA or promotion provenance, MUST fail. A
+  unit's conclusion normalizes to its highest terminal attempt, and no further
+  attempt of the same unit may add a streak position. Units MUST be ordered by
+  immutable creation order (`createdAt`, then run ID) and MUST NOT be ordered
+  by rerun start time, so an old rerun cannot move behind newer failures. Each
+  unit records immutable run ID, head SHA, event, branch, complete attempt
+  history, terminal conclusion, deterministic ordering metadata, and verified
+  promotion ancestry. Pagination gaps, missing or duplicate identities,
+  non-v3, non-push, pre-promotion, and nonterminal units MUST fail.
+  Eligibility, count, and run IDs MUST be derived, never trusted from
+  self-asserted fields.
+- **FR-084**: Retirement MUST require the derived last ten distinct ordered run
+  units to be successes with no intervening failure or cancellation.
+  Promotion MUST integrate all spec003w5 scope results into one atomic candidate
+  relative to the spec003w5 parent, assert its complete path diff, and revert that
+  exact commit in rehearsal. Pre-merge rehearsal MUST identify the candidate
+  from the verified current atomic candidate HEAD and the recorded spec003w5
+  parent; `promotion-record.json` is created only after merge and MUST NOT be
+  a pre-merge input. Every code-changing wave MUST own one semantic
+  changelog fragment.
 
-## Assumptions
+- **FR-085**: The same change that introduces each shadow Make target MUST add
+  that target to `APPROVED_MAKE_TARGETS`. All six shadow targets (the
+  aggregate, the four slices, and shutdown) MUST be approved in spec003w1,
+  with a positive test proving each approved name resolves to a real Makefile
+  rule and that a workflow step calling it is accepted, and a negative test
+  proving both an unapproved `test-bazel-rust-<name>` call and an approved
+  name with no Makefile rule are rejected.
+- **FR-086**: A typed qualification validator, implemented no later than
+  spec003w3 in `packages/xtask/src/bazel_qualification.rs` with tests and
+  exposed as the contributor-only `cargo xtask bazel-qualification-validate`,
+  MUST derive every qualification
+  threshold from complete paginated, attempt-aware Cargo, Bazel, and fixture
+  run inventories plus immutable content references. It MUST reject page gaps,
+  missing attempts, omitted intervening protected-`v3` pushes, omitted,
+  forged, duplicate, inconsistent, and wrong-candidate references.
+  It MUST normalize each run ID to its highest terminal attempt, derive
+  same-head pairing and mismatch resets, and select the five newest qualifying
+  cold records from the complete stream.
+  `qualification.json` MUST NOT qualify through trusted booleans; boolean
+  fields are informational mirrors only, and a mirror that disagrees with the
+  derived result is a refusal. Evidence curation and promotion validation MUST
+  run the validator, and contributor validation MUST run it before any
+  informational inspection.
+- **FR-087**: The no-shell property MUST be bound to
+  `bazel/generated/no-shell-inventory.json`, an exact, generated,
+  drift-checked source and spawn-site inventory whose three sets are each
+  nonempty. Governed sources,
+  declared carrier inputs, and discovered spawn sites MUST agree
+  bidirectionally: the governed-source, declared-input, and spawn-site source
+  projections MUST be equal in both directions, and a fresh scan's exact
+  spawn-site keys MUST equal the committed `spawnSites` keys in both
+  directions. No governed source may be missing from either projection, no
+  declared input or spawn-site source may be ungoverned, and no discovered or
+  recorded spawn site may be missing from the other set. Empty, missing-entry,
+  extra-entry, and planted-shell inventories MUST fail. The integrator commits
+  the generated inventory; slices preview it only.
+- **FR-088**: The spec003w0 Cargo gate MUST take its package supply-chain
+  inputs from the native-system selected policy inputs for broker GNU and
+  guest musl, with an exact source census, deny, and pinned `--no-fetch`
+  audit, while the aggregate root-lock and `Cargo.guest.lock` checks stay
+  independent. Guest static dependency policy MUST consume only the selected
+  production closure and production lock; policy metadata and lock are
+  reserved for deny and audit. The pinned test inventory MUST select packages from the one root
+  lock and MUST NOT back up, restore, or otherwise mutate any lock file. Tests
+  for both MUST precede implementation.
+- **FR-089**: spec003w6 entry MUST require a containing published semantic
+  release tag matching `v<major>.<minor>.<patch>` exactly, not any containing
+  tag. Entry MUST prove the tag matches the anchored pattern, contains the
+  promotion commit, resolves to the same peeled commit locally and on the
+  origin remote, and carries a published non-draft release.
 
-- ADR 0052 is accepted, is amended as of 2026-08-03, and that amended record is
-  the binding architectural decision for this feature. The amendment is a
-  merged prerequisite rather than work this feature performs.
-- Committed, passing code and the current execution-manifest reference define
-  the authoritative baseline when prose and implementation differ.
-- The baseline migration set is eighteen Rust surfaces under
-  `D2B_SKIP_FIXTURE_BUILD=1`; the two fixture-backed contract surfaces remain
-  outside this Bazel-only set and are carried as a required same-commit
-  companion verdict rather than being compared between executors.
-- The reference local host and continuous-integration runner are the profiles
-  defined by ADR 0052 unless a separately reviewed change records a new basis.
-- The current Make target names and required `test-rust` context are public
-  contributor contracts that must survive both promotion and Cargo
-  implementation retirement.
-- The shadow period intentionally carries two working Rust execution paths and
-  accepts the temporary maintenance and disk cost, including that both binary
-  location arms stay green on the Cargo path for its whole duration.
-- Promotion, cache maintenance, publication, the equivalence streak, and the
-  post-promotion observation window all run on protected `v3`.
-- Detailed cleanup, timeout, deadline, cache, locator, per-case result, vendor
-  materialization, and process-control mechanics are implemented exactly as
-  constrained by the amended ADR 0052 and are not redesigned by this feature
-  specification.
+## Key Entities
 
-### Dependencies
+- **Product Workspace**: The resolver-v2 workspace rooted at
+  `packages/Cargo.toml` with the authoritative `packages/Cargo.lock`.
+- **Walker Workspace**: The separate no-bash AST tool manifest and lock.
+- **Dependency Hub**: Exactly `product` or `walker`.
+- **Configured First-Party Target**: A native Bazel target whose direct
+  first-party dependencies, features, and cfg values describe one selected
+  Cargo context.
+- **Package Policy Input**: A generated system-and-target-specific production
+  or policy graph plus filtered lock.
+- **Selected Context Oracle**: A three-way join of locked offline
+  target-filtered root Cargo metadata (identities, sources, candidate edges,
+  `cfg`), `packages/Cargo.lock` plus the committed git archive pin
+  (checksums), and package-selected stable Cargo tree traversals under pinned
+  flags (root, dependency-kind reach, resolved features); no synthetic
+  manifest or splice.
+- **Selected Source Census**: The exact sorted non-path source identities and
+  checksums derived from one policy graph and its filtered lock.
+- **Product Yanked Snapshot**: One committed product-lock-bounded key set used
+  whole by main and by exact selected-graph projections for broker and guest.
+- **Verified Executable Handle**: One `O_RDONLY|O_CLOEXEC` provider descriptor
+  opened with `RESOLVE_NO_MAGICLINKS` only, whose bytes are verified and
+  executed with `execveat(AT_EMPTY_PATH)`.
+- **Cache Generation**: One action or repository cache entry with a
+  run-unique primary key, run/SHA-free restore prefix, and newest-generation
+  retention, counted in a record as `bazelRestoreCount`, `bazelSaveCount`,
+  and `bazelPublicationCount`.
+- **No-Shell Spawn Inventory**: One generated, drift-checked, nonempty record
+  of governed sources, declared carrier inputs, and discovered spawn sites that
+  must agree bidirectionally.
+- **Rust Surface**: One of the existing eighteen execution-manifest IDs.
+- **Carrier Target**: One independently reported Bazel target assigned to one
+  Rust surface.
+- **Qualification Record**: A protected `v3` push record pairing Cargo,
+  Bazel, and fixture verdicts on one commit, whose qualified status is derived
+  from immutable evidence references, never from a boolean field.
+- **Typed Qualification Validator**: The contributor-reachable checker that
+  resolves every qualification threshold from immutable evidence references and
+  refuses omitted, forged, duplicate, inconsistent, or wrong-candidate ones.
+- **Promotion Evidence Set**: The immutable coverage, failure, topology,
+  package-policy, architecture, performance, cache, and equivalence evidence
+  required before promotion.
+- **Supply Chain Equivalence Result**: Exact current-Cargo versus decomposed
+  Bazel status and normalized-finding equality for one context.
+- **Post-Promotion Run Unit**: One API-derived immutable push-created
+  `(run ID, head SHA)` pair carrying its complete `1..max` attempt history,
+  provenance, normalized terminal conclusion, immutable creation ordering, and
+  verified promotion ancestry. A unit contributes exactly one streak position;
+  an attempt never does.
 
-- The amended ADR 0052 document and its referenced execution-manifest,
-  toolchain, supply-chain, no-bash, workflow, and test-inventory contracts.
-- The current Cargo Rust gate must remain runnable throughout shadow evidence
-  collection.
-- The pinned development environment must provide the accepted build system and
-  companion tool versions, including the build-file formatting tools, without
-  requiring an unpinned version launcher anywhere on the gate path.
-- Promotion depends on `v3` qualification-record history and repository cache
-  maintenance capabilities that cannot be demonstrated by a source diff
-  alone.
-- Alias removal depends only on a release containing the promotion commit, and
-  Cargo implementation retirement depends only on post-promotion `v3` history.
+## Success Criteria
+
+- **SC-001**: Exactly eighteen surface IDs have nonempty, total, unambiguous
+  carrier coverage.
+- **SC-002**: Ten consecutive protected-`v3` qualification records carry
+  matching Cargo and Bazel verdicts and a passing same-commit fixture verdict.
+- **SC-003**: Eighteen isolated plants fail exactly their owning surfaces.
+- **SC-004**: Cargo and Bazel report equal test, ignored, doctest,
+  harness-free, API, schema, scan, and pinned-inventory censuses.
+- **SC-005**: Each broker context passes twenty consecutive executions under
+  the required serialized topology.
+- **SC-006**: Three warm local samples have median at most 10 minutes and
+  maximum at most 12.
+- **SC-007**: Three cold local samples have median at most 15 minutes and
+  maximum at most 18.
+- **SC-008**: The five most recent qualifying cold CI records have median at
+  most 15 minutes and no record above 18.
+- **SC-009**: Shadow creates zero shared Bazel cache entries and pull requests
+  have zero write-capable cache paths.
+- **SC-010**: Promotion publishes separate bounded action and download caches
+  from one writer after synchronous trimming and two at-most-8-GiB headroom
+  checks.
+- **SC-011**: All four broker/guest system-and-target contexts pass exact
+  closure, source census, checksum, deny, pinned no-fetch audit, and leakage
+  checks.
+- **SC-012**: All eight per-system package check wrappers plus both
+  architecture-specific `guest-static-elf` checks exist in the pins and
+  realize on their native runners.
+- **SC-013**: All required planted guards, including retired-hub argv/cwd,
+  source census, license policy, wrong-system, wrong-target, wrong-runner,
+  foreign-system, remote-builder, and stale-output cases, fail as specified.
+- **SC-014**: Promotion and retirement change zero required context names and
+  remove zero public Rust Make entry points.
+- **SC-015**: Before Cargo retirement, reverting the promotion commit restores
+  Cargo authority without reconstructing deleted behavior.
+- **SC-016**: All three broker suites retain `tags = ["exclusive"]`, fail the
+  tag-removal mutation, and pass twenty consecutive executions per context
+  without overlapping any test.
+- **SC-017**: External-egress and live-index plants fail, canonical declared
+  local-socket tests pass, and the fetch inventory contains only pinned
+  repository rules.
+- **SC-018**: Both dedicated Nix derivations contain the exact
+  `wl-proxy-0.1.2` hash, and missing, wrong, or one-sided pins fail.
+- **SC-019**: Module refresh changes only `MODULE.bazel.lock` when stale,
+  changes nothing on its second run, carries matching absolute startup
+  options, and has zero Make/workflow reachability.
+- **SC-020**: Provider route, descriptor inheritance, `ENOSYS`, blocking-wait,
+  early-reap, shortened-grace, and conditional-SIGKILL mutations all fail.
+- **SC-021**: Every qualifying record carries `bazelRestoreCount`,
+  `bazelSaveCount`, and `bazelPublicationCount`; every selected cold record
+  has `bazelRestoreCount` of zero and four `sliceDurationsSeconds` entries;
+  cache
+  retention keeps the newest generation and restore prefixes contain neither
+  run ID nor commit SHA.
+- **SC-022**: Native `test-flake-aarch64` passes five realizations and
+  `make test-rust-supply-chain` on one renderer-covered stable head.
+- **SC-023**: Every mutating validation command leaves the committed candidate
+  clean under tracked, staged, and untracked-path assertions.
+- **SC-024**: Main, broker, and guest yanked checks use the one product-lock
+  snapshot with exact full-set or projection semantics; walker and
+  `Cargo.guest.lock` never enter its key authority.
+- **SC-025**: Canonical loopback TCP and Unix-socket tests pass under the
+  declared local-socket policy, while external-egress, DNS, live-index, and
+  undeclared-listener plants fail.
+- **SC-026**: Provider tests accept escaping runfiles leaf symlinks without
+  `RESOLVE_BENEATH`, reject reintroducing it, and preserve strict flags on
+  result and cleanup paths.
+- **SC-027**: Native guest artifacts are `ET_DYN` for the expected x86_64 or
+  aarch64 `e_machine` and have no interpreter or `DT_NEEDED`; non-PIE and
+  wrong-machine plants fail.
+- **SC-028**: Manifest, JUnit, no-shell, redaction, ignored-case, original
+  status, and combined-budget mutations all fail their exact guards.
+- **SC-029**: Every bound cache input changes each applicable primary key and
+  restore prefix, and action and repository namespaces never collapse.
+- **SC-030**: Cargo and decomposed Bazel supply-chain exit statuses and
+  normalized finding unions are equal for all three contexts.
+- **SC-031**: The release workflow, both retained fail-closed gate scripts, the
+  three-way-join context oracle under its pinned traversal flags, the
+  shared-dependency feature canary, and generic/dedicated context selectors
+  pass.
+- **SC-032**: Post-promotion run units are complete and derived; the last ten
+  distinct ordered run units are successes with no intervening reset before
+  retirement.
+- **SC-033**: All six shadow Make targets are approved in spec003w1 and each
+  resolves to a real Makefile rule; an unapproved shadow target call and an
+  approved name without a Makefile rule both fail.
+- **SC-034**: The typed qualification validator derives every threshold from
+  complete paginated, attempt-aware run inventories and immutable content
+  references; page-gap, missing-attempt, omitted-push, omitted, forged,
+  duplicate, inconsistent, and wrong-candidate plants each fail, and no
+  trusted boolean can qualify a record.
+- **SC-035**: Each of the generated no-shell inventory's three sets is nonempty;
+  the three source projections and the fresh-scan/committed spawn-site keys are
+  equal in both directions; empty, missing-entry, extra-entry, and
+  planted-shell cases each fail.
+- **SC-036**: The pinned inventory lists under the one root lock with no lock
+  backup or restore, the four native selected policy inputs drive the package
+  census, deny, and pinned `--no-fetch` audit, guest static dependency policy
+  reads only its production graph/lock, and the aggregate root and
+  `Cargo.guest.lock` checks remain independent.
+- **SC-037**: spec003w6 entry accepts only a containing published
+  `v<major>.<minor>.<patch>` tag whose peeled local and origin commits match;
+  a two-component tag, an unpushed tag, a divergent local/remote tag, and a
+  draft-only release each fail entry.
+- **SC-038**: The last ten distinct ordered run units succeed, while a
+  repeated-attempt plant and an old-rerun-after-failure plant each fail to
+  extend the streak.
+
+## Assumptions and Dependencies
+
+- ADR 0054 is merged and is the binding amendment to ADR 0052.
+- The current committed tree at `a7093601` is the implementation base. Parked
+  historical `spec003-w0-*` and `spec003-w0` branches and spike commits are
+  read-only evidence.
+- Existing passing code wins when it conflicts with older Spec 003 prose. The
+  complete corrections are recorded in `plan.md`.
+- The root flake system set remains exactly `x86_64-linux` and
+  `aarch64-linux`.
+- The existing eighteen surface IDs and two fixture-backed companion surfaces
+  remain unchanged.
+- Implementation may begin only after this amended artifact set receives
+  unanimous Track A plan-panel signoff.

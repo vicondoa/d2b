@@ -1,1207 +1,1190 @@
-# Implementation Plan: ADR 0052 Bazel Rust Gate
+# Implementation Plan: ADR 0052 Under ADR 0054
 
-**Branch**: `adr052-bazel-rust-spec` | **Date**: 2026-08-03 |
+**Track**: A
+
+**Branch**: `spec003-adr0054-amend`
+
+**Date**: 2026-08-05
+
 **Spec**: [spec.md](./spec.md)
-
-**Input**: The amended ADR 0052 and the feature specification in this
-directory.
 
 ## Summary
 
-ADR 0052 is accepted and amended as of 2026-08-03. The amendment corrected five
-mechanics the first draft could not implement and two supporting statements
-that were wrong about the build substrate; it is merged and is settled
-authority for this plan. Add Bazel 8.6.0 beside the authoritative Cargo Rust
-gate, preserve the exact eighteen-surface execution and isolation contract,
-collect qualification evidence on protected `v3`, and promote only after every
-mechanical gate passes. Cargo manifests, four workspace locks, policy files,
-and the stable and nightly toolchain pins remain authoritative. Promotion
-preserves the `test-rust` context and the Make interface. Alias removal and
-Cargo implementation retirement are later independent changes, and neither
-removes a public entry point name.
+Restart Spec 003 from merged `v3` after ADR 0054. First merge broker and guest
+into one resolver-v2 product Cargo workspace and root lock, establish one
+product and one walker Bazel hub, generate package-scoped broker GNU and guest
+musl policy inputs for both root flake systems, and retain targeted Cargo and
+dedicated Nix build contexts. Then continue ADR 0052's exact-coverage shadow,
+safety, qualification, promotion, alias-removal, and Cargo-retirement
+lifecycle.
+
+No parked historical `spec003-w0-*` or `spec003-w0` commit is assumed merged.
+Its source shape and the unified Bazel spike are read-only evidence. Every
+implementation file is recreated or
+adapted from current `v3`, committed in the new wave, validated, reviewed, and
+sealed normally.
 
 ## Technical Context
 
-**Language/Version**: Rust 1.97.0 for the gate and `nightly-2026-02-16` for the
-API census. The nightly channel is reached by a repository-owned per-target
-transition over the census subgraph, never by a global channel flag.
+**Product Cargo authority**:
+`packages/{Cargo.toml,Cargo.lock}`, resolver version 2, including broker and
+guest.
 
-**Primary Dependencies**: Bazel 8.6.0 from pinned nixpkgs; Bzlmod with
-`MODULE.bazel.lock` under `common --lockfile_mode=error` and
-`common --check_direct_dependencies=error`; `rules_rust` 0.73.0
-as the initial explicit pin, including `crate_universe`, subject to a W0
-measurement scoped to this repository's graph rather than to basic version
-compatibility, which upstream already publishes; the `cargo-bazel` generator
-consumed from its registry-pinned URL and sha256 with the source-bootstrap
-fallback refused; repository-owned `cargo xtask gen-bazel`, topology runner,
-deadline wrapper, cleanup plumbing, dual-mode test locator, `rustdoc_json`
-rule, channel transition rule, and vendor repository rule; and the existing
-Cargo, nextest, cargo-deny, cargo-audit, RustSec, Make, and workflow
-generators. The dev shell must expose `bazel_8` and `bazel-buildtools` before
-any Bazel target lands; Bazelisk is not on the gate path and is not required.
+**Tool Cargo authority**:
+`tests/tools/no-bash-ast-walker/{Cargo.toml,Cargo.lock}`.
 
-**Storage**: Committed module lock, four per-hub `crate_universe` Bazel-side
-locks, generated `BUILD.bazel` files, generated `.bazelignore`, governed-source
-and coverage-map artifacts, derived censuses, the build-script and
-action-environment inventory, and migration evidence summaries. Local output,
-action cache, and repository cache live only below `.scratch/bazel/`, reached
-through absolute startup options the wrapper supplies. Promoted action and
-download caches are separate; the output base is never cached.
+**Generated static-guest input**:
+`packages/Cargo.guest.lock`, not a workspace or hub.
 
-**Testing**: Existing Layer-1 Rust tests, `test-policy`, `test-drift`,
-`test-fixture-contracts`, workflow policy tests, and the Cargo Rust gate. New
-behavior uses the lowest existing surface. No new shell gate and no new Layer-1
-job.
+**Bazel dependency hubs**:
+`product` and `walker`.
 
-**Target Platform**: Linux `x86_64-linux`. Local reference: at least 12
-physical cores, 32 GiB available RAM, and SSD/NVMe. CI reference:
-`ubuntu-latest`, 4 vCPU and 16 GiB.
+**Configured product contexts**:
+generic main, broker default, broker `layer1-bootstrap`, broker
+`fake-backends`, guest `real-libshpool`.
 
-**Project Type**: Internal monorepo build, test, policy, and delivery
-orchestration. No runtime daemon, broker, VM, package, image, fixture, or
-release contract changes.
+**Package policy contexts**:
 
-**Promotion Lineage**: Protected `v3`, settled by the merged ADR amendment. A
-qualification record is a push event on `refs/heads/v3` produced by a merged
-pull request, carrying the head commit, both workflow run identifiers, both
-rollup verdicts, the same-commit fixture-contract companion verdict, and, for a
-cold sample, the four slice durations. Pull-request runs are diagnostic and
-stay path-filtered. W0 verifies the amended ADR commit is present in its base
-and refuses to proceed otherwise; no task in this feature amends the ADR.
+```text
+x86_64-linux/x86_64-unknown-linux-gnu/broker-production
+x86_64-linux/x86_64-unknown-linux-musl/guest-real-libshpool
+aarch64-linux/aarch64-unknown-linux-gnu/broker-production
+aarch64-linux/aarch64-unknown-linux-musl/guest-real-libshpool
+```
 
-**Performance Goals**: Three warm local runs: median at most 10 minutes and
-maximum at most 12. Three cold local runs: median at most 15 and maximum at
-most 18. Five most recent qualifying cold qualification records: median at most
-15 and none above 18. The cold continuous-integration ceiling does not become
-binding until the W3 feasibility measurement records it as attainable on the
-real runner class; the only pre-authorized answers to a shortfall are a larger
-runner class or a further disjoint slice split. A promoted job has a 15-minute
-total ceiling, 2-minute checkout allowance, 13-minute post-checkout in-band
-window, and 17-minute outer backstop. The `api` slice's profiles carry the
-second configuration the channel transition creates.
+**Rust tools**:
+stable 1.97.0 and the existing pinned nightly API toolchain.
 
-**Constraints**: Cargo and toolchain inputs stay authoritative; no network from
-any Bazel action, no remote cache or execution, no fixture migration, no
-Nix/package/release migration, no new linter, formatter, or hook, no new
-Layer-1 job, and no new required context. Repository-rule fetch is permitted
-and is always pinned by URL plus checksum or by git rev.
-`CARGO_BAZEL_REPIN`, `REPIN`, and `CARGO_BAZEL_REPIN_ONLY` are never set in the
-Make wrapper or in continuous integration. The single exception is the scoped
-child environment `cargo xtask bazel-repin --hub <name>` constructs for the one
-Bazel process it spawns; that command is not a Make target, no workflow may
-reach it, and a structural guard allowlists exactly that one construction site.
-`cargo xtask bazel-module-refresh`, `cargo xtask bazel-yanked-refresh`, and
-`cargo xtask bazel-evidence prepare-cold-local` are likewise not Make targets
-and unreachable from any workflow; `cargo xtask bazel-yanked-check` is offline,
-runs inside the three supply-chain carriers as a declared-input action, and is
-also not a Make target. The structural guard refuses all five by name in
-`Makefile` and in `.github/workflows/`.
-`bazel-yanked-refresh` is the one repository command that opens a socket, and
-it does so only through the `IndexClient` implementation of the
-`YankedIndex` boundary; no gate action reaches that boundary.
-Every hub sets `lockfile`, `cargo_lockfile`, and
-`skip_cargo_lockfile_overwrite = True`, because the last of those defaults to
-false at `rules_rust` 0.73.0 and a repin would otherwise rewrite the
-authoritative Cargo lock. No `.bazelrc` line and no wrapper
-argument sets `@rules_rust//rust/toolchain/channel`. `.bazelrc` carries only
-`common`, `build`, `test`, and `build:<config>` lines; every startup option is
-supplied by the wrapper as an absolute path and is byte-identical across
-`build`, `test`, `query`, `info`, `shutdown`, `clean`, and, from W2, the
-repin and module-refresh children.
-`D2B_RUST_BUDGET` remains the only resource control, and custom Bazel local
-resources are inert because `--local_test_jobs` discards tag-derived resources.
-`--test_output=streamed` is forbidden during any measured run. Any change to
-the action-environment allowlist invalidates the entire action cache and must
-be charged against the 4 GiB promoted budget in the same review. Any Bazel
-version bump reopens the disk-cache garbage-collection design review rather
-than being an ordinary version bump. Local action cache: 8 GiB/14 days; local
-repository cache: 2 GiB; output-root soft/hard marks: 20/40 GiB. Promoted
-action/download snapshots: 4/1 GiB, with repository use plus planned snapshot
-at most 8 GiB.
+**Build tools**:
+Bazel 8.6.0, reviewed `rules_rust` pin, pinned `cargo-bazel`.
 
-**Scale/Scope**: Exactly eighteen execution-manifest IDs, four CI slices
-(`main`, `api`, `broker`, `aux`), four `crate_universe` hubs over
-`packages/Cargo.lock`, `packages/d2b-priv-broker/Cargo.lock`,
-`packages/d2b-guest-shell-runner/Cargo.lock`, and
-`tests/tools/no-bash-ast-walker/Cargo.lock`, plus `packages/Cargo.guest.lock`
-as a generator and cache-key input that is not a hub. 56 main workspace
-members, 205 integration-test files, and 912 tracked Rust files at the ADR
-measurement. The governed no-bash input set, the executed harness-free census,
-the doctest census, and the emitted schema census are all generator-derived and
-drift-checked; no literal count in this plan is normative. The locator
-migration covers 25 files that locate binaries through compile-time Cargo
-environment expansion and 20 test files that resolve `CARGO_MANIFEST_DIR`, 11
-of those through a `repo_root()` helper. Two fixture-backed surfaces remain on
-Cargo/Nix and are carried as a required same-commit companion verdict.
+**Execution surface**:
+the existing eighteen manifest IDs and two fixture companion IDs.
+
+**Platforms**:
+root flake systems `x86_64-linux` and `aarch64-linux`. Native x86 and arm
+realization is required. ADR 0008 runtime support is unchanged.
+
+**Validation carriers**:
+existing Rust, policy, drift, flake, fixture-contract, workflow-policy, and
+Layer-1 surfaces. No new top-level shell gate or Layer-1 job.
 
 ## Constitution Check
 
-### Pre-research gate
-
 | Principle | Result | Basis |
 | --- | --- | --- |
-| I. Daemon-Only Control Plane | PASS | No service, unit, per-VM work, or runtime path is added. |
-| II. Broker-Mediated Privilege | PASS | Validation is unprivileged. Cleanup acts only as the invoking user below `.scratch/`. |
-| III. Reasonable Isolation | PASS | Broker suites retain exclusive per-binary topology; main and guest retain per-case processes with per-case temporary directories. |
-| IV. Contract-Driven Compatibility | PASS | Execution-manifest v1 is reused unchanged. The amended ADR is a merged prerequisite that W0 verifies mechanically; generated, Make, and context contracts are guarded. Retirement removes implementations, never public names. |
-| V. Test-Layer Discipline | PASS | Existing Rust, policy, drift, and workflow-policy surfaces carry coverage. The coverage guard is split so each half runs where it can actually execute. |
-| VI. Panel-Gated Work | PASS | Every wave has plan and diff gates with all ten roles, with the `software` seat filled by the Bazel and `rules_rust` expert. Green tests waive nothing. This plan declines pipelining. |
-| VII. Traceable Artifacts | PASS | Markers stay in planning, commits, and PRs. Code waves carry semantic fragments and ASCII hyphens. |
-
-Broker topology, per-case evidence publication, binary location, execution
-evidence, cleanup safety, cache permissions, and shell-free repository-owned
-execution are load-bearing and receive positive and planted negative guards
-before shadow use.
-
-### Post-design gate
-
-All seven principles still pass. Phase 1 adds only internal migration
-contracts, defers to execution-manifest v1, uses existing Layer-1 carriers,
-separates evidence collection from promotion, and blocks implementation until
-the merged amended ADR is verified present. There is no violation.
-
-## Project Structure
-
-### Planning artifacts
-
-```text
-specs/003-adr052-bazel-rust/
-|-- plan.md
-|-- research.md
-|-- data-model.md
-|-- quickstart.md
-|-- contracts/
-|   |-- README.md
-|   |-- make-target-compatibility.md
-|   |-- coverage-map.md
-|   |-- runner-environment.md
-|   |-- workspace-and-tool-pinning.md
-|   |-- execution-manifest-binding.md
-|   |-- shadow-promotion-evidence.md
-|   |-- cache-workflow-boundaries.md
-|   `-- recovery-deadline.md
-|-- evidence/                       # Added from W4; summaries only
-|   |-- qualification.json          # W4 immutable qualification record set
-|   |-- promotion-record.json       # W5 promotion outcome
-|   `-- post-promotion.json         # Independent release/run clocks
-`-- tasks.md                        # Phase 2 task list
-```
-
-### Expected implementation locations
-
-```text
-.bazelversion
-.bazelrc                              # common/build/test/config lines only
-.bazelignore                          # Generated; covers .scratch/ and all Cargo output dirs
-MODULE.bazel
-MODULE.bazel.lock
-Makefile                              # Supplies all absolute startup options
-flake.nix                             # Dev-shell tools only: bazel_8, bazel-buildtools
-bazel/                                # Repository-owned Bazel rules/helpers
-bazel/cargo/                          # Four crate_universe hubs and per-hub locks
-bazel/rules/channel_transition.bzl    # Per-target nightly transition over the census
-bazel/rules/rustdoc_json.bzl          # JSON render plus emitted toolchain version
-bazel/vendor/                         # Vendor repository rule and lock classification
-bazel/supply_chain/                   # Offline deny/audit carriers and the yanked snapshot
-bazel/carriers/                       # Carrier fragments consumed by ci/rust
-ci/rust/BUILD.bazel                   # ADR-fixed carriers, guard, and aggregate
-packages/**/BUILD.bazel               # Generated first-party targets
-tests/tools/no-bash-ast-walker/BUILD.bazel   # Generated; fourth hub consumer
-packages/xtask/src/bazel.rs           # gen-bazel, gen-bazel --check, bazel-repin, bazel-module-refresh
-packages/xtask/src/bazel_yanked.rs    # Yanked refresh and check; YankedIndex seam
-packages/xtask/tests/bazel_module_refresh.rs # Real-Bazel module lock drift and remediation
-packages/xtask/src/                   # Schema output and evidence helpers
-packages/xtask/tests/policy_ci.rs
-packages/xtask/tests/fixtures/ci/
-packages/d2b-contract-tests/tests/policy_docs.rs # W0 wave-note lint; W2 source-shape tests
-specs/003-adr052-bazel-rust/wave-notes/ # w0.md, w1.md, w2.md; one writer each
-packages/d2b-bazel-support/src/fsops.rs    # Injectable FileSystem: writer, cleanup, providers, notes
-packages/d2b-bazel-support/src/runfiles.rs # Injectable RunfilesView for locator and runner
-packages/d2b-bazel-support/src/startup.rs  # The one absolute startup-option construction
-packages/d2b-bazel-support/tests/provider_handle.rs # Fake-driven provider open, verify, exec lifecycle
-packages/d2b-bazel-runner/src/bin/d2b-exec-probe.rs # Probe binary for the execveat conformance test
-packages/d2b-bazel-runner/tests/exec_handle.rs      # Host-backed execveat and CLOEXEC conformance
-packages/d2b-bazel-runner/src/clock.rs # Injectable Clock and UptimeSource for deadlines
-tests/unit/meta/w0-dep-direction.sh    # Extended with the build-tooling direction rule
-packages/                             # Support, runner, locator crate paths fixed by W0 prep
-tests/golden/bazel-rust-coverage.json
-tests/golden/bazel-rust-query.json     # Committed drift-checked query result
-tests/test-rust.sh                     # Cargo authority; fixture mode survives
-tests/layer1-jobs.json                 # Promotion only
-tests/ci/layer1-workflow.template.yml  # If generator input requires it
-.github/workflows/pr-bazel-rust.yml    # Added W3, deleted W5
-.github/workflows/pr-l1-static-fast.yml
-changelog.d/                           # One semantic fragment per code-changing wave/PR
-```
-
-`gen-bazel` owns all generated BUILD files, `.bazelignore`, the governed-source
-manifest, every derived census, and the build-script and action-environment
-inventory. ADR 0052 fixes labels and ownership, not every helper filename. W0
-prep selects the support crate, the runner crate, the locator crate, and exact
-helper paths before parallel worktrees open.
-
-### Dependency direction among the build-tooling crates
-
-Three internal crates carry this migration's Rust code, and their edges are a
-closed set rather than a convention:
-
-```text
-packages/d2b-bazel-support/   <- packages/d2b-bazel-runner/
-                              <- packages/d2b-test-locator/
-                              <- packages/xtask/            (from W2)
-                              <- packages/d2b-contract-tests/ (dev only)
-```
-
-`d2b-bazel-support` is neutral: it declares no first-party dependency at all.
-Every other edge among these three and `xtask` is refused, in particular
-`xtask -> d2b-bazel-runner`, which an earlier draft would have created when the
-wrapper's startup-option construction was going to live in the runner. That
-edge is wrong in direction: `xtask` is the generator and the contributor
-command surface, and the runner is a consumer of the graph `xtask` generates,
-so a runner dependency makes the generator's own build depend on the thing it
-generates targets for. Moving the shared construction into a neutral crate is
-what removes the temptation rather than documenting it away.
-
-`packages/d2b-contract-tests` is the fourth consumer and the only one that
-reaches the support crate as a **dev-dependency**, because the wave-note policy
-lint reads its corpus through the same anchored filesystem boundary rather than
-through `std::fs::read_dir` and `std::fs::read_to_string`. That edge is
-dev-only by construction: the crate ships no non-test target that needs it, and
-the direction gate refuses it in any non-dev kind, which keeps the support
-crate's non-dev consumer list at exactly the runner, the locator, and `xtask`.
-
-The rule is enforced by the repository's existing crate-granular gate,
-`tests/unit/meta/w0-dep-direction.sh`, which `tests/test-policy.sh` and
-`tests/static.sh` already run. That gate resolves dependencies with
-`cargo metadata --no-deps`, so it sees the real resolved crate name after a
-`package =` rename, after workspace inheritance, and for target-specific
-entries, and it already fails closed when the resolver cannot run. A
-manifest-text scan in a Rust policy test would miss exactly those three forms,
-which is why the guard extends the existing resolver-backed gate instead of
-starting a parallel one. FR-053 forbids a new top-level shell gate; this adds
-no gate, no Layer-1 job, and no required context.
-
-W0 extends that gate with: `d2b-bazel-support` declares no workspace member and
-no `d2b`-prefixed crate; `d2b-bazel-runner` and `d2b-test-locator` declare
-`d2b-bazel-support` and nothing else first-party; `xtask` declares neither the
-runner nor the locator in any dependency kind, so a dev-dependency cannot
-smuggle the edge back through `packages/xtask/tests/`; the only members that
-may declare `d2b-bazel-support` as a non-dev dependency are the runner, the
-locator, and `xtask`, so `d2b-contract-tests` declaring it in any non-dev kind
-is refused while its dev edge is permitted; and no member at all may declare
-`d2b-bazel-runner`
-outside the runner's own targets; and the gate carries a required-crate list
-naming all three and refuses when any of them is absent from the resolver's
-member set, rather than falling through its existing "not a workspace member
-yet" skip, because a silent skip on a misspelled crate name is the one path by
-which a direction gate passes while enforcing nothing. That required-crate
-assertion is satisfiable only on the integrated tree, since the runner and the
-locator become members at integration, so the planted-edge observations happen
-there rather than inside a single scope worktree, and the list is never
-weakened to make one worktree green.
-
-`d2b-test-locator` is deliberately outside that reverse rule: the W1 migration
-makes it a **dev-dependency** of every first-party crate whose tests locate a
-binary or a fixture, which is the whole point of the crate, and the existing
-gate already filters dev edges out of the direction check.
-
-### Provider resolution is a read over a declared forest, not a path mutation
-
-The two resolve policies are asked about often enough that the asymmetry is
-recorded here rather than re-derived each round.
-
-A provider lookup opens one artifact that Bazel has already declared as a
-`data` dependency and already materialized into the runfiles tree for this
-test. The runner creates nothing there, renames nothing there, and unlinks
-nothing there; it supplies an anchor plus one declared relative component,
-reads, and executes. A runfiles tree is a symlink forest **by construction** -
-that is the interface Bazel publishes, not an anomaly at this call site - so
-the leaf a provider open reaches is a symlink in the ordinary case, not the
-exceptional one. Measured on the reference host against a runfiles-shaped leaf
-symlink whose target lies outside the anchor, `RESOLVE_BENEATH` fails `EXDEV`
-and `RESOLVE_NO_SYMLINKS` fails `ELOOP`. A policy that refuses every legitimate
-input is not a fail-closed guard; it is a guard that gets switched off, and the
-switch is the actual hole.
-
-What binds which bytes execute is therefore identity, not link refusal, and
-identity is bound by five things on one descriptor: a single
-`openat2(anchor, relative, O_RDONLY|O_CLOEXEC, RESOLVE_NO_MAGICLINKS)`, which
-still refuses a `/proc/<pid>/fd/<n>` body with `ELOOP`; an `fstat` for
-regular-file kind, executable mode, and freshness against the newest declared
-input; a digest of `st_size` bytes read from offset zero and compared against
-the value the coverage map records for that provider; a second `fstat` that
-must agree with the first on `st_dev`, `st_ino`, `st_size`, `st_mtim`, and
-`st_ctim`; and `execveat(fd, "", argv, envp, AT_EMPTY_PATH)` on that same
-descriptor, with no `Command`, no `fexecve`, and no `/proc/self/fd` reopen. A
-symlink can decide which inode is reached. It cannot make the wrong inode's
-bytes digest to the recorded value, and it cannot substitute an inode after the
-digest read without the bracketing `fstat` refusing.
-
-The strict callers are the mirror image and that is the whole reason the policy
-is a per-call-site parameter rather than a global: cleanup targets, the
-per-case directories, the `XML_OUTPUT_FILE` parent, and the wave-note corpus
-are paths the runner itself creates or the repository itself commits. No link
-belongs on any of them, refusing one costs nothing, and there is no digest to
-fall back on, so link refusal is the only identity those sites have. Applying
-the provider's policy there would accept a symlinked note; applying the strict
-policy to providers would refuse every provider. A guard that silently used the
-other site's policy is exactly what the asserted policy parameter and the
-walk-route leaf tests exist to catch.
-
-This is a decision, not an open finding. The strict no-symlink prescription is
-declined for providers, and it is declined because adopting it would trade a
-measured, tested identity proof for an unusable one.
+| Daemon-only control plane | PASS | No service, unit, broker operation, or runtime path changes. |
+| Broker-mediated privilege | PASS | Build and policy work is unprivileged. |
+| Isolation | PASS | Selected package closures, dedicated Nix derivations, native first-party targets, and existing test topologies remain explicit. |
+| Contract compatibility | PASS | Manifest v1, required context, Make names, and fixture split stay stable. |
+| Test-layer discipline | PASS | Existing carriers own every new guard and architecture realization. |
+| Panel-gated work | PASS | Track A plan and integrated-diff panels gate every wave. |
+| Traceable artifacts | PASS | Qualified wave IDs remain in planning only; shipped artifacts use semantic text. |
 
 ## Spec Corrections
 
-| Drift | Canon retained | Treatment |
+| Prior artifact claim | Canon or ADR 0054 authority retained | Plan treatment |
 | --- | --- | --- |
-| ADR 0009 names `tests/static.sh`, old flake checks, and Rust 1.94.1. | Current Make DAG, `tests/test-rust.sh`, current checks, Rust 1.97.0. | No code is realigned to ADR 0009. |
-| Current schema leaf snapshots `packages/xtask/out`, which does not exist, so two empty snapshots compare equal. | Record current behavior; it is not valid reproducibility evidence. | W0 adds `--out-dir`, a generated emitted census, and exact nonempty checks. |
-| Planning prose previously fixed the schema census at twenty. | The generator's returned manifest is the census. | The literal is removed as normative. The current `docs/reference/schemas/v2/` tree holds more entries than that literal, which is exactly why a literal cannot be the census. |
-| Planning prose previously fixed six harness-free targets. | The set the gate executes under its current selector. | The census is generator-derived. Four `fuzz`-gated `[[test]]` entries in `packages/d2b-core` are out of census because `fuzz` is not a default feature, and the `packages/d2b-zone-routing` `[[bench]]` entry is out of census because discovery filters `bench` kinds. Both exclusions are recorded with reasons. |
-| An earlier plan draft counted three Cargo workspaces and locks. | Four independently resolved workspaces feed the gate, plus `packages/Cargo.guest.lock`. | The walker gets its own hub and Bazel-side lock. The guest lock stays a generator and cache-key input, not a hub. |
-| ADR prose once described reading crate archives out of the Bazel repository cache. | The cache has no enumeration interface; the amendment corrects this in place. | The vendor tree is produced by a repository rule that re-declares each download by URL and lock checksum. |
-| ADR prose once generalized that custom local resources are not a serialization mechanism. | They are inert specifically because `--local_test_jobs` discards tag-derived resources, which this configuration always sets. | Recorded as the narrower, durable statement. |
-| GitHub default branch is `main`, while protected `v3` never merges to `main`. | Repository branch policy and the `v3` promotion lineage. | Settled by the merged ADR amendment. W0 verifies the amendment is present rather than proposing it. |
-| Workflow prose predates constitution pipelining. | Constitution 2.1.0 controls. | Use the stricter serialization. |
-| An earlier plan draft validated a wave with `make test-rust-main` or `make test-policy` alone after editing a file the `d2b-contract-tests` crate reads. | `tests/test-rust.sh` sets `workspace_test_excludes=(--exclude d2b-contract-tests)`, and `policy_broker_schema.rs` walks every `.rs` file under `packages/`, so that crate executes only under `D2B_ENABLE_FIXTURE_BUILD=1 make test-fixture-contracts` and every wave that touches `packages/` is inside its input set. | Every code-changing wave now runs the fixture-contract target in its validation. The rule and the command that derives the input set are in the delivery rules above and in `tasks.md`. |
-| An earlier plan draft treated the yanked-state carrier as conditional on the recorded comparison. | The amended ADR 0052 section 6 makes the snapshot and the three carriers unconditional. | The carrier lands in W1 either way; the comparison keeps its promotion-blocking force but no longer decides whether the capability exists. |
-| An earlier plan draft forbade the repin controls without naming any supported regeneration path. | `rules_rust` 0.73.0 `determine_repin` treats `CARGO_BAZEL_REPIN_ONLY` as an exact-match comma-delimited hub allowlist, and `skip_cargo_lockfile_overwrite` defaults to false. | `cargo xtask bazel-repin --hub <name>` is the one supported path; the environment prohibition in Make and continuous integration is unchanged, and every hub sets `skip_cargo_lockfile_overwrite = True` so a repin cannot rewrite the authoritative Cargo lock. |
-| An earlier plan draft left module lock drift with no named command, so the refusal could only point at Bazel's own diagnostic. | Measured at Bazel 8.6.0: `--lockfile_mode=error` exits 48 naming `bazel mod deps --lockfile_mode=update`, an invocation that carries no startup options and would run against the default output user root under the home directory. | `cargo xtask bazel-module-refresh` issues the measured invocation with the repository's absolute startup options, writes only `MODULE.bazel.lock`, and is the exact remediation the refusal names. ADR 0052 needs no amendment: it names `bazel-repin` as the supported path for a *hub* lock, and the module lock is the separately kept mechanism the ADR already distinguishes. |
-| Planning prose treated `--lockfile_mode=error` as sufficient to fail closed on any module-input change. | Measured at Bazel 8.6.0: a direct `bazel_dep` version the graph absorbs produces a warning and exit zero; only a missing registry file checksum fails. | `.bazelrc` gains `common --check_direct_dependencies=error`. A check that warns is not a pin, and W0 proves the negative. |
-| Planning prose required byte-identical options across every Bazel invocation without distinguishing startup options from command options. | Measured at Bazel 8.6.0: `bazel mod` rejects `--symlink_prefix` as unrecognized. | The identity requirement binds the startup-option set that selects the server and output base. `--symlink_prefix` is supplied to the commands that accept it, and the module-refresh child is held only to startup-option identity. |
-| An earlier plan draft ended the yanked drift remedy at `bazel-yanked-refresh`, leaving verification to continuous integration. | The gate check must be offline and must not regenerate state, so it is a different operation from the networked refresh. | `cargo xtask bazel-yanked-check` is the offline validator, the three carriers run it as a declared-input action, and the recovery text ends on it. |
-| An earlier plan draft put the shared absolute startup-option construction in `packages/d2b-bazel-runner/` and had `packages/xtask/Cargo.toml` take a path dependency on the runner to reach it. | Dependency direction: `xtask` generates the graph the runner's targets live in, so `xtask -> d2b-bazel-runner` inverts the relationship. | The construction moves to the neutral `packages/d2b-bazel-support/`, which declares no first-party dependency; `xtask`, the runner, and the locator all consume it, and `tests/unit/meta/w0-dep-direction.sh` refuses the runner edge in every dependency kind. |
-| An earlier plan draft proved the locator's stale-provider negative by writing an out-of-date executable to the live Cargo path and removing a runfiles entry. | A guard whose setup writes an executable into `packages/target/` leaves that executable behind when the run is interrupted, in the one directory the shadow stage keeps full of real binaries. | The absent, non-executable, stale, and wrong-identity providers are all supplied states on the injected `FileSystem`, and the missing runfiles entry is a state on the injected `RunfilesView`. No provider test writes to or executes a live path. |
-| An earlier plan draft had the wave-note refusal name the whole offending token and modeled absent note content as `Option<String>`. | A refusal is republished into CI output, panel comments, and PR bodies, so echoing the token spreads the leak; and a failed read is a diagnosable error, not a blank. | The refusal carries the note, the one-based line, and one remediation only, proven by running the rendered refusals back through the scanner's own rules; the entry API returns `std::io::Result` at both levels and keeps the real error. |
-| An earlier plan draft had the locator check a provider by path and then let the caller run it by path. | Measured on the reference host: after the provider path is replaced, executing a retained descriptor runs the original verified bytes while a freshly path-opened descriptor runs the replacement. A check and a spawn that both resolve the same name are two resolutions, and the second one wins. | The locator opens the provider once with `openat2(O_RDONLY\|O_CLOEXEC, RESOLVE_NO_MAGICLINKS)`, runs mode, kind, freshness, digest, and a bracketing `fstat` comparison against that descriptor, returns a `VerifiedExecutable` with no path accessor, and executes it with `execveat(fd, "", argv, envp, AT_EMPTY_PATH)`. No `Command` by path, no `fexecve`, no `/proc/self/fd` fallback. |
-| An earlier plan draft applied one link-refusal policy to every anchored open. | Measured: on a runfiles-shaped symlink whose target lies outside the anchor, `RESOLVE_BENEATH` fails `EXDEV` and `RESOLVE_NO_SYMLINKS` fails `ELOOP`, so the strict policy would refuse every real Bazel provider. | The policy is a per-call-site parameter that decides the resolve flags on the `openat2` route and the leaf `O_NOFOLLOW` on the walk route. Runner-created directories and committed files use `RESOLVE_BENEATH\|RESOLVE_NO_SYMLINKS\|RESOLVE_NO_MAGICLINKS`; providers use `RESOLVE_NO_MAGICLINKS` and rely on handle identity instead of link refusal. Each site's choice is asserted. |
-| An earlier plan draft had the wave-note lint enumerate its corpus with `std::fs::read_dir` and read each entry with `std::fs::read_to_string` on a concatenated `DirEntry` path. | A guard that follows a symlink out of the directory it polices, and that resolves that directory a second time between enumeration and read, is the check-then-use shape the rest of this design refuses. | The lint reads the corpus through the shared `FileSystem` boundary: one anchored close-on-exec directory descriptor with `RESOLVE_BENEATH\|RESOLVE_NO_SYMLINKS\|RESOLVE_NO_MAGICLINKS`, enumeration by name only, and descriptor-relative reads. `packages/d2b-contract-tests` gains a dev-dependency on `packages/d2b-bazel-support` and the direction gate refuses any non-dev form of it. |
-| An earlier plan draft carried one wave-note violation type holding a line and an error together. | A permission denial has no line, and a leaked path token has no errno, so one type renders a line remedy for a file-level failure. | The type splits into `PathLeak`, carrying note name and one-based line and rendering the `<worktree>` rewrite-or-drop remedy, and `ReadError`, carrying note name and the preserved `std::io::Error` and rendering the fix-permissions-or-remove-the-entry remedy. An unreadable or empty corpus becomes a corpus-level error the enumerator returns instead of a list. Cross-rendering any remedy is a test failure. |
-| An earlier plan draft described the forced component-walk route as `O_NOFOLLOW` on every component except the final one, unconditionally. | Measured: `openat` on a runfiles-shaped leaf symlink without `O_NOFOLLOW` opens and returns the same `st_ino` that `openat2` with `RESOLVE_NO_MAGICLINKS` returns, while the same open with `O_NOFOLLOW` fails `ELOOP`. The leaf flag is the whole policy difference on that route, so hardcoding the exemption handed cleanup, the two output-path opens, and the wave-note lint a weaker guarantee on one of their two routes. | The resolve policy decides the leaf. Intermediate components stay `O_NOFOLLOW` under both policies; the strict policy adds `O_NOFOLLOW` on the leaf and the provider policy does not. `RESOLVE_NO_MAGICLINKS` has no `openat` equivalent, so the one property the walk route cannot reproduce is recorded with its measurement rather than approximated by a partial check, bounded by unchanged handle identity and by ADR 0008's `6.6`/`6.9` kernel floor, which puts `openat2` on every supported host. |
-| An earlier plan draft derived the wave-note position label from raw directory enumeration and rendered no directory in either corpus error. | Measured: the same seven note names enumerate as `w2 w0 w1 w11 w3 w10 w9` on ext4 and `w3 w11 w1 w0 w2 w10 w9` on tmpfs, so a position label names a different entry per filesystem; and a corpus error names no entry, so a remedy with no directory asks a contributor to repair something unnamed. | Names are sorted by unsigned byte order before any entry is opened, and the entry sequence, violation order, and every position derive from that. Both corpus remedies carry the fixed repository-relative literal `specs/003-adr052-bazel-rust/wave-notes/`, never the path resolved beneath `repo_root()`, which would be an absolute path FR-029 forbids and which the lint's own self-application case would catch. |
-| An earlier draft said a provider refusal names the expected runfiles path while the canonical redaction rule forbade a refusal from carrying a runfiles location. | Two different things wore one name. The string a `data` declaration produces is repository content, identical on every machine; the directory it resolves beneath is a local value. | The artifacts use "declared runfiles-relative path" for the permitted string and "runfiles root" or "resolved absolute runfiles location" for the forbidden one, and FR-029 states the split so the permission and the prohibition cannot be read as contradicting each other. |
-| An earlier plan draft typed the wave-note entry name as `String` while also requiring a position label for a name that is not valid UTF-8, which is a state that type cannot hold. | Measured with the pinned stable toolchain: a Linux directory entry is any NUL-free byte string, `to_str()` returns `None` for `w\xff9.md`, `w\xff9.md` and `w\xfe9.md` produce identical lossy text, and raw `w\x80.md` sorts before valid UTF-8 `w\xc3\xa9.md` while their lossy forms sort the other way. | The name field is `std::ffi::OsString` holding the raw bytes, the sort key is `OsStr::as_bytes()`, and `NoteLabel::Name` is constructed only where `to_str()` returns `Some` and that `&str` passes the lint's own rules. T009 gains a non-UTF-8-name label case and a raw-byte ordering case, both with planted mutations. |
-| An earlier plan draft gave T042 no forced component-walk assertion, while `runner-environment.md` already required the strict leaf refusal for the per-case directory and the `XML_OUTPUT_FILE` parent. | The contract is the binding artifact and the wave-note and cleanup tasks already carry the same requirement; T042 was the only strict caller whose task omitted it. | T042 requires the walk-route leaf-symlink `ELOOP` assertion for both strict opens and the planted hardcoded-leaf-exemption mutation, matching T009 and T083. |
+| Product dependencies came from main, broker, and guest workspaces and locks. | One resolver-v2 product workspace and root lock. | Merge broker and guest in `spec003w0`; delete nested workspace tables and locks. |
+| Four Bazel hubs existed. | Exactly product and walker hubs. | Retire main, broker, and guest identifiers with exact diagnostics. |
+| The walker could be folded into main dependency resolution. | Walker is separate gate plumbing with its own lock. | Keep walker hub and Bazel-side lock byte-independent from product repin. |
+| `Cargo.guest.lock` was a hub or workspace input. | It is generated static-guest closure input only. | Keep aggregate guest checks and cache binding; exclude it from hub authority. |
+| Optional libshpool plus `crate.spec` modeled production. | Normal libshpool dependency, code feature gate retained, no `crate.spec`. | Change guest manifest in spec003w0 prep and add a no-`crate.spec` guard. |
+| Whole-workspace broker and guest locks proved closure isolation. | Package-selected Cargo/Nix contexts and package-scoped closure policy prove isolation. | Generate system-and-target production and policy graphs from root lock. |
+| Package policy could scan the shared lock union. | Exact selected roots, graphs, sources, and checksums are authoritative. | Require exact source census and filtered-lock equality before policy tools. |
+| Guest license findings could be solved by broad license allow. | Six package/license pairs need a narrow reviewed update. | Add package-scoped exceptions and different-package denial plants. |
+| Aarch64 flake evidence was eval-only on x86. | ADR 0054 requires native aarch64 package and ELF realization. | Keep job ID, move to `ubuntu-24.04-arm`, 60 minutes, same five checks. |
+| Parked historical foundation implementation was the base. | Branch head contains ADR 0054 only and no Bazel implementation. | Start spec003w0 from current merged `v3`; parked branches are evidence only. |
+| A synthetic splice workspace was needed for selected policy or Bazel generation. | Locked root metadata plus configured native targets suffice. | No splice generator, splice lock, or synthetic manifest task exists. |
+| Main Clippy included broker and guest after merge. | ADR 0054 requires generic main Clippy to exclude broker and guest while retaining contract Clippy. | Add explicit exclusions and dedicated package Clippy/test lanes. |
+| Current standalone paths in `tests/test-rust.sh`, Nix, and CI remain valid after merge. | Committed code is the pre-merge baseline, not the target state. | Update them in spec003w0 while preserving selectors, target isolation, and job IDs. |
+| The amendment summarized broker serialization without its Bazel mechanism. | ADR 0052 requires all three suites to carry `tags = ["exclusive"]`, overlap no test, and pass twenty executions per context. | Restore tag, mutation, scheduler, and qualification requirements in spec003w1 and spec003w4. |
+| The amendment described offline tools without a qualified egress boundary. | Pinned repository rules are the only fetchers; committed tests still require declared local sockets. | Add external-egress and live-index plants plus qualification evidence. |
+| ADR 0052 says no Rust action opens a socket. | Committed mandatory tests bind sandbox-local loopback TCP and Unix sockets, including `d2b-realm-transport`, `d2b-session-unix`, daemon readiness, CLI contract, and broker socket tests. | Permit only declared sandbox-local loopback and Unix sockets. Deny host/external egress, DNS, live indexes, advisory fetches, and undeclared listeners. Plants exercise forbidden external/live-index egress, not every socket syscall. |
+| Moving both Nix packages to the root lock made the git output hash look implicit. | ADR 0054 says both dedicated derivations retain the pinned git output hash. | Assert the exact `wl-proxy-0.1.2` key and value in both derivations. |
+| Module lock drift named no complete repository path. | Measured Bazel remediation lacks worktree startup options. | Test then implement no-argument, lock-only, idempotent `bazel-module-refresh` with exact repository remediation. |
+| Current amended recovery prose shortened command sequences. | ADR 0052 fixes exact per-code commands and forbidden cross-code remedies. | Restore literal commands and redaction/wrong-remedy mutations. |
+| The prior plan serialized both post-promotion children because they share some files. | Eligibility is independent; only actual shared-file merge order is serial. | Either child may land first; the second rebases, revalidates, and re-panels. |
+| The amended cache record retained only a zero-write summary. | ADR 0052 requires explicit restore, save, publication, duration, key, prefix, and retention semantics. | Restore fields and their fixtures in spec003w3 through spec003w5. |
+| Provider and expiry summaries omitted load-bearing kernel detail. | Same-descriptor `execveat`, close-on-exec behavior, and non-consuming grace observations are binding. | Restore exact flags, fallback semantics, mutations, and host conformance. |
+| Provider opens reused strict result-path resolution. | Bazel runfiles leaf symlinks may leave the anchor. Provider opens therefore use `O_RDONLY|O_CLOEXEC` with `RESOLVE_NO_MAGICLINKS` only; forced walks use `O_NOFOLLOW` only on intermediates. Strict result and cleanup paths retain all three strict resolve flags. | Remove `RESOLVE_BENEATH` and `RESOLVE_NO_SYMLINKS` from provider opens, retain them on result/cleanup paths, and add a mutation rejecting provider `RESOLVE_BENEATH`. |
+| Guest static ELF evidence accepted `ET_EXEC` and did not bind machine identity. | ADR 0054 keeps static PIE, and the native system decides the expected `e_machine`. | Require `ET_DYN`, expected native `e_machine`, no `PT_INTERP`, and no `DT_NEEDED`; add non-PIE and wrong-machine plants. |
+| spec003w0 foundation tasks proposed failing future-behavior tests behind inert seams. | A merged wave must be green. | Implement spec003w0 behavior tested there; defer spec003w1/spec003w2 tests with their implementations. |
+| Yanked authority still reflected the superseded three-lock model. | ADR 0054 creates one product lock plus selected policy projections. | Key one snapshot only from `packages/Cargo.lock`; project broker and guest from selected graphs. |
+| Selected closures could be reconstructed from metadata alone or a synthetic splice. | Exact package context needs a three-way join; measured `cargo metadata` carries no `checksum` field and null workspace `resolve.root`, and plain `cargo tree` output is not machine-readable. | Join target-filtered locked offline root metadata (identities, sources, candidate edges, `cfg`), `packages/Cargo.lock` plus the committed git archive pin (checksums), and package-selected stable `cargo tree` traversals under pinned `--charset ascii --prefix depth --no-dedupe` and a repository-pinned delimited `--format` (root, dependency-kind reach, resolved features); forbid synthetic manifests and require a shared-dependency feature canary. |
+| The initial amendment left the release workflow and two existing drift gates outside spec003w0. | The workspace merge changes their root-manifest, output, and cache assumptions. | spec003w0 updates `release-host-binaries.yml`, `flake-check-matrix-sync.sh`, and `ci-rust-cache-sync.sh`; neither gate is deleted. |
+| Only three contributor docs were scheduled for the spec003w0 workspace correction. | `CONTRIBUTING.md`, workflow guidance, critical-subsystem wording, and `policy_modules.rs` also encode the sibling-workspace shape. | Add all four to the future spec003w0 binding-doc scope. Do not edit dated ADR 0038; record that ADR 0054 governs the newer shape. |
+| ADR 0052 and its index/changelog summary still call accepted ADR 0054 proposed and retain the retired four-hub inventory. | ADR 0054 is accepted settled context. | Correct the ADR 0052 amendment-status paragraph, ADR index summary, and ADR 0054 changelog fragment with the spec003w0 documentation correction; leave ADR 0038 historical text unchanged. |
+| Slice ownership included module locks, hub locks, Nix pins, generated BUILD files, and coverage/query goldens. | Those artifacts are generator results shared by all slices. | Integrator alone commits them. Slices write scratch previews. Lock refresh follows the changed authority and always refreshes `MODULE.bazel.lock` last, then clean no-op checks. |
+| One lock-refresh order was described for every change, and two validation blocks refreshed the module lock before the walker hub. | The product and walker hubs are independent authorities and the module lock consumes both. | Split into three authorities: product manifest change (`packages/Cargo.lock`, product hub, module lock last, walker inputs proved byte-identical); walker manifest or lock change (walker Cargo lock, walker hub, module lock last, product inputs proved byte-identical); initial or combined setup (product hub, walker hub, module lock last). Reorder every validation block accordingly. |
+| The spec003w0 Cargo gate could keep auditing the nested broker and guest locks. | Those locks are deleted by the same wave, so the gate has no nested authority left. | Move package deny/audit onto the native-system broker-GNU and guest-musl selected policy inputs with exact source census and pinned `--no-fetch` audit, keep the aggregate root and `Cargo.guest.lock` checks independent, and replace `tests/tools/assert-pinned-tests.sh` nested-lock backup/restore with root-lock package selection. |
+| Six shadow Make targets could be introduced without touching the workflow allowlist. | `APPROVED_MAKE_TARGETS` in `packages/xtask/tests/policy_ci.rs` is the only allowlist, and an unlisted target silently escapes the ci-uses-make guard. | The same wave that introduces the shadow targets adds all six to the allowlist with positive and negative tests owned by one exact spec003w1 slice. |
+| Qualification could be read from boolean verdict fields. | A boolean is self-asserted; only immutable references are evidence. | Add a typed validator that derives every threshold from immutable evidence references and refuses omitted, forged, duplicate, inconsistent, and wrong-candidate references. |
+| No-shell was asserted over an implied file set. | An implied set cannot detect an unscanned new spawn site. | Bind no-shell to a generated, drift-checked, nonempty inventory compared bidirectionally against governed sources and declared inputs, with empty, missing, extra, and planted-shell negatives. |
+| spec003w6 entry accepted any containing tag. | Repository tags include two-component names such as `v1.0`, `v1.1`, and `v1.2`, so containment alone is not a release. | Require a containing published tag matching `v<major>.<minor>.<patch>` exactly, resolving on origin with a non-draft release. |
+| The pre-merge rollback rehearsal read `promotion-record.json`. | That record is written only after merge. | Rehearse from the verified current atomic candidate HEAD and the recorded spec003w5 parent; keep promotion-record reads post-merge. |
+| spec003w5 binding docs covered only the three contributor docs. | `tests/README.md` and `docs/reference/test-execution-manifest.md` also describe the eight CI jobs. | Add both to the spec003w5 binding-doc scope. |
+| Qualification cache fields were written in mixed snake_case and ad hoc names. | One canonical camelCase field set must appear in every artifact. | Fix `bazelRestoreCount`, `bazelSaveCount`, `bazelPublicationCount`, and `sliceDurationsSeconds` as the only spellings. |
+| Post-promotion streak positions were counted per observation, allowing attempts to advance the streak. | An attempt is a rerun of one unit, and rerun start time is mutable. | Count distinct push-created (run ID, head SHA) units, normalize to the highest terminal attempt, and order by immutable `createdAt` then run ID. |
+| Promotion reused old leaf names as CI slice targets. | Promotion needs four authoritative CI slice targets while preserving all eight public leaves. | Introduce `test-rust-slice-{main,api,broker,aux}` for CI and map every old leaf to an exact Bazel subset. Compatibility aliases forward only to the aggregate or matching slice target. |
+| Post-promotion eligibility trusted count and ID fields in the evidence file. | Eligibility must be derived from the complete protected-`v3` run stream. | Inventory typed run units with pagination, provenance, terminality, ordering, and promotion-ancestry checks; derive resets and the current streak. |
 
-There is no eighteen-surface drift: committed code publishes eighteen with
-`D2B_SKIP_FIXTURE_BUILD=1` and two fixture surfaces when enabled.
+## Shared Design Invariants
 
-## Wave Graph and Delivery Rules
+1. Product dependency authority is one root manifest and lock.
+2. Walker dependency authority remains separate.
+3. `Cargo.guest.lock` is never a Cargo or hub authority.
+4. Broker and guest contexts always name package, default-feature state,
+   features, target, and target directory.
+5. Nix keeps dedicated broker and guest derivations.
+6. Product first-party crates are native Bazel targets.
+7. The product external repository may be a third-party superset.
+8. Every absence or leakage predicate follows a root, nonempty closure, and
+   exact census assertion.
+9. Selected-source identities and checksums are exact and verified before deny
+   or audit.
+10. Package audit is pinned and no-fetch.
+11. Native x86 and arm lanes realize the same five system-specific checks
+    without foreign-system or remote-builder arguments.
+12. Contributor mutations are unavailable from Make and workflows.
+13. All existing ADR 0052 coverage, runner, cache, deadline, and promotion
+    invariants remain.
+14. The three broker suites are exclusive against every other test and each
+    qualifies with twenty consecutive executions.
+15. Rust actions may use only declared sandbox-local loopback TCP and Unix
+    sockets required by committed tests. Host/external egress, DNS, live
+    indexes, advisory fetches, and undeclared listeners are denied; only pinned
+    repository rules fetch.
+16. Both dedicated Nix derivations carry the exact committed `wl-proxy` output
+    hash.
+17. Provider execution opens with `O_RDONLY|O_CLOEXEC` and
+    `RESOLVE_NO_MAGICLINKS` only, uses no `RESOLVE_BENEATH` or
+    `RESOLVE_NO_SYMLINKS`, executes the same descriptor with
+    `execveat(AT_EMPTY_PATH)`, and has no path fallback. Forced walk applies
+    `O_NOFOLLOW` only to intermediates. Strict result and cleanup paths keep
+    all three resolve flags. Expiry observes without consuming until
+    unconditional group kill and direct-child reap.
+18. Every mutating validation command leaves the committed candidate clean.
+19. Native guest ELF evidence requires expected `e_machine`, `ET_DYN`, no
+    `PT_INTERP`, and no `DT_NEEDED`.
+20. Generated locks, pins, BUILD files, and coverage/query goldens are
+    integrator-owned.
+21. Cargo/decomposed-Bazel supply-chain exit status and normalized findings
+    must match for main, broker, and guest.
+22. Lock refresh follows the authority that changed, always commits
+    `MODULE.bazel.lock` last, and proves the untouched hub's inputs
+    byte-identical.
+23. The selected-context oracle is a three-way join: metadata supplies
+    identities, sources, candidate edges, and `cfg`; the product lock and
+    committed git pin supply checksums; pinned package-selected `cargo tree`
+    traversals supply root, dependency-kind reach, and resolved features.
+24. Every qualification threshold is derived from immutable evidence
+    references; no boolean field can qualify a record.
+25. No-shell is bound to a generated, drift-checked, nonempty inventory whose
+    governed sources, declared inputs, and discovered spawn sites agree
+    bidirectionally.
+26. A shadow Make target is approved in `APPROVED_MAKE_TARGETS` by the same
+    wave that introduces it.
+27. A post-promotion streak position is one distinct push-created
+    (run ID, head SHA) unit ordered by immutable creation order; an attempt
+    never adds a position.
+
+## Expected Implementation Locations
 
 ```text
-Merged ADR 0052 amendment (prerequisite, not a task in this feature)
-  -> W0 foundation -> W1 coverage -> W2 safety -> W3 shadow CI
-  -> W4 evidence -> W5 promotion
-W5 -> W6 alias removal              # release-containment gate only
-W5 -> W7 Cargo retirement           # ten-green-run gate only
+.bazelversion
+.bazelrc
+.bazelignore
+MODULE.bazel
+MODULE.bazel.lock
+BUILD.bazel
+bazel/
+  cargo/{product.lock,walker.lock}
+  carriers/
+  generated/
+  rules/
+  supply_chain/yanked-snapshot.json
+  vendor/
+ci/rust/BUILD.bazel
+packages/
+  Cargo.toml
+  Cargo.lock
+  Cargo.guest.lock
+  policy-inputs/
+  d2b-bazel-support/
+  d2b-bazel-runner/
+  d2b-test-locator/
+  d2b-priv-broker/Cargo.toml
+  d2b-guest-shell-runner/{Cargo.toml,deny.toml}
+  xtask/src/{bazel,bazel_evidence,bazel_qualification,bazel_yanked,hermeticity,package_policy,schema}.rs
+  xtask/tests/policy_ci.rs
+bazel/generated/no-shell-inventory.json
+tests/
+  README.md
+  lib.sh
+  golden/bazel-rust-coverage.json
+  golden/bazel-rust-query.json
+  golden/flake-check-matrix/
+  golden/pinned/{kernel-canaries,usbip-firewall-skeleton,host-prepare-network,broker-socket-acl,broker-export-audit}.txt
+  layer1-jobs.json
+  test-rust.sh
+  tools/assert-pinned-tests.sh
+  tools/no-bash-ast-walker/src/main.rs
+  tools/flake-check-classes.sh
+  unit/nix/pinned/{common,x86_64-linux,aarch64-linux}.txt
+.github/workflows/pr-bazel-rust.yml
+.github/workflows/pr-l1-static-fast.yml
+nixos-modules/host-broker.nix
+flake.nix
+AGENTS.md
+tests/AGENTS.md
+docs/contributing/gates-and-lints.md
+docs/reference/test-execution-manifest.md
 ```
 
-W0 begins with a mechanical verification that the amended ADR commit is an
-ancestor of the W0 base. No implementation branch, generator change, or Bazel
-workspace file may predate that commit.
+Generated outputs are integrator-owned. A parallel slice may generate a
+scratch preview but never commits a shared generated output.
 
-Every scope uses its own worktree and branch, commits before validation, and
-owns a unique semantic changelog fragment when code changes. The integrator
-merges scope commits into one wave branch and opens one wave PR. Shared
-contracts land in an integrator prep commit before parallel scopes open. Each
-boundary has a plan panel and an integrated-diff panel with `software`, `test`,
-`nixos`, `networking`, `security`, `rust`, `product`, `docs`, `observability`,
-and `kernel`. For this delivery run the `software` seat is filled by the Bazel
-and `rules_rust` expert, because every finding that forced the ADR amendment
-was substrate-level. All ten must sign off with no recommendations. Reviewers
-inspect supplied evidence and do not rerun validation. Content changes
-invalidate prior signoffs.
+## Wave Graph
 
-### Wave notes record command shapes, not local values
+```text
+ADR 0054 and amended Spec 003 plan panel
+  -> spec003w0 product foundation
+  -> spec003w1 complete Bazel carriers
+  -> spec003w2 operational safety
+  -> spec003w3 shadow CI
+  -> spec003w4 immutable qualification
+  -> spec003w5 promotion and promotion record
+       -> spec003w6 alias removal, release-containment gate
+       -> spec003w7 Cargo implementation retirement, ten-green-run gate
+```
 
-Several waves record a measured invocation in their wave notes: W0 records the
-one that repins exactly one hub and the one that updates the module lock, W1
-records the reviewed networked yanked-snapshot refresh together with the index
-revision it observed, and
-W2 records the consolidated startup-option construction. Every such note
-records the command as a **shape** with placeholders, for example
-`<worktree>/.scratch/bazel` for the output user root and
-`<worktree>/.scratch/bazel/<base>` for the output base. A real absolute path
-from the machine the measurement ran on is never written into a note, a PR
-body, a panel comment, or an evidence file.
+Every wave is independently reviewable, mergeable, and sealed before a child
+wave begins. The only graph fork is after promotion. `spec003w6` and
+`spec003w7` are evidence-independent but share files; if both are active, one
+lands first and the other rebases, revalidates, and re-panels before merge.
 
-This is the same rule that keeps absolute paths and environment values out of
-refusal text, applied to the artifacts that describe how those refusals were
-measured. A wave note is quoted forward into later waves and into review, so a
-home directory path in one has escaped just as surely as an echoed variable
-would have. Panels check notes for this, and the redaction fixtures that cover
-message text list the note paths in the same forbidden set.
+## Global Delivery Rules
 
-The notes have one fixed home, because a rule about a file no command can name
-is not enforceable. Each wave's notes are one committed file under
-`specs/003-adr052-bazel-rust/wave-notes/`, named `w0.md`, `w1.md`, and `w2.md`,
-and each is owned by the single scope that made the measurement: `generator` in
-W0, `aux` in W1, and `local-wrapper` in W2. One writer per file keeps the notes
-disjoint in the ownership map without a prep commit.
+- Run a unanimous ten-role Track A plan panel before each implementation wave.
+- Reviewers inspect supplied validation and do not rerun gates.
+- Land an integrator prep commit before parallel scopes where shared contracts
+  are needed.
+- Prep contracts are complete and green before dispatch. No parallel scope
+  edits a prep-owned file. After all dependent scopes merge, the integrator
+  may edit a prep-owned crate root or command router only to wire the completed
+  scope-owned modules. A missing contract or dependency requires a second prep
+  commit and all affected scopes restart from it.
+- Each scope writes only its ownership list.
+- Each scope commits before integration validation.
+- The integrator alone updates shared manifests, generated outputs, and
+  generated workflows after merging scope commits.
+- Any content change invalidates the integrated-diff panel.
+- Required CI and native architecture jobs must pass on the stable PR head
+  before seal and merge.
+- Every generator, repin, refresh, and pin-regeneration validation is enclosed
+  by tracked, staged, and untracked clean-diff assertions.
+- Future binding docs and changelog fragments use semantic language and contain
+  no delivery process markers.
+- Run `nix-collect-garbage` after every wave merge.
 
-The rule is carried by a test, not by a ritual. W0 lands a type-5 policy lint
-in `packages/d2b-contract-tests/tests/policy_docs.rs` that enumerates every
-entry of that directory and refuses four things: an empty corpus, any entry
-that is not a readable regular file named `w<digits>.md`, any line that still
-holds a `/`-rooted path token once every `<worktree>`-rooted path and every
-`http` or `https` scheme-and-authority prefix has been removed, and any line
-carrying the worktree's own absolute path, or that path without its leading
-slash, as a bare substring. A `<worktree>`-rooted path is the exact literal
-`<worktree>` followed by `/`-separated segments, each an ordinary segment or a
-further angle-bracket placeholder, so
-`<worktree>/.scratch/bazel/<base>/execroot`
-is consumed whole rather than leaving `/execroot` behind. The scheme allowlist
-is exactly `http` and `https`, so `file:` is refused rather than parsed: a
-`file:` URI is an absolute path wearing a scheme, and parsing it would be the
-one hole an enumerated denylist of root directories always leaves. Nothing is
-allowlisted as a permitted real absolute path, `/dev/null` included, because a
-note records a shape and not a transcript. The substring rule is what catches a
-leak that arrives with no leading slash at all.
+## spec003w0 - Product Workspace and Reversible Foundation
 
-**The lint reads the corpus through the shared boundary.** It does not call
-`std::fs::read_dir`, does not call `std::fs::read_to_string`, and never builds
-a path by concatenating a `DirEntry` onto a parent. It opens the notes
-directory once as an anchored close-on-exec descriptor beneath the repository
-root with `RESOLVE_BENEATH`, `RESOLVE_NO_SYMLINKS`, and
-`RESOLVE_NO_MAGICLINKS`, enumerates entries as raw names rather than as
-reconstructed paths or as decoded text, and opens each entry
-descriptor-relative from that same
-anchor under the same policy, all through the `FileSystem` trait in
-`packages/d2b-bazel-support/src/fsops.rs` that cleanup, the result writer, the
-locator, and the topology provider checks already use. A guard that follows a
-symlink out of the directory it polices, and that resolves that directory a
-second time between enumeration and read, is the check-then-use shape the rest
-of this plan refuses, performed by the code whose whole job is catching leaks.
-The kernel's `d_type` is advisory and is not trusted for classification,
-because it is `DT_UNKNOWN` on some filesystems; the authoritative answer is the
-errno the descriptor-relative open or read returns. That policy was measured
-against exactly this shape: a regular note opens, a symlink and a dangling
-symlink are refused `ELOOP`, a committed subdirectory opens and reads `EISDIR`,
-a `..` escape is refused `EXDEV`, and a mode `0000` entry is refused `EACCES`,
-which is the four-way distinguishability the rule below requires.
-`packages/d2b-contract-tests` reaches the boundary as a dev-dependency only,
-and the direction gate refuses any non-dev form of that edge.
+### Deliverable
 
-**The strict policy binds on both of the boundary's routes, and the
-enumeration is sorted before anything is opened.** The forced component-walk
-route carries `O_NOFOLLOW` on the leaf as well as on every intermediate
-component under the strict policy, because the resolve policy is what decides
-the leaf. A route that exempted the leaf would let this lint follow a symlinked
-note out of the directory it polices, which is the escape it exists to refuse,
-performed by the lint. And the enumerated names are sorted by unsigned byte
-order over `OsStr::as_bytes()`
-before any entry is opened, with the returned entry sequence, the
-violation order, and every one-based position label derived from that sorted
-sequence. Directory order is not an order: measured, the same seven note names
-enumerate as `w2 w0 w1 w11 w3 w10 w9` on ext4 and as `w3 w11 w1 w0 w2 w10 w9`
-on tmpfs, so a position taken from raw enumeration names a different entry in
-CI than it does locally and no contributor can reproduce the message they were
-handed. The key is the raw bytes rather than `OsString`'s own `Ord`, whose
-equality with the byte relation the standard library does not promise across
-targets; measured here they agree, and naming `as_bytes()` is what keeps that
-agreement out of the load path.
+One product workspace and lock, separate walker workspace and lock, product and
+walker hubs, generator-owned native first-party graph, package-scoped policy
+inputs and checks for both systems, root-lock Nix derivations, exact source
+census and checksum policy, retired-hub refusals, and the reusable support,
+runner, locator, schema, and hermeticity foundation. Cargo remains the
+authoritative Rust executor.
 
-**The refusal itself is redacted, and there are two shapes of it.** A violation
-names the note, the one thing that identifies the condition, and one
-remediation sentence, and stops there. It never prints the offending token, not
-truncated, not summarized, not "first segment only". This is not a new rule:
-FR-029 already forbids a refusal message from carrying an absolute path, and a
-refusal that echoes the leaked token is exactly such a message. It is also the
-worse case, because a lint refusal
-travels further than the file it refused: it lands in the
-`test-fixture-contracts` output, is pasted into panel comments, and is quoted
-into PR bodies and wave notes. A refusal that echoes the leaked absolute path
-has published it into three more artifacts than the note did, which is the
-exact escape this lint exists to close, and it would do so at the moment
-everyone is looking. `w1.md:37` plus "rewrite the path as a `<worktree>`-rooted
-shape or drop it" is enough to fix it, because the contributor already has the
-file open.
+### Entry condition
 
-The two shapes are structural, not a tag on one record:
+The branch base is a descendant of ADR 0054 commit `a7093601`, and these paths
+are absent from the base:
 
-- `PathLeak` carries the note name and the one-based line, and nothing else. It
-  renders the line and the single remedy, rewrite the path as a
-  `<worktree>`-rooted shape or drop it.
-- `ReadError` carries the note name and the preserved `std::io::Error`, and no
-  line. It renders the error and the single file-level remedy, fix the entry's
-  permissions or remove the invalid entry.
+```text
+.bazelversion
+.bazelrc
+.bazelignore
+MODULE.bazel
+MODULE.bazel.lock
+bazel/
+BUILD.bazel
+```
 
-An unreadable or empty corpus names no note at all, so it is not a violation:
-the enumerator returns a corpus error instead of a list, `Unreadable` carrying
-the real errno from the anchored open or the enumeration and `Empty` carrying
-nothing, each with its own remedy. One type holding an optional line beside an
-optional error would render a line remedy for a permission denial, which is a
-message that sends a contributor to fix a line that is not the problem.
+The entry check also proves no parked historical `spec003-w0-*` or
+`spec003-w0` commit is an ancestor requirement.
 
-Both corpus remedies name the corpus, as the fixed repository-relative literal
-`specs/003-adr052-bazel-rust/wave-notes/`. A corpus error names no entry, so
-without the directory the remedy asks a contributor to repair something
-unnamed. The literal is compile-time text and never the rendered form of the
-path the enumerator opened beneath `repo_root()`, and that is forced rather
-than chosen: the rendered form is an absolute path, FR-029 forbids one in a
-refusal, and the lint's own self-application case would catch its own message.
-The literal passes the lint's rules by construction, because every `/` in it is
-preceded by an ordinary path character and so is not a `/`-rooted token. The
-two remedy sentences stay distinguishable even though both carry the literal,
-so the per-shape assertion is on the whole sentence and never on the shared
-directory text.
+### Integrator prep
 
-The scanner refuses its own rendered refusals: one test runs every rendered
-refusal and every rendered corpus error back through the same path-token and
-worktree-substring rules and requires no violation, so a future change that
-adds the token to the message, or that renders the resolved corpus path instead
-of the literal, fails the lint that added it. A second test asserts, per shape,
-that the right remedy is present and that each of the other three is absent, so
-no refactor can borrow a remedy across shapes. A third supplies one corpus in
-two different enumeration orders and requires identical entry order, violation
-order, and position values, with the removed sort as the planted mutation. The
-note label is the only borrowed text any refusal prints and it is checked
-before it is printed: a name whose `OsStr::to_str()` is `None`, or one that
-fails the lint's own rules, is replaced by the entry's
-one-based position in the sorted enumeration, which is what makes the
-self-application test a property rather than a coincidence about the names that
-happen to be committed.
+The prep commit lands all shared contracts before slices open:
 
-**The entry name is `std::ffi::OsString`, and that is a correctness choice
-rather than a fastidious one.** A Linux directory entry is any NUL-free,
-`/`-free byte string, so a `String` name field cannot represent part of the
-corpus the lint is responsible for, and an enumerator that cannot represent an
-entry has exactly two moves, both defects. Dropping it is fail-open in the
-guard's fail-closed position: the `w<digits>.md` name-shape rule is what makes
-*anything else in this directory* a refusal, so the one entry a contributor
-could not have produced by accident is the one entry that rule never sees.
-Converting it lossily corrupts the label instead. Measured on this host with
-the pinned stable toolchain: the distinct raw names `w\xff9.md` and `w\xfe9.md`
-convert to identical lossy text, so two entries share one rendered label and
-one sort key and the tie falls back to the directory order the sort exists to
-remove; and raw `w\x80.md` sorts before the valid UTF-8 name `w\xc3\xa9.md`
-while their lossy forms sort the other way, because `U+FFFD` encodes to
-`0xEF 0xBF 0xBD` and outranks `0xC3`. That second one is the sharper failure,
-because it moves the position label of entries that were never broken. With
-`OsString` the name-shape rule runs over the raw bytes, `w\xff9.md` is refused
-`ErrorKind::InvalidInput` without being opened and labelled by position, the
-sort key is `OsStr::as_bytes()`, and UTF-8 is required only at the renderer,
-which is the only place it was ever needed. Measured alongside: the enumeration
-returns such names unchanged and `CString::new(name.as_bytes())` round-trips
-each one for the descriptor-relative open, so nothing about the boundary
-changes.
+```text
+packages/Cargo.toml
+packages/Cargo.lock
+packages/d2b-priv-broker/Cargo.toml
+packages/d2b-priv-broker/Cargo.lock              # delete
+packages/d2b-guest-shell-runner/Cargo.toml
+packages/d2b-guest-shell-runner/Cargo.lock       # delete
+packages/d2b-contract-tests/Cargo.toml
+packages/xtask/tests/policy_workspace.rs
+packages/d2b-bazel-support/Cargo.toml
+packages/d2b-bazel-support/src/lib.rs
+packages/d2b-bazel-support/src/fsops.rs
+packages/d2b-bazel-support/src/runfiles.rs
+packages/d2b-bazel-support/src/startup.rs
+packages/d2b-bazel-support/tests/provider_handle.rs
+packages/d2b-bazel-support/tests/startup.rs
+packages/d2b-bazel-runner/Cargo.toml
+packages/d2b-bazel-runner/src/lib.rs
+packages/d2b-test-locator/Cargo.toml
+packages/d2b-test-locator/src/lib.rs
+packages/xtask/Cargo.toml
+packages/xtask/src/main.rs
+```
 
-**Absent content is an error, not a blank.** The per-entry content field holds
-exactly what the boundary read returned and is never collapsed into `None` or
-into an empty string, and the corpus error is returned rather than folded into
-an empty list. A directory the lint cannot read is a fail-closed refusal rather
-than a corpus that happens to look empty, and an entry that is a directory, a
-symlink, a permission denial, or non-UTF-8 is refused with its real errno
-rather than with one indistinguishable "absent" state, so a reviewer can tell
-"someone committed a subdirectory here" from "the file is unreadable in CI".
-Preserving the real `std::io::Error` is also what stops a later refactor from
-quietly mapping every failure onto the same benign-looking value; an `Option`
-has exactly one way to be empty and a `Result` has to say why. The one
-constructed error is `ErrorKind::InvalidInput` for an entry whose name does not
-match `w<digits>.md` and which is therefore never opened, and a test pins the
-exact `raw_os_error` of `EACCES`, `EISDIR`, and `ELOOP` and the `InvalidData`
-kind of non-UTF-8 content so that stays the only construction. A non-UTF-8
-*name* is a different condition from non-UTF-8 *content* and is not folded into
-it: content is decoded and fails `InvalidData` on an entry that was opened, a
-name is never decoded and fails the byte-level shape rule on an entry that was
-not.
+The prep commit:
 
-The lint runs in the one lane that reaches that crate,
-`D2B_ENABLE_FIXTURE_BUILD=1 make test-fixture-contracts`. That is measured, not
-assumed: `tests/test-rust.sh` sets `workspace_test_excludes=(--exclude
-d2b-contract-tests)`, and `tests/test-policy.sh` runs seven fixture-independent
-contract-test binaries, none of which is `policy_docs`. No new gate, shell
-script, or `tests/test-policy.sh` entry is added, per FR-053.
+- merges broker and guest into the root workspace;
+- removes nested workspace and profile tables;
+- makes libshpool normal and `real-libshpool` empty;
+- regenerates the root lock offline;
+- creates and registers the complete neutral support crate, including the
+  filesystem, runfiles, startup interfaces, fakes, and provider behavior that
+  runner, locator, xtask, and policy slices read;
+- creates and registers green runner and locator crate skeletons before any
+  runner or locator test, with their complete future dependency sets and
+  stable crate-root contract seams. Scope tests load their not-yet-wired
+  implementation files through test-local paths, and the integrator wires the
+  completed modules only after parallel work ends;
+- owns the complete spec003w0 xtask dependency set and a green command root without declaring
+  not-yet-present generator modules. The integrator wires those modules after
+  the generator scope merges;
+- regenerates and commits `packages/Cargo.lock` after the manifest changes;
+- implements every behavior its tests assert. Coverage, topology, manifest,
+  deadline, process, cleanup, and recovery tests remain deferred to
+  spec003w1 or spec003w2 with their implementations rather than landing red
+  behind inert seams.
 
-The lint carries its own proof that it can fail, and it carries it in the
-injected fake rather than on disk. The enumeration negatives are supplied
-states of the `FileSystem` fake: an unreadable directory, an empty corpus, an
-entry refused `EACCES`, an entry refused `ELOOP`, a subdirectory whose read
-returns `EISDIR`, non-UTF-8 content, an entry whose raw name is not valid
-UTF-8, a second raw name differing from it only in bytes a lossy conversion
-collapses, and an invalid raw name enumerated against a valid non-ASCII one so
-the byte order and the lossy order disagree. The line-rule negatives are
-in-test
-note bodies: the generic absolute path
-`/home/planted-d2b-note-leak/adr052/.scratch/bazel`, which belongs to no
-machine in this run; the worktree path with its leading slash removed; a
-non-note entry name; an entry name that itself carries a leak; and the
-placeholder-spelling case that refuses `<WORKTREE>`, `<worktree-root>`, and a
-`file:` URI while accepting a placeholder-rooted path with a nested `<base>`
-segment. All of them are observed failing against inert seams before the
-real one lands, alongside the self-application case and the per-shape remedy
-case.
+No parallel slice edits a prep-owned file. If a shared seam is incomplete, an
+additional prep commit lands before scopes resume.
 
-No wave plants a note fixture in the real directory any more. An untracked leak
-file there is either named like a note, in which case the lint reads it, or
-named anything else, in which case the lint refuses the entry. That is strictly
-stronger than the tracked-versus-untracked scan it replaces, and unlike a scan
-a validation task performs by hand, it cannot be skipped by a reviewer who is
-in a hurry. Adding `specs/003-adr052-bazel-rust/wave-notes` to this crate's
-input set is also what makes the fixture-dependent validation rule below bind
-for W0, W1, and W2 by derivation rather than by the incidental `.rs`
-intersection.
+### Parallel slice ownership
 
-### Fixture-dependent validation rule
+| Slice | Owned files |
+| --- | --- |
+| `spec003w0-cargo-gates` | `tests/test-rust.sh`, `tests/tools/assert-pinned-tests.sh`, `tests/golden/pinned/kernel-canaries.txt`, `tests/golden/pinned/usbip-firewall-skeleton.txt`, `tests/golden/pinned/host-prepare-network.txt`, `tests/golden/pinned/broker-socket-acl.txt`, `tests/golden/pinned/broker-export-audit.txt` |
+| `spec003w0-bazel-generator` | `.bazelversion`, `.bazelrc`, `MODULE.bazel`, `BUILD.bazel`, `bazel/BUILD.bazel`, `bazel/defs.bzl`, `bazel/toolchains.bzl`, `bazel/cargo/README.md`, `bazel/cargo/BUILD.bazel`, `bazel/cargo/cargo_bazel.bzl`, `packages/xtask/src/bazel.rs`, `packages/xtask/src/package_policy.rs`, `packages/xtask/src/bazel_yanked.rs`, `packages/xtask/src/schema.rs`, `packages/xtask/src/hermeticity.rs`, `packages/xtask/tests/bazel_foundation.rs`, `packages/xtask/tests/bazel_module_refresh.rs`, `packages/xtask/tests/package_policy_refusals.rs` |
+| `spec003w0-runner-foundation` | `packages/d2b-bazel-runner/src/exec_handle.rs`, `packages/d2b-bazel-runner/src/bin/d2b-exec-probe.rs`, `packages/d2b-bazel-runner/tests/exec_handle.rs` |
+| `spec003w0-locator-foundation` | `packages/d2b-test-locator/src/mode.rs`, `packages/d2b-test-locator/tests/mode_selection.rs` |
+| `spec003w0-nix-policy` | `nixos-modules/host-broker.nix`, `flake.nix`, `tests/unit/nix/cases/bazel-package-policy.nix`, `packages/d2b-contract-tests/tests/policy_bazel_nix.rs`, `packages/d2b-contract-tests/tests/policy_bazel_supply_chain.rs`, `packages/d2b-guest-shell-runner/deny.toml` |
+| `spec003w0-policy-ci` | `tests/lib.sh`, `packages/xtask/tests/policy_ci.rs`, `packages/d2b-contract-tests/tests/policy_docs.rs`, `tests/unit/meta/w0-dep-direction.sh`, `tests/unit/meta/ci-runner-regression.py`, `tests/unit/gates/flake-check-matrix-sync.sh`, `tests/unit/gates/ci-rust-cache-sync.sh`, `tests/layer1-jobs.json`, `tests/tools/layer1-jobs.py`, `tests/ci/layer1-workflow.template.yml`, `tests/tools/flake-check-classes.sh`, `tests/tools/gen-flake-check-matrix-pin.sh`, `.github/workflows/release-host-binaries.yml` |
+| `spec003w0-binding-docs` | `AGENTS.md`, `tests/AGENTS.md`, `CONTRIBUTING.md`, `docs/contributing/gates-and-lints.md`, `docs/contributing/workflow.md`, `docs/contributing/critical-subsystems.md`, `docs/adr/0052-bazel-rust-build-and-test.md`, `docs/adr/README.md`, `changelog.d/adr0054-broker-hub.md`, `packages/d2b-contract-tests/tests/policy_modules.rs` |
 
-`tests/test-rust.sh` sets `workspace_test_excludes=(--exclude
-d2b-contract-tests)`, so the `d2b-contract-tests` crate never runs under
-`make test-rust-main` or any other workspace leaf. It runs only under
-`D2B_ENABLE_FIXTURE_BUILD=1 make test-fixture-contracts`.
-`tests/test-policy.sh`
-does not close that gap: it runs seven named fixture-independent contract-test
-binaries, and `policy_docs` is not one of them. A wave that edits a
-file that crate reads therefore has no coverage at all unless its validation
-task runs that target.
+Only the Bazel generator slice opens from the first prep tip. After it
+integrates, the integrator wires xtask, generates the product and walker hub
+locks, and refreshes the module lock. The remaining independent spec003w0
+scopes open from that green generator-checkpoint tip, so no Cargo process
+observes routing or lock mutation in flight.
+`spec003w0-nix-policy` begins only after the generator's policy schema is
+integrated. `spec003w0-policy-ci` begins only after the new fixture-independent policy
+binaries exist. `spec003w0-binding-docs` begins
+after the integrated command and gate shapes are stable.
+The release-workflow substep of `spec003w0-policy-ci` begins after the root
+workspace and gate target directories are stable. These are real dependencies,
+not parallel work. The binding-doc scope records that ADR 0054 governs the
+newer workspace shape and does not edit dated ADR 0038.
 
-The crate's committed input set is derived mechanically, not by memory:
+### Integrator-owned reconciliation
+
+After slice commits merge, only the integrator updates:
+
+```text
+Makefile
+packages/Cargo.toml
+packages/Cargo.lock
+.bazelignore
+MODULE.bazel.lock
+bazel/generated/output-manifest.json
+every exact generated BUILD and manifest path listed by that output manifest
+bazel/cargo/product.lock
+bazel/cargo/walker.lock
+the sixteen exact package-policy files enumerated in tasks T026
+tests/unit/nix/pinned/common.txt
+tests/unit/nix/pinned/x86_64-linux.txt
+tests/unit/nix/pinned/aarch64-linux.txt
+tests/golden/bazel-rust-coverage.json
+tests/golden/bazel-rust-query.json
+tests/golden/flake-check-matrix/x86_64-linux.txt
+tests/golden/flake-check-matrix/aarch64-linux.txt
+.github/workflows/pr-l1-static-fast.yml
+changelog.d/adr052-bazel-foundation.md
+```
+
+Initial hub and module lock generation occurs here only after the tested
+generator is integrated and routed. Lock refresh follows the authority that
+changed, and `MODULE.bazel.lock` is always committed last:
+
+- initial or combined setup commits `bazel/cargo/product.lock`, then
+  `bazel/cargo/walker.lock`, then `MODULE.bazel.lock`; while the module lock is
+  absent, the two initial repins alone use command-local
+  `--lockfile_mode=off`, which creates no module lock and is refused after
+  bootstrap;
+- a later product manifest change regenerates and commits
+  `packages/Cargo.lock`, then product repin, then module refresh, and proves
+  the walker Cargo lock and `bazel/cargo/walker.lock` byte-identical;
+- a later walker manifest or lock change regenerates and commits the walker
+  Cargo lock, then walker repin, then module refresh, and proves
+  `packages/Cargo.lock` and `bazel/cargo/product.lock` byte-identical.
+
+Byte-identity is proved by comparing recorded hashes of the untouched files
+before and after the refresh. Only after those commits does clean no-op
+validation run.
+Slices may place previews under `.scratch/`; no slice commits a generated
+lock, pin, BUILD file, coverage golden, or query golden.
+
+### Validation
+
+On the committed integrated candidate:
 
 ```bash
-grep -rhoE 'read_repo_file(_opt)?\("[^"]+"' packages/d2b-contract-tests/ \
-  | sed -E 's/.*\("//; s/"$//' | sort -u
-grep -rhoE 'repo_root\(\)\.join\("[^"]+"' packages/d2b-contract-tests/ \
-  | sed -E 's/.*\("//; s/"$//' | sort -u
+set -euo pipefail
+assert_clean() {
+  git diff --exit-code -- "$@"
+  git diff --cached --exit-code -- "$@"
+  test -z "$(git status --porcelain --untracked-files=all -- "$@")"
+}
+assert_clean packages/Cargo.lock
+(cd packages && cargo generate-lockfile --offline)
+assert_clean packages/Cargo.lock
+(cd packages && cargo metadata --locked --offline --format-version 1)
+assert_clean .bazelignore bazel packages MODULE.bazel.lock
+(cd packages && cargo xtask gen-bazel --check)
+assert_clean .bazelignore bazel packages MODULE.bazel.lock
+assert_clean packages/policy-inputs
+(cd packages && cargo xtask gen-package-policy-inputs --check)
+assert_clean packages/policy-inputs
+assert_clean bazel/cargo/product.lock
+(cd packages && cargo xtask bazel-repin --hub product)
+assert_clean bazel/cargo/product.lock
+assert_clean bazel/cargo/walker.lock
+(cd packages && cargo xtask bazel-repin --hub walker)
+assert_clean bazel/cargo/walker.lock
+assert_clean MODULE.bazel.lock
+(cd packages && cargo xtask bazel-module-refresh)
+assert_clean MODULE.bazel.lock
+assert_clean tests/unit/nix/pinned
+make nix-unit-pin
+assert_clean tests/unit/nix/pinned
+make check-tier0
+make test-lint
+make test-rust-main
+make test-rust-broker
+make test-rust-guest-shell-runner
+make test-rust-schema
+make test-rust-inventory
+make test-rust-supply-chain
+make test-rust
+make test-policy
+make test-drift
+make test-flake
+make test-nix-unit
+D2B_ENABLE_FIXTURE_BUILD=1 make test-fixture-contracts
 ```
 
-A wave whose owned path set intersects that union MUST run
-`D2B_ENABLE_FIXTURE_BUILD=1 make test-fixture-contracts` in its validation
-task. Measured at the current base, the union already contains
-`repo_root().join("packages")`, which
-`packages/d2b-contract-tests/tests/policy_broker_schema.rs` walks for every
-`.rs` file, plus `Makefile`, `tests/test-rust.sh`, `flake.nix`,
-`packages/Cargo.toml`, `packages/xtask/src/main.rs`, `AGENTS.md`,
-`docs/contributing`, and `nixos-modules`. Every code-changing wave in this plan
-adds or edits at least one `.rs` file under `packages/`, so W0, W1, W2, W3, W5,
-W6, and W7 all carry the target. W0 adds
-`repo_root().join("specs/003-adr052-bazel-rust/wave-notes")` to the union when
-it lands the wave-note lint, so from W0 onward the wave that writes a note is
-bound to the target by derivation rather than by the incidental `.rs`
-intersection. W4 owns no implementation file and runs it
-anyway, because promotion evidence requires the same-commit companion verdict.
-The practical consequence is that the target is not optional for a wave whose
-diff looks unrelated to fixtures: a wave that adds a new runner test file has
-already changed an input this crate scans. Each wave recomputes the
-intersection against its final owned path set rather than inheriting this list.
-
-### W0 - Reversible foundation
-
-**Deliverable**: Verified amendment ancestry, pinned Bazel and Bzlmod state,
-four `crate_universe` hubs with committed per-hub locks, the scoped
-single-hub repin command, the no-argument module-lock refresh command, the
-reviewed networked yanked-snapshot refresh
-command, the pinned
-`cargo-bazel` acquisition, the generated workspace boundary, the Cargo-derived
-generator, the schema output prerequisite, the generated first-party graph, the
-coverage-map structure, the third-party build-script and action-environment
-inventory, the wave-note policy lint that carries the command-shape rule, and
-the frozen support, runner, and locator crate decisions, including the shared
-`FileSystem` and `RunfilesView` boundaries with the provider open, verify, and
-`execveat` operations and the two resolve policies, the frozen `startup` seam,
-the runner-local `clock` boundary, and the dependency-direction guard that pins
-the edges between the three. Cargo remains authoritative.
-
-**Ownership**:
-
-- `foundation-tools`: `.bazelversion`, `.bazelrc`, `MODULE.bazel`,
-  `MODULE.bazel.lock`, `flake.nix`, hand-written `bazel/`, `bazel/cargo/` hub
-  declarations and per-hub locks, and `packages/xtask/tests/policy_ci.rs` for
-  the pinning and repin-control guards. The one exception is the main-hub lock
-  after workspace membership changes, which only the integrator regenerates and
-  commits; the other three must be byte-identical across integration.
-- `generator`: `packages/xtask/src/bazel.rs`, including `gen-bazel`,
-  `gen-bazel --check`, `bazel-repin`, and `bazel-module-refresh`;
-  `packages/xtask/src/bazel_yanked.rs`, including `bazel-yanked-refresh`
-  written against the prep-frozen `YankedIndex` boundary, its `IndexClient`
-  implementation, and its fake;
-  `packages/xtask/tests/bazel_module_refresh.rs`; their tests;
-  the wave-note policy lint in
-  `packages/d2b-contract-tests/tests/policy_docs.rs` and the W0 note
-  `specs/003-adr052-bazel-rust/wave-notes/w0.md`, which the scope that made the
-  measurement writes together with the lint that polices it;
-  and its generated outputs including `.bazelignore` and the derived censuses.
-- `schema`: schema generator, its tests, and the current schema leaf only.
-- `runner`: `packages/d2b-bazel-runner/`, plus
-  `tests/unit/meta/w0-dep-direction.sh`. It opens no file under
-  `packages/d2b-bazel-support/`, which the prep commit lands whole. It lands
-  the runner crate as a skeleton with the runner-local `clock` boundary W2
-  implements against, plus the probe binary
-  `packages/d2b-bazel-runner/src/bin/d2b-exec-probe.rs` and the one host-backed
-  conformance test `packages/d2b-bazel-runner/tests/exec_handle.rs` that
-  measures `execveat`, close-on-exec inheritance, and repeated execution of one
-  descriptor, because those are kernel claims and a fake cannot prove a kernel.
-  It also extends the dependency-direction gate, because
-  FR-051 puts an enforcing guard in the same wave as the plumbing it
-  constrains.
-- `locator`: the frozen locator crate skeleton and its own tests. It consumes
-  the support boundaries and declares no other first-party dependency.
-- Integrator prep: `Makefile`, Cargo workspace membership,
-  `packages/xtask/src/main.rs` seams, the `YankedIndex` trait declaration in
-  `packages/xtask/src/bazel_yanked.rs`, coverage-map format,
-  `packages/d2b-bazel-support/` whole, meaning `src/fsops.rs` and
-  `src/runfiles.rs` complete with their host-backed implementations and their
-  in-memory fakes, `src/startup.rs` empty and W0-frozen for W2, and
-  `tests/provider_handle.rs`, because four consumers read those boundaries and
-  a shared trait plus its fake arriving inside one parallel scope's worktree is
-  the coupling the prep rule exists to remove; the `d2b-bazel-support`
-  dev-dependency in `packages/d2b-contract-tests/Cargo.toml` so the
-  `generator` scope's lint opens against a resolvable edge; runner and locator
-  crate selection, generated output reconciliation, and shared changelog
-  folding.
-
-No W0 scope owns a file under `packages/d2b-bazel-support/`, for the same
-reason no W1 scope does. If a scope finds the boundary short an operation it
-lands in a second prep commit and nowhere else.
-
-**Validation**: `make check-tier0`, `make test-lint`, `make test-rust-schema`,
-`make test-rust-inventory`, `make test-drift`, `make test-policy`,
-`D2B_ENABLE_FIXTURE_BUILD=1 make test-fixture-contracts` per the
-fixture-dependent validation rule, and a Cargo-authoritative
-`D2B_SKIP_FIXTURE_BUILD=1 make test-rust`.
-
-**Done when**: the amended ADR commit is an ancestor of the W0 base; Bazel is
-8.6.0; module lock mode is `error` and direct-dependency checking is `error`;
-all four hubs declare `lockfile`,
-`cargo_lockfile`, and `skip_cargo_lockfile_overwrite = True`, and a stale-lock
-mutation fails closed; no repin environment control exists in the
-wrapper or CI; `cargo xtask bazel-repin --hub <name>` refuses an unknown hub,
-refuses an ambient repin control, changes only the named hub's lock, and fails
-when any other generated artifact changed; `cargo xtask bazel-module-refresh`
-takes no arguments, refuses an ambient repin control, changes only
-`MODULE.bazel.lock`, fails when any other tracked derived file changed, and
-exits zero having changed nothing on an already-current tree; planted module
-drift makes the pinned Bazel fail under `--lockfile_mode=error` and the
-repository surfaces the exact `cargo xtask bazel-module-refresh` remediation
-beside that failure; neither command is named in `Makefile` or in any workflow;
-every row of the actionable failure contract is triggered and its exact string
-asserted by a test in the module that emits it; the `cargo-bazel` URL and
-sha256 are pinned and the source
-bootstrap is refused; `.bazelrc` contains no startup line and no channel flag;
-generated `.bazelignore` covers `.scratch/` and every Cargo output directory,
-proven by a drift mutation; `gen-bazel --check` is clean; `bazel-yanked-refresh`
-reaches the index only through the `YankedIndex` boundary, every one of its unit
-tests supplies a fake response and none opens a socket, and `IndexClient` is the
-one site that may; both schema generations report the exact generated nonempty
-valid census; the build-script
-and action-environment inventory is committed and drift-checked; the W0 wave
-notes record both measured invocations as command shapes with `<worktree>`
-placeholders and the wave-note policy lint in
-`packages/d2b-contract-tests/tests/policy_docs.rs` passes over every entry of
-that directory under `D2B_ENABLE_FIXTURE_BUILD=1 make test-fixture-contracts`,
-reading that corpus through one anchored close-on-exec descriptor with
-`RESOLVE_BENEATH`, `RESOLVE_NO_SYMLINKS`, and `RESOLVE_NO_MAGICLINKS` and never
-through `std::fs::read_dir`, `std::fs::read_to_string`, or a concatenated
-`DirEntry` path, holding each enumerated name as a `std::ffi::OsString` and
-sorting them by unsigned byte order over `OsStr::as_bytes()` before opening
-any entry, with its planted absolute-path, empty-corpus, unreadable
-corpus, `EACCES`, `ELOOP`, `EISDIR`, non-UTF-8-content, non-UTF-8-name,
-non-note-entry,
-leaking-entry-name, worktree-substring, placeholder-spelling,
-stable-enumeration-order, raw-byte-ordering, and fixed-corpus-directory cases
-all
-present and each observed failing against the inert seams before the real ones
-landed, its violation type split into `PathLeak` carrying label and line and
-`ReadError` carrying label and the preserved `std::io::Error`, its `NoteLabel`
-constructing `Name` only where `OsStr::to_str()` returns `Some` and that `&str`
-passes the lint's own rules, its corpus error
-returned rather than folded into an empty list and rendering the fixed
-repository-relative `specs/003-adr052-bazel-rust/wave-notes/` rather than any
-resolved path, and its rendered refusals
-carrying the correct remedy for their own shape, none of the other three
-remedies, and no offending token, proven by running those refusals back through
-the scanner's own rules; `packages/d2b-bazel-support/` declares no first-party
-dependency, the runner and the locator declare it and nothing else first-party,
-`packages/d2b-contract-tests` declares it as a dev-dependency only, and
-`tests/unit/meta/w0-dep-direction.sh` refuses a planted
-`xtask -> d2b-bazel-runner` edge, a planted first-party edge out of the
-support crate, and a planted non-dev `d2b-contract-tests -> d2b-bazel-support`
-edge, all observed failing and reverted;
-the support crate's provider path opens exactly once with `O_RDONLY`,
-`O_CLOEXEC`, and `RESOLVE_NO_MAGICLINKS`, runs kind, mode, freshness, digest,
-and the bracketing `fstat` comparison against that descriptor, returns a
-`VerifiedExecutable` with no path accessor and no public constructor, and
-executes it with `execveat(fd, "", argv, envp, AT_EMPTY_PATH)`, with the
-fake-driven lifecycle cases in
-`packages/d2b-bazel-support/tests/provider_handle.rs`, which the prep commit
-landed test-first, and the host-backed conformance run in
-`packages/d2b-bazel-runner/tests/exec_handle.rs` both
-passing and the post-open path-rebind mutation observed failing;
-the forced component-walk route takes its leaf `O_NOFOLLOW` from the resolve
-policy, with the strict-leaf refusal, the provider-leaf acceptance whose handle
-still passes every identity check, and the intermediate-symlink refusal all
-present in `packages/d2b-bazel-support/tests/provider_handle.rs` and both
-hardcoded-leaf mutations observed failing;
-Cargo remains authoritative and green; the ten-role panel and wave PR are
-sealed and merged.
-
-### W1 - Coverage carriers
-
-**Deliverable**: Eighteen attributed carriers with a total and unambiguous
-carrier map, four slices, the shell-free topology runner with its full
-environment and per-case evidence contract, the dual-mode locator migration,
-the nightly channel transition and `rustdoc_json` rule, the vendor repository
-rule and offline supply-chain carriers, derived censuses, the split coverage
-guard, the manifest adapter, and the six ADR Make targets.
-
-**Ownership after prep**:
-
-- `main`: main format, clippy, tests, doctests, harness-free companions,
-  no-bash, schema, stub, and pinned-label carriers.
-- `api`: the channel transition rule, the `rustdoc_json` rule, the census
-  snapshots, the emitted-toolchain guard, and `packages/xtask/tests/policy_ci.rs`
-  for the global-channel-flag refusal.
-- `broker`: three feature carriers and their exclusivity.
-- `aux`: the guest runner carrier and the offline supply-chain carriers,
-  including the vendor repository rule, the unconditional lock-bounded
-  yanked-state snapshot and its three carriers,
-  `packages/xtask/src/bazel_yanked.rs` for the offline `bazel-yanked-check`
-  validator those carriers run and its message tests, and the W1 note
-  `specs/003-adr052-bazel-rust/wave-notes/w1.md`.
-- `runner`: only the frozen runner crate, its environment and per-case evidence
-  implementation, and its tests. It consumes the W0 support boundaries and adds
-  no operation to them.
-- `locator`: the locator crate and the enumerated first-party migration.
-- `coverage`: `ci/rust/BUILD.bazel`, the coverage JSON, the committed query
-  result, and the split guard.
-- `generator`: `packages/xtask/src/bazel.rs` only, for the W1 emission
-  extension. It does not touch `packages/xtask/src/bazel_yanked.rs`, which
-  `aux` owns for W1, so the two `xtask` scopes stay file-disjoint.
-- Integrator prep: `Makefile`, approved targets, the manifest adapter boundary,
-  the `bazel-yanked-check` CLI seam in `packages/xtask/src/main.rs`, and the
-  locator's public macro surface, which the migration scope consumes.
-
-No W1 scope owns a file under `packages/d2b-bazel-support/`. The W0 prep commit
-landed that
-crate complete, which is what lets the `runner` and `locator` scopes, whose
-provider and result-file tests both drive the same fake, open in parallel
-without one waiting on the other's worktree. If W1 discovers the boundary is
-short an operation, it lands in the W1 prep commit and nowhere else; a scope
-that quietly extends a shared trait has reintroduced the coupling the prep rule
-exists to remove.
-
-Generated BUILD outputs remain generator-owned and are regenerated once after
-scope merges.
-
-**Validation**: `make test-bazel-rust`, all four slice targets, an aggregate
-with `D2B_EXECUTION_MANIFEST=.scratch/adr052-w1-manifest.json`, `make
-test-rust`, `make test-policy`,
-`D2B_ENABLE_FIXTURE_BUILD=1 make test-fixture-contracts`, and `make
-test-drift`.
-
-**Done when**: every baseline ID has a nonempty carrier set and every carrier
-belongs to exactly one ID; carrier existence fails at analysis when a mapped
-label does not exist; graph completeness and query drift are proven outside the
-Bazel test and no Bazel test invokes `bazel query`; censuses and ignored counts
-are exact and generator-derived; the census emits the toolchain version it
-actually used and the guard compares it to the pin; a global channel flag is
-rejected by a guard; the vendor rule refuses an unclassifiable lock entry and
-asserts materialized package count equals the lock's; the committed
-lock-bounded yanked snapshot exists, `cargo xtask bazel-yanked-check` passes
-offline for all three locks from both the carriers and a contributor shell,
-that validator names neither `YankedIndex` nor `IndexClient` so it cannot reach
-the index at all, the wave notes record the reviewed networked refresh that
-produced the snapshot as a command shape plus the index revision it observed
-and the W0 wave-note lint passes over the added `w1.md` in the same
-`D2B_ENABLE_FIXTURE_BUILD=1 make test-fixture-contracts` run, with no shell
-scan and no planted note added here,
-its drift refusal names refresh, review and commit, then the check, and it
-reports under the existing `rust-deny-*` identifiers without adding a
-nineteenth surface; every migrated test resolves its binary
-and fixtures through the locator, every located provider is opened once and
-executed through that same descriptor with no `Command` by path and no
-`/proc/self/fd` reopen, every provider negative, the stale-provider case,
-and the post-open path-rebind case are all supplied by the injected
-`FileSystem` and `RunfilesView` fakes with no executable written into
-`packages/target/` or any other live path, and both arms stay green under
-Cargo;
-per-case JUnit results are published with the canonical redaction set absent
-and raw output only in `test.log`; failed and interrupted runs publish partial
-evidence; repository-owned runner execution uses no shell, with the
-`rules_rust`-generated stable-channel doctest runner recorded as the deliberate
-difference it is; Cargo is still authoritative; panel and PR are sealed and
-merged.
-
-### W2 - Operational safety
-
-**Deliverable**: Budget propagation, bounded scratch state, absolute
-wrapper-supplied startup options with byte-identical reuse, synchronous
-on-demand disk-cache trimming, safe cleanup, the deadline and process-group
-wrapper, per-code recovery, and all guards. An evidence-only
-`cargo xtask bazel-evidence prepare-cold-local` helper prepares the ADR
-cold-local state without adding a Make target or a persistent contributor
-control. W5 removes that helper after W4 qualification is complete.
-
-**Ownership**:
-
-- `process-control`: deadline, process group, wait ordering, shutdown tests.
-- `cleanup`: cleanup modules and tests, plus its `policy_docs.rs` marker block.
-- `local-wrapper`: `Makefile`, `.bazelrc`, the one startup-option construction
-  in `packages/d2b-bazel-support/src/startup.rs` and its identity tests in
-  `packages/d2b-bazel-support/tests/startup_options.rs`, the
-  synchronous trim step, scratch budgets, `packages/xtask/Cargo.toml`,
-  `packages/xtask/src/bazel.rs` solely to replace the minimal W0 startup-option
-  derivation inside `bazel-repin` and `bazel-module-refresh` with the one shared
-  construction, and `packages/xtask/tests/bazel_module_refresh.rs` solely to add
-  the case proving every command the wrapper issues surfaces the same
-  module-lock remediation, plus the W2 note
-  `specs/003-adr052-bazel-rust/wave-notes/w2.md`. That
-  replacement adds a `d2b-bazel-support` path dependency, which changes the
-  generated graph, so W2 gains an integrator regeneration step and
-  `make test-drift` in validation. It is the support edge and not a runner
-  edge: `xtask -> d2b-bazel-runner` stays refused by the W0
-  dependency-direction guard, which is why the construction lives in the
-  neutral crate rather than in the runner it was first drafted into.
-- `recovery`: the recovery table and its tests only.
-- `boundaries`: `packages/d2b-bazel-support/src/fsops.rs` and
-  `packages/d2b-bazel-runner/src/clock.rs`. Both are W0-frozen module paths
-  whose operation set W0 fixed and W1 consumed, so this scope owns only the W2
-  changes to `fsops.rs`, which should be none, and `clock.rs` with its
-  in-memory fake; the `fsops` and `runfiles` fakes already exist from the W0
-  prep commit.
-  Cleanup, result publication, and
-  deadline handling consume those traits rather than calling the standard
-  library directly and rather than adding operations to these two files. No
-  cleanup or deadline test may depend on live host filesystem state or on the
-  host clock. This scope and `local-wrapper` both open files under
-  `packages/d2b-bazel-support/`, and they stay file-disjoint the same way the
-  two W1 `xtask` scopes do: ownership in this plan is per file, never per crate.
-
-Prep first splits stable interfaces if process-control and cleanup would share
-a file. `clock` lands in the prep commit, and `fsops` and `runfiles` are
-already whole from W0, so cleanup, deadline, and result-publication scopes open
-against a stable trait surface.
-
-**Validation**: `make test-rust-main`, `make test-policy`, `make check-tier0`,
-`make test-drift`, `make test-bazel-rust`, `D2B_CLEAN_DRY_RUN=1 make clean`,
-`D2B_ENABLE_FIXTURE_BUILD=1 make test-fixture-contracts` per the
-fixture-dependent validation rule, and planted
-mutations through their existing Rust and policy carriers.
-
-**Done when**: cleanup, descriptor inheritance and race, signal order,
-deadline, redaction, and wrong-remedy mutations fail; no descendant survives;
-unrelated processes survive; the 20/40 GiB marks work; startup options are
-proven byte-identical across `build`, `test`, `query`, `info`, `shutdown`, and
-`clean`, with a mutation that perturbs one of them failing closed; the trim
-step is synchronous and its completion is observed before any size measurement;
-every cleanup, result-file, and deadline property is proven through the
-injected `fsops` and `clock` boundaries with no live-host dependency; the one
-startup-option construction lives in `packages/d2b-bazel-support/src/startup.rs`
-and both `xtask` commands call it rather than deriving their own, with
-`xtask -> d2b-bazel-runner` still refused by the W0 dependency-direction guard;
-the W2 wave notes record the consolidated startup-option construction as a
-command shape with `<worktree>` placeholders and the W0 wave-note lint passes
-over the added `w2.md` in the same `D2B_ENABLE_FIXTURE_BUILD=1 make
-test-fixture-contracts` run, with the W2 source-shape work in the same policy
-file leaving that lint and its cases byte-identical;
-panel and PR are sealed and merged.
-
-### W3 - Shadow CI
-
-**Deliverable**: A non-required four-slice workflow with no restore or save,
-workflow and cache permission guards with fixtures, qualification-record
-capture, and the cold-CI feasibility measurement that must precede the binding
-ceiling. The required Cargo CI is unchanged.
-
-**Ownership**:
-
-- `shadow-workflow`: `.github/workflows/pr-bazel-rust.yml`.
-- `workflow-policy`: `policy_ci.rs` and CI fixtures.
-- `target-policy`: the approved-target list if it did not land in W1.
-- Integrator: triggers, path filters, and workflow allowlist reconciliation.
-
-**Validation**: `make test-rust-main`, `make test-policy`, `make test-lint`,
-`make check-tier0`, `D2B_ENABLE_FIXTURE_BUILD=1 make test-fixture-contracts`
-per the fixture-dependent validation rule, four Bazel slices, and inspection of
-the shadow workflow's
-`pull_request` run from a draft W3 PR for permissions, zero writes, slice
-verdicts, and rollup attribution.
-
-**Done when**: the workflow is non-required and outside `V3_PR_GATE_WORKFLOWS`;
-jobs call approved Make targets only; PR reachability has only
-`contents: read`, no writer, and no `actions: write`; shadow publishes nothing;
-policy fixtures pass; push events on protected `v3` produce complete
-qualification records carrying both run identifiers, the shared head commit,
-both verdicts, the same-commit fixture-contract verdict, and the four slice
-durations, while pull-request runs produce none; the cold-CI feasibility
-measurement is recorded with its four slice durations and either clears the
-ceiling or names which pre-authorized remedy is being taken; panel and PR are
-sealed and merged.
-
-### W4 - Evidence qualification
-
-**Deliverable**: A reviewed promotion evidence summary, with no executor flip
-and no cache publication.
-
-**Ownership**: One curator owns the immutable
-`specs/003-adr052-bazel-rust/evidence/qualification.json`. No implementation
-source.
-
-**Validation**: Audit ten consecutive matching qualification records, each at a
-shared head commit with a passing same-commit fixture-contract verdict;
-eighteen isolated seeded failures; exact generator-derived census, topology,
-and ignored counts; twenty exclusive broker repetitions; three warm, three
-cold-local, and the five most recent qualifying cold qualification-record
-measurements; supply-chain equivalence together with the landed yanked carrier
-and its passing offline key-set drift check; and zero shadow cache publication.
-Run both Rust aggregates, policy, and fixture contracts on the evidence commit.
-
-**Done when**: the Qualification Evidence Record validates every threshold and
-reference, no item is pending, and the load-bearing documentation wave gets
-unanimous panel signoff and merges. The committed record is immutable.
-Qualification evidence and promotion never combine.
-
-### W5 - Promotion
-
-**Entry**: W4 merged; maintenance code and fixtures green; a pre-merge cache
-API audit with complete pagination, no ambiguous prefix, no retired writer run
-after the audit, and enough projected headroom after a synchronous trim.
-
-**Deliverable**: Keep `test-rust`, switch the eighteen surfaces to Bazel,
-retain the Cargo fixture mode, replace eight leaves with four slices, delete
-the shadow workflow, stop old writes, delete authorized retired caches, verify
-at most 8 GiB after an explicit synchronous trim, and publish through one
-protected-`v3` writer. Add the structural assertions the amended ADR requires
-as future guards: no `pull_request`-reachable job requests `actions: write`,
-and every promoted Bazel Rust job sets the in-band deadline control. Remove the
-W2 evidence-only cold-local preparation helper after the qualified W4
-measurements have been used.
-
-**Ownership**:
-
-- `promotion-make`: `Makefile`, `tests/test-rust.sh`.
-- `promotion-manifest`: `tests/layer1-jobs.json` and generator inputs.
-- `cache`: maintenance implementation and fixtures.
-- Integrator: regenerate the PR workflow, delete the shadow workflow, order
-  shared jobs.
-
-**Validation**: `make layer1-workflow`, `make test-drift`, `make check`,
-fixture contracts, alias status tests, deadline policy, a maintenance dry run,
-and the first ordered protected-`v3` maintenance and save run.
-
-**Done when**: the context remains `test-rust`; the eighteen surfaces use
-Bazel; two fixture surfaces use Cargo/Nix; the shadow workflow is absent; old
-and Bazel names forward with equal status; workflows call no deprecated alias;
-retired keys are absent; the trim completes synchronously and both headroom
-checks pass; exactly one writer publishes; the two future guards are committed
-and enforcing; panel and PR are sealed and merged. After the first ordered
-protected-`v3` run, a W5 follow-up records `promotion-record.json` with the
-promotion commit, cache maintenance result, and first promoted verdict.
-Rollback is reverting W5.
-
-### W6 - Compatibility alias removal
-
-**Deliverable**: Remove only Bazel-specific aliases after release. Keep
-authoritative Rust leaf names and the Cargo fallback implementation.
-
-**Ownership**: Make and approved-target policy, related contributor docs, and a
-unique semantic fragment. No Cargo leaf deletion.
-
-**Entry**: `promotion-record.json` exists and `git tag --contains` confirms at
-least one release contains the promotion commit. The ten-green-run clock and
-Cargo retirement state are irrelevant to this entry.
-
-**Validation**: Recheck release containment, then run `make test-rust`, all
-authoritative leaf targets, `make test-rust-main`, `make test-policy`,
-`make check-tier0`, `D2B_ENABLE_FIXTURE_BUILD=1 make test-fixture-contracts`
-per the fixture-dependent validation rule, and workflow
-absence checks for the removed names.
-
-**Done when**: release containment is rechecked; aliases are absent;
-authoritative names retain status; release notes, panel, and PR are complete.
-
-### W7 - Cargo implementation retirement
-
-**Deliverable**: Remove Cargo implementations only for the eighteen surfaces
-after ten promoted green runs. Preserve every public target name, the fixture
-mode, and both fixture surfaces.
-
-**Ownership**: `tests/test-rust.sh`, obsolete Cargo leaf internals, unreachable
-Cargo-only plumbing, related docs, and a unique semantic fragment. Fixture
-files are read-only.
-
-**Entry**: `promotion-record.json` exists and ten consecutive promoted `v3` run
-IDs are recorded in `post-promotion.json`. Release containment and
-compatibility-alias removal are irrelevant to this entry.
-
-**Validation**: `make check`, `make test-rust`, four slices,
-`D2B_ENABLE_FIXTURE_BUILD=1 make test-fixture-contracts`, `make test-policy`,
-`make test-drift`, and an inventory proving that only the eighteen Cargo
-implementations disappeared and that `make test-rust` plus all eight
-`make test-rust-<leaf>` names still exist and still invoke Bazel carriers.
-
-**Done when**: ten runs are rechecked; no migrated Cargo implementation
-remains; every public name still resolves to an authoritative carrier; fixture
-mode passes; coverage stays exact; panel and PR merge.
-
-W6 and W7 are independent children of W5. Either may land first once its own
-entry condition holds; neither consumes or weakens the other's condition.
-
-Host, VM, live-host, hardware, and manual deployment tiers do not cover this
-internal build feature and are not claimed.
-
-## Risks and Rollback
-
-Generic risk rows are noise. These are the specific failures this design makes
-possible, each with the guard that catches it.
-
-| Failure | Guard | Rollback |
-| --- | --- | --- |
-| A sandboxed scan or generator passes because it scanned nothing, or scanned a tree it could not see. | Generator-derived exact census, declared-input equality in both directions, parsed count equal to declared count, `test-drift`, planted violation. | Revert the carrier; Cargo remains the authority. |
-| The locator misses under Bazel and silently finds a stale binary in `packages/target/`, which holds real executables for the whole shadow stage. | Mode is selected once and the arms never chain; a Bazel-mode miss fails naming the declared runfiles-relative path; identity is asserted on the one descriptor the provider was opened on and before that same descriptor is executed; and the planted case supplies a stale, wrong-identity provider at the Cargo path through the injected `FileSystem` while the injected `RunfilesView` reports the entry missing, so the refusal is proven without any test writing an executable into a live path. | Revert the locator migration scope; the Cargo arm is unchanged. |
-| A provider negative is arranged on disk instead of injected, so the shadow stage's own `packages/target/` becomes test scaffolding and one abandoned run leaves a stale executable behind that a later Cargo test finds. | Every provider negative, absent, non-regular, non-executable, out of date, wrong identity, and the post-open path rebind, is a supplied state on the shared `FileSystem` and `RunfilesView` fakes; the locator and topology never call the standard library directly, and no provider check executes the planted file, because identity is a digest read from the descriptor the checks already hold. | Revert the locator or topology scope; nothing was written outside the fake. |
-| The locator verifies one binary and the test runs another, because the provider path was rebound between the digest read and the spawn. `packages/target/` is replaced by rename during a concurrent Cargo build for the whole shadow stage, so the window is real, and the failure is silent and green. | The provider is opened once through the boundary and every check binds to that descriptor; `VerifiedExecutable` has no path accessor and no public constructor, so no caller can spawn by name; execution is `execveat(fd, "", argv, envp, AT_EMPTY_PATH)` on the same descriptor with no `Command`, no `fexecve`, and no `/proc/self/fd` fallback. The fake rebinds the path to a different inode after the open and requires the original bytes to run; mutations that re-resolve at exec time, digest from a second open, or fall back on `ENOSYS` all fail. `packages/d2b-bazel-runner/tests/exec_handle.rs` measures the kernel half against a first-party probe binary rather than asserting it. | Revert the locator or topology scope; the boundary is a W0-frozen module path, so the seam does not move. |
-| The provider handle leaks into the child, so a test's own descriptor table differs under Bazel and a later change silently depends on the inherited descriptor. | Every descriptor on this path is close-on-exec, and the conformance test asserts the provider inode is absent from the child while a deliberately non-close-on-exec control descriptor is present, so the assertion is proven able to fail. | Revert the runner scope; the descriptor policy is one boundary operation. |
-| The channel transition silently stops applying in a `rules_rust` bump, so the census renders on stable and still looks correct. | The census emits the toolchain version the action actually used as a declared output, and a test compares it to the committed pin. | Revert the `api` scope; the census stays on the Cargo path. |
-| The channel flag is set globally instead, so every first-party crate compiles on nightly while the gate stays green. | A guard fails closed on any `.bazelrc` line or wrapper argument that sets the channel flag. | Remove the flag; the guard blocks the merge before it ships. |
-| The vendor tree is quietly short a crate, so `licenses` harvests fewer files, reports fewer findings, and exits zero. | Total classification with named refusals for mirrors and checksum-less non-git entries, plus an assertion that the materialized package count equals the lock's before any tool runs. | Revert the vendor rule; the Cargo supply-chain leaf remains authoritative. |
-| The decomposed supply-chain pair loses yanked-state detection and nothing notices, because the migration comparison happened to run on a lock set with no yanked crate. | The lock-bounded snapshot and its three carriers land in W1 unconditionally, so the capability exists before the first finding; the comparison still blocks promotion on any differing enforcing outcome, and the offline key-set drift check ties the snapshot to the three locks. | Fix the snapshot or the drift check; omitting the carrier is not authorized in either direction. |
-| A contributor hits the stale-lock refusal, finds no supported regeneration path, and runs `CARGO_BAZEL_REPIN=1 make ...`, rewriting every hub lock and, at the 0.73.0 default, the authoritative `Cargo.lock` as well. | `cargo xtask bazel-repin --hub <name>` is the one supported path: closed hub set, `CARGO_BAZEL_REPIN_ONLY` scoped to that hub, controls set only on the spawned child, `skip_cargo_lockfile_overwrite = True` on every hub, and a post-check that fails unless the named hub lock is the only changed tracked file. The Make and workflow prohibition is unchanged and the guard allowlists exactly one construction site. | Discard the worktree change; the refusal is fail-closed and the lock is committed. |
-| A contributor hits the module lock refusal and copies the invocation Bazel prints, which carries no startup options, so a second server starts against the worktree and a second output base lands outside `.scratch/` under the home directory. | The repository's own remediation names `cargo xtask bazel-module-refresh` and nothing else. That command issues the measured invocation with the repository's absolute startup options, writes only `MODULE.bazel.lock`, and refuses when any other tracked derived file changed. The module-lock integration test plants real drift, runs the pinned Bazel, and asserts the repository line is present beside the upstream one. | Delete the stray output base and rerun the repository command; the lock was never rewritten by the failing run. |
-| A `bazel_dep` version disagreement is absorbed by the resolved graph, so `--lockfile_mode=error` warns and exits zero and the module lock records a version nobody declared. | `.bazelrc` carries `common --check_direct_dependencies=error`, and W0 proves the negative by planting a direct-dependency version the graph would otherwise absorb. | Correct the declared version or the pin; the build refuses until they agree. |
-| A repin or module refresh quietly carries an unrelated tracked change into the same commit, so a review reads one lock update and merges two. | Both commands digest every committed derived artifact before the child runs and fail afterwards on any other tracked change, listing the affected paths repository-relative. The recovery is to commit or restore those paths and rerun the same scoped command. | Nothing was committed; the command refused before writing a result. |
-| A yanked snapshot is refreshed over the network, reviewed, committed, and never validated, so a key set that does not match the locks reaches continuous integration. | The drift recovery ends on `cargo xtask bazel-yanked-check`, the same offline validator the three carriers run, so the contributor sees the same message in their own shell. | Rerun the refresh and the check; the snapshot is committed and revertible. |
-| A cleanup or deadline guard is written against the live host filesystem or clock, so its planted negative silently never runs and the guard is decorative. | `fsops` in `packages/d2b-bazel-support/` and `clock` in `packages/d2b-bazel-runner/` are injected boundaries; every negative is produced by the fake, and the mutation tests assert errno mapping, ownership state, call ordering, and rounding without a full disk, a privileged mount, or a manipulated host clock. | Revert the affected W2 scope; the boundary is a W0-frozen module path, so reverting an implementation does not move the seam. |
-| The shared startup-option construction is put in the runner because that is where the wrapper lives, so `xtask` takes a dependency on the crate whose build targets `xtask` itself generates, and the next shared helper follows it there. | The construction lives in the neutral `packages/d2b-bazel-support/`, and `tests/unit/meta/w0-dep-direction.sh` refuses `xtask -> d2b-bazel-runner` in every dependency kind and refuses any first-party edge out of the support crate, resolving names with `cargo metadata` so a rename or a target-specific entry cannot evade it. | Move the helper into the support crate; the guard blocks the merge before the edge ships. |
-| The wave-note lint refuses a leaked absolute path and prints the token, so the leak is copied into CI output, a panel comment, and a PR body by the guard that caught it. | The refusal carries the note name, the one identifying detail for its shape, and one remediation and nothing else, and one test runs every rendered refusal back through the scanner's own path-token and worktree-substring rules. | Fix the message; the note itself never merged, because the lint refusal is merge-blocking. |
-| The wave-note lint enumerates its corpus with `std::fs::read_dir` and reads each entry by a concatenated `DirEntry` path, so a symlink committed into the notes directory makes the guard read a file outside it, and the directory is resolved a second time between enumeration and read. | The lint reads through the shared `FileSystem` boundary: one anchored close-on-exec descriptor with `RESOLVE_BENEATH`, `RESOLVE_NO_SYMLINKS`, and `RESOLVE_NO_MAGICLINKS`, enumeration by name only, and descriptor-relative reads. The symlink, subdirectory, permission, and non-UTF-8 negatives are supplied states of the fake and were measured to produce four distinguishable errnos under exactly that flag set. | Revert the lint scope; the boundary is W0-frozen and the corpus was never read by another route. |
-| The shared boundary's fallback route exempts the leaf from `O_NOFOLLOW` for every caller, so on that route a symlinked wave note, a symlinked per-case directory, or a symlinked `XML_OUTPUT_FILE` parent is followed out of its anchor and the lint's four-way errno distinguishability collapses, while every openat2-route test stays green. | The resolve policy decides the leaf on the walk route, and the fake supplies both routes for both policies. `packages/d2b-bazel-support/tests/provider_handle.rs` carries the strict-leaf refusal, the provider-leaf acceptance whose handle still passes kind, mode, freshness, digest, and the bracketing `fstat`, and the intermediate-symlink refusal, and both hardcoded-leaf mutations must fail. | Revert the boundary change in a second W0 prep commit; the trait is a W0-frozen module path and no scope owns it. |
-| A wave-note refusal falls back to a position label taken from raw directory enumeration, so the entry a message names differs between the contributor's ext4 checkout and the CI filesystem and neither run reproduces the other. | Names are sorted by unsigned byte order before any entry is opened, and the entry sequence, violation order, and every position derive from that sorted sequence. One test supplies the same corpus in two enumeration orders and requires identical output, with the removed sort as the planted mutation. | Revert the lint scope; the sort is inside the enumerator and nothing else derives an ordinal from the corpus. |
-| One wave-note violation type carries an optional line beside an optional error, so a permission denial renders the line remedy and a contributor is told to rewrite a line that is not the problem. | The type splits into `PathLeak`, note plus line, and `ReadError`, note plus preserved `std::io::Error`, with an unreadable or empty corpus returned as a corpus error instead of a violation. A test asserts per shape that the right remedy is present and the other three are absent. | Fix the rendering; the split is structural, so the cross-remedy state stops being expressible. |
-| The wave-note enumerator types its name field as `String`, so an entry whose raw name is not valid UTF-8 is either dropped, which makes the `w<digits>.md` refusal blind to the one entry nobody could have created by accident, or lossily converted, which gives two distinct entries one label and one sort key and inverts the order against valid non-ASCII names. | The name is `std::ffi::OsString`, the shape rule and the sort key run over the raw bytes, and `NoteLabel::Name` exists only where `OsStr::to_str()` returns `Some`. T009 adds a case requiring a position-labelled `InvalidInput` refusal for a non-UTF-8 name and a case requiring raw-byte ordering across a corpus mixing invalid names with a valid non-ASCII one, each with the lossy-conversion mutation planted and required to fail. | Revert the lint scope; the name type is internal to the enumerator and its label renderer, and no other caller reads the field. |
-| The coverage guard is green while half its invariants never executed, because a Bazel test cannot query the graph. | Analysis-time dependency edges prove label existence; completeness and query drift run in the wrapper and `test-drift` over a committed drift-checked query result; no Bazel test invokes `bazel query`. | Revert the guard split; do not weaken either half. |
-| The disk cache is measured before asynchronous trimming finishes, so a compliant run refuses to publish forever. | An explicit synchronous on-demand collector runs as a named step before measurement and save; the size refusal stays a backstop. | Revert to the previous snapshot; the maintenance verdict is outside the Rust verdict. |
-| A cache-key input changes without changing the key, restoring a subtly stale cache. | The key binds all four hub locks, all four per-hub Bazel-side locks, the guest lock, the generator sha256, `.bazelignore`, the startup and symlink configuration, the build-script and action-environment digest, and the generated BUILD digest. | Rotate the restore prefix; a stale generation is superseded and deleted by the maintenance job. |
-| Graph discovery traverses `.scratch/` or a Cargo output directory and either fails or absorbs generated files. | Generated drift-checked `.bazelignore` plus an absolute `--symlink_prefix` beneath `.scratch/`, with a mutation that removes a directory from the list failing closed. | Regenerate `.bazelignore`; the wrapper refuses to run without it. |
-| A third-party build script probes the host, diverges from Cargo behavior, or fails under sandboxing. | W0 enumerates every build-script-producing crate per hub, records required annotations, and pins a minimal action-environment allowlist that is itself a cache-key input. | Fix declared inputs and annotations, or stop the migration at W0. |
-| A `--test_output=streamed` run silently serializes every test and produces a measurement that means nothing. | The profile invalidation list forbids it, and every recorded sample carries the flags it ran under. | Invalidate and replace the sample. |
-| The equivalence streak is laundered by pairing runs that tested different trees, or by cancelling a run about to go red. | Records are push events on `v3` with a shared head commit; a Bazel run reaching no verdict while its paired Cargo run does is a mismatch that resets the streak. | Reset the streak; a double cancellation produces no record and buys nothing. |
-| Cleanup follows a replacement or leaks descriptors. | Descriptor-relative removal, forced fallback route with the strict policy's leaf `O_NOFOLLOW` asserted on that route, exec-leak and decoy race tests. | Revert W2; never use raw recursive removal. |
-| A timeout kills the caller or leaves descendants alive. | Dedicated-group escalation order with real sibling and descendant tests. | Revert W5 to Cargo. |
-| Retirement deletes a public entry point along with its Cargo implementation. | The retirement inventory proves only the eighteen implementations disappeared and that `make test-rust` plus all eight leaf names still resolve to Bazel carriers. | Revert W7; W6 and W5 are unaffected. |
-
-After each merge run `nix-collect-garbage`, prune old system generations per
-operator policy, and remove finished worktree targets. Never share
-`packages/target` or `.scratch/bazel`. The wrapper reports sizes, enforces age
-and size, and refuses unsafe cleanup.
-
-## Delivery Memory
-
-### Deferred findings
-
-| Severity | Subject | Wave | Round | Tracking item |
-| --- | --- | --- | --- | --- |
-| None | None | None | None | None |
-
-Only LOW and MEDIUM findings may be deferred from round ten. CRITICAL and HIGH
-block.
-
-### Friction log
-
-| Wave | Category | Impact | Follow-up |
-| --- | --- | --- | --- |
-| None | None | None | None |
-
-These tables store classification metadata only, never transcripts, validation
-output, credentials, or attestations. A category recurring across three waves
-becomes a separately filed task.
+Run the ADR 0054 x86 Nix block natively. On the stable PR head, require the
+generated native `test-flake-aarch64` job and the x86 realized job to pass.
+The arm job must realize all five checks and run
+`make test-rust-supply-chain`; renderer coverage and both results must bind the
+same unchanged stable head.
+
+### Mechanical done condition
+
+All must be true:
+
+- the scoped authority inventory over `packages/Cargo.lock`,
+  `packages/Cargo.guest.lock`, both retired nested lock paths, and the walker
+  lock reports root product, generated guest, and walker locks only; unrelated
+  lab, proof, and compile-fixture locks remain outside this assertion;
+- Cargo metadata reports broker and guest as root workspace members;
+- broker and guest manifests have no `[workspace]` or workspace profiles;
+- guest manifest has normal libshpool and empty real-libshpool;
+- no `crate.spec` exists;
+- MODULE declares only product and walker hubs;
+- product repin changes only product lock when stale and nothing when current;
+- walker repin changes only walker lock and is current;
+- module refresh changes only `MODULE.bazel.lock` when stale, is idempotent,
+  uses matching absolute startup options, emits the exact remediation, and is
+  unreachable from Make and workflows;
+- retired hubs pass exact injected argv/cwd refusal tests;
+- `gen-bazel --check` and `gen-package-policy-inputs --check` pass;
+- the selected-context oracle joins locked offline target-filtered root
+  metadata (identities, sources, candidate edges, `cfg`),
+  `packages/Cargo.lock` plus the committed git archive pin (checksums), and
+  package-selected stable `cargo tree` traversals pinned to
+  `--locked --offline -p <package> --target <target> --no-default-features`
+  with explicit `--features`, `--charset ascii`, `--prefix depth`,
+  `--no-dedupe`, and the repository-pinned delimited `--format`, with
+  production and dev-inclusive edges traversed separately and every traversal
+  identity cross-checked against metadata and the lock; it uses no synthetic
+  manifest or splice;
+- a feature canary on an unrelated workspace member enabling an
+  otherwise-absent feature of a dependency shared with broker or guest cannot
+  enter either selected output;
+- module refresh is committed after both hub locks in every refresh order, and
+  the untouched hub's Cargo and Bazel inputs are proved byte-identical;
+- the Cargo gate's package deny, audit, and source census read the four native
+  selected policy inputs for broker GNU and guest musl, the package audit is
+  pinned with `--no-fetch`, and the aggregate root-lock and
+  `Cargo.guest.lock` checks remain independent and enforcing;
+- `tests/tools/assert-pinned-tests.sh` selects packages from the one root
+  lock, backs up and restores no lock file, and leaves the candidate clean;
+  the five affected `tests/golden/pinned/*.txt` comment files describe the
+  root-lock shape;
+- generic Cargo and Nix build/test and Clippy contexts exclude broker and guest
+  exactly, while each dedicated context retains its selectors;
+- the exact four policy contexts and eight package check wrappers exist;
+- both dedicated Nix derivations retain the exact committed
+  `wl-proxy-0.1.2` output hash and all three pin mutations fail;
+- every guest static artifact is `ET_DYN`, reports the expected native
+  `e_machine`, has no `PT_INTERP` and no `DT_NEEDED`, and the non-PIE and
+  wrong-machine plants fail;
+- the release workflow uses the root manifest with `--locked`, explicit
+  package/bin/default-feature selectors and `packages/target/release`, and its
+  cache mapping is `packages -> target` plus the explicit gate directories;
+- both existing fail-closed gate scripts are updated for that shape and remain
+  present;
+- `make nix-unit-pin` is a no-op and `make test-nix-unit` passes;
+- new fixture-independent policy binaries appear exactly once in
+  `tests/lib.sh`, run under `make test-policy`, and are excluded from fixture
+  contracts by the regression test;
+- the six guest license exceptions are exact and different-package plants fail;
+- both native five-check CI sets pass and the arm stable head also passes
+  `make test-rust-supply-chain`;
+- all ten spec003w0 binding-doc, ADR-status, and policy paths describe the unified workspace
+  without process markers, with ADR 0054 governing the newer shape and ADR
+  0038 unchanged;
+- every mutating check above leaves the candidate clean;
+- Cargo remains the required `test-rust` executor;
+- the ten-role integrated-diff panel signs off;
+- the PR is sealed as `spec003w0` and merged.
+
+## spec003w1 - Complete Bazel Coverage Carriers
+
+### Deliverable
+
+All eighteen Bazel carriers, native first-party configured contexts, exact
+coverage map, runner and locator implementation, offline supply-chain
+carriers, nightly API census, schema, no-bash, inventory, and execution-manifest
+adapter. Cargo remains authoritative.
+
+### Integrator prep
+
+Prep fixes shared interfaces in:
+
+```text
+packages/d2b-bazel-runner/Cargo.toml
+packages/d2b-bazel-runner/src/lib.rs
+packages/d2b-bazel-runner/src/contracts.rs
+packages/d2b-test-locator/Cargo.toml
+packages/d2b-test-locator/src/lib.rs
+packages/d2b-test-locator/src/contracts.rs
+packages/xtask/Cargo.toml
+packages/xtask/src/main.rs
+packages/Cargo.lock
+bazel/cargo/product.lock
+MODULE.bazel.lock
+bazel/generated/locator-migration-files.json
+```
+
+Those files contain complete green interfaces, complete future dependencies,
+crate-root and xtask contract seams, and the exact sorted migration file
+inventory. They do not declare not-yet-present implementation modules. Scope
+tests load their scope-owned implementation modules through test-local paths;
+after the parallel frontier closes, the integrator wires completed modules
+into the prep-owned roots. No spec003w1 slice edits a prep-owned root,
+contract, inventory, or lock. If a product manifest changes, prep regenerates
+`packages/Cargo.lock`, then product-repins, then module-refreshes, committing
+each generated result in that order before no-op checks, and proves both walker
+inputs byte-identical. If a walker manifest or lock changes, prep regenerates
+the walker Cargo lock, then walker-repins, then module-refreshes in that order,
+and proves `packages/Cargo.lock` and `bazel/cargo/product.lock`
+byte-identical. `MODULE.bazel.lock` is always committed last. The
+integrator owns Make, `ci/rust/BUILD.bazel`, and generated reconciliation after
+slice integration.
+
+### Slice ownership
+
+| Slice | Owned files |
+| --- | --- |
+| `spec003w1-main` | `bazel/carriers/main.bzl`, `packages/d2b-bazel-runner/tests/main_topology.rs` |
+| `spec003w1-api` | `bazel/rules/channel_transition.bzl`, `bazel/rules/rustdoc_json.bzl`, `bazel/rules/tests/channel_transition.rs`, `bazel/rules/tests/rustdoc_json.rs` |
+| `spec003w1-broker` | `bazel/carriers/broker.bzl`, `packages/d2b-bazel-runner/tests/broker_topology.rs`, `packages/d2b-bazel-runner/tests/broker_exclusive.rs` |
+| `spec003w1-guest` | `bazel/carriers/guest.bzl`, `packages/d2b-bazel-runner/tests/guest_topology.rs` |
+| `spec003w1-supply-chain` | `bazel/vendor/repositories.bzl`, `bazel/supply_chain/BUILD.bazel`, `bazel/supply_chain/defs.bzl`, `packages/xtask/src/bazel_yanked.rs`, `packages/xtask/tests/bazel_yanked.rs`, `packages/xtask/tests/bazel_action_network.rs` |
+| `spec003w1-runner` | `packages/d2b-bazel-runner/src/coverage.rs`, `packages/d2b-bazel-runner/src/topology.rs`, `packages/d2b-bazel-runner/src/runner_env.rs`, `packages/d2b-bazel-runner/src/junit.rs`, `packages/d2b-bazel-runner/src/manifest.rs`, `packages/d2b-bazel-runner/tests/coverage.rs`, `packages/d2b-bazel-runner/tests/result_publication.rs`, `packages/d2b-bazel-runner/tests/provider_execution.rs` |
+| `spec003w1-locator` | `packages/d2b-test-locator/src/locator.rs`, `packages/d2b-test-locator/tests/locator.rs`, and every source path listed in prep-owned `bazel/generated/locator-migration-files.json`; the inventory file itself is not owned |
+| `spec003w1-no-bash` | `bazel/carriers/no_bash.bzl`, `tests/tools/no-bash-ast-walker/src/main.rs`, including its inline unit tests |
+| `spec003w1-census-generator` | `bazel/carriers/schema.bzl`, `bazel/carriers/inventory.bzl`, `bazel/carriers/stub.bzl`, `packages/d2b-bazel-runner/tests/schema_inventory.rs`, `packages/xtask/src/bazel.rs`, `packages/xtask/src/schema.rs`, `packages/xtask/tests/bazel_generation.rs` |
+| `spec003w1-coverage` | `bazel/carriers/coverage.bzl`, `packages/d2b-bazel-runner/tests/coverage_map.rs`, `packages/xtask/tests/policy_ci.rs` |
+| Integrator | `Makefile`, `ci/rust/BUILD.bazel`, `packages/d2b-bazel-runner/src/lib.rs`, `packages/d2b-test-locator/src/lib.rs`, `packages/xtask/src/main.rs`, `bazel/generated/output-manifest.json` and every exact path it lists, `tests/golden/bazel-rust-coverage.json`, `tests/golden/bazel-rust-query.json`, `bazel/supply_chain/yanked-snapshot.json`, `changelog.d/adr052-bazel-carriers.md` |
+
+The locator file inventory is generated and committed in prep. It is the exact
+file-ownership expansion for `spec003w1-locator`; no other slice edits a listed
+path. The no-bash tests in `main.rs` are added before its implementation change
+and are sequential because they edit the same file.
+
+The integrator alone regenerates BUILD files, `.bazelignore`, module and hub
+locks, `bazel/supply_chain/yanked-snapshot.json`, all files beneath
+`bazel/generated/` including `bazel/generated/no-shell-inventory.json`, and
+both coverage/query goldens.
+Slices emit scratch previews only.
+
+`spec003w1-coverage` owns `packages/xtask/tests/policy_ci.rs` alone. It adds
+all six shadow Make targets (`test-bazel-rust`, `test-bazel-rust-main`,
+`test-bazel-rust-api`, `test-bazel-rust-broker`, `test-bazel-rust-aux`,
+and `bazel-shutdown`) to `APPROVED_MAKE_TARGETS` in the same wave that
+introduces them, with a positive test that every approved shadow name resolves
+to a rule in a supplied Makefile fixture and that a workflow step calling it
+is accepted, and
+negative tests that an unapproved `test-bazel-rust-<name>` call and an
+approved shadow name with no Makefile rule are both rejected. The integrated
+repository consistency form runs after the integrator adds the six entry
+points and must be green on the candidate. The integrator reconciles `Makefile` and
+`ci/rust/BUILD.bazel`, then wires completed modules into the prep-owned runner,
+locator, and xtask roots; prep already owns Cargo manifests and their ordered
+lock refresh.
+
+### Validation
+
+```bash
+set -euo pipefail
+make test-bazel-rust
+make test-bazel-rust-main
+make test-bazel-rust-api
+make test-bazel-rust-broker
+make test-bazel-rust-aux
+D2B_EXECUTION_MANIFEST=.scratch/spec003w1-manifest.json make test-bazel-rust
+make test-rust
+make test-policy
+make test-drift
+D2B_ENABLE_FIXTURE_BUILD=1 make test-fixture-contracts
+```
+
+Also compare Cargo's enforcing exit status and normalized finding set with the
+decomposed Bazel deny, audit, and yanked union for full-product main and exact
+selected broker and guest projections. Any difference fails validation.
+
+### Mechanical done condition
+
+- coverage map has exactly eighteen IDs and no orphan carrier;
+- every first-party crate is native and every configured context census is
+  exact and nonempty;
+- product and walker containment checks pass;
+- main, guest, and broker topology tests pass;
+- all broker suites carry `tags = ["exclusive"]`, overlap no test, and the
+  tag-removal mutation fails;
+- declared loopback TCP and Unix-socket tests pass; forbidden
+  external/live-index egress plants fail; DNS, advisory fetches, and undeclared
+  listeners remain denied; every repository-rule fetch is pinned;
+- package carriers use the four spec003w0 policy contexts, the one product-lock
+  yanked snapshot with exact main/broker/guest semantics, and pinned no-fetch
+  audit;
+- no-bash walk/read/parse errors refuse and parsed-file census equals the
+  governed manifest and declared input set;
+- `bazel/generated/no-shell-inventory.json` is committed, nonempty in each of
+  its three sets, and drift-checked; the governed-source, declared-input, and
+  spawn-site source projections are equal in both directions; a fresh scan's
+  exact keyed spawn-site set equals the committed `spawnSites` set in both
+  directions; every governed source is scanned; and the empty, missing-entry,
+  extra-entry, and planted-shell plants each fail;
+- all six shadow Make targets appear in `APPROVED_MAKE_TARGETS`, each
+  resolves to a real Makefile rule, an unapproved `test-bazel-rust-<name>`
+  call fails, and an approved shadow name with no Makefile rule fails;
+- schema performs two independent nonempty exact-census generations and its
+  mismatch and empty-output plants fail;
+- stub-no-socket rejects missing executable, wrong binary identity, runtime
+  state, and forbidden listener creation;
+- pinned inventory rejects empty, missing, and extra inventories;
+- runner tests cover prior-evidence invalidation, multi-carrier attribution,
+  sorted atomic manifest v1 evidence for success, failure, and handled
+  interruption, original-status preservation, ignored-case fidelity, complete
+  forbidden-value redaction, required JUnit publication, and no shell;
+- `D2B_RUST_BUDGET` validation and propagation bound Bazel jobs and suite
+  concurrency as one combined limit; invalid and multiplicative mutations
+  fail;
+- Cargo and decomposed Bazel supply-chain status and normalized finding unions
+  match for main, broker, and guest;
+- all seeded spec003w1 carrier negatives fail;
+- Cargo and Bazel censuses match;
+- Cargo remains authoritative;
+- `changelog.d/adr052-bazel-carriers.md` is a semantic fragment owned and
+  generated by the integrator;
+- panel, seal `spec003w1`, and merge complete.
+
+## spec003w2 - Operational Safety
+
+### Deliverable
+
+Bounded local state, one startup-option construction, synchronous trim, safe
+cleanup, deadline and process-group control, exact recovery messages, and the
+temporary cold-local evidence helper.
+
+### Integrator prep and ownership
+
+Prep lands complete green interfaces in
+`packages/d2b-bazel-runner/Cargo.toml`,
+`packages/d2b-bazel-runner/src/lib.rs`,
+`packages/d2b-bazel-runner/src/clock.rs`,
+`packages/d2b-bazel-runner/src/process_backend.rs`,
+`packages/xtask/Cargo.toml`,
+`packages/xtask/src/main.rs`,
+`packages/d2b-bazel-support/src/startup.rs`, plus prep-only
+`packages/d2b-bazel-runner/tests/process_backend_contract.rs` and
+`packages/d2b-bazel-support/tests/startup_contract.rs`. Prep owns every spec003w2
+crate-root and contract seam but does not declare not-yet-present
+implementation modules. Scope tests load those modules through test-local
+paths; the integrator wires them after the parallel frontier closes. No slice
+edits a prep-owned root, contract, or lock. If a product manifest changes, prep
+regenerates `packages/Cargo.lock`, then product-repins, then
+module-refreshes, commits those generated outputs in order, and proves the
+three commands are clean no-ops and both walker inputs byte-identical before
+dispatch. If a walker manifest or lock changes, prep regenerates the walker
+Cargo lock, then walker-repins, then module-refreshes, and proves
+`packages/Cargo.lock` and `bazel/cargo/product.lock` byte-identical.
+`MODULE.bazel.lock` is always committed last.
+
+| Slice | Owned files |
+| --- | --- |
+| `spec003w2-process` | `packages/d2b-bazel-runner/src/deadline.rs`, `packages/d2b-bazel-runner/src/process.rs`, `packages/d2b-bazel-runner/tests/deadline.rs`, `packages/d2b-bazel-runner/tests/process.rs` |
+| `spec003w2-cleanup` | `packages/d2b-bazel-runner/src/cleanup.rs`, `packages/d2b-bazel-runner/tests/cleanup.rs`, the cleanup-only test module in `packages/d2b-contract-tests/tests/policy_docs.rs` |
+| `spec003w2-local-wrapper` | `Makefile`, `.bazelrc`, `packages/d2b-bazel-support/tests/startup.rs` |
+| `spec003w2-recovery` | `packages/d2b-bazel-runner/src/recovery.rs`, `packages/d2b-bazel-runner/tests/recovery.rs` |
+| `spec003w2-evidence` | `packages/xtask/src/bazel_evidence.rs`, `packages/xtask/tests/bazel_evidence.rs` |
+| Integrator | `packages/d2b-bazel-runner/src/lib.rs`, `packages/xtask/src/main.rs`, `packages/Cargo.lock`, `bazel/cargo/product.lock`, `MODULE.bazel.lock`, generated BUILD files listed by the committed generation manifest, `changelog.d/adr052-bazel-safety.md` |
+
+Any shared support trait change belongs in prep. No slice extends it.
+
+### Validation
+
+```bash
+set -euo pipefail
+make test-rust-main
+make test-policy
+make check-tier0
+make test-drift
+make test-bazel-rust
+D2B_CLEAN_DRY_RUN=1 make clean
+D2B_ENABLE_FIXTURE_BUILD=1 make test-fixture-contracts
+```
+
+Run every cleanup, descriptor, race, deadline, process, recovery, startup,
+trim, cache-limit, and no-shell mutation.
+
+### Mechanical done condition
+
+- all local state is under `.scratch/bazel/`;
+- one startup option set selects every server command;
+- synchronous trim completes before measurement;
+- every unsafe cleanup plant deletes nothing;
+- expiry repeatedly observes with `EXITED|NOWAIT|NOHANG` throughout the
+  independently timed full grace, treats observations as informational,
+  unconditionally kills the group, then reaps the direct child;
+- blocking-wait, early-reap, shortened-grace, and conditional-kill mutations
+  fail;
+- provider and cleanup auxiliary descriptor inheritance mutations fail;
+- every recovery code emits its exact ADR 0052 command sequence and only its
+  own redacted remedy; wrong-remedy and unsafe-external-action mutations fail;
+- the ADR-0054 drift table covers product and walker hub locks, module lock,
+  generator output, package-policy output, yanked snapshot, ambient repin
+  controls, and unexpected tracked mutation with exact `nix develop`, then
+  `cd packages`, command, review/commit, and rerun steps;
+- no new gate exists;
+- panel, seal `spec003w2`, and merge complete.
+
+## spec003w3 - Cache-Free Shadow CI
+
+### Deliverable
+
+Non-required four-slice shadow workflow, workflow-policy fixtures,
+qualification record capture, the typed qualification validator, and cold-CI
+feasibility measurement.
+
+### Ownership
+
+| Slice | Owned files |
+| --- | --- |
+| `spec003w3-shadow-workflow` | `.github/workflows/pr-bazel-rust.yml`, `packages/xtask/src/bazel_qualification.rs`, `packages/xtask/tests/bazel_qualification.rs` |
+| `spec003w3-workflow-policy` | `packages/xtask/tests/policy_ci.rs`, `packages/xtask/tests/fixtures/ci/cache-save-pr.yml`, `packages/xtask/tests/fixtures/ci/cache-post-step-pr.yml`, `packages/xtask/tests/fixtures/ci/unknown-cache-writer-pr.yml`, `packages/xtask/tests/fixtures/ci/actions-write-job-pr.yml`, `packages/xtask/tests/fixtures/ci/actions-write-workflow-pr.yml`, `packages/xtask/tests/fixtures/ci/shadow-valid.yml`, `packages/xtask/tests/fixtures/ci/qualification-wrong-event.yml`, `packages/xtask/tests/fixtures/ci/qualification-missing-count.yml` |
+| Integrator | `packages/xtask/src/main.rs`, workflow allowlist, shared trigger and path-filter reconciliation, `changelog.d/adr052-bazel-shadow.md` |
+
+### Validation
+
+```bash
+set -euo pipefail
+make test-bazel-rust-main
+make test-bazel-rust-api
+make test-bazel-rust-broker
+make test-bazel-rust-aux
+make test-rust-main
+make test-policy
+make test-lint
+make check-tier0
+D2B_ENABLE_FIXTURE_BUILD=1 make test-fixture-contracts
+```
+
+Inspect a draft PR run for four attributed slices, zero cache actions,
+read-only permissions, approved Make targets, and no qualification record.
+Separately run `cargo xtask bazel-qualification-validate` against a
+protected-`v3` push record and confirm it derives the verdict before any
+informational inspection of `bazelRestoreCount`, `bazelSaveCount`,
+`bazelPublicationCount`, and the four `sliceDurationsSeconds` entries.
+
+### Mechanical done condition
+
+- workflow is not required;
+- a pull-request run emits no qualification record and contains zero cache
+  actions;
+- pull-request permissions are read-only;
+- policy fixtures prove every writer and permission refusal;
+- protected `v3` pushes produce complete qualification records with explicit
+  `bazelRestoreCount` of zero, explicit `bazelSaveCount` and
+  `bazelPublicationCount`, and four complete `sliceDurationsSeconds`
+  entries;
+- `packages/xtask/src/bazel_qualification.rs` exists with tests, derives
+  every threshold from immutable evidence references, and refuses omitted,
+  forged, duplicate, inconsistent, and wrong-candidate references;
+- a record whose boolean mirror disagrees with the derived verdict is refused,
+  and no record qualifies through a boolean field;
+- `cargo xtask bazel-qualification-validate` is unreachable from Make and
+  workflows;
+- cold feasibility measurement exists and either supports the ceiling or names
+  one authorized remedy;
+- panel, seal `spec003w3`, and merge complete.
+
+## spec003w4 - Immutable Qualification
+
+### Deliverable
+
+Only `specs/003-adr052-bazel-rust/evidence/qualification.json`.
+
+### Ownership
+
+One curator owns that file. Every log, manifest, and raw measurement stays
+under `.scratch/`.
+
+### Evidence
+
+- ten consecutive matching qualification records;
+- eighteen isolated surface failure records;
+- exact Cargo and Bazel censuses;
+- five topology proofs and per-case publication;
+- twenty consecutive executions for each broker context with
+  `tags = ["exclusive"]`, no overlap, and the tag-removal mutation;
+- complete locator proof;
+- three warm, three cold-local, and five cold-CI measurements;
+- all four package policy contexts with exact source and checksum results;
+- Cargo versus decomposed Bazel deny, audit, and yanked enforcing exit-status
+  and normalized-finding equality for main, broker, and guest;
+- one product-lock yanked snapshot, full main evaluation, exact broker/guest
+  projections, reviewed refresh, and offline check;
+- both native architecture five-check realization sets;
+- native arm supply-chain and renderer results from the same stable head;
+- all safety and workflow plants;
+- explicit `bazelRestoreCount` of zero, `bazelSaveCount`, and
+  `bazelPublicationCount` in every shadow record, with four
+  `sliceDurationsSeconds` entries in each cold record;
+- the typed qualification validator's derived verdict for the record, plus its
+  omitted, forged, duplicate, inconsistent, and wrong-candidate reference
+  refusals;
+- module-refresh lock-only/idempotence/remediation evidence and both exact Nix
+  output-hash results;
+- external-egress and live-index plants plus the pinned repository-rule fetch
+  inventory, interpreted as forbidden external/live-index egress rather than a
+  blanket socket ban;
+- canonical loopback TCP and Unix-socket carrier passes;
+- expected native `e_machine`, `ET_DYN`, no-interpreter and no-`DT_NEEDED`
+  evidence plus non-PIE and wrong-machine plant results;
+- manifest/JUnit/redaction/ignored-case/original-status/no-shell evidence and
+  combined Bazel-plus-suite budget mutations;
+- the committed `bazel/generated/no-shell-inventory.json` digest with its
+  nonempty result, bidirectional three-source-projection and
+  fresh-scan/committed spawn-site-key equality results, and the empty,
+  missing-entry, extra-entry, and planted-shell plant results.
+
+### Mechanical done condition
+
+`cargo xtask bazel-qualification-validate` derives every threshold from the
+record's immutable evidence references and returns success. The record contains
+no pending or incomparable item, binds one candidate commit where required,
+contains no raw logs or attestations, passes both Rust aggregates and fixture
+companion validation, and is panel-signed, sealed as `spec003w4`, merged, and
+immutable.
+
+## spec003w5 - Promotion and Promotion Record
+
+### Deliverable
+
+Switch eighteen surfaces to Bazel, preserve fixture behavior and required
+context, replace eight CI leaves with four slices, remove shadow workflow,
+perform ordered cache cutover, and record promotion in a follow-up.
+
+### Integrator prep and ownership
+
+Prep owns complete green interfaces in
+`packages/xtask/src/bazel_cache_contract.rs` and
+`packages/xtask/src/promotion_contract.rs`, plus
+`packages/xtask/Cargo.toml`, `packages/xtask/src/main.rs`,
+`packages/Cargo.lock`, `bazel/cargo/product.lock`, and
+`MODULE.bazel.lock`. Prep owns the cache and promotion contracts and a green
+xtask root that does not declare not-yet-present implementation modules.
+Cache-slice tests load their modules through test-local paths; after the
+parallel frontier closes, the integrator wires them into xtask. No promotion
+slice edits the prep-owned contracts, routing files, manifests, or locks. If a
+product manifest changes, prep regenerates the product Cargo lock,
+product-repins, and module-refreshes in that order, then proves all three are
+clean no-ops and both walker inputs byte-identical. If a walker manifest or
+lock changes, prep regenerates the walker Cargo lock, walker-repins, and
+module-refreshes in that order, and proves `packages/Cargo.lock` and
+`bazel/cargo/product.lock` byte-identical. `MODULE.bazel.lock` is always
+committed last.
+
+| Slice | Owned files |
+| --- | --- |
+| `spec003w5-promotion-make` | `Makefile`, `tests/test-rust.sh` |
+| `spec003w5-promotion-manifest` | `tests/unit/meta/ci-runner-regression.py`, `tests/layer1-jobs.json`, `tests/tools/layer1-jobs.py`, `tests/ci/layer1-workflow.template.yml` |
+| `spec003w5-cache` | `packages/xtask/src/bazel_cache.rs`, `packages/xtask/src/post_promotion_observations.rs`, `packages/xtask/tests/bazel_cache.rs`, `packages/xtask/tests/post_promotion_observations.rs`, `packages/xtask/tests/policy_ci.rs`, `packages/xtask/tests/fixtures/ci/promoted-cache-valid.yml`, `packages/xtask/tests/fixtures/ci/promoted-cache-prefix-run-id.yml`, `packages/xtask/tests/fixtures/ci/promoted-cache-prefix-sha.yml`, `packages/xtask/tests/fixtures/ci/promoted-cache-delete-newest.yml` |
+| `spec003w5-interface-tests` | `packages/d2b-bazel-runner/tests/make_interface.rs` |
+| `spec003w5-binding-docs` | `AGENTS.md`, `tests/AGENTS.md`, `docs/contributing/gates-and-lints.md`, `tests/README.md`, `docs/reference/test-execution-manifest.md` |
+| Integrator | `packages/xtask/src/main.rs`, `.github/workflows/pr-l1-static-fast.yml`, deletion of `.github/workflows/pr-bazel-rust.yml`, `specs/003-adr052-bazel-rust/evidence/promotion-record.json`, `specs/003-adr052-bazel-rust/evidence/post-promotion.json`, `changelog.d/adr052-bazel-promotion.md` |
+
+### Validation
+
+```bash
+set -euo pipefail
+make layer1-workflow
+make test-drift
+make check
+D2B_ENABLE_FIXTURE_BUILD=1 make test-fixture-contracts
+```
+
+Also run `cargo xtask bazel-qualification-validate` against the sealed
+spec003w4 record, then validate qualification digest, alias status, promoted
+deadline policy, cache pagination, synchronous trim, two headroom checks, one
+writer, and a one-commit rollback rehearsal. The pre-merge rehearsal identifies
+the candidate from the verified current atomic candidate HEAD and the recorded
+spec003w5 parent; `promotion-record.json` does not exist yet and is not an
+input.
+
+### Mechanical done condition
+
+- required context remains `test-rust`;
+- eighteen surfaces use Bazel and fixtures use existing path;
+- current Cargo and decomposed Bazel deny/audit/yanked status and normalized
+  finding equality still holds for main, broker, and guest at the promotion
+  candidate;
+- generated CI calls exactly `test-rust-slice-main`,
+  `test-rust-slice-api`, `test-rust-slice-broker`, and
+  `test-rust-slice-aux`;
+- all eight old public leaf names retain exact forwarding subsets, including
+  conditional fixture behavior in `test-rust-main`;
+- Bazel compatibility aliases print their exact stderr replacement lines,
+  forward to the aggregate or matching authoritative slice, and preserve
+  status;
+- shadow workflow is absent;
+- retired Cargo cache writes stop;
+- one writer publishes separate bounded caches after ordered maintenance;
+- each primary key is unique for one successful protected-`v3` run, restore
+  prefixes omit run ID and commit SHA, and maintenance retains the newest
+  complete generation;
+- binding docs, including `tests/README.md` and
+  `docs/reference/test-execution-manifest.md`, describe four Bazel slices
+  behind `test-rust` instead of eight Cargo leaves, with no process markers;
+- `cargo xtask bazel-qualification-validate` succeeds against the sealed
+  spec003w4 record at the promotion candidate;
+- all spec003w5 scope results are integrated or squashed into one atomic promotion
+  candidate relative to the recorded spec003w5 parent, and the complete path diff is
+  asserted before panel;
+- pre-merge rollback rehearsal resolves the candidate from the verified
+  current atomic candidate HEAD and the recorded spec003w5 parent, reverts that
+  exact atomic commit, and restores Cargo authority; `promotion-record.json`
+  is read only after merge;
+- promotion PR is panel-signed, sealed as `spec003w5`, and merged;
+- follow-up promotion record is panel-signed, sealed as `spec003w5fu1`, and
+  merged.
+
+## spec003w6 - Compatibility Alias Removal
+
+### Entry
+
+A containing published semantic release tag exists. Entry runs exactly:
+
+```bash
+set -euo pipefail
+promotion_sha=$(git rev-parse --verify "<promotion-commit>^{commit}")
+tag=
+while IFS= read -r candidate; do
+  git merge-base --is-ancestor "$promotion_sha" "$candidate^{commit}" \
+    || continue
+  remote_commit=$(
+    git ls-remote --exit-code --tags origin \
+      "refs/tags/$candidate" "refs/tags/$candidate^{}" \
+      | awk '
+          $2 ~ /\^\{\}$/ { peeled = $1 }
+          $2 !~ /\^\{\}$/ { direct = $1 }
+          END { print peeled != "" ? peeled : direct }
+        '
+  ) || continue
+  test -n "$remote_commit" || continue
+  test "$(git rev-parse "$candidate^{commit}")" = "$remote_commit" || continue
+  test "$(gh release view "$candidate" --json isDraft --jq .isDraft \
+    2>/dev/null)" = "false" || continue
+  tag=$candidate
+  break
+done < <(
+  git tag --contains "$promotion_sha" \
+    | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' \
+    | sort -V
+)
+test -n "$tag"
+```
+
+Any containing tag that does not match `^v[0-9]+\.[0-9]+\.[0-9]+$` is not a
+release tag; the repository already carries two-component tags such as
+`v1.0`, `v1.1`, and `v1.2` that must not satisfy entry. An unpushed tag, a
+divergent same-named local and remote tag, or a draft-only release also fails
+entry. Green-run count is irrelevant.
+
+### Ownership
+
+One `spec003w6-alias-removal` slice owns `Makefile`,
+`packages/d2b-bazel-runner/tests/make_interface.rs`,
+`packages/xtask/tests/policy_ci.rs`, `AGENTS.md`, `tests/AGENTS.md`,
+`tests/README.md`, `docs/contributing/gates-and-lints.md`,
+`docs/reference/test-execution-manifest.md`,
+`changelog.d/adr052-bazel-alias-removal.md`, and the alias fields in
+`specs/003-adr052-bazel-rust/evidence/post-promotion.json`. It does not edit
+Cargo implementation files.
+
+### Mechanical done condition
+
+The interface test is updated and observed failing before alias removal, then
+passes after the Make edit. Only Bazel-specific aliases are removed;
+`make bazel-shutdown`,
+`make test-rust`, and all eight public leaf names remain; no workflow names a
+removed alias; validation and fixture contracts pass; panel, seal
+`spec003w6`, and merge complete.
+
+## spec003w7 - Cargo Implementation Retirement
+
+### Entry
+
+`post-promotion.json` contains ten distinct ordered green promoted
+protected-`v3` `test-rust` run units derived from the complete paginated run
+inventory, where a unit is a distinct push-created (run ID, head SHA) pair and
+never an attempt.
+Release containment is irrelevant.
+
+### Ownership
+
+One `spec003w7-cargo-retirement` slice owns `tests/test-rust.sh`,
+`packages/xtask/src/post_promotion_observations.rs`,
+`packages/xtask/tests/post_promotion_observations.rs`,
+`packages/xtask/tests/policy_workspace.rs`, `AGENTS.md`, `tests/AGENTS.md`,
+`docs/contributing/gates-and-lints.md`,
+`changelog.d/adr052-cargo-retirement.md`, and the typed run-unit inventory
+and derived validator result in
+`specs/003-adr052-bazel-rust/evidence/post-promotion.json`.
+
+spec003w7 may land before spec003w6. Their branches may prepare concurrently.
+Only the shared binding docs and `post-promotion.json` serialize at merge:
+whichever child lands second rebases onto the merged first child, reruns its
+entire validation, and receives a new ten-seat panel verdict before merge.
+
+### Mechanical done condition
+
+Only Cargo implementations for the eighteen surfaces and unreachable
+Cargo-only plumbing are removed. Every public Rust Make name, all Bazel
+carriers, fixture mode, and fixture IDs remain. `make check`, Rust, policy,
+drift, and fixture validation pass; panel, seal `spec003w7`, and merge
+complete.
+
+The eligibility check inventories every promoted protected-`v3` `test-rust`
+run unit. A unit is one distinct push-created (run ID, head SHA) pair carrying
+its complete `1..max` attempt history, push event, `v3` branch, terminal
+conclusion, immutable creation ordering metadata, and verified promotion
+ancestry. Attempts are nested history of one unit, never streak positions: the
+unit's conclusion normalizes to its highest terminal attempt, and no further
+attempt of the same unit may increment the streak. Units are ordered by
+immutable creation order, `createdAt` then run ID; rerun start time is never
+an ordering input, so an old rerun cannot move behind newer failures. The check
+rejects incomplete pagination, missing attempts within a unit, attempts with
+conflicting head SHA or promotion provenance, missing or duplicate unit
+identities, non-push or non-v3 runs, pre-promotion commits, and nonterminal
+conclusions. It derives resets and the current streak from the ordered units
+and ignores any self-asserted eligible, count, or run-ID summary field.
+Retirement requires the derived final ten distinct ordered units to be
+successes with no intervening failed or cancelled result. Repeated-attempt and
+old-rerun-after-failure fixtures prove both rules.
+
+## Specific Risks and Guards
+
+| Failure made possible | Guard |
+| --- | --- |
+| Shared lock is mistaken for broker or guest reach. | Package-selected builds, exact production closure, and unrelated-sibling leakage plants. |
+| Product hub union becomes first-party authority. | Native configured targets and direct first-party edge census. |
+| Empty selected closure passes a no-leakage predicate. | Root, nonempty closure, and exact census precede every predicate. |
+| Missing source makes license scan report fewer findings. | Exact selected-source count, readability, and checksum gate before deny. |
+| Guest license fix broadens policy for unrelated packages. | Six package-scoped exceptions plus different-package denial plants. |
+| `Cargo.guest.lock` silently becomes a third hub. | Exact hub inventory and cache-key classification guard. |
+| Repin test mutates product lock. | Injected non-mutating executor with exact argv and cwd. |
+| Retired hub starts Bazel before refusing. | Executor call count remains zero for main, broker, and guest refusals. |
+| Aarch64 check runs on x86 with a foreign system. | Native runner mapping plus separate foreign-system, wrong-runner, and remote-builder plants. |
+| Parked historical foundation code is treated as merged history. | spec003w0 entry inventory and base ancestry check. |
+| Walker repin changes during product merge. | Byte-identity check on walker manifest, lock, and Bazel-side lock. |
+| Dedicated binary isolation disappears in a broad Nix build. | Separate derivations, explicit package flags, ELF, size, and closure checks. |
+| A broker suite loses `exclusive` and races another test's signal/reap state. | Literal-tag guard, overlap plant, and twenty runs per context. |
+| An offline-looking action reaches a live index or external host while canonical local-socket tests are overblocked. | Declared loopback/Unix allowlist, external-egress and live-index plants, and pinned repository-rule inventory. |
+| Root-lock Nix migration drops the git output hash from one derivation. | Exact key/value assertion and one-sided-pin mutation. |
+| A contributor follows Bazel's bare module remediation and starts a second server outside worktree scratch. | Repository-owned lock-only module refresh with absolute startup options and exact remediation. |
+| A provider is verified by descriptor but executed through a rebound path, or a runfiles leaf symlink is rejected by strict result-path flags. | One `O_RDONLY|O_CLOEXEC` handle with only `RESOLVE_NO_MAGICLINKS`, same-handle `execveat`, leaf-symlink and rebound tests, a mutation rejecting provider `RESOLVE_BENEATH`, and no fallback. |
+| A blocking observation or early reap defeats the independent grace timer. | Recording backend requires repeated `EXITED|NOWAIT|NOHANG`, full grace, unconditional kill, then reap. |
+| Cache restore prefixes become unique and never restore, or maintenance deletes the newest entry. | Run/SHA-free prefix fixtures and newest-generation retention test. |
+| A shadow Make target is introduced without an allowlist entry, so a shadow workflow escapes the ci-uses-make guard. | All six shadow names enter `APPROVED_MAKE_TARGETS` in the same wave, with an unapproved-call negative and an approved-name-without-Makefile-rule negative. |
+| A record qualifies because a boolean verdict field says so while its evidence reference is missing or points at another candidate. | Typed validator derives every threshold from immutable references and refuses omitted, forged, duplicate, inconsistent, and wrong-candidate references; a disagreeing boolean mirror is a refusal. |
+| A new runner source spawns a shell and is never scanned because the governed set was implied. | Generated nonempty no-shell inventory compared bidirectionally against governed sources and declared inputs, with empty, missing, extra, and planted-shell plants. |
+| The module lock is refreshed before the walker hub, so it pins a stale walker input that the next repin invalidates. | Split refresh authorities commit `MODULE.bazel.lock` last in every order and prove the untouched hub's inputs byte-identical. |
+| The pinned inventory backs up and restores a lock file, so a gate mutates the candidate it is validating. | Root-lock package selection with no backup or restore plus tracked, staged, and untracked clean-diff assertions. |
+| A two-component or unpushed tag containing the promotion commit is accepted as a release. | Anchored `^v[0-9]+\.[0-9]+\.[0-9]+$` match plus origin resolution and non-draft release checks. |
+| A rerun of an old run inflates the streak or reorders behind newer failures. | Streak positions are distinct push-created (run ID, head SHA) units ordered by `createdAt` then run ID, with repeated-attempt and old-rerun-after-failure fixtures. |
+| The pre-merge rollback rehearsal reads a promotion record that does not exist yet and silently rehearses nothing. | Rehearsal resolves the candidate from verified candidate HEAD and the recorded spec003w5 parent; promotion-record reads are post-merge only. |
+
+## Final Cross-Artifact Verification
+
+After the desired waves:
+
+1. every FR-001 through FR-089 maps to at least one completed task;
+2. every SC-001 through SC-038 maps to mechanical evidence;
+3. no obsolete product workspace, hub, nested-lock, synthetic-splice, or
+   optional-libshpool assumption remains except as a clearly labelled rejected
+   or retired case;
+4. no implementation file cites a parked historical `spec003-w0-*` or
+   `spec003-w0` commit as an ancestor;
+5. every completed wave is merged and sealed;
+6. planning evidence contains no credentials, logs, transcripts, or
+   attestation payloads.
+7. every scope-owned path is disjoint within its wave, every prep-owned file is
+   untouched by parallel scopes, and the task dependency graph matches the
+   task list exactly;
+8. every mutating validation command leaves the committed candidate clean;
+9. every planning artifact names waves as `spec003w0` through `spec003w7`
+   plus `spec003w5fu1`; only historical literal branch names such as
+   `spec003-w0` remain otherwise;
+10. the canonical qualification cache field spellings `bazelRestoreCount`,
+    `bazelSaveCount`, `bazelPublicationCount`, and `sliceDurationsSeconds`
+    are the only ones used in spec, plan, data model, quickstart, contracts,
+    and tasks;
+11. every lock-refresh sequence in every artifact commits `MODULE.bazel.lock`
+    last and states which hub's inputs are proved byte-identical.

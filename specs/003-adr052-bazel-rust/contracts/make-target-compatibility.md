@@ -2,8 +2,8 @@
 
 ## Shadow stage
 
-`make test-rust` and its eight existing leaf names remain Cargo-authoritative.
-W1 adds:
+Cargo remains authoritative for `make test-rust` and the eight existing leaf
+names. The Bazel shadow adds:
 
 ```text
 make test-bazel-rust
@@ -14,84 +14,192 @@ make test-bazel-rust-aux
 make bazel-shutdown
 ```
 
-The aggregate invokes all eighteen baseline surfaces. Slice targets invoke
-only their coverage-map rows. Every Bazel invocation the wrapper makes,
-including `bazel-shutdown`, uses byte-identical absolute startup options; see
-`workspace-and-tool-pinning.md`. `bazel-shutdown` deletes nothing and returns
-nonzero with `D2B-BZLSERVER-STUCK` if its own bound expires.
+The aggregate covers exactly eighteen IDs. Slice targets cover only their
+mapped rows. Workflows call approved Make targets, never Bazel directly.
 
-Every workflow calls one of these approved Make targets, never Bazel directly.
-All targets run from repository root, preserve carrier-attributed diagnostics,
-and return nonzero when any selected enforcing carrier fails.
+All six shadow names enter `APPROVED_MAKE_TARGETS` in
+`packages/xtask/tests/policy_ci.rs` in the same wave that introduces them,
+owned by one exact spec003w1 slice. The allowlist change carries:
 
-`D2B_EXECUTION_MANIFEST` accepts the requested evidence path and binds either
-aggregate executor to existing manifest v1. `D2B_RUST_BUDGET` accepts a
-positive integer and remains the only resource budget. Cold-local evidence
-preparation is an internal, temporary W2 xtask helper, not a Make target or
-environment contract, and is removed in W5.
+- a positive test that each of the six approved shadow names resolves to a real
+  Makefile rule and that a workflow step calling it is accepted by the
+  ci-uses-make guard;
+- a negative test that a workflow step calling an unapproved
+  `test-bazel-rust-<name>` is rejected;
+- a negative test that an approved shadow name with no Makefile rule is
+  rejected.
 
-Four other operations are deliberately **not** Make targets and never become
-approved targets, because every approved target is reachable from a workflow:
+The Makefile-rule assertion is written test-first and is red until the
+integrator adds the six entry points; it must be green on the integrated
+candidate.
 
-- `cargo xtask bazel-repin --hub <name>`, the single-hub lock regeneration
-  described in `workspace-and-tool-pinning.md`;
-- `cargo xtask bazel-module-refresh`, the `MODULE.bazel.lock` update described
-  in the same contract;
-- `cargo xtask bazel-yanked-refresh`, the reviewed networked yanked-snapshot
-  update;
-- `cargo xtask bazel-evidence prepare-cold-local`, the temporary W2 helper.
+`D2B_EXECUTION_MANIFEST` and `D2B_RUST_BUDGET` keep their existing meanings.
 
-The workflow guard rejects any workflow that invokes any of them, and the
-approved-target guard rejects any `Makefile` recipe that names one.
+## Contributor-only commands
 
-`cargo xtask bazel-yanked-check` is the one exception in shape but not in
-policy. It is the offline key-set validator the three Bazel supply-chain
-carriers run as a declared-input action, and a contributor runs the same
-command in a shell to get the same message before pushing. It is still not a
-Make target and still not a workflow step: workflows reach it only through the
-approved aggregate and slice targets that build those carriers.
+After entering `nix develop` at repository root and `cd packages`:
 
-The structural guard therefore refuses **five** command names, not four. The
-four above plus `cargo xtask bazel-yanked-check` are each rejected by name in
-any `Makefile` recipe and in any file under `.github/workflows/`. Leaving the
-validator out of that list would be the easy mistake, because it is the one a
-workflow author would reach for in good faith to "also check the snapshot", and
-the result would be a second, unattributed execution of a check the carriers
-already own.
+```text
+cargo xtask bazel-repin --hub product
+cargo xtask bazel-repin --hub walker
+cargo xtask bazel-module-refresh
+cargo xtask bazel-yanked-refresh
+cargo xtask bazel-yanked-check
+cargo xtask gen-package-policy-inputs
+cargo xtask gen-package-policy-inputs --check
+cargo xtask bazel-evidence prepare-cold-local
+cargo xtask bazel-qualification-validate
+cargo generate-lockfile --offline
+cargo generate-lockfile --offline --manifest-path ../tests/tools/no-bash-ast-walker/Cargo.toml
+```
+
+None is a Make target. No workflow names one. Workflows reach offline checks
+only through the approved carrier targets that own them.
+
+`cargo xtask bazel-qualification-validate` takes no arguments, reads the
+fixed repository-relative qualification record path, derives every threshold
+from the record's immutable evidence references, and refuses omitted, forged,
+duplicate, inconsistent, and wrong-candidate references. It is not a Make
+target and no workflow names it.
+
+`main`, `broker`, and `guest` repin identifiers are retired and fail with the
+exact product remediation contract before Bazel starts.
+
+`cargo xtask bazel-module-refresh` takes no arguments, runs the measured
+`bazel mod deps --lockfile_mode=update` child with the repository's absolute
+startup options, permits only `MODULE.bazel.lock` to change, and is idempotent.
+Module drift uses the `D2B-BZLDRIFT-MODULE` row from
+`workspace-and-tool-pinning.md`, including the exact ordered sequence:
+
+```text
+From the repository root, run: nix develop
+Then run: cd packages
+cargo xtask bazel-module-refresh
+Review and commit MODULE.bazel.lock.
+Rerun cargo xtask bazel-module-refresh, then rerun the failed command.
+```
+
+Policy tests reject every contributor-only command through direct recipe text,
+variable indirection, helper calls, generated workflow steps, and post steps.
+There is no Make forwarding target for product-lock generation, module refresh,
+hub repin, yanked refresh/check, policy generation, or evidence mutation.
 
 ## Promotion
 
-- Required context remains `test-rust`.
+- Required context stays `test-rust`.
 - `make test-rust` routes eighteen surfaces through Bazel and retains the
-  Cargo/Nix fixture leaf.
-- All eight existing `make test-rust-*` leaf names keep working as thin
-  mappings to authoritative carriers.
-- Bazel-specific names become forwarding aliases. Each prints one stderr line
-  naming its replacement and exits with exactly the forwarded status.
-- No workflow may call a deprecated alias.
-- `make bazel-shutdown` remains while Bazel is authoritative.
+  Cargo and Nix fixture path.
+- Generated CI calls exactly:
+
+  ```text
+  make test-rust-slice-main
+  make test-rust-slice-api
+  make test-rust-slice-broker
+  make test-rust-slice-aux
+  ```
+
+- All eight public leaf names remain with their existing semantics:
+  `test-rust-api-surface`, `test-rust-main`, `test-rust-broker`,
+  `test-rust-guest-shell-runner`, `test-rust-no-bash-ast`,
+  `test-rust-schema`, `test-rust-inventory`, and
+  `test-rust-supply-chain`.
+- `test-rust-main` retains its current conditional fixture/CLI behavior.
+- Each public leaf maps to the exact carrier subset in `coverage-map.md`; it is
+  not an alias for a broader slice.
+- Bazel-specific names become status-preserving forwarding aliases with these
+  exact mappings and exact stderr lines:
+
+  ```text
+  test-bazel-rust -> test-rust
+  make: test-bazel-rust is deprecated; use test-rust
+
+  test-bazel-rust-main -> test-rust-slice-main
+  make: test-bazel-rust-main is deprecated; use test-rust-slice-main
+
+  test-bazel-rust-api -> test-rust-slice-api
+  make: test-bazel-rust-api is deprecated; use test-rust-slice-api
+
+  test-bazel-rust-broker -> test-rust-slice-broker
+  make: test-bazel-rust-broker is deprecated; use test-rust-slice-broker
+
+  test-bazel-rust-aux -> test-rust-slice-aux
+  make: test-bazel-rust-aux is deprecated; use test-rust-slice-aux
+  ```
+
+  Each alias writes only its one remediation line to stderr before forwarding
+  and exits with the forwarded target's exact status.
+- No workflow calls a deprecated alias.
+- `make bazel-shutdown` remains.
+- The same implementation change updates `AGENTS.md`, `tests/AGENTS.md`,
+  `docs/contributing/gates-and-lints.md`, `tests/README.md`, and
+  `docs/reference/test-execution-manifest.md` from eight Rust CI leaves to
+  four Bazel slices while retaining the stable rollup language. The last two
+  are included because they also describe the eight CI jobs.
+- Promotion documentation and its semantic changelog fragment list every exact
+  replacement above.
 
 ## Removal
 
-Bazel-specific aliases may be removed only in a separate change after a
-release tag contains promotion and the promotion deprecation shipped.
+Bazel-specific aliases may be removed only after a published semantic release
+contains the promotion commit. Entry is exactly:
 
-Cargo *implementation* for the eighteen migrated surfaces may be removed only
-in a later change after ten consecutive green promoted `v3` runs. That change
-removes leaf modes from `tests/test-rust.sh` and unreachable Cargo-specific
-plumbing and nothing else. It must not remove:
+```bash
+set -euo pipefail
+promotion_sha=$(git rev-parse --verify "<promotion-commit>^{commit}")
+tag=
+while IFS= read -r candidate; do
+  git merge-base --is-ancestor "$promotion_sha" "$candidate^{commit}" \
+    || continue
+  remote_commit=$(
+    git ls-remote --exit-code --tags origin \
+      "refs/tags/$candidate" "refs/tags/$candidate^{}" \
+      | awk '
+          $2 ~ /\^\{\}$/ { peeled = $1 }
+          $2 !~ /\^\{\}$/ { direct = $1 }
+          END { print peeled != "" ? peeled : direct }
+        '
+  ) || continue
+  test -n "$remote_commit" || continue
+  test "$(git rev-parse "$candidate^{commit}")" = "$remote_commit" || continue
+  test "$(gh release view "$candidate" --json isDraft --jq .isDraft \
+    2>/dev/null)" = "false" || continue
+  tag=$candidate
+  break
+done < <(
+  git tag --contains "$promotion_sha" \
+    | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' \
+    | sort -V
+)
+test -n "$tag"
+```
+
+A containing tag that does not match `^v[0-9]+\.[0-9]+\.[0-9]+$` is not a
+release tag: the repository already carries two-component tags such as
+`v1.0`, `v1.1`, and `v1.2`. An unpushed tag, a divergent same-named local and
+remote tag, or a draft-only release also fails entry.
+
+spec003w6 first updates
+`packages/d2b-bazel-runner/tests/make_interface.rs` to expect removal and
+observes that test fail, then removes the aliases and makes it pass.
+
+Cargo implementations for the eighteen migrated surfaces may be removed only
+after ten distinct ordered green promoted `v3` run units, where a unit is one
+push-created (run ID, head SHA) pair and never an attempt. Retirement does not
+remove:
 
 - `make test-rust`;
-- any of the eight `make test-rust-<leaf>` names;
-- the `fixture-contracts` mode or either fixture surface.
+- any existing `make test-rust-<leaf>` name;
+- fixture-contract mode or either fixture-backed surface.
 
-Those names continue to invoke the authoritative Bazel carriers. Leaving
-`test-rust` with only the fixture leaf is forbidden. The retirement validation
-includes an inventory proving that exactly the eighteen Cargo implementations
-disappeared and that every public name still resolves to a Bazel carrier.
+## Guards
 
-## Guard
+Existing workflow and policy tests reject:
 
-Existing `packages/xtask/tests/policy_ci.rs` owns approved target and workflow
-shape policy. Positive and negative fixtures must prove recognition of direct,
-indirect, post-step, and unknown workflow writers. No new Make gate is added.
+- direct Bazel workflow invocation;
+- every contributor-only command in Make or workflows;
+- retired hub identifiers except in refusal tests and documentation contracts;
+- a workflow calling a deprecated alias;
+- an indirect, post-step, or unknown cache writer;
+- a public Rust Make name removed at promotion or retirement.
+
+No new top-level gate is created.

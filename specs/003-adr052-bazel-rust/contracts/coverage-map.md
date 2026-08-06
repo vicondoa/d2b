@@ -1,38 +1,7 @@
 # Coverage Map Contract
 
-`tests/golden/bazel-rust-coverage.json` is an internal committed artifact. It
-does not version or replace execution-manifest v1.
-
-## Required row
-
-Each row contains:
-
-- `surfaceId`: one baseline execution-manifest ID;
-- `carriers`: the nonempty set of carrier entries for this surface, each naming
-  an existing Bazel label, whether it owns the verdict, and either its topology
-  or an explicit not-applicable reason. Exactly one entry owns the verdict.
-  Topology is per carrier, not per surface, because
-  `rust-main-workspace-tests` carries a process-per-case suite, a doctest
-  carrier, and a harness-free carrier under one identifier;
-- `slice`: `main`, `api`, `broker`, or `aux`;
-- `cargoBaseline`: current leaf/mode reference;
-- `census`: the generator-derived census artifact, its expected entries and
-  count, and the derivation that produced it;
-- `outOfCensus`: every manifest entry the executed selector excludes, each with
-  its reason;
-- `testTargets`: all transitively carried Rust tests;
-- `handwrittenFragments`: all non-generated BUILD fragments;
-- `binaryProviders`: expected provider label, declared runfiles-relative path,
-  and the byte digest the located descriptor must match before that same
-  descriptor is executed;
-- `locatorFiles`: the migrated first-party files this surface's tests use, each
-  `migrated` or `no-migration-needed` with a reason;
-- `deliberateDifferences`: applicable ADR section 13 entries;
-- `generatedBuildDigest`: digest binding the row to generated graph state.
-
-Arrays and rows are sorted deterministically. Paths are normalized
-repository-relative paths. Empty required collections are invalid, and a
-hand-written count is invalid wherever the generator can derive one.
+`tests/golden/bazel-rust-coverage.json` binds the existing eighteen
+execution-manifest IDs to Bazel carriers. It does not replace manifest v1.
 
 ## Exact ID set
 
@@ -57,83 +26,159 @@ rust-audit-broker
 rust-audit-guest
 ```
 
-`rust-contract-tests` and `rust-cli-contract-tests` must not appear.
+Fixture-backed IDs do not appear.
 
-## Cardinality
+## Required row
 
-The mapping is **total and unambiguous**, not one-to-one: every ID has a
-nonempty carrier set and every carrier belongs to exactly one ID.
-`rust-main-workspace-tests` already needs three carriers. The guard enforces
-both directions of totality.
+Each row contains:
+
+- one `surfaceId`;
+- nonempty carriers with exactly one verdict owner;
+- one of `main`, `api`, `broker`, `aux`;
+- the current Cargo baseline using root product package selectors;
+- exact generated census and out-of-census reasons;
+- per-carrier topology;
+- all carried Rust tests;
+- every hand-written fragment;
+- configured first-party target labels and direct dependency, cfg, and feature
+  census;
+- binary providers and declared runfiles-relative paths;
+- locator migration dispositions;
+- deliberate ADR 0052 differences;
+- generated BUILD digest.
+- `actionNetwork = "sandbox-local-declared"` only for carriers whose committed
+  tests require declared loopback TCP or Unix sockets, otherwise
+  `actionNetwork = "none"`; every row still records the declared-input source
+  for every tool, advisory database, yanked record, and vendored crate;
+- for each broker row, the literal target tag set `["exclusive"]`.
+
+Rows and arrays are sorted. Required collections cannot be empty.
+
+## Hub and native-target invariants
+
+- Third-party product dependencies come only from `@product`.
+- Walker dependencies come only from `@walker`.
+- Every first-party product crate is a native Bazel target.
+- Broker default, layer1, and fake contexts and guest real-libshpool each have
+  an exact configured native target census.
+- The product external package and feature union may exceed a configured
+  context.
+- Actual first-party dependencies and features are defined by configured
+  native targets, not by the product hub union.
+- No configured broker context reaches guest or an unrelated first-party
+  sibling.
+- No guest context reaches broker or an unrelated first-party sibling.
+
+## Broker scheduling isolation
+
+`rust-broker-default`, `rust-broker-layer1`, and
+`rust-broker-fakebackends` each map to a Bazel suite carrying exactly
+`tags = ["exclusive"]`. Bazel must schedule each after all nonexclusive tests,
+so none may overlap another broker suite or any other test. A custom local
+resource is not an equivalent mechanism.
+
+The coverage guard rejects a missing or renamed tag. Its mutation removes
+`exclusive` from one suite and must observe overlap with a planted ordinary
+test. Qualification runs each broker context twenty consecutive times with
+`--runs_per_test=20`, one context at a time, while an ordinary overlap probe is
+present; every run must show the broker suite alone.
+
+## Action network inventory
+
+Every carrier row identifies whether an input was produced by a pinned
+repository rule or is a committed/generated declared input. Actions may open
+only declared sandbox-local loopback TCP and Unix sockets required by the
+committed tests. Host or external egress, DNS, live package or advisory
+indexes, and undeclared listeners are forbidden. The only fetch rows are
+repository-rule rows pinned by a Cargo checksum or the `wl-proxy` revision
+plus archive sha256.
+
+The guard rejects an action-level URL, live-index input, downloader, external
+destination, DNS resolver, undeclared listener, unpinned repository rule, or
+missing declared input. The seeded matrix includes separate live-index and
+external-egress plants, and both must fail their owning policy predicate rather
+than a later carrier assertion. A blanket socket-syscall denial is itself a
+failing mutation because it breaks canonical local-socket tests.
+
+## Test-first non-main carriers
+
+The generated carrier files are deliberately disjoint:
+
+| Carrier file | Surface |
+| --- | --- |
+| `bazel/carriers/schema.bzl` | One action runs two sequential generations into distinct directories, proving two independent nonempty exact censuses before comparison; mismatch and empty-output plants. |
+| `bazel/carriers/stub.bzl` | Stub-no-socket executable identity and runtime-state checks; missing executable, wrong identity, state creation, and forbidden undeclared-listener plants. |
+| `bazel/carriers/inventory.bzl` | Pinned test inventory; empty, missing, and extra inventory plants. |
+| `bazel/carriers/no_bash.bzl` | No-bash walker input and parsed-census wiring, separate from main. |
+
+`bazel/carriers/main.bzl` is not a shared writer for these surfaces.
+
+## Promoted public target mapping
+
+Promotion introduces exactly four authoritative CI slice targets:
+
+```text
+test-rust-slice-main
+test-rust-slice-api
+test-rust-slice-broker
+test-rust-slice-aux
+```
+
+Generated CI calls those names only. The eight existing public leaves retain
+their current surface semantics and forward to these exact carrier subsets:
+
+| Public leaf | Bazel subset after promotion |
+| --- | --- |
+| `test-rust-api-surface` | `//ci/rust:api_census`. |
+| `test-rust-main` | `//ci/rust:fmt`, `//ci/rust:clippy`, `//ci/rust:main_tests`, `//ci/rust:main_doctests`, and `//ci/rust:main_harness_free`, plus the unchanged conditional Cargo/Nix fixture and CLI path. |
+| `test-rust-broker` | `//ci/rust:broker_default`, `//ci/rust:broker_layer1`, and `//ci/rust:broker_fakebackends`. |
+| `test-rust-guest-shell-runner` | `//ci/rust:guest_shell_runner`. |
+| `test-rust-no-bash-ast` | `//ci/rust:no_bash_ast`. |
+| `test-rust-schema` | `//ci/rust:schema_reproducibility`. |
+| `test-rust-inventory` | `//ci/rust:stub_no_socket` and `//ci/rust:pinned_test_inventory`. |
+| `test-rust-supply-chain` | `//ci/rust:deny_main`, `//ci/rust:deny_broker`, `//ci/rust:deny_guest`, `//ci/rust:audit_main`, `//ci/rust:audit_broker`, and `//ci/rust:audit_guest`; each deny carrier includes its yanked projection. |
+
+## Guard placement
+
+| Invariant | Enforcement |
+| --- | --- |
+| Mapped carrier label exists | Analysis-time `deps` or `data` edge |
+| Carrier belongs to exactly one ID | Coverage test |
+| No Rust test target is unclaimed | Make wrapper and `test-drift` over committed query result |
+| Query result is current | `test-drift` |
+| Exact census, topology, native target, cfg, feature, and fragment list | Coverage test |
+| Hub and lock containment | Selected-context query checks |
+| Generated BUILD and policy output current | `test-drift` |
+| Broker suite keeps `tags = ["exclusive"]` and cannot overlap any test | Coverage test plus scheduling mutation |
+| Only declared sandbox-local sockets are usable; external/live-index egress is denied; every fetch is a pinned repository rule | Hermeticity inventory, local-socket positives, external-egress/live-index plants, and `test-policy` |
+| No-bash parsed-file census equals governed manifest and declared inputs | Walker unit tests plus coverage test |
+| Generated `bazel/generated/no-shell-inventory.json` is nonempty; its three source projections agree in both directions; fresh-scan and committed spawn-site keys agree in both directions | Census-generator tests, coverage test, and `test-drift` |
+
+No Bazel test invokes `bazel query` or starts a nested server.
 
 ## Required hand-written fragments
 
-These are not generated and must each appear exactly once in
-`handwrittenFragments`:
+Exactly once:
 
-- the per-target nightly channel transition rule over the API census subgraph;
-- the `rustdoc_json` rule that renders the census and emits the toolchain
-  version the action actually used;
-- the vendor repository rule that materializes the offline dependency tree;
-- the yanked-state carrier fragment that consumes the committed lock-bounded
-  snapshot, runs the repository-owned offline `bazel-yanked-check` validator
-  over it and the three committed locks as declared inputs, and reports under
-  `rust-deny-main`, `rust-deny-broker`, and
-  `rust-deny-guest`, which exists unconditionally and adds no nineteenth ID;
-- the aggregate, slice, carrier, and guard fragments under `bazel/` and
-  `ci/rust/`.
+- per-target nightly transition;
+- `rustdoc_json` rule;
+- pinned vendor repository rule;
+- package-policy carriers and selected-source census checker;
+- product and walker hub containment checker;
+- aggregate, slice, carrier, and coverage guards.
 
-## Where each invariant is proved
+There is no synthetic splice fragment and no `crate.spec` fragment.
 
-A Bazel test action has no server, no source tree, and no sanctioned way to
-reach one. A condition phrased as a nested `bazel query` inside the test cannot
-execute and would leave the guard green while proving less than it claims. The
-split is therefore load-bearing:
+## Fail-closed cases
 
-| Invariant | Proved at |
-| --- | --- |
-| Every mapped carrier label exists | Analysis time, through real `deps`/`data` edges from the guard target |
-| Every carrier belongs to exactly one ID | Bazel test |
-| No Rust test target is unclaimed | Make wrapper and `test-drift`, over `tests/golden/bazel-rust-query.json` |
-| Query result is not stale | Make wrapper and `test-drift` |
-| Exact census, topology, hand-written-fragment listing | Bazel test |
-| Generated BUILD and lock drift | `test-drift` |
-
-No Bazel test invokes `bazel query`, and no test action runs a nested Bazel
-server. The committed query result is a declared input to the out-of-test
-check and is drift-checked by the same mechanism that guards every other
-generated output, so no new gate, Layer-1 job, or Make target is created.
-
-## Fail-closed invariants
-
-The guard rejects:
-
-- an ID missing, duplicated, or added;
-- an ID with an empty carrier set;
-- a carrier claimed by more than one ID;
-- a carrier or companion label that does not exist, which fails analysis
-  naming the label before any test runs;
-- a Rust test target not transitively claimed exactly once;
-- a suite without an exact nonempty census or a required topology;
-- a hand-written fragment not listed exactly once, including the four
-  fragments named above;
-- a scan input set unequal to its committed manifest in either direction;
-- parsed no-bash files unequal to declared inputs;
-- empty or missing harness-free or doctest discovery, and a harness-free
-  census that does not match the selector the Cargo gate uses;
-- an out-of-census manifest entry with no recorded reason;
-- a schema generation differing from the generated nonempty valid-JSON census
-  before content comparison;
-- a binary provider that is absent, non-regular, non-executable, stale, or of
-  the wrong identity, or whose path is rebound to a different file after the
-  single anchored open, where each of those states is supplied through the
-  injected `FileSystem` and `RunfilesView` boundaries rather than arranged on
-  disk;
-- a locator file that is neither migrated nor recorded as needing no
-  migration;
-- an emitted census toolchain version that differs from the committed pin;
-- a `.bazelrc` line or wrapper argument that sets the toolchain channel flag;
-- generated BUILD drift, `.bazelignore` drift, or Cargo/Bazel lock drift.
-
-A passing guard is necessary but not sufficient for promotion; execution
-evidence is also required.
+The guard refuses missing, duplicate, or added IDs; empty carriers; multiply
+claimed carriers; absent labels; unclaimed Rust tests; missing topology or
+census; stale query or BUILD output; missing fragment; empty scan or companion
+sets; mismatched configured native target dependencies, cfgs, or features;
+wrong product or walker containment; cross-context edges; unrelated
+first-party siblings; any first-party target represented as an external
+generated crate; a broker tag removal or overlap; forbidden external egress or
+a live-index input; a no-bash walk, read, or parse failure or mismatch among
+the governed manifest, declared inputs, and parsed-file census; and an empty,
+missing-entry, extra-entry, planted-shell, source-projection-mismatch, or
+fresh-scan/committed-spawn-mismatch no-shell inventory.

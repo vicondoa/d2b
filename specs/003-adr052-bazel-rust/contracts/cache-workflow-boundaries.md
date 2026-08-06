@@ -4,101 +4,125 @@
 
 - The workflow is non-required and outside `V3_PR_GATE_WORKFLOWS`.
 - It restores and saves no Bazel cache.
-- Qualification and measurement draw only from qualification records, which are
-  `push` events on `refs/heads/v3` produced by merged pull requests. See
-  `shadow-promotion-evidence.md`.
-- Pull-request runs stay path-filtered and diagnostic. They produce no record.
-- PR-reachable jobs request only `contents: read`.
-- No PR-reachable job requests `actions: write`.
+- Pull-request runs remain path-filtered and diagnostic.
+- Pull-request jobs request only `contents: read` and no `actions: write`.
 - No direct, indirect, post-step, or unknown cache writer is reachable.
 - Checkout uses `persist-credentials: false`.
-- Cache service credentials never enter a `run:` environment.
+- Cache credentials never enter `run:` or a Bazel environment.
 
-## Promotion
+## Promoted cache kinds
 
-Only two cache kinds exist:
+| Kind | Maximum |
+| --- | ---: |
+| Action | 4 GiB |
+| Repository/download | 1 GiB |
 
-| Kind | Maximum | Notes |
-| --- | --- | --- |
-| Action/disk | 4 GiB | Trimmed synchronously before measurement and save. |
-| Repository/download | 1 GiB | Separate entry and key. |
+The output base is never cached.
 
-The output base is forbidden.
+Every protected-`v3` qualification record carries three explicit nonnegative
+counts:
 
-### Bound key inputs
+- `bazelRestoreCount`;
+- `bazelSaveCount`;
+- `bazelPublicationCount`.
 
-A change to any of these must produce a different key rather than a subtly
-stale cache:
+Every record carries all three. Shadow records require all three to be zero. A
+cold continuous-integration record additionally carries `sliceDurationsSeconds`
+with exactly four completed durations and requires
+`bazelRestoreCount == 0`. These four camelCase names are the canonical
+spellings everywhere. A missing count or duration is a refusal and is never
+interpreted as zero.
 
-- `.bazelversion`, `MODULE.bazel`, `MODULE.bazel.lock`, `.bazelrc`;
-- both `rust-toolchain.toml` files;
-- all four hub Cargo locks, including
-  `tests/tools/no-bash-ast-walker/Cargo.lock`;
-- `packages/Cargo.guest.lock`;
-- all four per-hub dependency-generator Bazel-side locks;
-- the dependency generator binary's pinned URL and sha256;
-- all deny configurations and the advisory-database pin;
-- the committed yanked-state snapshot, which always exists;
-- `.bazelignore`;
-- the symlink-prefix and startup-option configuration;
-- the third-party build-script annotation digest and the action-environment
-  allowlist;
-- the generated BUILD tree digest.
+## Bound key inputs
 
-Primary keys include a unique successful protected-`v3` run ID. Restore
-prefixes omit the run ID and the commit SHA. Any change to the
-action-environment allowlist invalidates the entire action cache and is
-reviewed against the 4 GiB budget in the same change.
+The table is authoritative. `A` means the action-cache key changes; `R` means
+the repository/download-cache key changes. A dash means the input cannot
+change that cache's fetched-byte identity and need not invalidate it.
 
-PR jobs restore read-only. Exactly one protected-`v3` job may publish. Cache
-actions alone receive cache credentials; Bazel and repository or third-party
-code do not.
+| Bound input | A | R |
+| --- | :---: | :---: |
+| `.bazelversion` | A | R |
+| `MODULE.bazel` | A | R |
+| `MODULE.bazel.lock` | A | R |
+| `.bazelrc` | A | R |
+| stable Rust toolchain pin | A | R |
+| nightly Rust toolchain pin | A | R |
+| `packages/Cargo.lock` | A | R |
+| walker `Cargo.lock` | A | R |
+| `packages/Cargo.guest.lock` | A | R |
+| `bazel/cargo/product.lock` | A | R |
+| `bazel/cargo/walker.lock` | A | R |
+| `cargo-bazel` URL | A | R |
+| `cargo-bazel` sha256 | A | R |
+| root deny configuration | A | R |
+| broker deny configuration | A | R |
+| guest deny configuration | A | R |
+| pinned RustSec database revision and hash | A | R |
+| yanked snapshot bytes | A | - |
+| generated package-policy inputs | A | - |
+| package-policy system/target mapping digest | A | - |
+| selected-source census rules | A | R |
+| selected-source checksum rules | A | R |
+| `.bazelignore` | A | - |
+| absolute startup-option shape | A | - |
+| symlink prefix | A | - |
+| build-script annotations | A | - |
+| action-environment allowlist | A | - |
+| generated BUILD digest | A | - |
+| configured native-target digest | A | - |
+| native runner architecture and exact system/target mapping | A | R |
 
-## Trimming is synchronous and on demand
+A table-driven test mutates each row independently and proves every marked
+primary key and restore prefix changes. For a row marked only `A`, the test
+also proves the repository namespace remains well formed but does not require
+needless invalidation.
+Every case asserts the action and repository namespaces have different fixed
+kind components; changing an input may never collapse the two keys or prefixes
+into one namespace.
 
-Bazel's built-in disk-cache collection runs asynchronously in the server while
-it idles. A job that proceeds directly to a size measurement, or that shuts the
-server down first as the cleanup contract requires, can observe an untrimmed
-cache and then correctly refuse to publish, permanently. That is the deadlock
-the size rule exists to prevent.
+The primary key for each cache kind includes a successful protected-`v3` run
+ID and is unique for that run. Restore prefixes omit both the run ID and the
+commit SHA but bind the same applicable semantic-input digest as their
+primary key. A prefix containing either run identifier is invalid because it
+cannot find a prior generation. Action and repository entries use distinct
+namespaces and never share a key.
 
-1. Run the explicit on-demand collector as a named step: the upstream
-   `//src/tools/diskcache:gc` tool at the pinned Bazel version, or a pinned
-   repository-owned equivalent.
-2. Observe its completion before any size measurement.
-3. Only then measure.
+## Native architecture lanes
 
-Idle-delay-based collection and the size refusal remain secondary mechanism and
-backstop, not the primary mechanism. A Bazel version bump reopens this design
-review rather than being an ordinary version bump.
+X86 and arm jobs never restore each other's system-specific package-policy or
+Nix realization cache under the same key. Each native lane binds its runner
+architecture and exact system-and-target input mapping.
 
-## Maintenance ordering
+Neither lane sets a foreign system, `--builders`, or a remote builder.
 
-1. Stop retired Cargo cache writes.
-2. Enumerate cache entries with complete pagination.
-3. Reject failed queries, incomplete pages, and ambiguous prefix matches.
-4. Delete only committed authorized retired prefixes and superseded Bazel
-   generations beyond retention.
-5. Run the synchronous collector and observe completion.
-6. Requery usage and require existing use plus planned snapshots at most 8 GiB.
-7. Immediately before save, requery and enforce the same bound.
-8. Publish from the one authorized writer.
+## Trimming and maintenance
 
-Unauthorized entries are not deleted. Failure names the entry key and headroom
-shortfall, not credentials. The maintenance verdict is separate from
-`test-rust` in both directions.
+1. Stop retired Cargo cache writes at promotion.
+2. Enumerate all cache pages.
+3. Refuse failed, incomplete, or ambiguous enumeration.
+4. Delete only authorized retired or superseded generations.
+   For each authorized Bazel prefix, retain the newest complete generation and
+   delete only older generations beyond retention. Completion order, not
+   lexical run-ID order, selects the newest generation.
+5. Run and await the synchronous on-demand collector.
+6. Require repository use plus planned snapshots at most 8 GiB.
+7. Recheck immediately before save.
+8. Publish from one protected-`v3` writer.
+
+The maintenance verdict is independent of the Rust verdict. Pull requests
+restore read-only after promotion.
+
+Fixtures cover duplicate primary keys, a primary key without the successful
+run ID, a restore prefix containing a run ID or commit SHA, cross-kind key
+reuse, deletion of the newest generation, retention of an older generation
+instead of the newest, a missing `bazelRestoreCount`, `bazelSaveCount`,
+`bazelPublicationCount`, or `sliceDurationsSeconds` entry, and every row
+of the bound-input table. A missing row, a mutation that leaves an applicable
+key unchanged, or equal action/repository namespaces fails.
 
 ## Policy fixtures
 
-Fixtures must reject `actions/cache` with a saving post-step,
-`actions/cache/save`, a saving `Swatinem/rust-cache`, unknown writers, a
-missing promoted deadline control, and PR `actions: write` at both job and
-workflow level. A compliant restore-only PR job alongside a writer restricted
-to pushes on protected `v3` must pass.
-
-Two structural assertions are implementation deliverables of the promotion
-change rather than existing checks, and this contract does not claim the
-current Cargo workflow already satisfies them:
-
-- no `pull_request`-reachable job requests `actions: write`;
-- every promoted Bazel Rust job sets the in-band deadline control.
+Fixtures reject direct and post-step cache saves, unknown writers, pull-request
+`actions: write`, missing promoted deadlines, cross-architecture cache keys,
+foreign-system arguments, and remote-builder arguments. A restore-only pull
+request and one protected-`v3` writer pass.

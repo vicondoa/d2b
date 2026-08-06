@@ -1,42 +1,36 @@
-# ADR 0052 Internal Interface Contracts
+# Spec 003 Internal Contracts
 
-These documents constrain implementation and migration evidence. They are not
-new public versioned APIs.
+These files constrain implementation and migration evidence. They are not new
+public APIs.
 
-Existing authority wins:
+Authority order:
 
-1. The amended ADR 0052 for architecture and mechanics.
-2. `docs/reference/test-execution-manifest.md` and its v1 schema for execution
-   evidence.
-3. Committed Make, Rust gate, Layer-1 manifest, and policy code for the current
-   baseline.
-4. These documents for plan-level interfaces left to implementation.
+1. ADR 0052 as amended by ADR 0054.
+2. Committed passing code for the current baseline.
+3. The execution-manifest v1 reference and schema.
+4. This amended Spec 003 artifact set.
 
-Files:
+Contracts:
 
-- `make-target-compatibility.md` - contributor and workflow entry points.
-- `coverage-map.md` - internal coverage artifact shape, cardinality, and the
-  split between analysis-time, in-test, and out-of-test invariants.
-- `runner-environment.md` - child environment, per-case result document,
-  binary provider resolution as a single anchored open whose verified
-  descriptor is the one that executes, filesystem semantics, and the scope of
-  the no-shell rule.
-- `workspace-and-tool-pinning.md` - startup options and the one construction
-  that derives them, the crate dependency direction that construction's home
-  depends on, the workspace boundary, the
-  four dependency hubs and their locks, the repository-owned commands that
-  regenerate each committed lock and validate the yanked snapshot, the
-  injectable index boundary the networked refresh calls through, the exact
-  operator-facing recovery text every refusal must carry, the wave-note
-  command-shape rule, the anchored filesystem boundary the policy lint reads
-  the note corpus through, and the two violation shapes it renders, and
-  permitted tool acquisition.
-- `execution-manifest-binding.md` - executor-to-existing-contract binding.
-- `shadow-promotion-evidence.md` - qualification records, evidence, and
-  lifecycle gates.
+- `workspace-and-tool-pinning.md` - product and walker workspace, lock, hub,
+  repin, module refresh, yanked authority, selected-context oracle,
+  local-socket/external-egress boundary, package-policy equivalence,
+  source-census, Nix selection, generated ownership, release wiring, and
+  tool-pinning contract.
+- `coverage-map.md` - eighteen-surface carrier coverage, native first-party
+  targets, selected-context censuses, and guard placement.
+- `make-target-compatibility.md` - shadow, contributor mutation, promotion,
+  and retirement command surface.
+- `runner-environment.md` - test topology, provider, environment, and
+  per-case evidence contract, including same-descriptor kernel execution.
+- `execution-manifest-binding.md` - Bazel carrier results bound to existing
+  execution-manifest v1.
+- `shadow-promotion-evidence.md` - qualification, the typed qualification
+  validator, dual-architecture, promotion evidence, cache counts, broker
+  repetition, stable-head rules, and typed post-promotion run-unit derivation.
 - `cache-workflow-boundaries.md` - permissions, credentials, key inputs,
-  trimming, and generations.
-- `recovery-deadline.md` - cleanup, shutdown, and deadline behavior.
+  trimming, and cache generations.
+- `recovery-deadline.md` - cleanup, shutdown, deadline, and recovery behavior.
 
-If one of these conflicts with the amended ADR 0052 or committed passing code,
-record the drift and follow the higher authority.
+If an implementation detail disagrees with older Spec 003 prose, follow the
+authority above and record the correction in `plan.md`.

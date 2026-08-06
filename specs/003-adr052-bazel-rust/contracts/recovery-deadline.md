@@ -1,107 +1,92 @@
 # Recovery and Deadline Contract
 
-## Cleanup boundary
+ADR 0054 does not weaken ADR 0052 cleanup or deadline behavior.
 
-Cleanup anchors worktree `.scratch/` once with a close-on-exec directory
-descriptor, resolves only `.scratch/bazel/` beneath it without symlink,
-magic-link, or escape traversal, and removes entries descriptor-relative.
-Both `openat2` and forced component-walk fallback are tested. Every opened
-descriptor is close-on-exec. A tracked file, unsafe layout, replacement race,
-or live matching server causes refusal before deletion.
+## Cleanup
 
-Cleanup performs every one of those operations through the same injectable
-filesystem trait in `packages/d2b-bazel-support/src/fsops.rs` that the per-case
-result writer, the topology provider path, the locator, and the wave-note
-policy lint use. Those
-subsystems enforce identical properties on
-identical syscalls, so a single implementation and a single mutation set cover
-them, and no cleanup test needs live host filesystem state: the tracked-file,
-symlink, magic-link, escape, replacement-race, decoy-survival, and
-descriptor-inheritance negatives are all produced by the injected fake. The
-forced component-walk route is selected through the same boundary rather than
-by finding a kernel that lacks `openat2`. Cleanup uses the strict resolve
-policy, `RESOLVE_BENEATH` with `RESOLVE_NO_SYMLINKS` and
-`RESOLVE_NO_MAGICLINKS`, because it operates only on paths the runner created;
-the provider open uses `RESOLVE_NO_MAGICLINKS` alone for the reasons
-`runner-environment.md` records, and each call site's choice is asserted so
-neither inherits the other's. That choice binds the walk route too: on the
-forced component-walk route the strict policy carries `O_NOFOLLOW` on the leaf
-as well as on every intermediate component, so a symlink planted at the final
-name of a cleanup target is refused `ELOOP` whichever route the boundary took.
-A route that exempted the leaf would let cleanup follow a link out of
-`.scratch/bazel/` on the one route its own negatives force, which is the
-failure this whole subsystem exists to refuse. The trait lives in the neutral
-support crate rather than in the runner so that the locator can reach it
-without depending on the runner, so `packages/d2b-contract-tests` can reach it
-as a dev-dependency, and so `xtask` can reach the startup-option
-construction beside it without an `xtask -> d2b-bazel-runner` edge.
+Cleanup anchors `.scratch/` once, resolves only `.scratch/bazel/`, and removes
+descriptor-relative. It refuses links, magic links, escapes, tracked files,
+replacement races, foreign content, or a live matching server before deleting
+anything. Both `openat2` and forced component-walk routes are tested through
+the injected filesystem boundary.
 
-| Code | Required recovery |
+| Code | Recovery |
 | --- | --- |
-| `D2B-BZLCLEAN-TRACKED` | Run `D2B_CLEAN_DRY_RUN=1 make clean`; remove or relocate the unexpected tracked entry under `.scratch/bazel/`; rerun `make clean`. |
-| `D2B-BZLCLEAN-SYMLINK` | Dry-run; remove the offending link under `.scratch/bazel/`; rerun clean. External target remains untouched and needs separate ownership verification. |
-| `D2B-BZLCLEAN-ESCAPE` | Same safe steps as symlink/unsafe layout; no external target operation. |
-| `D2B-BZLCLEAN-LIVE` | Close other clients; run `make bazel-shutdown`; rerun `make clean`. No dry-run or tree correction first. |
-| `D2B-BZLSERVER-STUCK` | Close other clients; run `make bazel-shutdown`; do not delete scratch or signal a PID manually. |
+| `D2B-BZLCLEAN-TRACKED` | Run `D2B_CLEAN_DRY_RUN=1 make clean`; remove or relocate the unexpected tracked entry from `.scratch/bazel/`; run `make clean`. |
+| `D2B-BZLCLEAN-SYMLINK` | Run `D2B_CLEAN_DRY_RUN=1 make clean`; remove the offending symlink or magic link from under `.scratch/bazel/`; run `make clean`. State that the external target is outside managed cleanup, remains untouched, and may be reclaimed only after separate inspection and independent ownership verification. |
+| `D2B-BZLCLEAN-ESCAPE` | Run `D2B_CLEAN_DRY_RUN=1 make clean`; remove the escaping layout from under `.scratch/bazel/`; run `make clean`. State that external content is outside managed cleanup, remains untouched, and may be reclaimed only after separate inspection and independent ownership verification. |
+| `D2B-BZLCLEAN-LIVE` | Close other Bazel clients running against this worktree; run `make bazel-shutdown`; run `make clean`. Do not dry-run, inspect, or correct `.scratch/bazel/` first. |
+| `D2B-BZLSERVER-STUCK` | Close other Bazel clients running against this worktree; run `make bazel-shutdown`. Do not delete `.scratch/bazel/` or signal any process identifier by hand. |
 
-Refusal deletes nothing. Messages never include absolute paths, output hashes,
-user/PID values, raw deadlines, opaque handles, recursive-removal commands, or
-a remedy belonging to another code.
+Messages contain no absolute path, user or process identifier, output hash, raw
+deadline, handle, recursive-removal command, or another code's remedy.
+They do not instruct the operator to replace a refused entry with a directory.
+Table-driven tests assert the exact command tokens and ordered steps for each
+code. Redaction, omitted-remedy, borrowed-remedy, external-target removal,
+replacement-directory, recursive-removal, manual-signal, and
+ceiling-remedy-substitution mutations each fail their own row.
+
+The workspace drift and contributor-mutation refusals are the separate
+ADR-0054-adjusted table in `workspace-and-tool-pinning.md`. It covers stale
+product and walker hub locks, module lock drift, generator drift,
+package-policy drift, yanked snapshot drift, ambient repin controls, and
+unexpected tracked mutation. Each row has an exact nonzero message with the
+ordered `nix develop`, `cd packages`, exact command, review/commit, and rerun
+sequence. The same redaction and exact-message harness rejects a missing step,
+wrong command, borrowed remedy, absolute path, secret, identifier, or echoed
+ambient value. The retired-hub diagnostic bytes are unchanged and remain
+outside that table.
 
 ## Deadline
 
-Promoted CI checkout has `timeout-minutes: 2`. The first action after checkout
-reads `/proc/uptime`; the shared checked parser accepts ASCII digits with an
-optional nonempty fractional part. Capture truncates to milliseconds and
-exports an absolute boot-relative deadline:
+Promoted checkout has a two-minute bound. The first post-checkout action reads
+uptime through the shared checked parser and exports:
 
 ```text
 deadline_ms = anchor_ms + 780000
 ```
 
-The Make target reads current uptime with the same parser, rounds it up, and
-uses checked subtraction. Missing deadline is the unbounded local default and
-is forbidden by promoted workflow policy. Malformed, signed, nonnumeric,
-trailing, or overflowing input fails without echo. `None` or zero remaining
-means an ordinary expired budget, not malformed input. Child duration rounds
-down.
+Capture truncates milliseconds, read rounds up, and child timeout rounds down.
+Missing is the unbounded local default and is forbidden in promoted jobs.
+Malformed or overflowing input refuses without echo. Zero or underflow is an
+ordinary expired budget.
 
-Both the raw uptime field and the current instant arrive through
-`packages/d2b-bazel-runner/src/clock.rs`, which declares an `UptimeSource` and
-a `Clock`. That boundary stays in the runner rather than moving to the shared
-support crate, because the deadline and process paths are its only readers; the
-locator resolves provider freshness from timestamps the filesystem boundary
-returns from the provider's own descriptor and needs no clock at all. Nothing
-in the deadline path opens
-`/proc/uptime` or reads the host
-clock directly. That is what makes the grammar and rounding table testable:
-every accepted and rejected field, the truncate-on-capture and round-up-on-read
-pair, the exactly-zero remaining budget, and the overflow case are supplied
-values rather than states a test has to wait for or provoke. Expiry-path tests
-drive the fake clock past the deadline so the SIGTERM, full-grace, SIGKILL, and
-reap ordering below is asserted deterministically, with no sleep and no timing
-race on a loaded host.
+Time is injected. Tests do not sleep or manipulate the host clock.
 
 ## Process control
 
-Repository-owned Rust code spawns the Bazel client into a new process group
-without a shell. On expiry:
+On expiry:
 
-1. send SIGTERM to only the child group;
-2. wait the fixed grace in full;
-3. observe leader state only with `EXITED|NOWAIT|NOHANG`;
-4. send unconditional SIGKILL to the group;
-5. reap the direct child;
-6. request server termination only through a bounded `bazel shutdown` carrying
-   byte-identical absolute startup options.
+1. spawn the client in a dedicated process group without a shell;
+2. signal SIGTERM to that group;
+3. independently time the full fixed grace;
+4. throughout that grace, repeatedly observe the direct child with
+   `waitid(EXITED|NOWAIT|NOHANG)`;
+5. treat every observation as informational only: no observation consumes
+   status, blocks the grace clock, shortens the grace, authorizes an early
+   return, or triggers a reap;
+6. when the grace expires, send unconditional group SIGKILL even if the leader
+   has exited;
+7. only after the group SIGKILL, reap the direct child;
+8. request server shutdown only through bounded `bazel shutdown` with matching
+   startup options.
 
-It never signals its own group, group zero, group -1, or a server PID read from
-a file. Tests prove call order, full grace after leader exit, surviving
-descendant termination, unrelated sibling survival, and stuck shutdown.
+The wrapper never signals its own group, group zero, group -1, an unrelated
+process, or a server PID read from a file.
 
-A ceiling miss reports measured duration and target and authorizes only a
-larger runner or further disjoint slice split. It never suggests weaker
-coverage, weaker enforcement, surface removal, or a relaxed ceiling. The cold
-continuous-integration ceiling does not become binding until the W3 feasibility
-measurement records it as attainable on the real runner class; a feasibility
-shortfall takes one of the same two remedies.
+The process backend records the exact order and clock progress. Tests require
+more than one non-consuming poll when the grace spans more than one poll
+interval, a poll that reports no state while the leader runs, a repeated poll
+that reports the same exited status, full grace after an immediate leader exit,
+unconditional SIGKILL, and final direct-child reap. A blocking-wait mutation
+that removes `NOHANG` and an early-reap mutation that consumes or reaps the
+leader before SIGKILL must fail the order test. Separate mutations that
+shorten grace on observed exit or make SIGKILL conditional must also fail.
+The spawn path has a planted missing-`process_group(0)` variant. Separate
+variants target the wrapper's group, group zero, group -1, and a PID-file
+decoy. Every variant fails while a sibling process and the decoy process
+remain alive, proving the wrapper signals only the dedicated child group and
+never trusts a PID read from a file.
+
+A ceiling miss authorizes only a larger runner class or a further disjoint
+slice split.

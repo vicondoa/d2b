@@ -1,37 +1,42 @@
 # Execution Manifest Binding
 
-## Existing authority
+`docs/reference/test-execution-manifest.md` and schema v1 remain authoritative.
+ADR 0054 changes dependency resolution and package-policy inputs, not manifest
+fields or IDs.
 
-`docs/reference/test-execution-manifest.md` and
-`docs/reference/schemas/test-execution-manifest-v1.json` are authoritative.
-ADR 0052 changes the executor, not that contract. This document adds no field,
-identifier, status, or lifecycle rule.
+Requirements:
 
-## Adapter requirements
+- Build Event Protocol results map to the exact eighteen IDs.
+- A surface completes only after every mapped carrier and companion succeeds.
+- A surface with several carriers emits one surface verdict owned by its
+  coverage-map verdict carrier only after every carrier succeeds. Tests plant
+  one success plus one failure and reject early completion or attribution to
+  the wrong carrier.
+- Prior evidence is invalidated before dispatch.
+- Success, failure, and handled interruption publish sorted atomic manifest v1
+  evidence. Partial evidence contains only completed leaves and the exact
+  failed/interrupted surfaces available at the boundary.
+- A publication failure after an existing test failure or handled interruption
+  preserves the original status and adds only a bounded publication error.
+- Fixture IDs are emitted only by the unchanged fixture path.
+- Executor, Cargo workspace, hub, architecture, and policy context are
+  migration evidence and are not new v1 fields.
+- Per-case results remain in the executor's per-target JUnit document, with
+  exact passed, failed, and ignored outcomes. Publication is enforcing.
+- One planted result contains every forbidden redaction value in its
+  environment, argv, failure text, and raw output. JUnit contains none of
+  them; `test.log` retains the raw diagnostic.
+- Repository-owned manifest, runner, timeout, cleanup, and process-control
+  paths use no shell.
+- `D2B_RUST_BUDGET` is validated once and propagated as one combined Bazel and
+  suite-concurrency bound.
 
-- Build Event Protocol results map to the exact eighteen existing surface IDs.
-- A surface enters `completed_leaves` only after every command and companion
-  required by its coverage row succeeds.
-- Carrier failures map to `failed_surfaces` without collapsing several
-  carriers into one result. A surface with several carriers still reports one
-  surface verdict, owned by the carrier the coverage map marks as owning it.
-- Prior manifest evidence is invalidated before dispatch.
-- Normal failure and handled interruption publish sorted partial evidence
-  atomically and preserve the original command status.
-- An uncatchable termination may publish nothing, but cannot leave an old
-  success record in place.
-- Fixture-backed IDs are emitted only by the unchanged Cargo/Nix fixture path.
-- Executor name is migration metadata and is not added to schema v1.
-- Per-case results live in the executor's own per-target result document, as
-  `runner-environment.md` specifies. They sit below this binding and add no
-  manifest field, identifier, or status.
+Cargo and Bazel evidence is comparable only at one commit, with the same
+fixture mode and a schema-valid manifest. Source inventory, hub containment,
+package-policy results, and Nix realization supplement execution evidence;
+none substitutes for it.
 
-## Equivalence
-
-Cargo and Bazel evidence is comparable only when it refers to the same commit,
-uses the same fixture mode, and validates against schema v1. Passing promotion
-evidence contains all eighteen baseline IDs. A failed/interrupted manifest is
-valid diagnostic evidence but cannot satisfy positive equivalence.
-
-Static source or Bazel query inventory cannot substitute for execution
-evidence.
+Qualification-only `bazelRestoreCount`, `bazelSaveCount`,
+`bazelPublicationCount`, `sliceDurationsSeconds`, action-network, and
+stable-head fields remain outside manifest v1. They are required in the
+qualification record and MUST NOT be added to this schema.
