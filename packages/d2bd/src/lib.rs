@@ -79,6 +79,7 @@ use d2b_core::processes::{ProcessNode, ProcessRole, ProcessesJson, ReadinessPred
 use d2b_core::realm_controller_config::{RealmControllerMetadataSummary, RealmControllersJson};
 use d2b_core::workload_identity::WorkloadIdentity;
 use d2b_core_controller::coordinator::{CoordinatorError, ZoneCoordinator};
+use d2b_core_controller::main::StartupStage;
 use d2b_gateway::{
     AgentHandle, AgentSpawnRequest, AppCommand, Clock, ContextSeed, DisplayListener,
     DisplaySessionContext, GatewayDeps, GatewayError, GatewayOrchestrator, GatewayWorkload,
@@ -693,6 +694,40 @@ fn new_typed_shell_session_targets() -> Arc<Mutex<TypedShellSessionTargetCache>>
     Arc::new(Mutex::new(TypedShellSessionTargetCache::default()))
 }
 
+/// Return the Zone identities declared by the integrity-pinned storage
+/// artifacts.
+///
+/// The artifact hash keys are the daemon's only loaded index of the private
+/// per-Zone rows. Legacy host/environment and VM rows are projections used
+/// for lifecycle bindings; they must not decide which Zone stores exist.
+fn authoritative_zone_ids(resolver: &BundleResolver) -> Result<BTreeSet<ZoneId>, &'static str> {
+    let Some(artifact_hashes) = resolver.bundle.artifact_hashes.as_ref() else {
+        return Err("bundle Zone storage artifact index unavailable");
+    };
+    let mut zones = BTreeSet::new();
+    for key in artifact_hashes.keys() {
+        let Some(storage_path) = key.strip_prefix("zones/") else {
+            continue;
+        };
+        let Some(zone_name) = storage_path.strip_suffix("/storage.json") else {
+            continue;
+        };
+        if zone_name.is_empty() || zone_name.contains('/') || zone_name.contains('\\') {
+            return Err("bundle Zone storage artifact index invalid");
+        }
+        let zone =
+            ZoneId::parse(zone_name.to_owned()).map_err(|_| "bundle Zone identity invalid")?;
+        zones.insert(zone);
+    }
+    if zones.is_empty() {
+        return Err("bundle Zone storage artifact index empty");
+    }
+    if !zones.iter().any(|zone| zone.as_str() == "local-root") {
+        return Err("bundle Zone storage artifact index missing local root");
+    }
+    Ok(zones)
+}
+
 struct TypedShellSessionCreateReservation {
     cache: Arc<Mutex<TypedShellSessionTargetCache>>,
     key: (u32, String),
@@ -706,7 +741,8 @@ impl Drop for TypedShellSessionCreateReservation {
     }
 }
 
-/// Populate the daemon's Zone authority index from the trusted host bundle.
+/// Populate the daemon's Zone authority index from the trusted Zone artifact
+/// index and bind legacy VM projections to those admitted Zones.
 ///
 /// VM lifecycle requests carry only a VM resource name. The Zone binding is
 /// derived here from bundle-owned `vmRuntimes` rows, never from a request
@@ -720,9 +756,7 @@ fn register_authoritative_zones(
         .zone_coordinator
         .lock()
         .map_err(|_| "zone coordinator lock unavailable")?;
-    for environment in &resolver.host.environments {
-        let zone =
-            ZoneId::parse(environment.env.clone()).map_err(|_| "bundle Zone identity invalid")?;
+    for zone in authoritative_zone_ids(resolver)? {
         let _ = coordinator.register_zone(zone);
     }
     for runtime in &resolver.host.vm_runtimes {
@@ -730,10 +764,9 @@ fn register_authoritative_zones(
             continue;
         };
         let zone = ZoneId::parse(environment).map_err(|_| "VM Zone identity invalid")?;
-        let _ = coordinator.register_zone(zone.clone());
         coordinator
             .bind_vm(runtime.vm.clone(), &zone)
-            .map_err(|_| "VM Zone binding conflicted")?;
+            .map_err(|_| "VM Zone binding unavailable")?;
     }
     // `vmRuntimes` is optional in legacy host bundles. The signed public
     // manifest carries the same VM-to-environment binding, so use it as the
@@ -743,10 +776,9 @@ fn register_authoritative_zones(
             continue;
         };
         let zone = ZoneId::parse(environment).map_err(|_| "manifest Zone identity invalid")?;
-        let _ = coordinator.register_zone(zone.clone());
         coordinator
             .bind_vm(vm.clone(), &zone)
-            .map_err(|_| "manifest VM Zone binding conflicted")?;
+            .map_err(|_| "manifest VM Zone binding unavailable")?;
     }
     Ok(())
 }
@@ -1731,8 +1763,8 @@ pub async fn serve(options: ServeOptions) -> Result<(), TypedError> {
                         }
                     }
                     Err(error) => {
-                        for environment in &resolver.host.environments {
-                            if let Ok(zone) = ZoneId::parse(environment.env.clone()) {
+                        if let Ok(zones) = authoritative_zone_ids(&resolver) {
+                            for zone in zones {
                                 audit_resource_plane(
                                     &state,
                                     &zone,
@@ -12838,7 +12870,13 @@ fn open_zone_store_from_broker(
             detail: "OpenZoneStore did not return exactly one descriptor".to_owned(),
         });
     }
-    let fd = duplicate_received_fd(&received_fds, 0, "duplicate Zone store fd")?;
+    let fd = match duplicate_received_fd(&received_fds, 0, "duplicate Zone store fd") {
+        Ok(fd) => fd,
+        Err(error) => {
+            close_received_fds(&received_fds);
+            return Err(error);
+        }
+    };
     close_received_fds(&received_fds);
     match response {
         BrokerResponse::OpenZoneStore(response) => {
@@ -12875,23 +12913,8 @@ async fn open_resource_plane(
         return Err(resource_runtime::ResourceRuntimeError::CoreStartupFailed);
     }
     let mut plane = resource_runtime::ResourcePlane::new();
-    let mut zones = BTreeSet::new();
-    zones.insert(
-        ZoneId::parse("local-root".to_owned())
-            .map_err(|_| resource_runtime::ResourceRuntimeError::ZoneStoreIdInvalid)?,
-    );
-    for environment in &resolver.host.environments {
-        let zone = ZoneId::parse(environment.env.clone())
-            .map_err(|_| resource_runtime::ResourceRuntimeError::ZoneStoreIdInvalid)?;
-        zones.insert(zone);
-    }
-    for runtime in resolver.manifest.vms.values() {
-        if let Some(environment) = runtime.env.as_deref() {
-            let zone = ZoneId::parse(environment.to_owned())
-                .map_err(|_| resource_runtime::ResourceRuntimeError::ZoneStoreIdInvalid)?;
-            zones.insert(zone);
-        }
-    }
+    let zones = authoritative_zone_ids(resolver)
+        .map_err(|_| resource_runtime::ResourceRuntimeError::ZoneStoreIdInvalid)?;
     for zone in zones {
         let opened = match open_zone_store_from_broker(state, &zone) {
             Ok(opened) => opened,
@@ -12907,6 +12930,11 @@ async fn open_resource_plane(
                 return Err(error);
             }
         };
+        if !matches!(runtime.core_stage(), Ok(StartupStage::Ready)) {
+            let _ = runtime.shutdown().await;
+            let _ = plane.shutdown().await;
+            return Err(resource_runtime::ResourceRuntimeError::CoreStartupFailed);
+        }
         if let Err(error) = plane.insert(runtime) {
             let _ = plane.shutdown().await;
             return Err(error);
