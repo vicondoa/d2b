@@ -104,6 +104,7 @@
       # for pkgs.rustc/pkgs.cargo and the pin will be served natively.
       devShells = forAllSystems (system: let
         pkgs = nixpkgsFor.${system};
+        bazelSeccomp = import ./pkgs/bazel-8.6.0-seccomp { inherit pkgs; };
       in {
         default = pkgs.mkShell {
           name = "d2b-dev";
@@ -111,6 +112,10 @@
             # Toolchain. rustup resolves packages/rust-toolchain.toml.
             rustup
             stdenv.cc
+            # Bazel is the repository-pinned 8.6.0 output with the Linux
+            # sandbox seccomp and PID-namespace monitor patch. Do not add an
+            # ambient Bazel here.
+            bazelSeccomp
             # Compiler cache. The cargo configs route rustc through
             # .cargo/rustc-wrapper.sh, which uses this when present and plain
             # rustc when absent, so the shell never has to clear RUSTC_WRAPPER.
@@ -144,6 +149,9 @@
 
       packages = forAllSystems (system: let
         pkgs = nixpkgsFor.${system};
+        bazelSeccomp = import ./pkgs/bazel-8.6.0-seccomp { inherit pkgs; };
+        bazelExecSupervisor =
+          import ./pkgs/d2b-bazel-exec-supervisor { inherit pkgs; };
         rustPackagesSrc = pkgs.runCommand "d2b-rust-src" { } ''
           mkdir -p $out/packages
           cp -r ${./packages}/. $out/packages/
@@ -241,6 +249,8 @@
             '';
           };
       in {
+        "bazel-8.6.0-seccomp" = bazelSeccomp;
+        "d2b-bazel-exec-supervisor" = bazelExecSupervisor;
         manpages = pkgs.runCommand "d2b-manpages" { } ''
           install -Dm644 ${./docs/manpages/d2b.1} "$out/share/man/man1/d2b.1"
           ${pkgs.gzip}/bin/gzip -n -c ${./docs/manpages/d2b.1} > "$out/share/man/man1/d2b.1.gz"
@@ -757,6 +767,7 @@
           nix-unit-misc = [
             "assertions.nix"
             "autostart-wiring.nix"
+            "bazel-toolchain.nix"
             "examples-with-observability.nix"
             "ifname-nix-rust-parity.nix"
             "observability.nix"

@@ -86,6 +86,12 @@ autostart-wiring/no-d2b-auto-vm
 autostart-wiring/no-d2b-manual-vm
 autostart-wiring/no-d2b-template
 autostart-wiring/no-dangling-d2b-wants
+bazel-toolchain/native-system-is-supported
+bazel-toolchain-policy-load-boundary
+bazel-toolchain-ptrace-policy-shape
+bazel-toolchain-single-devshell-provider
+bazel-toolchain-supervisor-contract
+bazel-toolchain/version-and-source
 bridge-ipv6-boot-sysctl/br-personal-lan-accept-ra
 bridge-ipv6-boot-sysctl/br-personal-lan-autoconf
 bridge-ipv6-boot-sysctl/br-personal-lan-disable-ipv6

@@ -1,0 +1,138 @@
+{
+  "schemaVersion": 1,
+  "artifact": "d2b-bazel-exec-supervisor",
+  "supportedSystems": [
+    "x86_64-linux",
+    "aarch64-linux"
+  ],
+  "source": {
+    "path": "tests/tools/d2b-bazel-exec-supervisor/supervisor.c",
+    "sha256": "d58d1b00ae2f8564cd7fa63d30328a6099b4a1f9769aef720ea6d9f7f9553f0e",
+    "plantPath": "tests/tools/d2b-bazel-exec-supervisor/sandbox-crash-plant.c",
+    "plantSha256": "3656365c998c44901f94bda7ef001f40f384c558dfcb61db1e14d630849a98d7"
+  },
+  "expression": {
+    "path": "pkgs/d2b-bazel-exec-supervisor/default.nix",
+    "sha256": "270d2117895cf9caa742b2639541eceebec727fdd38afa3cb9ec5de864c929cf"
+  },
+  "protocol": {
+    "version": 1,
+    "privateExecutableFd": 9,
+    "statusFd": 8,
+    "execError": {
+      "magic": "D2BE",
+      "version": 1,
+      "recordBytes": 8,
+      "overlongRule": "one-byte-probe-after-one-record"
+    },
+    "status": {
+      "magic": "D2BS",
+      "version": 1,
+      "headerBytes": 8,
+      "retainedBufferBytes": 27,
+      "frames": {
+        "READY": {
+          "type": 1,
+          "payloadBytes": 0
+        },
+        "EXECUTED": {
+          "type": 2,
+          "payloadBytes": 0
+        },
+        "EXITED": {
+          "type": 3,
+          "payloadBytes": 1
+        },
+        "SIGNALED": {
+          "type": 4,
+          "payloadBytes": 1
+        }
+      },
+      "order": [
+        "READY",
+        "EXECUTED",
+        "terminal",
+        "EOF"
+      ],
+      "noStatusOverlongProbe": true
+    },
+    "ptraceCalls": [
+      {
+        "request": "PTRACE_TRACEME",
+        "pid": "0",
+        "address": "(void *)0",
+        "data": "(void *)0"
+      },
+      {
+        "request": "PTRACE_SETOPTIONS",
+        "pid": "child",
+        "address": "(void *)0",
+        "data": "(void *)(uintptr_t)PTRACE_O_TRACEEXEC"
+      },
+      {
+        "request": "PTRACE_CONT",
+        "pid": "child",
+        "address": "(void *)0",
+        "data": "(void *)0"
+      },
+      {
+        "request": "PTRACE_DETACH",
+        "pid": "child",
+        "address": "(void *)0",
+        "data": "(void *)0"
+      }
+    ]
+  },
+  "linuxMinimum": "3.19",
+  "yama": {
+    "assumption": "parent-child",
+    "acceptedUnprivilegedModes": [
+      0,
+      1
+    ],
+    "refusedModes": [
+      2,
+      3
+    ],
+    "capSysPtrace": false
+  },
+  "identity": {
+    "protocolSha256": "44ee11da46f3df5c02f0057ea635b5906523d19017161e8537e7a6bd83435033",
+    "staticCompilerSha256": "5a7bfe08973a594ba7d785a8071f81acfec63a044429dfe92485db129a6013bb",
+    "staticLibcSha256": "d9cffe17a9995597b3968b965c4a73a239fc08ca78de0c99c95c4a4163ad3553",
+    "staticHeadersSha256": "109ce3f72e51a39ef697b2380dd54782ff417b03860eb6a0a4132a18d7e6e6f4",
+    "dependencyClosureSha256": {
+      "x86_64-linux": "8675c42b60204b56959493376b2c9108e01531d7248d1ae079c146207b3520b5",
+      "aarch64-linux": "cd05edced3b007c968a7916c2d7695c57cbcbe0cdb89c84bc6742bb09954c50f"
+    }
+  },
+  "output": {
+    "narSha256": "318bfae9de4af7498448575f27d183ddcc0458e05cb41cb32a9371624ec6c5fd",
+    "executableSha256": "6081bb857bed5e418363fd7c55129a1863249d811d156f4d7d8b56fc25dc239e",
+    "staticElfSha256": "e77c1a8fc00fe46a7b2f3c67eb066129708e788ffcd0bda9aa32344109fa45ce",
+    "staticCompilerSha256": "5a7bfe08973a594ba7d785a8071f81acfec63a044429dfe92485db129a6013bb",
+    "staticLibcSha256": "d9cffe17a9995597b3968b965c4a73a239fc08ca78de0c99c95c4a4163ad3553",
+    "staticHeadersSha256": "109ce3f72e51a39ef697b2380dd54782ff417b03860eb6a0a4132a18d7e6e6f4"
+  },
+  "nativeOutputs": {
+    "x86_64-linux": {
+      "derivationSha256": "3e55da05ccf6032562179f6207c79f8f58784784d363fe1a15e7a84cae76afd6",
+      "narSha256": "318bfae9de4af7498448575f27d183ddcc0458e05cb41cb32a9371624ec6c5fd",
+      "executableSha256": "6081bb857bed5e418363fd7c55129a1863249d811d156f4d7d8b56fc25dc239e",
+      "staticElfSha256": "e77c1a8fc00fe46a7b2f3c67eb066129708e788ffcd0bda9aa32344109fa45ce"
+    },
+    "aarch64-linux": {
+      "derivationSha256": "13bb12d7c2fede191f1bef766c585fe3e8707e4cb1084e19d3f9cdd9e24df1ea",
+      "narSha256": "017506a4af8ed6f9c0f065fd0b1950a13fbd978ca9d3f1ceaa4c5bd3c444880a",
+      "executableSha256": "fc0ee887bbbc65aedd2e5986e0e6f3367b44d1e65692bda7ec03b87ae880d5b9",
+      "staticElfSha256": "08ae825bc35f1cb879d30f9079521eca1547fbc35f56bbdd6403580d16b18707",
+      "staticCompilerSha256": "fc38d9ad97da19240f822ace24e129d5bda32efafe8816ec39507a0e1204acce",
+      "staticLibcSha256": "b71a1a5655a43e8e3277466e82a894e8031aca2f5ae379724d920afbf4af65b8",
+      "staticHeadersSha256": "0c33fe629c5e1bdfa393b802b6d78eb555c0c6bfe13b68eec24724765eeb7d1d"
+    }
+  },
+  "sourceFiles": [
+    "tests/tools/d2b-bazel-exec-supervisor/supervisor.c",
+    "tests/tools/d2b-bazel-exec-supervisor/sandbox-crash-plant.c"
+  ]
+}

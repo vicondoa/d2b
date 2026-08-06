@@ -1,0 +1,423 @@
+//! Fixture-independent policy for the Spec 003 Bazel toolchain boundary.
+//!
+//! This test deliberately reads repository inputs rather than rendered Nix
+//! fixtures. The toolchain and immutable C supervisor exist before the Bazel
+//! generator, so their identity, protocol, policy, and recovery ownership
+//! must be checked without a fixture build.
+
+use d2b_contract_tests::{read_repo_file, repo_path_exists};
+use serde_json::Value;
+
+const BAZEL_NIX: &str = "pkgs/bazel-8.6.0-seccomp/default.nix";
+const PATCH: &str = "pkgs/bazel-8.6.0-seccomp/linux-sandbox-seccomp.patch";
+const POLICY: &str = "pkgs/bazel-8.6.0-seccomp/seccomp-policy.json";
+const SUPERVISOR_NIX: &str = "pkgs/d2b-bazel-exec-supervisor/default.nix";
+const SUPERVISOR: &str = "tests/tools/d2b-bazel-exec-supervisor/supervisor.c";
+const PLANT: &str = "tests/tools/d2b-bazel-exec-supervisor/sandbox-crash-plant.c";
+const TOOLCHAIN_GOLDEN: &str = "tests/golden/bazel-toolchain.json";
+const SUPERVISOR_GOLDEN: &str = "tests/golden/bazel-exec-supervisor.json";
+const RUNBOOK: &str = "docs/contributing/critical-subsystems.md";
+
+fn json(path: &str) -> Value {
+    serde_json::from_str(&read_repo_file(path))
+        .unwrap_or_else(|error| panic!("{path} must be valid JSON: {error}"))
+}
+
+fn string(value: &Value, path: &str) -> String {
+    value
+        .pointer(path)
+        .and_then(Value::as_str)
+        .unwrap_or_else(|| panic!("{path} must be a string"))
+        .to_owned()
+}
+
+fn array_strings(value: &Value, path: &str) -> Vec<String> {
+    value
+        .pointer(path)
+        .and_then(Value::as_array)
+        .unwrap_or_else(|| panic!("{path} must be an array"))
+        .iter()
+        .map(|entry| {
+            entry
+                .as_str()
+                .unwrap_or_else(|| panic!("{path} contains a non-string entry"))
+                .to_owned()
+        })
+        .collect()
+}
+
+fn strings(values: &[&str]) -> Vec<String> {
+    values.iter().map(|value| (*value).to_owned()).collect()
+}
+
+#[test]
+fn every_toolchain_input_is_present_and_anchored() {
+    for path in [
+        BAZEL_NIX,
+        PATCH,
+        POLICY,
+        SUPERVISOR_NIX,
+        SUPERVISOR,
+        PLANT,
+        TOOLCHAIN_GOLDEN,
+        SUPERVISOR_GOLDEN,
+        "flake.nix",
+        RUNBOOK,
+    ] {
+        assert!(repo_path_exists(path), "missing governed toolchain input {path}");
+    }
+}
+
+#[test]
+fn policy_is_closed_no_network_and_constant_ptrace() {
+    let policy = json(POLICY);
+    assert_eq!(policy["schemaVersion"], 1);
+    assert_eq!(policy["policyId"], "d2b-bazel-action-seccomp-v1");
+    assert_eq!(policy["capabilityAbi"], "d2b-bazel-seccomp-abi-v1");
+    assert_eq!(policy["defaultAction"], "allow");
+    assert_eq!(policy["denial"]["action"], "errno");
+    assert_eq!(policy["denial"]["errno"], "EACCES");
+    assert_eq!(policy["denial"]["value"], 13);
+    assert_eq!(policy["load"]["after"], "sandbox-construction");
+    assert_eq!(policy["load"]["before"], "action-command-exec");
+    assert_eq!(policy["load"]["noNewPrivs"], true);
+    assert_eq!(policy["load"]["noFallback"], true);
+    assert_eq!(
+        array_strings(&policy, "/load/covers"),
+        strings(&[
+            "compile-build-command",
+            "test-setup-command",
+            "test-command",
+            "descendants"
+        ])
+    );
+    assert_eq!(
+        array_strings(&policy, "/deniedSyscalls"),
+        strings(&[
+            "socket",
+            "socketpair",
+            "connect",
+            "bind",
+            "listen",
+            "accept",
+            "accept4",
+            "sendto",
+            "sendmsg",
+            "sendmmsg",
+            "recvfrom",
+            "recvmsg",
+            "recvmmsg",
+            "shutdown",
+            "getsockname",
+            "getpeername",
+            "setsockopt",
+            "getsockopt",
+            "pidfd_getfd",
+            "io_uring_setup",
+            "io_uring_enter",
+            "io_uring_register",
+            "socketcall"
+        ])
+    );
+
+    let requests = policy["ptrace"]["requests"]
+        .as_array()
+        .expect("ptrace requests must be an array");
+    assert_eq!(requests.len(), 4);
+    assert_eq!(
+        requests
+            .iter()
+            .map(|request| request["name"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        [
+            "PTRACE_TRACEME",
+            "PTRACE_SETOPTIONS",
+            "PTRACE_CONT",
+            "PTRACE_DETACH"
+        ]
+    );
+    assert_eq!(requests[0]["pid"], 0);
+    assert_eq!(requests[0]["address"]["value"], 0);
+    assert_eq!(requests[0]["data"]["value"], 0);
+    assert_eq!(requests[1]["address"]["value"], 0);
+    assert_eq!(requests[1]["data"]["value"], 16);
+    assert_eq!(
+        requests[1]["data"]["expression"],
+        "(void *)(uintptr_t)PTRACE_O_TRACEEXEC"
+    );
+    for request in &requests[1..] {
+        assert_eq!(request["pid"]["dynamic"], true);
+        assert_eq!(request["pid"]["owner"], "supervisor-owned-fork-result");
+        assert_eq!(request["address"]["value"], 0);
+    }
+    assert_eq!(requests[2]["data"]["value"], 0);
+    assert_eq!(requests[3]["data"]["value"], 0);
+    assert_eq!(policy["ptrace"]["futureChildPidMatching"], false);
+    assert_eq!(
+        array_strings(&policy, "/ptrace/dynamicIdentity"),
+        strings(&[
+            "owned-fork-result",
+            "confirmed-process-group",
+            "direct-parent-relation",
+            "traced-initial-stop",
+            "sole-wait-owner",
+            "PTRACE_EVENT_EXEC"
+        ])
+    );
+    assert!(array_strings(&policy, "/ptrace/forbiddenRequests")
+        .iter()
+        .any(|entry| entry == "PTRACE_ATTACH"));
+}
+
+#[test]
+fn policy_binds_fresh_pid_namespace_and_typed_quarantine() {
+    let policy = json(POLICY);
+    assert_eq!(policy["monitor"]["namespace"], "CLONE_NEWPID");
+    assert_eq!(policy["monitor"]["pid1OwnsAbnormalTeardown"], true);
+    assert_eq!(policy["monitor"]["pid1OutsideActionTree"], true);
+    assert_eq!(policy["monitor"]["nonblockingReapProgress"], true);
+    assert_eq!(policy["monitor"]["userspaceCeilingMs"], 10000);
+    assert_eq!(policy["monitor"]["kernelCleanupBounded"], false);
+    assert_eq!(policy["monitor"]["pendingState"], "pending-kernel-cleanup");
+    assert_eq!(policy["monitor"]["quarantineBeforeConsumingReap"], true);
+    assert_eq!(policy["monitor"]["successAfterQuarantine"], false);
+    assert_eq!(policy["monitor"]["reuseBeforeConsumingReap"], false);
+    assert_eq!(policy["monitor"]["replacementWaitOwner"], false);
+    assert_eq!(policy["monitor"]["manualRelease"], false);
+    assert_eq!(policy["monitor"]["reboot"], false);
+    assert_eq!(
+        policy["monitor"]["releaseRecord"],
+        "D2B-BZLEXEC-SANDBOX-CONSUMING-REAP-RELEASE"
+    );
+    assert_eq!(
+        policy["monitor"]["releaseCleanup"],
+        "complete-after-quarantine"
+    );
+    assert_eq!(
+        policy["monitor"]["releaseQuarantine"],
+        "entered-and-released-after-consuming-reap"
+    );
+    assert_eq!(
+        policy["monitor"]["runbook"],
+        "docs/contributing/critical-subsystems.md#bazel-pending-kernel-cleanup-quarantine"
+    );
+}
+
+#[test]
+fn supervisor_has_exact_four_pointer_width_ptrace_calls() {
+    let source = read_repo_file(SUPERVISOR);
+    assert_eq!(
+        source.matches("ptrace(").count(),
+        4,
+        "the supervisor must have exactly four ptrace call sites"
+    );
+    for call in [
+        "ptrace(PTRACE_TRACEME, 0, (void *)0, (void *)0)",
+        "ptrace(PTRACE_SETOPTIONS, child, (void *)0, (void *)(uintptr_t)PTRACE_O_TRACEEXEC)",
+        "ptrace(PTRACE_CONT, child, (void *)0, (void *)0)",
+        "ptrace(PTRACE_DETACH, child, (void *)0, (void *)0)",
+    ] {
+        assert!(source.contains(call), "missing exact ptrace call {call}");
+    }
+    for forbidden in [
+        "PTRACE_ATTACH",
+        "PTRACE_SEIZE",
+        "PTRACE_GETREGS",
+        "PTRACE_SYSCALL",
+        "PTRACE_GETEVENTMSG",
+        "CAP_SYS_PTRACE",
+        "fexecve",
+        "/proc/self/fd",
+    ] {
+        assert!(
+            !source.contains(forbidden),
+            "supervisor contains forbidden operation {forbidden}"
+        );
+    }
+    assert!(source.contains("execveat"));
+    assert!(source.contains("AT_EMPTY_PATH"));
+    assert!(source.contains("pipe2(exec_pipe, O_CLOEXEC | O_NONBLOCK)"));
+    assert_eq!(source.matches("fork()").count(), 1);
+    assert!(source.contains("setpgid(0, 0)"));
+    assert!(source.contains("setpgid(child, child)"));
+    assert!(source.contains("\"D2BS\""));
+    assert!(source.contains("\"D2BE\""));
+    assert!(source.contains("D2B_EXEC_DEADLINE_MS 10000"));
+    assert!(source.contains("D2B_STATUS_HEADER_SIZE 8"));
+    assert!(source.contains("D2B_PRIVATE_EXECUTABLE_FD 9"));
+    assert!(source.contains("D2B_STATUS_FD 8"));
+    assert!(source.contains("D2B_READY"));
+    assert!(source.contains("D2B_EXECUTED"));
+    assert!(source.contains("D2B_EXITED"));
+    assert!(source.contains("D2B_SIGNALED"));
+    assert!(source.contains("D2B-BZLEXEC-HELPER-PRE-EXEC-TERMINATION"));
+    assert!(source.contains("D2B-BZLEXEC-HELPER-PRE-EXEC-DEATH"));
+    assert!(source.contains("D2B-BZLEXEC-HELPER-PTRACE-EVENT"));
+    assert!(source.contains("D2B-BZLEXEC-HELPER-PTRACE-DETACH"));
+}
+
+#[test]
+fn patched_sandbox_keeps_policy_before_action_and_owns_all_sandbox_codes() {
+    let patch = read_repo_file(PATCH);
+    assert!(patch.contains("D2BPrepareActionPolicy();"));
+    assert!(patch.contains("D2BInheritedDescriptorPreflight"));
+    assert!(patch.contains("PR_SET_NO_NEW_PRIVS"));
+    assert!(patch.contains("SECCOMP_MODE_FILTER"));
+    assert!(patch.contains("SECCOMP_RET_ERRNO | EACCES"));
+    assert!(patch.contains("PTRACE_TRACEME"));
+    assert!(patch.contains("PTRACE_SETOPTIONS"));
+    assert!(patch.contains("PTRACE_CONT"));
+    assert!(patch.contains("PTRACE_DETACH"));
+    assert!(patch.contains("future child pid is intentionally not compared"));
+    assert!(patch.contains("CLONE_NEWPID"));
+    assert!(patch.contains("kD2BUserspaceCeilingMs = 10000"));
+    assert!(patch.contains("WNOHANG"));
+    for code in [
+        "D2B-BZLEXEC-SANDBOX-NAMESPACE",
+        "D2B-BZLEXEC-SANDBOX-PTRACE-POLICY",
+        "D2B-BZLEXEC-SANDBOX-MONITOR",
+        "D2B-BZLEXEC-SANDBOX-KILL",
+        "D2B-BZLEXEC-SANDBOX-REAP",
+        "D2B-BZLEXEC-SANDBOX-CEILING",
+        "D2B-BZLEXEC-SANDBOX-PENDING-KERNEL-CLEANUP",
+        "D2B-BZLEXEC-SANDBOX-CLEANUP",
+        "D2B-BZLEXEC-SANDBOX-CONSUMING-REAP-RELEASE",
+    ] {
+        assert!(
+            patch.contains(code),
+            "patched sandbox is missing recovery code {code}"
+        );
+    }
+    assert!(patch.contains("no-success-no-reuse"));
+    assert!(patch.contains("complete-after-quarantine"));
+    assert!(patch.contains("entered-and-released-after-consuming-reap"));
+    assert!(patch.contains(
+        "docs/contributing/critical-subsystems.md#bazel-pending-kernel-cleanup-quarantine"
+    ));
+    for forbidden in [
+        "retry-before-release",
+        "replacement-waiter",
+        "manual-release",
+        "prohibited=reboot",
+    ] {
+        assert!(patch.contains(forbidden), "missing quarantine prohibition {forbidden}");
+    }
+}
+
+#[test]
+fn package_and_flake_select_only_the_pinned_bazel_output() {
+    let package = read_repo_file(BAZEL_NIX);
+    let flake = read_repo_file("flake.nix");
+    let supervisor_package = read_repo_file(SUPERVISOR_NIX);
+    assert!(package.contains("version = \"8.6.0\""));
+    assert!(package.contains("bazel-${version}-dist.zip"));
+    assert!(package.contains("sha256-W22eB0IzHNZe3xaF8AZOkUTDCic3NXkypdqSDY61Su0="));
+    assert!(package.contains("linux-sandbox-seccomp.patch"));
+    assert!(package.contains("seccomp-policy.json"));
+    assert!(package.contains("patches = (old.patches or [ ]) ++ [ sandboxPatch ]"));
+    assert!(package.contains("userspaceCeilingMs = 10000"));
+    assert!(package.contains("futureChildPidMatching = false"));
+    assert!(supervisor_package.contains("pkgsStatic"));
+    assert!(supervisor_package.contains("-static"));
+    assert!(supervisor_package.contains("d2b-bazel-exec-supervisor"));
+    assert!(supervisor_package.contains("protocolVersion = 1"));
+    assert!(supervisor_package.contains("linuxMinimum = \"3.19\""));
+    assert!(supervisor_package.contains("capSysPtrace = false"));
+    assert!(flake.contains("import ./pkgs/bazel-8.6.0-seccomp"));
+    assert!(flake.contains("bazelSeccomp"));
+    assert!(!flake.contains("bazel_8"));
+    assert!(!flake.contains("Bazelisk"));
+}
+
+#[test]
+fn runbook_has_ordered_live_monitor_quarantine_steps() {
+    let runbook = read_repo_file(RUNBOOK);
+    let heading = "## Bazel pending kernel cleanup quarantine";
+    let heading_position = runbook
+        .find(heading)
+        .expect("pending-kernel-cleanup runbook heading is required");
+    let section = &runbook[heading_position..];
+    for marker in [
+        "D2B-BZLEXEC-SANDBOX-PENDING-KERNEL-CLEANUP",
+        "original job and patched `linux-sandbox` monitor live",
+        "Drain the affected CI worker or provider",
+        "GitHub-hosted",
+        "drain-without-terminate",
+        "D2B-BZLEXEC-SANDBOX-CONSUMING-REAP-RELEASE",
+        "cleanup=complete-after-quarantine",
+        "quarantine=entered-and-released-after-consuming-reap",
+        "do not retry",
+        "Reboot, retry-before-release, replacement wait ownership, and manual release",
+    ] {
+        assert!(section.contains(marker), "runbook missing {marker}");
+    }
+    assert!(
+        section.find("1. Keep").unwrap() < section.find("2. In").unwrap()
+            && section.find("2. In").unwrap() < section.find("3. Drain").unwrap()
+            && section.find("3. Drain").unwrap() < section.find("4. Wait").unwrap()
+            && section.find("4. Wait").unwrap() < section.find("5. Confirm").unwrap()
+            && section.find("5. Confirm").unwrap() < section.find("6. Only").unwrap()
+    );
+}
+
+#[test]
+fn golden_identity_records_are_redacted_and_native_scoped() {
+    let toolchain = json(TOOLCHAIN_GOLDEN);
+    let supervisor = json(SUPERVISOR_GOLDEN);
+    for value in [&toolchain, &supervisor] {
+        assert_eq!(value["schemaVersion"], 1);
+        assert_eq!(
+            array_strings(value, "/supportedSystems"),
+            strings(&["x86_64-linux", "aarch64-linux"])
+        );
+        let text = value.to_string();
+        assert!(!text.contains("/nix/store/"));
+        assert!(!text.contains("/home/"));
+        assert!(!text.contains("pid="));
+        assert!(!text.contains("run_id"));
+    }
+    for path in [
+        "/source/sha256",
+        "/patch/sha256",
+        "/policy/sha256",
+        "/output/narSha256",
+        "/output/executableSha256",
+        "/capabilityAbi/sha256",
+    ] {
+        assert_eq!(string(&toolchain, path).len(), 64, "{path} must be hex digest");
+    }
+    for system in ["x86_64-linux", "aarch64-linux"] {
+        let row = &toolchain["nativeOutputs"][system];
+        for path in ["/derivationSha256", "/narSha256", "/executableSha256"] {
+            assert_eq!(
+                row.pointer(path).and_then(Value::as_str).unwrap().len(),
+                64,
+                "{system}{path} must be hex digest"
+            );
+        }
+    }
+    for path in [
+        "/source/sha256",
+        "/expression/sha256",
+        "/identity/protocolSha256",
+        "/output/narSha256",
+        "/output/executableSha256",
+        "/output/staticElfSha256",
+    ] {
+        assert_eq!(string(&supervisor, path).len(), 64, "{path} must be hex digest");
+    }
+    assert_eq!(supervisor["protocol"]["version"], 1);
+    assert_eq!(supervisor["protocol"]["privateExecutableFd"], 9);
+    assert_eq!(supervisor["protocol"]["statusFd"], 8);
+    assert_eq!(supervisor["protocol"]["status"]["retainedBufferBytes"], 27);
+    assert_eq!(supervisor["protocol"]["status"]["noStatusOverlongProbe"], true);
+    assert_eq!(supervisor["linuxMinimum"], "3.19");
+    assert_eq!(supervisor["yama"]["capSysPtrace"], false);
+    assert_eq!(
+        array_strings(&supervisor, "/sourceFiles"),
+        strings(&[
+            "tests/tools/d2b-bazel-exec-supervisor/supervisor.c",
+            "tests/tools/d2b-bazel-exec-supervisor/sandbox-crash-plant.c"
+        ])
+    );
+}

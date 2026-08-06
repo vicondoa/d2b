@@ -240,3 +240,46 @@ is fail-closed (`path-safety-violation`,
 [`docs/explanation/host-prepare.md`](../explanation/host-prepare.md)
 § "NetworkManager / systemd-networkd coexistence" and ADR 0013 for
 the rationale.
+
+## Bazel pending kernel cleanup quarantine
+
+The patched Bazel Linux sandbox owns abnormal action teardown in a fresh
+`CLONE_NEWPID` namespace. Namespace PID 1 kills every other member and makes
+nonblocking reap progress. The one fixed 10,000 ms ceiling covers userspace
+TERM/KILL/monitor escalation and the close-or-quarantine decision only. It
+does not bound kernel task exit, namespace destruction, or reap.
+
+When a consuming wait has not proved PID 1 reaped, the outer
+`linux-sandbox` monitor remains live as the sole wait owner and emits the
+typed `D2B-BZLEXEC-SANDBOX-PENDING-KERNEL-CLEANUP` diagnostic. It quarantines
+the sandbox and outputs, keeps the action failed, and permits neither success
+nor reuse until that same monitor publishes the consuming-reap release.
+
+Follow this ordered runbook:
+
+1. Keep the original job and patched `linux-sandbox` monitor live. Do not
+   cancel, restart, reboot, retry, or start a replacement waiter.
+2. In the original job's sanitized stderr, inspect the byte-exact
+   `D2B-BZLEXEC-SANDBOX-PENDING-KERNEL-CLEANUP` diagnostic. Require
+   `state=pending-kernel-cleanup` and follow only the fixed repository link
+   `docs/contributing/critical-subsystems.md#bazel-pending-kernel-cleanup-quarantine`.
+3. Drain the affected CI worker or provider from new admission without
+   terminating the original monitor. A GitHub-hosted job-exclusive
+   allocation is drained by leaving the original job running and admitting
+   no retry. A shared provider without a drain-without-terminate control
+   remains blocked.
+4. Wait on the original job. Observation is non-consuming; only its original
+   live monitor may perform the consuming wait and reap.
+5. Confirm that same monitor published the byte-exact
+   `D2B-BZLEXEC-SANDBOX-CONSUMING-REAP-RELEASE` record with
+   `cleanup=complete-after-quarantine` and
+   `quarantine=entered-and-released-after-consuming-reap`. No other record
+   releases quarantine.
+6. Only after step 5, rerun the exact closed slice command printed by the
+   original diagnostic. If release never appears, keep admission drained and
+   do not retry.
+
+Reboot, retry-before-release, replacement wait ownership, and manual release
+are prohibited. Entry through quarantine always leaves the Bazel action
+failed. No host PID, PID file, host process group, cgroup, or operator action
+is a release authority.

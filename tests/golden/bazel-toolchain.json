@@ -1,0 +1,113 @@
+{
+  "schemaVersion": 1,
+  "artifact": "bazel-8.6.0-seccomp",
+  "version": "8.6.0",
+  "supportedSystems": [
+    "x86_64-linux",
+    "aarch64-linux"
+  ],
+  "source": {
+    "url": "https://github.com/bazelbuild/bazel/releases/download/8.6.0/bazel-8.6.0-dist.zip",
+    "sha256": "5b6d9e0742331cd65edf1685f0064e9144c30a2737357932a5da920d8eb54aed",
+    "archiveSha256": "13a84586429b6084b13bd5040d78deda58d523012151e71e7d4be0c63dd831f9"
+  },
+  "patch": {
+    "path": "pkgs/bazel-8.6.0-seccomp/linux-sandbox-seccomp.patch",
+    "sha256": "c9809e3d01b8809c89291b733b8d381b4a285787052abc9621f17272618ef05e",
+    "loadPoint": "after-sandbox-construction-before-action-command-exec"
+  },
+  "policy": {
+    "path": "pkgs/bazel-8.6.0-seccomp/seccomp-policy.json",
+    "sha256": "b1ce0e3607e6888af24475cac8ca4ab59555a42fed791dcc6420fbb4434831a9",
+    "abiSha256": "b0ab93e7faa7393d4af87552ae33d0030d88f3d52d0ff4742f578bfb58c9e21f",
+    "capabilityAbi": "d2b-bazel-seccomp-abi-v1",
+    "denialErrno": "EACCES",
+    "futureChildPidMatching": false,
+    "noNetwork": true,
+    "noFallback": true
+  },
+  "capabilityAbi": {
+    "name": "d2b-bazel-seccomp-abi-v1",
+    "sha256": "b0ab93e7faa7393d4af87552ae33d0030d88f3d52d0ff4742f578bfb58c9e21f"
+  },
+  "output": {
+    "narSha256": "afd726ad3701d92b8bbadf9db2003a659d09af268d815e983444b1a5ed7e5622",
+    "executableSha256": "f624d2ff5afc6128b8e263a3804d8b16432deb2bb9e16e02eeeb458841fb9568"
+  },
+  "nativeOutputs": {
+    "x86_64-linux": {
+      "derivationSha256": "9b7341deeaafff8b6fe55500a318fd42b620ec2c7a77efe53a8cd5436c3af1c3",
+      "narSha256": "afd726ad3701d92b8bbadf9db2003a659d09af268d815e983444b1a5ed7e5622",
+      "executableSha256": "f624d2ff5afc6128b8e263a3804d8b16432deb2bb9e16e02eeeb458841fb9568",
+      "nativeExecutable": "bazel-8.6.0-linux-x86_64",
+      "startupProbe": {
+        "capabilityAbi": "d2b-bazel-seccomp-abi-v1",
+        "filterLoad": "observed",
+        "fixedDenial": "EACCES"
+      }
+    },
+    "aarch64-linux": {
+      "derivationSha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "narSha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "executableSha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "nativeExecutable": "bazel-8.6.0-linux-aarch64",
+      "startupProbe": {
+        "capabilityAbi": "d2b-bazel-seccomp-abi-v1",
+        "filterLoad": "native-required",
+        "fixedDenial": "EACCES"
+      }
+    }
+  },
+  "actionNetwork": {
+    "strategy": "sandboxed",
+    "deniedSyscalls": [
+      "socket",
+      "socketpair",
+      "connect",
+      "bind",
+      "listen",
+      "accept",
+      "accept4",
+      "sendto",
+      "sendmsg",
+      "sendmmsg",
+      "recvfrom",
+      "recvmsg",
+      "recvmmsg",
+      "shutdown",
+      "getsockname",
+      "getpeername",
+      "setsockopt",
+      "getsockopt",
+      "pidfd_getfd",
+      "io_uring_setup",
+      "io_uring_enter",
+      "io_uring_register",
+      "socketcall"
+    ],
+    "inheritedDescriptorPreflight": [
+      "socket",
+      "io_uring",
+      "io_uring-sqpoll",
+      "io_uring-registered-files",
+      "io_uring-fixed-sockets"
+    ],
+    "forbiddenStrategies": [
+      "process",
+      "local",
+      "standalone",
+      "worker",
+      "remote",
+      "no-sandbox",
+      "fallback"
+    ]
+  },
+  "containment": {
+    "namespace": "CLONE_NEWPID",
+    "userspaceCeilingMs": 10000,
+    "kernelCleanupBounded": false,
+    "pendingState": "pending-kernel-cleanup",
+    "releaseRecord": "D2B-BZLEXEC-SANDBOX-CONSUMING-REAP-RELEASE",
+    "runbook": "docs/contributing/critical-subsystems.md#bazel-pending-kernel-cleanup-quarantine"
+  }
+}
