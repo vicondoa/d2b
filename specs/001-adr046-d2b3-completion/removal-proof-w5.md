@@ -524,7 +524,8 @@ these are the deltas W5 produces.
 
 Net effect on the outstanding count: 36 rows lacking a proof becomes **33** -
 two proved here, one (line 735) retired as naming no path. The two proved rows
-move out of the W2 owner column entirely, so the W2 total falls from 6 to 4.
+move out of the W2 owner column entirely, and the retired row is no longer
+outstanding, so the W2 total falls from 6 to 3.
 No row is closed by assertion and no successor obligation is discharged.
 
 ## 8. The stopping condition, stated so a machine can evaluate it
