@@ -1,12 +1,26 @@
 <!--
 Sync Impact Report
 ==================
-Version change: 2.0.0 -> 2.1.0 (this amendment); 1.0.0 -> 2.0.0 (prior, same day)
-Rationale: MAJOR. Principle VI is redefined, not merely clarified. Behavior that
-the 1.0.0 text forbade - dispatching the next phase's implementation before the
-current phase's panel returns unanimous sign-off - is now permitted under four
-named conditions. That is a backward-incompatible governance redefinition per
-this document's own versioning policy.
+Version change: 2.1.0 -> 2.2.0 (this amendment)
+Rationale: MINOR. Principle IV gains a materially expanded, explicit path for
+correcting an approved plan, specification, or contract defect in the same
+coordinated change as its contract implementation. The change does not relax
+versioning, paired-artifact atomicity, drift gates, or review.
+
+Amendment 2.2.0 (2026-08-06): Approved contract-defect correction
+- Principle IV now permits one approved correction to amend the governing plan,
+  specification, or contract while moving the affected contract, schema,
+  reference documentation, emitter, consumer, generated artifacts, and tests
+  together.
+- Approval must precede implementation and bind the defect, exact governed
+  surfaces, version impact, and candidate snapshot. A vague intent to "fix
+  drift" is not approval.
+- The correction still requires every applicable version bump and drift gate.
+  It cannot be used to land a contract-only change, defer a paired artifact, or
+  treat stale prose as authority over committed passing code.
+- Rationale: an accepted artifact can itself contain a defect. Requiring a
+  second artificial sequencing step after the defect and coordinated repair
+  are already approved adds delay without improving contract consistency.
 
 Amendment 2.1.0 (2026-07-29): Bounded deferral and delivery memory
 - Principle VI gains a "Bounded deferral after eight rounds" clause: from round
@@ -38,11 +52,17 @@ Amendment 2.0.0 (2026-07-29): Pipelined dispatch
 - Accepted cost recorded in the principle text: rework, when a finding changes a
   contract that in-flight next-phase work already consumed.
 
-Modified principles: VI. Panel-Gated Multi-Phase Work (redefined)
+Modified principles:
+- IV. Contract-Driven Compatibility (expanded in 2.2.0)
+- VI. Panel-Gated Multi-Phase Work (redefined in 2.0.0 and expanded in 2.1.0)
 Added sections: none
 Removed sections: none
 
 Templates and artifacts requiring follow-up:
+- specs/001-adr046-d2b3-completion/ - the open Wave 5 contract defect may now
+  be corrected through one approved `/d2b-spec-edit` batch that assigns the
+  contract, schema, docs, generated artifacts, implementation, and tests to the
+  same coordinated change. Its analysis and plan panel must be rerun.
 - specs/001-adr046-d2b3-completion/spec.md - FR-025 and FR-036 restated for the
   pipeline; new FRs added for the strict panel/seal/merge ordering. DISCHARGED:
   FR-056 through FR-059 landed, FR-025 was narrowed to exit, and FR-057 states
@@ -144,9 +164,23 @@ relevant version, update the paired schema/doc, and land in the same
 change as the emitter/consumer edit. Drift gates (`xtask gen-*` +
 `git diff --exit-code`) are the enforcement mechanism and MUST NOT be
 disabled or worked around to land an out-of-sync artifact.
+
+An approved defect in a plan, specification, or contract MAY be corrected in
+the same coordinated change as the affected contract implementation. Approval
+MUST be recorded before implementation and MUST identify the defect, the exact
+governed surfaces, the required version impact, and the candidate snapshot.
+That change MUST move every affected contract definition, schema, reference
+document or governing specification, emitter, consumer, generated artifact,
+and test together. It MUST run the normal drift gates and panel review. This
+path does not permit a contract-only edit, a deferred paired artifact, a
+missing version bump, or a success-shaped compatibility fallback.
+
 Rationale: downstream consumers (host configs, sibling flakes, the broker,
 the daemon) depend on these contracts being exact; unversioned drift breaks
-them invisibly.
+them invisibly. Accepted planning or contract prose can itself be defective;
+once that defect and its complete repair are approved, splitting the prose and
+implementation into artificial sequential changes adds delay without making
+the resulting contract more exact.
 
 ### V. Test-Layer Discipline
 New test coverage MUST land at the lowest layer that can hermetically prove
@@ -322,4 +356,4 @@ described in the amendment procedure above. The version, ratification date,
 and last-amended date are recorded in the footer and MUST be updated
 together in any amending change.
 
-**Version**: 2.1.0 | **Ratified**: 2026-07-29 | **Last Amended**: 2026-07-29
+**Version**: 2.2.0 | **Ratified**: 2026-07-29 | **Last Amended**: 2026-08-06
