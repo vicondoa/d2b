@@ -33,6 +33,69 @@ DASHES=(
   $'\u2015' $'\u2212' $'\uFE58' $'\uFF0D'
 )
 
+# Only exact upstream blobs may bypass the dash scan. The hashes are repeated
+# here so the shell gate can fail closed without trusting a mutable metadata
+# file; check-bindings independently compares this list with UPSTREAM.json.
+CAVEMAN_VENDOR_DIR="third_party/caveman/v1.10.0"
+CAVEMAN_DASH_ADMISSIONS=(
+  "$CAVEMAN_VENDOR_DIR/LICENSE 5eb826cd03151bcc7cce3f80d40e87733237fedfc6c36d6908aca5fd650a0bdb"
+  "$CAVEMAN_VENDOR_DIR/skills/caveman/SKILL.md daf9cec496ebd039809d8236f99f17fa1b4beaadf8ce4e2d532d0da51d70afce"
+  "$CAVEMAN_VENDOR_DIR/skills/caveman-compress/SKILL.md 3167d62440eee99c0e5b224d7f8b8ebcfe37efba38bc5bbee24f0d00da72a688"
+)
+# Exact path-plus-hash admissions:
+# third_party/caveman/v1.10.0/LICENSE 5eb826cd03151bcc7cce3f80d40e87733237fedfc6c36d6908aca5fd650a0bdb
+# third_party/caveman/v1.10.0/skills/caveman/SKILL.md daf9cec496ebd039809d8236f99f17fa1b4beaadf8ce4e2d532d0da51d70afce
+# third_party/caveman/v1.10.0/skills/caveman-compress/SKILL.md 3167d62440eee99c0e5b224d7f8b8ebcfe37efba38bc5bbee24f0d00da72a688
+
+is_caveman_dash_admission() {
+  local path="$1"
+  local admission path_part
+  for admission in "${CAVEMAN_DASH_ADMISSIONS[@]}"; do
+    path_part=${admission%% *}
+    [ "$path" = "$path_part" ] && return 0
+  done
+  return 1
+}
+
+validate_caveman_dash_admissions() {
+  local root="$1"
+  local admission path_part expected actual file rel
+  local vendor="$root/$CAVEMAN_VENDOR_DIR"
+  local -a vendor_files=()
+
+  # Fixtures without the vendor tree exercise the general dash rule. A real
+  # repository or a fixture that includes the tree must carry the complete
+  # closed admission set.
+  [ -d "$vendor" ] || return 0
+
+  for admission in "${CAVEMAN_DASH_ADMISSIONS[@]}"; do
+    path_part=${admission%% *}
+    expected=${admission#* }
+    file="$root/$path_part"
+    [ -f "$file" ] \
+      || fail "Caveman dash admission is missing $path_part"
+    actual=$(sha256sum "$file" | awk '{ print $1 }') \
+      || fail "cannot hash Caveman dash admission $path_part"
+    [ "$actual" = "$expected" ] \
+      || fail "Caveman dash admission hash mismatch for $path_part"
+  done
+
+  while IFS= read -r -d '' file; do
+    vendor_files+=("${file#"$root/"}")
+  done < <(find "$vendor" -type f -print0)
+  for rel in "${vendor_files[@]}"; do
+    case "$rel" in
+      "$CAVEMAN_VENDOR_DIR/UPSTREAM.json"|"$CAVEMAN_VENDOR_DIR/LICENSE"|\
+      "$CAVEMAN_VENDOR_DIR/skills/caveman/SKILL.md"|\
+      "$CAVEMAN_VENDOR_DIR/skills/caveman-compress/SKILL.md")
+        ;;
+      *)
+        fail "Caveman vendor file is outside the closed allowlist: $rel"
+        ;;
+    esac
+  done
+}
+
 # A process marker is a delimited wave (`W3`, `W4-fu`, `W1fu3`), phase
 # (`P6`, `P2.3`, `ph6`), follow-up (`fu3`), high finding (`H20`),
 # contextual finding/revision (`finding M2`, `revision R5`), or reviewer finding
@@ -178,6 +241,17 @@ scan_dashes() {
     || fail "dash scan could not enumerate files (enumerator exited $enum_status)"
   [ "${#files[@]}" -gt 0 ] || fail "dash scan found no files in its scan root"
 
+  validate_caveman_dash_admissions "$root"
+
+  local -a scan_files=()
+  for f in "${files[@]}"; do
+    # Admission is path-plus-hash, not a path-only exemption. The validation
+    # above ran before this filter, so a changed blob cannot disappear from
+    # the scan silently.
+    is_caveman_dash_admission "$f" || scan_files+=("$f")
+  done
+  [ "${#scan_files[@]}" -gt 0 ] || ok "all files are exact Caveman admissions"
+
   for dash in "${DASHES[@]}"; do
     patterns+=(-e "$dash")
   done
@@ -191,7 +265,7 @@ scan_dashes() {
   # greater must fail the gate rather than report a pass having scanned nothing.
   # `if hits=$(...)` suspends errexit while capturing the command-substitution
   # status.
-  if hits=$(cd "$root" && grep -nHIF "${patterns[@]}" -- "${files[@]}" 2>&1); then
+  if hits=$(cd "$root" && grep -nHIF "${patterns[@]}" -- "${scan_files[@]}" 2>&1); then
     grep_status=0
   else
     grep_status=$?

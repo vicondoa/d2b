@@ -71,6 +71,26 @@ fn fixture_tree(name: &str, body: &str) -> PathBuf {
     root
 }
 
+fn exact_vendor_fixture(name: &str) -> PathBuf {
+    let root = fixture_tree(name, "clean text\n");
+    let vendor = root.join("third_party/caveman/v1.10.0");
+    fs::create_dir_all(vendor.join("skills/caveman")).expect("create vendor tree");
+    fs::create_dir_all(vendor.join("skills/caveman-compress")).expect("create vendor tree");
+    for relative in [
+        "LICENSE",
+        "UPSTREAM.json",
+        "skills/caveman/SKILL.md",
+        "skills/caveman-compress/SKILL.md",
+    ] {
+        fs::copy(
+            repo_root().join("third_party/caveman/v1.10.0").join(relative),
+            vendor.join(relative),
+        )
+        .expect("copy exact vendor fixture");
+    }
+    root
+}
+
 #[test]
 fn scan_fails_on_every_banned_codepoint_and_names_the_line() {
     for (dash, label) in BANNED {
@@ -97,6 +117,72 @@ fn scan_passes_on_a_clean_tree() {
     assert!(
         success,
         "the tier0 dash scan must pass a tree whose only dash is the ASCII hyphen; output:\n{output}"
+    );
+}
+
+#[test]
+fn scan_passes_on_exact_caveman_vendor_admissions() {
+    let root = exact_vendor_fixture("exact-vendor");
+    let (success, output) = scan(&root);
+    assert!(
+        success,
+        "exact upstream Caveman blobs are the only admitted vendor files; output:\n{output}"
+    );
+}
+
+#[test]
+fn modified_caveman_vendor_blob_loses_dash_admission() {
+    let root = exact_vendor_fixture("modified-vendor");
+    let path = root.join("third_party/caveman/v1.10.0/LICENSE");
+    let mut bytes = fs::read(&path).expect("read vendor fixture");
+    bytes.push(b'x');
+    fs::write(path, bytes).expect("modify vendor fixture");
+
+    let (success, output) = scan(&root);
+    assert!(
+        !success,
+        "a modified admitted blob must fail closed; output:\n{output}"
+    );
+    assert!(
+        output.contains("hash mismatch"),
+        "the failure must name the hash admission, not pass for an unrelated reason; output:\n{output}"
+    );
+}
+
+#[test]
+fn missing_caveman_vendor_blob_fails_closed() {
+    let root = exact_vendor_fixture("missing-vendor");
+    fs::remove_file(root.join("third_party/caveman/v1.10.0/skills/caveman/SKILL.md"))
+        .expect("remove vendor fixture");
+
+    let (success, output) = scan(&root);
+    assert!(
+        !success,
+        "a missing admitted blob must fail closed; output:\n{output}"
+    );
+    assert!(
+        output.contains("admission is missing"),
+        "the failure must name the missing admission; output:\n{output}"
+    );
+}
+
+#[test]
+fn extra_caveman_vendor_file_is_not_admitted() {
+    let root = exact_vendor_fixture("extra-vendor");
+    fs::write(
+        root.join("third_party/caveman/v1.10.0/extra.md"),
+        "extra file with \u{2014}\n",
+    )
+    .expect("write extra vendor fixture");
+
+    let (success, output) = scan(&root);
+    assert!(
+        !success,
+        "an extra vendor file must not inherit the admission; output:\n{output}"
+    );
+    assert!(
+        output.contains("outside the closed allowlist"),
+        "the failure must name the closed vendor allowlist; output:\n{output}"
     );
 }
 
@@ -200,6 +286,27 @@ fn the_gate_matches_codepoints_not_literal_characters() {
         gate.contains("scan_dashes \"$ROOT\""),
         "{GATE} must run the repository-wide scan in its main body, not only in scan mode"
     );
+    assert!(
+        gate.contains("CAVEMAN_DASH_ADMISSIONS"),
+        "{GATE} must carry an explicit hash-scoped Caveman dash admission"
+    );
+    assert!(
+        gate.contains("validate_caveman_dash_admissions"),
+        "{GATE} must validate Caveman admissions before filtering them"
+    );
+    for expected in [
+        "third_party/caveman/v1.10.0/LICENSE",
+        "third_party/caveman/v1.10.0/skills/caveman/SKILL.md",
+        "third_party/caveman/v1.10.0/skills/caveman-compress/SKILL.md",
+        "5eb826cd03151bcc7cce3f80d40e87733237fedfc6c36d6908aca5fd650a0bdb",
+        "daf9cec496ebd039809d8236f99f17fa1b4beaadf8ce4e2d532d0da51d70afce",
+        "3167d62440eee99c0e5b224d7f8b8ebcfe37efba38bc5bbee24f0d00da72a688",
+    ] {
+        assert!(
+            gate.contains(expected),
+            "{GATE} must pin the exact Caveman admission value {expected}"
+        );
+    }
 }
 
 #[test]

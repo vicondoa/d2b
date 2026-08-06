@@ -69,6 +69,15 @@ const GATE = "scripts/copilot/check-bindings.mjs";
 const REQUIRED_INPUTS = [
   ".github/agents",
   ".github/skills",
+  "AGENTS.md",
+  "tests/AGENTS.md",
+  "labs/venus-vulkan-video/AGENTS.md",
+  "docs/contributing",
+  "third_party/caveman/v1.10.0",
+  "tests/tools/tier0-first-pass.sh",
+  "packages/d2b-contract-tests/tests/policy_dash_gate.rs",
+  "scripts/copilot/prompt-corpus.mjs",
+  "scripts/copilot/prompt-corpus-manifest.json",
   "packages/xtask/src/delivery/model.rs",
   "packages/xtask/src/delivery/panel.rs",
   "packages/xtask/src/delivery/mod.rs",
@@ -85,6 +94,15 @@ const REQUIRED_INPUTS = [
 const REQUIRED_FAILURE_TEXT = {
   ".github/agents": ".github/agents does not exist",
   ".github/skills": "the panel record helper is required",
+  "AGENTS.md": "prompt corpus check failed",
+  "tests/AGENTS.md": "prompt corpus check failed",
+  "labs/venus-vulkan-video/AGENTS.md": "prompt corpus check failed",
+  "docs/contributing": "prompt corpus check failed",
+  "third_party/caveman/v1.10.0": "Caveman vendor root",
+  "tests/tools/tier0-first-pass.sh": "tests/tools/tier0-first-pass.sh is missing",
+  "packages/d2b-contract-tests/tests/policy_dash_gate.rs": "policy_dash_gate.rs is missing",
+  "scripts/copilot/prompt-corpus.mjs": "prompt-corpus.mjs is missing",
+  "scripts/copilot/prompt-corpus-manifest.json": "prompt-corpus-manifest.json is missing",
   "packages/xtask/src/delivery/model.rs": "cannot read model.rs",
   "packages/xtask/src/delivery/panel.rs": "cannot read panel.rs",
   "packages/xtask/src/delivery/mod.rs": "cannot read mod.rs",
@@ -149,6 +167,21 @@ function mutateJson(dir, relativePath, fn) {
   const state = JSON.parse(readFileSync(path, "utf8"));
   fn(state);
   writeFileSync(path, `${JSON.stringify(state, null, 2)}\n`);
+}
+
+function mutateFile(dir, relativePath, fn) {
+  const path = join(dir, relativePath);
+  const source = readFileSync(path, "utf8");
+  const next = fn(source);
+  if (next === source) {
+    throw new Error(`fixture: mutation of ${relativePath} was a no-op`);
+  }
+  writeFileSync(path, next);
+}
+
+function removeFile(dir, relativePath) {
+  const path = join(dir, relativePath);
+  rmSync(path);
 }
 
 // Replace the helper's ROLES declaration with arbitrary text. Taking the whole
@@ -237,6 +270,15 @@ function mutateBar(dir, seat, fn) {
   writeFileSync(p, next);
 }
 
+function cavemanBlock(dir, agent = "d2b-implementer") {
+  const source = readFileSync(join(dir, ".github", "agents", `${agent}.agent.md`), "utf8");
+  const start = source.indexOf("<!-- BEGIN D2B-CAVEMAN-COMMUNICATION -->");
+  const endMarker = "<!-- END D2B-CAVEMAN-COMMUNICATION -->";
+  const end = source.indexOf(endMarker, start);
+  if (start < 0 || end < 0) throw new Error("fixture: optional Caveman block is missing");
+  return source.slice(start, end + endMarker.length);
+}
+
 // A negative case asserts both a nonzero exit and a substring from the roster
 // guard itself. Exit status alone would pass if the gate failed for some
 // unrelated reason, which is precisely how a guard that no longer fires hides.
@@ -245,6 +287,200 @@ const CASES = [
     name: "baseline: an unmutated fixture passes",
     mutate: () => {},
     expectExit: 0,
+  },
+  {
+    name: "modified admitted Caveman blob is rejected",
+    mutate: (dir) =>
+      mutateFile(dir, "third_party/caveman/v1.10.0/LICENSE", (text) => `${text}x`),
+    expectExit: 1,
+    expectText: "hash mismatch",
+  },
+  {
+    name: "missing Caveman license is rejected",
+    mutate: (dir) => removeFile(dir, "third_party/caveman/v1.10.0/LICENSE"),
+    expectExit: 1,
+    expectText: "Caveman vendor file LICENSE is missing",
+  },
+  {
+    name: "extra Caveman runtime file is rejected",
+    mutate: (dir) =>
+      writeFileSync(
+        join(dir, "third_party", "caveman", "v1.10.0", "scripts.py"),
+        "runtime\n",
+      ),
+    expectExit: 1,
+    expectText: "outside the closed allowlist",
+  },
+  {
+    name: "changed shell dash admission hash is rejected",
+    mutate: (dir) =>
+      mutateFile(
+        dir,
+        "tests/tools/tier0-first-pass.sh",
+        (text) => text.replaceAll(
+          "5eb826cd03151bcc7cce3f80d40e87733237fedfc6c36d6908aca5fd650a0bdb",
+          "0".repeat(64),
+        ),
+      ),
+    expectExit: 1,
+    expectText: "tier-0 dash gate is missing required binding text",
+  },
+  {
+    name: "missing optional Caveman agent marker is rejected",
+    mutate: (dir) =>
+      mutateFile(dir, ".github/agents/panel-rust.agent.md", (text) => {
+        const start = text.indexOf("<!-- BEGIN D2B-CAVEMAN-COMMUNICATION -->");
+        const endMarker = "<!-- END D2B-CAVEMAN-COMMUNICATION -->";
+        const end = text.indexOf(endMarker, start) + endMarker.length;
+        return `${text.slice(0, start)}${text.slice(end)}`;
+      }),
+    expectExit: 1,
+    expectText: "Caveman-enabled agent set",
+  },
+  {
+    name: "duplicated optional Caveman agent marker is rejected",
+    mutate: (dir) =>
+      mutateFile(
+        dir,
+        ".github/agents/panel-rust.agent.md",
+        (text) => `${text}\n${cavemanBlock(dir, "panel-rust")}\n`,
+      ),
+    expectExit: 1,
+    expectText: "must have exactly one start and end marker",
+  },
+  {
+    name: "Caveman marker on architect is rejected",
+    mutate: (dir) =>
+      mutateFile(
+        dir,
+        ".github/agents/d2b-architect.agent.md",
+        (text) => `${text}\n${cavemanBlock(dir)}\n`,
+      ),
+    expectExit: 1,
+    expectText: "unapproved agent",
+  },
+  {
+    name: "panel verdict JSON drift is rejected",
+    mutate: (dir) =>
+      mutateFile(
+        dir,
+        ".github/agents/panel-test.agent.md",
+        (text) => text.replace('"signoff": true', '"approved": true'),
+      ),
+    expectExit: 1,
+    expectText: "panel verdict JSON output schema changed",
+  },
+  {
+    name: "non-owner direct feature write claim is rejected",
+    mutate: (dir) =>
+      mutateFile(
+        dir,
+        ".github/skills/speckit-plan/SKILL.md",
+        (text) => text.replace(
+          "existing=editor",
+          "existing=direct-write",
+        ),
+      ),
+    expectExit: 1,
+    expectText: "feature-artifact routing marker is missing or duplicated",
+  },
+  {
+    name: "editor root escape wording is rejected",
+    mutate: (dir) =>
+      mutateFile(
+        dir,
+        ".github/skills/d2b-spec-edit/SKILL.md",
+        (text) => text.replace(
+          "FEATURE_DIR`: one existing directory under the repository's `specs/`",
+          "FEATURE_DIR`: one existing directory under the repository root",
+        ),
+      ),
+    expectExit: 1,
+    expectText: "missing fail-closed ownership text",
+  },
+  {
+    name: "prompt corpus membership drift is rejected",
+    mutate: (dir) =>
+      mutateJson(dir, "scripts/copilot/prompt-corpus-manifest.json", (manifest) => {
+        manifest.membership.push("not-in-corpus.md");
+      }),
+    expectExit: 1,
+    expectText: "prompt corpus check failed",
+  },
+  {
+    name: "prompt heading fingerprint drift is rejected",
+    mutate: (dir) =>
+      mutateFile(dir, "docs/contributing/README.md", (text) =>
+        text.replace("# Contributing docs", "# Changed heading")),
+    expectExit: 1,
+    expectText: "prompt corpus check failed",
+  },
+  {
+    name: "prompt fenced command fingerprint drift is rejected",
+    mutate: (dir) =>
+      mutateFile(dir, "docs/contributing/gates-and-lints.md", (text) =>
+        text.replace("make check-tier0", "make check-tier0 --changed")),
+    expectExit: 1,
+    expectText: "prompt corpus check failed",
+  },
+  {
+    name: "prompt inline-code fingerprint drift is rejected",
+    mutate: (dir) =>
+      mutateFile(dir, "AGENTS.md", (text) =>
+        text.replace("git+file://$ROOT", "git+file://$ROOT2")),
+    expectExit: 1,
+    expectText: "prompt corpus check failed",
+  },
+  {
+    name: "prompt link fingerprint drift is rejected",
+    mutate: (dir) =>
+      mutateFile(dir, "docs/contributing/architecture.md", (text) =>
+        text.replace(
+          "https://github.com/vicondoa/entrablau.nix",
+          "https://github.com/vicondoa/entrablau.nix-bad",
+        )),
+    expectExit: 1,
+    expectText: "prompt corpus check failed",
+  },
+  {
+    name: "prompt number fingerprint drift is rejected",
+    mutate: (dir) =>
+      mutateFile(dir, "docs/contributing/copilot-agents.md", (text) =>
+        text.replace("13 agents", "14 agents")),
+    expectExit: 1,
+    expectText: "prompt corpus check failed",
+  },
+  {
+    name: "prompt normative-token fingerprint drift is rejected",
+    mutate: (dir) =>
+      mutateFile(dir, "AGENTS.md", (text) =>
+        text.replace("MUST", "SHOULD")),
+    expectExit: 1,
+    expectText: "prompt corpus check failed",
+  },
+  {
+    name: "prompt list hierarchy fingerprint drift is rejected",
+    mutate: (dir) =>
+      mutateFile(dir, "AGENTS.md", (text) =>
+        text.replace("- **Existing code is canon.**", "  - **Existing code is canon.**")),
+    expectExit: 1,
+    expectText: "prompt corpus check failed",
+  },
+  {
+    name: "prompt table-shape fingerprint drift is rejected",
+    mutate: (dir) =>
+      mutateFile(dir, "docs/contributing/copilot-agents.md", (text) =>
+        text.replace("| --- | --- |", "| --- | --- | --- |")),
+    expectExit: 1,
+    expectText: "prompt corpus check failed",
+  },
+  {
+    name: "prompt JSON-example fingerprint drift is rejected",
+    mutate: (dir) =>
+      mutateFile(dir, "docs/contributing/panel-review.md", (text) =>
+        text.replace('"engineer": "software"', '"engineer": "tester"')),
+    expectExit: 1,
+    expectText: "prompt corpus check failed",
   },
   {
     name: "an additional installed integration is rejected",
