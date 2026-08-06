@@ -75,8 +75,9 @@ top-level shell gate. Every heavy lane runs through the two-slot `xtask heavy-ga
 **Target Platform**: `x86_64-linux` NixOS host with KVM, single trusted user. Graphics paths
 are x86_64-only by existing platform gate.
 
-**Project Type**: NixOS module framework plus a multi-crate Rust control plane (35 workspace
-members today, plus two deliberately excluded standalone workspaces)
+**Project Type**: NixOS module framework plus a multi-crate Rust control plane (58 workspace
+members at committed HEAD c758a377703c523edd88a987e48a6f30034e1912, plus two deliberately
+excluded standalone workspaces)
 
 **Performance Goals**: Empty-store readiness <=500 ms; p95 local Get and bounded List <=2 ms;
 p95 crash-safe single-resource mutation <=10 ms; p95 durable commit to controller handler
