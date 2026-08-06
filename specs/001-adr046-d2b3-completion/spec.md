@@ -68,22 +68,23 @@ trust model.
 
 **Approved C1 correction**: Constitution 2.2.0 permits an approved plan, specification, or
 contract defect to be corrected in the same coordinated change as the affected contract
-implementation. The accepted `ADR-046-provider-system-core` member specification already
-defines the stable internal handler names `system_core_host` and `system_core_user` and
-requires name/phase/lastReconciledAt entries in `Zone.status.handlers`. The committed,
-unreleased v3 `ZoneHandlerName` closed enum omitted those allowed values. T605 owns the
-coordinated correction: add `ZoneHandlerName::SystemCoreHost` and
-`ZoneHandlerName::SystemCoreUser`, serialized by the existing kebab-case rule as
-`system-core-host` and `system-core-user`, and update every paired compiler-derived API
-snapshot, Rust serialization and duplicate-rejection test, lowest-layer contract/policy
-guard, and reference status surface. T595 consumes the two variants in the production
-emitter, and T599 reconciles the remaining status consumers. All paired Rust contract,
-tests, API snapshots, reference status docs, consumers/emitters, generator no-drift proof,
-and panel evidence land in the same Wave 5 PR.
+implementation. The accepted `ADR-046-provider-system-core` member specification currently
+uses `system_core_host` and `system_core_user` for both internal telemetry labels and
+serialized status names, while the committed v3 `ZoneHandlerName` closed enum uses kebab-case
+wire serialization and omitted those variants. T605 owns the coordinated correction: add
+`ZoneHandlerName::SystemCoreHost` and `ZoneHandlerName::SystemCoreUser`, serialize them only as
+`system-core-host` and `system-core-user`, retain the underscore spellings only as internal
+telemetry labels, bump both governing normative specification versions, and update every
+paired compiler-derived API snapshot, Rust serialization and duplicate/underscore-rejection
+test, lowest-layer contract/policy guard, and reference status surface. T595 consumes the two
+variants in the production emitter, and T599 reconciles the remaining status consumers. All
+paired normative specs and version metadata, Rust contract/tests, API snapshots, reference
+status docs, consumers/emitters, generator no-drift proof, and panel evidence land in the
+same Wave 5 PR.
 
-This is a correction of two omitted values in an unreleased closed status enum. It adds no
-field or operation and changes no desired-state ResourceType schema. Therefore it requires no
-`apiVersion`, `schemaVersion`, `manifestVersion`, `bundleVersion`, or wire-field version bump.
+The C1 correction itself adds no field or operation and changes no desired-state ResourceType
+schema. Therefore it requires no `apiVersion`, JSON `schemaVersion`, `manifestVersion`,
+`bundleVersion`, or C1-specific wire-field version bump.
 The Zone desired-spec artifact
 `docs/reference/schemas/v3/core.d2bus.org_Zone.schema.json` remains unchanged and T605 must
 prove generator output is byte-identical rather than hand-editing it. C1 is resolved in these
@@ -330,13 +331,19 @@ artifacts, complete Story 1, and exercise each desktop companion against it.
   single-owner ComponentSession admitted by the authoritative Zone registrar and routed by
   the ZoneBus. The registrar MUST derive the subject from verified peer evidence in its
   private state and propagate that authoritative subject through every Resource API
-  operation. A caller-supplied subject, daemon peer role treated as a resource subject,
+  operation. Unix peer evidence MUST bind `SO_PEERCRED` to a live pidfd and expected process
+  generation/cgroup evidence; restart MUST rediscover the peer and open a fresh pidfd, while
+  numeric-PID reuse, mismatch, `ESRCH`, or ambiguity denies admission. A caller-supplied
+  subject, daemon peer role treated as a resource subject,
   unauthenticated direct service call, fixed fixture endpoint, or readiness flag MUST NOT
   satisfy this requirement.
 - **FR-067**: Wave 5 MUST establish `ZoneResourceRuntime` as the one Zone resource-policy
   owner in the daemon-owned Zone runtime. Initial installation and restart recovery MUST use
-  one private, sealed, non-`Clone`, one-shot `PolicyBootstrapRead` capability owned by that
-  runtime. The capability MAY read only the Zone's policy-input resource envelopes at the
+  one private, sealed, non-`Clone`, non-`Copy`, one-shot `PolicyBootstrapRead` capability
+  owned by that runtime and minted only by one private issuer. It MUST expose no public
+  constructor, field, accessor, `Default`, conversion, capability trait implementation, or
+  reconstruction path, and compiler/API-surface/external compile-fail seals MUST enforce
+  those absences. The capability MAY read only the Zone's policy-input resource envelopes at the
   exact durable nonzero policy revision needed to construct the first immutable `PolicySet`;
   it MUST carry no public Resource API subject, expose no general resource read or mutation
   operation, and become unusable when that installation attempt consumes it.
@@ -375,14 +382,21 @@ artifacts, complete Story 1, and exercise each desktop companion against it.
   specific remediation. Wave 5 does not wait for the remaining Wave 6 Provider dossiers.
   Partial publication, a bare readiness boolean, or a status value without the live owned
   registration and handler handles is forbidden.
-- **FR-070**: Wave 5 MUST provide one production audit owner per Zone runtime that drains the
-  durable mutation audit outbox into the authoritative audit sink. Replay after restart MUST
-  be idempotent by operation identity and mutation ordinal. Mutation success MUST NOT be
-  acknowledged until the required audit record is durably appended and the matching outbox
-  entry is durably completed. If the resource mutation commits but append or outbox
-  completion cannot finish, the API MUST NOT return ordinary success or imply rollback. It
-  MUST return the indeterminate semantic state `CommittedPendingAudit` through the existing
-  layered `ResourceStatus` composite: `ResourceStatus.phase` is
+- **FR-070**: Wave 5 MUST provide one production audit owner per Zone runtime. The same
+  transaction that commits each privileged resource mutation MUST create an immutable
+  authoritative journal row for each bounded mutation ordinal. Segment export completion is
+  separate mutable state and MUST NOT delete or rewrite that authority. Journal, segment, and
+  export records MUST use domain-separated fixed digests for operation, correlation,
+  authoritative subject, Zone, and resource identifiers; raw values MUST remain private and
+  absent from audit output, errors, logs, metrics, spans, and redacted `Debug`. Only validated
+  propagated trace context may be retained. Replay after restart MUST be idempotent by fixed
+  operation digest and mutation ordinal. Configured retention days, record limits, and segment
+  byte limits MUST be enforced at startup and rotation; prune failure MUST produce typed
+  degraded health and block publication. Mutation success MUST NOT be acknowledged until the
+  required segment export and its completion state are durable. If export cannot finish after
+  the mutation and authoritative row commit, the API MUST NOT return ordinary success or imply
+  rollback. It MUST return `CommittedPendingAudit` through the layered `ResourceStatus`
+  composite: `ResourceStatus.phase` is
   `ResourcePhase::Degraded`; `ResourceStatus.outcome.code` is
   `StatusCode("committed-pending-audit")` with retryable, safe remediation and no raw sink
   detail; `ResourceStatus.update.state` is `UpdateState::Blocked`; and
@@ -390,15 +404,20 @@ artifacts, complete Story 1, and exercise each desktop companion against it.
   redacted condition, outcome, and update fields carry only the semantic status and
   instructions to retry with the same ID or inspect status. They MUST NOT expose a subject,
   mutation payload, raw sink error, or a claim that the commit was undone. The affected Zone
-  MUST remain unpublished and degraded until the drainer completes. A retry with the same
-  operation ID MUST resume or observe the same committed mutation without reapplying it,
-  return the same pending state while drain is incomplete, and return its one stored final
-  result after recovery. A different operation ID follows ordinary expected-revision and
-  conflict semantics. Restart replay MUST key deduplication by operation ID plus mutation
-  ordinal and produce exactly one logical audit record. An unavailable or disabled callback,
-  an undrained outbox, a dropped record, or an audit record not bound to the mutation MUST
-  fail closed. `ResourceUpdateStatus` does not acquire a phase or status-code member, and
-  this semantic code adds no enum variant, wire field, or schema version.
+  MUST remain unpublished and degraded until export completes. Before same-ID status or
+  resumption, the implementation MUST match a persisted replay-binding digest over the
+  registrar-derived subject, Zone, canonical semantic request, target, verb, exact expected
+  revision, operation ID, and idempotency data. Cross-subject, cross-Zone, altered-request,
+  target, verb, revision, idempotency, or restart mismatch MUST be denied and audited without
+  observation or reapplication. An exact retry returns the same pending state while export is
+  incomplete and its one stored final result after recovery. A different operation ID follows
+  ordinary expected-revision and conflict semantics. Every mutation response, including
+  `DeleteResponse` and batch ordinals, MUST represent the composite with the additive bounded
+  protobuf `PendingAuditStatus`; ordinary success omits it. This changes the ResourceService
+  schema fingerprint but not Resource JSON `apiVersion` or `schemaVersion`, and
+  `ResourceUpdateStatus` does not acquire a phase or status-code member. An unavailable or
+  disabled audit owner, missing authoritative row, incomplete export, dropped record, or
+  unbound record MUST fail closed.
 - **FR-071**: Persisted store, policy, active-configuration, and controller identities MUST
   reopen after their mutable revisions advance. Immutable store and Zone identity MAY be
   checked at open, but mutable revisions MUST be recovered from durable state rather than
@@ -416,24 +435,31 @@ artifacts, complete Story 1, and exercise each desktop companion against it.
   API-snapshot, paired-reference, and unchanged Zone desired-schema drift results. T604 MUST
   additionally prove on that same candidate that an operator Nix declaration for the
   representative Guest, Volume, Network, and Device emits the installed per-Zone bundle,
-  activates through the production daemon, reaches a real owned effect/readiness or precise
-  actionable refusal for each resource, and removes one declaration with dependency-safe
-  cleanup while unrelated resources remain intact. Direct `WatchService` calls, fixed or
-  fake endpoints, test-only subject injection, stale evidence from an older tree, and
+  activates on initial startup and public declaration/removal NixOS switches without manual
+  daemon restart or private reload, reaches a real owned effect and readiness for every
+  supported representative resource, and removes one declaration with dependency-safe
+  cleanup while unrelated resources remain ready and intact. Actionable refusals are separate
+  negative cases and cannot satisfy this positive story. Direct `WatchService` calls, fixed
+  or fake endpoints, test-only subject injection, stale evidence from an older tree, and
   historical proof artifacts are not evidence for this gate. Before T589 may resume, T603
-  MUST write the closed external receipt at
+  MUST write the closed immutable external authorization receipt at
   `.scratch/autopilot/adr046w5/reconciliation.json`, account for exactly every T073-T218
-  obligation against the current converged Wave 5 commit and delivery records, and bind both
-  a current cross-artifact analysis result and a unanimous plan-panel receipt to the exact
-  amended feature-artifact snapshot and unambiguous branch/candidate identity. T605 appears
-  only as future work after resume, never as a 147th obligation row or progress checkbox. If
-  any row is open, T603 remains unchecked and no checkbox changes. Only when all 146 rows are
-  satisfied, analysis has no unresolved HIGH or CRITICAL finding, and unanimous plan signoff
-  is current may T603 route one `/d2b-spec-edit` batch whose only feature changes check
-  T073-T218 and T603 after the editor recomputes every identity. T589 MUST require the editor
-  progress receipt and those checked boxes. An absent, stale, ambiguous, structurally open,
-  or identity-mismatched receipt, any unaccounted prior obligation, or any direct integrator
-  checkbox edit MUST block resume.
+  obligation against clean resume base B and delivery records, bind repository identity plus
+  a repository-relative feature path, and bind both current cross-artifact analysis and
+  unanimous plan-panel receipts to B and pre-edit snapshot P. The validator MUST derive the
+  sole authorized post-edit snapshot Q for the 147 checkbox changes. T605 appears only as
+  future work after resume, never as a 147th obligation row or 148th checkbox transition. If
+  any row is open, T603 remains unchecked and no checkbox changes. Only 146 satisfied rows,
+  clean B/P identity, analysis with no unresolved HIGH or CRITICAL finding, and unanimous
+  plan signoff authorize `/d2b-spec-edit`. The Wave 5 integrator alone owns dedicated checkbox
+  commit C, whose sole parent MUST be B and whose only diff MUST be P-to-Q. The prepare,
+  apply, and finalize protocol MUST resume safely from exact B/P, B/Q, or C/Q and refuse every other
+  state. T589 MUST require the finalized progress receipt, clean HEAD C, and those checked
+  boxes. T602 later validates B/P, C/Q, exact `C^ = B`, C as an ancestor of final candidate F,
+  separate T600/T601 evidence bound to F and F's tree, HEAD exactly F, and no staged,
+  unstaged, or non-ignored untracked state. An absent, stale, ambiguous, structurally open,
+  path-raced, or identity-mismatched receipt, any unaccounted prior obligation, or any
+  unauthorized checkbox edit MUST block resume.
 - **FR-073**: D106 remains binding in the completed production path.
   `d2b-resource-store` and `d2b-resource-store-redb` MUST NOT deserialize, import, compile,
   evaluate, or own `Role`, `RoleBinding`, `PolicySet`, or other RBAC policy DTOs. Policy
@@ -442,9 +468,13 @@ artifacts, complete Story 1, and exercise each desktop companion against it.
   invariants, and MAY only narrow an authorized mutation.
 - **FR-074**: Wave 5 MUST reconcile the desktop-wrapper, companion, audio, USB, and
   security-key CLI reference promises with the exact emitted CLI and machine-readable
-  behavior. A documented command or field MUST either exist and pass its contract test or be
-  described as unavailable through the emitted capability or typed refusal state. Reference
-  documentation MUST NOT promise an absent command, field, fallback, or production route.
+  behavior. A documented command or field MUST exist and pass its contract test. Candidate
+  absence is a defect unless the same change follows the explicit parity or FR-042 retirement
+  path with a named replacement, migration guidance, owner, restoring condition, release
+  treatment, and contract coverage. A typed unavailable state is valid only when the frozen
+  contract already defines it or that explicit path introduces it; candidate absence alone
+  never authorizes rewriting the promise. Reference documentation MUST NOT invent an absent
+  command, field, fallback, or production route.
 
 #### Provider model
 
@@ -956,22 +986,30 @@ Delegation is not omission. Every delegated obligation is enumerated in
 - **SC-030**: On the exact Wave 5 candidate, every successful Resource API request and watch
   is traceable to one registrar-admitted ComponentSession and its authoritative subject, and
   100 percent of attempted cross-Zone or self-named-subject accesses are denied and audited.
+  Unix admission is bound to a live pidfd and expected generation/cgroup evidence; restart
+  opens a fresh pidfd, and PID reuse, mismatch, `ESRCH`, and ambiguity are denied.
 - **SC-031**: Crash injection at every boundary from generation commit through effect
   completion leaves zero lost effects and zero lost cleanup intents after restart. Every
   stale, zero, or wrong-UID cleanup completion is denied without changing durable state.
-- **SC-032**: For every ordinary successful mutation in the audit matrix, the authoritative
-  audit record and completed outbox state are durable before success is returned. At every
-  commit-to-audit crash boundary, a committed mutation instead returns
-  `CommittedPendingAudit` as `ResourceStatus.phase = ResourcePhase::Degraded`,
+- **SC-032**: For every privileged mutation in the audit matrix, an immutable authoritative
+  journal row commits transactionally with the mutation before any success-shaped effect.
+  For every ordinary successful mutation, append-only segment export and its separate
+  completion state are durable before success is returned. At every post-commit export crash
+  boundary, the mutation instead returns `CommittedPendingAudit` through the additive
+  protobuf status field as `ResourceStatus.phase = ResourcePhase::Degraded`,
   `ResourceStatus.outcome.code = StatusCode("committed-pending-audit")`,
   `ResourceStatus.update.state = UpdateState::Blocked`, and
   `ResourceStatus.update.operation_id = Some(original_operation_id)`. Its bounded, redacted
   condition, outcome, and update fields expose only safe same-ID retry/status remediation.
   It leaves the Zone unpublished and degraded and never reports rollback. Same-ID retries
-  apply the mutation zero additional times and converge on one final result; a different-ID
-  retry obeys revision/conflict rules. Restart replay produces zero missing records and zero
-  duplicate logical records by operation ID plus mutation ordinal, without adding a field,
-  enum variant, or schema version.
+  with an exact replay-binding match apply the mutation zero additional times and converge on
+  one final result; cross-subject, cross-Zone, altered-request/target/verb/revision/
+  idempotency, and restart mismatches are denied and audited; a different-ID retry obeys
+  revision/conflict rules. Restart replay produces zero missing records and zero duplicate
+  logical exports by fixed operation digest plus mutation ordinal. Raw operation,
+  correlation, subject, Zone, and resource canaries occur zero times in audit/export/error/
+  log/metric/span/Debug output. Configured retention and segment limits hold, and a prune
+  failure produces typed degraded health.
 - **SC-033**: Removing the `Provider/system-core` registration or either required
   `Zone.status.handlers[]` record in turn prevents publication of only the affected Zone.
   Acceptance also rejects duplicate records, a missing record, a wrong `name`, and an
@@ -981,18 +1019,22 @@ Delegation is not omission. Every delegated obligation is enumerated in
   handlers; a boolean substitute fails the test. In the multi-Zone startup and shutdown
   matrix, every unrelated Zone is visited and remains operable, and every affected Zone
   reports a specific actionable refusal.
-- **SC-034**: T603's external receipt contains exactly the closed task-ID set T073-T218 with
-  one `satisfied|open` row each and exact snapshot/tip identities. Any open row leaves T603
-  unchecked and changes no checkbox. Only 146 satisfied rows, analysis with no unresolved
-  HIGH or CRITICAL finding, and a current unanimous plan panel authorize the sole
-  `/d2b-spec-edit` progress batch; T589 refuses until its editor receipt exists and T073-T218
-  plus T603 are checked. T605 is recorded only as future work after resume and does not alter
-  the 146 receipt rows or 147 checkbox transitions. T219 refuses unless all FR-072 evidence
-  records name the same exact candidate commit, T600 and T601 both reference T604's operator
-  activation/effect/cleanup result and T605's contract/drift result, the production RSS
-  result is at or below 24,576 KiB with no baseline subtraction, the owner fan-in is singular,
-  current removal proofs pass, and the checked reference behavior matches the candidate's
-  emitted CLI and wire output.
+- **SC-034**: T603's immutable external authorization contains exactly the closed task-ID set
+  T073-T218 with one `satisfied|open` row each, repository identity, relative feature path,
+  resume base B/tree, pre-edit snapshot P, and validator-derived post-edit snapshot Q. Any
+  open row leaves T603 unchecked and changes no checkbox. Only 146 satisfied rows, analysis
+  with no unresolved HIGH or CRITICAL finding, and a current unanimous plan panel at B/P
+  authorize the sole `/d2b-spec-edit` progress batch. Dedicated checkbox commit C has exact
+  parent B and exact P-to-Q diff; prepare/apply/finalize tests converge after a crash from
+  B/P, B/Q, or C/Q. T589 refuses until the finalized editor receipt exists, HEAD is clean C,
+  and T073-T218 plus T603 are checked. T605 remains future work and does not alter the 146
+  receipt rows or 147 checkbox transitions. T219 refuses unless C is an ancestor of final
+  candidate F, all FR-072 evidence records name F and F's tree, HEAD equals F with no staged,
+  unstaged, or non-ignored untracked state, T600 and T601 both reference T604's all-positive
+  public-switch activation/effect/cleanup result and T605's normative contract/drift result,
+  the production RSS is at or below 24,576 KiB with no baseline subtraction, owner fan-in is
+  singular, current removal proofs pass, and checked reference behavior matches the
+  candidate's emitted CLI and wire output.
 
 #### Scale and footprint
 

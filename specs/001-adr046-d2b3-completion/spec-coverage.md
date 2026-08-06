@@ -795,22 +795,24 @@ exact-candidate evidence; T603 is the seventeenth local Wave 5 completion/resume
 feature task total is 605.
 The completion boundary is:
 
-- registrar-consumed authenticated ComponentSession and authoritative subject;
+- registrar-consumed, pidfd-bound authenticated ComponentSession and authoritative subject,
+  with fresh restart pidfd and PID-reuse/mismatch/`ESRCH`/ambiguity denials;
 - matching nonzero Zone policy revision under `ZoneResourceRuntime`, with initial/restart
-  installation through one sealed, non-`Clone`, one-shot `PolicyBootstrapRead` limited to
-  exact-revision policy envelopes and every later policy access through the authenticated
-  Resource API;
+  installation through one private-issuer, compiler/API-sealed, non-fabricable one-shot
+  `PolicyBootstrapRead` limited to exact-revision policy envelopes and every later policy
+  access through the authenticated Resource API;
 - registered ResourceService and controller endpoint on the exact ZoneBus;
 - admitted production watch through store and controller fan-in;
 - durable effect/adoption and cleanup ledger;
-- durable mutation-audit drain before ordinary success, with operation-bound
+- a transactional immutable authoritative mutation-audit journal row at commit plus separate
+  segment export/completion/retention health before ordinary success, with operation-bound
   `CommittedPendingAudit` represented by `ResourceStatus.phase =
   ResourcePhase::Degraded`, `ResourceStatus.outcome.code =
   StatusCode("committed-pending-audit")`, `ResourceStatus.update.state =
   UpdateState::Blocked`, and `ResourceStatus.update.operation_id =
-  Some(original_operation_id)`, with bounded redacted detail, same-ID
-  no-reapply/eventual-final-result behavior, and no new enum variant, field, or schema
-  version;
+  Some(original_operation_id)`, carried by additive protobuf `PendingAuditStatus` on every
+  mutation response including delete, with bounded redacted detail, fixed identifier digests,
+  exact replay-binding, and same-ID no-reapply/eventual-final-result behavior;
 - one aggregate readiness projection containing exactly the
   `d2b-core-controller`-owned `Provider/system-core` registration plus an actual
   `Zone.status.handlers[]` list with exactly one `system-core-host` record and one
@@ -818,27 +820,32 @@ The completion boundary is:
   initialized, current handler; `ProviderLifecycle` remains distinct and cannot substitute,
   and Wave 5 does not wait for other Wave 6 dossiers;
 - T605's `ZoneHandlerName::SystemCoreHost` and `ZoneHandlerName::SystemCoreUser` kebab-case
-  round-trip, exact-list acceptance and rejection coverage, current compiler-derived public
-  and private API snapshots, paired `docs/reference/resource-plane-runtime.md`, and read-only
-  proof that `packages/xtask/src/zone_schema.rs` leaves
+  round-trip as `system-core-host`/`system-core-user`, underscore-label rejection on the Zone
+  wire, both governing normative specs and version metadata, exact-list acceptance and
+  rejection coverage, current compiler-derived public/private API snapshots, paired
+  `docs/reference/resource-plane-runtime.md`, and read-only proof that
+  `packages/xtask/src/zone_schema.rs` leaves
   `docs/reference/schemas/v3/core.d2bus.org_Zone.schema.json` byte-identical because the
   desired Zone spec is unchanged;
 - per-Zone failure isolation;
 - T604 exact-candidate coverage from an operator Nix declaration and emitted bundle through
-  production daemon activation to a real owned effect/readiness or precise actionable
-  refusal for the representative Guest, Volume, Network, and Device, followed by
-  dependency-safe removal cleanup with unrelated resources intact;
-- T603's closed external reconciliation receipt for every T073-T218 obligation plus current
-  analysis and unanimous `adr046w5-r<n>` plan receipt against one amended artifact
-  snapshot/tip and unambiguous branch/candidate, followed only when every row is satisfied by
-  the identity-verifying `/d2b-spec-edit` checkbox batch and editor progress receipt; and
+  startup and public declaration/removal switches without manual restart to a real owned
+  effect/readiness for every representative Guest, Volume, Network, and Device, followed by
+  dependency-safe removal cleanup with ready unrelated resources intact; refusals remain
+  separate negative cases;
+- T603's immutable B/P authorization for every T073-T218 obligation plus current analysis and
+  unanimous `adr046w5-r<n>` plan receipt, repository identity and relative feature path,
+  validator-derived P-to-Q checkbox edit, exact child commit C and progress receipt, then
+  separate C-ancestor-of-F and clean exact-F candidate evidence; and
 - exact-candidate production-boundary, RSS, owner, removal, and reference evidence.
 
 A direct ResourceService or `WatchService` call, `ProductionWatchHarness`, fixed/fake endpoint,
-constructed subject, reusable bootstrap reader, independent readiness bit, status-only
-Provider substitute, disabled audit callback, undrained outbox, ordinary success for a
+constructed subject, numeric-PID-only identity, fabricable/reusable bootstrap reader,
+independent readiness bit, status-only Provider substitute, disabled audit owner, missing
+authoritative row, incomplete export, ordinary success for a
 committed-pending-audit mutation, a claim that `ResourceUpdateStatus` owns phase/code, an
-operator test that bypasses Nix activation, or evidence from another commit cannot cover
+operator test that bypasses the public Nix switch or accepts a refusal as a positive
+representative path, a stale receipt, a dirty candidate tree, or evidence from another commit cannot cover
 FR-066 through FR-072 or SC-030 through SC-034.
 
 ### D106 keeps policy interpretation out of both store crates
@@ -939,11 +946,11 @@ Run this against `tasks.md` before implementation starts.
       implementation slices, one serial daemon composition owner, five disjoint
       acceptance/docs slices including T604's operator activation coverage, and
       exact-candidate evidence before T219
-- [x] T603 is the sole direct prerequisite of T589, writes the closed external receipt,
-      accounts for all T073-T218 obligations without checking them from code presence, and
-      authorizes checkbox progress only through an identity-verifying `/d2b-spec-edit` batch
-      when all rows are satisfied and current analysis plus unanimous plan signoff bind one
-      exact amended artifact snapshot/tip and qualified `adr046w5` address
+- [x] T603 is the sole direct prerequisite of T589, writes immutable repository-relative B/P
+      authorization, accounts for all T073-T218 obligations without checking them from code
+      presence, authorizes only the validator-derived P-to-Q `/d2b-spec-edit` batch, binds the
+      exact child checkbox commit C in the finalized receipt, and leaves descendant final
+      candidate F/tree evidence separate
 - [x] C1 is resolved as a specification-quality assignment under Constitution 2.2.0: T605
       adds the two closed-enum values and paired contract/drift artifacts, T595 consumes them,
       and the same Wave 5 PR carries the remaining consumers, docs, and evidence. No

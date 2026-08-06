@@ -98,16 +98,16 @@ Are requirements present for each scenario class, or explicitly excluded?
 
 ## Wave 5 Production-Completion Remediation
 
-- [x] CHK048 Is the first policy install and restart path specified without requiring a policy-authorized read before the first `PolicySet`, while preserving authenticated normal access and D106? [Consistency, Spec FR-067]
+- [x] CHK048 Is the first policy install and restart path specified without requiring a policy-authorized read before the first `PolicySet`, while preserving authenticated normal access, private-issuer compiler/API capability seals, and D106? [Consistency, Spec FR-067]
 - [x] CHK049 Is the Wave 5 Provider readiness member the exact `Provider/system-core` registration and its two owned handler-health handles rather than all Wave 6 dossiers or a boolean? [Clarity, Spec FR-069]
-- [x] CHK050 Is resumed work mechanically gated by T603's closed external reconciliation receipt, sole identity-verifying `/d2b-spec-edit` checkbox batch, editor progress receipt, exact amended artifact snapshot, current analysis, unanimous plan receipt, and every T073-T218 obligation? [Traceability, Plan "Approved adr046w5 production-completion graph"]
-- [x] CHK051 Is commit-before-audit-finish behavior explicit about indeterminate committed state, safe operation-bound status, same-ID idempotency, different-ID conflicts, restart replay, and no rollback claim? [Scenario, Spec FR-070]
+- [x] CHK050 Is resumed work mechanically gated by T603's immutable repository-relative B/P authorization, validator-derived P-to-Q `/d2b-spec-edit` batch, exact child commit C, crash-safe finalize receipt, current analysis, unanimous plan receipt, and every T073-T218 obligation, while final evidence binds separate descendant F? [Traceability, Plan "Approved adr046w5 production-completion graph"]
+- [x] CHK051 Does commit create immutable authoritative audit in the same transaction, keep export completion separate, and make export-pending behavior explicit about the protobuf-represented committed state, exact replay binding, fixed digests, retention health, restart replay, and no rollback claim? [Scenario, Spec FR-070]
 - [x] CHK052 Does the Constitution Check distinguish the sole W0/W1 Principle VI exception from FR-043 and constitution-authorized pipelined-dispatch risks? [Consistency, Plan "Constitution Check"]
 - [x] CHK053 Do current Wave 5 panel, checkpoint, resume, and commit-tag instructions use qualified lowercase `adr046w5` while preserving labeled historical identifiers? [Consistency, Plan/Tasks wave addressing]
 - [x] CHK054 Does the approved Constitution 2.2.0 correction assign the two omitted `ZoneHandlerName` values, exact `Zone.status.handlers[]` list semantics, paired artifacts, version impact, and no-drift proof without claiming implementation? [Constitution, Spec/Plan "C1 correction and version impact"]
-- [x] CHK055 Does `CommittedPendingAudit` use the existing layered `ResourceStatus` composite without claiming phase/code members on `ResourceUpdateStatus` or adding an enum variant, field, or schema version? [Consistency, Spec FR-070]
-- [x] CHK056 Does T604 prove the exact-candidate operator Nix activation-to-effect-and-cleanup boundary in the canonical lowest feasible and host-integration destinations without adding a top-level gate? [Coverage, Tasks T604]
-- [x] CHK057 Is T603 progress receipt-driven, closed-set, atomic, stale-checked, and editor-mediated so code presence or direct integrator checkbox edits cannot terminate autopilot? [Traceability, Tasks T603]
+- [x] CHK055 Does `CommittedPendingAudit` preserve the layered `ResourceStatus` composite without claiming phase/code members on `ResourceUpdateStatus`, while assigning the additive protobuf field to every mutation response including delete and recording the ResourceService fingerprint impact? [Consistency, Spec FR-070]
+- [x] CHK056 Does T604 prove automatic startup/declaration/removal ingestion and owned effect/readiness for every supported representative resource in the canonical lowest feasible and host-integration destinations, with refusals separate and no top-level gate or new unit? [Coverage, Tasks T604]
+- [x] CHK057 Is T603 progress receipt-driven, closed-set, fd-anchored, durable, crash-resumable from exact pre/post states, and editor-mediated with an integrator-owned exact child commit? [Traceability, Tasks T603]
 
 ## Notes
 
@@ -465,12 +465,14 @@ matching installed policy revision after a one-shot private bootstrap read, regi
 controller endpoint, admitted production watch, durable effect/adoption and audit recovery,
 the exact `Provider/system-core` registration plus both required handler handles, and one
 aggregate readiness projection. T604 adds the original operator boundary from Nix declaration
-and emitted bundle through production activation, owned effect/readiness or precise refusal,
-and dependency-safe removal cleanup. T219 cannot accept a reusable bootstrap reader, direct
-service call, `ProductionWatchHarness`, fake endpoint, constructed subject, independent
-readiness bit, status-only Provider substitute, disabled audit callback, undrained outbox,
-ordinary success for a committed-pending-audit mutation, a fictitious
-`ResourceUpdateStatus` phase/code shape, or stale evidence.
+and emitted bundle through automatic startup/declaration/removal ingestion, owned effect and
+readiness for every supported representative Guest, Volume, Network, and Device, and
+dependency-safe removal cleanup. Refusals remain separate negative cases. T219 cannot accept
+a fabricable or reusable bootstrap reader, numeric-PID-only identity, direct service call,
+`ProductionWatchHarness`, fake endpoint, constructed subject, independent readiness bit,
+status-only Provider substitute, disabled audit owner, missing immutable authoritative row,
+incomplete export reported as success, a fictitious `ResourceUpdateStatus` phase/code shape,
+manual-restart operator evidence, or stale/dirty candidate evidence.
 
 SC-030 through SC-034, T603, T600-T602, and T604 make the resume and stopping conditions
 mechanical and bind them to exact artifact/candidate identities. CHK021 is therefore closed
@@ -483,10 +485,10 @@ CHK048 through CHK053 are closed by normative artifact text in this batch:
 
 | Item | Artifact resolution |
 | --- | --- |
-| CHK048 | FR-067, the plan data flow, T589-T591, and the Resource API contract define private one-shot `PolicyBootstrapRead`, the bootstrap-to-authenticated transition, restart/failure behavior, and the D106 guard. |
+| CHK048 | FR-067, the plan data flow, T589-T591, and the Resource API contract define private-issuer, compiler/API-sealed one-shot `PolicyBootstrapRead`, the bootstrap-to-authenticated transition, restart/failure behavior, and the D106 nonempty/poison guard. |
 | CHK049 | FR-069/SC-033, plan/tasks, and contracts name `Provider/system-core`, its `d2b-core-controller` registration owner, exactly one `Zone.status.handlers[]` record named `system-core-host` and one named `system-core-user`, each with phase/timestamp from the live `HostReconciler` or `UserReconciler`; other Wave 6 dossiers are excluded. |
-| CHK050 | T603 is unchecked, precedes T589, is T589's sole direct prerequisite, writes the closed external receipt, accounts for T073-T218 without file-presence completion, and permits checkbox progress only through the exact-receipt `/d2b-spec-edit` batch and editor receipt. |
-| CHK051 | FR-070/SC-032 and contract/task acceptance define `CommittedPendingAudit` through the existing `ResourceStatus` phase/outcome/update layers, safe same-ID retry/status information, different-ID conflicts, restart replay, and exactly-once logical audit without a new wire shape. |
+| CHK050 | T603 is unchecked, precedes T589, is T589's sole direct prerequisite, writes immutable repository-relative B/P authorization, accounts for T073-T218 without file-presence completion, permits only validator-derived P-to-Q checkbox progress, binds exact child C in the finalized receipt, and leaves final F evidence separate. |
+| CHK051 | FR-070/SC-032 and contract/task acceptance require transactionally immutable authoritative rows, separate export completion, `CommittedPendingAudit` through the exact `ResourceStatus` layers and additive protobuf field including delete, exact replay binding, fixed digests, retention health, and one export per digest/ordinal. |
 | CHK052 | The Constitution Check and Complexity Tracking name one Principle VI exception and separately retain the FR-043 safety risk and constitution-2.1.0-authorized pipelining rework risk. |
 | CHK053 | Current plan/task instructions use `adr046w5` and qualified template forms; preserved `ADR046-W5` occurrences are explicitly labeled legacy or historical. |
 

@@ -47,18 +47,21 @@ and a green fast hermetic suite.
 ### 1b. Reconcile `adr046w5` progress before implementation
 
 T603 never infers task completion from code presence and never edits a feature artifact
-directly. It first writes the closed receipt at
-`.scratch/autopilot/adr046w5/reconciliation.json`, bound to the exact 28-file feature
-snapshot, Git tip, branch, candidate, analysis receipt, ten-record plan panel, and one row for
-each T073-T218 obligation.
+directly. Its fd-anchored validator first writes immutable authorization R at
+`.scratch/autopilot/adr046w5/reconciliation.json`, bound to repository identity, the
+repository-relative feature path, clean resume base B and tree, exact 28-file pre-edit
+snapshot P, validator-derived post-edit snapshot Q, analysis receipt, ten-record plan panel,
+and one row for each T073-T218 obligation.
 
 If any row is `open`, leave T603 and T073-T218 unchecked and stop. If all 146 rows are
 `satisfied`, analysis has no unresolved HIGH or CRITICAL finding, and current unanimous plan
-signoff names the same snapshot/tip, route one explicit `/d2b-spec-edit` progress batch. The
-editor recomputes the receipt identity before making its only permitted feature changes:
-checking T073-T218 and T603. It persists the progress receipt at
-`.scratch/autopilot/adr046w5/progress-editor-receipt.json`. T589 refuses unless both receipts
-are current and all 147 checkboxes are checked; an integrator never edits them directly.
+signoff names B/P, route one explicit `/d2b-spec-edit` progress batch. The editor recomputes
+R before making its only permitted feature changes: checking T073-T218 and T603. The Wave 5
+integrator stages only that diff and owns dedicated commit C with exact parent B. The
+validator then finalizes `.scratch/autopilot/adr046w5/progress-editor-receipt.json`, binding
+B, C, P, and Q. A retry converges only from exact B/P, B/Q, or C/Q. T589 refuses unless HEAD
+is clean C, the finalized receipt validates, and all 147 checkboxes are checked. T602 later
+validates C as an ancestor of separate final candidate F rather than requiring R to match F.
 
 C1 is approved and fully assigned under Constitution 2.2.0. Run read-only
 `/speckit-analyze`, then request the unanimous plan panel if analysis is clean. Implementation
@@ -221,24 +224,24 @@ make test-host-integration
 ```
 
 The host leg declares the representative Guest, Volume, Network, and Device, consumes the
-emitted `zones/<zone>/resource-bundle.json`, activates through the production daemon, and
-requires a real owned effect/readiness or a precise actionable refusal for every resource.
-It then removes the Guest, activates the next generation, verifies dependency-safe cleanup,
-and proves the unrelated resources remain intact. Direct ResourceService calls and
-status-only effects do not satisfy T604.
+emitted `zones/<zone>/resource-bundle.json`, activates on startup and public NixOS switches
+through the production daemon, and requires a real owned effect and readiness for every one
+of the four supported representative resources. Refusals are separate negative cases. It
+then removes the Guest, switches the next generation without a manual daemon restart,
+verifies dependency-safe cleanup, and proves the unrelated resources remain ready and intact.
+Direct ResourceService calls, private reloads, and status-only effects do not satisfy T604.
 
 ```bash
 # 1. Declare a Zone with a small resource set in the host config, then:
 sudo nixos-rebuild switch --flake .#<host>
-sudo systemctl restart d2bd.service     # notify-ready; confirm active before validating
 
-# 2. Every declared resource should reach ready, or name a specific cause
+# 2. Every supported representative resource must reach its owned effect and ready state
 d2b resource list
 d2b resource inspect <Type>/<name>
 ```
 
-**Expected**: each resource ready or reporting an actionable failure; a dependency that is not
-ready causes its dependent to *wait with a stated reason*, not fail permanently.
+**Expected**: the Guest, Volume, Network, and Device are each ready through their owned effect.
+Actionable refusal coverage runs separately and cannot satisfy this positive proof.
 
 ### Story 1 - retire and restart
 

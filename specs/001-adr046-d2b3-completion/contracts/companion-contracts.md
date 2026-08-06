@@ -47,7 +47,7 @@ decide who is in the set and what counts as verified.
 | CO-8 | Record any Retired surface on the FR-042 retirement list before the tag, with justification, owner, restoring condition, and a release-note line, and never as a relabelled failure | W8 | Open |
 | CO-9 | Re-derive the inventory at W8 under FR-064's two limbs, carrying repository, pinned commit, maintainer, discovery source, and consumed surfaces per row, with a recorded negative determination for any removal | W8 | Open |
 | CO-10 | Hold every companion verification to all seven FR-065 conditions, and void every verification if the release-candidate snapshot moves | W8 | Open |
-| CO-11 | Reconcile every desktop-wrapper and companion/device CLI promise with exact W5 emitted help, JSON, capability, refusal, and wire behavior; remove any promise for an absent surface without claiming companion verification | W5 exit | Open - FR-019, FR-074 |
+| CO-11 | Compare every desktop-wrapper and companion/device CLI promise with the frozen expected surface and exact W5 emitted help, JSON, capability, refusal, and wire behavior. Candidate absence is a defect unless the same change follows the explicit parity or FR-042 retirement path with a named replacement, migration guidance, owner, restoring condition, release treatment, and contract coverage; absence alone never authorizes deleting the promise | W5 exit | Open - FR-019, FR-074 |
 
 ## The resolution, and what it binds
 
@@ -111,7 +111,9 @@ Absent that, the constraint stands.
 
 The release-classification family remains closed: CHK018 is closed by FR-064 and CHK022 by
 FR-065; see "Who is in the set" and "What counts as a pass" below. CO-11 is a separate W5
-reference-to-emission consistency obligation. It does not reopen membership or live-host
+frozen-reference-to-emission consistency obligation. An absent candidate command or field
+fails it unless the explicit parity/retirement record supplies the replacement, migration,
+and release treatment in the same change. It does not reopen membership or live-host
 verification, and closing it does not verify a companion.
 
 ## Who is in the set: the membership test

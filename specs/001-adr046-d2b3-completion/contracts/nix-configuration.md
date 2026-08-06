@@ -25,7 +25,7 @@ controller-owned effect, and declared-resource removal cleanup.
 | NIX-3 | Add Zone assertions to `assertions.nix` (sole W2 writer of that file) | FR-001 | W2 |
 | NIX-4 | Removing a declared resource activates the new generation immediately and requests async owner- and finalizer-safe deletion with visible cleanup status | FR-005 | W5 |
 | NIX-5 | Extend the `eval-*` flake checks with Zone and resource examples | FR-032 | W5 |
-| NIX-6 | Prove the exact-candidate operator path from a Nix declaration of the representative Guest, Volume, Network, and Device through the emitted bundle and production daemon to durable reconciliation, a real owned effect/readiness or precise actionable refusal, then dependency-safe removal cleanup with unrelated resources intact | FR-001, FR-005, FR-072, SC-034 | W5 |
+| NIX-6 | Prove the exact-candidate positive operator path from a Nix declaration of every supported representative Guest, Volume, Network, and Device through the emitted bundle and automatic startup/declaration/removal ingestion to durable reconciliation and each resource's real owned effect/readiness, then dependency-safe removal cleanup with unrelated resources still ready; refusal cases are separate | FR-001, FR-005, FR-072, SC-034 | W5 |
 
 ## Invariants
 
@@ -39,9 +39,11 @@ controller-owned effect, and declared-resource removal cleanup.
 - A declared Zone with resources evaluates, emits its pinned generation, and is rejected at
   eval time when malformed.
 - T604 pins the declaration and removal generations at the fixture-backed contract layer,
-  consumes those exact generations through the Type-3 production daemon activation/reload
-  test, and exercises the real activation/effect/cleanup boundary in
+  consumes those exact generations through the Type-3 production daemon startup/change
+  ingestion test, and exercises public NixOS declaration and removal switches, without a
+  manual daemon restart or private reload, through the real activation/effect/cleanup boundary in
   `tests/host-integration/resource-operator-activation.nix` through the public
-  `make test-host-integration` target. Direct ResourceService calls and status-only effects
-  are ineligible.
+  `make test-host-integration` target. Every supported representative resource must reach its
+  owned effect and readiness in the positive leg. Direct ResourceService calls, status-only
+  effects, and actionable refusals are ineligible for that positive proof.
 - `make test-drift` is clean after regeneration.
