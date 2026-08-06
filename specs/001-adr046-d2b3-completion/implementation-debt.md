@@ -1069,7 +1069,7 @@ specification disagree and code was kept.
 
 **The ruling.** Wave 4 remains **one** wave for panel and seal purposes. Its
 first two slice rounds run as an explicit opening phase with its own integrator
-merge, so the binding ten-role panel at T070 reviews a tree whose keystone is
+merge, so the binding ten-role panel at T071 reviews a tree whose keystone is
 already integrated rather than a tree assembled in one merge from six groups.
 
 **What was verified.** `ADR-046-implementation-graph.json` pins W4 at
