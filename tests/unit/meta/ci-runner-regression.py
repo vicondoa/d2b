@@ -14,6 +14,7 @@ import signal
 import shlex
 import shutil
 import subprocess
+import sys
 import tempfile
 import time
 import types
@@ -591,7 +592,7 @@ set -euo pipefail
         self.assertIn("nix-unit-shards", rollup_job)
         self.assertIn("Every discovered Nix-unit shard passed.", rollup_job)
 
-    def test_nix_unit_driver_uses_one_full_corpus_eval_jobs_path(self) -> None:
+    def test_nix_unit_driver_uses_bounded_topical_eval_jobs_paths(self) -> None:
         driver = executable_shell_source(source_text(NIX_UNIT_DRIVER))
         flake = (ROOT / "flake.nix").read_text(encoding="utf-8")
         eval_jobs = (ROOT / "tests" / "unit" / "nix" / "eval-jobs.nix").read_text(
@@ -599,7 +600,10 @@ set -euo pipefail
         )
 
         runner_calls = list(
-            re.finditer(r"(?m)^\s*(?:if\s+)?nix-eval-jobs\b", driver)
+            re.finditer(
+                r"(?m)^\s*(?:if\s+)?(?:setsid\s+)?nix-eval-jobs\b",
+                driver,
+            )
         )
         self.assertEqual(
             len(runner_calls),
@@ -614,8 +618,8 @@ set -euo pipefail
         self.assertIn("--no-instantiate", invocation)
         self.assertRegex(
             invocation,
-            r"--flake\s+[^\n]*nixUnitJobs[^\n]*"
-            r"--workers\s+[\"']?\$[A-Za-z_][A-Za-z0-9_]*[\"']?[^\n]*"
+            r"--flake\s+[^\n]*nixUnitJobShards[^\n]*"
+            r"--workers\s+1[^\n]*"
             r"--max-memory-size\s+[\"']?\$[A-Za-z_][A-Za-z0-9_]*[\"']?",
         )
 
@@ -634,11 +638,12 @@ set -euo pipefail
         jobs_block = flake[jobs_match.start() : inventory_match.start()]
         self.assertIn("fileJobs", jobs_block)
         self.assertIn("nixUnitCorpus.fileJobs", jobs_block)
+        self.assertIn("nixUnitJobShards", jobs_block)
+        self.assertIn("jobsFor", jobs_block)
         self.assertIn("nix-unit = self.checks.${system}.nix-unit", jobs_block)
-        self.assertEqual(jobs_block.count("self.checks"), 1)
+        self.assertGreaterEqual(jobs_block.count("self.checks"), 1)
         self.assertNotIn("nixUnitCorpus.jobs", jobs_block)
         self.assertNotIn("__nix_unit_integrity", jobs_block)
-        self.assertNotIn("jobsFor", flake)
 
         inventory_block = flake[inventory_match.start() :]
         self.assertIn("nixUnitInventory = forAllSystems", inventory_block)
@@ -726,7 +731,7 @@ set -euo pipefail
             driver,
             "successful full runs must not dump the raw JSONL result file",
         )
-        self.assertIn('2>"$tool_stderr"', driver)
+        self.assertIn('2>"$shard_stderr"', driver)
         self.assertIn("emit_sanitized_tool_stderr()", driver)
         self.assertIn(
             'while IFS= read -r line || [ -n "$line" ]; do',
@@ -1094,7 +1099,11 @@ printf '%s\n' "$sanitized_line"
             }
             env.update(overrides)
             result = subprocess.run(
-                ["bash", str(NIX_UNIT_DRIVER)],
+                [
+                    "bash",
+                    str(NIX_UNIT_DRIVER),
+                    "--internal-peak-rss-guarded",
+                ],
                 cwd=ROOT,
                 env=env,
                 stdout=subprocess.PIPE,
@@ -1106,31 +1115,52 @@ printf '%s\n' "$sanitized_line"
             self.assertEqual(result.stdout, "")
             self.assertEqual(result.stderr, expected_stderr)
 
-    def test_nix_unit_does_not_add_a_repository_specific_scheduler(self) -> None:
+    def test_nix_unit_uses_a_bounded_process_group_scheduler(self) -> None:
         driver = executable_shell_source(source_text(NIX_UNIT_DRIVER))
-        for marker in (
-            "declare -a pids",
-            "launch_check()",
-            "reap_next()",
-            "next_to_wait",
-            'while [ "$running"',
-            'kill "$pid"',
-            'pids+=("$!")',
-        ):
-            self.assertNotIn(
-                marker,
-                driver,
-                msg=f"repository-specific Nix scheduler marker remains: {marker}",
-            )
-        self.assertNotRegex(
+        exit_handler = driver[
+            driver.index("nix_unit_exit()") : driver.index("trap nix_unit_exit EXIT")
+        ]
+        self.assertIn("shard_pids=()", driver)
+        self.assertIn("shard_group_files=()", driver)
+        self.assertIn("shard_statuses=()", driver)
+        self.assertIn("shard_workers", driver)
+        self.assertIn("harvest_nix_unit_shard()", driver)
+        self.assertIn("settle_nix_unit_process_group()", driver)
+        self.assertIn("terminate_nix_unit_process_group()", driver)
+        self.assertIn("terminate_active_nix_unit_shard_groups()", driver)
+        self.assertIn("setsid nix-eval-jobs", driver)
+        self.assertIn('kill -TERM -- "-$process_group"', driver)
+        self.assertIn('terminate_nix_unit_process_group "$pid"', driver)
+        self.assertIn(
+            'trap \'terminate_nix_unit_process_group "$pid" || true; exit 143\' TERM INT HUP',
             driver,
-            r"(?m)^\s*(?:[A-Za-z_][A-Za-z0-9_]*\s*=\s*)?[^#\n]*&\s*$",
-            "the Nix-unit driver must not launch a shell worker pool",
         )
+        self.assertIn("terminate_active_nix_unit_shard_groups || true", exit_handler)
         self.assertRegex(
             driver,
             r"(?i)(?:nix-unit|lix-unit|nix-eval-jobs|"
             r"\bnix\s+(?:eval|build|flake\s+check)\b)",
+        )
+
+    def test_nix_unit_preserves_nonzero_evaluator_status_files(self) -> None:
+        driver = executable_shell_source(source_text(NIX_UNIT_DRIVER))
+        run_region = driver[
+            driver.index("run_nix_unit_shard()") : driver.index("harvest_nix_unit_shard()")
+        ]
+        harvest_start = driver.index("harvest_nix_unit_shard()")
+        harvest_region = driver[
+            harvest_start : driver.index('while [ "${#shard_pids[@]}" -gt 0 ]; do', harvest_start)
+        ]
+
+        self.assertIn('printf \'%s\\n\' "$rc" >"$shard_status_file"', run_region)
+        self.assertIn('return "$rc"', run_region)
+        self.assertIn('recorded_rc=$(head -n 1 "$status_file" 2>/dev/null || true)', harvest_region)
+        self.assertIn('[ "$recorded_rc" -ne 0 ]; then', harvest_region)
+        self.assertIn("rc=$recorded_rc", harvest_region)
+        self.assertLess(
+            harvest_region.index('recorded_rc=$(head -n 1 "$status_file" 2>/dev/null || true)'),
+            harvest_region.index('printf \'%s\\n\' "$rc" >"$status_file"'),
+            "harvest must consult the evaluator status file before rewriting it",
         )
 
     def test_fixture_driver_realizes_minimal_and_excludes_real_binary_probe(self) -> None:
@@ -1156,6 +1186,294 @@ printf '%s\n' "$sanitized_line"
         self.assertNotIn("checks.${contract_system}.fixture-smoke", driver)
         self.assertIn("nix eval", fixture_driver)
         self.assertNotIn("nix build", fixture_driver)
+
+    def test_eval_fixture_keeps_full_contracts_off_vm_closure_and_ifd_paths(self) -> None:
+        flake = (ROOT / "flake.nix").read_text(encoding="utf-8")
+        fixture_driver = (ROOT / "tests" / "tools" / "eval-fixtures.sh").read_text(
+            encoding="utf-8"
+        )
+
+        # The full fixture validates feature-specific process and minijail
+        # records, not closure JSON. Keep the eval-only projection from
+        # traversing the legacy VM closure table.
+        self.assertRegex(
+            flake,
+            r"full\s*=\s*renderEvalFixture\s*\{\s*"
+            r"evaluated\s*=\s*fullEvalFixture;\s*"
+            r"includeClosures\s*=\s*false;\s*"
+            r"processData\s*=\s*fullProcessFixtureData;\s*\};",
+        )
+        full_fixture = re.search(
+            r"fullFixture\s*=.*?(?=\n\s*# Rust tests reach)",
+            flake,
+            flags=re.DOTALL,
+        )
+        self.assertIsNotNone(full_fixture)
+        assert full_fixture is not None
+        self.assertNotIn("config.d2b._bundle.closures", full_fixture.group(0))
+
+        # The production catalog remains IFD-backed, but empty eval fixtures
+        # must replace it at the fixture boundary with deterministic data.
+        self.assertIn("fixtureArtifactCatalogOverride", flake)
+        self.assertIn(
+            "d2b._bundle.extraArtifacts.artifactCatalog =\n"
+            "            lib.mkOverride 0 fixtureArtifactCatalogArtifact",
+            flake,
+        )
+        self.assertIn("fullProcessFixtureData", flake)
+        self.assertIn('"corp-full" "sys-work-usbipd" "sys-obs"', flake)
+        self.assertIn('node.id == "otel-host-bridge"', flake)
+        self.assertIn("processData = fullProcessFixtureData", flake)
+        self.assertIn("d2b_flake_ref", fixture_driver)
+        self.assertNotIn("fixture-smoke-full", fixture_driver)
+
+    def test_peak_rss_guards_fail_and_pass_for_both_eval_lanes(self) -> None:
+        helper = ROOT / "tests" / "tools" / "peak-rss.py"
+        self.assertTrue(helper.is_file(), "peak RSS helper is missing")
+
+        common_cause = (
+            "full NixOS/VM system.build.toplevel",
+            "pkgs.closureInfo",
+            "derivation realization/IFD",
+            "narrow attr-local fixture",
+            "shared evaluated scenario",
+            "stubbed evaluation boundary",
+        )
+        for lane in ("nix-unit", "flake"):
+            failed = subprocess.run(
+                [
+                    sys.executable,
+                    str(helper),
+                    "--lane",
+                    lane,
+                    "--max-kib",
+                    "1",
+                    "--",
+                    sys.executable,
+                    "-c",
+                    "import time; x = [0] * 1000000; time.sleep(1)",
+                ],
+                cwd=ROOT,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(
+                failed.returncode,
+                125,
+                msg=f"{lane} low-threshold guard unexpectedly passed:\n{failed.stderr}",
+            )
+            self.assertIn(f"{lane} peak RSS guard failed", failed.stderr)
+            self.assertIn("observed", failed.stderr)
+            self.assertIn("maximum", failed.stderr)
+            for phrase in common_cause:
+                self.assertIn(phrase, failed.stderr)
+
+            active_code = (
+                "import os, signal, time; "
+                "signal.signal(signal.SIGTERM, signal.SIG_IGN); "
+                "child = os.fork(); "
+                "signal.signal(signal.SIGTERM, signal.SIG_IGN); "
+                "print(child, flush=True); time.sleep(30)"
+            )
+            started = time.monotonic()
+            active = subprocess.run(
+                [
+                    sys.executable,
+                    str(helper),
+                    "--lane",
+                    lane,
+                    "--max-kib",
+                    "1",
+                    "--",
+                    sys.executable,
+                    "-c",
+                    active_code,
+                ],
+                cwd=ROOT,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(
+                active.returncode,
+                125,
+                msg=f"{lane} active-termination guard unexpectedly passed:\n"
+                f"{active.stderr}",
+            )
+            self.assertLess(
+                time.monotonic() - started,
+                5,
+                msg=f"{lane} guard did not actively terminate promptly:\n"
+                f"{active.stderr}",
+            )
+            self.assertIn(f"{lane} peak RSS guard failed", active.stderr)
+
+            nested_pid = self.scratch / f"{lane}-nested-setsid.pid"
+            nested_driver = self.scratch / f"{lane}-nested-setsid.sh"
+            nested_python = (
+                "import os, pathlib, signal, time; "
+                "signal.signal(signal.SIGTERM, signal.SIG_IGN); "
+                "pathlib.Path(os.environ['D2B_CHILD_PID_FILE']).write_text(str(os.getpid())); "
+                "x = [0] * 2000000; time.sleep(30)"
+            )
+            nested_driver.write_text(
+                f"""#!/usr/bin/env bash
+set -euo pipefail
+child_pid_file=$1
+settle_group() {{
+  local pg="$1" attempt=1
+  while [ "$attempt" -le 40 ]; do
+    if ! kill -0 -- "-$pg" 2>/dev/null; then
+      return 0
+    fi
+    sleep 0.05
+    attempt=$((attempt + 1))
+  done
+  return 1
+}}
+terminate_group() {{
+  local pg="$1" attempt=1
+  kill -TERM -- "-$pg" 2>/dev/null || true
+  while [ "$attempt" -le 10 ]; do
+    if ! kill -0 -- "-$pg" 2>/dev/null; then
+      return 0
+    fi
+    sleep 0.05
+    attempt=$((attempt + 1))
+  done
+  kill -KILL -- "-$pg" 2>/dev/null || true
+  settle_group "$pg"
+}}
+cleanup() {{
+  local pg
+  [ -r "$child_pid_file" ] || return 0
+  pg=$(cat "$child_pid_file")
+  case "$pg" in
+    ''|*[!0-9]*) return 0 ;;
+  esac
+  terminate_group "$pg" || true
+}}
+trap cleanup EXIT
+export D2B_CHILD_PID_FILE="$child_pid_file"
+setsid {shlex.quote(sys.executable)} -c {shlex.quote(nested_python)} &
+wait
+""",
+                encoding="utf-8",
+            )
+            nested_driver.chmod(0o755)
+            nested = subprocess.run(
+                [
+                    sys.executable,
+                    str(helper),
+                    "--lane",
+                    lane,
+                    "--max-kib",
+                    "1",
+                    "--",
+                    "bash",
+                    str(nested_driver),
+                    str(nested_pid),
+                ],
+                cwd=ROOT,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(
+                nested.returncode,
+                125,
+                msg=f"{lane} nested-setsid guard unexpectedly passed:\n{nested.stderr}",
+            )
+            self.assertTrue(
+                nested_pid.is_file(),
+                f"{lane} nested-setsid worker never published its process-group id",
+            )
+            nested_group = int(nested_pid.read_text(encoding="utf-8").strip())
+            for _ in range(40):
+                try:
+                    os.killpg(nested_group, 0)
+                except ProcessLookupError:
+                    break
+                time.sleep(0.05)
+            else:
+                self.fail(
+                    f"{lane} nested-setsid worker process group {nested_group} "
+                    f"survived the guard:\n{nested.stderr}"
+                )
+
+            passed = subprocess.run(
+                [
+                    sys.executable,
+                    str(helper),
+                    "--lane",
+                    lane,
+                    "--max-kib",
+                    "100000",
+                    "--",
+                    sys.executable,
+                    "-c",
+                    "import time; print('rss-self-test'); time.sleep(1)",
+                ],
+                cwd=ROOT,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(
+                passed.returncode,
+                0,
+                msg=f"{lane} normal-threshold guard failed:\n{passed.stderr}",
+            )
+            self.assertIn(f"{lane} peak RSS:", passed.stderr)
+
+            unmeasured_code = (
+                "import importlib.util, sys; "
+                f"s = importlib.util.spec_from_file_location('peak_rss_test', "
+                f"{str(helper)!r}); "
+                "m = importlib.util.module_from_spec(s); s.loader.exec_module(m); "
+                "m.process_rss_kib = lambda root: None; "
+                "m.cgroup_current_kib = lambda pid: None; "
+                f"sys.argv = ['peak-rss.py', '--lane', {lane!r}, "
+                "'--max-kib', '100000', '--', sys.executable, '-c', "
+                "'import time; time.sleep(1)']; "
+                "raise SystemExit(m.main())"
+            )
+            unmeasured = subprocess.run(
+                [sys.executable, "-c", unmeasured_code],
+                cwd=ROOT,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(
+                unmeasured.returncode,
+                125,
+                msg=f"{lane} unmeasured guard unexpectedly passed:\n"
+                f"{unmeasured.stderr}",
+            )
+            self.assertIn(
+                "could not obtain process-tree or cgroup resident memory",
+                unmeasured.stderr,
+            )
+
+        nix_runner = (ROOT / "tests" / "test-nix-unit.sh").read_text(
+            encoding="utf-8"
+        )
+        flake_runner = (ROOT / "tests" / "test-flake.sh").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("NIX_UNIT_RSS_MAX_KIB=10683720", nix_runner)
+        self.assertIn("FLAKE_RSS_MAX_KIB=14665373", flake_runner)
+        self.assertIn("tests/tools/peak-rss.py", nix_runner)
+        self.assertIn("tests/tools/peak-rss.py", flake_runner)
+        self.assertIn("--lane nix-unit", nix_runner)
+        self.assertIn("--lane flake", flake_runner)
 
     def test_realized_flake_check_gets_its_own_unblocked_lane(self) -> None:
         manifest = load_layer1_jobs().load_manifest()
@@ -1746,12 +2064,19 @@ esac
 
     def test_harness_free_binaries_receive_no_libtest_arguments(self) -> None:
         driver = RUST_DRIVER.read_text(encoding="utf-8")
-        command = next(
-            line
-            for line in driver.splitlines()
-            if 'cargo test --jobs "$D2B_RUST_CARGO_JOBS"' in line
-            and '--test "$bin"' in line
+        command_match = re.search(
+            r'cargo test --jobs "\$D2B_RUST_CARGO_JOBS" '
+            r'"\$\{cargo_profile\[@\]\}" \\\n'
+            r'\s+--manifest-path "\$manifest_path" "\$@" -p "\$pkg" '
+            r'"\$cargo_selector" "\$target"',
+            driver,
         )
+        self.assertIsNotNone(command_match)
+        command = command_match.group(0)
+        self.assertIn("cargo_selector=--test", driver)
+        self.assertIn("cargo_selector=--bench", driver)
+        self.assertIn("cargo_profile=(--release)", driver)
+        self.assertIn('"${cargo_profile[@]}"', command)
         self.assertNotIn("--test-threads", command)
         self.assertFalse(command.rstrip().endswith(" --"))
 

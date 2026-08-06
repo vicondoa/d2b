@@ -1343,12 +1343,16 @@ d2b.artifacts.provider-transport-azure-relay = {
 The artifact entry resolves to:
 
 ```
-packages/d2b-provider-transport-azure-relay/
-  -> d2b-transport-azure-relay-listener   (system binary)
-  -> d2b-transport-azure-relay-sender     (system binary)
-  -> provider-manifest.json               (signed)
-  -> transport-settings.schema.json       (settings schema; committed separately
-                                           under docs/reference/schemas/v3/providers/)
+<out>/
+  bin/d2b-transport-azure-relay-listener         (system binary)
+  bin/d2b-transport-azure-relay-sender           (system binary)
+  share/d2b/provider/provider-manifest.json      (signed)
+  share/d2b/provider/provider-manifest.json.sig  (detached Ed25519 signature)
+  share/d2b/provider/config-schema.json          (root config schema; the
+                                                  reviewable copy is committed
+                                                  under docs/reference/schemas/
+                                                  v3/providers/ and kept equal by
+                                                  make test-drift)
 ```
 
 The settings schema file at:
@@ -1360,6 +1364,10 @@ docs/reference/schemas/v3/providers/transport-azure-relay.transport-settings.jso
 is committed, version-controlled, and kept in sync with the Rust
 `AzureRelayTransportSettings` type by `make test-drift` (via
 `xtask gen-provider-transport-schemas && git diff --exit-code`).
+
+The committed settings schema remains the review surface. The derivation copy
+at `share/d2b/provider/config-schema.json` is the copy the resource compiler
+hashes; a third-party Provider has only that derivation copy.
 
 The artifact **never** includes:
 

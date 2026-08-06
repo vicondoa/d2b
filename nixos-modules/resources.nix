@@ -210,14 +210,99 @@ let
       };
     };
   };
+
+  # The telemetry/audit resource fields are kept in a small schema-shaped
+  # helper so bundle emitters and Nix-unit cases use the same bounds without
+  # duplicating them in a provider-specific module.
+  telemetryEmitterType = types.submodule {
+    # Keep ResourceType-specific fields available while still type-checking
+    # the fields owned by the telemetry contract.
+    freeformType = types.attrsOf types.unspecified;
+    options.ringCapacityBytes = mkOption {
+      type = types.ints.between (64 * 1024) (64 * 1024 * 1024);
+      default = 2 * 1024 * 1024;
+    };
+  };
+
+  auditResourceType = types.submodule {
+    freeformType = types.attrsOf types.unspecified;
+    options = {
+      retentionDays = mkOption {
+        type = types.ints.between 1 3650;
+        default = 30;
+      };
+      maxSegmentBytes = mkOption {
+        type = types.ints.between (1024 * 1024) (1024 * 1024 * 1024);
+        default = 64 * 1024 * 1024;
+      };
+    };
+  };
+
+  telemetryResourceSpecType = types.submodule {
+    # This is deliberately a type provider, not a NixOS module.  Unknown
+    # ResourceType fields remain available to generated schemas, but known
+    # telemetry/audit fields cannot bypass their bounds through freeform data.
+    freeformType = types.attrsOf types.unspecified;
+    options = {
+      telemetry = mkOption {
+        type = types.submodule {
+          freeformType = types.attrsOf types.unspecified;
+          options.emitter = mkOption {
+            type = telemetryEmitterType;
+            default = { };
+          };
+        };
+        default = { };
+      };
+      audit = mkOption {
+        type = auditResourceType;
+        default = { };
+      };
+    };
+  };
+
+  schemaAwareResourceModule = { ... }: {
+    freeformType = null;
+    options = {
+      type = mkOption {
+        type = resourceTypeNameType;
+      };
+      metadata = mkOption {
+        type = types.submodule {
+          freeformType = null;
+          options = {
+            ownerRef = mkOption {
+              type = types.nullOr resourceRefType;
+              default = null;
+            };
+            labels = mkOption {
+              type = types.attrsOf types.str;
+              default = { };
+            };
+            annotations = mkOption {
+              type = types.attrsOf types.str;
+              default = { };
+            };
+          };
+        };
+        default = { };
+      };
+      spec = mkOption {
+        type = telemetryResourceSpecType;
+        default = { };
+      };
+    };
+  };
 in
 {
   inherit
     resourceModule
+    schemaAwareResourceModule
     resourceRefPattern
     resourceRefType
     resourceTypeNameType
     standardResourceTypes
+    telemetryResourceSpecType
     validResourceRef
     validResourceType
     ;

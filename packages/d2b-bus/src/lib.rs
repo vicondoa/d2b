@@ -7,14 +7,23 @@
 #[cfg(test)]
 extern crate self as d2b_bus;
 
+pub mod audit;
 pub mod authorization;
+pub mod driver;
+pub mod engine;
+pub mod error;
+pub mod lifecycle;
+pub mod metrics;
 pub mod operations;
 pub mod registry;
 pub mod relay;
 pub mod router;
+pub mod routing;
+pub mod service_router;
 pub mod session;
 pub mod streams;
 pub mod transport;
+pub mod wire;
 pub mod zone_route;
 
 pub use authorization::{

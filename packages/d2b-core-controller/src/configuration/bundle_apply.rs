@@ -18,6 +18,10 @@ use super::{
     ManagementAgent, ResourceBundle, ResourceKey, StoredResource,
 };
 
+/// Core finalizer whose revocation must complete before a Credential row is
+/// finally removed.
+pub const CORE_CREDENTIAL_REVOKE_FINALIZER: &str = "core.credential-revoke";
+
 /// Closed failure from adapting or applying a verified bundle.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BundleApplyError {
@@ -254,9 +258,23 @@ pub enum BundleApplyEffect {
         authority: Option<MutationAuthority>,
         triggers_reconcile: bool,
     },
+    /// Invoke the Credential provider revocation path before the delete
+    /// finalizer can be cleared.
+    RevokeCredential {
+        key: ResourceKey,
+        finalizer: &'static str,
+    },
+    /// Mark a Provider's config schema failure without blocking the
+    /// generation's unrelated resources.
+    MarkProviderConfigInvalid { key: ResourceKey },
+    /// Idempotently advance redb `store_meta` after the durable generation
+    /// record has committed and before resource effects are applied.
+    RecordStoreMeta(super::StoreMetaConfiguration),
     /// Request finalizer-safe asynchronous deletion.
     DeleteResource {
         key: ResourceKey,
+        /// Store-owned deletion-request timestamp stamped at activation.
+        deletion_requested_at: Timestamp,
         authority: MutationAuthority,
     },
     /// Cancel an outstanding Delete during rollback.
@@ -278,6 +296,7 @@ pub struct BundleApplyPlan {
     desired: BTreeMap<ResourceKey, DesiredBundleResource>,
     conflicts: Vec<NameConflict>,
     configuration_generation: ConfigurationGeneration,
+    invalid_provider_config: BTreeSet<ResourceKey>,
 }
 
 impl BundleApplyPlan {
@@ -310,7 +329,9 @@ pub struct BundleApplyCommitProof {
     desired: BTreeMap<ResourceKey, DesiredBundleResource>,
     conflicts: Vec<NameConflict>,
     configuration_generation: ConfigurationGeneration,
+    deletion_requested_at: Timestamp,
     unchanged: Vec<ResourceKey>,
+    invalid_provider_config: BTreeSet<ResourceKey>,
 }
 
 impl BundleApplyCommitProof {
@@ -330,6 +351,40 @@ pub fn begin_bundle_apply(
     bundle: &ZoneBundle,
     store: &[StoredResource],
     now: &Timestamp,
+) -> Result<BundleApplyOutcome, BundleApplyError> {
+    begin_bundle_apply_mode(service, bundle, store, now, false, BTreeSet::new())
+}
+
+/// Diff a bundle while allowing invalid Provider configurations to fail
+/// independently.  The desired Provider row is still activated and a
+/// status-effect is emitted for that Provider; unrelated resources continue.
+pub fn begin_bundle_apply_with_provider_config_invalid(
+    service: &mut ConfigurationService,
+    bundle: &ZoneBundle,
+    store: &[StoredResource],
+    now: &Timestamp,
+    invalid_provider_config: BTreeSet<ResourceKey>,
+) -> Result<BundleApplyOutcome, BundleApplyError> {
+    begin_bundle_apply_mode(service, bundle, store, now, false, invalid_provider_config)
+}
+
+/// Diff a retained bundle for an explicit rollback activation.
+pub fn begin_bundle_rollback(
+    service: &mut ConfigurationService,
+    bundle: &ZoneBundle,
+    store: &[StoredResource],
+    now: &Timestamp,
+) -> Result<BundleApplyOutcome, BundleApplyError> {
+    begin_bundle_apply_mode(service, bundle, store, now, true, BTreeSet::new())
+}
+
+fn begin_bundle_apply_mode(
+    service: &mut ConfigurationService,
+    bundle: &ZoneBundle,
+    store: &[StoredResource],
+    now: &Timestamp,
+    rollback: bool,
+    invalid_provider_config: BTreeSet<ResourceKey>,
 ) -> Result<BundleApplyOutcome, BundleApplyError> {
     let declared: Vec<(ResourceKey, DesiredBundleResource, super::BundleResource)> = bundle
         .resources()
@@ -363,7 +418,12 @@ pub fn begin_bundle_apply(
         bundle.content_hash().clone(),
         resources,
     )?;
-    match service.begin_activation(&adapted, store, now)? {
+    let outcome = if rollback {
+        service.begin_rollback(&adapted, store, now)?
+    } else {
+        service.begin_activation(&adapted, store, now)?
+    };
+    match outcome {
         ActivationOutcome::Unchanged => Ok(BundleApplyOutcome::Unchanged {
             name_conflicts: conflicts,
         }),
@@ -374,6 +434,7 @@ pub fn begin_bundle_apply(
                 desired,
                 conflicts,
                 configuration_generation,
+                invalid_provider_config,
             }))
         }
     }
@@ -397,7 +458,9 @@ pub fn commit_bundle_apply(
         desired: plan.desired,
         conflicts: plan.conflicts,
         configuration_generation: plan.configuration_generation,
+        deletion_requested_at: now.clone(),
         unchanged,
+        invalid_provider_config: plan.invalid_provider_config,
     })
 }
 
@@ -411,12 +474,17 @@ pub fn release_bundle_apply_effects(
         desired,
         conflicts,
         configuration_generation,
+        deletion_requested_at,
         unchanged,
+        invalid_provider_config,
     } = proof;
     let effects = service.release_activation_effects(generation)?;
     let mut rendered = Vec::with_capacity(effects.len() + unchanged.len() + conflicts.len());
     for effect in effects {
         match effect {
+            ConfigurationEffect::RecordStoreMeta(pointer) => {
+                rendered.push(BundleApplyEffect::RecordStoreMeta(pointer));
+            }
             ConfigurationEffect::QueueIntent(intent) => match intent {
                 ConfigurationIntent::Create(key) => rendered.push(persist_effect(
                     &desired,
@@ -435,13 +503,21 @@ pub fn release_bundle_apply_effects(
                     true,
                 )?),
                 ConfigurationIntent::Delete(key) => {
+                    let is_credential = key.type_name().as_str() == "Credential";
                     rendered.push(BundleApplyEffect::DeleteResource {
                         authority: MutationAuthority::for_resource(
                             &key,
                             OrdinaryMutationVerb::Delete,
                         ),
-                        key,
+                        deletion_requested_at: deletion_requested_at.clone(),
+                        key: key.clone(),
                     });
+                    if is_credential {
+                        rendered.push(BundleApplyEffect::RevokeCredential {
+                            key,
+                            finalizer: CORE_CREDENTIAL_REVOKE_FINALIZER,
+                        });
+                    }
                 }
                 ConfigurationIntent::CancelDelete(key) => {
                     rendered.push(BundleApplyEffect::CancelDelete(key));
@@ -473,6 +549,19 @@ pub fn release_bundle_apply_effects(
                 rendered.push(BundleApplyEffect::NotifyReconcile);
             }
         }
+    }
+    let invalid_effects: Vec<BundleApplyEffect> = invalid_provider_config
+        .into_iter()
+        .filter(|key| key.type_name().as_str() == "Provider" && desired.contains_key(key))
+        .map(|key| BundleApplyEffect::MarkProviderConfigInvalid { key })
+        .collect();
+    if let Some(notify_index) = rendered
+        .iter()
+        .position(|effect| matches!(effect, BundleApplyEffect::NotifyReconcile))
+    {
+        rendered.splice(notify_index..notify_index, invalid_effects);
+    } else {
+        rendered.extend(invalid_effects);
     }
     Ok(rendered)
 }

@@ -198,6 +198,13 @@ fn classify(rel: &str, idx: usize, lines: &[String]) -> Verdict {
         // Storage principal names and ACL subjects - NOT systemd unit declarations.
         return Verdict::Skip;
     }
+    if rel.ends_with("/options-volumes.nix")
+        && (line.contains("owner = \"User/") || line.contains("group = \"User/"))
+    {
+        // Typed Volume ownership ResourceRefs may name a principal whose
+        // canonical user name matches a retired per-VM unit basename.
+        return Verdict::Skip;
+    }
     if rel.ends_with("/components/observability/host.nix") {
         // Alloy journald source filters may name the historical units; only an
         // actual `systemd.services`/`systemd.sockets` declaration is a failure.
@@ -341,6 +348,27 @@ fn legacy_unit_denylist_classify_semantics() {
         ),
         Verdict::Skip,
         "manifest.nix bundle-metadata strings are exempt"
+    );
+
+    // options-volumes.nix: a typed User ResourceRef is skipped...
+    assert_eq!(
+        classify(
+            "nixos-modules/options-volumes.nix",
+            0,
+            &[r#"      owner = "User/d2b-${guestName}-swtpm";"#.to_string()]
+        ),
+        Verdict::Skip,
+        "typed Volume ownership ResourceRefs are exempt"
+    );
+    // ...but a unit declaration in the same file is still LIVE.
+    assert_eq!(
+        classify(
+            "nixos-modules/options-volumes.nix",
+            0,
+            &[r#"    systemd.services."d2b-work-swtpm" = {};"#.to_string()]
+        ),
+        Verdict::Live,
+        "an actual systemd.services declaration in options-volumes.nix must be flagged"
     );
 
     // observability/host.nix: a journald-filter string is skipped...

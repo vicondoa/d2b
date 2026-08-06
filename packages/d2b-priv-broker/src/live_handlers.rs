@@ -66,6 +66,10 @@ pub enum LiveHandlerError {
         pid: i32,
         detail: String,
     },
+    /// Zone resource-store provisioning/open failed. The nested error is
+    /// deliberately path-free so the broker error and audit surfaces cannot
+    /// disclose the host layout.
+    ZoneStore(crate::ops::zone_store::ZoneStoreError),
     /// Spawn preflight rejected the bundle-resolved plan.
     SpawnPreflight(SpawnRunnerError),
     /// `clone3(2)` failed.
@@ -115,6 +119,7 @@ impl std::fmt::Display for LiveHandlerError {
             Self::ProcStatReadFailed { pid, detail } => {
                 write!(f, "/proc/{pid}/stat read after pidfd_open: {detail}")
             }
+            Self::ZoneStore(error) => write!(f, "{error}"),
             Self::SpawnPreflight(e) => write!(f, "spawn preflight rejected: {e}"),
             Self::SpawnFailed { detail } => write!(f, "clone3/spawn failed: {detail}"),
             Self::ReconcileExec(e) => write!(f, "reconcile exec: {e}"),
@@ -143,6 +148,17 @@ pub struct OpenPidfdResult {
     pub pidfd: OwnedFd,
     pub pid: i32,
     pub verified_start_time_ticks: u64,
+}
+
+/// Live broker `OpenZoneStore` handler. The resolver is the only source of
+/// the signed storage row and its derived state layout; no request path is
+/// accepted here.
+pub fn live_open_zone_store(
+    resolver: &d2b_core::bundle_resolver::BundleResolver,
+    zone_store_id: &d2b_contracts::v3::storage::ZoneStoreId,
+) -> Result<crate::ops::zone_store::ZoneStoreOutcome, LiveHandlerError> {
+    crate::ops::zone_store::open_zone_store(resolver, zone_store_id)
+        .map_err(LiveHandlerError::ZoneStore)
 }
 
 /// Live broker `OpenPidfd` handler.

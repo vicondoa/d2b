@@ -96,27 +96,11 @@ materialised, and a framework-managed Ed25519 key has been generated
 at `/var/lib/d2b/keys/corp-vm_ed25519`.
 
 ```bash
-d2b list       # corp-vm + sys-work-net
-# NAME               ENV       GRAPHICS  TPM   USBIP   STATIC_IP       STATUS
-# corp-vm            work      false     false false   10.20.0.10      stopped
-# sys-work-net       work      false     false false   192.0.2.2       running (net-vm)
-
-d2b status     # same table + a "=== Bridge health ===" footer
-# NAME               ENV       GRAPHICS  TPM   USBIP   STATIC_IP       STATUS
-# corp-vm            work      false     false false   10.20.0.10      stopped
-# sys-work-net       work      false     false false   192.0.2.2       running (net-vm)
-#
-# === Bridge health ===
-# BRIDGE               STATE      ADMIN   EXPECTED     RESULT
-# br-work-up           UP         up      UP           ok
-# br-work-lan          NO-CARRIER up      NO-CARRIER   no-carrier (no workloads up)
-
-# STATUS values: `running` = supervised by d2bd with a live runner;
-# `running (net-vm)` marks the auto-declared per-env net VM; `stopped`
-# = no live runner.
-d2b vm start corp-vm --apply   # boot it
+d2b guest list                  # typed Guest resource inventory
+d2b host doctor --read-only     # host and bridge readiness
+d2b guest start corp-vm --apply # boot it
 ssh -i /var/lib/d2b/keys/corp-vm_ed25519 alice@10.20.0.10 hostname
-d2b vm stop corp-vm --apply
+d2b guest stop corp-vm --apply
 ```
 
 `sys-work-net` (and every per-env net VM) is `autostart = true` by
@@ -132,17 +116,16 @@ running VM runners are re-adopted rather than cycled. After rebuilding,
 check whether any VM has pending changes:
 
 ```bash
-d2b list
-# ... STATUS column shows `running [pending restart]` for VMs whose
-# `current` closure differs from `booted` while they're running.
+d2b guest list
+# ... Guest resources expose pending updates under status.update.
 
-d2b vm restart <vm> --apply    # apply the new declared VM closure
+d2b guest restart <name> --apply # apply the new declared Guest closure
 # or
-d2b switch <vm> --apply        # full per-VM closure rebuild + live activation
+d2b activation switch Guest/<name> --apply # live activation
 ```
 
-`d2b status <vm>` (per-VM view) reports `pending-restart: yes/no`
-with both store paths and the exact remediation command. See
+`d2b guest status <name>` reports the Guest phase, conditions, and
+`status.update` currency. See
 [`docs/reference/cli-contract.md`](../../docs/reference/cli-contract.md#pending-restart-signal-v015)
 for the full semantics.
 

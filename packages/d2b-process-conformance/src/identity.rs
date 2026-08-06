@@ -11,10 +11,20 @@ use serde::Serialize;
 pub enum WaitReapOwner {
     /// d2b owns wait and reap; the process is a direct descendant of the
     /// local effect owner. This is the `system-minijail` posture.
+    #[serde(rename = "d2b")]
     Local,
     /// The service manager owns wait and reap; d2b holds only a verified
     /// pidfd. This is the `system-systemd` posture.
+    #[serde(rename = "systemd")]
     ServiceManager,
+}
+
+impl WaitReapOwner {
+    /// Whether this owner is the privileged broker parent that must relay
+    /// terminal status after wait/reap.
+    pub const fn is_broker(self) -> bool {
+        matches!(self, Self::Local)
+    }
 }
 
 /// One stable identity property an effect adapter can verify before the
@@ -108,6 +118,11 @@ macro_rules! opaque_digest {
                     out.push(char::from_digit((byte & 0x0f) as u32, 16).unwrap_or('0'));
                 }
                 out
+            }
+
+            /// Whether this digest is the forbidden all-zero identity.
+            pub fn is_zero(self) -> bool {
+                self.0 == [0; 32]
             }
         }
 

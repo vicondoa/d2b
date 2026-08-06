@@ -3,21 +3,27 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use d2b_contracts::v3::{ResourceRef, ResourceTypeName, ZoneId, ZoneRevision};
 use d2b_resource_store::{
-    StoreError, StoreFilter, StoreGetRequest, StoreInspectSchemaRequest, StoreListRequest,
-    StoreListResult, StoreProjection, StoreResolveRequest, StoreResolvedIdentity, StoredResource,
-    StoredSchema,
+    ExpectedRevision, ResourceMutationKind, StoreError, StoreFilter, StoreGetRequest,
+    StoreInspectSchemaRequest, StoreListRequest, StoreListResult, StoreProjection,
+    StoreResolveRequest, StoreResolvedIdentity, StoredResource, StoredSchema,
 };
 use redb::{Database, ReadableDatabase, ReadableTable};
 use tokio::sync::{OwnedSemaphorePermit, mpsc, oneshot};
 
+use crate::audit::{
+    DurableMutationAudit, NoopMutationAudit, opaque_digest, resource_mutation_record,
+};
+use crate::backup::LogicalBackup;
+use crate::metrics::{NoopStoreTelemetry, StoreMetric, StoreTelemetry};
+use crate::revision_log::{WatchCoordinator, WatchRegistrationId, WatchSelector, WatchStream};
+use crate::tracing::{STORE_READ_SPAN, STORE_WRITE_SPAN};
 use crate::transaction::{
     API_SCHEMAS, ChangeBatch, CommittedGroup, RESOURCES, ResourceRecord, StoreMeta, VerifiedWrite,
-    apply_group, backpressure, current_meta, decode, resource_key, revision_key, stored_resource,
-    timeout,
+    apply_group, backpressure, current_meta, decode, resource_key, stored_resource, timeout,
 };
 use crate::{KeySpace, ValueKind};
 use d2b_resource_store::mutation_seal::OpenedMutation;
@@ -54,6 +60,10 @@ impl SharedChangeBatch {
         self.batch.revision()
     }
 
+    pub(crate) fn batch_arc(&self) -> Arc<ChangeBatch> {
+        Arc::clone(&self.batch)
+    }
+
     pub fn entries(&self) -> impl ExactSizeIterator<Item = &crate::transaction::ChangeEntry> {
         self.indices
             .iter()
@@ -87,6 +97,69 @@ pub(crate) struct SignalCounters {
     writer_queue_depth: AtomicU64,
 }
 
+struct AuditIntent {
+    zone: String,
+    operation_id: String,
+    correlation_id: String,
+    subject_digest: String,
+    policy_revision: u64,
+    mutations: Vec<AuditMutation>,
+}
+
+struct AuditMutation {
+    verb: &'static str,
+    resource_type: &'static str,
+    resource_uid: String,
+    generation: u64,
+    expected_revision: u64,
+}
+
+fn audit_intent(body: &d2b_resource_store::mutation_seal::MutationSealBody) -> AuditIntent {
+    let mutations = body
+        .mutations
+        .iter()
+        .map(|prepared| {
+            let mutation = prepared.mutation();
+            let resource_uid = prepared
+                .resource_uid()
+                .or(mutation.expected_uid.as_ref())
+                .map_or_else(
+                    || opaque_digest(&mutation.target.to_canonical_string()),
+                    |uid| uid.as_str().to_owned(),
+                );
+            AuditMutation {
+                verb: mutation_audit_verb(mutation.kind),
+                resource_type: audit_resource_type(mutation.target.resource_type().as_str()),
+                resource_uid,
+                generation: 0,
+                expected_revision: match mutation.expected {
+                    ExpectedRevision::CreateAbsent => 0,
+                    ExpectedRevision::Exact(revision) => revision.get(),
+                },
+            }
+        })
+        .collect();
+    AuditIntent {
+        zone: body.authorization.zone.as_str().to_owned(),
+        operation_id: body.operation.operation_id.clone(),
+        correlation_id: body.operation.correlation_id.clone(),
+        subject_digest: opaque_digest(&body.authorization.subject_ref.to_canonical_string()),
+        policy_revision: body.policy_snapshot.policy_revision,
+        mutations,
+    }
+}
+
+const fn mutation_audit_verb(kind: ResourceMutationKind) -> &'static str {
+    match kind {
+        ResourceMutationKind::Create => "create",
+        ResourceMutationKind::UpdateSpec => "update-spec",
+        ResourceMutationKind::UpdateStatus => "update-status",
+        ResourceMutationKind::UpdateMetadata => "update-metadata",
+        ResourceMutationKind::UpdateFinalizers => "update-finalizers",
+        ResourceMutationKind::Delete => "delete",
+    }
+}
+
 impl SignalCounters {
     pub(crate) fn snapshot(&self) -> BackendSignals {
         BackendSignals {
@@ -99,11 +172,23 @@ impl SignalCounters {
             writer_queue_capacity: WRITE_QUEUE_CAPACITY as u64,
         }
     }
+
+    fn record_shared_batch(&self) {
+        self.shared_immutable_batches
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn record_fanout_reference(&self) {
+        self.fanout_references.fetch_add(1, Ordering::Relaxed);
+    }
 }
 
 pub(crate) struct WriterHandle {
     sender: Option<mpsc::Sender<WriterCommand>>,
     signals: Arc<SignalCounters>,
+    telemetry: Arc<dyn StoreTelemetry>,
+    audit_intents: Arc<std::sync::Mutex<BTreeMap<u64, AuditIntent>>>,
+    next_sequence: AtomicU64,
     write_permits: Arc<tokio::sync::Semaphore>,
     thread: Option<std::thread::JoinHandle<()>>,
     quarantined: Arc<AtomicBool>,
@@ -113,21 +198,56 @@ impl WriterHandle {
     pub(crate) fn start(
         database: Arc<Database>,
         signals: Arc<SignalCounters>,
+        watch_coordinator: Arc<std::sync::Mutex<WatchCoordinator>>,
+    ) -> Result<Self, StoreError> {
+        Self::start_with_ports(
+            database,
+            signals,
+            watch_coordinator,
+            Arc::new(NoopStoreTelemetry),
+            Arc::new(NoopMutationAudit),
+        )
+    }
+
+    pub(crate) fn start_with_ports(
+        database: Arc<Database>,
+        signals: Arc<SignalCounters>,
+        watch_coordinator: Arc<std::sync::Mutex<WatchCoordinator>>,
+        telemetry: Arc<dyn StoreTelemetry>,
+        audit: Arc<dyn DurableMutationAudit>,
     ) -> Result<Self, StoreError> {
         let (sender, receiver) = mpsc::channel(WRITE_QUEUE_CAPACITY);
         crate::transaction::set_clean_shutdown(&database, false)?;
         let actor_signals = Arc::clone(&signals);
+        let actor_telemetry = Arc::clone(&telemetry);
+        let actor_audit = Arc::clone(&audit);
+        let audit_intents = Arc::new(std::sync::Mutex::new(BTreeMap::new()));
+        let actor_audit_intents = Arc::clone(&audit_intents);
         let quarantined = Arc::new(AtomicBool::new(false));
         let actor_quarantined = Arc::clone(&quarantined);
+        let actor_watch_coordinator = Arc::clone(&watch_coordinator);
         let thread = std::thread::Builder::new()
             .name("d2b-redb-writer".to_owned())
             .spawn(move || {
-                WriterActor::new(database, receiver, actor_signals, actor_quarantined).run();
+                WriterActor::new_with_ports(
+                    database,
+                    receiver,
+                    actor_signals,
+                    actor_quarantined,
+                    actor_watch_coordinator,
+                    actor_telemetry,
+                    actor_audit,
+                    actor_audit_intents,
+                )
+                .run();
             })
             .map_err(|_| crate::transaction::integrity("writer-actor-start-failed"))?;
         Ok(Self {
             sender: Some(sender),
             signals,
+            telemetry,
+            audit_intents,
+            next_sequence: AtomicU64::new(0),
             write_permits: Arc::new(tokio::sync::Semaphore::new(WRITE_QUEUE_CAPACITY)),
             thread: Some(thread),
             quarantined,
@@ -157,6 +277,8 @@ impl WriterHandle {
             .try_acquire_owned()
             .map_err(|_| backpressure())?;
         let (response, receiver) = oneshot::channel();
+        let sequence = self.next_sequence.fetch_add(1, Ordering::Relaxed);
+        let intent = audit_intent(opened.body());
         let principal = opened.body().authorization.subject_uid.as_str().to_owned();
         let mut resources = opened
             .body()
@@ -175,8 +297,27 @@ impl WriterHandle {
         self.signals
             .writer_queue_depth
             .fetch_add(1, Ordering::Relaxed);
+        self.telemetry.metric(
+            StoreMetric::QueueDepth,
+            BTreeMap::from([("operation".to_owned(), "write".to_owned())]),
+            self.signals.writer_queue_depth.load(Ordering::Relaxed) as f64,
+        );
+        {
+            let mut audit_intents = match self.audit_intents.lock() {
+                Ok(intents) => intents,
+                Err(_) => {
+                    self.signals
+                        .writer_queue_depth
+                        .fetch_sub(1, Ordering::Relaxed);
+                    return Err(crate::transaction::integrity(
+                        "audit-intent-registry-poisoned",
+                    ));
+                }
+            };
+            audit_intents.insert(sequence, intent);
+        }
         if let Err(error) = sender.try_send(WriterCommand::Commit(Box::new(WriteRequest {
-            sequence: 0,
+            sequence,
             principal,
             resources,
             mutation: VerifiedWrite::from_opened(opened),
@@ -186,6 +327,10 @@ impl WriterHandle {
             self.signals
                 .writer_queue_depth
                 .fetch_sub(1, Ordering::Relaxed);
+            let _ = self
+                .audit_intents
+                .lock()
+                .map(|mut intents| intents.remove(&sequence));
             return Err(match error {
                 mpsc::error::TrySendError::Full(_) => backpressure(),
                 mpsc::error::TrySendError::Closed(_) => {
@@ -223,6 +368,94 @@ impl WriterHandle {
             .await
             .map_err(|_| crate::transaction::integrity("watch-replay-closed"))??;
         Ok(ZoneRevision::new(high_water))
+    }
+
+    pub(crate) async fn watch(
+        &self,
+        after_revision: ZoneRevision,
+        selector: WatchSelector,
+        initial_credits: u32,
+    ) -> Result<(WatchStream, ZoneRevision), StoreError> {
+        if self.quarantined.load(Ordering::Acquire) {
+            return Err(crate::transaction::quarantined());
+        }
+        let (response, receiver) = oneshot::channel();
+        self.sender
+            .as_ref()
+            .ok_or_else(|| crate::transaction::integrity("writer-closed"))?
+            .send(WriterCommand::Watch {
+                after_revision,
+                selector,
+                initial_credits,
+                response,
+            })
+            .await
+            .map_err(|_| crate::transaction::integrity("writer-closed"))?;
+        receiver
+            .await
+            .map_err(|_| crate::transaction::integrity("watch-response-closed"))?
+    }
+
+    pub(crate) async fn acknowledge_watch(
+        &self,
+        id: WatchRegistrationId,
+        revision: ZoneRevision,
+    ) -> Result<(), StoreError> {
+        if self.quarantined.load(Ordering::Acquire) {
+            return Err(crate::transaction::quarantined());
+        }
+        let (response, receiver) = oneshot::channel();
+        self.sender
+            .as_ref()
+            .ok_or_else(|| crate::transaction::integrity("writer-closed"))?
+            .send(WriterCommand::AcknowledgeWatch {
+                id,
+                revision,
+                response,
+            })
+            .await
+            .map_err(|_| crate::transaction::integrity("writer-closed"))?;
+        receiver
+            .await
+            .map_err(|_| crate::transaction::integrity("watch-ack-response-closed"))?
+    }
+
+    pub(crate) async fn unregister_watch(
+        &self,
+        id: WatchRegistrationId,
+    ) -> Result<Option<ZoneRevision>, StoreError> {
+        if self.quarantined.load(Ordering::Acquire) {
+            return Err(crate::transaction::quarantined());
+        }
+        let (response, receiver) = oneshot::channel();
+        self.sender
+            .as_ref()
+            .ok_or_else(|| crate::transaction::integrity("writer-closed"))?
+            .send(WriterCommand::UnregisterWatch { id, response })
+            .await
+            .map_err(|_| crate::transaction::integrity("writer-closed"))?;
+        receiver
+            .await
+            .map_err(|_| crate::transaction::integrity("watch-unregister-response-closed"))?
+    }
+
+    pub(crate) async fn backup(
+        &self,
+        identity: crate::StoreIdentity,
+    ) -> Result<LogicalBackup, StoreError> {
+        if self.quarantined.load(Ordering::Acquire) {
+            return Err(crate::transaction::quarantined());
+        }
+        let (response, receiver) = oneshot::channel();
+        self.sender
+            .as_ref()
+            .ok_or_else(|| crate::transaction::integrity("writer-closed"))?
+            .send(WriterCommand::Backup { identity, response })
+            .await
+            .map_err(|_| crate::transaction::integrity("writer-closed"))?;
+        receiver
+            .await
+            .map_err(|_| crate::transaction::integrity("writer-backup-response-closed"))?
     }
 
     pub(crate) async fn shutdown(&mut self) -> Result<(), StoreError> {
@@ -276,6 +509,25 @@ enum WriterCommand {
         resource_types: BTreeSet<ResourceTypeName>,
         visit: Box<dyn FnMut(SharedChangeBatch) -> Result<(), StoreError> + Send>,
         response: oneshot::Sender<Result<u64, StoreError>>,
+    },
+    Watch {
+        after_revision: ZoneRevision,
+        selector: WatchSelector,
+        initial_credits: u32,
+        response: oneshot::Sender<Result<(WatchStream, ZoneRevision), StoreError>>,
+    },
+    AcknowledgeWatch {
+        id: WatchRegistrationId,
+        revision: ZoneRevision,
+        response: oneshot::Sender<Result<(), StoreError>>,
+    },
+    UnregisterWatch {
+        id: WatchRegistrationId,
+        response: oneshot::Sender<Result<Option<ZoneRevision>, StoreError>>,
+    },
+    Backup {
+        identity: crate::StoreIdentity,
+        response: oneshot::Sender<Result<LogicalBackup, StoreError>>,
     },
     Shutdown {
         response: oneshot::Sender<Result<(), StoreError>>,
@@ -365,14 +617,43 @@ struct WriterActor {
     signals: Arc<SignalCounters>,
     sequence: u64,
     quarantined: Arc<AtomicBool>,
+    watch_coordinator: Arc<std::sync::Mutex<WatchCoordinator>>,
+    telemetry: Arc<dyn StoreTelemetry>,
+    audit: Arc<dyn DurableMutationAudit>,
+    audit_intents: Arc<std::sync::Mutex<BTreeMap<u64, AuditIntent>>>,
 }
 
 impl WriterActor {
+    #[cfg(test)]
     fn new(
         database: Arc<Database>,
         receiver: mpsc::Receiver<WriterCommand>,
         signals: Arc<SignalCounters>,
         quarantined: Arc<AtomicBool>,
+        watch_coordinator: Arc<std::sync::Mutex<WatchCoordinator>>,
+    ) -> Self {
+        Self::new_with_ports(
+            database,
+            receiver,
+            signals,
+            quarantined,
+            watch_coordinator,
+            Arc::new(NoopStoreTelemetry),
+            Arc::new(NoopMutationAudit),
+            Arc::new(std::sync::Mutex::new(BTreeMap::new())),
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn new_with_ports(
+        database: Arc<Database>,
+        receiver: mpsc::Receiver<WriterCommand>,
+        signals: Arc<SignalCounters>,
+        quarantined: Arc<AtomicBool>,
+        watch_coordinator: Arc<std::sync::Mutex<WatchCoordinator>>,
+        telemetry: Arc<dyn StoreTelemetry>,
+        audit: Arc<dyn DurableMutationAudit>,
+        audit_intents: Arc<std::sync::Mutex<BTreeMap<u64, AuditIntent>>>,
     ) -> Self {
         Self {
             database,
@@ -381,6 +662,10 @@ impl WriterActor {
             signals,
             sequence: 0,
             quarantined,
+            watch_coordinator,
+            telemetry,
+            audit,
+            audit_intents,
         }
     }
 
@@ -412,6 +697,7 @@ impl WriterActor {
                     mut visit,
                     response,
                 } => {
+                    let started = Instant::now();
                     let high_water = current_meta(&self.database).map(|meta| meta.current_revision);
                     let replayed = match high_water {
                         Ok(high_water) => {
@@ -420,6 +706,8 @@ impl WriterActor {
                                 let Some(filtered) = filter_batch(batch, &resource_types) else {
                                     return Ok(());
                                 };
+                                self.signals.record_shared_batch();
+                                self.signals.record_fanout_reference();
                                 visit(filtered)
                             })
                             .map(|()| high_water)
@@ -431,7 +719,101 @@ impl WriterActor {
                     {
                         self.quarantine(error.clone());
                     }
+                    let outcome = if replayed.is_ok() { "ok" } else { "error" };
+                    let elapsed = elapsed_seconds(started);
+                    self.telemetry.metric(
+                        StoreMetric::ReadDuration,
+                        BTreeMap::from([("operation".to_owned(), "scan".to_owned())]),
+                        elapsed,
+                    );
+                    self.telemetry.span(
+                        STORE_READ_SPAN,
+                        BTreeMap::from([
+                            ("op".to_owned(), "scan".to_owned()),
+                            ("outcome".to_owned(), outcome.to_owned()),
+                        ]),
+                        None,
+                    );
                     let _ = response.send(replayed);
+                }
+                WriterCommand::Watch {
+                    after_revision,
+                    selector,
+                    initial_credits,
+                    response,
+                } => {
+                    let result = self
+                        .watch_coordinator
+                        .lock()
+                        .map_err(|_| crate::transaction::integrity("watch-coordinator-poisoned"))
+                        .and_then(|mut coordinator| {
+                            coordinator.register_and_replay(
+                                &self.database,
+                                after_revision,
+                                selector,
+                                initial_credits,
+                            )
+                        });
+                    if let Err(error) = &result
+                        && error.kind() == d2b_resource_store::StoreErrorKind::StoreIntegrityFailure
+                    {
+                        self.quarantine(error.clone());
+                    }
+                    if result.is_ok()
+                        && let Ok(coordinator) = self.watch_coordinator.lock()
+                    {
+                        self.telemetry.metric(
+                            StoreMetric::WatchActive,
+                            BTreeMap::new(),
+                            coordinator.signals().current_registrations as f64,
+                        );
+                    }
+                    let _ = response.send(result);
+                }
+                WriterCommand::AcknowledgeWatch {
+                    id,
+                    revision,
+                    response,
+                } => {
+                    let result = self
+                        .watch_coordinator
+                        .lock()
+                        .map_err(|_| crate::transaction::integrity("watch-coordinator-poisoned"))
+                        .and_then(|mut coordinator| coordinator.acknowledge(id, revision));
+                    let _ = response.send(result);
+                }
+                WriterCommand::UnregisterWatch { id, response } => {
+                    let result = self
+                        .watch_coordinator
+                        .lock()
+                        .map_err(|_| crate::transaction::integrity("watch-coordinator-poisoned"))
+                        .map(|mut coordinator| coordinator.unregister(id));
+                    if result.is_ok()
+                        && let Ok(coordinator) = self.watch_coordinator.lock()
+                    {
+                        self.telemetry.metric(
+                            StoreMetric::WatchActive,
+                            BTreeMap::new(),
+                            coordinator.signals().current_registrations as f64,
+                        );
+                    }
+                    let _ = response.send(result);
+                }
+                WriterCommand::Backup { identity, response } => {
+                    let started = Instant::now();
+                    let backup = LogicalBackup::from_database(&self.database, &identity);
+                    let outcome = if backup.is_ok() { "ok" } else { "error" };
+                    self.telemetry.metric(
+                        StoreMetric::BackupDuration,
+                        BTreeMap::from([("outcome".to_owned(), outcome.to_owned())]),
+                        elapsed_seconds(started),
+                    );
+                    if let Err(error) = &backup
+                        && error.kind() == d2b_resource_store::StoreErrorKind::StoreIntegrityFailure
+                    {
+                        self.quarantine(error.clone());
+                    }
+                    let _ = response.send(backup);
                 }
                 WriterCommand::Shutdown { response } => {
                     let result = if self.quarantined.load(Ordering::Acquire) {
@@ -449,9 +831,8 @@ impl WriterActor {
         }
     }
 
-    fn enqueue(&mut self, mut request: WriteRequest) {
-        request.sequence = self.sequence;
-        self.sequence = self.sequence.wrapping_add(1);
+    fn enqueue(&mut self, request: WriteRequest) {
+        self.sequence = self.sequence.max(request.sequence.wrapping_add(1));
         self.scheduler.push(request);
     }
 
@@ -465,6 +846,30 @@ impl WriterActor {
                 u64::try_from(requests.len()).unwrap_or(u64::MAX),
                 Ordering::Relaxed,
             );
+            if let Err(error) = self.append_mutation_audits(&requests) {
+                self.telemetry.metric(
+                    StoreMetric::WriteDuration,
+                    BTreeMap::from([
+                        ("kind".to_owned(), commit_kind(requests.len()).to_owned()),
+                        ("outcome".to_owned(), "error".to_owned()),
+                    ]),
+                    0.0,
+                );
+                self.telemetry.span(
+                    STORE_WRITE_SPAN,
+                    BTreeMap::from([
+                        ("kind".to_owned(), commit_kind(requests.len()).to_owned()),
+                        ("outcome".to_owned(), "error".to_owned()),
+                    ]),
+                    None,
+                );
+                for request in requests {
+                    let _ = request.response.send(Err(error.clone()));
+                }
+                continue;
+            }
+            let started = Instant::now();
+            let request_count = requests.len();
             let owned = requests
                 .into_iter()
                 .map(|request| {
@@ -473,8 +878,37 @@ impl WriterActor {
                 })
                 .collect::<Vec<_>>();
             let (mutations, responses): (Vec<_>, Vec<_>) = owned.into_iter().unzip();
+            self.telemetry.metric(
+                StoreMetric::GroupCommitSize,
+                BTreeMap::new(),
+                request_count as f64,
+            );
             match apply_group(&self.database, mutations) {
                 Ok(CommittedGroup { results, batch }) => {
+                    let outcome = commit_outcome(&results);
+                    self.telemetry.metric(
+                        StoreMetric::WriteDuration,
+                        BTreeMap::from([
+                            ("kind".to_owned(), commit_kind(request_count).to_owned()),
+                            ("outcome".to_owned(), outcome.to_owned()),
+                        ]),
+                        elapsed_seconds(started),
+                    );
+                    self.telemetry.span(
+                        STORE_WRITE_SPAN,
+                        BTreeMap::from([
+                            ("kind".to_owned(), commit_kind(request_count).to_owned()),
+                            ("outcome".to_owned(), outcome.to_owned()),
+                        ]),
+                        None,
+                    );
+                    if outcome == "conflict" {
+                        self.telemetry.metric(
+                            StoreMetric::Conflict,
+                            BTreeMap::from([("resource_type".to_owned(), "vendor".to_owned())]),
+                            1.0,
+                        );
+                    }
                     let integrity_error = results.iter().find_map(|result| match result {
                         Err(error)
                             if error.kind()
@@ -484,7 +918,22 @@ impl WriterActor {
                         }
                         _ => None,
                     });
-                    let _ = batch;
+                    if let Some(batch) = batch
+                        && let Err(error) = self.dispatch_live(batch)
+                    {
+                        for response in responses {
+                            let _ = response.send(Err(error.clone()));
+                        }
+                        self.quarantine(error);
+                        return;
+                    }
+                    if let Ok(meta) = current_meta(&self.database) {
+                        self.telemetry.metric(
+                            StoreMetric::Revision,
+                            BTreeMap::new(),
+                            meta.current_revision as f64,
+                        );
+                    }
                     for (response, result) in responses.into_iter().zip(results) {
                         let _ = response.send(result);
                     }
@@ -494,6 +943,22 @@ impl WriterActor {
                     }
                 }
                 Err(error) => {
+                    self.telemetry.metric(
+                        StoreMetric::WriteDuration,
+                        BTreeMap::from([
+                            ("kind".to_owned(), commit_kind(request_count).to_owned()),
+                            ("outcome".to_owned(), "error".to_owned()),
+                        ]),
+                        elapsed_seconds(started),
+                    );
+                    self.telemetry.span(
+                        STORE_WRITE_SPAN,
+                        BTreeMap::from([
+                            ("kind".to_owned(), commit_kind(request_count).to_owned()),
+                            ("outcome".to_owned(), "error".to_owned()),
+                        ]),
+                        None,
+                    );
                     for response in responses {
                         let _ = response.send(Err(error.clone()));
                     }
@@ -504,6 +969,114 @@ impl WriterActor {
                 }
             }
         }
+    }
+
+    fn append_mutation_audits(&self, requests: &[WriteRequest]) -> Result<(), StoreError> {
+        if !self.audit.enabled() {
+            if let Ok(mut intents) = self.audit_intents.lock() {
+                for request in requests {
+                    intents.remove(&request.sequence);
+                }
+            }
+            return Ok(());
+        }
+        let meta = current_meta(&self.database)?;
+        let resulting_revision = meta
+            .current_revision
+            .checked_add(1)
+            .ok_or_else(|| crate::transaction::integrity("zone-revision-exhausted"))?;
+        let mut previous_hash = self
+            .audit
+            .previous_hash()
+            .map_err(|_| crate::transaction::durability_failure("audit-unavailable"))?;
+        let mut intents = self.audit_intents.lock().map_err(|_| {
+            crate::transaction::durability_failure("audit-intent-registry-poisoned")
+        })?;
+        let mut append = |zone: String,
+                          operation_id: String,
+                          correlation_id: String,
+                          subject_digest: String,
+                          policy_revision: u64,
+                          mutation: AuditMutation|
+         -> Result<(), StoreError> {
+            let record = resource_mutation_record(
+                unix_timestamp_ms(),
+                zone,
+                operation_id,
+                correlation_id,
+                "resource-store",
+                previous_hash.clone(),
+                mutation.verb,
+                mutation.resource_type,
+                mutation.resource_uid,
+                mutation.generation,
+                mutation.expected_revision,
+                resulting_revision,
+                subject_digest,
+                policy_revision,
+                "ok",
+                None,
+            )
+            .map_err(|_| crate::transaction::durability_failure("audit-record-invalid"))?;
+            self.audit
+                .append_before_commit(&record)
+                .map_err(|_| crate::transaction::durability_failure("audit-unavailable"))?;
+            previous_hash = record.record_hash().clone();
+            Ok(())
+        };
+        for request in requests {
+            if let Some(intent) = intents.remove(&request.sequence) {
+                for mutation in intent.mutations {
+                    append(
+                        intent.zone.clone(),
+                        intent.operation_id.clone(),
+                        intent.correlation_id.clone(),
+                        intent.subject_digest.clone(),
+                        intent.policy_revision,
+                        mutation,
+                    )?;
+                }
+            } else {
+                let Some(resource) = request.resources.first() else {
+                    return Err(crate::transaction::durability_failure(
+                        "audit-mutation-target-missing",
+                    ));
+                };
+                append(
+                    meta.zone_name.clone(),
+                    format!("writer-{}", request.sequence),
+                    format!("writer-correlation-{}", request.sequence),
+                    opaque_digest(&request.principal),
+                    meta.policy_revision,
+                    AuditMutation {
+                        verb: "update-spec",
+                        resource_type: audit_resource_type(resource.resource_type().as_str()),
+                        resource_uid: opaque_digest(&resource.to_canonical_string()),
+                        generation: 0,
+                        expected_revision: meta.current_revision,
+                    },
+                )?;
+            }
+        }
+        Ok(())
+    }
+
+    fn dispatch_live(&self, batch: ChangeBatch) -> Result<(), StoreError> {
+        let Some(shared) = shared_batch(batch) else {
+            return Ok(());
+        };
+        let fanout = self
+            .watch_coordinator
+            .lock()
+            .map_err(|_| crate::transaction::integrity("watch-coordinator-poisoned"))?
+            .dispatch(shared);
+        if fanout != 0 {
+            self.signals.record_shared_batch();
+            self.signals
+                .fanout_references
+                .fetch_add(fanout, Ordering::Relaxed);
+        }
+        Ok(())
     }
 
     fn quarantine(&mut self, error: StoreError) {
@@ -534,6 +1107,18 @@ impl WriterActor {
                 WriterCommand::Replay { response, .. } => {
                     let _ = response.send(Err(crate::transaction::quarantined()));
                 }
+                WriterCommand::Watch { response, .. } => {
+                    let _ = response.send(Err(crate::transaction::quarantined()));
+                }
+                WriterCommand::AcknowledgeWatch { response, .. } => {
+                    let _ = response.send(Err(crate::transaction::quarantined()));
+                }
+                WriterCommand::UnregisterWatch { response, .. } => {
+                    let _ = response.send(Err(crate::transaction::quarantined()));
+                }
+                WriterCommand::Backup { response, .. } => {
+                    let _ = response.send(Err(crate::transaction::quarantined()));
+                }
                 WriterCommand::Shutdown { response } => {
                     let _ = response.send(Err(error.clone()));
                 }
@@ -542,19 +1127,24 @@ impl WriterActor {
     }
 }
 
-fn filter_batch(
+pub(crate) fn filter_batch(
     batch: Arc<ChangeBatch>,
     resource_types: &BTreeSet<ResourceTypeName>,
+) -> Option<SharedChangeBatch> {
+    filter_batch_with(batch, |entry| {
+        resource_types.contains(entry.resource_type())
+    })
+}
+
+pub(crate) fn filter_batch_with(
+    batch: Arc<ChangeBatch>,
+    mut matches: impl FnMut(&crate::transaction::ChangeEntry) -> bool,
 ) -> Option<SharedChangeBatch> {
     let indices = batch
         .entries()
         .iter()
         .enumerate()
-        .filter_map(|(index, entry)| {
-            resource_types
-                .contains(entry.resource_type())
-                .then_some(index)
-        })
+        .filter_map(|(index, entry)| matches(entry).then_some(index))
         .collect::<Vec<_>>();
     (!indices.is_empty()).then(|| SharedChangeBatch {
         batch,
@@ -562,37 +1152,92 @@ fn filter_batch(
     })
 }
 
+pub(crate) fn shared_batch(batch: ChangeBatch) -> Option<SharedChangeBatch> {
+    filter_batch_with(Arc::new(batch), |_| true)
+}
+
 pub(crate) fn replay_after<F>(
     database: &Database,
     after_revision: u64,
     signals: &SignalCounters,
-    mut visit: F,
+    visit: F,
 ) -> Result<(), StoreError>
 where
     F: FnMut(ChangeBatch) -> Result<(), StoreError>,
 {
-    let Some(first) = after_revision.checked_add(1) else {
-        return Ok(());
-    };
-    let read = database
-        .begin_read()
-        .map_err(crate::transaction::integrity)?;
-    let table = read
-        .open_table(crate::transaction::REVISION_LOG)
-        .map_err(crate::transaction::integrity)?;
-    let lower = revision_key(first)?;
-    signals.revision_range_seeks.fetch_add(1, Ordering::Relaxed);
-    for row in table
-        .range(lower.as_slice()..)
-        .map_err(crate::transaction::integrity)?
-    {
-        let (_, value) = row.map_err(crate::transaction::integrity)?;
-        signals.replay_rows_scanned.fetch_add(1, Ordering::Relaxed);
-        let batch = decode(ValueKind::ChangeBatch, value.value())?;
-        signals.replay_rows_decoded.fetch_add(1, Ordering::Relaxed);
-        visit(batch)?;
+    let mut replay = crate::revision_log::ReplaySignals::default();
+    let result = crate::revision_log::stream_after(database, after_revision, &mut replay, visit);
+    signals
+        .revision_range_seeks
+        .fetch_add(replay.range_seeks(), Ordering::Relaxed);
+    signals
+        .replay_rows_scanned
+        .fetch_add(replay.rows_scanned(), Ordering::Relaxed);
+    signals
+        .replay_rows_decoded
+        .fetch_add(replay.rows_decoded(), Ordering::Relaxed);
+    result
+}
+
+fn elapsed_seconds(started: Instant) -> f64 {
+    started.elapsed().as_secs_f64()
+}
+
+fn unix_timestamp_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .ok()
+        .and_then(|duration| u64::try_from(duration.as_millis()).ok())
+        .unwrap_or(0)
+}
+
+fn commit_kind(request_count: usize) -> &'static str {
+    if request_count == 1 {
+        "single"
+    } else {
+        "group"
     }
-    Ok(())
+}
+
+fn commit_outcome(
+    results: &[Result<d2b_resource_store::StoreCommitResult, StoreError>],
+) -> &'static str {
+    if results.iter().all(Result::is_ok) {
+        return "ok";
+    }
+    if results.iter().any(|result| {
+        result.as_ref().err().is_some_and(|error| {
+            error.kind() == d2b_resource_store::StoreErrorKind::ResourceConflict
+        })
+    }) {
+        "conflict"
+    } else {
+        "error"
+    }
+}
+
+fn audit_resource_type(resource_type: &str) -> &'static str {
+    match resource_type {
+        "Zone" => "Zone",
+        "ZoneLink" => "ZoneLink",
+        "Provider" => "Provider",
+        "Role" => "Role",
+        "RoleBinding" => "RoleBinding",
+        "Quota" => "Quota",
+        "Host" => "Host",
+        "Guest" => "Guest",
+        "Process" => "Process",
+        "EphemeralProcess" => "EphemeralProcess",
+        "Volume" => "Volume",
+        "Network" => "Network",
+        "Device" => "Device",
+        "User" => "User",
+        "Credential" => "Credential",
+        "Endpoint" => "Endpoint",
+        "ResourceExport" => "ResourceExport",
+        "ResourceImport" => "ResourceImport",
+        _ => "vendor",
+    }
 }
 
 pub(crate) struct ReadPool {
@@ -601,10 +1246,19 @@ pub(crate) struct ReadPool {
     zone: ZoneId,
     permits: Arc<tokio::sync::Semaphore>,
     threads: Vec<std::thread::JoinHandle<()>>,
+    telemetry: Arc<dyn StoreTelemetry>,
 }
 
 impl ReadPool {
     pub(crate) fn start(database: Arc<Database>, zone: ZoneId) -> Result<Self, StoreError> {
+        Self::start_with_telemetry(database, zone, Arc::new(NoopStoreTelemetry))
+    }
+
+    pub(crate) fn start_with_telemetry(
+        database: Arc<Database>,
+        zone: ZoneId,
+        telemetry: Arc<dyn StoreTelemetry>,
+    ) -> Result<Self, StoreError> {
         let per_worker_capacity = MAX_CONCURRENT_READS / READ_POOL_THREADS;
         debug_assert_eq!(
             per_worker_capacity * READ_POOL_THREADS,
@@ -637,13 +1291,25 @@ impl ReadPool {
             zone,
             permits: Arc::new(tokio::sync::Semaphore::new(MAX_CONCURRENT_READS)),
             threads,
+            telemetry,
         })
     }
 
     async fn submit<T>(
         &self,
+        operation: &'static str,
         make: impl FnOnce(oneshot::Sender<Result<T, StoreError>>) -> ReadCommand,
     ) -> Result<T, StoreError> {
+        self.submit_with_hold(operation, make, None).await
+    }
+
+    async fn submit_with_hold<T>(
+        &self,
+        operation: &'static str,
+        make: impl FnOnce(oneshot::Sender<Result<T, StoreError>>) -> ReadCommand,
+        hold: Option<ReadHold>,
+    ) -> Result<T, StoreError> {
+        let started = Instant::now();
         let permit = Arc::clone(&self.permits)
             .try_acquire_owned()
             .map_err(|_| backpressure())?;
@@ -658,6 +1324,7 @@ impl ReadPool {
                 command: make(response),
                 deadline,
                 permit,
+                hold,
             })
             .map_err(|error| match error {
                 std::sync::mpsc::TrySendError::Full(_) => backpressure(),
@@ -665,15 +1332,30 @@ impl ReadPool {
                     crate::transaction::integrity("read-pool-closed")
                 }
             })?;
-        tokio::time::timeout(READ_LIFETIME + Duration::from_millis(25), receiver)
+        let result = tokio::time::timeout(READ_LIFETIME + Duration::from_millis(25), receiver)
             .await
             .map_err(|_| timeout())?
-            .map_err(|_| crate::transaction::integrity("read-response-closed"))?
+            .map_err(|_| crate::transaction::integrity("read-response-closed"))?;
+        let outcome = if result.is_ok() { "ok" } else { "error" };
+        self.telemetry.metric(
+            StoreMetric::ReadDuration,
+            BTreeMap::from([("operation".to_owned(), operation.to_owned())]),
+            elapsed_seconds(started),
+        );
+        self.telemetry.span(
+            STORE_READ_SPAN,
+            BTreeMap::from([
+                ("op".to_owned(), operation.to_owned()),
+                ("outcome".to_owned(), outcome.to_owned()),
+            ]),
+            None,
+        );
+        result
     }
 
     pub(crate) async fn get(&self, request: StoreGetRequest) -> Result<StoredResource, StoreError> {
         self.validate_zone(&request.zone)?;
-        self.submit(|response| ReadCommand::Get { request, response })
+        self.submit("get", |response| ReadCommand::Get { request, response })
             .await
     }
 
@@ -682,7 +1364,7 @@ impl ReadPool {
         request: StoreListRequest,
     ) -> Result<StoreListResult, StoreError> {
         self.validate_zone(&request.zone)?;
-        self.submit(|response| ReadCommand::List { request, response })
+        self.submit("list", |response| ReadCommand::List { request, response })
             .await
     }
 
@@ -691,7 +1373,7 @@ impl ReadPool {
         request: StoreResolveRequest,
     ) -> Result<StoreResolvedIdentity, StoreError> {
         self.validate_zone(&request.zone)?;
-        self.submit(|response| ReadCommand::Resolve { request, response })
+        self.submit("get", |response| ReadCommand::Resolve { request, response })
             .await
     }
 
@@ -700,12 +1382,16 @@ impl ReadPool {
         request: StoreInspectSchemaRequest,
     ) -> Result<StoredSchema, StoreError> {
         self.validate_zone(&request.zone)?;
-        self.submit(|response| ReadCommand::InspectSchema { request, response })
-            .await
+        self.submit("scan", |response| ReadCommand::InspectSchema {
+            request,
+            response,
+        })
+        .await
     }
 
     pub(crate) async fn meta(&self) -> Result<StoreMeta, StoreError> {
-        self.submit(|response| ReadCommand::Meta { response }).await
+        self.submit("scan", |response| ReadCommand::Meta { response })
+            .await
     }
 
     fn validate_zone(&self, zone: &ZoneId) -> Result<(), StoreError> {
@@ -716,9 +1402,22 @@ impl ReadPool {
     }
 
     #[cfg(test)]
-    pub(crate) async fn expiry_probe(&self) -> Result<(), StoreError> {
-        self.submit(|response| ReadCommand::NeverRespond { response })
-            .await
+    pub(crate) async fn expiry_probe(
+        &self,
+        started: oneshot::Sender<()>,
+        release: std::sync::mpsc::Receiver<()>,
+        completed: oneshot::Sender<()>,
+    ) -> Result<(), StoreError> {
+        self.submit_with_hold(
+            "scan",
+            |response| ReadCommand::NeverRespond { response },
+            Some(ReadHold {
+                started,
+                release,
+                completed,
+            }),
+        )
+        .await
     }
 
     #[cfg(test)]
@@ -752,7 +1451,18 @@ struct ReadWork {
     command: ReadCommand,
     deadline: Instant,
     permit: OwnedSemaphorePermit,
+    hold: Option<ReadHold>,
 }
+
+#[cfg(test)]
+struct ReadHold {
+    started: oneshot::Sender<()>,
+    release: std::sync::mpsc::Receiver<()>,
+    completed: oneshot::Sender<()>,
+}
+
+#[cfg(not(test))]
+struct ReadHold;
 
 enum ReadCommand {
     Get {
@@ -787,6 +1497,7 @@ fn read_worker(database: Arc<Database>, receiver: std::sync::mpsc::Receiver<Read
             command,
             deadline,
             permit,
+            hold,
         }) = command
         else {
             return;
@@ -794,8 +1505,16 @@ fn read_worker(database: Arc<Database>, receiver: std::sync::mpsc::Receiver<Read
         if Instant::now() >= deadline {
             send_read_result(command, Err(timeout()));
             drop(permit);
+            #[cfg(test)]
+            if let Some(hold) = hold {
+                let _ = hold.completed.send(());
+            }
+            #[cfg(not(test))]
+            let _ = hold;
             continue;
         }
+        #[cfg(test)]
+        let mut completed: Option<oneshot::Sender<()>> = None;
         match command {
             ReadCommand::Get { request, response } => {
                 let _ = response.send(read_get(&database, request, deadline));
@@ -837,11 +1556,21 @@ fn read_worker(database: Arc<Database>, receiver: std::sync::mpsc::Receiver<Read
             }
             #[cfg(test)]
             ReadCommand::NeverRespond { response } => {
-                std::thread::sleep(READ_LIFETIME + Duration::from_millis(10));
+                if let Some(hold) = hold {
+                    let _ = hold.started.send(());
+                    let _ = hold.release.recv();
+                    completed = Some(hold.completed);
+                }
                 let _ = response.send(Err(timeout()));
             }
         }
         drop(permit);
+        #[cfg(test)]
+        if let Some(completed) = completed {
+            let _ = completed.send(());
+        }
+        #[cfg(not(test))]
+        let _ = hold;
     }
 }
 
@@ -1155,7 +1884,12 @@ fn read_schema(
         .get(key.as_bytes())
         .map_err(crate::transaction::integrity)?
         .ok_or_else(not_found)?;
-    let canonical_json: Vec<u8> = decode(ValueKind::ApiSchemaRecord, bytes.value())?;
+    let decoded =
+        crate::DecodedValue::decode(bytes.value()).map_err(crate::transaction::integrity)?;
+    if decoded.kind() != ValueKind::ApiSchemaRecord {
+        return Err(crate::transaction::integrity("table-value-kind-mismatch"));
+    }
+    let canonical_json = decoded.canonical_json().to_vec();
     let payload_digest =
         d2b_contracts::v3::canonical_digest("d2b:v3:resource-schema", &canonical_json);
     Ok(StoredSchema {
@@ -1185,7 +1919,7 @@ fn not_found() -> StoreError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::transaction::{ChangeEntry, ChangeEvent, REVISION_LOG, encode};
+    use crate::transaction::{ChangeEntry, ChangeEvent, REVISION_LOG, encode, revision_key};
     use d2b_contracts::v3::{ResourceGeneration, ResourceName, ResourceUid};
     use std::fs::OpenOptions;
 
@@ -1351,11 +2085,13 @@ mod tests {
         let (second_response, second_result) = oneshot::channel();
         let mut second = second;
         second.response = second_response;
+        let watch_coordinator = Arc::new(std::sync::Mutex::new(WatchCoordinator::default()));
         let mut actor = WriterActor::new(
             database,
             command_receiver,
             Arc::clone(&signals),
             Arc::clone(&quarantined),
+            watch_coordinator,
         );
         actor.scheduler.push(first);
         actor.scheduler.push(second);
@@ -1369,6 +2105,78 @@ mod tests {
         assert_eq!(
             second_result.blocking_recv().unwrap().unwrap_err().kind(),
             d2b_resource_store::StoreErrorKind::StoreQuarantined
+        );
+    }
+
+    #[test]
+    fn durable_audit_failure_blocks_the_store_commit() {
+        struct RejectingAudit(AtomicU64);
+
+        impl DurableMutationAudit for RejectingAudit {
+            fn append_before_commit(
+                &self,
+                _record: &d2b_audit::AuditRecord,
+            ) -> Result<(), d2b_audit::AuditRecordError> {
+                self.0.fetch_add(1, Ordering::Relaxed);
+                Err(d2b_audit::AuditRecordError::Serialization)
+            }
+        }
+
+        let (_directory, database) = database("audit-before-commit");
+        let identity = crate::StoreIdentity::new(
+            d2b_resource_store::StoreSlot::new(0).unwrap(),
+            d2b_contracts::v3::ResourceUid::parse("11111111-1111-4111-8111-111111111111").unwrap(),
+            ZoneId::parse("work").unwrap(),
+            d2b_contracts::v3::ResourceUid::parse("22222222-2222-4222-8222-222222222222").unwrap(),
+            d2b_contracts::v3::Timestamp::parse("2026-07-31T00:00:00.000Z").unwrap(),
+            d2b_resource_store::PolicySnapshot {
+                policy_revision: 1,
+                api_catalog_revision: 1,
+                active_configuration_revision: d2b_contracts::v3::ConfigurationGeneration::new(1)
+                    .unwrap(),
+                controller_generation: None,
+            },
+        );
+        crate::transaction::initialize(&database, &identity).unwrap();
+
+        let (_command_sender, command_receiver) = mpsc::channel(1);
+        let signals = Arc::new(SignalCounters::default());
+        let quarantined = Arc::new(AtomicBool::new(false));
+        let permits = Arc::new(tokio::sync::Semaphore::new(1));
+        let request = crate::transaction::empty_write_request_for_test(
+            0,
+            "subject",
+            ResourceRef::parse("Process/first").unwrap(),
+            Arc::clone(&permits).try_acquire_owned().unwrap(),
+        );
+        let (response, result) = oneshot::channel();
+        let mut request = request;
+        request.response = response;
+        let audit = Arc::new(RejectingAudit(AtomicU64::new(0)));
+        let watch_coordinator = Arc::new(std::sync::Mutex::new(WatchCoordinator::default()));
+        let mut actor = WriterActor::new_with_ports(
+            database.clone(),
+            command_receiver,
+            signals,
+            quarantined,
+            watch_coordinator,
+            Arc::new(NoopStoreTelemetry),
+            audit.clone(),
+            Arc::new(std::sync::Mutex::new(BTreeMap::new())),
+        );
+        actor.scheduler.push(request);
+        actor.flush();
+
+        assert_eq!(audit.0.load(Ordering::Relaxed), 1);
+        assert_eq!(
+            crate::transaction::current_meta(&database)
+                .unwrap()
+                .current_revision,
+            0
+        );
+        assert_eq!(
+            result.blocking_recv().unwrap().unwrap_err().kind(),
+            d2b_resource_store::StoreErrorKind::StoreIntegrityFailure
         );
     }
 }

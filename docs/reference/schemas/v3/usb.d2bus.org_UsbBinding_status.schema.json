@@ -10,6 +10,6 @@
   "title": "usb.d2bus.org/UsbBinding/status",
   "type": "object",
   "x-d2b-resource-type": "usb.d2bus.org.UsbBinding",
-  "x-d2b-schema-fingerprint": "sha256:c35b46f9fa0314d401a2dc61eb8dda7d90e9d5e7d8e203c08f5df986264d0127",
+  "x-d2b-schema-fingerprint": "sha256:b56c6b69fff8d12d1d202549b3d38a9b8055aa54361cc865308bd1910e67f5bf",
   "x-d2b-schema-version": "1.0"
 }

@@ -1,12 +1,13 @@
 //! The neutral Process Provider trait and its conformance profile.
 
 use std::collections::BTreeSet;
-use std::future::Future;
+use std::{future::Future, future::ready};
 
 use d2b_contracts::v3::execution_policy::{BoundedToken, ExecutionDomain};
 
 use crate::error::ProcessConformanceError;
 use crate::identity::{IdentityBinding, WaitReapOwner};
+use crate::port::StopClass;
 use crate::status::ProcessStatusReport;
 use crate::ticket::LaunchTicket;
 
@@ -96,4 +97,17 @@ pub trait ProcessProvider: Send + Sync {
         &self,
         ticket: &LaunchTicket,
     ) -> impl Future<Output = Result<AdoptionOutcome, ProcessConformanceError>> + Send;
+
+    /// Stop exactly one verified process identity.
+    ///
+    /// The default is deliberately unavailable: a Provider must opt into the
+    /// provider-specific stop proof rather than silently pretending that a
+    /// generic signal completed teardown.
+    fn stop(
+        &self,
+        _identity: &crate::identity::ProcessIdentityDigest,
+        _class: StopClass,
+    ) -> impl Future<Output = Result<(), ProcessConformanceError>> + Send {
+        ready(Err(ProcessConformanceError::StopUnavailable))
+    }
 }

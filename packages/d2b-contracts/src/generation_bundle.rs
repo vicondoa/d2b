@@ -9,9 +9,10 @@ use std::collections::{BTreeMap, BTreeSet};
 use schemars::JsonSchema;
 use serde::{Deserialize, Deserializer, Serialize};
 
+use crate::v3::resource_schema::framed_canonical_digest;
 use crate::v3::{
     CanonicalJsonError, CanonicalJsonObject, ResourceBundleGenerationId, ResourceName, ResourceRef,
-    ResourceTypeName, SchemaFingerprint, ZoneId, canonical_digest, canonical_json_bytes,
+    ResourceTypeName, SchemaFingerprint, ZoneId, canonical_json_bytes,
 };
 
 /// Bundle schema version for the resource-plane contract.
@@ -356,7 +357,7 @@ impl ZoneBundle {
         resources: &[BundleResource],
     ) -> Result<ResourceBundleGenerationId, ZoneBundleError> {
         let bytes = canonical_json_bytes(&resources.to_vec())?;
-        ResourceBundleGenerationId::parse(canonical_digest(ZONE_BUNDLE_DOMAIN_TAG, &bytes))
+        ResourceBundleGenerationId::parse(framed_canonical_digest(ZONE_BUNDLE_DOMAIN_TAG, &bytes))
             .map_err(|_| ZoneBundleError::CanonicalJson)
     }
 

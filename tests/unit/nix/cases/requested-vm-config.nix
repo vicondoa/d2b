@@ -2,10 +2,10 @@
 
 let
   requested = mkEval [
-    (import (flakeRoot + "/examples/qemu-media-dark-live.nix"))
+    (import (flakeRoot + "/examples/qemu-media/qemu-media.nix"))
   ];
   requestedNiriNative = mkEval [
-    (import (flakeRoot + "/examples/qemu-media-dark-live.nix"))
+    (import (flakeRoot + "/examples/qemu-media/qemu-media.nix"))
     ({ ... }: {
       d2b.vms."dark-live".graphics.waylandProxy.border.enable = false;
     })

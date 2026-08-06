@@ -704,6 +704,12 @@ is what exposed the gap.
 
 ### 12.2 Specification gap: the required derivation outputs have no path, name, or layout
 
+**Disposition: closed by accepted ADR 0050 and its applied amendment.** The
+historical audit below records the pre-amendment state. Section 4.9 of
+`ADR-046-resources-zone-control.md` now fixes the output-selection predicate,
+the complete relative layout, the executable set, digest preimages, and the
+failure taxonomy.
+
 **Unimplementable as specified.** The Phase 2 row above names three required
 derivation outputs - manifest, config schema, executable - and specifies no
 path, no filename, no Nix output name, and no directory layout for any of them.
@@ -750,6 +756,10 @@ section 11's row closes; if rejected, the term stays open behind the amendment
 above.
 
 ### 12.3 Specification gap: the required-outputs rule has no conformance scenario
+
+**Disposition: closed by the applied amendment.** The section 15.8 Phase 1,
+Phase 2, and Phase 3 tables now carry the named Provider artifact and launcher
+scenarios, and work items 015 and 016 cite them.
 
 Smaller, and independent of whether 12.2 is amended.
 
@@ -840,10 +850,10 @@ digests.
 | Finding | Class | Owning wave |
 | --- | --- | --- |
 | Output obligation mislocated to `provider-catalog.nix`; the derivation-contents rule is `ADR046-zone-control-015` | Correction to this register | Recorded, no wave work |
-| Required derivation outputs have no path, filename, output name, or layout | Specification gap | Amendment, before `ADR046-zone-control-015` in W5 |
-| Output cardinality not checkable: no Provider crate has a package output, so the crate-to-output relation does not exist in the tree | Unmet obligation, blocked | Behind the amendment above |
+| Required derivation outputs have no path, filename, output name, or layout | Specification correction | Closed by accepted ADR 0050 and its applied amendment |
+| Output cardinality not checkable: no Provider crate has a package output, so the crate-to-output relation does not exist in the tree | Unmet obligation, blocked | Closed by the section 4.9.1 artifact-entry predicate |
 | `d2b.artifacts.<id>.package` typed `types.package` already enforces the cardinality at the one entry point | Inference, needs confirm or reject | W3 panel |
-| Required-outputs row has no conformance scenario in the section 15.8 Phase 2 table | Specification gap | Same amendment |
+| Required-outputs row has no conformance scenario in the section 15.8 Phase 2 table | Specification correction | Closed by the applied amendment |
 | Catalog names component and descriptor digests; contract names exported schema and service digests; section 4.3.1 names neither | Ruling needed, three-way | Amendment, before the Provider packaging surface is treated as frozen |
 | Five catalog facts absent from the manifest; one contract field absent from the catalog | Unmet obligation, pinned as data | `ADR046-provider-002`, closes when the ruling above lands |
 
@@ -978,6 +988,11 @@ the thing that needs to change. The consequence for `ADR046-zone-control-019`
 and `-020` is a real unmet obligation, but it is theirs and it is blocked behind
 this amendment.
 
+**Discharged by ADR 0051 Amendment A.** The security-key dossier now declares
+an empty provider-neutral backing set as a determinate deny-all, so the
+projection factory is constructible without inventing a physical backing
+reference.
+
 ### 13.4 The other underdetermined semantics this slice reported
 
 Checked against sections 2 and 10.2 first; none of the four was already
@@ -1025,7 +1040,7 @@ Three, all small, all recorded rather than corrected in place.
 | Finding | Class | Owning wave |
 | --- | --- | --- |
 | Telemetry Binding common status layer is empty, so no common status is writable for that type | Specification gap | Amendment to the telemetry dossier, before a telemetry controller is written |
-| Security-key names no semantic backing resource, so no signed projection factory can be built for that family | Specification gap | Amendment to the security-key dossier, before `ADR046-zone-control-019` / `-020` |
+| Security-key names no semantic backing resource, so no signed projection factory can be built for that family | Discharged by ADR 0051 Amendment A | Security-key dossier amendment before `ADR046-zone-control-019` / `-020` |
 | `ADR046-zone-control-019` / `-020` will find one of four families without factory metadata | Unmet obligation, blocked | Behind the amendment above |
 | Same-Zone half of the Binding ref/target rule is delegated to a caller that does not exist, and three of four families' target sets are untested | Unmet obligation | `ADR046-provider-004`, or the wave that first resolves refs in a Zone |
 | Serde round trip proved for the spec layer only, not status or projection | Unmet obligation, minor | Any later slice owning `semantic_services` |
@@ -2000,6 +2015,12 @@ stays open and visible until a runner exists.
 
 ### 19.7 `ADR046-zone-control-015` stays blocked pending an amendment
 
+**Disposition: closed by the accepted ADR 0050 amendment.** The item remains
+implementation work owned by W5, but it is no longer blocked on an absent
+derivation contract; the applied section 4.9 and section 15.8 scenarios are
+the contract it consumes. The dependent 016 and 021 records may likewise cite
+the corrected Phase 3 launcher and configuration scenarios.
+
 **The ruling.** The item is **not** delivered in W5 on invented facts. Section
 12.3 and the required-outputs register row already record the gap: the required
 derivation outputs have no path, filename, output name, or layout anywhere in the
@@ -2018,12 +2039,17 @@ not slice work.
 
 ### 19.8 The security-key semantic projection is not invented
 
-**The ruling.** Section 13.3 records that security-key cannot construct a signed
-projection factory at all, because no backing set is defined. W5 does not invent
-one. This follows the Wave 3 precedent, which correctly refused to invent a
-missing backing set rather than shipping a plausible guess.
+**The ruling.** Section 13.3 records that security-key could not construct a
+signed projection factory because no backing set was defined. W5 does not
+invent a non-empty set. ADR 0051 Amendment A instead makes the empty
+provider-neutral set determinate and deny-all, which unblocks construction
+without assigning the physical `Device` to the semantic Service.
 
-**Class: specification gap**, carried forward unchanged.
+**Class: specification gap, discharged by ADR 0051 Amendment A.**
+
+**Discharged by ADR 0051 Amendment A.** The security-key projection factory is
+now admitted with an empty `allowedBackingRefTypes` set, and any attempted
+backing reference remains denied.
 
 ### 19.9 What Wave 5 takes on from the standing register
 
@@ -2059,8 +2085,9 @@ their validation evidence rather than a criticism of it.
 - Three **unmet obligations**: the ChangeBatch fan-out coverage gap that the
   canonical RSS fixture cannot exercise (19.5), the latency targets that no
   runner can measure (19.6), and the standing debt table in 19.9.
-- Two **specification gaps** carried forward: derivation output layout (19.7) and
-  the security-key backing set (19.8).
+- The derivation output layout gap (19.7) is closed by accepted ADR 0050 and
+  its applied amendment.
+- The security-key backing-set gap (19.8) is discharged by ADR 0051 Amendment A.
 - Three **inferences** a reviewer should confirm: per-round prep against the
   one-snapshot requirement (19.1) and the `redb` dependency placement (19.4).
 
@@ -2103,3 +2130,127 @@ part of the evidence, not as an aside.
 
 **Class: unmet obligation** until the measurement of record is taken under that
 precondition. The provisional slice reading is explicitly not evidence.
+
+## 20. Wave 5 destination and rename drift, and two corrections to earlier entries
+
+The full adjudication is
+[`amendment-w5-destination-drift.md`](./amendment-w5-destination-drift.md). Only
+what changes an existing entry in this register is restated here.
+
+**Class: specification drift.** Eleven W5 items and two already-`Merged` items
+carry destination paths naming crates that do not exist, where a committed crate
+covers the same obligation under a different name: `d2b-bus-session` and
+`d2b-bus-session-unix` against `d2b-session` and `d2b-session-unix`,
+`d2b-bus-wire` against `d2b-bus`, `d2b-zone-router` against `d2b-zone-routing`,
+`d2b-client` and `d2b-bus-client` against `d2b-resource-client`,
+`d2b-bus-contracts` and `d2b-zone-service` against `d2b-resource-api`, and
+`d2b-provider-runtime` and `d2b-provider-agent` against `d2b-provider`.
+
+**FR-046 does not decide this class**, and that is the entry worth carrying
+forward. FR-046 resolves prose against the generated manifests. Here both sides
+are the generated manifest: `ADR046-exec-016` names `packages/d2b-bus-session/`
+while `ADR046-session-001`, `Merged` in W1, names `packages/d2b-session/`, and
+both are rows in `ADR-046-work-items.json`. Two member specs were authored
+against different naming proposals and the generator carried both forward
+faithfully. The deciding rule is therefore "existing code is canon", with the
+committed crate as the destination - except where the member spec's own
+detailed-design text permits the current name, in which case there is no drift.
+`ADR046-exec-016` and `ADR046-exec-017` are that exception: both say "rename
+crate ... or retain name", and `ADR046-exec-017`'s Removal proof says "if the
+name is retained, no prior owner is removed".
+
+### 20.1 Correction to section 10.3: the crate-layout policy record is stale
+
+Section 10.3 recorded that `ADR046-pkg-001` named
+`packages/d2b-contract-tests/tests/policy_provider_crate_layout.rs` while the
+slice shipped `policy_provider_crates.rs`, routed through "the **advisory**
+`test-fixture-contracts` lane". Both halves have been overtaken:
+
+- The named file now exists. `2232c8c1` added it, 533 lines, driven by Cargo
+  metadata and an on-disk `packages/` scan so a crate omitted from the workspace
+  cannot escape coverage.
+- `test-fixture-contracts` is no longer advisory. `tests/layer1-jobs.json`
+  classifies exactly one job advisory today, `test-performance-budgets`.
+
+Section 10.3's reasoning was sound and is kept; its premise about the lane is
+not, and citing that sentence now understates the coverage. Three locations are
+live and each has a distinct role - the xtask entrypoint at
+`packages/xtask/src/provider_crate_policy.rs`, the dependency-allowlist and
+naming-exemption policy at `policy_provider_crates.rs`, and the layout policy at
+`policy_provider_crate_layout.rs`. The shell gate `ADR046-pstate-011` also names
+is still not owed; section 14.4 already ruled on it and the gate set is closed.
+
+### 20.2 Two obligations that are absent rather than relocated
+
+Recorded separately because the rest of the drift resolves to a rename, and a
+reader who generalises would conclude nothing is missing:
+
+- `ProcessAttachClient`, `ADR046-exec-022`'s fourth prescribed rename, has no
+  counterpart anywhere in `packages/`. The other three renames it names all
+  landed in `d2b-resource-client`.
+- `nixos-modules/options-volumes.nix` does not exist and no other module covers
+  it. `ADR046-volume-004` and `ADR046-vvfs-006` both name it for user-facing
+  volume and attachment options. Its sibling destination
+  `nixos-modules/resources-volume.nix` does exist and is substantial, so a scan
+  that stopped at "one destination of two is present" would have marked the row
+  covered.
+
+`nixos-modules/resources-zone-control.nix` at `ADR046-zone-control-007` is a
+third case, between the two: no file answers to the name, but Zone-control
+resource handling is spread across `options-zones.nix`,
+`options-zones-resources.nix`, `resources-zones-processes.nix`,
+`resources-zones-volumes.nix` and `generated/`, and `index.nix` already computes
+`declaredZones` and `zoneRows`. The integrator must bind the destination to that
+set or accept a new file; it is not decided here.
+
+### 20.3 A normative numeric conflict: the configuration-cleanup stall threshold
+
+**Class: specification drift, and an unmet reconciliation obligation.** Full
+record in
+[`amendment-w5-destination-drift.md`](./amendment-w5-destination-drift.md)
+section 7; only what a later reader must not miss is restated here.
+
+The configuration-cleanup stall threshold has two published defaults.
+`packages/d2b-core-controller/src/cleanup.rs:257` carries
+`CONFIGURATION_CLEANUP_STALL_THRESHOLD_MS_DEFAULT = 600_000`, ten minutes, and
+`ADR-046-resources-host-guest-process-user` agrees. Three statements in
+`ADR-046-resources-zone-control`, one in `ADR-046-security-and-threat-model`,
+and `ADR046-zone-control-016`'s `detailedDesign` all say five minutes.
+
+**Ruling: committed passing code is canon for this wave. The constant stands at
+600,000 ms and no runtime behaviour changes.** FR-046 does not decide it -
+`ADR046-exec-015` carries "10 min default" and `ADR046-zone-control-016` carries
+"default 5 min", both inside `detailedDesign` in the same generated manifest, so
+both sides are the manifest. Nothing in the specification set gives one member
+standing over another on a shared default, which is why an amendment is required
+rather than a reading.
+
+Three things worth carrying forward.
+
+- **Nothing production reads the constant.** Its only two call sites are inside
+  one `#[cfg(test)]` unit test, `cleanup_stall_due` takes the threshold as a
+  parameter, and `cleanupStuckThreshold` appears nowhere outside `docs/specs/` -
+  no Nix option, no schema field, no CLI surface. No operator is affected today
+  in either direction, and the conflict is therefore cheap now and expensive
+  once the option is wired, when changing it becomes a consumer-visible default
+  change under the deprecation policy.
+- **The failing test is the guard.** `ADR046-zone-control-016`'s destination
+  explicitly names `packages/d2b-core-controller/src/cleanup.rs` while its design
+  says five minutes, so an implementer working it literally will edit the
+  constant and break
+  `configuration_stall_clock_is_bounded_and_clock_injected`, which pins the
+  transition at exactly `00:10:00.000`. Retuning that test to five minutes is the
+  tempting repair and is exactly how a halved operator-visible default ships
+  green and unrecorded. That test is the only artifact in the tree asserting what
+  the default is.
+- **Standing instruction for W5**: do not move the constant, do not retune the
+  test, do not wire the option. A candidate snapshot that does any of the three
+  is out of scope and should be rejected at review.
+
+The amendment must pick one value. The recommendation recorded, and it is a
+recommendation only, is five minutes with the code changed to match in a
+deliberate separate change carrying a changelog entry: crossing this threshold
+sets a Degraded condition and never refuses or force-clears a finalizer, so a
+false positive costs one investigation while a false negative hides a stuck
+finalizer for twice as long, and the shorter window is the fail-closed direction
+for a threshold that surfaces rather than denies.

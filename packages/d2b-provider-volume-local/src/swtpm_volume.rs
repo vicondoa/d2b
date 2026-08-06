@@ -7,7 +7,8 @@
 
 use d2b_contracts::v3::ResourceUid;
 use d2b_contracts::v3::volume::{
-    CreatePolicy, EntryType, RepairPolicy, SensitivityClass, VolumeKind, VolumeSpec,
+    CleanupPolicy, CreatePolicy, EntryAdoptionPolicy, EntryType, RepairPolicy, SensitivityClass,
+    VolumeKind, VolumeSpec,
 };
 
 use crate::error::VolumeLocalError;
@@ -66,17 +67,30 @@ pub fn assert_swtpm_volume(
         .cloned()
         .and_then(|value| serde_json::from_value(value).ok())
         .ok_or(VolumeLocalError::InvalidSpec)?;
-    if sensitivity != SensitivityClass::Secret {
+    if !matches!(
+        sensitivity,
+        SensitivityClass::SecretAdjacent | SensitivityClass::Secret
+    ) {
         return Err(VolumeLocalError::InvalidSpec);
     }
     let root = EntryRequest::resolve(volume_uid, root)?;
     if root.create_policy() != CreatePolicy::CreateIfNeverProvisioned {
         return Err(VolumeLocalError::InvalidSpec);
     }
-    // The contract's repair set has no fail-closed member, so the
-    // strictest available posture is the mode-only repair that never
-    // rewrites the owner of existing NVRAM.
-    if root.repair_policy() != RepairPolicy::ExactMode {
+    if !matches!(
+        root.repair_policy(),
+        RepairPolicy::FailClosed | RepairPolicy::ExactMode
+    ) {
+        return Err(VolumeLocalError::InvalidSpec);
+    }
+    if root.cleanup_policy() != CleanupPolicy::Never
+        || !matches!(
+            root.adoption_policy(),
+            EntryAdoptionPolicy::QuarantineOnAmbiguity
+                | EntryAdoptionPolicy::NeverAdopt
+                | EntryAdoptionPolicy::AdoptWithLiveOwnerProof
+        )
+    {
         return Err(VolumeLocalError::InvalidSpec);
     }
     Ok(())

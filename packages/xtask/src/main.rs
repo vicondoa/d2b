@@ -15,11 +15,10 @@ use d2b_contracts::{
     WireProtocolSchema,
     cli_output::{
         AuditOutputV2, AuthStatusOutputV2, HostCheckOutputV2, LaunchOutputV1, ListOutputV2,
-        OpInspectOutputV1, RealmInspectOutputV1, RealmListOutputV1, ShellDetachOutputV1,
-        ShellKillOutputV1, ShellListOutputV1, StatusOutputV2, StoreVerifyOutputV2,
-        UsbProbeOutputV1, VmAudioSetOutputV1, VmAudioStatusOutputV1, VmDisplayCloseOutputV1,
-        VmDisplayListOutputV1, VmExecCreateOutputV1, VmExecKillOutputV1, VmExecListOutputV1,
-        VmExecLogsOutputV1, VmExecStatusOutputV1,
+        OpInspectOutputV1, RealmInspectOutputV1, RealmListOutputV1, StatusOutputV2,
+        StoreVerifyOutputV2, UsbProbeOutputV1, VmAudioSetOutputV1, VmAudioStatusOutputV1,
+        VmDisplayCloseOutputV1, VmDisplayListOutputV1, VmExecCreateOutputV1, VmExecKillOutputV1,
+        VmExecListOutputV1, VmExecLogsOutputV1, VmExecStatusOutputV1,
     },
     v3::storage::ZoneStoreStorageRow,
 };
@@ -94,6 +93,7 @@ use schemars::schema::RootSchema;
 
 mod changelog;
 mod delivery;
+mod gen_resource_schemas;
 mod gen_spec_set;
 mod heavy_gate;
 mod implementation_graph;
@@ -361,6 +361,9 @@ fn main() -> std::process::ExitCode {
         [command] if command == "gen-zone-nix-options" => run_task("gen-zone-nix-options", || {
             zone_schema::gen_zone_nix_options(repo_root()?)
         }),
+        [command] if command == "gen-resource-schemas" => run_task("gen-resource-schemas", || {
+            gen_resource_schemas::generate(repo_root()?)
+        }),
         [command] if command == "gen-error-codes" => run_task("gen-error-codes", gen_error_codes),
         [command] if command == "gen-provider-packaging" => {
             run_task("gen-provider-packaging", || {
@@ -409,12 +412,13 @@ fn main() -> std::process::ExitCode {
         }),
         [command] if command == "process-marker-pin" => run_process_marker_pin(),
         [command] if command == "check-provider-crate-layout" => run_provider_crate_layout(),
+        [command] if command == "check-provider-layout" => run_provider_layout(),
         [command, rest @ ..] if command == "test-runtime-ledger" => {
             test_runtime_ledger::run_cli(rest)
         }
         _ => {
             eprintln!(
-                "usage: cargo run --manifest-path packages/Cargo.toml -p xtask -- <gen-schemas|gen-zone-storage-schema|gen-cli-schemas|gen-zone-schemas|gen-zone-nix-options|gen-error-codes|gen-provider-packaging|gen-semantic-service-schemas|gen-cli-shell-artifacts|gen-guest-proto|gen-guest-ttrpc|gen-resource-proto|gen-resource-ttrpc|gen-daemon-api|release-notes <version>|adr0035-inventory [--output <path>]|changelog-fold [--check]|spec-registry|implementation-graph|process-marker-pin|check-provider-crate-layout|test-runtime-ledger <record|check|lint|help> [options]|redact-diagnostics --repo-root <path> [--home <path>] [--tail-lines <count>]|delivery wave <snapshot|validate-import|panel-request|panel-attest|seal|merge-target|merge-eligibility|help> [options]|heavy-gate <-- <command> [args...] | verify-slot>>"
+                "usage: cargo run --manifest-path packages/Cargo.toml -p xtask -- <gen-schemas|gen-zone-storage-schema|gen-cli-schemas|gen-zone-schemas|gen-zone-nix-options|gen-resource-schemas|gen-error-codes|gen-provider-packaging|gen-semantic-service-schemas|gen-cli-shell-artifacts|gen-guest-proto|gen-guest-ttrpc|gen-resource-proto|gen-resource-ttrpc|gen-daemon-api|release-notes <version>|adr0035-inventory [--output <path>]|changelog-fold [--check]|spec-registry|implementation-graph|process-marker-pin|check-provider-crate-layout|check-provider-layout|test-runtime-ledger <record|check|lint|help> [options]|redact-diagnostics --repo-root <path> [--home <path>] [--tail-lines <count>]|delivery wave <snapshot|validate-import|panel-request|panel-attest|seal|merge-target|merge-eligibility|help> [options]|heavy-gate <-- <command> [args...] | verify-slot>>"
             );
             std::process::ExitCode::FAILURE
         }
@@ -444,6 +448,78 @@ fn run_provider_crate_layout() -> std::process::ExitCode {
             eprintln!("check-provider-crate-layout failed: {error}");
             std::process::ExitCode::FAILURE
         }
+    }
+}
+
+fn run_provider_layout() -> std::process::ExitCode {
+    let result = repo_root()
+        .map_err(|error| error.to_string())
+        .and_then(check_provider_layout);
+    match result {
+        Ok(()) => std::process::ExitCode::SUCCESS,
+        Err(error) => {
+            eprintln!("check-provider-layout failed: {error}");
+            std::process::ExitCode::FAILURE
+        }
+    }
+}
+
+/// Check the four required paths for every two-segment Provider workspace
+/// member. Generic helper crates such as `d2b-provider-toolkit` do not match
+/// the Provider crate naming shape and remain outside this check.
+fn check_provider_layout(repo_root: &Path) -> Result<(), String> {
+    let manifest = fs::read_to_string(repo_root.join("packages/Cargo.toml"))
+        .map_err(|_| "provider-layout-input-unreadable".to_owned())?;
+    let members_start = manifest
+        .find("members = [")
+        .ok_or_else(|| "provider-layout-members-missing".to_owned())?;
+    let members = &manifest[members_start..];
+    let members_end = members
+        .find(']')
+        .ok_or_else(|| "provider-layout-members-malformed".to_owned())?;
+    let mut violations = Vec::new();
+
+    for line in members[..members_end].lines().skip(1) {
+        let member = line.trim().trim_end_matches(',');
+        let Some(relative) = member
+            .strip_prefix('"')
+            .and_then(|value| value.strip_suffix('"'))
+        else {
+            continue;
+        };
+        let member_path = Path::new(relative);
+        let Some(crate_name) = member_path.file_name().and_then(|value| value.to_str()) else {
+            return Err("provider-layout-member-invalid".to_owned());
+        };
+        let Some(provider_suffix) = crate_name.strip_prefix("d2b-provider-") else {
+            continue;
+        };
+        if !provider_suffix.contains('-') {
+            continue;
+        }
+        let crate_dir = repo_root.join("packages").join(member_path);
+        let required = ["src", "tests", "integration", "README.md"];
+        let missing = required
+            .into_iter()
+            .filter(|path| !crate_dir.join(path).exists())
+            .collect::<Vec<_>>();
+        if !missing.is_empty() {
+            let missing = missing
+                .into_iter()
+                .map(|path| format!("\"{path}\""))
+                .collect::<Vec<_>>()
+                .join(",");
+            violations.push(format!(
+                "{{\"error\":\"missing-provider-layout\",\"crate\":\"{crate_name}\",\"missing\":[{missing}]}}"
+            ));
+        }
+    }
+
+    if violations.is_empty() {
+        Ok(())
+    } else {
+        violations.sort();
+        Err(violations.join("\n"))
     }
 }
 
@@ -786,7 +862,7 @@ fn gen_cli_schemas() -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {
     let out_dir = repo_root.join("docs/reference/cli-output");
     fs::create_dir_all(&out_dir)?;
 
-    let schemas: [(&str, RootSchema); 23] = [
+    let schemas: [(&str, RootSchema); 20] = [
         ("list.schema.json", schemars::schema_for!(ListOutputV2)),
         ("status.schema.json", schemars::schema_for!(StatusOutputV2)),
         ("launch.schema.json", schemars::schema_for!(LaunchOutputV1)),
@@ -835,18 +911,6 @@ fn gen_cli_schemas() -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {
             schemars::schema_for!(VmExecKillOutputV1),
         ),
         ("audit.schema.json", schemars::schema_for!(AuditOutputV2)),
-        (
-            "shell-list.schema.json",
-            schemars::schema_for!(ShellListOutputV1),
-        ),
-        (
-            "shell-detach.schema.json",
-            schemars::schema_for!(ShellDetachOutputV1),
-        ),
-        (
-            "shell-kill.schema.json",
-            schemars::schema_for!(ShellKillOutputV1),
-        ),
         (
             "host-check.schema.json",
             schemars::schema_for!(HostCheckOutputV2),
@@ -910,7 +974,7 @@ fn markdown_cell(value: &str) -> String {
 fn gen_cli_shell_artifacts() -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {
     let repo_root = repo_root()?;
     let man_dir = repo_root.join("docs/manpages");
-    let comp_dir = repo_root.join("docs/completions");
+    let comp_dir = repo_root.join("completions");
     fs::create_dir_all(&man_dir)?;
     fs::create_dir_all(&comp_dir)?;
 
@@ -931,18 +995,15 @@ fn gen_cli_shell_artifacts() -> Result<Vec<PathBuf>, Box<dyn std::error::Error>>
         .render(&mut man_buffer)?;
     write_manpage(&man_path, man_buffer)?;
     let host_man_path = write_subcommand_manpage(&man_dir, &["host"], "d2b-host")?;
-    let launch_man_path = write_subcommand_manpage(&man_dir, &["launch"], "d2b-launch")?;
     let shell_man_path = write_subcommand_manpage(&man_dir, &["shell"], "d2b-shell")?;
     let clipboard_man_path = write_subcommand_manpage(&man_dir, &["clipboard"], "d2b-clipboard")?;
-    let clipboard_arm_man_path =
-        write_subcommand_manpage(&man_dir, &["clipboard", "arm"], "d2b-clipboard-arm")?;
+    let clipboard_arm_man_path = write_clipboard_arm_manpage(&man_dir)?;
 
     let bash_path = comp_dir.join("d2b.bash");
     let mut bash_command = d2b::cli_command();
     let mut bash_buffer = Vec::new();
     generate(Bash, &mut bash_command, "d2b", &mut bash_buffer);
-    let bash_buffer = patch_vm_exec_logs_bash_completion(String::from_utf8(bash_buffer)?)?;
-    fs::write(&bash_path, bash_buffer)?;
+    fs::write(&bash_path, String::from_utf8(bash_buffer)?)?;
 
     let zsh_path = comp_dir.join("d2b.zsh");
     let mut zsh_command = d2b::cli_command();
@@ -954,13 +1015,11 @@ fn gen_cli_shell_artifacts() -> Result<Vec<PathBuf>, Box<dyn std::error::Error>>
     let mut fish_command = d2b::cli_command();
     let mut fish_buffer = Vec::new();
     generate(Fish, &mut fish_command, "d2b", &mut fish_buffer);
-    let fish_buffer = patch_vm_exec_logs_fish_completion(String::from_utf8(fish_buffer)?)?;
-    fs::write(&fish_path, fish_buffer)?;
+    fs::write(&fish_path, String::from_utf8(fish_buffer)?)?;
 
     Ok(vec![
         man_path,
         host_man_path,
-        launch_man_path,
         shell_man_path,
         clipboard_man_path,
         clipboard_arm_man_path,
@@ -996,6 +1055,31 @@ fn write_subcommand_manpage(
     Ok(man_path)
 }
 
+fn write_clipboard_arm_manpage(man_dir: &Path) -> Result<PathBuf, Box<dyn std::error::Error>> {
+    // `arm` is a provider projection verb, not a nested clap subcommand.
+    // Start from the modern root so the projection page inherits its global
+    // options without pretending that `ModernCli` owns the provider verb.
+    let mut command = d2b::cli_command()
+        .name("clipboard arm")
+        .bin_name("clipboard arm")
+        .about("Open the clipboard picker through the declared Provider projection")
+        .mut_subcommands(|subcommand| subcommand.hide(true));
+    command.build();
+
+    let man_path = man_dir.join("d2b-clipboard-arm.1");
+    let mut man_buffer = Vec::new();
+    Man::new(command)
+        .title("d2b-clipboard-arm")
+        .section("1")
+        .date("1970-01-01")
+        .source("d2b".to_owned())
+        .manual("d2b CLI")
+        .render(&mut man_buffer)?;
+    let rendered = String::from_utf8(man_buffer)?.replace(r#" <\fIsubcommands\fR>"#, "");
+    write_manpage(&man_path, rendered.into_bytes())?;
+    Ok(man_path)
+}
+
 fn write_manpage(path: &Path, rendered: Vec<u8>) -> Result<(), Box<dyn std::error::Error>> {
     let rendered = String::from_utf8(rendered)?;
     let mut normalized = rendered
@@ -1003,66 +1087,10 @@ fn write_manpage(path: &Path, rendered: Vec<u8>) -> Result<(), Box<dyn std::erro
         .map(str::trim_end)
         .collect::<Vec<_>>()
         .join("\n");
+    normalized = normalized.trim_end().to_owned();
     normalized.push('\n');
     fs::write(path, normalized)?;
     Ok(())
-}
-
-fn patch_vm_exec_logs_bash_completion(
-    generated: String,
-) -> Result<String, Box<dyn std::error::Error>> {
-    let generated = replace_once(
-        generated,
-        r#"            opts="-d -i -t -h --detach --interactive --tty --env --cwd --json --human --help <VM> [MANAGEMENT]... [COMMAND]..."
-"#,
-        r#"            opts="-d -i -t -h --detach --interactive --tty --env --cwd --json --human --help <VM> [MANAGEMENT]... [COMMAND]..."
-            if [[ " ${COMP_WORDS[*]} " == *" logs "* ]] ; then
-                opts="${opts} --stdout-offset --stderr-offset --max-len"
-            fi
-"#,
-        "bash vm exec opts",
-    )?;
-    replace_once(
-        generated,
-        r#"                --cwd)
-                    COMPREPLY=($(compgen -f "${cur}"))
-                    return 0
-                    ;;
-"#,
-        r#"                --cwd)
-                    COMPREPLY=($(compgen -f "${cur}"))
-                    return 0
-                    ;;
-                --stdout-offset|--stderr-offset|--max-len)
-                    COMPREPLY=()
-                    return 0
-                    ;;
-"#,
-        "bash vm exec logs flag values",
-    )
-}
-
-fn patch_vm_exec_logs_fish_completion(
-    generated: String,
-) -> Result<String, Box<dyn std::error::Error>> {
-    replace_once(
-        generated,
-        "complete -c d2b -n \"__fish_d2b_using_subcommand vm; and __fish_seen_subcommand_from exec\" -l cwd -d 'Working directory for the guest command' -r\n",
-        "complete -c d2b -n \"__fish_d2b_using_subcommand vm; and __fish_seen_subcommand_from exec\" -l cwd -d 'Working directory for the guest command' -r\ncomplete -c d2b -n \"__fish_d2b_using_subcommand vm; and __fish_seen_subcommand_from exec; and __fish_seen_subcommand_from logs\" -l stdout-offset -d 'Resume stdout from this byte offset. The daemon clamps stale offsets' -r\ncomplete -c d2b -n \"__fish_d2b_using_subcommand vm; and __fish_seen_subcommand_from exec; and __fish_seen_subcommand_from logs\" -l stderr-offset -d 'Resume stderr from this byte offset. The daemon clamps stale offsets' -r\ncomplete -c d2b -n \"__fish_d2b_using_subcommand vm; and __fish_seen_subcommand_from exec; and __fish_seen_subcommand_from logs\" -l max-len -d 'Maximum retained bytes to request per stream' -r\n",
-        "fish vm exec logs flags",
-    )
-}
-
-fn replace_once(
-    input: String,
-    needle: &str,
-    replacement: &str,
-    label: &str,
-) -> Result<String, Box<dyn std::error::Error>> {
-    if !input.contains(needle) {
-        return Err(format!("could not patch generated completion: missing {label}").into());
-    }
-    Ok(input.replacen(needle, replacement, 1))
 }
 
 fn write_schemas(
@@ -1673,4 +1701,53 @@ fn civil_from_days(z: i64) -> (i32, u32, u32) {
     let m = if mp < 10 { mp + 3 } else { mp - 9 };
     let y = if m <= 2 { y + 1 } else { y };
     (y, m, d)
+}
+
+#[cfg(test)]
+mod provider_layout_tests {
+    use super::check_provider_layout;
+    use std::{
+        fs,
+        sync::atomic::{AtomicUsize, Ordering},
+    };
+
+    static FIXTURE_COUNTER: AtomicUsize = AtomicUsize::new(0);
+
+    fn fixture() -> std::path::PathBuf {
+        let serial = FIXTURE_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let root = std::env::temp_dir().join(format!(
+            "d2b-provider-layout-command-{}-{serial}",
+            std::process::id()
+        ));
+        let crate_dir = root.join("packages/d2b-provider-device-fixture");
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(crate_dir.join("src")).unwrap();
+        fs::create_dir_all(crate_dir.join("tests")).unwrap();
+        fs::create_dir_all(crate_dir.join("integration")).unwrap();
+        fs::write(
+            root.join("packages/Cargo.toml"),
+            "[workspace]\nmembers = [\n    \"d2b-provider-device-fixture\",\n]\n",
+        )
+        .unwrap();
+        fs::write(crate_dir.join("README.md"), "# fixture\n").unwrap();
+        root
+    }
+
+    #[test]
+    fn accepts_all_four_required_paths() {
+        let root = fixture();
+        assert_eq!(check_provider_layout(&root), Ok(()));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn names_each_missing_required_path() {
+        let root = fixture();
+        let missing = root.join("packages/d2b-provider-device-fixture/integration");
+        fs::remove_dir_all(missing).unwrap();
+        let error = check_provider_layout(&root).unwrap_err();
+        assert!(error.contains("\"crate\":\"d2b-provider-device-fixture\""));
+        assert!(error.contains("\"missing\":[\"integration\"]"));
+        fs::remove_dir_all(root).unwrap();
+    }
 }

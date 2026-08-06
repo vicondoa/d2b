@@ -58,7 +58,7 @@ all guest-side wiring is unconditional within the module.
     cycle the running swtpm. Killing swtpm under a live VM means
     the guest loses its TPM socket and Entra/Intune device-bound
     credentials become unreachable; the framework refuses to do
-    this silently. Use `d2b vm restart <vm> --apply` to apply pending
+    this silently. Use `d2b guest restart <name> --apply` to apply pending
     changes. (Pre-v0.1.7 this was the broken
     `unitConfig.X-RestartIfChanged = false` form; see v0.1.7
     CHANGELOG.)
@@ -95,9 +95,9 @@ A `nixos-rebuild switch` updates the unit file but does NOT cycle
 the running swtpm - killing swtpm under a live VM tears down the
 CH TPM socket, the guest's libtpms enters failure mode, and
 Entra/Intune device-bound creds become unreachable. After a
-rebuild, `d2b list` flags the VM with `[pending restart]` if
+rebuild, `d2b guest list` exposes update currency if
 its `current` closure has drifted from `booted`; apply with
-`d2b vm restart <vm> --apply` (clean down+up cycles swtpm and CH
+`d2b guest restart <name> --apply` (clean stop/start cycles swtpm and CH
 together so the TPM socket survives the round-trip). See
 [`docs/reference/cli-contract.md` - Pending-restart signal](./cli-contract.md#pending-restart-signal-v015).
 
@@ -131,7 +131,7 @@ together so the TPM socket survives the round-trip). See
   owned by `d2b-<vm>-swtpm`. ACLs grant `d2b-<vm>-gpu` rw;
   no other user (including the kvm group) can reach the control
   protocol out-of-band.
-- swtpm NVRAM persists across `d2b vm start`/`d2b vm stop` cycles
+- swtpm NVRAM persists across `d2b guest start`/`d2b guest stop` cycles
   and across host reboots - by design. Anything the guest binds to
   the TPM (LUKS keys, Himmelblau device key, sbctl PCR policies)
   survives a VM restart.

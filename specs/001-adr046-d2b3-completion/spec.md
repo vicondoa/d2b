@@ -483,7 +483,9 @@ artifacts, complete Story 1, and exercise each desktop companion against it.
 - **FR-045**: No intermediate release artifact MUST be published during the program. There
   is exactly one release, d2b 3.0, cut after the final wave satisfies the release gate.
   Wave merges are integration events, not releases, and MUST NOT be tagged or published as
-  consumable versions.
+  consumable versions. This does not forbid publishing the replacement *contracts* that
+  companions adapt against; FR-061 defines the contract/artifact boundary and is the
+  resolution of the apparent conflict with FR-039.
 - **FR-046**: Where the specification set's prose and the generated implementation graph or
   work-item manifest disagree on wave assignment, destination paths, or work-item identity,
   the **generated manifests are authoritative**. Any such drift MUST be recorded and raised
@@ -516,9 +518,189 @@ artifacts, complete Story 1, and exercise each desktop companion against it.
   against the release candidate. The program MUST identify that companion set, publish the
   replacement contracts they depend on early enough for them to adapt, and treat an
   unadapted companion as a release blocker rather than as acceptable post-release breakage.
+  FR-064 defines which candidates are members of that set; FR-065 defines what verification
+  passes.
 - **FR-040**: Companion compatibility MUST be verified by exercising each companion against
   the release candidate on a live host, not by inspection of its source or version number
   alone.
+- **FR-061**: The FR-039 release blocker and the FR-045 no-intermediate-artifact rule are
+  both retained in full, and the tension between them is resolved by **publishing contracts
+  without publishing artifacts**. The distinction is binding, not editorial. A **contract**
+  is committed reference text, a committed schema, or a committed typed definition, reachable
+  at a public git ref, that a companion maintainer can read and implement against; publishing
+  one is not a release. An **artifact** is anything a consumer's build could select or fetch
+  as a version - a tag, a GitHub release, a binary archive, a substituter output, or a flake
+  output pinned to a version; publishing one is a release and remains forbidden. The program
+  MUST publish contracts early and MUST NOT publish artifacts, and the three stages MUST run
+  in this order, each refusing rather than degrading:
+
+  | Stage | Wave | Refusal if the stage is not met |
+  | --- | --- | --- |
+  | Publish the companion inventory and every replacement contract it names | W5 | The W5 exit refuses while any "surface consumed" cell in the inventory does not resolve to a committed reference document, schema, or typed definition at a public ref |
+  | Companion maintainers adapt against the published contracts | W5 through W8, external to this program | No refusal here; this program does not control the schedule of a sibling repository, which is exactly why FR-062 records it as an unvalidated assumption rather than a plan step |
+  | Verify each companion by exercising it against the release candidate on a live host | W8 | The release gate refuses while any inventory row lacks a live-host verification record naming the exact candidate, the companion revision, the surfaces exercised, and the result |
+
+  Three things MUST NOT be accepted as verification evidence in the third stage: source
+  inspection, a matching version number, and the publication of the contracts themselves.
+  Contract publication is adaptation input, never compatibility evidence, and a reviewer who
+  treats a published contract as a discharged verification has skipped the stage that FR-040
+  exists to require.
+
+  If adaptation stalls anyway, exactly two outcomes are lawful: **hold the release**, or
+  **amend FR-045** through the specification-amendment path. Amending FR-045 is a
+  specification change with its own evidence, never an integrator judgment call and never an
+  unannounced preview. Publishing any artifact without that amendment is a violation of
+  FR-045, not a pragmatic exception to it.
+- **FR-062**: The assumption underlying FR-061 - that a companion maintainer can adapt from
+  published contracts alone, with no artifact to build or test against - is **recorded as
+  unvalidated**. This program cannot validate it: doing so requires evidence from repositories
+  it does not own, and no such evidence has been gathered. The assumption MUST therefore be
+  carried as a named risk with a stated mitigation and a stated detection point, and MUST NOT
+  be restated as a fact anywhere in the program's artifacts.
+
+  - **Mitigation**: the published contracts are the actionable interface shape, not a
+    summary. Where a surface has a generated schema or a typed definition, the contract MUST
+    point at that generated source rather than paraphrase it, so a maintainer implements
+    against the same bytes the implementation validates against.
+  - **Detection point**: the first live-host verification in W8. That is the first moment the
+    assumption is tested, and it is late. A verification failure there is evidence the
+    assumption was wrong, and the response is FR-061's two lawful outcomes, not a relaxation
+    of FR-040.
+  - **Escalation**: if the assumption is found wrong for any companion, that finding MUST be
+    recorded against this requirement rather than absorbed into a wave's fix round, because
+    it changes a program-level premise and not a wave's implementation.
+- **FR-063**: Each companion surface named in the published inventory MUST be classified at
+  W8 into exactly one of three outcomes, and the classification - not the impression a
+  reviewer forms - decides whether the release proceeds.
+
+  **First, the distinction the classification rests on.** A companion that reads a published
+  capability key, finds the capability false, and declines to offer the action is **conforming
+  to the contract**, not degrading. Capability discovery is the sanctioned way an operator's
+  desktop shrinks: `runtime.operationCapabilities` is a committed manifest field, and
+  `docs/reference/zone-cli-contract.md` already binds the shell client to check
+  `runtime.operationCapabilities.guest.shell` before offering a shell action. Treating that as
+  a defect would block the release on a companion doing exactly what d2b told it to do, and
+  would make the capability surface pointless. **Degradation** is the different case: the
+  surface is available and the companion cannot use it.
+
+  | Outcome | Condition | Effect on the release |
+  | --- | --- | --- |
+  | **Conformant** | Every surface named in the row either works, or is unavailable through a published capability key or a typed refusal state the contract already names, and the companion refuses that action with an actionable message and takes no fallback | Ships |
+  | **Blocked** | Anything else: absent, crashes, hangs, silently returns a wrong result, falls back to another transport or privilege path or a legacy shape, refuses without an actionable message, requires an undocumented workaround, or **cannot be classified** | Holds the release (FR-039) |
+  | **Retired** | The operator has converted a Blocked surface into an explicit capability retirement under FR-042 **before the tag** | Ships, with the retirement named in the consumer-facing release notes |
+
+  **A degraded required companion blocks.** SC-024 exists so that an operator's desktop is not
+  degraded by adopting 3.0, and this requirement does not carve an exception into it. There is
+  no tolerance band, no "mostly working" outcome, and no per-surface partial credit: a row with
+  one Blocked surface is Blocked.
+
+  **Fail closed on classification.** Any W8 outcome not positively classified as Conformant or
+  Retired is Blocked. An exercise that was not run, was inconclusive, or produced a result the
+  verifier could not place is Blocked, because an unclassifiable outcome and a broken one are
+  indistinguishable from the release gate's position.
+
+  **Refusal must be actionable, per FR-017.** A conformant refusal MUST name the capability key
+  or refusal state that is false, and MUST name at least one concrete operator action: an option
+  to set, a command to run, or an artifact to inspect. A bare "not supported", a generic retry
+  prompt, a message naming only the companion, and a silently disabled or greyed control with no
+  explanation are each **not** actionable, and a row whose refusal is unactionable is Blocked
+  rather than Conformant.
+
+  **Retirement is the only lawful ship-with-less path, and it is not a reclassification.** A
+  Retired outcome requires an entry on the FR-042 retirement list with a stated justification,
+  a named owner, the condition that would restore the surface, and a line in the consumer-facing
+  release notes. It MUST be decided before the tag; a failed exercise MUST NOT be relabelled as
+  a retirement after the fact. It is unavailable where FR-041 independently applies - if the
+  capability's migration disposition promised a successor, that successor must be obtainable and
+  no retirement may substitute for it. The published inventory row MUST NOT read as verified for
+  a retired surface.
+
+  **No staged deprecation applies.** FR-045 leaves exactly one release, and this repository
+  deliberately retired its staged warning, fail-loud, and removal calendar at the clean break.
+  A retirement is therefore an enumerated, release-note-named fact, never the first step of a
+  multi-release timeline.
+- **FR-064**: Membership in the release-blocking companion set MUST be decided by a two-limb
+  test. A candidate is a member if and only if **both** limbs hold, and the decision MUST be
+  recorded rather than argued.
+
+  **Limb 1 - discovery.** The candidate appears in at least one of these sources, which are a
+  closed list:
+
+  1. the flake inputs of the validation host's own configuration - d2b targets a single trusted
+     host with one operator, so the set that adopting 3.0 can break is what that host runs;
+  2. the currently published inventory in `docs/reference/companion-contracts.md`, so the set
+     can never shrink silently; or
+  3. any repository that a d2b reference document, example, template, or how-to names as
+     consuming a d2b surface.
+
+  Prose in `README.md` or `AGENTS.md` MAY raise a candidate but MUST NOT settle membership,
+  because it is measurably unreliable: `AGENTS.md` names no companion at all, and `README.md`
+  names them once, in a sentence about colour output, listing three of the five published
+  members under non-canonical short names alongside two upstream projects that are not members,
+  and omitting two members entirely.
+
+  **Limb 2 - consumed public surface.** The candidate consumes at least one surface from this
+  closed list of public operator surfaces:
+
+  - the public daemon socket wire (`docs/reference/daemon-api.md`);
+  - the `d2b` CLI contract, including `--json` output and exit codes
+    (`docs/reference/cli-contract.md`), and its v3 replacement
+    (`docs/reference/zone-cli-contract.md`);
+  - the public `vms.json` manifest (`docs/reference/manifest-schema.md` and its schema);
+  - public presentation artifacts `/etc/d2b/ui-colors.json` and `/etc/d2b/ui-colors.css`
+    (`docs/reference/ui-colors.md` and its schema);
+  - the clipboard picker protocol over the inherited `socketpair()` file descriptor
+    (`docs/reference/clipboard-picker-protocol.md`);
+  - public launcher metadata served to authorized clients through the public daemon API
+    (`realm-workloads-launcher-v2.json`, per `docs/reference/manifest-bundle.md`); and
+  - the flake's public outputs: `nixosModules`, `packages.<system>`, `templates`, `overlays`.
+
+  **Reading a private artifact is not membership; it is a defect.**
+  `docs/reference/manifest-bundle.md` fixes the public/private boundary, and every private
+  bundle artifact installs `root:d2bd` `0640`. A candidate found reading one MUST be reported
+  as a defect and MUST NOT be admitted to the inventory on that basis, because admitting it
+  would record an unauthorised read as a supported contract.
+
+  **Evidence each row carries.** The repository, the exact revision pinned on the validation
+  host as a commit rather than a tag or version string, the maintainer of record, the discovery
+  source that raised it, and the specific surfaces from limb 2 that it consumes. A row without
+  a pinned revision is not a row, because "which version blocks" would be undecidable.
+
+  **Additions and removals.** An addition requires only both limbs. A **removal requires a
+  negative determination**: recorded evidence that the candidate consumes no surface on the
+  limb-2 list, at a named revision, on a named date. Removal by assertion, by absence from
+  prose, or by an unrecorded judgement is not permitted.
+
+  **Uncertain candidates fail closed into the set.** A candidate that satisfies limb 1 but whose
+  limb-2 consumption cannot be determined is a **member** and blocks the release until a
+  negative determination is recorded. The asymmetry is deliberate: wrongly including costs one
+  determination, and wrongly excluding ships a broken desktop.
+- **FR-065**: "A compatible version verified against the release candidate" (FR-039, SC-024)
+  passes if and only if **all** of the following hold. Any one failing is a fail, and there is
+  no aggregate or majority reading:
+
+  1. the exercise ran on the daily-driver **live host**, not in a VM, a container, or a CI
+     runner;
+  2. it ran against the **exact release-candidate snapshot** that will be tagged, named by
+     commit;
+  3. the companion was at a **pinned revision**, named by commit;
+  4. **every** surface named in that companion's inventory row was exercised, not a sample;
+  5. every one of those surfaces classified **Conformant or Retired** under FR-063;
+  6. **zero** surfaces classified Blocked, including zero that could not be classified; and
+  7. the evidence was recorded in FR-063's shape.
+
+  **None of these is a pass**: source inspection; a matching version number or tag; a
+  successful documentation check; the publication of the replacement contracts; a successful
+  build; a green CI run in the companion's own repository; an exercise against any d2b build
+  other than the candidate; an exercise on a host that is not the live validation host; and a
+  partial exercise of the row.
+
+  **A moved candidate voids its verifications.** If the release-candidate snapshot changes for
+  any reason, every companion verification recorded against the previous snapshot is void and
+  MUST be re-run against the new one. This mirrors the rule that any content change invalidates
+  prior panel sign-off, and it is what makes "verified against the release candidate"
+  measurable rather than aspirational: without it, "the candidate" is whichever build was
+  convenient at the time.
 
 ### Key Entities
 
@@ -653,6 +835,9 @@ Delegation is not omission. Every delegated obligation is enumerated in
 - **SC-024**: 100 percent of identified desktop companions that consume d2b's public
   operator contracts have a compatible version verified against the release candidate on a
   live host before 3.0 is tagged, so an operator's desktop is not degraded by adopting 3.0.
+  The identified set is fixed by FR-064's two-limb membership test; "verified" means exercised
+  and classified under FR-063 and passing every condition of FR-065. A Blocked surface,
+  including one that could not be classified, holds the release.
 - **SC-026**: All seven remaining waves reach the integration lineage through a pull request
   whose gates passed first, with zero waves landing by direct push or by a gate-bypassing
   local merge, and zero intermediate versions published before 3.0.
@@ -713,6 +898,11 @@ Delegation is not omission. Every delegated obligation is enumerated in
   specification set with assigned work items that must reach merged for its wave to seal.
 - The integration lineage is `v3` rather than `main`. How work reaches it is a requirement,
   not an assumption; see FR-044 and FR-045.
+- Desktop companion maintainers can adapt to the v3 surfaces from published contracts alone,
+  without any artifact to build or test against. This is an **unvalidated** assumption held
+  about repositories this program does not own, and it is carried as a named risk with a
+  mitigation, a detection point, and an escalation path; see FR-062. It is stated here as an
+  assumption and nowhere in this program's artifacts as a fact.
 - Delivery state, panel transcripts, and attestation payloads remain outside the repository
   and are never committed.
 - The target remains a single trusted host with one human operator. Multi-tenant isolation,
@@ -734,4 +924,5 @@ Delegation is not omission. Every delegated obligation is enumerated in
   authored and released by their own maintainers. This program owns identifying the
   companion set, publishing the replacement contracts they need, and verifying them against
   the release candidate; a companion that has not adapted blocks the 3.0 release (FR-039,
-  FR-040).
+  FR-040), and a companion that adapted only partly is classified and blocks on any Blocked
+  surface (FR-063).

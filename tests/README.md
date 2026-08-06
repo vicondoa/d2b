@@ -229,14 +229,24 @@ replace source inventory, `make test-policy`, or
 ### Nix-unit runner
 
 `make test-nix-unit` uses the established `nix-eval-jobs` runner with
-`--no-instantiate` against the locked `nixUnitJobs.<system>` flake output.
-That output contains one aggregate attr per current `*.nix` case file (45
-file jobs), plus the `nix-unit` shard/pin integrity attr. File jobs use stable
-names of the form `case-<basename>`. Each file job
+`--no-instantiate` against the locked `nixUnitJobShards.<system>` flake
+output for the complete local pass. The underlying `nixUnitJobs.<system>`
+surface still contains one aggregate attr per current `*.nix` case file, plus
+the `nix-unit` shard/pin integrity attr. File jobs use stable names of the
+form `case-<basename>`, and `nixUnitJobShards.<system>` presents them one
+local shard attr at a time plus the integrity shard. Each file job
 reuses the same `casesFor`/`resultsFor`/failure-report constructor as the
 seven topical `checks.<system>` leaves, so it reports every
 `FAIL <case>: <detail>` from its file without submitting installables to the
 daemon or realizing derivations.
+
+Neither the file-job count nor the corpus case count is stated here as a
+number. They are derived, the bijection rather than the cardinality is the
+contract, and the corpus total differs per system (the common pin plus the
+native-system pin). `ls tests/unit/nix/cases/*.nix | wc -l` gives the file-job
+count; the pin files under `tests/unit/nix/pinned/` give the case counts. See
+[`tests/AGENTS.md`](./AGENTS.md) for the derivation and why the numbers are
+not pinned in prose.
 The seven topical checks remain the stable manifest leaves:
 `nix-unit`, `nix-unit-daemon`, `nix-unit-guest`, `nix-unit-misc`,
 `nix-unit-network`, `nix-unit-runtime`, and `nix-unit-state`.
@@ -256,8 +266,10 @@ retired and exits with status 2; use
 bounded by the CPU cap `min(4, logical CPUs, finite cgroup CPU quota)` and the
 memory cap
 `max(1, floor((effective available MiB - 3072) / (limit + 2048)))`.
-The full local runner defaults to four workers and a 4096 MiB evaluator limit,
-plus 2048 MiB of per-worker process and flake overhead.
+The full local runner requests four workers and a 4096 MiB evaluator limit by
+default, plus 2048 MiB of per-worker process and flake overhead, but the
+runner still keeps at most **two** `nix-eval-jobs` shard processes resident at
+once after those caps are applied.
 Effective available memory is the smaller of `MemAvailable` and the finite
 cgroup allowance after reclaimable file cache. A visible but unreadable cgroup
 controller fails closed to one worker. On the reference 12-CPU, 62-GiB host
@@ -274,10 +286,12 @@ also compared exactly with the locked file-job names. Command progress uses the
 fixed path-free `d2b` flake label.
 
 `D2B_NIX_UNIT_CHECK=<name>` remains the manual single-shard selector. It
-requires one of the seven discovered aggregate checks and evaluates only that
-check without entering the eval-jobs tool shell or resource-accounting path.
-Hosted CI retains the pre-change discovery plus per-check matrix because the
-full eval-jobs path did not fit the hosted runner envelope. With execution
+requires one of the seven discovered aggregate checks, reads that check's
+per-file jobs from `nixUnitCheckJobShards.<system>`, and evaluates those jobs
+one at a time without entering the eval-jobs tool shell or the full local
+resource-accounting path. Hosted CI retains those same seven topical names and
+the per-check matrix because the full eval-jobs path did not fit the hosted
+runner envelope. With execution
 evidence enabled, a full pass publishes exactly the
 seven leaves `nix-unit`, `nix-unit-daemon`, `nix-unit-guest`, `nix-unit-misc`,
 `nix-unit-network`, `nix-unit-runtime`, and `nix-unit-state`; a selected pass

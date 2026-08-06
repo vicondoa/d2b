@@ -38,6 +38,7 @@ side-effect audit operation that never reaches the wire dispatcher).
 | OpenKvm | promoted-live | Opens the allowed KVM device path and returns the fd over `SCM_RIGHTS`. | live in production broker |
 | OpenPidfd | promoted-live | Opens a runner pidfd, re-verifies the process start time, and returns the fd over `SCM_RIGHTS`. | live in production broker |
 | OpenVhostNet | promoted-live | Opens the allowed vhost-net device path and returns the fd over `SCM_RIGHTS`. | live in production broker |
+| OpenZoneStore | promoted-live | Resolves and validates the signed opaque storage row, provisions or opens its database inode idempotently, and returns exactly one close-on-exec descriptor over `SCM_RIGHTS` without a host path. | live in production broker |
 | OwnershipMatrixCheck | stubbed-unimplemented | Returns `BrokerError::Unimplemented`; ownership-matrix preflight is not implemented. | future work |
 | PauseBroker | stubbed-unimplemented | Returns `BrokerError::Unimplemented`; broker admin pause controls are not implemented. | future work |
 | PollChildReaped | promoted-live | Drains the broker's child-reap notification buffer and returns the pending notifications. | live in production broker |

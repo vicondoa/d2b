@@ -27,12 +27,12 @@
 //!
 //! # What this crate deliberately does not contain
 //!
-//! Session establishment, the Noise handshake, wire encoding, attachments, and
-//! named streams are not here. Those depend on the Zone session engine and the
-//! v3 session contract module, which land separately; `d2b-bus` composes them
-//! with the route and call policy this crate provides. Consequently there is no
-//! connector trait, no `ConnectedClient`, and no `Response` type yet: inventing
-//! one would fix a session contract this crate has no authority to define.
+//! Session establishment, the Noise handshake, wire encoding, and attachment
+//! ownership remain with the Zone session engine. This crate exposes the
+//! transport-neutral connector and connected-session seams that let that
+//! engine supply authenticated evidence without moving authority or wire
+//! ownership into the client. Named Watch teardown is likewise delegated to
+//! the session-owned stream adapter.
 //!
 //! The request-metadata bounds in `call` are carried over from the ADR45
 //! client because the v3 session contract module does not publish them yet.
@@ -42,7 +42,9 @@ mod call;
 mod client;
 mod dispatch;
 mod error;
+mod process_attach;
 mod target;
+mod zone_client;
 
 pub use call::{
     CallOptions, CancellationToken, MAX_CORRELATION_ID_BYTES, MAX_IDEMPOTENCY_KEY_BYTES,
@@ -52,7 +54,19 @@ pub use call::{
 pub use client::ResourceClient;
 pub use dispatch::{AttemptDisposition, AttemptTicket, CallDriver, MethodProfile, SessionFailure};
 pub use error::ClientError;
+pub use process_attach::{
+    ComponentNamedStream, ConnectedSession, MAX_PROCESS_ATTACH_MESSAGE_BYTES, NamedStream,
+    NamedStreamTransport, ProcessAttachClient, ProcessAttachKind, ProcessAttachOpenRequest,
+    ProcessAttachOptions, ProcessAttachSession, ProcessAttachStream, ProcessAttachTarget,
+    TerminalSize,
+};
 pub use target::{
     ResolvedTarget, RouteRecord, RouteTable, ServiceOwner, TargetInput, TargetResolver,
     TransportKind, TransportSelection, ZoneServiceKind,
+};
+pub use zone_client::{
+    ComponentSessionConnector, ConnectedZoneClient, ConnectedZoneSession, LocalZoneSession,
+    ResourceCallOptions, ResourceVerb, ResourceWatch, ResourceWatchTransport, ZoneClient,
+    ZonePeerIdentity, ZoneServiceClient, ZoneSessionConnector, ZoneSessionPin, ZoneSocketConnector,
+    resource_verb_is_mutating,
 };

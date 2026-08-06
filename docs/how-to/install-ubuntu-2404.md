@@ -96,21 +96,21 @@ then restart the daemon if you changed the bundle after install.
 With the bundle in place, dry-run the first VM before applying:
 
 ```bash
-d2b vm start work-vm --dry-run --json
+d2b guest start work-vm --dry-run --json
 ```
 
 If the dry-run looks correct and the host checks are clean, attempt the real
 start:
 
 ```bash
-sudo d2b vm start work-vm --apply
+sudo d2b guest start work-vm --apply
 ```
 
 After the guest is reachable, finish the SSH trust step:
 
 ```bash
-d2b trust work-vm
-d2b status work-vm
+d2b activation trust work-vm
+d2b guest status work-vm
 ```
 
 ## 8. Troubleshoot the common failures

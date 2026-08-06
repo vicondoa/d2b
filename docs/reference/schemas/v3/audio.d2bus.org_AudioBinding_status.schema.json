@@ -14,6 +14,6 @@
   "title": "audio.d2bus.org/AudioBinding/status",
   "type": "object",
   "x-d2b-resource-type": "audio.d2bus.org.AudioBinding",
-  "x-d2b-schema-fingerprint": "sha256:9a90314fde7ee31cff3cdb62ff10eadc327f62c20230a9f52dae0db2711e38d7",
+  "x-d2b-schema-fingerprint": "sha256:253bc10b7917a0f66dc23347750c68240f079201983f547d9823a41f771a0448",
   "x-d2b-schema-version": "1.0"
 }

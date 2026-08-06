@@ -1,7 +1,7 @@
 use std::process::Command;
 
 #[test]
-fn launch_has_no_static_or_ssh_fallback_when_daemon_is_missing() {
+fn retired_launch_is_rejected_without_fallback_or_argument_leakage() {
     let dir = tempfile::tempdir().expect("test dir");
     let output = Command::new(env!("CARGO_BIN_EXE_d2b"))
         .args(["launch", "browser.host.d2b", "--item", "browser"])
@@ -9,9 +9,15 @@ fn launch_has_no_static_or_ssh_fallback_when_daemon_is_missing() {
         .env("D2B_BUNDLE_PATH", dir.path().join("missing-bundle.json"))
         .output()
         .expect("spawn d2b launch");
-    assert_eq!(output.status.code(), Some(69));
+    assert_eq!(output.status.code(), Some(2));
+    assert!(output.stdout.is_empty());
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("no static or provider fallback"));
+    assert!(stderr.contains("unrecognized subcommand 'launch'"));
+    assert!(stderr.contains("Usage: d2b"));
+    assert!(!stderr.contains("browser.host.d2b"));
+    assert!(!stderr.contains("browser"));
+    assert!(!stderr.contains("static"));
+    assert!(!stderr.contains("provider"));
     assert!(!stderr.contains("ssh"));
     assert!(!stderr.contains("sudo"));
 }
@@ -31,4 +37,5 @@ fn launch_rejects_public_command_arguments() {
         .expect("spawn d2b launch");
     assert_eq!(output.status.code(), Some(2));
     assert!(!String::from_utf8_lossy(&output.stdout).contains("private-canary"));
+    assert!(!String::from_utf8_lossy(&output.stderr).contains("private-canary"));
 }

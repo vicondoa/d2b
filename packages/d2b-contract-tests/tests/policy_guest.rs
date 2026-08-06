@@ -139,13 +139,13 @@ fn retired_guest_control_nongoals_are_now_shipped_goals() {
         "processes.rs must declare the GuestControlHealth readiness predicate"
     );
 
-    // W16: the `d2b exec` CLI non-goal became the admin-only guest-control
-    // `vm exec` surface. (The earlier `vm konsole` verb was superseded by
-    // `vm exec` upstream and is intentionally absent.)
-    let cli = read_repo_file("packages/d2b/src/lib.rs");
+    // The guest-control exec path is exposed through the v3 top-level `exec`
+    // command. The retired `vm exec` spelling is intentionally absent.
+    let cli = read_repo_file("packages/d2b/src/dispatch.rs");
     assert!(
-        cli.contains("Exec(VmExecArgs)"),
-        "the CLI must expose the admin-only `vm exec` guest-control verb"
+        cli.contains("Exec(exec::ExecArgs)")
+            && cli.contains("ModernCommand::Exec(args) => exec::run"),
+        "the CLI must expose and dispatch the v3 guest-control `exec` command"
     );
 }
 

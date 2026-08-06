@@ -26,22 +26,32 @@ fragment publication error after a successful sub-surface fails that leaf with
 a static retry diagnostic; when the test surface already failed, recording its
 failed fragment is best effort and the original test status is preserved.
 
-The Nix-unit target uses the same lifecycle. Its full pass invokes the locked
-`nix-eval-jobs` tool on the `nixUnitJobs.<system>` attrset with
-`--no-instantiate`. That attrset contains exactly one aggregate attr per
-current `*.nix` case file (45 file jobs), with stable `case-<basename>` names,
-plus the `nix-unit` shard/pin integrity attr. Each file job and the seven
-existing topical `checks.<system>` leaves reuse
-the same `casesFor`/`resultsFor`/failure-report constructor. The runner
-compares sorted result attrs by symmetric difference with the locked file-job
-names, so each worker evaluates one file aggregate rather than one case or
-the complete 893-case attrset. The single locked
-`nixUnitInventory.<system>` output is evaluated once with a `git+file` flake
-reference; it contains sorted `caseNames` and sorted `jobNames`. The runner
-compares `caseNames` by sorted symmetric difference with the common and
-native-system pin files. A selected `D2B_NIX_UNIT_CHECK` pass evaluates only
-that discovered topical check's `drvPath`, retaining the manual selector
-without realizing its output.
+The Nix-unit target uses the same lifecycle. Its complete local pass invokes
+the locked `nix-eval-jobs` tool on `nixUnitJobShards.<system>` with
+`--no-instantiate`. The underlying `nixUnitJobs.<system>` attrset still
+contains exactly one aggregate attr per current `*.nix` case file, with stable
+`case-<basename>` names, plus the `nix-unit` shard/pin integrity attr, and
+`nixUnitJobShards.<system>` presents those file aggregates as one local shard
+attr at a time plus integrity. Each file job and the seven existing topical
+`checks.<system>` leaves reuse the same
+`casesFor`/`resultsFor`/failure-report constructor. The runner compares sorted
+result attrs by symmetric difference with the locked file-job names, so each
+worker evaluates one file aggregate rather than one case or the whole-corpus
+attrset. The single locked `nixUnitInventory.<system>` output is evaluated
+once with a `git+file` flake reference; it contains sorted `caseNames` and
+sorted `jobNames`. The runner compares `caseNames` by sorted symmetric
+difference with the common and native-system pin files. A selected
+`D2B_NIX_UNIT_CHECK` pass keeps the seven topical check names, discovers that
+selected leaf's jobs from `nixUnitCheckJobShards.<system>`, and evaluates each
+selected job's `drvPath` one at a time without realizing its output.
+
+The number of file jobs and the number of corpus cases are derived from the
+tree rather than fixed by this document. The manifest contract is the
+bijection between case files and file jobs and the exact pin comparison, not a
+cardinality; the corpus total additionally differs per system, being the
+common pin plus the native-system pin. Derive the current values with
+`ls tests/unit/nix/cases/*.nix | wc -l` and the pin files under
+`tests/unit/nix/pinned/`.
 
 Because both Nix-unit paths are evaluation-only, they submit no installables
 to the Nix daemon and realize no checks. Their manifest evidence therefore
@@ -49,8 +59,12 @@ keeps `installables` and `realized_checks` empty. The completed leaf fragments
 are the coverage evidence: a full pass publishes exactly `nix-unit`,
 `nix-unit-daemon`, `nix-unit-guest`, `nix-unit-misc`, `nix-unit-network`,
 `nix-unit-runtime`, and `nix-unit-state`; a selected pass publishes only the
-selected leaf. A failed evaluation records the stable failed Nix-unit surface
-best effort and preserves the original target status.
+selected leaf. The full local pass takes its operator controls from
+`D2B_NIX_UNIT_WORKERS` and `D2B_NIX_UNIT_MEMORY_MB`, but after CPU and memory
+caps it still keeps at most two resident `nix-eval-jobs` shard processes at
+once; `D2B_NIX_UNIT_CHECK` is the manual topical selector. A failed evaluation
+records the stable failed Nix-unit surface best effort and preserves the
+original target status.
 
 When an aggregate evaluation fails, the runner extracts each real
 `FAIL <case>: <detail>` line from that aggregate's error and prints one
@@ -183,9 +197,11 @@ as separate full-budget Make jobs before the stable `test-rust` join.
 
 For Nix-unit, compare the seven completed leaves listed above with the
 baseline execution manifest, then compare the source case and file-job
-inventories separately. A passing full run must contain the 45 current
-file-job result attributes plus integrity and all 893 case names in the single
-inventory; it
-publishes all seven leaves. A selected run evaluates and publishes only its one
-selected topical leaf. A failed or interrupted record is diagnostic partial
-evidence and cannot satisfy coverage acceptance.
+inventories separately. A passing full run must contain the current derived
+file-job result attributes plus integrity and all current inventory case names;
+do not key coverage acceptance to the superseded `45` or `893` prose figures
+from older revisions. The contract is the exact inventory comparison against
+`nixUnitJobs.<system>`/`nixUnitInventory.<system>`, and a successful full pass
+publishes all seven leaves. A selected run evaluates and publishes only its
+one selected topical leaf. A failed or interrupted record is diagnostic
+partial evidence and cannot satisfy coverage acceptance.

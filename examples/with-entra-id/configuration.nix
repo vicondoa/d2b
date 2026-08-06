@@ -36,7 +36,7 @@
     # too, in which case waylandUser is mandatory.
     waylandUser = "alice";
 
-    # Members of `d2b` can run `d2b vm start/stop/...`
+    # Members of `d2b` can run `d2b guest start/stop/...`
     # through the daemon public socket. The framework adds the group;
     # you still declare the user above.
     launcherUsers = [ "alice" ];

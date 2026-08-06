@@ -67,9 +67,11 @@ fn unrepairable_drift_degrades_instead_of_silently_converging() {
     let mut drifted = ObservedEntry::conformant(OwnerProof::NotApplicable);
     drifted.drift = BTreeSet::from([DriftClass::Mode]);
     let port = ScriptedPort::converged().with_observation("", drifted);
-    let report =
-        block_on(controller(&port).reconcile(&fixtures::volume_uid(), &fixtures::state_volume()))
-            .expect("reconcile succeeds");
+    let mut rendered = serde_json::to_value(fixtures::state_volume()).expect("fixture serializes");
+    rendered["layout"][0]["repairPolicy"] = serde_json::json!("none");
+    let spec = serde_json::from_value(rendered).expect("fixture remains valid");
+    let report = block_on(controller(&port).reconcile(&fixtures::volume_uid(), &spec))
+        .expect("reconcile succeeds");
     assert_eq!(report.layout_phase, LayoutPhase::Degraded);
     assert_eq!(
         report.layout_conditions[0].reason,
@@ -226,5 +228,56 @@ fn hard_quota_on_a_filesystem_that_cannot_enforce_it_fails_the_volume() {
     assert_eq!(
         block_on(controller(&port).reconcile(&fixtures::volume_uid(), &spec)).unwrap_err(),
         VolumeLocalError::QuotaUnenforceable
+    );
+}
+
+#[test]
+fn fail_closed_repair_never_mutates_drifted_state() {
+    let mut rendered = serde_json::to_value(fixtures::state_volume()).expect("fixture serializes");
+    rendered["layout"][0]["repairPolicy"] = serde_json::json!("fail-closed");
+    let spec = serde_json::from_value(rendered).expect("fixture remains valid");
+    let mut drifted = ObservedEntry::conformant(OwnerProof::NotApplicable);
+    drifted.drift = BTreeSet::from([DriftClass::Mode]);
+    let port = ScriptedPort::converged().with_observation("", drifted);
+    let report =
+        block_on(controller(&port).reconcile(&fixtures::volume_uid(), &spec)).expect("report");
+    assert_eq!(report.layout_phase, LayoutPhase::Failed);
+    assert_eq!(
+        report.layout_conditions[0].reason,
+        VolumeLocalError::InvariantViolated
+    );
+    assert!(!port.calls().iter().any(|call| matches!(
+        call,
+        PortCall::Repair(_) | PortCall::ApplyAcl(_) | PortCall::Cleanup(_)
+    )));
+}
+
+#[test]
+fn process_cleanup_requires_dead_owner_proof() {
+    let mut rendered = serde_json::to_value(fixtures::state_volume()).expect("fixture serializes");
+    rendered["layout"][0]["cleanupPolicy"] = serde_json::json!("process-exit-with-proof");
+    rendered["layout"][0]["leaseClass"] = serde_json::json!("process-pidfd");
+    let spec = serde_json::from_value(rendered).expect("fixture remains valid");
+
+    let live =
+        ScriptedPort::converged().with_observation("", ObservedEntry::conformant(OwnerProof::Live));
+    assert!(
+        block_on(controller(&live).cleanup(&fixtures::volume_uid(), &spec))
+            .expect("cleanup report")
+            .is_empty()
+    );
+
+    let dead =
+        ScriptedPort::converged().with_observation("", ObservedEntry::conformant(OwnerProof::Dead));
+    assert_eq!(
+        block_on(controller(&dead).cleanup(&fixtures::volume_uid(), &spec))
+            .expect("cleanup report")
+            .len(),
+        1
+    );
+    assert!(
+        dead.calls()
+            .iter()
+            .any(|call| matches!(call, PortCall::Cleanup(_)))
     );
 }

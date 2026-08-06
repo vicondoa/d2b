@@ -44,6 +44,13 @@ The contracts. Stable interfaces a consumer can depend on.
 - [`reference/cli-contract.md`](./reference/cli-contract.md) -
   the behavioural contract for any `d2b` CLI implementation
   (lifecycle FSM, signal semantics, exit codes, JSON vs human output).
+- [`reference/companion-contracts.md`](./reference/companion-contracts.md) -
+  complete desktop-companion inventory, consumed surfaces, and verification
+  status.
+- [`reference/zone-cli-contract.md`](./reference/zone-cli-contract.md) -
+  actionable v3 replacement contracts for desktop clients, including the
+  public socket, shell, launcher, UI, audio, security-key, and picker
+  boundaries.
 - [`reference/error-codes.md`](./reference/error-codes.md) - the
   stable public error/refusal catalog for daemon, broker, and CLI
   surfaces.
@@ -146,6 +153,9 @@ The contracts. Stable interfaces a consumer can depend on.
 
 Task-oriented recipes. Prescriptive, copy-and-adapt.
 
+- [`how-to/create-provider.md`](./how-to/create-provider.md) -
+  Provider crate layout, schema and Nix configuration, toolkit usage, and
+  hermetic or declared heavy-test lanes.
 - [`how-to/install-nixos-tier1.md`](./how-to/install-nixos-tier1.md) -
   module-first Tier-1 install path for NixOS hosts.
 - [`how-to/install-ubuntu-2404.md`](./how-to/install-ubuntu-2404.md) -

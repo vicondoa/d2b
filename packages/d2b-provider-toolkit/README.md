@@ -7,6 +7,9 @@ Because it is a common library rather than a Provider, the per-Provider
 sections below are answered from that position rather than left as
 placeholders.
 
+For the toolkit manifest workflow and Provider authoring contract, see
+[Create a Provider](../../docs/how-to/create-provider.md).
+
 ## Provider identity
 
 None, deliberately and permanently. A common library cannot register a second

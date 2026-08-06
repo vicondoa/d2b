@@ -21,10 +21,9 @@ use d2b_realm_core::{
     NodeId, ProtocolToken, RealmAccessAliasBinding, RealmAccessAliasSource, RealmAccessBinding,
     RealmAccessCapabilityPreflight, RealmAccessClientBinding, RealmAccessClientBindingKind,
     RealmAccessClientContract, RealmAccessConflictCandidate, RealmAccessResolverDiagnostic,
-    RealmAccessResolverError, RealmAccessResolverRequest, RealmAccessResolverResponse,
-    RealmAccessTargetInput, RealmControllerPlacement, RealmId, RealmPath, RealmTarget,
-    RealmTargetParseError, RealmTargetParser, RealmTransportBinding, TargetName, UnixSocketPath,
-    WorkloadId,
+    RealmAccessResolverError, RealmAccessResolverResponse, RealmControllerPlacement, RealmId,
+    RealmPath, RealmTarget, RealmTargetParseError, RealmTargetParser, RealmTransportBinding,
+    TargetName, UnixSocketPath, WorkloadId,
 };
 use d2b_realm_router::{DispatchTarget, RealmEntrypointTable, ResolveError};
 
@@ -32,6 +31,7 @@ const DEFAULT_PUBLIC_SOCKET_PATH: &str = "/run/d2b/public.sock";
 const CLI_ROUTING_GENERATION: &str = "cli-routing-contract-v1";
 const GATEWAY_TRANSPORT_TOKEN: &str = "realm-gateway-v1";
 const GATEWAY_BINDING_REF: &str = "local-gateway-convention";
+const MAX_TARGET_INPUT_BYTES: usize = 388;
 
 /// The routing decision for a `vm start/exec <target>` argument.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -387,7 +387,6 @@ impl AccessRouteContext {
 pub struct AccessRoute {
     pub route: Route,
     pub response: RealmAccessResolverResponse,
-    pub request: RealmAccessResolverRequest,
 }
 
 /// Parse a CLI realm argument (`work`, `payments.work`) into a realm path.
@@ -438,9 +437,9 @@ pub fn resolve_access_route(
     table: &RealmEntrypointTable,
     context: &AccessRouteContext,
 ) -> Result<AccessRoute, RouteError> {
-    let request = resolver_request(raw, context)?;
+    validate_target_input(raw)?;
     let Some((target, alias_source)) = parse_target_for_access(raw, context)? else {
-        return Ok(local_passthrough_route(raw, request));
+        return Ok(local_passthrough_route(raw));
     };
 
     match table.resolve(&target) {
@@ -457,7 +456,6 @@ pub fn resolve_access_route(
                     vm: target.workload.as_str().to_owned(),
                 },
                 response,
-                request,
             })
         }
         Ok(DispatchTarget::GatewayBacked { gateway, target }) => {
@@ -474,7 +472,6 @@ pub fn resolve_access_route(
                     target: target.to_string(),
                 },
                 response,
-                request,
             })
         }
         Err(ResolveError::NoEntrypoint(realm)) => Err(RouteError::NoRealmEntrypoint {
@@ -488,23 +485,19 @@ pub fn resolve_access_route(
     }
 }
 
-fn resolver_request(
-    raw: &str,
-    context: &AccessRouteContext,
-) -> Result<RealmAccessResolverRequest, RouteError> {
-    let requested_target =
-        RealmAccessTargetInput::parse(raw.to_owned()).ok_or_else(|| RouteError::InvalidTarget {
+fn validate_target_input(raw: &str) -> Result<(), RouteError> {
+    if raw.is_empty()
+        || raw.len() > MAX_TARGET_INPUT_BYTES
+        || raw.contains('\0')
+        || raw.chars().any(char::is_whitespace)
+    {
+        return Err(RouteError::InvalidTarget {
             target: raw.to_owned(),
             reason: "target input is empty, too long, contains NUL, or contains whitespace"
                 .to_owned(),
-        })?;
-    Ok(RealmAccessResolverRequest {
-        requested_target,
-        default_realm: context.default_realm.clone(),
-        aliases: context.aliases.clone(),
-        required_capabilities: context.required_capabilities.clone(),
-        client: context.client.clone(),
-    })
+        });
+    }
+    Ok(())
 }
 
 fn parse_target_for_access(
@@ -560,14 +553,13 @@ fn parse_target_for_access(
             },
         )),
         Err(RealmTargetParseError::LegacyNodeQualified { legacy, suggested }) => {
-            let legacy_target = RealmAccessTargetInput::parse(legacy.diagnostic_form())
-                .expect("legacy diagnostic form is valid target input");
-            Err(resolver_error(
-                RealmAccessResolverDiagnostic::OldNodeQualifiedTarget {
-                    legacy_target,
-                    suggested,
-                },
-            ))
+            Err(RouteError::InvalidTarget {
+                target: legacy.diagnostic_form(),
+                reason: format!(
+                    "old node-qualified target; use `{}`",
+                    suggested.to_canonical()
+                ),
+            })
         }
         Err(err) => Err(RouteError::InvalidTarget {
             target: raw.to_owned(),
@@ -708,7 +700,7 @@ fn gateway_binding(realm: RealmPath) -> RealmAccessBinding {
     }
 }
 
-fn local_passthrough_route(raw: &str, request: RealmAccessResolverRequest) -> AccessRoute {
+fn local_passthrough_route(raw: &str) -> AccessRoute {
     let vm = local_vm_from_compat_target(raw).unwrap_or_else(|| raw.to_owned());
     let workload =
         WorkloadId::parse(&vm).unwrap_or_else(|_| WorkloadId::parse("local-vm").unwrap());
@@ -716,7 +708,6 @@ fn local_passthrough_route(raw: &str, request: RealmAccessResolverRequest) -> Ac
     AccessRoute {
         route: Route::Local { vm },
         response: local_compat_response(target),
-        request,
     }
 }
 
@@ -1253,17 +1244,12 @@ mod tests {
         let context = AccessRouteContext::compatibility().with_legacy_node_label(node("aca"));
         let err = resolve_access_route("demo.aca.work.d2b", &table, &context).unwrap_err();
         match err {
-            RouteError::AccessResolver { error } => match error.diagnostic {
-                RealmAccessResolverDiagnostic::OldNodeQualifiedTarget {
-                    legacy_target,
-                    suggested,
-                } => {
-                    assert_eq!(legacy_target.as_str(), "demo.aca.work.d2b");
-                    assert_eq!(suggested.to_canonical(), "demo.work.d2b");
-                }
-                other => panic!("expected OldNodeQualifiedTarget, got {other:?}"),
-            },
-            other => panic!("expected access resolver error, got {other:?}"),
+            RouteError::InvalidTarget { target, reason } => {
+                assert_eq!(target, "demo.aca.work.d2b");
+                assert!(reason.contains("old node-qualified target"));
+                assert!(reason.contains("demo.work.d2b"));
+            }
+            other => panic!("expected invalid target, got {other:?}"),
         }
     }
 

@@ -11,7 +11,7 @@ gets an auto-generated `d2b-launch-<vm>.desktop` entry installed
 under `share/applications/`. The wrapper script the entry's `Exec`
 line points at is the **daemon path** - it drives the VM through
 `d2bd → d2b-priv-broker → SpawnRunner`, not the legacy bash
-`d2b vm start` / `microvm@<vm>.service` chain.
+`d2b guest start` / `microvm@<vm>.service` chain.
 
 ## Why a typed contract
 
@@ -34,9 +34,9 @@ of the store.
 | `schemaVersion` | `1` | Bumped only when this table changes. |
 | `vm` | `"<vm>"` | Identity. |
 | `execProgram` | `${d2b}/bin/d2b` (the Rust CLI) | The legacy bash CLI was retired in v1.0 per ADR 0015; the wrapper MUST point at the Rust binary. |
-| `execArgv` | `[ "vm" "start" "<vm>" "--apply" ]` | The daemon-native lifecycle verb. Replaces `d2b vm start <vm> -d`. |
-| `execEnv.D2B_NATIVE_ONLY` | `"1"` | In v1.0 (per ADR 0015) the daemon path is the default and the bash fallback was retired in v1.0; the env var is a no-op. The wrapper still sets it for historical traceability with pre-v1.0 desktop entries. |
-| `outputMode` | `"json"` | `d2b vm start --apply --json` emits the typed envelope so failures are parseable. |
+| `execArgv` | `[ "guest" "start" "<vm>" "--apply" ]` | The daemon-native lifecycle verb. |
+| `execEnv` | none | The Rust CLI is the only operator surface; legacy environment switches are not used. |
+| `outputMode` | `"json"` | `d2b guest start --apply --json` emits the typed envelope so failures are parseable. |
 | `waitForHostCompositor` | `true` | Wrapper waits up to 30 s for the host `$WAYLAND_DISPLAY` socket before invoking the daemon. The GPU sidecar's cross-domain bind-mount target must exist when the runner starts. |
 | `hostCompositorSocketEnv` | `"WAYLAND_DISPLAY"` | The env var the wrapper resolves to find the host compositor's socket under `$XDG_RUNTIME_DIR`. |
 | `waitForGpuSocket` | `"/run/d2b-wlproxy/<vm>/wayland-0"` when the host proxy is enabled; no extra per-VM host socket in the direct fallback | After the daemon reports the VM up, the wrapper waits up to 30 s for the host-side Wayland proxy socket when that socket is part of the graphics DAG. The direct fallback reuses the host compositor socket already covered by `waitForHostCompositor`; `/run/d2b-gpu/<vm>/wayland-0` is an in-sandbox bind-mount destination, not a host-side wait target. |
@@ -52,12 +52,12 @@ of the store.
    `notify-send` if absent after 30 s. Exports `WAYLAND_DISPLAY` and
    `DISPLAY` for the in-VM client.
 2. **Drive the daemon.** Runs
-   `D2B_NATIVE_ONLY=1 d2b vm start <vm> --apply --json`,
+   `d2b guest start <vm> --apply --json`,
    appending stdout/stderr to `$XDG_STATE_HOME/d2b/launchers/<vm>.log`.
    On non-zero exit, parses the trailing JSON envelope with `jq`,
    extracts `errorKind` / `operationId` / `remediation`, and surfaces
    them via `notify-send`. Always points the operator at:
-   - `d2b status <vm>` (per-VM state)
+   - `d2b guest status <name>` (Guest state)
    - `journalctl -u d2bd.service` (daemon log)
    - the per-VM launcher log
 3. **Wait for the per-VM graphics Wayland socket when present.** Polls
@@ -74,7 +74,7 @@ of the store.
    `<sshUser>@<staticIp>` with the per-VM key; the daemon-native path no
    longer depends on SSH for terminal access.
 5. **Exec Konsole.** Replaces the wrapper with a chromed Konsole
-   running `d2b vm exec -it <vm> -- <login-shell>`, which attaches an
+   running `d2b exec run Guest/<name> -- <login-shell>`, which creates an
    interactive guest-control session (admin-only, runs as the VM's
    workload user, no SSH).
    `StartupWMClass=org.kde.konsole` matches Konsole's fixed Wayland
@@ -104,7 +104,7 @@ and `journalctl -u d2bd.service`.
   `Keywords`, `Categories`, `StartupWMClass`) is intentionally out
   of scope; that's UX styling, not a lifecycle contract. See
   `nixos-modules/cli.nix` `desktopItems`.
-- The in-VM session opened via `d2b vm exec -it` is not pinned
+- The in-VM session opened via `d2b exec run` is not pinned
   here. The wrapper hands off to Konsole + the guest-control
   interactive session; what the operator runs once they're in the VM
   is their concern.

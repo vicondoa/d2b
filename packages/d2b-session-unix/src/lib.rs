@@ -25,6 +25,8 @@ mod subject;
 mod systemd;
 #[cfg(feature = "native-vsock")]
 mod vsock;
+#[cfg(feature = "host-socket")]
+mod zone_admission;
 
 #[cfg(feature = "host-socket")]
 pub use adapter::{
@@ -63,3 +65,5 @@ pub use systemd::{
 };
 #[cfg(feature = "native-vsock")]
 pub use vsock::{FramedVsockTransport, NativeVsockListener, NativeVsockTransport};
+#[cfg(feature = "host-socket")]
+pub use zone_admission::{BootstrapProvider, ZoneAdmissionError, ZoneBootstrapIdentity};

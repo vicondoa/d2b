@@ -724,7 +724,7 @@ fn registered_host_mutation_sources() -> BTreeMap<&'static str, &'static str> {
             "storage paths:validation evidence root/records",
         ),
         (
-            "packages/d2b/src/lib.rs",
+            "packages/d2b/src/legacy.rs",
             "storage paths:validation evidence root/records via host validate dispatch",
         ),
         (

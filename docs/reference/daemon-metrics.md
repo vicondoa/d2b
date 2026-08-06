@@ -70,7 +70,7 @@ declared schema; see "Cardinality bounds" below.
 - **Labels:** `vm`, `outcome`
 - **Outcome values:** `success`, `failure`
 - **Buckets (seconds):** `0.5, 1, 2, 5, 10, 20, 30, 60, 120, 300`
-- **Meaning:** Wall-clock duration of `d2b vm start <vm>` as
+- **Meaning:** Wall-clock duration of `d2b guest start <name>` as
   observed by the daemon's supervisor DAG, from the moment the
   start intent is accepted to the moment the runner is either
   ready or declared failed.

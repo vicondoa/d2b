@@ -179,11 +179,14 @@ back into a single invocation:
 - **Doctests.** nextest does not run them. Several here are `compile_fail`
   capability seals (`AdmittedMutation`, `OwnerIndexMutation`), so dropping
   them removes a trust boundary without failing anything.
-- **`harness = false` binaries.** They expose no libtest interface, so nextest
-  builds them and reports zero test cases. `d2b-core-smoke` is one and carries
-  real fail-closed minijail assertions. The set is derived from `nextest list`
-  (kind `test` with zero cases) rather than pinned, so a new one cannot
-  silently drop out of the gate.
+- **Harness-free test and bench targets.** They expose no nextest execution
+  surface, so nextest builds them but does not run their assertions.
+  `d2b-core-smoke` is a test target and the routing and reaction benchmarks
+  are bench targets; all carry real assertions. The set is derived from
+  `nextest list` zero-case test suites plus Cargo metadata bench targets rather
+  than pinned, and each target is run once with its matching `--test` or
+  optimized `--release --bench` selector, so a new one cannot silently drop
+  out of the gate or turn a performance contract into a debug-build timing.
 
 The privileged broker workspace stays on `cargo test`. Its tests are not
 process-per-test safe, and it runs 528 tests in about 1.4 s, so nextest has
@@ -227,14 +230,35 @@ budget, including budget 1. Top-level Make `-j` is not the Rust budget knob.
 ### Nix-unit execution
 
 `make test-nix-unit` uses `nix-eval-jobs --no-instantiate` against the locked
-`nixUnitJobs.<system>` output. The output contains exactly one aggregate job
-per current `*.nix` case file (45 file jobs), named bijectively as
-`case-<basename>`, plus the `nix-unit` shard/pin integrity job. The `fileJobs`
-constructor reuses the same
+`nixUnitJobShards.<system>` output for the complete local pass. The underlying
+`nixUnitJobs.<system>` surface still contains exactly one aggregate job per
+current `*.nix` case file, named bijectively as `case-<basename>`, plus the
+`nix-unit` shard/pin integrity job. `nixUnitJobShards.<system>` presents those
+per-file aggregates as one local shard attr at a time, plus the integrity
+shard, so each evaluator process handles one file aggregate rather than the
+whole corpus. The `fileJobs` constructor reuses the same
 `casesFor`/`resultsFor`/failure-report semantics as the seven existing flake
 shard checks, so every file job reports all of its real
 `FAIL <case>: <detail>` lines. No installable is submitted and no derivation
 is realized.
+
+The file-job count and the corpus case count are **derived, not contractual**,
+so this document states the rule rather than a number. The bijection is the
+contract; the cardinality is whatever the corpus currently holds, and the
+pinned case list is what fails closed when it changes. Derive either count
+from the tree:
+
+```bash
+ls tests/unit/nix/cases/*.nix | wc -l            # file jobs, one per case file
+grep -hvc '^#' tests/unit/nix/pinned/common.txt  # cases present on every system
+grep -hvc '^#' tests/unit/nix/pinned/$(nix eval --raw --impure \
+  --expr builtins.currentSystem).txt             # extra cases on this system
+```
+
+The corpus total is **system-dependent**: it is the common pin count plus the
+native-system pin count, so a single hardcoded total would be wrong on at least
+one supported system. Hardcoding either number also puts this file one case
+addition behind the tree, which is how the previous figures went stale.
 
 The seven existing flake checks remain the stable manifest leaves:
 `nix-unit`, `nix-unit-daemon`, `nix-unit-guest`, `nix-unit-misc`,
@@ -256,8 +280,10 @@ message naming `D2B_NIX_UNIT_WORKERS`. Use that bounded operator-intent
 control. Its effective count is capped by four workers, logical CPUs, any
 finite cgroup CPU quota, and available memory after a 3 GiB host reserve at
 the evaluator limit plus 2048 MiB of process and flake overhead per worker.
-The full local runner defaults to four workers and a 4096 MiB evaluator limit.
-`D2B_NIX_UNIT_MEMORY_MB` may set the limit from 512 through 4096 MiB.
+The full local runner requests four workers and a 4096 MiB evaluator limit by
+default, but it still keeps at most **two** `nix-eval-jobs` shard processes
+resident at once after those caps are applied. `D2B_NIX_UNIT_MEMORY_MB` may
+set the limit from 512 through 4096 MiB.
 Successful full runs suppress raw JSONL output. Every real `FAIL <case>:
 <detail>` line from an aggregate error is parsed and printed as one concise,
 path-sanitized stderr entry. Repository and home roots become fixed
@@ -280,10 +306,12 @@ records. Do not force an internal `_index` value or materialize hundreds of
 typed submodules solely to test a fixed count.
 
 `D2B_NIX_UNIT_CHECK` remains the manual single-shard selector. When
-set, it exits through the selected Nix check before eval-jobs bootstrap or
-resource accounting. Hosted CI retains the pre-change discovery and
-per-check matrix because the full eval-jobs path did not fit the hosted
-runner envelope. When
+set, the runner discovers that one of the seven stable topical checks, reads
+its per-file jobs from `nixUnitCheckJobShards.<system>`, and instantiates each
+selected job's `drvPath` one at a time before eval-jobs bootstrap or the full
+local resource-accounting path. Hosted CI retains the seven topical check
+names and the per-check matrix because the full eval-jobs path did not fit the
+hosted runner envelope. When
 `D2B_EXECUTION_MANIFEST` is set, enter the shared secure lifecycle before Nix
 discovery or toolchain entry. A full pass records exactly these seven leaves:
 `nix-unit`, `nix-unit-daemon`, `nix-unit-guest`, `nix-unit-misc`,
@@ -300,6 +328,38 @@ atomic evidence, and failed or handled-interruption runs publish partial
 status. This evidence supplements source discovery and does not replace
 `make test-policy` or
 `D2B_ENABLE_FIXTURE_BUILD=1 make test-fixture-contracts`.
+
+The complete `test-nix-unit` and `test-flake` runners are protected by
+`tests/tools/peak-rss.py`. The helper samples aggregate process-tree resident
+memory (and uses a baseline-adjusted cgroup reading only when the cgroup is
+dedicated), fails closed when no measurement is available, and reports the
+lane, observed peak, configured maximum, and the likely full-system/closure
+cause. The Nix-unit ceiling is 10,683,720 KiB (8,546,976 KiB post-refresh
+baseline plus 25% deterministic headroom); the flake ceiling is 14,665,373
+KiB (11,732,298 KiB post-refresh local-shard baseline plus 25%). These are fixed
+lane contracts, not operator overrides. Full flake evaluation uses the
+existing local-shard topology with one resident shard by default; this
+isolates evaluated scenarios rather than deleting checks, and the guard
+remains authoritative if a caller requests more concurrency. A regression
+usually means that an eval-only test or module path deep-forced
+`system.build.toplevel`, `pkgs.closureInfo`, derivation realization/IFD, an
+equivalent VM closure, or an overly broad deep evaluation; narrow the
+attr-local fixture, share an evaluated scenario, or stub the evaluation
+boundary instead.
+
+The refreshed `origin/v3` comparison was measured on the same host and
+resident-memory harness. With one Nix-unit worker, v3 completed 46 attributes
+at 18,181,990 KiB in 777 seconds; its default four-worker run crossed a
+30,000,000 KiB protective cap and was terminated. That exceeds the supported
+16 GiB CI envelope and is a mechanical v3 baseline blocker, not acceptable
+growth to normalize. v3's complete monolithic flake run measured 14,583,722
+KiB in 605 seconds. The refreshed Wave 5 run evaluates 83 attributes and 32
+flake checks plus outputs: its Nix-unit peak is 8,563,111 KiB and its flake
+peak is 11,775,682 KiB. Thus the final flake ceiling is only 0.56% above the
+measured v3 flake baseline despite the added checks, while the Nix-unit
+ceiling remains well below the 16 GiB envelope because the repaired graph is
+smaller than the v3 baseline. Added case count is not permission to force VM
+closures.
 
 Tests that shell out to `cargo` cache their scratch trees between runs under
 `.scratch/rust-test-cache/`, keyed on `rustc -vV`, because compiled artifacts

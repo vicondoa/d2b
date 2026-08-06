@@ -299,7 +299,7 @@ Pretending otherwise would be dishonest.
   TPM (if used at all) is not d2b's concern.
 - **Multi-user trust separation on the host.** D2b assumes a
   single-human, single-Wayland-session host. The
-  `d2b` group exists to make `d2b vm start <vm>`
+  `d2b` group exists to make `d2b guest start <name>`
   password-free for the human's account, not to model trust
   between two operators. SSH private keys at
   `/var/lib/d2b/keys/<vm>_ed25519` are readable by every
@@ -601,10 +601,10 @@ filesystem caches discard).
 The trade-off is that consumers must explicitly opt into picking
 up sidecar config changes. The framework provides two paths:
 
-- `d2b vm restart <vm> --apply` - clean `down` + `up` of the existing
-  closure. Use this when `d2b list` flags a VM as
+- `d2b guest restart <name> --apply` - clean stop/start of the existing
+  closure. Use this when `d2b guest list` exposes a pending update in
   `[pending restart]` after a `nixos-rebuild switch`.
-- `d2b switch <vm> --apply` - full per-VM closure rebuild + live
+- `d2b activation switch Guest/<name> --apply` - full Guest closure rebuild + live
   activation through the daemon's authenticated guest-control path
   (no VM reboot). Use this when you edited the VM's own NixOS module.
   The host publishes the prepared toplevel into the VM's store view;
@@ -627,8 +627,8 @@ closure the host *declares*:
   `ExecStartPre` (graphics VMs).
 
 When `booted != current` AND the VM is running, the pending-
-restart predicate fires: `d2b list` adds `[pending restart]`
-to the STATUS column, and `d2b status <vm>` prints both
+update predicate fires: `d2b guest list` exposes `status.update`,
+and `d2b guest status <name>` prints the current status
 store paths plus the remediation command. A first-boot VM has
 no `booted` yet - that's not "pending" - and a stopped VM has
 nothing to apply.
@@ -707,7 +707,7 @@ metadata directory (`current → generations/N`, plus
 `/run/d2b-store-meta`. The guest's
 `d2b-load-store-db.service` (in
 [`nixos-modules/base.nix:91-125`](../../nixos-modules/base.nix))
-loads `db.dump` on every boot and on every `d2b switch`,
+loads `db.dump` on every boot and on every `d2b activation switch`,
 making `nix-store --query --valid` and `nix-shell` work without
 seeing host paths.
 
@@ -1083,7 +1083,7 @@ written to `/var/lib/d2b/keys/<vm>_ed25519` (mode 0640, root-
 owned, ACL'd `r` for `d2b`), and never enter the
 store. The CLI consumes them through `keysDir`; the guest gets
 only the corresponding pubkey via a virtio-fs share. Rotation is
-a single `d2b keys rotate <vm>` invocation; no rebuild
+a single `d2b activation keys rotate Guest/<name>` invocation; no rebuild
 required for that path.
 
 The trade is honest: the private key is readable by every member
@@ -1197,7 +1197,7 @@ audit ergonomics.
 
 `d2b.vms.<vm>.guestConfigFile` lets an operator edit a VM's
 in-guest OS layer from inside the VM and sync it back to the host
-(`d2b config sync` / `diff` / `approve`). This deliberately moves
+(`d2b activation config sync` / `diff` / `approve`). This deliberately moves
 *untrusted, guest-authored bytes* toward the host's trusted
 evaluation, so it is contained on three independent axes (see
 [ADR 0024](../adr/0024-in-vm-guest-config-sync.md)):
@@ -1236,7 +1236,7 @@ evaluation, so it is contained on three independent axes (see
 
 The residual sharp edge is the same one that governs all host-owned
 config: an operator who approves a config that errors at eval will see
-their `d2b switch` fail (not their host rebuild - the per-VM eval
+their `d2b activation switch` fail (not their host rebuild - the per-Guest eval
 is the failure boundary). Guest-built `/nix/store` paths are never
 trusted into the host; an in-guest `nixos-rebuild` (guest-build mode)
 remains a separate future spike.
@@ -1388,13 +1388,13 @@ The trade is that consumers must opt into picking up sidecar
 config changes. The framework provides two paths and a clear
 signal:
 
-- `d2b list` flags any VM whose declared closure
+- `d2b guest list` exposes any Guest whose declared closure
   (`current` symlink) has drifted from the running one
   (`booted` symlink) with `[pending restart]`.
-- `d2b vm restart <vm> --apply` does a clean `down` + `up` of the
+- `d2b guest restart <name> --apply` does a clean stop/start of the
   existing closure. Use this when you ran `nixos-rebuild
   switch` and a sidecar config changed.
-- `d2b switch <vm> --apply` does a per-VM closure rebuild + live
+- `d2b activation switch Guest/<name> --apply` does a Guest closure rebuild + live
   guest-control activation through the daemon (no VM reboot). Use this
   when you edited the VM's own NixOS module. Stopped VMs use
   `d2b boot <vm> --apply` for offline staging instead of host-side
@@ -1413,10 +1413,10 @@ for the exact predicate.
 
 ### The problem.
 
-Before observability, the operator who asks "did `d2b vm start
-work-aad` actually succeed?" has to reconstruct the answer from five
+Before observability, the operator who asks "did `d2b guest start
+work-aad --apply` actually succeed?" has to reconstruct the answer from five
 surfaces that were never designed to read as one story:
-`d2b status`, `journalctl`, host process lists, Cloud Hypervisor
+`d2b guest status`, `journalctl`, host process lists, Cloud Hypervisor
 API sockets, SSH probes, and the per-VM state directories under
 `/var/lib/d2b/`. Each tool answers only a slice of the question.
 None of them gives a first-class timeline from "the CLI asked for a
@@ -1646,7 +1646,7 @@ portability work splits that into three layers:
 - The VM no-surprise-restart invariant is preserved: `d2bd` may restart
   on host switch/update, but running VM children are not restarted by that
   daemon restart. Per-VM drift surfaces as `[pending restart]` in
-  `d2b list`/`status`.
+  `d2b guest list`/`guest status`.
 - v0.4.0 `vms.json` `manifestVersion = 2` is preserved unchanged;
   new bundle artifacts are layered beside it without mutating the
   existing schema (ADR 0006).
@@ -1743,7 +1743,7 @@ authority-bearing primitives this work introduces.
   must preserve this.
 - The "no auto-restart" invariant - `d2bd` never auto-restarts
   a running child on config change; drift surfaces as
-  `[pending restart]` in `d2b list` / `status`; this extends to
+  pending update currency in `d2b guest list` / `guest status`; this extends to
   the daemon binary itself.
 
 ## 7. References

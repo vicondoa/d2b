@@ -24,7 +24,13 @@
 #     minijail profiles expose `caps`, not the old `capabilities` key.
 #   * The observability dashboards directory is no longer retired/empty: the
 #     current SigNoz surface ships six dashboards.
-{ lib, flakeRoot, nixpkgsFlake, d2bModule, ... }:
+{ lib
+, flakeRoot
+, nixpkgsFlake
+, d2bModule
+, casePartition ? "host"
+, ...
+}:
 
 let
   shared = import ../eval-cases/shared.nix {
@@ -68,6 +74,14 @@ let
     observability-enabled-corp-vm = { ... }: {
       d2b.observability.enable = true;
       d2b.vms.corp-vm.observability.enable = true;
+    };
+    observability-enabled-corp-audit = { ... }: {
+      d2b.observability.enable = true;
+      d2b.vms.corp-vm.observability = {
+        enable = true;
+        scrapeJournal = false;
+      };
+      d2b.vms.corp-vm.audit.enable = true;
     };
   };
 
@@ -444,15 +458,42 @@ let
       };
     };
 
-    obs-audit-surface = {
+    obs-journal-execstart-enabled-deep-force = {
+      override = { ... }: {
+        d2b.observability.enable = true;
+        d2b.vms.corp-vm.observability = {
+          enable = true;
+          scrapeJournal = true;
+        };
+      };
+      extract = nixos:
+        let
+          execStart =
+            nixos.config.d2b._computed.corp-vm.config.systemd.services.d2b-otel-collector.serviceConfig.ExecStart;
+        in
+        builtins.deepSeq execStart (hasInfix "otelcol-contrib --config=file:" execStart);
+      expectedExtract = true;
+    };
+
+    obs-journal-execstart-disabled-deep-force = {
       override = { ... }: {
         d2b.observability.enable = true;
         d2b.vms.corp-vm.observability = {
           enable = true;
           scrapeJournal = false;
         };
-        d2b.vms.corp-vm.audit.enable = true;
       };
+      extract = nixos:
+        let
+          execStart =
+            nixos.config.d2b._computed.corp-vm.config.systemd.services.d2b-otel-collector.serviceConfig.ExecStart;
+        in
+        builtins.deepSeq execStart (hasInfix "otelcol-contrib --config=file:" execStart);
+      expectedExtract = true;
+    };
+
+    obs-audit-surface = {
+      scenario = "observability-enabled-corp-audit";
       extract = nixos:
         let workGuest = nixos.config.d2b._computed.corp-vm.config;
         in
@@ -928,5 +969,45 @@ let
 
   mkCase = _name: result:
     if result.kind == "expect-failure" then mkFailureCase result else mkSuccessCase result;
+  guestCases = [
+    "obs-relay-acl-surface"
+    "obs-stack-vm-guest-surface"
+    "obs-alerting-surface"
+    "obs-journal-default-on"
+    "obs-journal-execstart-enabled-deep-force"
+    "obs-journal-execstart-disabled-deep-force"
+    "obs-audit-surface"
+    "obs-rules-promtool"
+    "obs-metric-references"
+    "obs-scrape-job-stability"
+    "obs-stability"
+    "obs-graphics-runner-wiring"
+  ];
+  partitionCases = {
+    "host-collector" = [ "obs-host-collector-default-off" ];
+    "host-collector-journal" = [ "obs-host-collector-journal" ];
+    "host-collector-otlp" = [ "obs-host-collector-otlp" ];
+    "host-collector-processor-split" = [
+      "obs-host-collector-both-processor-split"
+    ];
+    "host-collector-identity" = [ "obs-host-identity-override" ];
+    "host-collector-umask" = [ "obs-host-otlp-client-group-umask" ];
+    "host-collector-flags" = [ "obs-host-flags-require-enable" ];
+  };
+  renderedCases = lib.mapAttrs'
+    (name: result: lib.nameValuePair "observability/${name}" (mkCase name result))
+    evaluated;
+  partitionMatches = name:
+    if casePartition == "all" then true
+    else if casePartition == "guest" then builtins.elem name guestCases
+    else if builtins.hasAttr casePartition partitionCases then
+      builtins.elem name partitionCases.${casePartition}
+    else
+      !(builtins.elem name guestCases
+        || lib.any
+          (partition: builtins.elem name partition)
+          (builtins.attrValues partitionCases));
 in
-lib.mapAttrs' (name: result: lib.nameValuePair "observability/${name}" (mkCase name result)) evaluated
+lib.filterAttrs
+  (name: _: partitionMatches (lib.removePrefix "observability/" name))
+  renderedCases

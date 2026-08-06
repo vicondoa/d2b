@@ -100,7 +100,7 @@ only prerequisite is `ADR046-W7`'s exit criteria (§4), and it runs that same
 | Wave | Specs (all must be `Accepted`; Gate 0 already covers this) | New/changed crates and modules (destination roots) |
 | --- | --- | --- |
 | `ADR046-W0` | `ADR-046-terminology-and-identities` → `ADR-046-resource-object-model` → `ADR046-store-001` → `ADR-046-resource-api-and-authorization` (serial contract sub-steps, one integrator branch) | `packages/d2b-contracts/src/v3/{identity,resource_ref,resource,resource_status,resource_schema,error}.rs`; `packages/d2b-resource-store/`; `packages/d2b-resource-store-redb/src/{schema,keys,values,ownership}.rs`; `packages/d2b-controller-toolkit/src/owner_hints.rs`; `packages/d2b-contracts/proto/d2b-resource-v3.proto`; `packages/d2b-resource-api/`; `nixos-modules/{options-zones,resources,index}.nix` |
-| `ADR046-W1` | `ADR046-feasibility-001` alongside the engine-neutral `ADR046-reconcile-001`/`ADR046-reconcile-002` toolkit and the production-unwired `ADR046-session-001`/`ADR046-session-002`/`ADR046-bus-001` foundations. These are exactly the six merged work items; the failed RSS result defers the production backend, watch dispatcher, and real-backend reaction benchmark. | `proofs/redb-resource-store-spike/`; `packages/d2b-controller-toolkit/` except the real-backend reaction benchmark; `packages/d2b-core-controller/src/{hints,dependencies,owner_reconcile}.rs`; `packages/d2b-contracts/src/v3/component_session.rs`; `packages/d2b-session/`; `packages/d2b-session-unix/`; `packages/d2b-bus/` |
+| `ADR046-W1` | `ADR046-feasibility-001` alongside the engine-neutral `ADR046-reconcile-001`/`ADR046-reconcile-002` toolkit and the production-unwired `ADR046-session-001`/`ADR046-session-002`/`ADR046-bus-001` foundations. These are exactly the six merged work items; the corrected SPIKE-01 RSS rerun is recorded in `proofs/redb-resource-store-spike/RESULTS-rerun-2026-08-02.md` at `18,428 KiB`, `6,148 KiB` below 24,576 KiB, with no baseline subtraction, and the production backend, watch dispatcher, and real-backend reaction benchmark remain `ADR046-W5` implementation work that still requires its own production validation. | `proofs/redb-resource-store-spike/`; `packages/d2b-controller-toolkit/` except the real-backend reaction benchmark; `packages/d2b-core-controller/src/{hints,dependencies,owner_reconcile}.rs`; `packages/d2b-contracts/src/v3/component_session.rs`; `packages/d2b-session/`; `packages/d2b-session-unix/`; `packages/d2b-bus/` |
 | `ADR046-W2` | `ADR-046-primitive-resource-composition` ‖ `ADR-046-zone-routing` | `packages/d2b-contracts/src/v3/{host,guest,execution_policy,process,volume,user,network,device,credential}.rs`; `packages/d2b-process/`; `packages/d2b-provider-supervisor/`; `packages/d2b-zone-routing/` |
 | `ADR046-W3` | `ADR-046-provider-model-and-packaging` (single spec; strictly serial - every downstream Provider dossier depends on it) | `packages/d2b-provider/`; `packages/d2b-provider-toolkit/`; one `packages/d2b-provider-<base>-<implementation>/` skeleton generator |
 | `ADR046-W4` | `ADR-046-components-processes-and-sandbox` ‖ `ADR-046-core-controllers` ‖ `ADR-046-resources-network` ‖ `ADR-046-resources-credential` ‖ `ADR-046-provider-state` (five parallel specs) | `packages/d2b-process/`, `d2b-provider-supervisor/` (process effect ports); `packages/d2b-core-controller/`; `packages/d2b-provider-network-local/` schema half; `packages/d2b-provider-credential-*/` schema half; Volume `stateSchema`/`persistenceClass`/`sensitivityClass` extension |
@@ -124,8 +124,8 @@ default position:
 | Work item | Assigned wave | Delivery determination |
 | --- | --- | --- |
 | `ADR046-store-001` | `ADR046-W0` | The engine-neutral trait, closed errors, schema/codecs, and golden vectors are present; this is the complete W0 store contract. |
-| `ADR046-feasibility-001` | `ADR046-W1` | The disposable proof crate and both spike results are present. Functional, watch, conflict, crash-recovery, and latency thresholds passed, but whole-process RSS was 25,216 KiB (24.625 MiB), 640 KiB or about 2.6% above 24,576 KiB; the failed outcome is the backend prep barrier evidence. |
-| `ADR046-store-004` | `ADR046-W5` | Only contract modules exist in the crate. The failed RSS gate requires the range-seek, streaming-decode, shared-fan-out design corrections before this production backend item starts, so it moves atomically with its watch consumer. |
+| `ADR046-feasibility-001` | `ADR046-W1` | The disposable proof crate and both spike results are present. Functional, watch, conflict, crash-recovery, and latency thresholds passed. The original `RESULTS.md` failure is superseded for this RSS row by the gated rerun at `18,428 KiB`, `6,148 KiB` below 24,576 KiB, with no baseline subtraction. The rerun is spike evidence only and does not make the production backend reachable or accepted. |
+| `ADR046-store-004` | `ADR046-W5` | Only contract modules exist in the crate. The originally failed RSS gate required the range-seek, streaming-decode, shared-fan-out design corrections before this production backend item starts, so it moves atomically with its watch consumer. The gated proof rerun confirms those corrections on a disposable fixture and supplies none of this item's production evidence. |
 | `ADR046-store-002` | `ADR046-W5` | Replay/live watch and API watch destinations are absent. It follows the corrected production backend and exclusively owns watch-budget saturation validation. |
 | `ADR046-store-003` | `ADR046-W5` | This is a generated storage-row integration contract, not an engine backend item; all Nix/schema/parity destinations are absent and belong with Nix and broker storage wiring. |
 | `ADR046-store-005` | `ADR046-W5` | Backup/migration and broker provisioning/fd-handoff destinations are absent; it follows the storage-row contract and production engine. |
@@ -648,12 +648,17 @@ Exact benchmark fixtures from `ADR-046-resource-store-redb`'s performance
 contract, run in `packages/d2b-resource-store-redb/benches/`:
 
 These rows are completion gates, not existing evidence. SPIKE-01 and SPIKE-02
-have both been executed. SPIKE-02 passed every profile; SPIKE-01 passed
-correctness, watch delivery, group commit and crash recovery but **failed its
-RSS gate** at a measured median of 25,216 KiB against a 24,576 KiB threshold.
-That failure is why `ADR046-store-004`, `ADR046-store-002` and
-`ADR046-reconcile-003` are scheduled in W5 rather than W1, and why the revised
-physical-schema plan in `ADR-046-resource-store-redb` is binding on them.
+have both been executed. SPIKE-02 passed every profile. SPIKE-01 passed
+correctness, watch delivery, group commit and crash recovery, and its
+originally failing RSS conclusion in `RESULTS.md` is superseded by the gated
+rerun recorded in
+`proofs/redb-resource-store-spike/RESULTS-rerun-2026-08-02.md` at
+`18,428 KiB`, `6,148 KiB` below 24,576 KiB, with no baseline subtraction.
+The original failure is why `ADR046-store-004`, `ADR046-store-002` and
+`ADR046-reconcile-003` are scheduled in `ADR046-W5` rather than `ADR046-W1`.
+That scheduling is unchanged by the rerun, because a disposable-proof result
+is not production evidence, and the revised physical-schema plan in
+`ADR-046-resource-store-redb` stays binding on them.
 
 Executing the spikes does not satisfy the rows below. They remain future
 completion gates for the production redb backend, watch and dispatcher

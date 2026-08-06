@@ -3,6 +3,7 @@
 let
   x86 = system == "x86_64-linux";
   resourceContracts = import ../../../../nixos-modules/resources.nix { inherit lib; };
+  resourceBundle = import ../../../../nixos-modules/resources-bundle.nix { inherit lib; };
 
   resourceBase = {
     boot.loader.grub.enable = false;
@@ -138,6 +139,10 @@ let
   }) ]).config;
   maxIdentity = "a${lib.concatStrings (lib.replicate 62 "b")}";
   tooLongIdentity = "${maxIdentity}c";
+  rejectedBundle = zoneName: resourceName:
+    resourceBundle.bundleForZone zoneName (lib.listToAttrs [
+      (lib.nameValuePair resourceName { type = "Provider"; })
+    ]);
   resourceFixture = {
     d2b.zones = {
       "${maxIdentity}".resources.${maxIdentity}.type = "Provider";
@@ -184,6 +189,20 @@ let
   };
   resourceCfg = (mkEval [ resourceBase resourceFixture ]).config;
   resourceIndex = resourceCfg.d2b._index.zones;
+  malformedResource = resource:
+    let
+      evaluated = lib.evalModules {
+        modules = [{
+          options.resources = lib.mkOption {
+            type = lib.types.attrsOf
+              (lib.types.submodule resourceContracts.resourceModule);
+            default = { };
+          };
+          config.resources.app = resource;
+        }];
+      };
+    in
+    builtins.tryEval (builtins.deepSeq evaluated.config.resources true);
   failureMessages = module:
     map (assertion: assertion.message)
       (lib.filter (assertion: lib.hasPrefix "d2b.zones." assertion.message)
@@ -203,20 +222,6 @@ let
           ownerRef = null;
         }
         resourceIndex.byName.${maxIdentity}.resources;
-    invalidNames = {
-      zone = failureMessages {
-        d2b.zones.${tooLongIdentity}.resources.provider.type = "Provider";
-      };
-      resource = failureMessages {
-        d2b.zones.work.resources.${tooLongIdentity}.type = "Provider";
-      };
-      emptyZone = failureMessages {
-        d2b.zones."".resources.provider.type = "Provider";
-      };
-      emptyResource = failureMessages {
-        d2b.zones.work.resources."".type = "Provider";
-      };
-    };
     invalidReferences = {
       missingDefaultUser = failureMessages {
         d2b.zones.work.resources = {
@@ -285,27 +290,21 @@ let
       };
     };
     malformed = {
-      badType = (builtins.tryEval ((mkEval [ resourceBase {
-        d2b.zones.work.resources.app.type = "Unknown";
-      } ]).config.system.build.toplevel)).success;
-      badRef = (builtins.tryEval ((mkEval [ resourceBase {
-        d2b.zones.work.resources.app = {
-          type = "Provider";
-          metadata.ownerRef = "user/alice";
-        };
-      } ]).config.system.build.toplevel)).success;
-      excessiveCpu = (builtins.tryEval ((mkEval [ resourceBase {
-        d2b.zones.work.resources.app = {
-          type = "Provider";
-          spec.budget.cpu.limit = "1024001m";
-        };
-      } ]).config.system.build.toplevel)).success;
-      excessiveMemory = (builtins.tryEval ((mkEval [ resourceBase {
-        d2b.zones.work.resources.app = {
-          type = "Provider";
-          spec.budget.memory.limit = "4097GiB";
-        };
-      } ]).config.system.build.toplevel)).success;
+      badType = (malformedResource {
+        type = "Unknown";
+      }).success;
+      badRef = (malformedResource {
+        type = "Provider";
+        metadata.ownerRef = "user/alice";
+      }).success;
+      excessiveCpu = (malformedResource {
+        type = "Provider";
+        spec.budget.cpu.limit = "1024001m";
+      }).success;
+      excessiveMemory = (malformedResource {
+        type = "Provider";
+        spec.budget.memory.limit = "4097GiB";
+      }).success;
     };
     vectors = {
       types = map resourceContracts.validResourceType [
@@ -363,20 +362,6 @@ let
       ];
     };
     maximumNameAccepted = true;
-    invalidNames = {
-      zone = [
-        "d2b.zones.${tooLongIdentity}: Zone name must match ^[a-z][a-z0-9-]{0,62}$."
-      ];
-      resource = [
-        "d2b.zones.work.resources.${tooLongIdentity}: resource name must match ^[a-z][a-z0-9-]{0,62}$."
-      ];
-      emptyZone = [
-        "d2b.zones.: Zone name must match ^[a-z][a-z0-9-]{0,62}$."
-      ];
-      emptyResource = [
-        "d2b.zones.work.resources.: resource name must match ^[a-z][a-z0-9-]{0,62}$."
-      ];
-    };
     invalidReferences = {
       missingDefaultUser = [
         "d2b.zones.work.resources.app.spec.defaultUserRef must resolve to a User in Zone work."
@@ -423,6 +408,29 @@ let
   ];
 in
 {
+  "index/invalid-zone-name-rejected-at-eval" = {
+    # Force the canonical compiler rejection directly. Deep-forcing a full
+    # NixOS config would evaluate nixpkgs' fileSystems assertion message,
+    # whose no-cycle path references a missing `cycle` attribute.
+    expr = rejectedBundle tooLongIdentity "provider";
+    expectedError = { };
+  };
+
+  "index/invalid-resource-name-rejected-at-eval" = {
+    expr = rejectedBundle "work" tooLongIdentity;
+    expectedError = { };
+  };
+
+  "index/empty-zone-name-rejected-at-eval" = {
+    expr = rejectedBundle "" "provider";
+    expectedError = { };
+  };
+
+  "index/empty-resource-name-rejected-at-eval" = {
+    expr = rejectedBundle "work" "";
+    expectedError = { };
+  };
+
   "index/shape-and-sorting" = {
     expr = {
       enabledEnvNames = index.enabledEnvNames;

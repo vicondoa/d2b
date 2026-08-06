@@ -7,6 +7,7 @@
 
 mod admission;
 mod attachment;
+pub mod audit;
 mod bootstrap;
 mod cancellation;
 mod deadline;

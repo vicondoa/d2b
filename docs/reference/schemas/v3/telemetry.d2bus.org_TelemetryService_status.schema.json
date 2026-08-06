@@ -11,6 +11,6 @@
   "title": "telemetry.d2bus.org/TelemetryService/status",
   "type": "object",
   "x-d2b-resource-type": "telemetry.d2bus.org.TelemetryService",
-  "x-d2b-schema-fingerprint": "sha256:43b95f533300b801ef582e5c0c3e359f15b084a28cab9d6fd7f53e586cf72512",
+  "x-d2b-schema-fingerprint": "sha256:c48a0dc7bca35d4f9f4e51f9e8711c0d1106f40988ac44608b6dca7c34ca8864",
   "x-d2b-schema-version": "1.0"
 }

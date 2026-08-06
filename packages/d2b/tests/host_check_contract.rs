@@ -45,6 +45,15 @@ use d2b_contracts::cli_output::{HostCheckOutputV2, HostCheckSeverityV2};
 
 use common::TestPeer;
 
+const OPERATOR_ERROR_KEYS: &[&str] = &[
+    "code",
+    "docsAnchor",
+    "kind",
+    "message",
+    "owningCommand",
+    "remediation",
+];
+
 /// The fixture-smoke output dir, or `None` when D2B_FIXTURES is unset.
 fn fixtures_dir() -> Option<String> {
     std::env::var("D2B_FIXTURES").ok()
@@ -279,14 +288,21 @@ fn parse_output(out: &Output) -> HostCheckOutputV2 {
     })
 }
 
-/// Parse the stderr operator-error envelope emitted for forced probe failures.
+/// Parse the stdout operator-error envelope emitted for forced probe failures.
 fn parse_error_envelope(out: &Output) -> Value {
-    serde_json::from_slice(&out.stderr).unwrap_or_else(|err| {
+    let value: Value = serde_json::from_slice(&out.stdout).unwrap_or_else(|err| {
         panic!(
-            "host check error envelope was not valid JSON: {err}\nstderr:\n{}",
-            String::from_utf8_lossy(&out.stderr)
+            "host check error envelope was not valid JSON: {err}\nstdout:\n{}",
+            String::from_utf8_lossy(&out.stdout)
         )
-    })
+    });
+    serde_json::from_value::<d2b_core::error::Error>(value.clone()).unwrap_or_else(|err| {
+        panic!(
+            "host check error envelope did not match the typed operator schema: {err}\nstdout:\n{}",
+            String::from_utf8_lossy(&out.stdout)
+        )
+    });
+    value
 }
 
 // --- CLI-local cases -------------------------------------------------------
@@ -499,8 +515,9 @@ fn host_check_ufw_probe_error_envelope() {
 }
 
 /// Shared body for the three forced-probe-failure cases: the probe error must
-/// surface as exit 1 with the `internal-io` operator envelope on stderr
-/// (owningCommand "host check", code 50, message carrying the forced reason).
+/// surface as exit 1 with the typed `internal-io` operator envelope on the
+/// v3 JSON output stream (owningCommand "host check", code 50, message
+/// carrying the forced reason) and no host-check report body.
 fn assert_probe_error_envelope(
     fixture_name: &str,
     expected_reason: &str,
@@ -519,10 +536,24 @@ fn assert_probe_error_envelope(
         "forced probe failure surfaces as an internal error (exit 1)"
     );
     assert!(
-        out.stdout.is_empty(),
-        "a forced probe failure must not print a report body"
+        out.stderr.is_empty(),
+        "v3 JSON errors must stay on stdout; stderr:\n{}",
+        String::from_utf8_lossy(&out.stderr)
     );
     let envelope = parse_error_envelope(&out);
+    let object = envelope
+        .as_object()
+        .expect("typed operator error envelope must be a JSON object");
+    let mut keys: Vec<&str> = object.keys().map(String::as_str).collect();
+    keys.sort_unstable();
+    assert_eq!(
+        keys, OPERATOR_ERROR_KEYS,
+        "typed operator error envelope schema drifted: {envelope}"
+    );
+    assert!(
+        envelope.get("summary").is_none() && envelope.get("findings").is_none(),
+        "a forced probe failure must not print a host-check report body: {envelope}"
+    );
     assert_eq!(envelope["kind"], "internal-io");
     assert_eq!(envelope["owningCommand"], "host check");
     assert_eq!(envelope["code"], 50);
@@ -534,17 +565,44 @@ fn assert_probe_error_envelope(
 }
 
 #[test]
-fn host_check_usage_error_exits_three() {
+fn host_check_strict_without_read_only_exits_three() {
+    let out = Command::new(env!("CARGO_BIN_EXE_d2b"))
+        .args(["host", "check", "--strict", "--json"])
+        .output()
+        .expect("spawn d2b host check --strict --json");
+
+    assert_eq!(
+        out.status.code(),
+        Some(3),
+        "strict host check without --read-only is a usage refusal"
+    );
+    assert!(
+        out.stderr.is_empty(),
+        "JSON usage refusals stay on stdout; stderr:\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let envelope: Value =
+        serde_json::from_slice(&out.stdout).expect("strict usage refusal must be JSON");
+    assert_eq!(envelope["ok"], false);
+    assert_eq!(envelope["errorClass"], "ref-invalid");
+    assert_eq!(
+        envelope["message"],
+        "host check --strict requires --read-only"
+    );
+}
+
+#[test]
+fn host_check_unknown_flag_exits_two() {
     if fixtures_dir().is_none() {
         eprintln!("SKIP: D2B_FIXTURES unset (not the gated CLI-contract step)");
         return;
     }
-    // clap usage errors (unknown flags) are exit 3 regardless of fixtures.
+    // ModernCli usage errors (unknown flags) use exit 2 regardless of fixtures.
     let out = Command::new(env!("CARGO_BIN_EXE_d2b"))
         .args(["host", "check", "--bogus"])
         .output()
         .expect("spawn d2b host check --bogus");
-    assert_eq!(out.status.code(), Some(3), "usage errors exit 3");
+    assert_eq!(out.status.code(), Some(2), "clap usage errors exit 2");
 }
 
 #[test]

@@ -15,6 +15,36 @@ ROOT=${ROOT:-$(cd "$HERE/.." && pwd)}
 D2B_LOG=${D2B_LOG:-/dev/null}
 export ROOT D2B_LOG
 
+# Refreshed post-06255750 complete-run baseline: 8,546,976 KiB process-tree
+# RSS. The immutable 25% headroom produces a 10,683,720 KiB ceiling. This is a
+# lane contract, not an operator knob; lower thresholds belong only to hermetic
+# peak-rss helper self-tests.
+NIX_UNIT_RSS_MAX_KIB=10683720
+rss_guarded=0
+if [ "${1:-}" = "--internal-peak-rss-guarded" ]; then
+  shift
+  rss_guarded=1
+fi
+if [ "$rss_guarded" -eq 0 ]; then
+  peak_rss_helper="$ROOT/tests/tools/peak-rss.py"
+  if command -v python3 >/dev/null 2>&1; then
+    exec python3 "$peak_rss_helper" \
+      --lane nix-unit \
+      --max-kib "$NIX_UNIT_RSS_MAX_KIB" \
+      -- bash "$0" --internal-peak-rss-guarded "$@"
+  elif command -v nix >/dev/null 2>&1; then
+    exec nix shell --quiet --inputs-from "$ROOT" nixpkgs#python3 \
+      --command python3 "$peak_rss_helper" \
+      --lane nix-unit \
+      --max-kib "$NIX_UNIT_RSS_MAX_KIB" \
+      -- bash "$0" --internal-peak-rss-guarded "$@"
+  else
+    printf '%s\n' \
+      "nix-unit peak RSS guard requires python3 or nix to provide it" >&2
+    exit 125
+  fi
+fi
+
 if [ "${D2B_NIX_UNIT_JOBS+x}" = x ]; then
   printf '%s\n' \
     "D2B_NIX_UNIT_JOBS is retired; unset it and use D2B_NIX_UNIT_WORKERS (1 through 4)." \
@@ -51,7 +81,8 @@ if [ -n "${D2B_EXECUTION_MANIFEST:-}" ] \
     --target test-nix-unit \
     --commit "$manifest_commit" \
     -- env D2B_NIX_UNIT_MANIFEST_LIFECYCLE=1 \
-      bash "$ROOT/tests/test-nix-unit.sh" "$@"
+      bash "$ROOT/tests/test-nix-unit.sh" \
+      --internal-peak-rss-guarded "$@"
 fi
 
 # shellcheck disable=SC1091
@@ -63,6 +94,7 @@ cd "$ROOT"
 manifest_exit_publication_enabled=1
 nix_unit_surface=nix-unit
 nix_unit_command_succeeded=0
+shard_group_files=()
 nix_unit_baseline_leaves=(
   nix-unit
   nix-unit-daemon
@@ -82,9 +114,49 @@ publish_manifest_fragment() {
     --status "$status"
 }
 
+settle_nix_unit_process_group() {
+  local process_group="$1" attempt=1
+  while [ "$attempt" -le 40 ]; do
+    if ! kill -0 -- "-$process_group" 2>/dev/null; then
+      return 0
+    fi
+    sleep 0.1
+    attempt=$((attempt + 1))
+  done
+  fail "nix-unit shard process group $process_group did not exit; refusing to start the next shard"
+  return 1
+}
+
+terminate_nix_unit_process_group() {
+  local process_group="$1" attempt=1
+  kill -TERM -- "-$process_group" 2>/dev/null || true
+  while [ "$attempt" -le 10 ]; do
+    if ! kill -0 -- "-$process_group" 2>/dev/null; then
+      return 0
+    fi
+    sleep 0.1
+    attempt=$((attempt + 1))
+  done
+  kill -KILL -- "-$process_group" 2>/dev/null || true
+  settle_nix_unit_process_group "$process_group"
+}
+
+terminate_active_nix_unit_shard_groups() {
+  local shard_group_file process_group
+  for shard_group_file in "${shard_group_files[@]}"; do
+    [ -r "$shard_group_file" ] || continue
+    process_group=$(head -n 1 "$shard_group_file" 2>/dev/null || true)
+    case "$process_group" in
+      ''|*[!0-9]*) continue ;;
+    esac
+    terminate_nix_unit_process_group "$process_group" || true
+  done
+}
+
 nix_unit_exit() {
   local rc=$?
   trap - EXIT
+  terminate_active_nix_unit_shard_groups || true
   if [ "$manifest_exit_publication_enabled" -eq 1 ] \
     && [ -n "${D2B_EXECUTION_MANIFEST:-}" ] \
     && [ -n "$nix_unit_surface" ]; then
@@ -173,21 +245,49 @@ if [ -n "${D2B_NIX_UNIT_CHECK:-}" ]; then
   fi
   check="$D2B_NIX_UNIT_CHECK"
   nix_unit_surface="$check"
-  log "--> nix eval --raw ${flake_label}#checks.${system}.${check}.drvPath (instantiate-only)"
-  if nix eval --raw "${flake_ref}#checks.${system}.${check}.drvPath" >/dev/null; then
-    nix_unit_command_succeeded=1
-    if ! publish_manifest_fragment "$check" passed; then
-      printf '%s\n' \
-        "test-nix-unit: required execution-manifest fragment publication failed after successful surface '$check'; evidence is incomplete; retry the target." \
-        >&2
-      exit 1
-    fi
-    nix_unit_surface=
-    ok "nix-unit check $check ($system)"
-  else
-    fail "nix-unit check $check ($system) failed" || true
+  selected_jobs_file="$check_dir/jobs"
+  log "--> nix eval --raw ${flake_label}#nixUnitCheckJobShards.${system} (job discovery: $check)"
+  if ! nix eval --raw "${flake_ref}#nixUnitCheckJobShards.${system}" --apply "
+      shards:
+        let jobs = builtins.getAttr \"${check}\" shards;
+        in builtins.concatStringsSep \"\\n\"
+          (builtins.sort builtins.lessThan (builtins.attrNames jobs))
+    " >"$selected_jobs_file"; then
+    fail "nix-unit check $check ($system) job discovery failed" || true
     exit 1
   fi
+  mapfile -t selected_jobs <"$selected_jobs_file"
+  if [ "${#selected_jobs[@]}" -eq 0 ]; then
+    fail "nix-unit check $check ($system) discovered no jobs" || true
+    exit 1
+  fi
+  for job in "${selected_jobs[@]}"; do
+    case "$job" in
+      ""|*[!A-Za-z0-9._-]*)
+        fail "nix-unit check $check ($system) discovered unsafe job name: $job" || true
+        exit 1
+        ;;
+    esac
+    log "--> nix eval --raw ${flake_label}#nixUnitCheckJobShards.${system} (job: $check/$job; instantiate-only)"
+    if ! nix eval --raw \
+      "${flake_ref}#nixUnitCheckJobShards.${system}" \
+      --apply "
+        shards:
+          (builtins.getAttr \"${job}\" (builtins.getAttr \"${check}\" shards)).drvPath
+      " >/dev/null; then
+      fail "nix-unit check $check job $job ($system) failed" || true
+      exit 1
+    fi
+  done
+  nix_unit_command_succeeded=1
+  if ! publish_manifest_fragment "$check" passed; then
+    printf '%s\n' \
+      "test-nix-unit: required execution-manifest fragment publication failed after successful surface '$check'; evidence is incomplete; retry the target." \
+      >&2
+    exit 1
+  fi
+  nix_unit_surface=
+  ok "nix-unit check $check ($system)"
   log "test-nix-unit OK (selected $check; duration: $((SECONDS - suite_started))s)"
   exit 0
 fi
@@ -204,7 +304,8 @@ if ! command -v nix-eval-jobs >/dev/null 2>&1 \
   exec nix develop --quiet --no-warn-dirty --no-write-lock-file \
     "${flake_ref}#devShells.${system}.nix-unit" \
     --command env D2B_NIX_UNIT_TOOLCHAIN_REENTRY=1 \
-      bash "$ROOT/tests/test-nix-unit.sh" "$@"
+      bash "$ROOT/tests/test-nix-unit.sh" \
+      --internal-peak-rss-guarded "$@"
 fi
 
 logical_cpus=$(getconf _NPROCESSORS_ONLN 2>/dev/null || nproc 2>/dev/null || printf '%s' 1)
@@ -305,7 +406,12 @@ workers=$requested_workers
 [ "$workers" -le "$cpu_cap" ] || workers=$cpu_cap
 [ "$workers" -le "$memory_cap" ] || workers=$memory_cap
 [ "$workers" -ge 1 ] || workers=1
-log "  nix-eval-jobs workers: requested $requested_workers, effective $workers (CPU cap $cpu_cap, memory cap $memory_cap, $memory_mb MiB evaluator limit plus 2048 MiB overhead per worker)"
+# Heavy file jobs are isolated into their own evaluator processes below. Keep
+# at most two such processes resident at once; this is a stable pressure cap,
+# not a substitute for narrowing a full-system fixture.
+shard_workers=$workers
+[ "$shard_workers" -le 2 ] || shard_workers=2
+log "  nix-eval-jobs workers: requested $requested_workers, effective $shard_workers (CPU cap $cpu_cap, memory cap $memory_cap, $memory_mb MiB evaluator limit plus 2048 MiB overhead per worker)"
 
 if ! command -v nix-eval-jobs >/dev/null 2>&1; then
   fail "nix-eval-jobs is required for local corpus evaluation; the locked nix-unit shell should provide it" || true
@@ -313,6 +419,10 @@ if ! command -v nix-eval-jobs >/dev/null 2>&1; then
 fi
 if ! command -v jq >/dev/null 2>&1; then
   fail "jq is required to report every nix-eval-jobs attribute result; the locked nix-unit shell should provide it" || true
+  exit 2
+fi
+if ! command -v setsid >/dev/null 2>&1; then
+  fail "setsid is required to reap isolated Nix-unit evaluator process groups"
   exit 2
 fi
 
@@ -323,6 +433,8 @@ nix_unit_surface=nix-unit
 result_dir=$(d2b_mktemp ".d2b-nix-eval-jobs.XXXXXX")
 result_file="$result_dir/results.jsonl"
 tool_stderr="$result_dir/stderr"
+shard_dir="$result_dir/shards"
+mkdir -p "$shard_dir"
 
 sanitize_observable_line() {
   local value="$1" store_hash
@@ -348,6 +460,36 @@ sanitize_stderr_file() {
 emit_sanitized_tool_stderr() {
   sanitize_stderr_file "$tool_stderr"
 }
+
+shard_list="$result_dir/shard-names"
+if ! nix eval \
+  --impure \
+  --quiet \
+  --no-warn-dirty \
+  --raw \
+  "${flake_ref}#nixUnitJobShards.${system}" \
+  --apply '
+    shards:
+      builtins.concatStringsSep "\n"
+        (builtins.sort builtins.lessThan (builtins.attrNames shards))
+  ' >"$shard_list" 2>"$result_dir/shards.stderr"; then
+  sanitize_stderr_file "$result_dir/shards.stderr"
+  fail "nix-unit shard discovery ($system): evaluation failed" || true
+  exit 1
+fi
+mapfile -t nix_unit_shards <"$shard_list"
+if [ "${#nix_unit_shards[@]}" -eq 0 ]; then
+  fail "nix-unit shard discovery ($system): no shard jobs found"
+  exit 1
+fi
+for shard in "${nix_unit_shards[@]}"; do
+  case "$shard" in
+    ""|*[!A-Za-z0-9._-]*)
+      fail "nix-unit shard discovery returned unsafe shard name: $shard"
+      exit 1
+      ;;
+  esac
+done
 
 inventory_file="$result_dir/inventory.json"
 inventory_stderr="$result_dir/inventory.stderr"
@@ -377,17 +519,94 @@ if ! jq -e '
   exit 1
 fi
 
-log "--> nix-eval-jobs --no-instantiate --flake ${flake_label}#nixUnitJobs.${system} --workers $workers --max-memory-size $memory_mb"
-if nix-eval-jobs \
-  --no-instantiate \
-  --flake "${flake_ref}#nixUnitJobs.${system}" \
-  --workers "$workers" \
-  --max-memory-size "$memory_mb" \
-  --show-trace >"$result_file" 2>"$tool_stderr"; then
-  tool_status=0
-else
-  tool_status=$?
-fi
+log "--> nix-eval-jobs isolated Nix-unit shards (${#nix_unit_shards[@]}) --workers $shard_workers --max-memory-size $memory_mb"
+shard_pids=()
+shard_statuses=()
+shard_status=0
+
+run_nix_unit_shard() {
+  local shard="$1" shard_result="$2" shard_stderr="$3" shard_status_file="$4" shard_group_file="$5"
+  local rc pid
+  setsid nix-eval-jobs \
+    --no-instantiate \
+    --flake "${flake_ref}#nixUnitJobShards.${system}.${shard}" \
+    --workers 1 \
+    --max-memory-size "$memory_mb" \
+    --show-trace >"$shard_result" 2>"$shard_stderr" &
+  pid=$!
+  trap 'terminate_nix_unit_process_group "$pid" || true; exit 143' TERM INT HUP
+  printf '%s\n' "$pid" >"$shard_group_file"
+  set +e
+  wait "$pid"
+  rc=$?
+  set -e
+  trap - TERM INT HUP
+  if ! terminate_nix_unit_process_group "$pid"; then
+    printf '%s\n' 1 >"$shard_status_file"
+    shard_status=1
+    return 1
+  fi
+  printf '%s\n' "$rc" >"$shard_status_file"
+  [ "$rc" -eq 0 ] || shard_status=1
+  return "$rc"
+}
+
+harvest_nix_unit_shard() {
+  local pid="$1" status_file="$2"
+  local rc recorded_rc=
+  set +e
+  wait "$pid"
+  rc=$?
+  set -e
+  if [ -r "$status_file" ]; then
+    recorded_rc=$(head -n 1 "$status_file" 2>/dev/null || true)
+  fi
+  if [[ "$recorded_rc" =~ ^[0-9]+$ ]] \
+    && [ "$recorded_rc" -ne 0 ]; then
+    rc=$recorded_rc
+  fi
+  printf '%s\n' "$rc" >"$status_file"
+  [ "$rc" -eq 0 ] || shard_status=1
+}
+
+for shard in "${nix_unit_shards[@]}"; do
+  while [ "${#shard_pids[@]}" -ge "$shard_workers" ]; do
+    harvest_nix_unit_shard "${shard_pids[0]}" "${shard_statuses[0]}"
+    shard_pids=("${shard_pids[@]:1}")
+    shard_statuses=("${shard_statuses[@]:1}")
+  done
+  shard_result="$shard_dir/$shard.jsonl"
+  shard_stderr="$shard_dir/$shard.stderr"
+  shard_status_file="$shard_dir/$shard.status"
+  shard_group_file="$shard_dir/$shard.group"
+  rm -f -- "$shard_result" "$shard_stderr" "$shard_status_file" "$shard_group_file"
+  shard_group_files+=("$shard_group_file")
+  log "  evaluating Nix-unit shard: $shard"
+  if [ "$shard_workers" -eq 1 ]; then
+    run_nix_unit_shard \
+      "$shard" "$shard_result" "$shard_stderr" "$shard_status_file" "$shard_group_file" || true
+  else
+    (
+      run_nix_unit_shard \
+        "$shard" "$shard_result" "$shard_stderr" "$shard_status_file" "$shard_group_file"
+    ) &
+    shard_pids+=("$!")
+    shard_statuses+=("$shard_status_file")
+  fi
+done
+while [ "${#shard_pids[@]}" -gt 0 ]; do
+  harvest_nix_unit_shard "${shard_pids[0]}" "${shard_statuses[0]}"
+  shard_pids=("${shard_pids[@]:1}")
+  shard_statuses=("${shard_statuses[@]:1}")
+done
+
+: >"$result_file"
+: >"$tool_stderr"
+for shard in "${nix_unit_shards[@]}"; do
+  cat "$shard_dir/$shard.jsonl" >>"$result_file" 2>/dev/null || true
+  cat "$shard_dir/$shard.stderr" >>"$tool_stderr" 2>/dev/null || true
+done
+tool_status="$shard_status"
 
 if [ ! -s "$result_file" ] || ! jq -s -e '
   length > 0
@@ -589,4 +808,4 @@ for leaf in "${nix_unit_baseline_leaves[@]}"; do
   fi
 done
 nix_unit_surface=
-log "test-nix-unit OK ($result_count attributes, $workers workers, ${memory_mb}MiB per worker; duration: $((SECONDS - suite_started))s)"
+log "test-nix-unit OK ($result_count attributes, $shard_workers shard workers, ${memory_mb}MiB per evaluator; duration: $((SECONDS - suite_started))s)"

@@ -31,6 +31,7 @@
 
 #![deny(missing_docs)]
 
+pub mod agent;
 mod context;
 mod descriptor;
 mod error;
@@ -39,7 +40,16 @@ mod identity;
 mod installation;
 mod registry;
 mod session;
+pub mod share_adapter;
 
+pub mod instance;
+pub mod rpc;
+
+pub use agent::{
+    MAX_AGENT_AUDIT_EVENTS, MAX_AGENT_IN_FLIGHT, MAX_AGENT_TIMEOUT_MS, ProviderAgent,
+    ProviderAgentAuditEvent, ProviderAgentError, ProviderAgentMessage, ProviderAgentOutcome,
+    ProviderAgentRequest, ProviderAgentResponse, ProviderAgentService,
+};
 pub use context::{CancellationToken, OwnedOperationContext};
 pub use descriptor::ProviderDescriptor;
 pub use error::{ProviderRuntimeError, RegistryBuildError};
@@ -61,3 +71,7 @@ pub use registry::{
     RegistryDrainPolicy, RegistryLifecycle, RegistryLimits, RegistryShutdownReport,
 };
 pub use session::SessionIdentity;
+pub use share_adapter::{
+    ExportAdapter, ImportAdapter, ShareAdapter, ShareAdapterError, admit_binding_target,
+    admit_export, admit_factory_pair, admit_import, projection_protocol_version, service_type,
+};

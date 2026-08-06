@@ -171,7 +171,7 @@ worker components.
 | --- | --- |
 | Component ID | `minijail-controller` |
 | Type | controller |
-| Binary | `d2b-provider-system-minijail` (single executable) |
+| `binaryRef` | `d2b-provider-system-minijail`; the component is `Launchable` (§4.9.3), so the derivation ships `bin/d2b-provider-system-minijail` and declares exactly one `package.executableDigests` entry keyed by that name |
 | Exported ResourceTypes | `Process`, `EphemeralProcess` |
 | Domain | `system` (default); `user` when descriptor declares `user-domain-supported` |
 | Cardinality | 1 per Zone |
@@ -184,6 +184,16 @@ worker components.
 
 There are no service, worker, or separate component binaries in this Provider.
 The controller is the only binary entry point.
+
+`Provider/system-minijail` is a bootstrap exception for Process creation only:
+the Zone runtime starts its controller without a parent `Process` resource
+(§11.3 step 5). It is not an in-process Provider. Unlike
+`Provider/system-core`, whose handlers link into the `d2b-core-controller`
+binary from another derivation, `system-minijail` builds and ships its own
+executable, so its component descriptor carries a `binaryRef`, its artifact
+ships a `bin/` directory, and its `package.executableDigests` is non-empty.
+The `InProcessBootstrap` arm of `ComponentExecution` is admissible for this
+Provider but is not used by it.
 
 ## 4.2 Endpoint resources (D092)
 
@@ -1393,7 +1403,8 @@ The build:
 
 1. Renders the canonical JSON ResourceSpec.
 2. Validates it against the committed ResourceTypeSchema
-   (`docs/reference/schemas/v3/Process.json` and `EphemeralProcess.json`).
+   (`docs/reference/schemas/v3/core.d2bus.org_Process.schema.json` and
+   `core.d2bus.org_EphemeralProcess.schema.json`).
 3. Validates `spec.sandbox` against the signed Provider schema extension for
    minijail-specific fields.
 4. Verifies no Nix store path appears in any rendered field.
@@ -1677,7 +1688,7 @@ delivery assumptions are not copied.
 | Dependency/owner | ADR046-minijail-005; Nix integrator; test infrastructure owner |
 | Current source | `nixos-modules/processes-json.nix`; `nixos-modules/minijail-profiles.nix`; `packages/d2b-contract-tests/tests/policy_observability.rs` |
 | Reuse action | adapt |
-| Destination | `nixos-modules/` - v3 Nix `Process`/`EphemeralProcess` resource authoring; Provider catalog entry; `docs/reference/schemas/v3/Process.json`; `docs/reference/schemas/v3/EphemeralProcess.json`; `make test-drift` schema drift gate |
+| Destination | `nixos-modules/` - v3 Nix `Process`/`EphemeralProcess` resource authoring; Provider catalog entry; `docs/reference/schemas/v3/core.d2bus.org_Process.schema.json`; `docs/reference/schemas/v3/core.d2bus.org_EphemeralProcess.schema.json`; `make test-drift` schema drift gate |
 | Detailed design | Nix module accepts `d2b.zones.<zone>.resources.<name>` with `type = "Process"` or `"EphemeralProcess"`; eval-time validation rules (§16.4); build-time JSON validation (§16.5); artifact catalog integration; cleanup contract tests (§16.5) |
 | Integration | `d2b.artifacts` catalog; Zone bundle emission; `make test-drift` |
 | Data migration | Current `nixos-modules/processes-json.nix` and minijail profile Nix removed at cutover |

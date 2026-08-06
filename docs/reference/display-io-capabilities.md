@@ -55,7 +55,7 @@ It never exposes session secrets, app argv, Wayland socket paths, relay
 endpoints, file descriptors, pidfds, cgroup paths, namespace identifiers, or
 process output. Closed and failed sessions are removed from active listings.
 
-`d2b vm display list --json` includes `canonicalTarget`,
+`d2b display list --json` includes `canonicalTarget`,
 `identitySource`, and `capabilityPreflight` for each active session. The
 canonical target is d2b-provided realm metadata, not a guest title or app id;
 desktop helpers should prefer it when displaying or correlating trusted VM

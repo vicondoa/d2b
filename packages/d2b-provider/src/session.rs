@@ -42,6 +42,9 @@ impl SessionIdentity {
             .provider_ref()
             .ok_or(ProviderRuntimeError::MissingProviderBinding)?
             .clone();
+        if provider_ref.resource_type().as_str() != "Provider" {
+            return Err(ProviderRuntimeError::MissingProviderBinding);
+        }
         let provider_generation = subject
             .provider_generation()
             .ok_or(ProviderRuntimeError::MissingProviderBinding)?;

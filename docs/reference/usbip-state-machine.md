@@ -45,9 +45,9 @@ the target VM/env/busid. Required preconditions are:
 - physical topology/policy checks allow the observed device before exposure.
 
 Public remediation stays on the lifecycle surface: start the VM with
-`d2b vm start <vm> --apply`, reconcile with
-`d2b usb attach <vm> <busid> --apply`, or release with
-`d2b usb detach <vm> <busid> --apply`. Operators must not edit lock files
+`d2b guest start <name> --apply`, reconcile with
+`d2b device usb attach <name> <busid> --apply`, or release with
+`d2b device usb detach <name> <busid> --apply`. Operators must not edit lock files
 or sysfs driver links directly.
 
 ## Canonical order
@@ -240,7 +240,7 @@ vendor/product allowlists, undeclared physical topology, or topology mismatch -
 fail before device exposure and roll back the VM start with remediation to fix
 the declaration or bind the approved physical device.
 
-`d2b usb probe` and `d2b status` project this split directly: session
+`d2b device usb probe` and `d2b guest status <name>` project this split directly: session
 claim, host bind/carrier/proxy, guest import, topology/policy, degraded
 reasons, and remediation commands are separate fields. A same-VM session claim
 that has not reconverged its active carriers is degraded, not `bound`.

@@ -1,11 +1,14 @@
 //! Fixed core-controller startup and restart policy.
 //!
-//! This is a library module rather than a binary entrypoint. The production
-//! ResourceClient, authenticated local ComponentSession connector, and store
-//! watch dispatcher are intentionally absent, so exposing an executable would
-//! advertise a process that cannot perform its specified startup contract.
+//! This module is the fixed production process coordinator owned by the Zone
+//! runtime. The daemon supplies the opened store, authenticated local session,
+//! and provider path; this entrypoint owns only startup ordering and handler
+//! readiness, never a private replacement ledger.
 
-use crate::controllers::{AggregateHealth, CoreHandlerRegistry};
+use crate::controllers::{
+    AggregateHealth, CoreHandlerKind, CoreHandlerRegistry, HandlerOutcome, HandlerPhase,
+    HandlerStatus,
+};
 
 /// Fixed process startup stage.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -163,6 +166,49 @@ impl CoreProcess {
         self.recovery = None;
         self.stage = StartupStage::WaitingForAuthenticatedSession;
     }
+
+    /// Start the fixed controller set after the Zone runtime has opened its
+    /// production store and authenticated its local session.
+    ///
+    /// An empty store has revision zero. The first readiness checkpoint is
+    /// therefore represented by the nonzero controller checkpoint `1`; this
+    /// is a process checkpoint, not a fabricated resource revision.
+    pub fn start_production(
+        &mut self,
+        checkpoint_revision: u64,
+    ) -> Result<StartupStage, StartupError> {
+        self.connect_runtime(RuntimeReadiness {
+            store_ready: true,
+            resource_api_ready: true,
+            local_bus_ready: true,
+            authenticated_system_core_session: true,
+        })?;
+        self.recover(RecoverySnapshot {
+            checkpoint_revision: checkpoint_revision.max(1),
+            active_configuration_revision: 1,
+            provider_lease_count: 0,
+            controller_lease_count: 0,
+            ambiguous_operation_count: 0,
+        })?;
+        self.configuration_published()?;
+        let ready = HandlerStatus {
+            phase: HandlerPhase::Ready,
+            outcome: HandlerOutcome::Converged,
+            observed_generation: 1,
+            queued: 0,
+            running: 0,
+            last_watch_revision: checkpoint_revision,
+            checkpoint_revision,
+            last_reconciled_tick: 1,
+            retry_after_tick: None,
+        };
+        for kind in CoreHandlerKind::ALL {
+            self.handlers
+                .update(kind, ready)
+                .map_err(|_| StartupError::MandatoryHandlerNotReady)?;
+        }
+        self.publish_readiness()
+    }
 }
 
 #[cfg(test)]
@@ -277,5 +323,16 @@ mod tests {
             process.publish_readiness(),
             Err(StartupError::MandatoryHandlerNotReady)
         );
+    }
+
+    #[test]
+    fn production_startup_reaches_ready_for_an_empty_store_checkpoint() {
+        let mut process = CoreProcess::new();
+        assert_eq!(
+            process.start_production(0),
+            Ok(StartupStage::Ready),
+            "empty stores still publish readiness after authenticated runtime startup"
+        );
+        assert_eq!(process.stage(), StartupStage::Ready);
     }
 }

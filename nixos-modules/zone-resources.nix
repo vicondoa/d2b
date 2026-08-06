@@ -7,34 +7,46 @@ let
   artifactRenderer = import ./zone-resources-json.nix { inherit pkgs; };
   apiVersion = "resources.d2bus.org/v3";
 
-  artifactCatalogEntries = map
+  providerCatalogEntries = map
     (entry: {
       inherit (entry) id type;
       inherit (entry) storePath;
-      packageDigest = entry.entry.packageDigest;
+      packageDigest = entry.entry.packageDigest or null;
       closureMetadata = {
-        executableDigest = entry.entry.executableDigest;
-        manifestDigest = entry.entry.manifestDigest;
-        componentDigest = entry.entry.componentDigest;
-        descriptorDigest = entry.entry.descriptorDigest;
-        configDigest = entry.entry.configDigest;
-        systems = entry.entry.systems;
-        platform = entry.entry.platform;
+        executableDigest = entry.entry.executableDigest or null;
+        manifestDigest = entry.entry.manifestDigest or null;
+        componentDigest = entry.entry.componentDigest or null;
+        descriptorDigest = entry.entry.descriptorDigest or null;
+        configDigest = entry.entry.configDigest or null;
+        systems = entry.entry.systems or [ ];
+        platform = entry.entry.platform or null;
       };
     })
-    cfg._providerCatalog.entries;
+    (cfg._providerCatalog.entries or [ ]);
   artifactCatalogPreimage = {
     schemaVersion = 3;
-    entries = artifactCatalogEntries;
+    entries = providerCatalogEntries;
   };
   artifactCatalogPreimageJson = builtins.toJSON artifactCatalogPreimage;
-  artifactCatalogPath = artifactRenderer.mkArtifactCatalog {
-    entriesJson = builtins.toJSON artifactCatalogEntries;
-    preimageJson = artifactCatalogPreimageJson;
-  };
+  canonicalArtifactCatalog =
+    if cfg ? _artifactCatalogV3 then cfg._artifactCatalogV3 else { };
+  canonicalArtifactCatalogPreimageJson =
+    canonicalArtifactCatalog.preimageJson or artifactCatalogPreimageJson;
+  artifactCatalogPath =
+    canonicalArtifactCatalog.path or (artifactRenderer.mkArtifactCatalog {
+      entriesJson = builtins.toJSON providerCatalogEntries;
+      preimageJson = canonicalArtifactCatalogPreimageJson;
+    });
+  schemaValidation = cfg._resourceCompiler.schemaValidation or { };
+  schemaValidationPath = schemaValidation.buildValidation or null;
 
   emittedResources = resources:
     lib.filterAttrs (_: resource: resource.type != "Zone") resources;
+
+  zoneResources = zoneName: zone:
+    zone.resources
+    // (cfg._resourceCompiler.volumeGenerated.byZone.${zoneName} or { })
+    // (cfg._resourceCompiler.volumeShorthand.${zoneName} or { });
 
   executionPolicyDefaults = {
     providerRef = null;
@@ -114,15 +126,15 @@ let
     else stripExecutionDefaults resource.spec;
 
   optionalMetadata = resource:
-    lib.optionalAttrs (resource.metadata.ownerRef != null) {
-      inherit (resource.metadata) ownerRef;
-    }
-    // lib.optionalAttrs (resource.metadata.labels != { }) {
-      inherit (resource.metadata) labels;
-    }
-    // lib.optionalAttrs (resource.metadata.annotations != { }) {
-      inherit (resource.metadata) annotations;
-    };
+    let
+      metadata = resource.metadata or { };
+      ownerRef = metadata.ownerRef or null;
+      labels = metadata.labels or { };
+      annotations = metadata.annotations or { };
+    in
+    lib.optionalAttrs (ownerRef != null) { inherit ownerRef; }
+    // lib.optionalAttrs (labels != { }) { inherit labels; }
+    // lib.optionalAttrs (annotations != { }) { inherit annotations; };
 
   canonicalResource = zoneName: resourceName: resource: {
     inherit apiVersion;
@@ -146,20 +158,26 @@ let
   zoneResourceList = zoneName: zone:
     sortResources (lib.mapAttrsToList
       (resourceName: resource: canonicalResource zoneName resourceName resource)
-      (emittedResources zone.resources));
+      (emittedResources (zoneResources zoneName zone)));
 
   catalogEntry = artifactId:
-    lib.findFirst (entry: entry.id == artifactId) null artifactCatalogEntries;
+    lib.findFirst (entry: entry.id == artifactId) null providerCatalogEntries;
 
-  providerSchemaDigests = zone:
+  providerSchemaDigests = zoneName: zone:
     lib.listToAttrs (lib.filter (entry: entry != null) (lib.mapAttrsToList
       (resourceName: resource:
         if resource.type != "Provider" || !(resource.spec ? artifactId) then null
         else
-          let catalog = catalogEntry resource.spec.artifactId;
-          in if catalog == null || !(catalog.closureMetadata ? configDigest) then null
-          else lib.nameValuePair "Provider/${resourceName}" catalog.closureMetadata.configDigest)
-      (emittedResources zone.resources)));
+          let
+            catalog = catalogEntry resource.spec.artifactId;
+            digest =
+              if catalog != null
+                && (catalog.closureMetadata.configDigest or null) != null
+              then catalog.closureMetadata.configDigest
+              else "sha256:${builtins.hashString "sha256"
+                "d2b:v3:schema/${resource.spec.artifactId or resourceName}"}";
+          in lib.nameValuePair "Provider/${resourceName}" digest)
+      (emittedResources (zoneResources zoneName zone))));
 
   bundleData = zoneName: zone:
     let
@@ -170,15 +188,18 @@ let
       zone = zoneName;
       inherit resources;
       generatedAt = "1970-01-01T00:00:00.000Z";
-      providerSchemaDigests = providerSchemaDigests zone;
+      providerSchemaDigests = providerSchemaDigests zoneName zone;
     };
 
   bundlePath = zoneName: data:
     artifactRenderer.mkZoneResourceBundle {
-      inherit zoneName artifactCatalogPreimageJson;
+      zoneName = zoneName;
+      artifactCatalogPreimageJson = canonicalArtifactCatalogPreimageJson;
       resourcesJson = builtins.toJSON data.resources;
       providerSchemaDigestsJson = builtins.toJSON data.providerSchemaDigests;
       zoneJson = builtins.toJSON zoneName;
+      artifactCatalogPath = artifactCatalogPath;
+      schemaValidationPath = schemaValidationPath;
     };
 
   zoneBundles = lib.mapAttrs
@@ -195,13 +216,10 @@ let
 in
 {
   config = lib.mkIf (cfg.zones != { }) {
-    d2b._bundle.zoneResourceBundles = zoneBundles;
-    d2b._bundle.extraArtifacts.artifactCatalog = {
-      data = artifactCatalogPreimage;
-      path = artifactCatalogPath;
-      installFileName = "artifact-catalog.json";
-      classification = "contractPrivateNonSecret";
-      sensitivity = "nonSecret";
-    };
+    # Keep only the old eval data for compatibility. Its legacy path and
+    # install metadata are deliberately not exposed to the bundle aggregator.
+    d2b._bundle.zoneResourceBundlesCompatibility = lib.mapAttrs
+      (_: bundle: { data = bundle.data; })
+      zoneBundles;
   };
 }

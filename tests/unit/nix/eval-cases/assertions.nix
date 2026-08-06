@@ -9,13 +9,18 @@
 # Replaces 31 separate per-case `nix-instantiate --eval --strict`
 # invocations in the legacy bash gate. See `shared.nix` for the
 # evaluator contract.
-{ flakeRoot ? null, nixpkgs ? null, d2bModule ? null }:
+{ flakeRoot ? null
+, nixpkgs ? null
+, d2bModule ? null
+, bucket ? null
+, bucketCount ? 1
+}:
 
 let
   shared = import ./shared.nix { inherit flakeRoot nixpkgs d2bModule; };
 in
-shared.mkBatch {
-  cases = {
+let
+  allCases = {
     # H10/1 - private-key marker in userAuthorizedKeys must be rejected.
     "private-key-in-authorized-keys" = {
       expectedSubstring = "does not look like a valid SSH public key";
@@ -689,4 +694,20 @@ shared.mkBatch {
       );
     };
   };
-}
+  caseIndex = shared.lib.listToAttrs
+    (shared.lib.imap0
+      (index: name: shared.lib.nameValuePair name index)
+      (builtins.attrNames allCases));
+  selectedCases =
+    if bucket == null then
+      allCases
+    else
+      shared.lib.filterAttrs
+        (name: _:
+          shared.lib.mod
+            caseIndex.${name}
+            bucketCount
+          == bucket)
+        allCases;
+in
+shared.mkBatch { cases = selectedCases; }

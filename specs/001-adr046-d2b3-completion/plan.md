@@ -115,7 +115,9 @@ specs/001-adr046-d2b3-completion/
 │   └── companion-contracts.md
 ├── checklists/
 │   ├── requirements.md  # Spec quality checklist (16/16 passing)
-│   └── coverage.md      # Upstream coverage gate (11/47, Gate 1 closed)
+│   └── coverage.md      # Upstream coverage gate (22/47 as of the W5 pass; Gate 1 and
+│                        #   Gate 2 closed, plus the W5 date-bound CHK025/CHK044 gate and
+│                        #   the companion family CHK018/CHK022/CHK033)
 └── tasks.md             # Phase 2 output - NOT created by /speckit-plan
 ```
 
@@ -229,6 +231,150 @@ applies without modification.
 item `ADR046-process-001` is W4. Per "existing code is canon" the machine-readable graph wins.
 This plan follows the graph. Correcting the prose is a specification amendment that re-opens
 that spec's evidence, so it is raised to the integrator rather than fixed mid-wave.
+
+`ADR-046-telemetry-audit-and-support` work item `ADR046-reuse-005` required the
+`observability-otel` Provider to emit authoritative `SessionConnect` records "via `d2b-audit`".
+That obligation is not dischargeable from a Provider crate and contradicts two committed,
+passing surfaces. `ALLOWED_WORKSPACE_DEPS` in
+`packages/d2b-contract-tests/tests/policy_provider_crates.rs` admits only `d2b-contracts`,
+`d2b-controller-toolkit`, `d2b-core`, `d2b-process-conformance`, `d2b-provider` and
+`d2b-provider-toolkit`, and `packages/d2b-provider-toolkit/src/audit.rs` states in code that the
+Provider agent ring is "diagnostic, never the authority for what happened". The authoritative
+writer already exists at `packages/d2b-session/src/audit.rs` and belongs to `ADR046-audit-003`.
+Per "existing code is canon" the code wins, and per the ruling class established in
+`implementation-debt.md` §16.1 this is a manifest defect rather than permission for a
+slice-local workaround. The correction was authored in the member spec and regenerated:
+the Provider is the subject of the record, not its author; the crate takes no `d2b-audit` and
+no direct `d2b-telemetry` dependency; the closed `METRIC_LABEL_POLICY` data is single-sourced
+in `d2b-contracts` and re-exported by both sides. `ADR046-telem-006`'s validation phrase was
+corrected in the same pass to distinguish the table-driven four-variant test of the one shared
+ingress gate, which is owed now, from live `otlp_unix` / `otlp_vsock` / `import_stream`
+adapters, which that item's own Removal proof sequences after the OTLP exporter.
+
+The W5 removal-proof inventory originally grouped eleven Rust crates together. The
+implementation graph and live dependency tree permit only three removals in W5:
+`d2b-daemon-access`, `d2b-host-providers` with its sole
+`d2b-host::runtime_provider` consumer, and the already-retired `d2b-userd` stub. The realm
+session crates are retained for the W7 Provider-session migration, `d2b-provider-aca` and
+`d2b-provider-relay` are W6 Provider surfaces, `d2b-unsafe-local-helper` is reused by W7, and
+`d2b-guestd` is the live guest-control service rather than a legacy stub. The work-item wave
+ownership and committed runtime wiring force this boundary; deleting the later-wave surfaces
+in W5 would remove their only current implementations.
+
+ADR 0051 Amendment F describes the audio dossier's `implementationEndpointRefs` as appearing
+only in YAML examples and prose. At the c62e57ce integration tip, the committed
+`AudioService.spec` table already has a typed `Type` column for that field and every other
+base field. Per "existing code is canon", this wave leaves the already-correct audio table
+unchanged and adds only the missing typed Service tables to the security-key and USBIP
+dossiers.
+
+ADR 0051 Amendment E names two provider admission variants that are not present in the
+current `d2b_core::error::Kind` catalog. This docs-only scope cannot add Rust error records,
+and `gen-error-codes` owns the auto-generated table, so the two normative rows are recorded
+in a separate provider projection admission table rather than hand-editing generated output.
+The generated runtime catalog remains unchanged and its drift gate stays authoritative. The
+corresponding `ProviderContractError` variants and the protocol-version field are also absent
+from the current Rust implementation; those implementation changes belong to the downstream
+ADR 0051 consumer slice.
+
+Amendment A is likewise intentionally ahead of the current implementation: the committed
+`semantic_services/security_key.rs` still models `allowed_backing_ref_types: None` and
+`BackingRefTypesUndetermined`, while `ProjectionFactory::new` still rejects an empty backing
+set. This docs-only slice records the accepted deny-all contract and leaves that Rust
+implementation drift for the consumer slice rather than editing out-of-scope code.
+
+ADR 0051 Amendment G is outside this W5 request, which consumes amendments A-F and H.
+`ADR-046-nix-configuration.md` is therefore deliberately left unchanged.
+
+`ADR046-zone-control-001` authorizes removing the legacy `Realm` model but does not make the
+whole `d2b-realm-core` crate mechanically replaceable. In particular,
+`d2b-contracts::v3::resource_status::ResourceUpdateStatus` still uses the realm-core string
+`OperationId`, while the v3 ComponentSession contract owns a distinct fixed-width, redacted
+`OperationId`. Choosing the v3 status wire representation is an architectural decision and is
+not inferred by a removal slice. This blocks eventual realm-core retirement, not the three
+W5-owned stub removals above.
+
+The SPIKE-01 RSS rerun amendment landed against
+[`amendment-spike-01-rerun.md`](./amendment-spike-01-rerun.md) and produced three drift
+records worth carrying forward.
+
+The draft prescribes pinning the policy fingerprint to the wording
+`6,148 KiB below 24,576 KiB`. The committed result artifact,
+`proofs/redb-resource-store-spike/RESULTS-rerun-2026-08-02.md`, does not emit that phrase; its
+canonical measurement cell reads ``Median `18,428 KiB`, `6,148 KiB` below the threshold``. Per
+"existing code is canon" the artifact wins, and the artifact is out of scope for this change.
+The lint therefore pins the artifact's actual wording as the canonical fingerprint and pins the
+draft's phrasing as the *derived* prose the specifications restate, with the `24,576 KiB` value
+bound separately through the row's threshold key. Both numbers and the gate are still pinned;
+only the sentence that carries them differs from the draft.
+
+The draft's verbatim §3.2 replacement text says "remain W5 implementation work". The surrounding
+table uses the `ADR046-W<n>` namespace throughout, so the applied text says `ADR046-W5`. This is
+a namespace normalization, not a scope change.
+
+`plan.md`'s **Constraints** line still reads "currently MEASURED-FAIL at 25,216 KiB". That
+figure is now superseded; the corrected proof measurement is 18,428 KiB with 6,148 KiB of
+headroom below the unchanged 24,576 KiB gate and no baseline subtraction. The line is left
+unedited because this change's ownership is scoped to the Recorded-drift and Gate-status content
+here, and because the production constraint the line states - `<=24,576 KiB` with no baseline
+subtraction - is itself unchanged. The exact replacement clause a follow-up should apply is
+"currently MEASURED-PASS on the disposable proof at 18,428 KiB and unmeasured on the production
+engine".
+
+Eleven W5 work items and two already-`Merged` items name destination crates that do not
+exist, where a committed crate covers the same obligation under a different name. The full
+adjudication is [`amendment-w5-destination-drift.md`](./amendment-w5-destination-drift.md);
+the summary is that FR-046 does not decide this class, because both sides of the
+disagreement are the generated manifest rather than prose against a manifest.
+`ADR046-exec-016` names `packages/d2b-bus-session/` while `ADR046-session-001`, `Merged` in
+W1, names `packages/d2b-session/`, and both are rows in `ADR-046-work-items.json`. "Existing
+code is canon" decides it, and the committed crate is the destination:
+`d2b-session`/`d2b-session-unix`, `d2b-bus`, `d2b-zone-routing`, `d2b-resource-client`,
+`d2b-resource-api`, and `d2b-provider`. The session-crate pair is not drift at all - the
+member spec's own text says "rename crate ... or retain name". Two obligations are genuinely
+absent rather than relocated, `ProcessAttachClient` and
+`nixos-modules/options-volumes.nix`, and both stay outstanding against their `Planned`
+items. No item is marked complete on file presence.
+
+The three W5 crate removals now carry real FR-023 proofs in
+[`removal-proof-w5.md`](./removal-proof-w5.md), replacing the rationale paragraph above as
+the evidence of record. Two migration-map rows moved to W5 under FR-060, one row was retired
+as naming a path that does not exist at the map's own baseline, and the
+`d2b-daemon-access` ADAPT disposition is raised as drift rather than corrected, because the
+migration map is a member specification.
+
+### Gate status
+
+Gate 0 has been re-evaluated a second time under FR-056; the record is
+[`gate0-reevaluation-spike-01-rss-rerun.md`](./gate0-reevaluation-spike-01-rss-rerun.md). The
+mechanical half is discharged: four member digests moved, seven work-item strings changed, and
+`ADR-046-implementation-graph.md` is byte-identical, so the specification-to-work-item bijection
+is provably untouched.
+
+The human-review half is **not** empty this time. `ADR046-W5` holds an outstanding ten-role panel
+request with imported validation evidence - including a `redb-rss-spike-observation` record -
+gathered before the amendment. FR-056 requires that evidence to be regathered rather than carried
+forward, so W5 must re-snapshot, re-import, and re-request its panel before it may seal. No wave
+has sealed under the superseded text, so no merged wave needs re-panelling.
+
+Waves W6 through W8 are unaffected. `ADR046-store-002`, `ADR046-store-004`, `ADR046-store-005`,
+and `ADR046-reconcile-003` remain `Planned` in W5: the passing rerun measures a disposable proof
+crate, not `packages/d2b-resource-store-redb`, and supplies none of those items' production
+evidence.
+
+That caveat is load bearing rather than ceremonial, and it became more so once the production
+backend landed. `packages/d2b-resource-store-redb/src/{actor,transaction,revision_log,backup}.rs`
+were added by `0a080828` on 2026-07-31, 349 commits before this amendment's base `c3e15b66`.
+The code exists; the measurement does not. The crate has **no `benches/` directory and no
+resident-memory harness of any kind**, so the production whole-process RSS obligation named by
+`ADR046-store-004`, `ADR046-store-002`, and `ADR046-store-005` is not merely unmet, it is
+currently unmeasurable. A reviewer who sees a green spike rerun beside a landed backend and
+concludes the backend's RSS gate is satisfied has made exactly the inference this amendment
+exists to block. All four items therefore stay `Planned` in the manifest, and the delivery
+obligation is a production measurement, not a re-reading of the proof result.
+
+The backend commit predates the amendment base, so it is outside this focused Gate 0 review and
+is not reverted or re-adjudicated here.
 
 ## Complexity Tracking
 

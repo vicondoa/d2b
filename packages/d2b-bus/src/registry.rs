@@ -398,7 +398,7 @@ pub(crate) struct SessionRegistration {
 }
 
 impl SessionRegistration {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "production-rss-fixture"))]
     pub(crate) fn new(
         context: AuthenticatedSubjectContext,
         routes: Vec<RouteKey>,
@@ -427,7 +427,7 @@ impl SessionRegistration {
         }
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "production-rss-fixture"))]
     pub(crate) const fn context(&self) -> Option<&AuthenticatedSubjectContext> {
         self.context.as_ref()
     }
@@ -477,7 +477,7 @@ impl PrincipalId {
 }
 
 impl SessionIdentity {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "production-rss-fixture"))]
     fn from_context(context: &AuthenticatedSubjectContext) -> Self {
         Self {
             zone: ZoneId::parse(context.zone_ref().name().as_str())

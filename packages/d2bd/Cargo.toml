@@ -18,8 +18,14 @@ nix = { version = "0.29", features = ["fs", "socket", "uio", "user", "signal", "
 parking_lot = { version = "0.12", features = ["arc_lock"] }
 rustix = { workspace = true }
 d2b-core = { path = "../d2b-core", version = "0.0.0-bootstrap" }
+d2b-core-controller = { path = "../d2b-core-controller", version = "0.0.0-bootstrap" }
+d2b-bus = { path = "../d2b-bus", version = "0.0.0-bootstrap" }
+d2b-resource-api = { path = "../d2b-resource-api", version = "0.0.0-bootstrap" }
+d2b-resource-store = { path = "../d2b-resource-store", version = "0.0.0-bootstrap" }
+d2b-resource-store-redb = { path = "../d2b-resource-store-redb", version = "0.0.0-bootstrap" }
 d2b-host = { path = "../d2b-host", version = "0.0.0-bootstrap" }
 d2b-contracts = { path = "../d2b-contracts", version = "0.0.0-bootstrap" }
+d2b-provider = { path = "../d2b-provider", version = "0.0.0-bootstrap" }
 # v2 constellation contract crates (ADR 0032). The peer-module skeletons in
 # src/realm_stubs.rs wire this trait surface; they are compile-only
 # and NOT called from the running daemon (zero behavior change).
@@ -44,6 +50,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 serde_json.workspace = true
 socket2 = "0.5"
 subtle = "2.6"
+tempfile = "3"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal", "sync", "time", "net"] }
 ttrpc = { version = "0.9.0", default-features = false, features = ["async", "sync"] }
 uzers = "0.12"

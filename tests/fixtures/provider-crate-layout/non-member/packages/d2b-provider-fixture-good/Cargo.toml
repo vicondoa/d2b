@@ -1,0 +1,4 @@
+[package]
+name = "d2b-provider-fixture-good"
+version = "0.0.0"
+edition = "2024"

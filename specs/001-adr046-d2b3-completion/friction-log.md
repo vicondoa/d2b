@@ -38,6 +38,7 @@ attestation payload.** Describe the friction, not the review text that surfaced 
 | F004 | 2026-07-29 | `test` | W1 | The storage spike missed its whole-process RSS budget by 640 KiB (2.6%), deferring the production engine and its watch consumer from W1 to W5 | Blocks the critical path; W5 cannot start its store chain until corrections are designed | T007 prototypes the corrections early so W5 confirms rather than discovers |
 | F005 | 2026-07-29 | `codegen` | W2 | `ADR-046-validation-and-delivery` §3.2 names two crate paths under W2 that no W2 work item targets; the graph assigns them to W4 | Spec prose and generated graph disagree; an implementer following prose targets the wrong wave | T575 raises it as a separate amendment; FR-046 makes the graph authoritative |
 | F006 | 2026-07-29 | `test` | all | The migration map supplies explicit removal proofs for only 3 of its 16 DELETE rows | FR-023 requires one per path; 13 must be authored | T576 inventories and assigns them |
+| F007 | 2026-08-02 | `merge` | W5 | Earlier W5 implementation was serialized through one integration lineage instead of launching every dependency-ready, file-disjoint slice in one coordination cycle; one committed execution slice remained on a sibling branch at the W5 entry audit | Integration had to reconstruct slice boundaries and audit unmerged sibling work before the wave could proceed | Corrected for this run: the execution slice was landed as its own merge commit, and all newly uncovered disjoint slices are dispatched in one batch |
 
 ## Standing obligations
 

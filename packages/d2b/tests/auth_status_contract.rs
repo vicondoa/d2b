@@ -60,8 +60,12 @@ fn run_auth_status(
     json: bool,
 ) -> std::process::Output {
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_d2b"));
-    cmd.args(["auth", "status", "--test-uid"])
+    // `--test-uid` belongs to ModernCli's `auth` arguments, before the
+    // nested `status` subcommand. It remains hidden from operator help but is
+    // retained as the fixture-only identity seam.
+    cmd.args(["auth", "--test-uid"])
         .arg(test_uid.to_string())
+        .arg("status")
         .arg(if json { "--json" } else { "--human" })
         .env("D2B_AUTH_STATUS_FIXTURE", fixture);
     for (key, value) in role_env {

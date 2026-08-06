@@ -84,7 +84,7 @@
     {
       "dependsOn" : [],
       "path" : "docs/specs/ADR-046-decision-register.md",
-      "sha256" : "9d2fd322b3a557116458350d6d337d50970ae97dda2d6439acfc05e4e9ccc18c",
+      "sha256" : "1fe107cc61dfaf364976151367f7403619e8b01ee77e0688930b607ab30c1834",
       "specId" : "ADR-046-decision-register",
       "status" : "Accepted",
       "supersedes" : null,
@@ -112,7 +112,7 @@
         "ADR-046-zone-routing"
       ],
       "path" : "docs/specs/ADR-046-feasibility-and-spikes.md",
-      "sha256" : "76c514283128f42925a6bd6d0105aa0b6f7ce11440b19227292c80418ae8cf72",
+      "sha256" : "d0634339b6a1712769cae183d04a17dc710530b98ec7da7f2df71538b8f8c720",
       "specId" : "ADR-046-feasibility-and-spikes",
       "status" : "Accepted",
       "supersedes" : null,
@@ -130,7 +130,7 @@
         "ADR-046-terminology-and-identities"
       ],
       "path" : "docs/specs/ADR-046-nix-configuration.md",
-      "sha256" : "191081239db945dd8a3b951fbf0c6f7c3471fe869d76ade5c952b41b52421920",
+      "sha256" : "888843570c03bf1da3d5adcdd0c5e65e4e9b5ce6b86edb0cbbd97cb8b69f0ca3",
       "specId" : "ADR-046-nix-configuration",
       "status" : "Accepted",
       "supersedes" : "Current `nixos-modules/options-realms*.nix`, `options-envs.nix`, `options-vms.nix`, `index.nix`, `bundle*.nix`, `*-json.nix`, and generated `/etc/d2b/*.json`",
@@ -321,7 +321,7 @@
         "ADR-046-telemetry-audit-and-support"
       ],
       "path" : "docs/specs/providers/ADR-046-provider-device-security-key.md",
-      "sha256" : "f2496b99ec2ace30a692b70b07dd15f82529e920e08f30403c46728d486b2410",
+      "sha256" : "a491ba0e04feaae3cf21c5034f3b95ec8445bb222cef04234b17ba20c7c16616",
       "specId" : "ADR-046-provider-device-security-key",
       "status" : "Accepted",
       "supersedes" : "`ProcessRole::SecurityKeyFrontend` daemon-internal accept loop (`packages/d2bd/src/security_key.rs`), `nixos-modules/components/security-key-guest.nix` untracked guest `d2b-sk-frontend.service` unit",
@@ -367,7 +367,7 @@
         "ADR-046-zone-routing"
       ],
       "path" : "docs/specs/providers/ADR-046-provider-device-usbip.md",
-      "sha256" : "fae7d6c70d34a5a95bfe49a0f8f840da431107a053db2dd21817c072384f1f46",
+      "sha256" : "f1a4d52cf2ff30d909ad3479114478c4dcb00949653ff85191d3d159d9ac61a4",
       "specId" : "ADR-046-provider-device-usbip",
       "status" : "Accepted",
       "supersedes" : "`nixos-modules/components/usbip.nix` (host-side), per-env usbipd systemd units in `nixos-modules/network.nix`, `ProcessRole::Usbip` / `RunnerRole::Usbip` in current v3 baseline",
@@ -407,7 +407,7 @@
         "ADR-046-resource-reconciliation"
       ],
       "path" : "docs/specs/ADR-046-provider-model-and-packaging.md",
-      "sha256" : "78a166a4f5655d608cbc462c77eb28b90d5644c4a490800fc0edadb2dee44b64",
+      "sha256" : "ac15073c9364684e8d2cdbcffffe6ce0eda4b5a0e879e49db580f5ba26617f61",
       "specId" : "ADR-046-provider-model-and-packaging",
       "status" : "Accepted",
       "supersedes" : "Current direct Provider construction/composition",
@@ -641,7 +641,7 @@
         "ADR-046-telemetry-audit-and-support"
       ],
       "path" : "docs/specs/providers/ADR-046-provider-system-core.md",
-      "sha256" : "e56d5f2274df1d7a82de676836228fa902d4b398ae9e1c38d0df32b3ca4f7ef5",
+      "sha256" : "914a0bd91d8a660858dc050588f83c5789324714bb68e940f04a1896fb815544",
       "specId" : "ADR-046-provider-system-core",
       "status" : "Accepted",
       "supersedes" : "Current `WorkloadProviderKind::UnsafeLocal`, host/User grouping helpers, `HostJson`/`VmRuntimeRow` host-management paths in `d2bd` and `d2b-realm-core`",
@@ -666,7 +666,7 @@
         "ADR-046-terminology-and-identities"
       ],
       "path" : "docs/specs/providers/ADR-046-provider-system-minijail.md",
-      "sha256" : "43bda8d9abd879715567dda9fbe301269dcd2809ea4a8dbc32e3a4e066d0e5f3",
+      "sha256" : "9821ba97dda8c92d7a2e2ed2f7cbd939d5e8b6817d1ce9cebdafcd5973f578d0",
       "specId" : "ADR-046-provider-system-minijail",
       "status" : "Accepted",
       "supersedes" : "Current `d2b-priv-broker` SpawnRunner, `d2b-core` minijail profile, and `d2bd` supervisor pidfd/wait paths for minijail-spawned processes",
@@ -706,7 +706,7 @@
         "ADR-046-zone-routing"
       ],
       "path" : "docs/specs/providers/ADR-046-provider-transport-azure-relay.md",
-      "sha256" : "e0479c91969d63708aa566a67ba5db4ea164c64702c22db384b2cdbaf83437d8",
+      "sha256" : "9fb625814daeb87b6f47a64f8d333ec9d71bc3dc91f011836b18c7f11700a273",
       "specId" : "ADR-046-provider-transport-azure-relay",
       "status" : "Accepted",
       "supersedes" : "`d2b-provider-relay` gateway-display relay path (`AcaWorkloadProvider` + `RelayProvider` traits in `d2b-realm-provider`); `d2b-gateway-runtime/src/bin/d2b-gateway-relay.rs`; `packages/d2b-provider-relay/src/lib.rs` as a first-party transport surface",
@@ -894,7 +894,7 @@
         "ADR-046-terminology-and-identities"
       ],
       "path" : "docs/specs/ADR-046-resource-store-redb.md",
-      "sha256" : "6d4e50a8106d59c716533364e89373a0d2a0698f4e0f8f75d0e3ccfb81c57e5a",
+      "sha256" : "d0c618d34b47b2203bdbf1b394c6379b4a91495191fb835ef285ea34139a095f",
       "specId" : "ADR-046-resource-store-redb",
       "status" : "Accepted",
       "supersedes" : null,
@@ -933,7 +933,7 @@
         "ADR-046-resource-reconciliation"
       ],
       "path" : "docs/specs/ADR-046-resources-device.md",
-      "sha256" : "15d2fff897feb70971ec97ba4ab4b5f110a46a2010b5d88e4db5a5a2945d82f4",
+      "sha256" : "589284b2f980ddc6db463de3a55f5f87babe5206e3ce735ef654b0f928ad3a75",
       "specId" : "ADR-046-resources-device",
       "status" : "Accepted",
       "supersedes" : "Current ProcessRole device sidecars (Swtpm, SwtpmPreStartFlush, Usbip, SecurityKeyFrontend, Gpu, GpuRenderNode, Video) and their Nix components",
@@ -974,7 +974,7 @@
         "ADR-046-terminology-and-identities"
       ],
       "path" : "docs/specs/ADR-046-resources-network.md",
-      "sha256" : "5848fea34024c2d7d207cfe46fb70cbe57ce42f72dd378f35ef881c3330fef95",
+      "sha256" : "a6c0c9d5d6559805a107d5af5e6e64c105125b24f4b8ebe952d105afb4391b92",
       "specId" : "ADR-046-resources-network",
       "status" : "Accepted",
       "supersedes" : "`d2b.envs.<env>` and `d2b.realms.<realm>.network` Nix surfaces (v3 reset)",
@@ -1013,7 +1013,7 @@
         "ADR-046-terminology-and-identities"
       ],
       "path" : "docs/specs/ADR-046-resources-zone-control.md",
-      "sha256" : "93829f519444505d55770d8e5f4c0940a5c293875a73d518568afac6c0815419",
+      "sha256" : "02b9eb335520415b7a7ea357bdbcc4ff23b6907bc714a942ec44bf9239d1d506",
       "specId" : "ADR-046-resources-zone-control",
       "status" : "Accepted",
       "supersedes" : null,
@@ -1080,7 +1080,7 @@
         "ADR-046-zone-routing"
       ],
       "path" : "docs/specs/ADR-046-security-and-threat-model.md",
-      "sha256" : "c2db2db6a7ef00499a4737da32a2601eb535471a449eb696a12824074d8f7802",
+      "sha256" : "ccae656814bd3f7348ae675299645b562d8aff832e83525912ffcabf238123f0",
       "specId" : "ADR-046-security-and-threat-model",
       "status" : "Accepted",
       "supersedes" : null,
@@ -1122,7 +1122,7 @@
         "ADR-046-terminology-and-identities"
       ],
       "path" : "docs/specs/ADR-046-telemetry-audit-and-support.md",
-      "sha256" : "f3fe03538910d76b7f7c09ef1c1bbf568207b654ae63abd60bde40bf2043043e",
+      "sha256" : "92d04c60b30b1667e8bbaa49e934166d6bf66614123cf84a15851333d37ab8aa",
       "specId" : "ADR-046-telemetry-audit-and-support",
       "status" : "Accepted",
       "supersedes" : "Current `d2bd` hand-rolled Prometheus registry; current daemon/broker/gateway JSONL audit paths",
@@ -1207,7 +1207,7 @@
         "ADR-046-zone-routing"
       ],
       "path" : "docs/specs/ADR-046-validation-and-delivery.md",
-      "sha256" : "ad445f1b06e71d0fd8b0a4e1dcb7a671013a28cd3d449bdbc06f492a2d1a40b0",
+      "sha256" : "3c39996c788a68f21d9255659229adcc3891f2d2bf4480e0008b4967e50e9f4a",
       "specId" : "ADR-046-validation-and-delivery",
       "status" : "Accepted",
       "supersedes" : "This repository's current `AGENTS.md` \"Panel review\" phase-gate as the *sole* review mechanism for ADR 0046 work (extended, not replaced, per §12); ad hoc per-agent validation ordering for ADR 0046 implementation",
@@ -1225,7 +1225,7 @@
         "ADR-046-terminology-and-identities"
       ],
       "path" : "docs/specs/ADR-046-zone-routing.md",
-      "sha256" : "a0c12f38d6c238192fa0ec1a00507041e74be505186b30209afc5acdae94fb3e",
+      "sha256" : "4f17e1ec0672e51806189014a783907abc7ea719158e2ec917c6c8f61b9641c2",
       "specId" : "ADR-046-zone-routing",
       "status" : "Accepted",
       "supersedes" : "`RealmEntrypointTable`/`EntrypointMode`/`RealmControllerPlacement` enum (→ compiler-only `parentZone` topology + ZoneLink transport + private Zone runtime bootstrap placement); `RouteTreeEngine`/`routing.rs` route contracts (adapted, not deleted); `RemoteNodeRegistry` (→ ZoneLink controller); `OperationRouter` (→ ZoneLinkIdempotencyKey in d2b-bus); `realm_access_resolver` module (→ ZoneEntrypointResolver); `realm-controllers.json`/`realm-identity.json` bundle artifacts (→ Nix-authored Zone settings/ZoneLink resources); `d2b.realms.*` Nix option namespace (→ `d2b.zones.*`); `WorkloadId` routing targets (→ typed Guest/Host resource refs); `CapabilitySet`-only routing authz (→ per-hop RBAC narrowing + allocator-issued capability scope)",

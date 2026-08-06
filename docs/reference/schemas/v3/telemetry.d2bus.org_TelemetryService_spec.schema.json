@@ -23,6 +23,6 @@
   "title": "telemetry.d2bus.org/TelemetryService/spec",
   "type": "object",
   "x-d2b-resource-type": "telemetry.d2bus.org.TelemetryService",
-  "x-d2b-schema-fingerprint": "sha256:34b6fed0153fc573f7014c017e9e566a3a09009c3156745fa106d860c11a0024",
+  "x-d2b-schema-fingerprint": "sha256:84342ac807b6c5f16ec98d5bea75d61bf5da3ade4b9d9e2c0e51d180c6372ff2",
   "x-d2b-schema-version": "1.0"
 }

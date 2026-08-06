@@ -21,6 +21,6 @@
   "title": "usb.d2bus.org/UsbBinding/spec",
   "type": "object",
   "x-d2b-resource-type": "usb.d2bus.org.UsbBinding",
-  "x-d2b-schema-fingerprint": "sha256:faf26ee762b575f979785cd1cbc12533c9a21bd8c9655703f0f5ba9838165177",
+  "x-d2b-schema-fingerprint": "sha256:8139afaa7c4e7c61e7db2f7e988624f7ab816f317fa8467914b4837e0be5b259",
   "x-d2b-schema-version": "1.0"
 }

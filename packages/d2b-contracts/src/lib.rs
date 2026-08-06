@@ -129,7 +129,6 @@ impl FeatureFlag {
             "export-broker-audit" => Some(KnownFeatureFlag::ExportBrokerAudit),
             "configured-launch-v1" => Some(KnownFeatureFlag::ConfiguredLaunchV1),
             "unsafe-local-provider-v1" => Some(KnownFeatureFlag::UnsafeLocalProviderV1),
-            "unsafe-local-shell-v1" => Some(KnownFeatureFlag::UnsafeLocalShellV1),
             _ => None,
         }
     }
@@ -163,7 +162,6 @@ pub enum KnownFeatureFlag {
     ExportBrokerAudit,
     ConfiguredLaunchV1,
     UnsafeLocalProviderV1,
-    UnsafeLocalShellV1,
 }
 
 impl KnownFeatureFlag {
@@ -175,7 +173,6 @@ impl KnownFeatureFlag {
             Self::ExportBrokerAudit => "export-broker-audit",
             Self::ConfiguredLaunchV1 => "configured-launch-v1",
             Self::UnsafeLocalProviderV1 => "unsafe-local-provider-v1",
-            Self::UnsafeLocalShellV1 => "unsafe-local-shell-v1",
         }
     }
 
@@ -435,10 +432,9 @@ mod tests {
     }
 
     #[test]
-    fn unsafe_local_shell_feature_is_known_without_changing_public_protocol() {
-        let feature = FeatureFlag::new("unsafe-local-shell-v1").expect("valid feature");
-        assert_eq!(feature.known(), Some(KnownFeatureFlag::UnsafeLocalShellV1));
-        assert_eq!(KnownFeatureFlag::UnsafeLocalShellV1.wire_value(), feature);
+    fn retired_unsafe_local_shell_feature_is_not_negotiated() {
+        let retired = FeatureFlag::new("unsafe-local-shell-v1").expect("valid feature");
+        assert_eq!(retired.known(), None);
         assert_eq!(PROTOCOL_VERSION, 4);
 
         let unknown = FeatureFlag::new("unsafe-local-shell-v2").expect("valid future feature");

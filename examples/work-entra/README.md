@@ -6,7 +6,7 @@ This is the doc-friendly alias for the checked
 Use it when you want the Rust-first command names from the README:
 
 ```bash
-sudo D2B_NATIVE_ONLY=1 d2b vm start work-entra --apply
+sudo d2b guest start work-entra --apply
 ```
 
 The actual flake, lockfile, and full composition walkthrough still

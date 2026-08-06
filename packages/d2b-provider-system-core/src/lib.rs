@@ -33,16 +33,27 @@
 
 #![deny(missing_docs)]
 
+mod bootstrap;
 mod error;
 mod host;
+mod host_process_audit;
+mod host_reconciler;
+mod host_status;
+mod nss;
 mod user;
 
 pub mod ownership;
 pub mod testing;
 
+pub use bootstrap::{BootstrapCapability, BootstrapError, BootstrapSequence, BootstrapStage};
 pub use error::SystemCoreError;
 pub use host::{
-    HostReconciler, HostStatusReport, ISOLATION_POSTURE_MESSAGE, NO_ISOLATION_STATUS_FIELDS,
+    BudgetReservation, HostCapabilityClass, HostObservationReport, HostProbeEffectPort,
+    HostProbeMetadata, HostProbeSnapshot, HostReconciler, HostStatusReport,
+    ISOLATION_POSTURE_MESSAGE, MinijailPlatformGate, NO_ISOLATION_STATUS_FIELDS,
+};
+pub use nss::{
+    MAX_OBSERVED_GROUPS, NssUserEffectPort, NssUserReconciler, NssUserRecord, NssUserStatus,
 };
 pub use ownership::{DISOWNED_RESOURCE_TYPES, OWNED_RESOURCE_TYPES};
 pub use user::{

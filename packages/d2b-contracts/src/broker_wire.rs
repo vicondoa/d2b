@@ -13,7 +13,9 @@ use crate::types::{
     BundleClosureRef, BundleOpId, MediaRef, PathClass, RoleId, ScopeId, SubjectId, TracingSpanId,
     VmId,
 };
-use crate::v3::{ResourceBundleGenerationId, ResourceGeneration, ResourceUid};
+use crate::v3::{
+    ResourceBundleGenerationId, ResourceGeneration, ResourceUid, storage::ZoneStoreId,
+};
 use d2b_core::host::IfName;
 use d2b_core::workload_identity::WorkloadIdentity;
 use schemars::JsonSchema;
@@ -124,6 +126,11 @@ pub enum BrokerRequest {
     /// SCM_RIGHTS; if start-time drifted the broker closes the fd and
     /// surfaces a typed pidfd-race error.
     OpenPidfd(OpenPidfdRequest),
+    /// Resolve one signed Zone storage-row id against the trusted bundle,
+    /// provision or open its database inode, and return the owned database
+    /// descriptor via `SCM_RIGHTS`. No path, mode, owner, or marker value
+    /// crosses this boundary.
+    OpenZoneStore(OpenZoneStoreRequest),
     OpenVhostNet(OpenVhostNetRequest),
     PauseBroker,
     /// Drain the broker's in-memory ring buffer of ChildReaped events.
@@ -299,6 +306,7 @@ impl BrokerRequest {
             Self::QemuMediaAttach(_) => "QemuMediaAttach",
             Self::QemuMediaDetach(_) => "QemuMediaDetach",
             Self::OpenPidfd(_) => "OpenPidfd",
+            Self::OpenZoneStore(_) => "OpenZoneStore",
             Self::OpenVhostNet(_) => "OpenVhostNet",
             Self::PauseBroker => "PauseBroker",
             Self::PollChildReaped => "PollChildReaped",
@@ -355,6 +363,7 @@ impl BrokerRequest {
             Self::ValidateBundle => "bundle",
             Self::ExportBrokerAudit(_) => "audit-log",
             Self::PollChildReaped => "pidfd-reap-buffer",
+            Self::OpenZoneStore(_) => "zone-store",
             _ => "operation",
         }
     }
@@ -577,6 +586,10 @@ pub enum BrokerResponse {
     /// on the same frame; the JSON body confirms which `(pid,
     /// start_time_ticks)` the broker verified.
     OpenPidfd(OpenPidfdResponse),
+    /// `OpenZoneStore` response. The database descriptor is the sole
+    /// `SCM_RIGHTS` attachment on the same frame; the JSON body contains
+    /// only opaque identity and disposition metadata.
+    OpenZoneStore(OpenZoneStoreResponse),
     /// Drain response for `BrokerRequest::PollChildReaped`.
     PollChildReaped(PollChildReapedResponse),
     ReconcileStorageScope(ReconcileStorageScopeResponse),
@@ -1202,6 +1215,43 @@ pub struct OpenPidfdResponse {
     /// Always `0` today; reserved for future multi-fd
     /// SCM_RIGHTS handoffs.
     pub pidfd_index: u32,
+}
+
+/// Open one broker-resolved Zone resource store. The request is deliberately
+/// one typed opaque id: all path, marker, ownership, filesystem, locking, and
+/// publication authority remains in the signed storage-row artifact.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct OpenZoneStoreRequest {
+    pub zone_store_id: ZoneStoreId,
+}
+
+/// Terminal disposition of a Zone store open.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum ZoneStoreDisposition {
+    Provisioned,
+    Opened,
+}
+
+impl ZoneStoreDisposition {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Provisioned => "provisioned",
+            Self::Opened => "opened",
+        }
+    }
+}
+
+/// Response to [`OpenZoneStoreRequest`]. The database fd is always the only
+/// descriptor attached to the response frame and is selected by `fd_index`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct OpenZoneStoreResponse {
+    pub zone_store_id: ZoneStoreId,
+    pub store_identity: String,
+    pub disposition: ZoneStoreDisposition,
+    pub fd_index: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -2195,6 +2245,94 @@ mod tests {
             }
             other => panic!("expected ValidateLockSpec, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn open_zone_store_request_round_trips_with_only_opaque_id() {
+        let frame = encode_frame(&serde_json::json!({
+            "kind": "OpenZoneStore",
+            "payload": {
+                "zoneStoreId": "zone-store-local-root"
+            }
+        }))
+        .expect("encodes");
+        let decoded = decode_frame::<BrokerRequest>("BrokerRequest", &frame).expect("decodes");
+        match decoded {
+            BrokerRequest::OpenZoneStore(req) => {
+                assert_eq!(req.zone_store_id.as_str(), "zone-store-local-root");
+            }
+            other => panic!("expected OpenZoneStore, got {other:?}"),
+        }
+
+        let response = BrokerResponse::OpenZoneStore(OpenZoneStoreResponse {
+            zone_store_id: ZoneStoreId::parse("zone-store-local-root").expect("id"),
+            store_identity: "sha256:".to_owned() + &"a".repeat(64),
+            disposition: ZoneStoreDisposition::Opened,
+            fd_index: 0,
+        });
+        let encoded = serde_json::to_string(&response).expect("serialize response");
+        let decoded: BrokerResponse = serde_json::from_str(&encoded).expect("decode response");
+        assert_eq!(decoded, response);
+    }
+
+    #[test]
+    fn open_zone_store_rejects_paths_and_extra_authority_fields() {
+        for field in ["path", "parentDirectoryId", "owner", "mode", "marker"] {
+            let frame = encode_frame(&serde_json::json!({
+                "kind": "OpenZoneStore",
+                "payload": {
+                    "zoneStoreId": "zone-store-local-root",
+                    field: "/var/lib/d2b/zones/local-root/store.redb"
+                }
+            }))
+            .expect("encodes");
+            let error = decode_frame::<BrokerRequest>("BrokerRequest", &frame)
+                .expect_err("caller authority must be rejected");
+            assert_eq!(
+                error.kind().as_str(),
+                "wire-unknown-field",
+                "unexpected rejection for {field}: {}",
+                error.message()
+            );
+        }
+    }
+
+    #[test]
+    fn open_zone_store_rejects_path_injection_in_opaque_id() {
+        let frame = encode_frame(&serde_json::json!({
+            "kind": "OpenZoneStore",
+            "payload": {
+                "zoneStoreId": "zone-store-local-root/../../outside"
+            }
+        }))
+        .expect("encodes");
+        let error = decode_frame::<BrokerRequest>("BrokerRequest", &frame)
+            .expect_err("path-shaped storage id must be rejected");
+        assert!(
+            error.kind().as_str() == "wire-invalid-field"
+                || error.kind().as_str() == "wire-malformed-json",
+            "unexpected error kind {}",
+            error.kind().as_str()
+        );
+    }
+
+    #[test]
+    fn open_zone_store_unknown_operation_fails_closed() {
+        let frame = encode_frame(&serde_json::json!({
+            "kind": "OpenZoneStoreFuture",
+            "payload": {
+                "zoneStoreId": "zone-store-local-root"
+            }
+        }))
+        .expect("encodes");
+        let error = decode_frame::<BrokerRequest>("BrokerRequest", &frame)
+            .expect_err("unknown operation must be denied");
+        assert!(
+            error.kind().as_str() == "wire-malformed-json"
+                || error.kind().as_str() == "wire-version-mismatch",
+            "unexpected error kind {}",
+            error.kind().as_str()
+        );
     }
 
     #[test]

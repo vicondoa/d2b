@@ -99,7 +99,7 @@ the rebuild, on the host you will find:
 | USBIP runners                                           | Not materialised by this headless starter unless a VM opts into `usbip.yubikey = true`; see the USBIP reference/how-to before adding YubiKey passthrough. |
 | Per-VM store farm                                  | Daemon-owned hardlink farm under `/var/lib/d2b/vms/<vm>/store/` mirroring each VM's closure. |
 | `/var/lib/d2b/keys/personal-dev_ed25519`       | Framework-managed Ed25519 key for SSH into `personal-dev`. Regenerated on activation if missing. |
-| `d2b` CLI on `$PATH`                           | `d2b list` shows declared VMs + env metadata; `d2b switch personal-dev --apply` rebuilds and live-applies inside the running VM. |
+| `d2b` CLI on `$PATH`                           | `d2b guest list` shows Guest resources; `d2b activation switch Guest/personal-dev --apply` rebuilds and live-applies inside the running VM. |
 
 All of that comes from the ~25-line flake plus the small consumer
 config in this directory. The framework is opinionated by design;
@@ -143,12 +143,12 @@ up and the auto-declared net VM running. The single workload VM
 is **not** autostarted.
 
 ```bash
-d2b list
+d2b guest list
 # NAME               ENV       GRAPHICS  TPM   USBIP   STATIC_IP       STATUS
 # personal-dev       personal      false     false false   10.99.0.10      stopped
 # sys-personal-net   personal  false     false false   192.0.2.2       running (net-vm)
 
-d2b status
+d2b guest status personal-dev
 # NAME               ENV       GRAPHICS  TPM   USBIP   STATIC_IP       STATUS
 # personal-dev       personal      false     false false   10.99.0.10      stopped
 # sys-personal-net   personal  false     false false   192.0.2.2       running (net-vm)
@@ -163,11 +163,11 @@ d2b status
 #                  Net VMs are tagged `running (net-vm)`.
 #   stopped      - not running.
 
-d2b vm start personal-dev --apply
+d2b guest start personal-dev --apply
 ssh -i /var/lib/d2b/keys/personal-dev_ed25519 alice@10.99.0.10 hostname
 # personal-dev
 
-d2b vm stop personal-dev --apply
+d2b guest stop personal-dev --apply
 ```
 
 ## Common gotchas
@@ -193,9 +193,8 @@ d2b vm stop personal-dev --apply
 `nixos-rebuild switch` updates the declared d2b bundle and may
 restart `d2bd`, but daemon restarts are continuation events:
 running VM runners are re-adopted rather than cycled. After rebuilding,
-`d2b list` flags any VM whose declared closure has drifted from the
-running one as `[pending restart]`; apply with `d2b vm restart
-<vm> --apply`. See
+`d2b guest list` exposes update currency in each Guest resource; apply with
+`d2b guest restart <name> --apply`. See
 [`templates/default/README.md` - After every subsequent rebuild](../../templates/default/README.md#after-every-subsequent-rebuild)
 for the recommended workflow and
 [`docs/reference/cli-contract.md`](../../docs/reference/cli-contract.md#pending-restart-signal-v015)

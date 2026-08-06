@@ -33,6 +33,7 @@ fn an_export_reaches_ready_only_when_the_host_serves_and_the_guest_mounts() {
     assert_eq!(
         port.calls(),
         vec![
+            PortCall::ObserveStoreViewMarker,
             PortCall::LaunchWorker,
             PortCall::ObserveSocket,
             PortCall::ObserveGuestMount,
@@ -49,6 +50,18 @@ fn a_socket_that_never_listens_holds_the_export_pending() {
     assert_eq!(report.reason, Some(VirtiofsExportError::ExportNotReady));
     // The guest is never probed while the host side is not serving.
     assert!(!port.calls().contains(&PortCall::ObserveGuestMount));
+}
+
+#[test]
+fn a_store_view_waits_for_its_zero_length_marker_before_launch() {
+    let port = ScriptedPort::serving().store_view_marker_missing();
+    let report = reconcile(&port, "read-only");
+    assert_eq!(report.phase, ExportPhase::Pending);
+    assert_eq!(
+        report.reason,
+        Some(VirtiofsExportError::StoreViewMarkerMissing)
+    );
+    assert_eq!(port.calls(), vec![PortCall::ObserveStoreViewMarker]);
 }
 
 #[test]
