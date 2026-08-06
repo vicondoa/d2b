@@ -13,7 +13,7 @@
   },
   "patch": {
     "path": "pkgs/bazel-8.6.0-seccomp/linux-sandbox-seccomp.patch",
-    "sha256": "5b91384004ecbff0fbfd2c95c978c4ba7d2b7ecfd279f2411e73d43d47028204",
+    "sha256": "3293478bf69c07dd16963f7ab7efeb6e4afcbb274c6461a8a8d94a4b211f2786",
     "loadPoint": "after-sandbox-construction-before-action-command-exec"
   },
   "policy": {
@@ -31,14 +31,14 @@
     "sha256": "b0ab93e7faa7393d4af87552ae33d0030d88f3d52d0ff4742f578bfb58c9e21f"
   },
   "output": {
-    "narSha256": "5748250a300ba0c04c98f3256fa0071ccb6490fcaf7aedcff628c81f2f428c9e",
-    "executableSha256": "f0f5317e0ff8589e164749a52e88b01290614a9d3baaf54b3005a1843132e6f2"
+    "narSha256": "b57d32790554461844f240fb376e406ac36cdfec7b211f3d5968cc50f41cefba",
+    "executableSha256": "743147d39b56b4a18b9f794995bd333cb57534fbb406bc07e882bf6913603e3a"
   },
   "nativeOutputs": {
     "x86_64-linux": {
-      "derivationSha256": "3a0a86a8726758a4afcd16dbefecfa8734bdcedaa85cf53b5ba879c6c821c154",
-      "narSha256": "5748250a300ba0c04c98f3256fa0071ccb6490fcaf7aedcff628c81f2f428c9e",
-      "executableSha256": "f0f5317e0ff8589e164749a52e88b01290614a9d3baaf54b3005a1843132e6f2",
+      "derivationSha256": "e2cb0fd6fe98ccbe4f2c6f24947854bbf4372bb2a0496a7ce686819af396c08d",
+      "narSha256": "b57d32790554461844f240fb376e406ac36cdfec7b211f3d5968cc50f41cefba",
+      "executableSha256": "743147d39b56b4a18b9f794995bd333cb57534fbb406bc07e882bf6913603e3a",
       "nativeExecutable": "bazel-8.6.0-linux-x86_64",
       "startupProbe": {
         "capabilityAbi": "d2b-bazel-seccomp-abi-v1",

@@ -53,6 +53,8 @@ in
       policyFile = builtins.match ".*seccomp-policy\\.json.*" bazelText != null;
       patchFile =
         builtins.match ".*linux-sandbox-seccomp\\.patch.*" bazelText != null;
+      policyEnv =
+        builtins.match ".*D2B_BAZEL_SECCOMP_POLICY.*" bazelText != null;
       sourcePatchLoad =
         builtins.match ".*D2BPrepareActionPolicy\\(\\).*" patchText != null;
       sandboxDiagnosticCodes = map (diagnostic: diagnostic.code)
@@ -65,6 +67,7 @@ in
       policyName = "d2b-bazel-action-seccomp-v1";
       policyFile = true;
       patchFile = true;
+      policyEnv = true;
       sourcePatchLoad = true;
       sandboxDiagnosticCodes = [
         "D2B-BZLEXEC-SANDBOX-NAMESPACE"

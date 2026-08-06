@@ -33,7 +33,7 @@ index 1a4bc4d..d2b9a01 100644
 +#include <stdint.h>
 +#include <time.h>
  #include <unistd.h>
-@@ -68,8 +69,340 @@
+@@ -68,8 +69,335 @@
  #include "src/main/tools/logging.h"
  #include "src/main/tools/process-tools.h"
 -
@@ -133,21 +133,16 @@ index 1a4bc4d..d2b9a01 100644
 +}
 +
 +static std::string D2BPolicyPath() {
-+  char executable[PATH_MAX];
-+  const ssize_t length =
-+      readlink("/proc/self/exe", executable, sizeof(executable) - 1);
-+  if (length <= 0) {
++  /*
++   * The immutable Bazel wrapper sets this to the policy installed in the
++   * same output. Missing or empty input is a refusal; there is no
++   * executable-link, ambient path, or policy-open fallback.
++   */
++  const char *policy_path = getenv("D2B_BAZEL_SECCOMP_POLICY");
++  if (policy_path == nullptr || policy_path[0] == '\0') {
 +    return std::string();
 +  }
-+  executable[length] = '\0';
-+  std::string path(executable);
-+  const std::string marker = "/libexec/bazel/";
-+  const size_t marker_position = path.rfind(marker);
-+  if (marker_position == std::string::npos) {
-+    return std::string();
-+  }
-+  return path.substr(0, marker_position) +
-+         "/share/d2b/bazel/seccomp-policy.json";
++  return std::string(policy_path);
 +}
 +
 +static bool D2BPolicyIdentityMatches() {

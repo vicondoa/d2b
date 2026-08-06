@@ -296,6 +296,8 @@ fn patched_sandbox_keeps_policy_before_action_and_owns_all_sandbox_codes() {
     assert!(patch.contains("PR_SET_NO_NEW_PRIVS"));
     assert!(patch.contains("SECCOMP_MODE_FILTER"));
     assert!(patch.contains("SECCOMP_RET_ERRNO | EACCES"));
+    assert!(patch.contains("D2B_BAZEL_SECCOMP_POLICY"));
+    assert!(!patch.contains("/proc/self/exe"));
     assert!(patch.contains("PTRACE_TRACEME"));
     assert!(patch.contains("PTRACE_SETOPTIONS"));
     assert!(patch.contains("PTRACE_CONT"));
@@ -347,6 +349,8 @@ fn package_and_flake_select_only_the_pinned_bazel_output() {
     assert!(package.contains("linux-sandbox-seccomp.patch"));
     assert!(package.contains("seccomp-policy.json"));
     assert!(package.contains("patches = (old.patches or [ ]) ++ [ sandboxPatch ]"));
+    assert!(package.contains("D2B_BAZEL_SECCOMP_POLICY"));
+    assert!(package.contains("wrapProgram \"$out/bin/bazel\""));
     assert!(package.contains("userspaceCeilingMs = 10000"));
     assert!(package.contains("futureChildPidMatching = false"));
     assert!(supervisor_package.contains("pkgsStatic"));

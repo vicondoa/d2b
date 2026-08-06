@@ -22,6 +22,9 @@ pkgs.bazel_8.overrideAttrs (old: {
   postFixup = (old.postFixup or "") + ''
     install -Dm444 ${policy} \
       "$out/share/d2b/bazel/seccomp-policy.json"
+    wrapProgram "$out/bin/bazel" \
+      --set D2B_BAZEL_SECCOMP_POLICY \
+      "$out/share/d2b/bazel/seccomp-policy.json"
   '';
   passthru = (old.passthru or { }) // {
     d2bSeccomp = {
