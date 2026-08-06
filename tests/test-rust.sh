@@ -131,7 +131,7 @@ guest_shell_runner_manifest="$ROOT/packages/d2b-guest-shell-runner/Cargo.toml"
 guest_shell_runner_lock_file="$ROOT/packages/d2b-guest-shell-runner/Cargo.lock"
 guest_shell_runner_deny_config="$ROOT/packages/d2b-guest-shell-runner/deny.toml"
 no_bash_manifest="$ROOT/tests/tools/no-bash-ast-walker/Cargo.toml"
-for required in "$manifest" "$lock_file" "$deny_config" "$broker_manifest" "$broker_lock_file" "$broker_deny_config" "$guest_shell_runner_manifest" "$guest_shell_runner_lock_file" "$guest_shell_runner_deny_config" "$no_bash_manifest"; do
+for required in "$manifest" "$lock_file" "$deny_config" "$broker_manifest" "$broker_lock_file" "$broker_deny_config" "$guest_shell_runner_manifest" "$guest_shell_runner_lock_file" "$guest_shell_runner_deny_config"; do
   if [ ! -f "$required" ]; then
     fail "missing Rust workspace input: $required"
     exit 1
@@ -615,6 +615,11 @@ run_fast_lint_gate() {
   local guest_shell_runner_changed=0
   local -a main_package_args=()
   declare -A main_packages=()
+
+  [ -f "$no_bash_manifest" ] || {
+    fail "missing Rust workspace input: $no_bash_manifest"
+    exit 1
+  }
 
   lint_base=${D2B_LINT_BASE:-}
   if [ -z "$lint_base" ]; then
