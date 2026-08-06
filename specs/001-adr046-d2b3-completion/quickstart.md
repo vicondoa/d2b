@@ -44,6 +44,27 @@ Entry also requires: no unresolved contention flag on this wave's destination pa
 proposed against the exact parent commit rather than a stale `v3`, a free heavy-gate semaphore,
 and a green fast hermetic suite.
 
+### 1b. Reconcile `adr046w5` progress before implementation
+
+T603 never infers task completion from code presence and never edits a feature artifact
+directly. It first writes the closed receipt at
+`.scratch/autopilot/adr046w5/reconciliation.json`, bound to the exact 28-file feature
+snapshot, Git tip, branch, candidate, analysis receipt, ten-record plan panel, and one row for
+each T073-T218 obligation.
+
+If any row is `open`, leave T603 and T073-T218 unchecked and stop. If all 146 rows are
+`satisfied`, analysis has no unresolved HIGH or CRITICAL finding, and current unanimous plan
+signoff names the same snapshot/tip, route one explicit `/d2b-spec-edit` progress batch. The
+editor recomputes the receipt identity before making its only permitted feature changes:
+checking T073-T218 and T603. It persists the progress receipt at
+`.scratch/autopilot/adr046w5/progress-editor-receipt.json`. T589 refuses unless both receipts
+are current and all 147 checkboxes are checked; an integrator never edits them directly.
+
+C1 is approved and fully assigned under Constitution 2.2.0. Run read-only
+`/speckit-analyze`, then request the unanimous plan panel if analysis is clean. Implementation
+remains pending: T603 must still reconcile exactly T073-T218 before T589, and T605 is future
+work after resume rather than a 147th receipt row.
+
 ### 2. Launch every ready, file-disjoint slice together
 
 Anti-serialization is a positive obligation, not permission (FR-028). For W2 that means both
@@ -57,6 +78,10 @@ git worktree add -b adr046-w2-routing    ../d2b-w2-routing    adr046-w2-integrat
 
 A ready slice left unlaunched without a recorded blocker fails wave entry.
 
+For `adr046w5`, the exact implementation chain is
+`T589 -> {T590,T591,T592,T593,T594,T605} -> T595`. T595 may not start until all six slices
+converge and consumes T605's `SystemCoreHost` and `SystemCoreUser` variants.
+
 ### 3. Inner loop while implementing
 
 ```bash
@@ -68,6 +93,22 @@ make check                       # full PR-equivalent Layer-1 gate
 
 Read `tests/layer1-jobs.json` for the current enforcing-vs-advisory split rather than assuming
 it. An advisory result is not validation evidence.
+
+T605 alone regenerates compiler-derived public/private API snapshots, and only through the
+pin target. Its focused loop is:
+
+```bash
+make api-surface-pin
+make test-rust-api-surface
+D2B_ENABLE_FIXTURE_BUILD=1 make test-fixture-contracts
+make test-drift
+```
+
+The result must prove `SystemCoreHost`/`SystemCoreUser` kebab-case round-trip, exactly one
+`Zone.status.handlers[]` record named `system-core-host` and one named `system-core-user`
+with `phase` and `lastReconciledAt`, duplicate/missing/wrong-name rejection,
+`ProviderLifecycle` non-substitution, current API snapshots, paired runtime reference text,
+and byte-identical generated Zone desired schema.
 
 ### 4. Heavy lanes, through the semaphore only
 
@@ -99,7 +140,7 @@ and require read-only findings. Then run the actual Copilot panel skill,
 `gpt-5.6-sol` at reasoning effort `xhigh` and context tier `default`.
 There is no separate dotted verification or review command.
 
-Clear every verification CRITICAL, including constitution conflicts, before the panel.
+Clear every verification HIGH and CRITICAL, including constitution conflicts, before the panel.
 A defect that reaches panel forces a content change, which invalidates the snapshot and
 every record bound to it.
 
@@ -165,6 +206,26 @@ This is the loop that distinguishes a live control plane from a sealed wave. It 
 runnable as W2-W5 land; before then it fails by design, because nothing is wired.
 
 ### Story 1 - declare and reconcile
+
+The exact-candidate automated proof is T604. Its fixture-contract leg owns
+`packages/d2b-contract-tests/tests/resource_operator_activation.rs`; its lowest feasible
+production-boundary leg owns `packages/d2bd/tests/resource_operator_activation.rs`; and its
+real activation/effect leg owns
+`tests/host-integration/resource-operator-activation.nix`. Run only through the existing
+public targets:
+
+```bash
+D2B_ENABLE_FIXTURE_BUILD=1 make test-fixture-contracts
+make test-rust
+make test-host-integration
+```
+
+The host leg declares the representative Guest, Volume, Network, and Device, consumes the
+emitted `zones/<zone>/resource-bundle.json`, activates through the production daemon, and
+requires a real owned effect/readiness or a precise actionable refusal for every resource.
+It then removes the Guest, activates the next generation, verifies dependency-safe cleanup,
+and proves the unrelated resources remain intact. Direct ResourceService calls and
+status-only effects do not satisfy T604.
 
 ```bash
 # 1. Declare a Zone with a small resource set in the host config, then:

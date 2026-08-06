@@ -18,12 +18,13 @@ companion reads this surface or the socket beside it.
 
 | # | Obligation | Requirement | Wave |
 | --- | --- | --- | --- |
-| CLI-1 | Resource inspection: list and inspect resources, owning Provider, status, and the reason for any degraded or failed condition | FR-016, SC-005 | W5 |
+| CLI-1 | Resource inspection: list and inspect resources, exact owning Provider, status, and the reason for any degraded or failed condition; committed-pending-audit status exposes only the safe operation ID and same-ID retry/status remediation; Zone readiness renders the actual handler-list names from T605 rather than a map-shaped alias | FR-016, FR-069, FR-070, SC-005, SC-032, SC-033 | W5 |
 | CLI-2 | Every failure names a specific cause and an actionable next step | FR-017, SC-004 | W5 |
 | CLI-3 | Cutover verbs: a non-mutating preview, and an apply gated on explicit intent plus exact content-bound consent | FR-020, FR-021 | W7 |
 | CLI-4 | The apply path refuses to pass the rollback boundary without a recorded recovery-point attestation | FR-043, SC-025 | W7 |
 | CLI-5 | Retired verbs are removed with a removal proof, in their own commit, after the successor is integrated | FR-023 | W5-W7 |
 | CLI-6 | `d2b userd` is removed only after parity with the fixed user supervisor Process | FR-041 | W5 |
+| CLI-7 | Desktop-wrapper, companion, audio, USB, security-key, and resource reference pages match exact emitted help, JSON, capabilities, typed refusals, and wire fields; absent behavior is not promised | FR-019, FR-074 | W5 |
 
 ## Retirement register
 
@@ -40,6 +41,18 @@ FR-042 explicit retirement list rather than the parity list.
 
 - Both machine-readable and human output modes behave per the CLI contract, with exit codes
   matching the documented table.
+- Every command and field promised by the desktop-wrapper and companion/device references is
+  present in exact emitted behavior, or the reference describes only the emitted capability
+  or typed unavailable state. A documented but absent feature fails W5.
+- A committed mutation whose authoritative audit is pending is displayed as degraded
+  `committed-pending-audit`, attributed to its opaque operation ID, with instructions to
+  retry that same ID or inspect status. Human and machine output never call it success,
+  rollback, or safe to repeat with a new ID and expose no mutation payload or raw sink error.
+- Zone readiness names `Provider/system-core` and the actual failing
+  `Zone.status.handlers[]` record: `system-core-host` or `system-core-user`, with its `phase`
+  and `lastReconciledAt`. Exactly one of each is required; duplicate, missing, wrong-name, or
+  `provider-lifecycle` substitution is reported as an actionable refusal rather than a vague
+  Provider path or boolean failure. T599 must match T605's paired contract/reference evidence.
 - The cutover preview modifies nothing, and the apply path is unreachable without both consent
   and attestation.
 - No retired verb remains, verified by its removal proof.

@@ -45,6 +45,52 @@ without producing the delivery contract's sealed wave records, so no wave is cur
 sealed. This specification accepts that as a one-time documented waiver and begins sealed
 delivery at W2.
 
+### Approved Wave 5 production-completion amendment (2026-08-06)
+
+The preceding Context is retained as the feature's historical starting record. The committed
+tree has moved beyond it: the production redb
+backend, a store watch primitive, a controller fan-in fixture, and a fail-closed daemon
+runtime skeleton now exist. They do not make the resource plane production-reachable. The
+daemon still opens the store with mutable revision identities pinned to bootstrap constants,
+installs no Zone policy, registers no authenticated ComponentSession route or controller
+endpoint, admits no production watch, and leaves the mutation audit outbox without a
+production drainer. Existing RSS and watch fixtures exercise in-process services or a fixed
+fixture endpoint, not the published daemon boundary.
+
+The operator has approved the missing production wiring as Wave 5 work. It is not deferred
+to W6 or W7, and a readiness bit, direct `WatchService` call, fake endpoint, disabled audit
+callback, or test-only subject may not substitute for the real path. This is an explicit
+scope amendment to the feature artifacts, not a rewrite of the earlier historical evidence.
+It preserves ADR 0034 restart/adoption semantics, ADR 0046's Zone trust boundaries, D106's
+store boundary, and the daemon-only end state. No new ADR is required because this amendment
+assigns implementation ownership for already-decided boundaries rather than choosing a new
+trust model.
+
+**Approved C1 correction**: Constitution 2.2.0 permits an approved plan, specification, or
+contract defect to be corrected in the same coordinated change as the affected contract
+implementation. The accepted `ADR-046-provider-system-core` member specification already
+defines the stable internal handler names `system_core_host` and `system_core_user` and
+requires name/phase/lastReconciledAt entries in `Zone.status.handlers`. The committed,
+unreleased v3 `ZoneHandlerName` closed enum omitted those allowed values. T605 owns the
+coordinated correction: add `ZoneHandlerName::SystemCoreHost` and
+`ZoneHandlerName::SystemCoreUser`, serialized by the existing kebab-case rule as
+`system-core-host` and `system-core-user`, and update every paired compiler-derived API
+snapshot, Rust serialization and duplicate-rejection test, lowest-layer contract/policy
+guard, and reference status surface. T595 consumes the two variants in the production
+emitter, and T599 reconciles the remaining status consumers. All paired Rust contract,
+tests, API snapshots, reference status docs, consumers/emitters, generator no-drift proof,
+and panel evidence land in the same Wave 5 PR.
+
+This is a correction of two omitted values in an unreleased closed status enum. It adds no
+field or operation and changes no desired-state ResourceType schema. Therefore it requires no
+`apiVersion`, `schemaVersion`, `manifestVersion`, `bundleVersion`, or wire-field version bump.
+The Zone desired-spec artifact
+`docs/reference/schemas/v3/core.d2bus.org_Zone.schema.json` remains unchanged and T605 must
+prove generator output is byte-identical rather than hand-editing it. C1 is resolved in these
+feature artifacts but is not implemented. The plan is eligible for read-only cross-artifact
+analysis and, if that has no HIGH or CRITICAL finding, a unanimous plan panel. Implementation
+remains gated on that analysis, the panel, and T603 progress reconciliation.
+
 ## Clarifications
 
 ### Session 2026-07-29
@@ -280,6 +326,125 @@ artifacts, complete Story 1, and exercise each desktop companion against it.
   identity rather than proving it.
 - **FR-009**: Resources MUST NOT be referenced across Zone boundaries except through the
   explicit, declared linking mechanism, and cross-Zone access MUST be default-denied.
+- **FR-066**: Wave 5 MUST publish the production Resource API only through an authenticated,
+  single-owner ComponentSession admitted by the authoritative Zone registrar and routed by
+  the ZoneBus. The registrar MUST derive the subject from verified peer evidence in its
+  private state and propagate that authoritative subject through every Resource API
+  operation. A caller-supplied subject, daemon peer role treated as a resource subject,
+  unauthenticated direct service call, fixed fixture endpoint, or readiness flag MUST NOT
+  satisfy this requirement.
+- **FR-067**: Wave 5 MUST establish `ZoneResourceRuntime` as the one Zone resource-policy
+  owner in the daemon-owned Zone runtime. Initial installation and restart recovery MUST use
+  one private, sealed, non-`Clone`, one-shot `PolicyBootstrapRead` capability owned by that
+  runtime. The capability MAY read only the Zone's policy-input resource envelopes at the
+  exact durable nonzero policy revision needed to construct the first immutable `PolicySet`;
+  it MUST carry no public Resource API subject, expose no general resource read or mutation
+  operation, and become unusable when that installation attempt consumes it.
+  `d2b-resource-api` MUST deserialize and compile those envelopes and install the resulting
+  set in `NativeAuthorizer`; neither store crate may interpret them. After the first set is
+  installed, every normal policy read and update MUST traverse an authenticated Resource API
+  session and its revision checks. A revision advance MUST compile the exact committed
+  revision before atomically replacing the installed set. Initial install, revision advance,
+  and restart recovery publish policy readiness only when Zone UID and installed revision
+  match live durable metadata. Missing, stale, cross-Zone, structurally invalid, or
+  un-compilable bootstrap input MUST consume the attempt, leave the Zone unpublished and
+  degraded, and name the policy remediation; it MUST NOT fall back to a constant, partial
+  policy, caller claim, or reusable bootstrap reader. The resource store and redb backend
+  MUST remain policy-neutral.
+- **FR-068**: Wave 5 MUST register the production controller endpoint and fan-in, and MUST
+  bind every committed controller effect and cleanup intent to one durable replay/adoption
+  ledger before releasing the effect. The ledger identity MUST include the resource UID,
+  controller generation, committed revision, operation identity, and effect ordinal.
+  Restart after generation commit MUST replay or adopt every outstanding effect without
+  losing cleanup intent. Cleanup completion MUST compare the same resource UID and an exact,
+  nonzero expected revision; a stale revision, zero revision, UID mismatch, or ambiguous
+  adoption MUST fail closed without releasing or completing the effect.
+- **FR-069**: Wave 5 MUST admit watches through the authenticated, exact-Zone Resource API
+  route, ZoneBus, production store, and registered controller fan-in without a replay/live
+  gap. One authoritative readiness projection MUST cover store recovery, matching installed
+  policy, authenticated session/router admission, registered controller endpoint, admitted
+  watch cursor, caught-up durable audit, mandatory controller health, and the
+  `d2b-core-controller`-owned registration for `Provider/system-core`. That Provider member
+  is healthy only while `Zone.status.handlers[]` contains exactly one record whose `name` is
+  `system-core-host` and exactly one record whose `name` is `system-core-user`. Each record
+  carries `phase` and `lastReconciledAt` and is backed respectively by the live owned,
+  active, initialized, current `HostReconciler` and `UserReconciler` handle.
+  `ZoneHandlerName::ProviderLifecycle` remains a distinct aggregate handler name and cannot
+  substitute for either required record. A missing, duplicate, wrong-name, inactive,
+  uninitialized, or stale record MUST leave only that Zone unpublished and degraded with a
+  specific remediation. Wave 5 does not wait for the remaining Wave 6 Provider dossiers.
+  Partial publication, a bare readiness boolean, or a status value without the live owned
+  registration and handler handles is forbidden.
+- **FR-070**: Wave 5 MUST provide one production audit owner per Zone runtime that drains the
+  durable mutation audit outbox into the authoritative audit sink. Replay after restart MUST
+  be idempotent by operation identity and mutation ordinal. Mutation success MUST NOT be
+  acknowledged until the required audit record is durably appended and the matching outbox
+  entry is durably completed. If the resource mutation commits but append or outbox
+  completion cannot finish, the API MUST NOT return ordinary success or imply rollback. It
+  MUST return the indeterminate semantic state `CommittedPendingAudit` through the existing
+  layered `ResourceStatus` composite: `ResourceStatus.phase` is
+  `ResourcePhase::Degraded`; `ResourceStatus.outcome.code` is
+  `StatusCode("committed-pending-audit")` with retryable, safe remediation and no raw sink
+  detail; `ResourceStatus.update.state` is `UpdateState::Blocked`; and
+  `ResourceStatus.update.operation_id` is `Some(original_operation_id)`. Existing bounded,
+  redacted condition, outcome, and update fields carry only the semantic status and
+  instructions to retry with the same ID or inspect status. They MUST NOT expose a subject,
+  mutation payload, raw sink error, or a claim that the commit was undone. The affected Zone
+  MUST remain unpublished and degraded until the drainer completes. A retry with the same
+  operation ID MUST resume or observe the same committed mutation without reapplying it,
+  return the same pending state while drain is incomplete, and return its one stored final
+  result after recovery. A different operation ID follows ordinary expected-revision and
+  conflict semantics. Restart replay MUST key deduplication by operation ID plus mutation
+  ordinal and produce exactly one logical audit record. An unavailable or disabled callback,
+  an undrained outbox, a dropped record, or an audit record not bound to the mutation MUST
+  fail closed. `ResourceUpdateStatus` does not acquire a phase or status-code member, and
+  this semantic code adds no enum variant, wire field, or schema version.
+- **FR-071**: Persisted store, policy, active-configuration, and controller identities MUST
+  reopen after their mutable revisions advance. Immutable store and Zone identity MAY be
+  checked at open, but mutable revisions MUST be recovered from durable state rather than
+  pinned to bootstrap constants. Startup and shutdown MUST visit every declared Zone:
+  failure in one Zone MUST leave that Zone unpublished and visibly degraded while unrelated
+  Zones continue, and a close failure MUST NOT silently drop later stores or their owners.
+  Recovery and cleanup MUST retain ADR 0034's adopt-before-cleanup rule.
+- **FR-072**: Before T219 may begin, Wave 5 MUST hold exact-candidate evidence for all of the
+  following: authenticated cross-Zone denial and same-Zone watch delivery through production
+  boundaries; restart crash windows for effect replay/adoption and cleanup stale, zero, and
+  UID-mismatch refusals; durable audit drain and restart replay; whole-process RSS and
+  single-owner fan-in at 10,000 resources and 100 watches; current removal proofs; and
+  reference documentation compared with emitted behavior; and T605's exact enum
+  round-trip, handler-list duplicate/missing/wrong-name, `ProviderLifecycle` non-substitution,
+  API-snapshot, paired-reference, and unchanged Zone desired-schema drift results. T604 MUST
+  additionally prove on that same candidate that an operator Nix declaration for the
+  representative Guest, Volume, Network, and Device emits the installed per-Zone bundle,
+  activates through the production daemon, reaches a real owned effect/readiness or precise
+  actionable refusal for each resource, and removes one declaration with dependency-safe
+  cleanup while unrelated resources remain intact. Direct `WatchService` calls, fixed or
+  fake endpoints, test-only subject injection, stale evidence from an older tree, and
+  historical proof artifacts are not evidence for this gate. Before T589 may resume, T603
+  MUST write the closed external receipt at
+  `.scratch/autopilot/adr046w5/reconciliation.json`, account for exactly every T073-T218
+  obligation against the current converged Wave 5 commit and delivery records, and bind both
+  a current cross-artifact analysis result and a unanimous plan-panel receipt to the exact
+  amended feature-artifact snapshot and unambiguous branch/candidate identity. T605 appears
+  only as future work after resume, never as a 147th obligation row or progress checkbox. If
+  any row is open, T603 remains unchecked and no checkbox changes. Only when all 146 rows are
+  satisfied, analysis has no unresolved HIGH or CRITICAL finding, and unanimous plan signoff
+  is current may T603 route one `/d2b-spec-edit` batch whose only feature changes check
+  T073-T218 and T603 after the editor recomputes every identity. T589 MUST require the editor
+  progress receipt and those checked boxes. An absent, stale, ambiguous, structurally open,
+  or identity-mismatched receipt, any unaccounted prior obligation, or any direct integrator
+  checkbox edit MUST block resume.
+- **FR-073**: D106 remains binding in the completed production path.
+  `d2b-resource-store` and `d2b-resource-store-redb` MUST NOT deserialize, import, compile,
+  evaluate, or own `Role`, `RoleBinding`, `PolicySet`, or other RBAC policy DTOs. Policy
+  interpretation stays in the Resource API and Zone policy owner. Store-owned validation
+  MAY enforce policy-neutral envelope, schema, atomicity, revision, and structural
+  invariants, and MAY only narrow an authorized mutation.
+- **FR-074**: Wave 5 MUST reconcile the desktop-wrapper, companion, audio, USB, and
+  security-key CLI reference promises with the exact emitted CLI and machine-readable
+  behavior. A documented command or field MUST either exist and pass its contract test or be
+  described as unavailable through the emitted capability or typed refusal state. Reference
+  documentation MUST NOT promise an absent command, field, fallback, or production route.
 
 #### Provider model
 
@@ -786,6 +951,49 @@ Delegation is not omission. Every delegated obligation is enumerated in
   identifying value appears in telemetry, audit, logs, or error output across the full
   redaction test matrix.
 
+#### Wave 5 production completion
+
+- **SC-030**: On the exact Wave 5 candidate, every successful Resource API request and watch
+  is traceable to one registrar-admitted ComponentSession and its authoritative subject, and
+  100 percent of attempted cross-Zone or self-named-subject accesses are denied and audited.
+- **SC-031**: Crash injection at every boundary from generation commit through effect
+  completion leaves zero lost effects and zero lost cleanup intents after restart. Every
+  stale, zero, or wrong-UID cleanup completion is denied without changing durable state.
+- **SC-032**: For every ordinary successful mutation in the audit matrix, the authoritative
+  audit record and completed outbox state are durable before success is returned. At every
+  commit-to-audit crash boundary, a committed mutation instead returns
+  `CommittedPendingAudit` as `ResourceStatus.phase = ResourcePhase::Degraded`,
+  `ResourceStatus.outcome.code = StatusCode("committed-pending-audit")`,
+  `ResourceStatus.update.state = UpdateState::Blocked`, and
+  `ResourceStatus.update.operation_id = Some(original_operation_id)`. Its bounded, redacted
+  condition, outcome, and update fields expose only safe same-ID retry/status remediation.
+  It leaves the Zone unpublished and degraded and never reports rollback. Same-ID retries
+  apply the mutation zero additional times and converge on one final result; a different-ID
+  retry obeys revision/conflict rules. Restart replay produces zero missing records and zero
+  duplicate logical records by operation ID plus mutation ordinal, without adding a field,
+  enum variant, or schema version.
+- **SC-033**: Removing the `Provider/system-core` registration or either required
+  `Zone.status.handlers[]` record in turn prevents publication of only the affected Zone.
+  Acceptance also rejects duplicate records, a missing record, a wrong `name`, and an
+  attempt to use the distinct `provider-lifecycle` record in place of either
+  `system-core-host` or `system-core-user`. The two required records occur exactly once,
+  carry `phase` and `lastReconciledAt`, and are backed by active, initialized, current live
+  handlers; a boolean substitute fails the test. In the multi-Zone startup and shutdown
+  matrix, every unrelated Zone is visited and remains operable, and every affected Zone
+  reports a specific actionable refusal.
+- **SC-034**: T603's external receipt contains exactly the closed task-ID set T073-T218 with
+  one `satisfied|open` row each and exact snapshot/tip identities. Any open row leaves T603
+  unchecked and changes no checkbox. Only 146 satisfied rows, analysis with no unresolved
+  HIGH or CRITICAL finding, and a current unanimous plan panel authorize the sole
+  `/d2b-spec-edit` progress batch; T589 refuses until its editor receipt exists and T073-T218
+  plus T603 are checked. T605 is recorded only as future work after resume and does not alter
+  the 146 receipt rows or 147 checkbox transitions. T219 refuses unless all FR-072 evidence
+  records name the same exact candidate commit, T600 and T601 both reference T604's operator
+  activation/effect/cleanup result and T605's contract/drift result, the production RSS
+  result is at or below 24,576 KiB with no baseline subtraction, the owner fan-in is singular,
+  current removal proofs pass, and the checked reference behavior matches the candidate's
+  emitted CLI and wire output.
+
 #### Scale and footprint
 
 - **SC-011**: The resource plane sustains a 10,000-resource working set and 100 concurrent
@@ -891,9 +1099,10 @@ Delegation is not omission. Every delegated obligation is enumerated in
   deliberate risk acceptance: the daily driver is the machine being put at risk, so the
   recovery-point attestation and rollback boundary (FR-043) are the primary safety net
   rather than a formality, and a recovery point must exist before each destructive run.
-- The deferred production storage engine and its watch consumer are delivered in W5 with the
-  named design corrections that address the failed footprint measurement. Re-measuring
-  against the corrected design is part of that wave's evidence.
+- The production storage engine and watch primitive now exist in committed code, but the
+  approved Wave 5 work is not complete until FR-066 through FR-074 make them reachable
+  through the authenticated production boundary. The historical measurements remain
+  evidence for their named snapshots only; FR-072 requires new exact-candidate evidence.
 - All 27 specified Provider dossiers are in scope, since each is an Accepted member of the
   specification set with assigned work items that must reach merged for its wave to seal.
 - The integration lineage is `v3` rather than `main`. How work reaches it is a requirement,

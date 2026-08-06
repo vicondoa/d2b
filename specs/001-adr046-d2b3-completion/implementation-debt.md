@@ -1874,10 +1874,13 @@ slices contend on. The Integrator-prep-first pattern's guarantee - that a scope
 worktree opens against a stable contract - is preserved per round, which is the
 level at which slices actually run concurrently.
 
-**Tag spelling.** Unchanged from the section 14.1 table, with `W5` substituted:
-`( W5 )` for every prep and slice commit, `( W5fu<M> )` for the integrator merge
-closing round `M`, and `( W5fu<M> <S><N> )` for a single finding. `W5a` stays
-reserved for its documented post-wave meaning.
+**Historical tag spelling.** The original section 14.1 ruling used the legacy
+forms `( W5 )` for every prep and slice commit, `( W5fu<M> )` for the integrator
+merge closing round `M`, and `( W5fu<M> <S><N> )` for a single finding; `W5a`
+was reserved for its documented post-wave meaning. Those strings describe the
+old record and are not rewritten. Current execution follows the qualified
+addressing contract: `( adr046w5 )`, `( adr046w5fu<m> )`, and
+`( adr046w5fu<m> <S><n> )`.
 
 **Class: inference.** A reviewer should confirm that per-round prep does not
 offend the binding panel's one-snapshot requirement. It does not appear to: that
@@ -2254,3 +2257,38 @@ sets a Degraded condition and never refuses or force-clears a finalizer, so a
 false positive costs one investigation while a false negative hides a stuck
 finalizer for twice as long, and the shorter window is the fail-closed direction
 for a threshold that surfaces rather than denies.
+
+## 21. C1 planned and assigned: add the omitted system-core handler names
+
+**Status: planned/assigned, not delivered.** The earlier read-only analysis correctly found
+that the committed unreleased v3 `ZoneHandlerName` enum cannot encode the two system-core
+handler observations. Constitution 2.2.0 now authorizes the approved plan/contract defect to
+be repaired in the same coordinated Wave 5 PR as its implementation.
+
+T605 owns the contract correction: add `ZoneHandlerName::SystemCoreHost` and
+`ZoneHandlerName::SystemCoreUser`, serialized by the existing kebab-case rule as
+`system-core-host` and `system-core-user`. The actual projection is the
+`Zone.status.handlers[]` list, with exactly one record of each name and each record carrying
+`phase` and `lastReconciledAt`. Duplicate or missing required records and wrong-name
+substitution are rejected. `ProviderLifecycle` remains a distinct allowed value and cannot
+substitute for either required record.
+
+T605 also owns focused Rust round-trip/list coverage, the ownership-compatible
+`packages/d2b-contract-tests/tests/policy_contracts.rs` guard, compiler-regenerated public
+and private snapshots under `tests/golden/api-surface/` via `make api-surface-pin` only, and
+the existing paired `docs/reference/resource-plane-runtime.md`. It treats
+`packages/xtask/src/zone_schema.rs` and
+`docs/reference/schemas/v3/core.d2bus.org_Zone.schema.json` as read-only proof inputs and must
+show that generator output remains byte-identical because the desired Zone spec is unchanged.
+T595 consumes the variants in the production emitter; T596, T599-T602, and T219 consume the
+list-shape and T605 evidence.
+
+No `apiVersion`, `schemaVersion`, `manifestVersion`, `bundleVersion`, or wire-field version
+bump is required: no field or operation changes, the desired-state Zone schema is unchanged,
+and v3 is unreleased. The same Wave 5 PR still carries all paired Rust contract changes,
+tests, API snapshots, reference status docs, consumers/emitters, generator no-drift proof,
+and panel evidence.
+
+CHK054 is checked only as a specification-quality resolution. Implementation remains
+unchecked. Normal read-only analysis, unanimous plan panel signoff, and T603's exact
+T073-T218 reconciliation still gate resume.

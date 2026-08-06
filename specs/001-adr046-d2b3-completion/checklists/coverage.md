@@ -49,7 +49,7 @@ Can these requirements be objectively assessed as written?
 - [x] CHK018 Is "desktop companion that consumes d2b's public operator contracts" defined by an objective test, so the release-blocking set cannot be argued? [Clarity, Spec §FR-039]
 - [ ] CHK019 Is "host recovery point" defined - what qualifies, and what evidence constitutes attestation? [Ambiguity, Spec §FR-043]
 - [x] CHK020 Is "actionable next step" specified well enough to be assessed without reviewer judgment? [Measurability, Spec §FR-017, §SC-004]
-- [ ] CHK021 Is "reachable through the operator surface" defined well enough to decide when a foundation surface has stopped being deliberately unwired? [Clarity, Spec §SC-021]
+- [x] CHK021 Is "reachable through the operator surface" defined well enough to decide when a foundation surface has stopped being deliberately unwired? [Clarity, Spec SC-021]
 - [x] CHK022 Is "compatible version verified against the release candidate" defined with a pass condition? [Measurability, Spec §SC-024]
 
 ## Requirement Consistency and Conflicts
@@ -95,6 +95,19 @@ Are requirements present for each scenario class, or explicitly excluded?
 - [ ] CHK045 Is the assumption that the named design corrections will recover the memory deficit flagged as unvalidated, with a decision path if they do not? [Assumption, Research §RK-1]
 - [ ] CHK046 Is the daily-driver validation risk acceptance recorded with an explicit accepter and a stated fallback? [Assumption, Spec §Assumptions]
 - [x] CHK047 Are the external dependencies required for cloud-backed Provider validation identified, including whether the necessary accounts and access exist? [Dependency, Gap, Spec §SC-022]
+
+## Wave 5 Production-Completion Remediation
+
+- [x] CHK048 Is the first policy install and restart path specified without requiring a policy-authorized read before the first `PolicySet`, while preserving authenticated normal access and D106? [Consistency, Spec FR-067]
+- [x] CHK049 Is the Wave 5 Provider readiness member the exact `Provider/system-core` registration and its two owned handler-health handles rather than all Wave 6 dossiers or a boolean? [Clarity, Spec FR-069]
+- [x] CHK050 Is resumed work mechanically gated by T603's closed external reconciliation receipt, sole identity-verifying `/d2b-spec-edit` checkbox batch, editor progress receipt, exact amended artifact snapshot, current analysis, unanimous plan receipt, and every T073-T218 obligation? [Traceability, Plan "Approved adr046w5 production-completion graph"]
+- [x] CHK051 Is commit-before-audit-finish behavior explicit about indeterminate committed state, safe operation-bound status, same-ID idempotency, different-ID conflicts, restart replay, and no rollback claim? [Scenario, Spec FR-070]
+- [x] CHK052 Does the Constitution Check distinguish the sole W0/W1 Principle VI exception from FR-043 and constitution-authorized pipelined-dispatch risks? [Consistency, Plan "Constitution Check"]
+- [x] CHK053 Do current Wave 5 panel, checkpoint, resume, and commit-tag instructions use qualified lowercase `adr046w5` while preserving labeled historical identifiers? [Consistency, Plan/Tasks wave addressing]
+- [x] CHK054 Does the approved Constitution 2.2.0 correction assign the two omitted `ZoneHandlerName` values, exact `Zone.status.handlers[]` list semantics, paired artifacts, version impact, and no-drift proof without claiming implementation? [Constitution, Spec/Plan "C1 correction and version impact"]
+- [x] CHK055 Does `CommittedPendingAudit` use the existing layered `ResourceStatus` composite without claiming phase/code members on `ResourceUpdateStatus` or adding an enum variant, field, or schema version? [Consistency, Spec FR-070]
+- [x] CHK056 Does T604 prove the exact-candidate operator Nix activation-to-effect-and-cleanup boundary in the canonical lowest feasible and host-integration destinations without adding a top-level gate? [Coverage, Tasks T604]
+- [x] CHK057 Is T603 progress receipt-driven, closed-set, atomic, stale-checked, and editor-mediated so code presence or direct integrator checkbox edits cannot terminate autopilot? [Traceability, Tasks T603]
 
 ## Notes
 
@@ -216,7 +229,7 @@ the row reads **needs integrator** rather than guessing.
 | CHK017 | "Operator-facing capability" parity criterion | W7 | Parity is evaluated at cutover, so the definition must bind no later than W7 |
 | CHK018 | Objective test for "desktop companion consuming public operator contracts" | W5 | **closed** - FR-064; see the companion-membership gate below |
 | CHK019 | "Host recovery point" definition and attestation evidence | W7 | FR-043 is program-local (outside the work-item manifest per the recorded operator decision) but is exercised by the W7 destructive runs |
-| CHK021 | "Reachable through the operator surface" for deliberately unwired foundations | needs integrator | Spans W0 foundation surfaces and W6 Provider wiring; no single owning wave is evident |
+| CHK021 | "Reachable through the operator surface" for deliberately unwired foundations | W5 - **closed** | FR-066-FR-072 define the complete production boundary; T603 binds amended-plan resume and T600-T602 bind exact-candidate evidence before T219 |
 | CHK022 | Pass condition for "compatible version verified against the release candidate" | W5 | **closed** - FR-065; see the companion-membership gate below |
 | CHK024 | 2-second operator envelope versus component-level budgets | W5 | The component budgets are measured against the W5 storage engine and its watch consumer |
 | CHK025 | Companion adaptation without a published preview artifact | W5 | **closed** - see the W5 date-bound gate below |
@@ -439,3 +452,55 @@ is itself an unverified starting set that FR-064 will confirm or change at W8.
 
 **Companion family status: closed.** CHK018, CHK022, CHK025, CHK033, and CHK044 are all
 resolved. The remaining open items in this checklist belong to other families.
+
+### CHK021 - production reachability boundary, closed (2026-08-06)
+
+The earlier artifacts treated an opened production store, an in-process watch, and readiness
+fields as progress toward reachability but did not define the point at which the foundation
+became production-reachable. The approved Wave 5 completion amendment closes that ambiguity.
+
+FR-066 through FR-072 and contracts/resource-api.md now require one complete path:
+registrar-consumed authenticated ComponentSession, authoritative subject, exact ZoneBus route,
+matching installed policy revision after a one-shot private bootstrap read, registered
+controller endpoint, admitted production watch, durable effect/adoption and audit recovery,
+the exact `Provider/system-core` registration plus both required handler handles, and one
+aggregate readiness projection. T604 adds the original operator boundary from Nix declaration
+and emitted bundle through production activation, owned effect/readiness or precise refusal,
+and dependency-safe removal cleanup. T219 cannot accept a reusable bootstrap reader, direct
+service call, `ProductionWatchHarness`, fake endpoint, constructed subject, independent
+readiness bit, status-only Provider substitute, disabled audit callback, undrained outbox,
+ordinary success for a committed-pending-audit mutation, a fictitious
+`ResourceUpdateStatus` phase/code shape, or stale evidence.
+
+SC-030 through SC-034, T603, T600-T602, and T604 make the resume and stopping conditions
+mechanical and bind them to exact artifact/candidate identities. CHK021 is therefore closed
+as a specification-quality item; no implementation or validation result is claimed by this
+transition.
+
+### Post-amendment remediation closure (2026-08-06)
+
+CHK048 through CHK053 are closed by normative artifact text in this batch:
+
+| Item | Artifact resolution |
+| --- | --- |
+| CHK048 | FR-067, the plan data flow, T589-T591, and the Resource API contract define private one-shot `PolicyBootstrapRead`, the bootstrap-to-authenticated transition, restart/failure behavior, and the D106 guard. |
+| CHK049 | FR-069/SC-033, plan/tasks, and contracts name `Provider/system-core`, its `d2b-core-controller` registration owner, exactly one `Zone.status.handlers[]` record named `system-core-host` and one named `system-core-user`, each with phase/timestamp from the live `HostReconciler` or `UserReconciler`; other Wave 6 dossiers are excluded. |
+| CHK050 | T603 is unchecked, precedes T589, is T589's sole direct prerequisite, writes the closed external receipt, accounts for T073-T218 without file-presence completion, and permits checkbox progress only through the exact-receipt `/d2b-spec-edit` batch and editor receipt. |
+| CHK051 | FR-070/SC-032 and contract/task acceptance define `CommittedPendingAudit` through the existing `ResourceStatus` phase/outcome/update layers, safe same-ID retry/status information, different-ID conflicts, restart replay, and exactly-once logical audit without a new wire shape. |
+| CHK052 | The Constitution Check and Complexity Tracking name one Principle VI exception and separately retain the FR-043 safety risk and constitution-2.1.0-authorized pipelining rework risk. |
+| CHK053 | Current plan/task instructions use `adr046w5` and qualified template forms; preserved `ADR046-W5` occurrences are explicitly labeled legacy or historical. |
+
+These are specification-quality transitions only. They do not mark implementation, T219,
+T220, or T603 complete and do not convert historical evidence into current evidence.
+
+### Latest analysis remediation status (2026-08-06)
+
+| Item | Status |
+| --- | --- |
+| CHK054 / C1 | **Closed as specification quality only.** Constitution 2.2.0 authorizes the coordinated repair. Unchecked T605 owns `ZoneHandlerName::SystemCoreHost` and `ZoneHandlerName::SystemCoreUser`, kebab-case round-trip, exactly-one-each handler-list acceptance and rejection, `ProviderLifecycle` non-substitution, compiler-derived public/private API snapshots, the paired reference, targeted contract coverage, and unchanged desired-Zone-schema proof. T595 consumes the variants. No implementation, test result, or delivery is claimed. |
+| CHK055 / C2 | **Closed as specification text only.** FR-070, SC-032, plan/tasks, and contracts now use the actual layered `ResourceStatus` composite and explicitly reject a fictitious `ResourceUpdateStatus` phase/code shape or schema change. |
+| CHK056 / G1 | **Closed as task coverage only.** Unchecked T604 owns disjoint fixture-contract, Type-3 d2bd production-boundary, and `runNixOSTest` destinations, names the existing public validation targets including `make test-host-integration`, and feeds T600, T601, T602, and T219. No test result is claimed. |
+| CHK057 / I1 and U1 | **Closed as process specification only.** T603 defines the closed external receipt, deterministic snapshot, atomic lifecycle, sole editor checkbox transition, and T589/T602 stale checks. No receipt exists and no checkbox transition is currently eligible until analysis is clean, the plan panel is unanimous, and all 146 reconciliation rows are satisfied. |
+
+CHK054 no longer blocks analysis. Run read-only `/speckit-analyze`; if clean, request the
+unanimous plan panel. Implementation remains pending and T603 still gates resume.

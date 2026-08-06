@@ -47,6 +47,7 @@ decide who is in the set and what counts as verified.
 | CO-8 | Record any Retired surface on the FR-042 retirement list before the tag, with justification, owner, restoring condition, and a release-note line, and never as a relabelled failure | W8 | Open |
 | CO-9 | Re-derive the inventory at W8 under FR-064's two limbs, carrying repository, pinned commit, maintainer, discovery source, and consumed surfaces per row, with a recorded negative determination for any removal | W8 | Open |
 | CO-10 | Hold every companion verification to all seven FR-065 conditions, and void every verification if the release-candidate snapshot moves | W8 | Open |
+| CO-11 | Reconcile every desktop-wrapper and companion/device CLI promise with exact W5 emitted help, JSON, capability, refusal, and wire behavior; remove any promise for an absent surface without claiming companion verification | W5 exit | Open - FR-019, FR-074 |
 
 ## The resolution, and what it binds
 
@@ -108,8 +109,10 @@ Absent that, the constraint stands.
 
 ### What this does not close
 
-Nothing in the companion family remains open. CHK018 is closed by FR-064 and CHK022 by
-FR-065; see "Who is in the set" and "What counts as a pass" below.
+The release-classification family remains closed: CHK018 is closed by FR-064 and CHK022 by
+FR-065; see "Who is in the set" and "What counts as a pass" below. CO-11 is a separate W5
+reference-to-emission consistency obligation. It does not reopen membership or live-host
+verification, and closing it does not verify a companion.
 
 ## Who is in the set: the membership test
 
@@ -318,4 +321,5 @@ FR-063, and "verified" means all seven FR-065 conditions hold. Publication of th
 and of the replacement contracts is not part of that acceptance; it is the precondition that
 makes adaptation possible, and FR-061 forbids reading it as evidence of compatibility. A
 surface that is Blocked, including one whose exercise could not be classified, holds the
-release.
+release. Before W5 closes, CO-11 separately requires every reference promise to match emitted
+behavior; correcting that reference drift is not evidence that any external companion works.

@@ -786,6 +786,71 @@ lints), D116 (envelope `defaultUserRef`), D128 (the failed RSS spike and its fou
 A change that contradicts a decision is a specification amendment, not an implementation
 choice.
 
+### Wave 5 production reachability is boundary-bound
+
+The approved 2026-08-06 amendment now adds sixteen local completion/evidence tasks without
+changing the 545-item manifest census. T589-T602 plus T604-T605 own the missing production
+composition, coordinated handler-contract correction, operator activation boundary, and
+exact-candidate evidence; T603 is the seventeenth local Wave 5 completion/resume task. The
+feature task total is 605.
+The completion boundary is:
+
+- registrar-consumed authenticated ComponentSession and authoritative subject;
+- matching nonzero Zone policy revision under `ZoneResourceRuntime`, with initial/restart
+  installation through one sealed, non-`Clone`, one-shot `PolicyBootstrapRead` limited to
+  exact-revision policy envelopes and every later policy access through the authenticated
+  Resource API;
+- registered ResourceService and controller endpoint on the exact ZoneBus;
+- admitted production watch through store and controller fan-in;
+- durable effect/adoption and cleanup ledger;
+- durable mutation-audit drain before ordinary success, with operation-bound
+  `CommittedPendingAudit` represented by `ResourceStatus.phase =
+  ResourcePhase::Degraded`, `ResourceStatus.outcome.code =
+  StatusCode("committed-pending-audit")`, `ResourceStatus.update.state =
+  UpdateState::Blocked`, and `ResourceStatus.update.operation_id =
+  Some(original_operation_id)`, with bounded redacted detail, same-ID
+  no-reapply/eventual-final-result behavior, and no new enum variant, field, or schema
+  version;
+- one aggregate readiness projection containing exactly the
+  `d2b-core-controller`-owned `Provider/system-core` registration plus an actual
+  `Zone.status.handlers[]` list with exactly one `system-core-host` record and one
+  `system-core-user` record, each carrying `phase` and `lastReconciledAt` from an active,
+  initialized, current handler; `ProviderLifecycle` remains distinct and cannot substitute,
+  and Wave 5 does not wait for other Wave 6 dossiers;
+- T605's `ZoneHandlerName::SystemCoreHost` and `ZoneHandlerName::SystemCoreUser` kebab-case
+  round-trip, exact-list acceptance and rejection coverage, current compiler-derived public
+  and private API snapshots, paired `docs/reference/resource-plane-runtime.md`, and read-only
+  proof that `packages/xtask/src/zone_schema.rs` leaves
+  `docs/reference/schemas/v3/core.d2bus.org_Zone.schema.json` byte-identical because the
+  desired Zone spec is unchanged;
+- per-Zone failure isolation;
+- T604 exact-candidate coverage from an operator Nix declaration and emitted bundle through
+  production daemon activation to a real owned effect/readiness or precise actionable
+  refusal for the representative Guest, Volume, Network, and Device, followed by
+  dependency-safe removal cleanup with unrelated resources intact;
+- T603's closed external reconciliation receipt for every T073-T218 obligation plus current
+  analysis and unanimous `adr046w5-r<n>` plan receipt against one amended artifact
+  snapshot/tip and unambiguous branch/candidate, followed only when every row is satisfied by
+  the identity-verifying `/d2b-spec-edit` checkbox batch and editor progress receipt; and
+- exact-candidate production-boundary, RSS, owner, removal, and reference evidence.
+
+A direct ResourceService or `WatchService` call, `ProductionWatchHarness`, fixed/fake endpoint,
+constructed subject, reusable bootstrap reader, independent readiness bit, status-only
+Provider substitute, disabled audit callback, undrained outbox, ordinary success for a
+committed-pending-audit mutation, a claim that `ResourceUpdateStatus` owns phase/code, an
+operator test that bypasses Nix activation, or evidence from another commit cannot cover
+FR-066 through FR-072 or SC-030 through SC-034.
+
+### D106 keeps policy interpretation out of both store crates
+
+`d2b-resource-store` and `d2b-resource-store-redb` own sealed mutation admission,
+policy-neutral envelope/schema/atomicity checks, revisions, and persistence. They do not
+deserialize or own Role, RoleBinding, PolicySet, or any other RBAC DTO. The Resource API and
+Zone policy owner compile and interpret policy. `PolicyBootstrapRead` may expose only
+policy-neutral envelopes to `d2b-resource-api`; its existence does not permit either store to
+select or parse an RBAC DTO. T591 must extend the existing guard to the whole source and
+dependency surface; checking only selected files does not cover D106.
+
 ### The 19 ResourceTypes have exclusive owners
 
 | Owning spec | Count | Types |
@@ -870,6 +935,19 @@ Run this against `tasks.md` before implementation starts.
 - [x] Wave assignment matches the implementation graph, with no item moved between waves
 - [x] Parallel groups are preserved so file-disjoint slices launch together (FR-028)
 - [x] The 14 `file-overlap-order` edges are recorded as explicit ordering constraints
+- [x] The approved W5 completion graph has one integrator-prep commit, six file-disjoint
+      implementation slices, one serial daemon composition owner, five disjoint
+      acceptance/docs slices including T604's operator activation coverage, and
+      exact-candidate evidence before T219
+- [x] T603 is the sole direct prerequisite of T589, writes the closed external receipt,
+      accounts for all T073-T218 obligations without checking them from code presence, and
+      authorizes checkbox progress only through an identity-verifying `/d2b-spec-edit` batch
+      when all rows are satisfied and current analysis plus unanimous plan signoff bind one
+      exact amended artifact snapshot/tip and qualified `adr046w5` address
+- [x] C1 is resolved as a specification-quality assignment under Constitution 2.2.0: T605
+      adds the two closed-enum values and paired contract/drift artifacts, T595 consumes them,
+      and the same Wave 5 PR carries the remaining consumers, docs, and evidence. No
+      implementation or delivery result is claimed
 - [ ] No task contradicts a decision in the register (checked per task at implementation time,
       per FR-047)
 - [x] Contended files are integrator-prep, not slice-owned
@@ -914,21 +992,31 @@ jq -r --arg p routing '.items[] | select(.workItemId | startswith("ADR046-\($p)-
 | FR-044 - FR-045 | Gated pull-request landing; no intermediate release | `validation-and-delivery` §13 | `delivery` |
 | FR-046 | Generated manifests authoritative over prose | **Locally added** - applies the repository's existing-code-is-canon rule | none |
 | FR-047 | Conformance to the 129 frozen decisions | `decision-register` | `decisions` |
+| FR-048 - FR-050 | Pipelined implementation start with strict ordered exit | `validation-and-delivery` section 4 | `delivery` |
+| FR-051 - FR-055 | Panel deferral registers and pre-panel review gates | `validation-and-delivery` plus program process | `delivery` |
+| FR-056 - FR-059 | Standing Gate 0, entry/exit distinction, waiver scope, contended-file prep | `validation-and-delivery` plus program process | `delivery` |
+| FR-060 | Removal proof follows the wave that removes the path | `current-code-migration-map`, `validation-and-delivery` | `reuse`, `streamline`, `delivery` |
+| FR-061 - FR-065 | Contract publication versus artifact release; companion classification, membership, and verification | **Locally added** - companion clarification family | none |
+| FR-066 - FR-072 | Authenticated production publication, one-shot policy bootstrap then authenticated policy access, controller ledger, exact system-core Provider readiness, committed-pending-audit `ResourceStatus` composite, restart/Zone isolation, operator Nix activation/effect/cleanup, exact evidence, and receipt/editor-mediated amended-plan resume | **Locally added Wave 5 completion assignment**, constrained by `componentsession-and-bus`, `resource-api-and-authorization`, `resource-store-redb`, `resource-reconciliation`, `core-controllers`, `provider-system-core`, `telemetry-audit-and-support`, ADR 0034 | `session`, `bus`, `api`, `store`, `reconcile`, `core`, `system-core`, `audit` plus T589-T605 |
+| FR-073 | RBAC policy DTOs and interpretation stay outside store/redb | `decision-register` D106, `resource-api-and-authorization`, ADR 0049 | `api`, `store` plus T591 |
+| FR-074 | CLI/reference promises match emitted behavior | `cli-and-operations`, `validation-and-delivery` | `cli`, `delivery` plus T599 |
 
 ### Locally added requirements
 
-Four requirements have no upstream ADR-046 owner. Each came from a recorded clarification
-decision, not from the specification set, and each is therefore **this program's own
-obligation** rather than an inherited one:
+Program-local requirements are explicit rather than masquerading as work-item-manifest
+content. The original clarification family and the later approved additions are:
 
 | Requirement | Origin | Consequence |
 | --- | --- | --- |
 | FR-039, FR-040 | Clarification: companions block the release | Adds a release-gate condition the ADR-046 set does not contain. If it is ever dropped, it must be dropped here, not looked for upstream. |
 | FR-043 | Clarification: recovery-point attestation required | Tightens `reset-and-cutover`. The owning spec permits proceeding past the rollback boundary without attestation; this program does not. |
 | FR-046 | Applies the repository's existing-code-is-canon rule to spec-versus-manifest drift | Governs the recorded W2 destination drift. |
+| FR-061 - FR-065 | Companion contract/artifact, classification, membership, and verification clarifications | Makes the locally added companion release blocker mechanically decidable. |
+| FR-066 - FR-072, FR-074 | Operator-approved Wave 5 production-completion amendment plus analysis remediation | Adds sixteen completion/evidence tasks including T604 and T605 plus T603, blocks T589 on the reconciliation receipt, sole editor checkbox transition, editor progress receipt, and checked prerequisites, blocks T219 on production wiring and exact-candidate evidence, and does not change the 545-item manifest. |
 
-A reviewer checking upstream fidelity should expect these four to have no counterpart in
-`docs/specs/`. That is intended, not a coverage gap.
+A reviewer checking upstream fidelity should expect these rows to have no one-to-one
+counterpart in `docs/specs/`. That is intended, not a coverage gap. FR-073 is not in this
+table because it preserves upstream D106 rather than adding a new boundary.
 
 ### Success-criteria traceability
 
@@ -941,3 +1029,5 @@ A reviewer checking upstream fidelity should expect these four to have no counte
 | SC-019 - SC-023, SC-026 | FR-025 - FR-038, FR-044, FR-045; `validation-and-delivery` §4 and §15 |
 | SC-024 | FR-039, FR-040 - locally added |
 | SC-025 | FR-043 - locally added |
+| SC-027 - SC-029 | FR-025 - FR-029, FR-049, FR-051 - FR-055 |
+| SC-030 - SC-034 | FR-066 - FR-074; T603 receipt/editor-mediated amended-plan resume and T590-T602 plus T604-T605 exact-candidate acceptance |
