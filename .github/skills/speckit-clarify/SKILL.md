@@ -8,6 +8,13 @@ metadata:
 ---
 
 
+## d2b feature artifact routing
+
+<!-- D2B-SPECKIT-ROUTE: clarify initial-create=none; existing=editor-batch -->
+
+Keep accepted answers in memory while asking questions. Submit one final `/d2b-spec-edit` batch after the questioning loop for all spec, clarification, and existing checklist changes. Validate the in-memory result; do not write after each answer or edit a feature artifact directly.
+
+
 ## User Input
 
 ```text
@@ -54,7 +61,7 @@ You **MUST** consider the user input before proceeding (if not empty).
 
 ## Outline
 
-Goal: Detect and reduce ambiguity or missing decision points in the active feature specification and record the clarifications directly in the spec file.
+Goal: Detect and reduce ambiguity or missing decision points in the active feature specification and send accepted clarifications to one editor batch.
 
 Note: This clarification workflow is expected to run (and be completed) BEFORE invoking `/speckit-plan`. If the user explicitly states they are skipping clarification (e.g., exploratory spike), you may proceed, but must warn that downstream rework risk increases.
 
@@ -178,12 +185,12 @@ Execution steps:
     - Never reveal future queued questions in advance.
     - If no valid questions exist at start, immediately report no critical ambiguities.
 
-6. Integration after EACH accepted answer (incremental update approach):
+6. Integrate accepted answers in memory:
     - Maintain in-memory representation of the spec (loaded once at start) plus the raw file contents.
     - For the first integrated answer in this session:
        - Ensure a `## Clarifications` section exists (create it just after the highest-level contextual/overview section per the spec template if missing).
        - Under it, create (if not present) a `### Session YYYY-MM-DD` subheading for today.
-    - Append a bullet line immediately after acceptance: `- Q: <question> → A: <final answer>`.
+    - Add a bullet to the in-memory spec after each accepted answer: `- Q: <question> → A: <final answer>`.
     - Then immediately apply the clarification to the most appropriate section(s):
        - Functional ambiguity → Update or add a bullet in Functional Requirements.
        - User interaction / actor distinction → Update User Stories or Actors subsection (if present) with clarified role, constraint, or scenario.
@@ -192,19 +199,19 @@ Execution steps:
        - Edge case / negative flow → Add a new bullet under Edge Cases / Error Handling (or create such subsection if template provides placeholder for it).
        - Terminology conflict → Normalize term across spec; retain original only if necessary by adding `(formerly referred to as "X")` once.
     - If the clarification invalidates an earlier ambiguous statement, replace that statement instead of duplicating; leave no obsolete contradictory text.
-    - Save the spec file AFTER each integration to minimize risk of context loss (atomic overwrite).
+    - Keep accepted integrations in memory until the questioning loop ends; then send one final `/d2b-spec-edit` batch. The editor performs the feature-artifact write.
     - Preserve formatting: do not reorder unrelated sections; keep heading hierarchy intact.
     - Keep each inserted clarification minimal and testable (avoid narrative drift).
 
-7. Validation (performed after EACH write plus final pass):
+7. Validate after each in-memory integration and once at the end:
    - Clarifications session contains exactly one bullet per accepted answer (no duplicates).
    - Total asked (accepted) questions ≤ 5.
-   - Updated sections contain no lingering vague placeholders the new answer was meant to resolve.
+   - Updated in-memory sections contain no lingering vague placeholders the new answer was meant to resolve.
    - No contradictory earlier statement remains (scan for now-invalid alternative choices removed).
    - Markdown structure valid; only allowed new headings: `## Clarifications`, `### Session YYYY-MM-DD`.
    - Terminology consistency: same canonical term used across all updated sections.
 
-8. Write the updated spec back to `FEATURE_SPEC`.
+8. Send the updated sections and clarification answers to `/d2b-spec-edit` once. The editor writes `FEATURE_SPEC`; this command performs no feature-artifact write.
 
 9. **Re-validate Spec Quality Checklist** (if it exists):
    - Check if `FEATURE_DIR/checklists/requirements.md` exists.
@@ -213,12 +220,12 @@ Execution steps:
      1. Read the checklist file.
      2. Identify all GitHub task-list checkbox lines - lines matching `- [ ]`, `- [x]`, or `- [X]` (case-insensitive, tolerant of leading whitespace for nested items) outside of code fences. Ignore all other content (headings, notes, non-checkbox bullets, metadata).
      3. For each checkbox line, record its current marker state (checked or unchecked) and item text into a before-snapshot list.
-     4. Re-evaluate each checkbox item against the **updated** spec (the version just saved in step 7).
+     4. Re-evaluate each checkbox item against the **updated in-memory** spec.
      5. For each checkbox item, update only if the checked/unchecked state actually changes:
         - If the item now passes and was unchecked: change `[ ]` to `[x]`.
         - If the item now fails and was checked: change `[x]`/`[X]` to `[ ]`.
         - If the state is unchanged: leave the marker as-is (preserve existing case to avoid cosmetic diffs).
-     6. Save the updated checklist file. **Only toggle the `[ ]`/`[x]` marker portion of checkbox lines whose state changed.** All other file content - headings, metadata, notes, line ordering, whitespace - must remain unchanged to avoid noisy diffs.
+     6. Add only changed checkbox states to the final `/d2b-spec-edit` batch. The editor toggles the `[ ]`/`[x]` marker portion; this command does not save the checklist. All other file content - headings, metadata, notes, line ordering, whitespace - must remain unchanged to avoid noisy diffs.
      7. Compare the before-snapshot with the current state to compute three lists for the Completion Report:
         - **Newly passing**: items that changed from unchecked to checked.
         - **Regressions**: items that changed from checked to unchecked.

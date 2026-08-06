@@ -20,7 +20,9 @@
 // attestation rather than an error. This script is the cheap place to catch
 // the mistakes that lead there.
 
+import { createHash } from "node:crypto";
 import { existsSync, lstatSync, readFileSync, readdirSync, statSync } from "node:fs";
+import { spawnSync } from "node:child_process";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -28,6 +30,75 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const agentsDir = join(root, ".github", "agents");
 const skillsDir = join(root, ".github", "skills");
 const modelRs = join(root, "packages", "xtask", "src", "delivery", "model.rs");
+const tier0DashGate = join(root, "tests", "tools", "tier0-first-pass.sh");
+const dashPolicyTest = join(root, "packages", "d2b-contract-tests", "tests", "policy_dash_gate.rs");
+const promptCorpusScript = join(root, "scripts", "copilot", "prompt-corpus.mjs");
+const promptCorpusManifest = join(root, "scripts", "copilot", "prompt-corpus-manifest.json");
+
+const CAVEMAN_VENDOR_ROOT = join(root, "third_party", "caveman", "v1.10.0");
+const CAVEMAN_VENDOR_FILES = {
+  "LICENSE": "5eb826cd03151bcc7cce3f80d40e87733237fedfc6c36d6908aca5fd650a0bdb",
+  "skills/caveman/SKILL.md": "daf9cec496ebd039809d8236f99f17fa1b4beaadf8ce4e2d532d0da51d70afce",
+  "skills/caveman-compress/SKILL.md": "3167d62440eee99c0e5b224d7f8b8ebcfe37efba38bc5bbee24f0d00da72a688",
+};
+const CAVEMAN_VENDOR_METADATA = {
+  repository: "https://github.com/JuliusBrussee/caveman",
+  tag: "v1.10.0",
+  commit: "fcf7663366c217dc8f334a11028de52ed950ceab",
+  files: CAVEMAN_VENDOR_FILES,
+};
+const CAVEMAN_AGENT_NAMES = [
+  "d2b-implementer", "d2b-integrator",
+  "panel-docs", "panel-kernel", "panel-networking", "panel-nixos",
+  "panel-observability", "panel-product", "panel-rust", "panel-security",
+  "panel-software", "panel-test",
+];
+const CAVEMAN_BLOCK_START = "<!-- BEGIN D2B-CAVEMAN-COMMUNICATION -->";
+const CAVEMAN_BLOCK_END = "<!-- END D2B-CAVEMAN-COMMUNICATION -->";
+const FEATURE_ROUTE_MARKER = "D2B-FEATURE-ARTIFACT-ROUTING: d2b-spec-edit-exclusive-v1";
+const SPECKIT_ROUTE_MARKERS = {
+  "speckit-specify": "D2B-SPECKIT-ROUTE: specify initial-create=spec-and-checklist; existing=editor",
+  "speckit-clarify": "D2B-SPECKIT-ROUTE: clarify initial-create=none; existing=editor-batch",
+  "speckit-analyze": "D2B-SPECKIT-ROUTE: analyze initial-create=none; existing=read-only-editor-remediation",
+  "speckit-plan": "D2B-SPECKIT-ROUTE: plan initial-create=plan-research-data-model-contracts-quickstart; existing=editor",
+  "speckit-tasks": "D2B-SPECKIT-ROUTE: tasks initial-create=tasks; existing=editor",
+  "speckit-implement": "D2B-SPECKIT-ROUTE: implement initial-create=none; existing=editor",
+  "speckit-converge": "D2B-SPECKIT-ROUTE: converge initial-create=none; existing=editor-append",
+  "speckit-checklist": "D2B-SPECKIT-ROUTE: checklist initial-create=checklist; existing=editor",
+};
+const SPECKIT_DIRECT_WRITE_RULES = {
+  "speckit-specify": [
+    ["unconditional template copy", /Copy the resolved `spec-template` file to `SPECIFY_FEATURE_DIRECTORY\/spec\.md` as the starting point/i],
+    ["unconditional spec creation", /The spec directory and file are always created by this command/i],
+  ],
+  "speckit-clarify": [
+    ["per-answer integration", /Integration after EACH accepted answer/i],
+    ["immediate append", /Append a bullet line immediately after acceptance/i],
+    ["per-write validation", /Validation \(performed after EACH write plus final pass\)/i],
+    ["direct checklist save", /Save the updated checklist file\./i],
+  ],
+  "speckit-analyze": [
+    ["manual feature-artifact edit", /Manually edit tasks\.md to add coverage/i],
+  ],
+  "speckit-plan": [
+    ["direct existing-artifact write", /Write an existing (?:plan|research|data-model|contracts|quickstart)/i],
+  ],
+  "speckit-tasks": [
+    ["direct existing tasks write", /^\s*Write an existing tasks file directly/im],
+  ],
+  "speckit-implement": [
+    ["direct task-artifact write", /^\s*Write tasks\.md or another existing feature artifact directly\./im],
+  ],
+  "speckit-converge": [
+    ["append section", /### 7\. Append Convergence Tasks\b/i],
+    ["direct tasks append", /Append to the \*\*end\*\* of `tasks\.md`/i],
+    ["direct mutation request", /The command's only mutation request is an append/i],
+  ],
+  "speckit-checklist": [
+    ["direct existing checklist append", /either creates a new file or appends to an existing one/i],
+    ["direct checklist cleanup", /clean up obsolete checklists when done/i],
+  ],
+};
 
 // Measured from the CLI's own model catalog. The legacy Gemini panel binding
 // has no `xhigh`; requesting it is invalid rather than merely unusual.
@@ -759,6 +830,278 @@ if (!existsSync(initOptionsJson)) {
         );
       }
     }
+  }
+}
+
+// --- Caveman, feature editing, and corpus contracts ----------------------
+
+function sha256File(path) {
+  return createHash("sha256").update(readFileSync(path)).digest("hex");
+}
+
+function vendorFilesUnder(dir, prefix = "") {
+  const files = [];
+  let entries;
+  try {
+    entries = readdirSync(join(dir, prefix), { withFileTypes: true });
+  } catch (e) {
+    fail(`cannot enumerate Caveman vendor tree ${join(dir, prefix)}: ${e.message}`);
+    return files;
+  }
+  for (const entry of entries) {
+    const relative = join(prefix, entry.name).replaceAll("\\", "/");
+    const path = join(dir, relative);
+    if (entry.isSymbolicLink()) {
+      fail(`Caveman vendor tree contains a symlink at ${relative}; vendor files must be inert regular files.`);
+    } else if (entry.isDirectory()) {
+      files.push(...vendorFilesUnder(dir, relative));
+    } else if (entry.isFile()) {
+      files.push(relative);
+    } else {
+      fail(`Caveman vendor tree contains a non-regular entry at ${relative}.`);
+    }
+  }
+  return files;
+}
+
+if (!existsSync(CAVEMAN_VENDOR_ROOT)) {
+  fail(`Caveman vendor root ${CAVEMAN_VENDOR_ROOT} is missing; the pinned provenance tree is required.`);
+} else {
+  const metadataPath = join(CAVEMAN_VENDOR_ROOT, "UPSTREAM.json");
+  if (!existsSync(metadataPath)) {
+    fail(`Caveman vendor metadata ${metadataPath} is missing.`);
+  } else {
+    let metadata = null;
+    try {
+      metadata = JSON.parse(readFileSync(metadataPath, "utf8"));
+    } catch (e) {
+      fail(`Caveman vendor metadata is not valid JSON: ${e.message}.`);
+    }
+    if (metadata && JSON.stringify(metadata) !== JSON.stringify(CAVEMAN_VENDOR_METADATA)) {
+      fail(`Caveman vendor UPSTREAM.json does not exactly match the approved repository, tag, commit, and file hashes.`);
+    }
+  }
+
+  const expectedVendorFiles = new Set(["UPSTREAM.json", ...Object.keys(CAVEMAN_VENDOR_FILES)]);
+  const actualVendorFiles = vendorFilesUnder(CAVEMAN_VENDOR_ROOT).sort();
+  for (const file of actualVendorFiles) {
+    if (!expectedVendorFiles.has(file)) {
+      fail(`Caveman vendor file ${file} is outside the closed allowlist; do not add an upstream runtime or script.`);
+    }
+  }
+  for (const file of expectedVendorFiles) {
+    if (!actualVendorFiles.includes(file)) {
+      fail(`Caveman vendor file ${file} is missing from the closed allowlist.`);
+    }
+  }
+  for (const [relative, expected] of Object.entries(CAVEMAN_VENDOR_FILES)) {
+    const path = join(CAVEMAN_VENDOR_ROOT, relative);
+    if (!existsSync(path)) continue;
+    try {
+      const actual = sha256File(path);
+      if (actual !== expected) {
+        fail(`Caveman vendor hash mismatch for ${relative}: expected ${expected}, found ${actual}.`);
+      }
+    } catch (e) {
+      fail(`cannot hash Caveman vendor file ${relative}: ${e.message}.`);
+    }
+  }
+}
+
+function requireText(path, text, label = path) {
+  if (!existsSync(path)) {
+    fail(`${label} is missing; this binding contract cannot be checked.`);
+    return;
+  }
+  const source = readFileSync(path, "utf8");
+  if (!source.includes(text)) {
+    fail(`${label} is missing required binding text: ${text}`);
+  }
+}
+
+if (!existsSync(tier0DashGate)) {
+  fail(`${tier0DashGate} is missing; the hash-scoped vendor dash admission has no gate.`);
+} else {
+  const source = readFileSync(tier0DashGate, "utf8");
+  requireText(tier0DashGate, "CAVEMAN_DASH_ADMISSIONS", "tier-0 dash gate");
+  requireText(tier0DashGate, "validate_caveman_dash_admissions", "tier-0 dash gate");
+  for (const [relative, hash] of Object.entries(CAVEMAN_VENDOR_FILES)) {
+    requireText(tier0DashGate, `${relative} ${hash}`, "tier-0 dash gate");
+  }
+  if (!source.includes("is_caveman_dash_admission")) {
+    fail("tier-0 dash gate does not filter only validated Caveman admissions; the general dash rule may be weakened.");
+  }
+}
+if (!existsSync(dashPolicyTest)) {
+  fail(`${dashPolicyTest} is missing; the vendor dash admission lacks policy-test coverage.`);
+} else {
+  const source = readFileSync(dashPolicyTest, "utf8");
+  for (const testName of [
+    "scan_passes_on_exact_caveman_vendor_admissions",
+    "modified_caveman_vendor_blob_loses_dash_admission",
+    "missing_caveman_vendor_blob_fails_closed",
+    "extra_caveman_vendor_file_is_not_admitted",
+  ]) {
+    requireText(dashPolicyTest, testName, "dash policy test");
+  }
+}
+
+function occurrenceCount(text, needle) {
+  return text.split(needle).length - 1;
+}
+
+const actualCavemanAgents = [];
+let communicationBlock = null;
+for (const [name, agent] of agents) {
+  const startCount = occurrenceCount(agent.text, CAVEMAN_BLOCK_START);
+  const endCount = occurrenceCount(agent.text, CAVEMAN_BLOCK_END);
+  if (startCount || endCount) {
+    if (startCount !== 1 || endCount !== 1) {
+      fail(`${agent.file}: optional Caveman communication block must have exactly one start and end marker.`);
+      continue;
+    }
+    const start = agent.text.indexOf(CAVEMAN_BLOCK_START);
+    const end = agent.text.indexOf(CAVEMAN_BLOCK_END, start);
+    const block = agent.text.slice(start, end + CAVEMAN_BLOCK_END.length);
+    actualCavemanAgents.push(name);
+    if (communicationBlock === null) communicationBlock = block;
+    else if (block !== communicationBlock) {
+      fail(`${agent.file}: Caveman communication block differs from the selected-lane contract.`);
+    }
+  }
+}
+if (actualCavemanAgents.sort().join(",") !== [...CAVEMAN_AGENT_NAMES].sort().join(",")) {
+  fail(
+    `Caveman-enabled agent set is [${actualCavemanAgents.sort().join(", ")}], expected ` +
+    `[${CAVEMAN_AGENT_NAMES.join(", ")}].`,
+  );
+}
+for (const name of agents.keys()) {
+  if (!CAVEMAN_AGENT_NAMES.includes(name) &&
+      (agents.get(name).text.includes(CAVEMAN_BLOCK_START) || agents.get(name).text.includes(CAVEMAN_BLOCK_END))) {
+    fail(`${agents.get(name).file}: optional Caveman communication is enabled on an unapproved agent.`);
+  }
+}
+if (agents.has("d2b-architect") &&
+    /caveman-full-optional|D2B-CAVEMAN-COMMUNICATION/.test(agents.get("d2b-architect").text)) {
+  fail("d2b-architect must remain normal communication and must not carry the optional Caveman marker.");
+}
+
+const autopilotSkill = join(skillsDir, "d2b-autopilot", "SKILL.md");
+const panelSkill = join(skillsDir, "d2b-panel-round", "SKILL.md");
+const specEditSkill = join(skillsDir, "d2b-spec-edit", "SKILL.md");
+const communicationRows = [
+  ["autopilot architect", autopilotSkill, "| architect | `d2b-architect` | `gpt-5.6-sol` | `xhigh` | `long_context` | `normal` |"],
+  ["autopilot implementer", autopilotSkill, "| implementer | `d2b-implementer` | `gpt-5.6-luna` | `max` | `long_context` | `caveman-full-optional` |"],
+  ["autopilot integrator", autopilotSkill, "| integrator | `d2b-integrator` | `gpt-5.6-luna` | `max` | `long_context` | `caveman-full-optional` |"],
+  ["panel header", panelSkill, "| Seat | `agent_type` | `model` | `reasoning_effort` | `context_tier` | `communication` |"],
+  ["autopilot header", autopilotSkill, "| Role | `agent_type` | `model` | `reasoning_effort` | `context_tier` | `communication` |"],
+  ["spec editor", specEditSkill, "| editor | `d2b-architect` | `gpt-5.6-sol` | `xhigh` | `long_context` | `normal` |"],
+];
+for (const [label, path, line] of communicationRows) {
+  if (!existsSync(path)) {
+    fail(`${label}: ${path} is missing; communication binding cannot be checked.`);
+  } else {
+    const source = readFileSync(path, "utf8");
+    if (occurrenceCount(source, line) !== 1) {
+      fail(`${label}: expected exactly one communication row: ${line}`);
+    }
+  }
+}
+for (const [label, path] of [
+  ["autopilot Caveman dispatch marker", autopilotSkill],
+  ["panel Caveman dispatch marker", panelSkill],
+]) {
+  if (existsSync(path) && occurrenceCount(readFileSync(path, "utf8"), "D2B-CAVEMAN-DISPATCH: caveman-full-optional") !== 1) {
+    fail(`${label}: expected exactly one optional communication dispatch marker.`);
+  }
+}
+
+for (const [skill, marker] of Object.entries(SPECKIT_ROUTE_MARKERS)) {
+  const path = join(skillsDir, skill, "SKILL.md");
+  if (!existsSync(path)) {
+    fail(`${skill}: route skill is missing; initial-creation ownership cannot be checked.`);
+    continue;
+  }
+  const source = readFileSync(path, "utf8");
+  if (occurrenceCount(source, marker) !== 1 || !source.includes("d2b-spec-edit")) {
+    fail(`${skill}: feature-artifact routing marker is missing or duplicated.`);
+  }
+  for (const [label, pattern] of SPECKIT_DIRECT_WRITE_RULES[skill] ?? []) {
+    if (pattern.test(source)) {
+      fail(`${skill}: contradictory direct-write instruction (${label}); existing feature artifacts must use one d2b-spec-edit batch.`);
+    }
+  }
+}
+for (const [label, path] of [
+  ["autopilot feature-artifact route", autopilotSkill],
+  ["memory feature-artifact route", join(skillsDir, "d2b-memory", "SKILL.md")],
+]) {
+  if (existsSync(path) && occurrenceCount(readFileSync(path, "utf8"), FEATURE_ROUTE_MARKER) !== 1) {
+    fail(`${label}: expected exactly one exclusive d2b-spec-edit route marker.`);
+  }
+}
+if (agents.has("d2b-architect") &&
+    !agents.get("d2b-architect").text.includes("dispatched by `/d2b-spec-edit`")) {
+  fail("d2b-architect: existing feature artifacts must be restricted to the d2b-spec-edit dispatch contract.");
+}
+for (const name of ["d2b-implementer", "d2b-integrator"]) {
+  if (agents.has(name) && !agents.get(name).text.includes("route it\nthrough `/d2b-spec-edit`")) {
+    fail(`${name}: feature-artifact changes must be routed through d2b-spec-edit.`);
+  }
+}
+if (!existsSync(specEditSkill)) {
+  fail("d2b-spec-edit: editor skill is missing.");
+} else {
+  const source = readFileSync(specEditSkill, "utf8");
+  for (const text of [
+    "D2B-SPEC-EDIT: exclusive-feature-root-v1",
+    "FEATURE_DIR`: one existing directory under the repository's `specs/`",
+    "symlink escapes",
+    "never revert\n   foreign work",
+    "No freshness sidecar, digest chain, or artifact-state file is created",
+  ]) {
+    if (!source.includes(text)) fail(`d2b-spec-edit: missing fail-closed ownership text: ${text}`);
+  }
+  if (source.includes("caveman-full-optional")) {
+    fail("d2b-spec-edit: editor communication must remain normal, not optional Caveman.");
+  }
+}
+
+const panelOutputSchema = (role) => [
+  "## Output",
+  "",
+  "Return exactly one JSON object and nothing else:",
+  "",
+  "```json",
+  `{`,
+  `  \"engineer\": \"${role}\",`,
+  `  \"signoff\": true,`,
+  `  \"summary\": \"What you reviewed and the overall posture.\",`,
+  `  \"recommendations\": []`,
+  `}`,
+  "```",
+].join("\n");
+for (const [name, agent] of panelAgents) {
+  const role = name.slice("panel-".length);
+  const output = agent.text.match(/## Output\n\nReturn exactly one JSON object and nothing else:\n\n```json\n[\s\S]*?\n```\n?/);
+  if (!output || !output[0].includes(panelOutputSchema(role))) {
+    fail(`${agent.file}: panel verdict JSON output schema changed or is missing.`);
+  }
+}
+
+if (!existsSync(promptCorpusScript)) {
+  fail(`${promptCorpusScript} is missing; governed prompt membership cannot be checked.`);
+} else if (!existsSync(promptCorpusManifest)) {
+  fail(`${promptCorpusManifest} is missing; governed prompt preservation cannot be checked.`);
+} else {
+  const corpus = spawnSync(process.execPath, [promptCorpusScript], {
+    cwd: root,
+    encoding: "utf8",
+  });
+  if (corpus.status !== 0) {
+    const output = `${corpus.stdout || ""}${corpus.stderr || ""}`.trim().split("\n").slice(0, 12).join("\n");
+    fail(`prompt corpus check failed (exit ${corpus.status}):\n${output}`);
   }
 }
 

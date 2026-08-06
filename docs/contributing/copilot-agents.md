@@ -1,20 +1,21 @@
 # Copilot agents, skills, and the autopilot process
 
-The canonical definition surface for this repository's ADR, panel, and
-delivery process. Everything here is committed, so a fresh clone behaves
-identically and nothing depends on an operator's local settings.
+Canonical definition surface for the repository's ADR, panel, and delivery
+process. Everything is committed, so fresh clones behave identically without
+local operator settings.
 
-Copilot is the sole supported and authoritative agent surface. The legacy
-integration was retired and its tracked files were removed; no second command
-path is preserved or selected by this repository.
+Copilot is the sole supported agent surface. The legacy integration was retired
+with its tracked files removed; no second command path remains.
 
 ## What is here
 
 ```
 .github/agents/          13 agents: 3 roles + 10 panel seats
 .github/skills/          d2b-adr, d2b-panel-round, d2b-wave-delivery,
-                         d2b-memory, d2b-autopilot, plus speckit-*
+                         d2b-memory, d2b-autopilot, d2b-caveman,
+                         d2b-caveman-compress, d2b-spec-edit, plus speckit-*
 scripts/copilot/         check-bindings.mjs, autopilot.sh
+                         prompt-corpus.mjs and its checked-in manifest
 .specify/memory/         deferred-work, friction-log, engineering-debt
 ```
 
@@ -34,7 +35,7 @@ it, like any other blocker.
 
 ## Authoring a feature
 
-Interactive, because this is where judgement belongs. Track A, the full path:
+Interactive, because this is where judgment belongs. Track A, the full path:
 
 ```
 /speckit-specify   <what you want built>      -> specs/NNN-slug/spec.md
@@ -45,8 +46,7 @@ Interactive, because this is where judgement belongs. Track A, the full path:
 /d2b-panel-round plan                         -> ten lanes review the plan
 ```
 
-Track B is spec-kit's own documented shorter path, and drops `clarify` and
-`analyze`:
+Track B is spec-kit's documented shorter path and drops `clarify` and `analyze`:
 
 ```
 /speckit-specify   <what you want built>
@@ -55,13 +55,69 @@ Track B is spec-kit's own documented shorter path, and drops `clarify` and
 /d2b-panel-round plan
 ```
 
-Iterate on the plan until the panel is unanimous. **That gate is what makes
-the next step safe to leave alone.**
+Iterate until the panel is unanimous. **That gate makes the next step safe to
+leave alone.**
 
-The `/speckit-*` steps run in the parent session. When that session is bound
-to `gpt-5.6-sol` at `xhigh` with the 1M `long_context` tier, it already carries
-the architect binding and no dispatch is needed. When it is not, dispatch
-`d2b-architect` explicitly for `specify` and `plan`.
+The `/speckit-*` steps run in the parent session. A session bound to
+`gpt-5.6-sol` at `xhigh` with the 1M `long_context` tier already carries the
+architect binding. Otherwise dispatch `d2b-architect` explicitly for `specify`
+and `plan`.
+
+## Optional Caveman communication
+
+`d2b-caveman` adapts pinned upstream communication rules to Copilot without
+Anthropic, Claude CLI, Python, external install, network access, or third-party
+content upload. Full communication is optional and applies only to transient
+messages in these lanes:
+
+| Surface | Default communication |
+| --- | --- |
+| `d2b-implementer` | `caveman-full-optional` |
+| `d2b-integrator` | `caveman-full-optional` |
+| all ten `panel-*` seats | `caveman-full-optional` |
+| `d2b-autopilot` and `d2b-panel-round` dispatches | `caveman-full-optional` |
+| `d2b-architect` and `d2b-spec-edit` | `normal` |
+
+An explicit `normal` or `off` request wins; no gate grades brevity. Persisted
+code, commands, paths, identifiers, exact errors, negations, exceptions,
+schemas, commits, release notes, contributor docs, ADRs, feature artifacts, and
+panel JSON remain normal and exact. The only persisted-prose exception is the
+checked-in governed prompt corpus.
+
+The upstream files are provenance only:
+`third_party/caveman/v1.10.0/UPSTREAM.json` pins the repository, tag, commit,
+and hashes. `d2b-caveman-compress` works only on the manifest corpus, snapshots
+under `.scratch/`, uses the current Copilot session, and requires a
+side-by-side semantic audit. It never invokes an upstream runtime.
+
+## Feature artifact ownership
+
+`d2b-spec-edit` is user-invocable and dispatches `d2b-architect` at
+`gpt-5.6-sol` / `xhigh` / `long_context` with `normal` communication. It
+resolves one active directory under `specs/`, snapshots allowed paths, rejects
+absolute paths, `..`, symlink escapes, ADRs, source, contributor docs, and
+every other path outside that directory, verifies the changed-path set, and
+never reverts foreign work. It accepts one batch and returns changed sections,
+checklist transitions, changed files, deliberately untouched related files,
+and requested validation.
+
+The designated `speckit-*` commands may create only absent artifacts. After a
+file exists, all feature-directory writes route through the editor. `clarify`
+collects answers and submits one batch; `analyze` is read-only; `implement`
+reports checkbox changes; `converge` prepares exact append content; `autopilot`
+and memory fold route writes through the editor. No freshness sidecar, digest
+chain, or artifact-state file is introduced.
+
+## Prompt corpus
+
+The checked-in manifest is an exact membership list for 32 files: three
+`AGENTS.md` files, all eight `docs/contributing/*.md` files, all thirteen
+`.github/agents/*.agent.md` files, and all eight `.github/skills/d2b-*/SKILL.md`
+files. `prompt-corpus.mjs` verifies frontmatter, headings, fenced blocks, inline code,
+links and URLs, list hierarchy and count, table shape, literals, normative
+operators and negations, and exact JSON or output examples. It does not grade
+style or token reduction. Imported `speckit-*` prose stays uncompressed except
+for routing edits.
 
 ## Executing it
 

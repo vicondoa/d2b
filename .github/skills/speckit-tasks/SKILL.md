@@ -8,6 +8,16 @@ metadata:
 ---
 
 
+## d2b feature artifact routing
+
+<!-- D2B-SPECKIT-ROUTE: tasks initial-create=tasks; existing=editor -->
+
+Create tasks.md only when it is absent. Route every later task revision, including checkbox or dependency changes, through one `/d2b-spec-edit` batch; do not write an existing tasks file directly.
+
+If tasks.md exists, read it and prepare the requested revision for the editor;
+do not regenerate or overwrite it in this command.
+
+
 ## User Input
 
 ```text
