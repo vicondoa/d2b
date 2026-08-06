@@ -97,7 +97,7 @@ Every parent code names the fixed input
 | Internal stage | Public code | Exact correction |
 | --- | --- | --- |
 | `PARENT_PREPARE` | `D2B-BZLEXEC-PARENT-PREPARE` | Correct status-channel construction and private-fd mapping in `packages/d2b-bazel-exec/src/execute.rs`. |
-| `PARENT_SIGNAL_HANDOFF` | `D2B-BZLEXEC-PARENT-SIGNAL-HANDOFF` | Under the process-wide launch guard, use the reviewed safe `nix::sys::signal::SigSet` API to capture and block the full managed set before spawn and restore the exact spawning-thread mask after every spawn result; add no Rust unsafe or disposition mutation. |
+| `PARENT_SIGNAL_HANDOFF` | `D2B-BZLEXEC-PARENT-SIGNAL-HANDOFF` | Under the one process-wide launch guard, use the reviewed safe `nix::sys::signal::SigSet` API to capture and block the full managed set before spawn, attempt exact spawning-thread mask restoration after every spawn result before unlock, and fail closed on capture, block, poisoned-guard, or restoration failure; add no Rust unsafe or disposition mutation. |
 | `PARENT_SPAWN` | `D2B-BZLEXEC-PARENT-SPAWN` | Correct the exact immutable-helper spawn in `packages/d2b-bazel-exec/src/execute.rs`; do not add a path fallback. |
 | `PARENT_CLOSE` | `D2B-BZLEXEC-PARENT-CLOSE` | Correct single-owner post-spawn descriptor closure in `packages/d2b-bazel-exec/src/execute.rs`. |
 | `PARENT_READY` | `D2B-BZLEXEC-PARENT-READY` | Correct the bounded stateful framed `READY` decoder in `packages/d2b-bazel-exec/src/execute.rs`. |
@@ -123,6 +123,7 @@ Every helper code names the fixed input
 | `HELPER_GROUP_EPERM` | `D2B-BZLEXEC-HELPER-GROUP-EPERM` | Correct the parent-and-child `setpgid` handshake without changing session or group authority; `EPERM` must fail before `READY` with direct-child cleanup. |
 | `HELPER_GROUP_ERROR` | `D2B-BZLEXEC-HELPER-GROUP-ERROR` | Correct the parent-and-child `setpgid` handshake; any other setpgid error or confirmed-group mismatch must fail before `READY` with direct-child cleanup and no raw errno text. |
 | `HELPER_GROUP_EARLY_EXIT` | `D2B-BZLEXEC-HELPER-GROUP-EARLY-EXIT` | Keep the child blocked at the group-confirmation barrier and reject an early exit before `READY`; consume-reap it and close every owned descriptor. |
+| `HELPER_PRE_EXEC_TERMINATION` | `D2B-BZLEXEC-HELPER-PRE-EXEC-TERMINATION` | While `ExecResult` is pending, coalesce any managed signal into one pre-exec setup termination, suppress `EXECUTED` and target terminal/audit publication even on empty exec-pipe EOF, immediately kill and consume-reap the confirmed child group without forwarding or grace, and let sandbox containment backstop incomplete cleanup. |
 | `HELPER_EXEC_TIMEOUT` | `D2B-BZLEXEC-HELPER-EXEC-TIMEOUT` | Correct absolute-deadline accounting without resetting time after retry or short I/O. |
 | `HELPER_EXEC_PARTIAL` | `D2B-BZLEXEC-HELPER-EXEC-PARTIAL` | Correct exact record cursors so EOF after any byte is partial. |
 | `HELPER_EXEC_OVERLONG` | `D2B-BZLEXEC-HELPER-EXEC-OVERLONG` | Correct the one-record-plus-one-byte overlong check. |

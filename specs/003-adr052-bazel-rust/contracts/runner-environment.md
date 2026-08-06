@@ -166,6 +166,14 @@ closed typed parent failures; restoration is attempted on every outcome and a
 failed restoration cannot report success. Every new Rust crate retains
 `unsafe_code = "forbid"`; first-party Rust defines no raw fork, `pre_exec`,
 signal callback, disposition mutation, or unsafe helper exception.
+Injected tests cover capture failure, block failure, poisoned-guard refusal,
+spawn success and spawn failure with exact restoration, restoration failure
+after each spawn outcome, and two launches held at deterministic barriers.
+The overlap case proves one process-wide guard: the second launch cannot
+capture, block, or spawn until the first has attempted restoration, and the
+first cannot unlock before that attempt. Mutations replacing the shared guard
+with per-launch guards or moving unlock before restoration fail. All tests use
+the same safe APIs and add no unsafe code.
 
 The helper starts and remains single-threaded with the managed set inherited
 blocked. Its first setup operation is observation-only inspection of every
@@ -189,8 +197,8 @@ that the child has not exited. `ESRCH`, `EPERM`, any other setpgid error, a
 mismatched group, or early child exit is a typed helper failure with
 direct-child reap and descriptor cleanup. Managed signals remain blocked and unconsumed in both
 processes through confirmation. Only after confirmation may the supervisor
-release the child setup barrier, consume or forward a pending managed signal,
-or emit `READY`. A pending managed signal at entry, in the Rust-to-helper
+release the child setup barrier or emit `READY`. A pending managed signal at
+entry, in the Rust-to-helper
 handoff window, during normalization, or during the setpgid race records one
 `termination-requested` transition. Before a child exists it refuses without
 forking; after group confirmation and before `READY` it performs fixed
@@ -220,7 +228,23 @@ The exec-error pipe remains a single-record protocol. Its reader accepts only
 empty EOF or exactly one fixed failure record followed by EOF, and uses one
 additional byte only to distinguish overlong input. EOF after any failure
 record byte is partial. A held writer, second record, unknown record, timeout,
-or I/O failure is typed. Empty EOF is the only exec success.
+or I/O failure is typed. Empty EOF is exec success only when no managed signal
+has been observed before `EXECUTED`.
+
+From group confirmation through the pending `ExecResult`, including after
+`READY`, the supervisor may synchronously observe managed signals but must not
+forward one or start TERM/grace/KILL escalation. The first observation queues
+one closed `pre-exec-termination-requested` state; later managed signals
+coalesce into that same state. That state takes precedence over every
+exec-error outcome, including empty EOF after the child dies. The helper
+suppresses `EXECUTED` and every target terminal frame, performs immediate
+setup cleanup by killing the confirmed child group and consuming the direct
+child reap, emits typed `HELPER_PRE_EXEC_TERMINATION`, and exits nonzero. A
+cleanup failure preserves that first setup cause and hands remaining
+containment to the patched sandbox monitor. The Rust parent emits no
+target-executed audit event. Only after the helper has accepted empty EOF and
+successfully emitted `EXECUTED` may managed-signal forwarding or the normal
+grace policy begin.
 
 The status pipe is a distinct framed stream and never uses the exec-error
 pipe's one-byte overlong probe. Every frame has this fixed eight-byte header:
@@ -245,10 +269,12 @@ detects status overrun without consuming the first byte of a valid coalesced
 frame.
 
 A status writer completes each frame or returns typed timeout, `EPIPE`, or I/O
-failure. Empty exec-error EOF causes exactly one `EXECUTED` frame. Partial,
+failure. Empty exec-error EOF with no queued pre-exec termination causes
+exactly one `EXECUTED` frame. Partial,
 overlong, duplicate, malformed, unknown, held-open-writer, timeout, or I/O
 failure on either protocol is a typed helper failure at that protocol's
-closed stage.
+closed stage. A queued pre-exec termination overrides empty EOF and causes no
+`EXECUTED` frame.
 
 The supervisor remains alive after `EXECUTED`. It forwards only `SIGHUP`,
 `SIGINT`, `SIGTERM`, and `SIGQUIT` to the target process group. Case-deadline
@@ -290,8 +316,16 @@ fd, replaced stdin, held-open exec-error writer, partial/overlong/malformed
 exec-error and supervisor transport, helper EOF/crash before `EXECUTED`, fast
 same-exit-status target versus helper crash, closed status reader, inherited
 ignored or `SA_NOCLDWAIT` `SIGCHLD`, inherited blocked or ignored `SIGTERM`,
-target-ignore-TERM escalation with no case deadline, disallowed or lost signal
-forwarding, target-status mismatch, and any first-party Rust unsafe allowance.
+target-ignore-TERM escalation with no case deadline, forwarding or starting
+grace before `EXECUTED`, treating pre-exec empty EOF as success, publishing a
+false target-executed audit event, disallowed or lost signal forwarding,
+target-status mismatch, a per-launch signal guard, unlock-before-restoration,
+and any first-party Rust unsafe allowance.
+Deterministic post-barrier tests hold the child after `READY` and before exec,
+inject each managed signal, and require one queued setup termination,
+helper-owned group kill/reap, no grace, no `EXECUTED`, no target terminal
+frame, and no target-executed audit event. One case makes the child die so the
+exec-error reader receives empty EOF and proves the queued signal still wins.
 Crash before `READY`, after `READY`, after `EXECUTED`, during grace, and with
 long-lived descendants is covered by real patched-sandbox integration rather
 than a Cargo mock.
@@ -303,8 +337,8 @@ than a Cargo mock.
 | `Verified` | Consumed handle exclusively owns the provider `OwnedFd`. | Identity or argument failure drops the provider once; no channel or child exists. |
 | `HelperIdentity` | Exact immutable store path and every C source/derivation-dependency/output/protocol digest match. | Missing, wrong, copied, symlinked, runfiles, worktree, or rebound output drops the provider; no spawn. |
 | `Prepared` | Rust owns provider fd, status reader/writer, mapping configuration, and declared stdio. | `PARENT_PREPARE`; close provider and both channel ends without changing stdio ownership. |
-| `SignalHandoff` | Under the process-wide launch guard, the spawning thread captures its exact mask with safe `nix::sys::signal::SigSet`, blocks the full managed set, and keeps it blocked through `Command::spawn`. | `PARENT_SIGNAL_HANDOFF`; after either spawn result, restore the exact captured mask before releasing the guard. Capture, block, poisoned-guard, or restoration failure is typed, emits no raw OS text, and cannot report success. |
-| `Spawned` | `std::process::Child` becomes the sole supervisor wait owner. Still under the launch guard, Rust restores its spawning-thread mask, closes its mapped provider and helper-side status copies, and retains only the reader plus `Child`. | `PARENT_SPAWN` before a child exists or `PARENT_CLOSE` after spawn; restoration is still attempted, owned fds close, and the action returns nonzero without signaling a PID or PGID. |
+| `SignalHandoff` | Under the one process-wide launch guard, the spawning thread captures its exact mask with safe `nix::sys::signal::SigSet`, blocks the full managed set, and keeps it blocked through `Command::spawn`. | `PARENT_SIGNAL_HANDOFF`; after either spawn result, restore the exact captured mask before releasing the guard. Capture, block, poisoned-guard, or restoration failure is typed, emits no raw OS text, and cannot report success. A second launch cannot enter capture while the first is between block and restoration attempt. |
+| `Spawned` | `std::process::Child` becomes the sole supervisor wait owner. Still under the guard, Rust attempts exact spawning-thread mask restoration before unlock, then closes its mapped provider and helper-side status copies and retains only the reader plus `Child`. | `PARENT_SPAWN` before a child exists or `PARENT_CLOSE` after spawn; restoration is attempted for both outcomes. A restoration failure after successful spawn fails the action with the child still wait-owned; after failed spawn it preserves the spawn cause and attaches handoff cleanup. Owned fds close and Rust never signals a PID or PGID. |
 | `Ready` | The stateful decoder consumes one complete framed `READY`; supervisor remains wait-owned through `Child`. | `PARENT_READY` for EOF, exit, timeout, partial header/payload, buffer overflow, malformed header, duplicate, unknown, or out-of-order status; close owned fds and return the action nonzero so sandbox teardown owns survivors. |
 | `Executed` | The retained decoder consumes one complete framed `EXECUTED` after `READY`; no target status is inferred from helper wait status. | `PARENT_EXECUTED` for EOF, exit, timeout, malformed input, or any frame before `EXECUTED`; close and return nonzero without a Rust signal operation. |
 | `Terminal` | The decoder consumes one framed `EXITED` or `SIGNALED`, rejects retained or later trailing bytes, drains to EOF, then waits for the supervisor and verifies exact status equality. | `PARENT_TERMINAL`, `PARENT_WAIT`, or `PARENT_STATUS`; block publication, close owned fds, and return nonzero to the sandbox owner. |
@@ -319,10 +353,10 @@ than a Cargo mock.
 | `Normalized` | While the managed set remains blocked, the supervisor installs default dispositions, ignored `SIGPIPE`, waitable default `SIGCHLD`, and the synchronous consumer, then establishes the final mask. | `HELPER_SIGNAL_NORMALIZE`; close all owned fds; no fork. |
 | `ExecPipe` | Supervisor creates and owns exactly one `O_CLOEXEC|O_NONBLOCK` exec-error reader/writer pair and one close-on-exec group-confirmation pipe. | `HELPER_EXEC_PIPE`; close both pairs and prior resources; no fork. |
 | `Forked` | Exactly one target child exists. Supervisor owns child pid, exec-error reader, group-confirmation writer, and Rust status writer; child owns the two readers/writers required for setup, executable fd, and stdio copies. | `HELPER_FORK` before child creation, or a later typed failure followed by direct-child reap and closure of every supervisor fd. |
-| `GroupConfirmed` | Child calls `setpgid(0, 0)` and waits with managed signals blocked. Supervisor calls `setpgid(child, child)`, confirms `getpgid(child) == child` and no early exit, then releases the child setup barrier. Only now may it consume/forward managed signals or emit `READY`. | `HELPER_GROUP_ESRCH`, `HELPER_GROUP_EPERM`, `HELPER_GROUP_ERROR`, or `HELPER_GROUP_EARLY_EXIT`; close the barrier, kill the confirmed group when one exists, consume-reap the direct child, close every fd, and emit no `READY`. |
+| `GroupConfirmed` | Child calls `setpgid(0, 0)` and waits with managed signals blocked. Supervisor calls `setpgid(child, child)`, confirms `getpgid(child) == child` and no early exit, then releases the child setup barrier and may emit `READY`. It still cannot forward or escalate a managed signal before `EXECUTED`. | `HELPER_GROUP_ESRCH`, `HELPER_GROUP_EPERM`, `HELPER_GROUP_ERROR`, or `HELPER_GROUP_EARLY_EXIT`; close the barrier, kill the confirmed group when one exists, consume-reap the direct child, close every fd, and emit no `READY`. |
 | `ChildSetup` | After group confirmation, child restores its empty mask/default dispositions, installs 0/1/2, marks executable fd CLOEXEC, and closes supervisor-only fds. | Fixed `CHILD_GROUP`, `CHILD_SIGNAL`, `CHILD_STDIO`, `CHILD_CLOEXEC`, or `CHILD_CLOSE` exec-error record; bounded exact write; `_exit`. |
 | `Execveat` | Child calls `execveat` on the same open file description. Successful exec closes the error writer and executable fd. | Fixed `CHILD_EXECVEAT` record, including typed `ENOSYS`; bounded exact write; `_exit`; no fallback. |
-| `ExecResult` | Supervisor emits framed `READY` only after `GroupConfirmed`, then accepts only empty EOF or one complete child failure record under one absolute deadline. Empty EOF emits framed `EXECUTED`; every exec-error cursor and retry remains under that deadline. | `HELPER_EXEC_TIMEOUT`, `HELPER_EXEC_PARTIAL`, `HELPER_EXEC_OVERLONG`, `HELPER_EXEC_UNKNOWN`, `HELPER_EXEC_EPIPE`, or `HELPER_EXEC_IO`; kill and reap target; close reader/status. |
+| `ExecResult` | Supervisor emits framed `READY` only after `GroupConfirmed`, then accepts only empty EOF or one complete child failure record under one absolute deadline. Until `EXECUTED`, observed managed signals coalesce into one `pre-exec-termination-requested` state and are never forwarded or escalated. Empty EOF emits framed `EXECUTED` only when that state is absent; every exec-error cursor and retry remains under that deadline. | `HELPER_PRE_EXEC_TERMINATION` for any managed signal observed before `EXECUTED`: suppress `EXECUTED` and target terminal/audit publication, immediately kill and consume-reap the confirmed group as setup cleanup, then fail nonzero. Transport failures remain `HELPER_EXEC_TIMEOUT`, `HELPER_EXEC_PARTIAL`, `HELPER_EXEC_OVERLONG`, `HELPER_EXEC_UNKNOWN`, `HELPER_EXEC_EPIPE`, or `HELPER_EXEC_IO`; kill and reap target and close reader/status. Sandbox containment backstops incomplete cleanup. |
 | `Supervising` | Supervisor owns the live target group and status writer, forwards only the four allowed termination signals, and applies the fixed escalation on case expiry or external `SIGTERM`, including when no case deadline exists. | `HELPER_SIGNAL_FORWARD` or `HELPER_DEADLINE`; full grace and unconditional target-group kill when required, direct-child reap, typed failure. |
 | `Reaped` | Supervisor has exact terminal wait status and no live child; it writes the framed `EXITED` or `SIGNALED` terminal, closes the status writer, and mirrors that status. | `HELPER_WAIT`, `HELPER_REAP`, `HELPER_TERMINAL_WRITE`, or `HELPER_STATUS_MIRROR`; retain the first cause and close every remaining fd. |
 | `Closed` | No provider/private/pipe/status descriptor and no unreaped child remains. | `HELPER_CLEANUP` is attached to the first failure; cleanup is attempted on every reachable path. |
@@ -379,14 +413,20 @@ All absent, non-regular, non-executable, stale, wrong-digest, rebound-path,
 short-read, metadata-change, and exec-stage cases are injected. Host-backed
 conformance exercises the exact static supervisor against a declared
 first-party probe. It covers exact spawning-thread mask capture/block/restore
-after successful and failed spawn under the serialization guard; a
+after successful and failed spawn, capture/block/poison/restoration failures,
+and overlapping-launch restore-before-unlock mutations under the one
+serialization guard; a
 deterministic managed-`SIG_IGN` disposition refusal before fork; a
 deterministic `SIGTERM` delivery in the block-to-helper handoff window;
 closed-reader `EPIPE`; inherited ignored and `SA_NOCLDWAIT` `SIGCHLD`;
 inherited blocked `SIGTERM`; a target that ignores TERM with no case deadline;
 parent-first and child-first setpgid races; typed `ESRCH`, `EPERM`, other-error,
 mismatched-group, and early-child-exit cleanup; a pending
-signal before group confirmation; each exact `EINTR`, `EAGAIN`, short,
+signal before group confirmation; every managed signal at a deterministic
+post-`READY`, post-barrier, pre-exec hold, including child death with empty
+exec-pipe EOF, with one setup request, helper kill/reap, no grace, no
+`EXECUTED` or target terminal frame, and no target-executed audit event; each
+exact `EINTR`, `EAGAIN`, short,
 fragmented and coalesced status frame, partial single-record exec-error,
 duplicate, malformed, and held-writer transport boundary;
 a target that execs and exits immediately with the planted helper-crash

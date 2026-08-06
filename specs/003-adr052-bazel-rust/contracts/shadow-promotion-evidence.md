@@ -328,10 +328,15 @@ It also proves:
     `READY`/`EXECUTED`/terminal transport; fragmented/coalesced and
     malformed/duplicate/order results; held-open-writer, closed-reader `EPIPE`,
     exact partial-I/O, fast-same-status, waitable `SIGCHLD`, safe serialized
-    spawning-thread mask block/exact restoration, inherited managed `SIG_IGN`
+    spawning-thread mask capture/block/exact restoration after both spawn
+    outcomes, capture/block/poison/restoration failures, overlapping-launch
+    one-guard and restore-before-unlock mutations, inherited managed `SIG_IGN`
     refusal, handoff-window/normalization-time `SIGTERM`, child/supervisor
     setpgid confirmation races, typed `ESRCH`/`EPERM`/early-child-exit cleanup,
-    pending signal before confirmation, pre-`READY` termination ownership, and forwarding,
+    pending signal before confirmation, pre-`READY` termination ownership,
+    deterministic post-`READY` pre-exec signals, child-death empty-EOF
+    priority, one setup request, helper group kill/reap, no pre-exec
+    forwarding/grace/`EXECUTED`/target terminal/audit, and post-exec forwarding,
     no-deadline external-TERM escalation, target-ignore-TERM, absence of
     numeric Rust signaling; and every Rust-parent and C-supervisor
     ownership/closure/cleanup/wait/reap result; plus every parent/helper/child

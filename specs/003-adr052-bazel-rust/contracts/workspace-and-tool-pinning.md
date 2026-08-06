@@ -388,7 +388,9 @@ build/test-tooling derivation. It is not a Rust crate, is absent from
   `READY`/`EXECUTED`/`EXITED`/`SIGNALED` header/version/type/length shapes,
   27-byte retained decoder bound, signal allowlist, block-first initialization,
   ignored `SIGPIPE`, waitable default `SIGCHLD`, pre-`READY` termination
-  ownership, fixed external-TERM escalation, absolute-deadline transport, and
+  ownership, pre-`EXECUTED` queuing with empty-EOF priority and no false
+  execution/audit publication, fixed post-exec external-TERM escalation,
+  absolute-deadline transport, and
   protocol version.
 
 The safe typed Rust consumer embeds the exact helper store path from that Nix
@@ -400,19 +402,24 @@ verified descriptor is mapped. Committed records persist no complete Nix store
 path.
 
 Rust parent spawn and descriptor mapping use the exact reviewed safe
-`command-fds` pin from `packages/Cargo.lock`. Under one process-wide
+`command-fds` pin from `packages/Cargo.lock`. Under the one process-wide
 serialization guard, the spawning thread uses the already reviewed safe
 `nix::sys::signal::SigSet` API to capture its exact mask, block the full
-managed set before `Command::spawn`, and restore the captured mask after
-successful or failed spawn before unlocking. The C supervisor is the only
+managed set before `Command::spawn`, and attempt restoration of the captured
+mask after successful or failed spawn before unlocking. Injected
+capture/block/poison/restoration failures and overlapping launches prove the
+shared guard and restore-before-unlock. The C supervisor is the only
 fork owner. It is single-threaded and inherits that blocked set. Its first
 setup operation inspects every managed disposition and fails with the typed
 ignored-disposition recovery code before fork if any is `SIG_IGN`; only after
 verification may it normalize dispositions, install synchronous consumption,
 and establish the final mask. Parent and child both perform `setpgid`, the
-parent confirms the exact group before `READY` or signal consumption, and
+parent confirms the exact group before `READY`, and
 managed signals stay blocked through that confirmation. It uses the fixed
-protocol described in `runner-environment.md`. No Rust unsafe exception, Rust helper crate,
+protocol described in `runner-environment.md`: before `EXECUTED`, any managed
+signal becomes one typed helper-owned setup termination with no forwarding,
+grace, `EXECUTED`, target terminal, or target-executed audit event, including
+when the child dies with empty exec-pipe EOF. No Rust unsafe exception, Rust helper crate,
 runfiles/worktree helper, numeric Rust PID/PGID signal, or fallback exists.
 The patched Bazel PID-namespace monitor, not Rust, is the abnormal-teardown
 owner. Its patch, userspace ceiling, `pending-kernel-cleanup` quarantine,

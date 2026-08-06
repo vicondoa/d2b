@@ -256,7 +256,10 @@
   the pinned safe `command-fds` API while preserving stdio. Under a
   process-wide guard, its spawning thread uses reviewed safe
   `nix::sys::signal::SigSet` calls to block the full managed set before spawn
-  and restore its exact prior mask after successful and failed spawn. The
+  and attempt restoration of its exact prior mask after successful and failed
+  spawn before unlock. Capture, block, poisoned-guard, and restoration
+  failures plus an overlapping-launch mutation prove one shared guard and
+  restore-before-unlock. The
   single-threaded helper inherits that mask, first refuses any managed
   `SIG_IGN` before fork without reset-and-continue, then installs dispositions
   and synchronous consumption. It creates the close-on-exec child error and
@@ -272,7 +275,10 @@
   discrimination, ignored-disposition refusal, handoff-window/
   normalization-time/blocked SIGTERM, parent/child setpgid races,
   `ESRCH`/`EPERM`/early-child-exit cleanup, pending signal before group
-  confirmation, pre-`READY` ownership, no-deadline external-TERM
+  confirmation, pre-`READY` ownership, deterministic post-`READY` pre-exec
+  termination for every managed signal including child-death empty EOF,
+  helper group kill/reap, no pre-exec forwarding/grace, no false
+  `EXECUTED`/target terminal/audit event, no-deadline external-TERM
   escalation, target-ignore-TERM, and every Rust-parent and C-supervisor
   ownership/closure/cleanup/wait/reap failure are covered. The patched
   sandbox's fresh PID-namespace monitor owns abnormal teardown under one fixed
@@ -362,12 +368,15 @@
   Complete negative stderr is compared byte-exactly with independent literals
   through the injectable entrypoint. Adjacency rows are independently checked
   against physical lines; census/section/mismatch positions are actual;
-  oversized record/line inputs assert closed bounds. Actual temp-dir, path,
-  open3, and subprocess setup failures plus injected warnings execute through
-  `run_cli_entrypoint --self-test` after sentinel output and return status 1,
-  empty stdout, and only their distinct fixed setup-class diagnostics and
-  validator-specific remedies; no raw exception/path, sentinel, or task
-  rewrite appears. Actual unreadable-source and unsupported-argument subprocesses
+  oversized record/line inputs assert closed bounds. Temp-dir,
+  path-resolution, make-path, copy, mkdir, open3, and subprocess capture/wait
+  failures and warnings are injected at their actual seams and execute through
+  `run_cli_entrypoint --self-test` after sentinel output. No case supplies its
+  expected reason to a generic setup wrapper. Each returns status 1, empty
+  stdout, and only its seam-specific fixed setup diagnostic and remedy; no raw
+  exception/path, sentinel, or task rewrite appears. `self-test-contract` is
+  byte-tested only for invalid validator self-test behavior. Actual
+  unreadable-source and unsupported-argument subprocesses
   assert empty stdout and exact status 1 and 2. Diagnostics authorize only the fixed repository-relative source plus
   bounded numeric or closed `none`/`overflow` locators, never task/dependency
   IDs, owned paths, contents, or counts, and every code has one exact remedy

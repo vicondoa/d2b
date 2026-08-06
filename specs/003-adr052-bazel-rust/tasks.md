@@ -192,7 +192,12 @@ to the same file are explicitly sequential.
   stdin/stdout/stderr. Under an injected process-wide serialization guard,
   test the spawning thread's reviewed safe `nix::sys::signal::SigSet`
   capture, full-managed-set block before helper spawn, and exact prior-mask
-  restoration after successful and failed spawn before unlock. Add complete
+  restoration after successful and failed spawn before unlock. Inject capture
+  failure, block failure, poisoned-guard refusal, and restoration failure
+  after each spawn outcome. Add a deterministic overlapping-launch case and
+  mutations proving both launches share one process-wide guard, the second
+  cannot capture/block/spawn while the first is inside the handoff, and the
+  first attempts restoration before unlock. Add complete
   Rust-parent and C-supervisor stage-error and owner/closure tables. Inject
   missing/wrong/rebound helper identity,
   private-fd identity, descriptor absence, CLOEXEC, stdin, held-open child
@@ -210,7 +215,15 @@ to the same file are explicitly sequential.
   Rust-to-helper-handoff-window, normalization-time, and blocked `SIGTERM`,
   parent-first/child-first setpgid confirmation races, typed
   `ESRCH`/`EPERM`/other-error/group-mismatch/early-child-exit cleanup, a pending managed
-  signal before group confirmation, pre-`READY` termination ownership,
+  signal before group confirmation, pre-`READY` termination ownership, and a
+  deterministic barrier after `READY` but before exec for every managed
+  signal. Require one coalesced pre-exec termination request, no forwarding or
+  grace, immediate helper-owned confirmed-group kill/reap, typed
+  `HELPER_PRE_EXEC_TERMINATION`, no `EXECUTED`, no target terminal frame, and
+  no target-executed audit event. One case makes the child die with empty
+  exec-pipe EOF and proves the pending request still suppresses `EXECUTED`.
+  Add mutations for pre-exec forwarding, pre-exec escalation, empty-EOF
+  success, and false execution/audit publication,
   target-ignore-TERM escalation with no case deadline,
   signal-forwarding/status mismatch, spawn, close, cleanup, wait, and reap
   failures. The fixed protocol requires `READY`, then `EXECUTED`, then terminal
@@ -262,8 +275,9 @@ to the same file are explicitly sequential.
   tests, declare the complete spec003w0 xtask dependency set, retain a green xtask
   root without declaring not-yet-present modules, implement the
   dependency-leaf owner, safe command-fd mapping, typed supervisor protocol,
-  serialized safe signal-mask handoff, and cleanup behavior required for every
-  T005 test to pass. Add the already reviewed pinned `nix` 0.29 `signal`
+  one process-wide serialized safe signal-mask handoff with restore-before-unlock,
+  pre-exec signal queuing and helper-owned setup termination, and cleanup
+  behavior required for every T005 test to pass. Add the already reviewed pinned `nix` 0.29 `signal`
   feature to that leaf for safe `SigSet` mask operations; add no new signal
   FFI dependency. No Rust helper crate, runner `sys.rs`, raw-fork
   implementation, `pre_exec`, signal-disposition mutation, or first-party Rust
@@ -329,6 +343,11 @@ to the same file are explicitly sequential.
   group and child liveness before `READY` or signal consumption/forwarding.
   Test pending, handoff-window, normalization-time, and
   pre-group-confirmation `SIGTERM`, pre-`READY` termination ownership,
+  every managed signal at a deterministic post-`READY`, post-barrier,
+  pre-exec hold, including a child death that yields empty exec-pipe EOF,
+  one queued pre-exec request, helper-owned group kill/reap, typed setup
+  failure, and absence of `EXECUTED`, target terminal, grace, and
+  target-executed audit publication,
   parent-first/child-first confirmation races, typed
   `ESRCH`/`EPERM`/other-error/group-mismatch/early-child-exit cleanup, signal forwarding,
   external-SIGTERM escalation with no case deadline, target wait/reap and exact
@@ -540,11 +559,14 @@ to the same file are explicitly sequential.
   `EINTR`/`EAGAIN`/short/partial/overlong transport, fast-same-status
   target/helper discrimination, ignored/`SA_NOCLDWAIT` SIGCHLD normalization,
   serialized safe spawning-thread mask capture/block/restore after successful
-  and failed spawn, inherited-mask verification, managed-`SIG_IGN` refusal
+  and failed spawn, capture/block/poison/restoration failures and overlapping
+  restore-before-unlock mutation coverage, inherited-mask verification, managed-`SIG_IGN` refusal
   before fork, pending/handoff-window/normalization-time/blocked SIGTERM,
   parent-first/child-first setpgid races, typed
   `ESRCH`/`EPERM`/other-error/group-mismatch/early-child-exit cleanup, pending signal before
-  group confirmation, pre-`READY` ownership, no-deadline external-TERM escalation,
+  group confirmation, pre-`READY` ownership, deterministic post-`READY`
+  pre-exec managed-signal setup termination including child-death empty EOF,
+  no false `EXECUTED` or audit publication, no-deadline external-TERM escalation,
   target-ignore-TERM, allowed-signal forwarding, exact target status, and
   terminal child reap. Use reviewed C test tooling for disposition planting;
   add no Rust unsafe.
@@ -822,11 +844,14 @@ to the same file are explicitly sequential.
   coalesced reads and malformed/duplicate/order negatives, single-record
   exec-error EOF/overlong behavior, held-open/closed-reader/exact partial
   transport, helper crash versus fast same-status target, waitable SIGCHLD,
-  serialized safe mask handoff and exact restoration, inherited managed
+  serialized safe mask handoff, capture/block/poison/restoration failures,
+  overlapping-launch restore-before-unlock mutation, inherited managed
   `SIG_IGN` refusal, handoff-window and normalization-time SIGTERM,
   parent/child setpgid confirmation races, typed
   `ESRCH`/`EPERM`/early-child-exit cleanup, pending signal before group
-  confirmation, pre-`READY` termination ownership, full signal forwarding,
+  confirmation, pre-`READY` termination ownership, deterministic post-`READY`
+  pre-exec signal queuing, empty-EOF priority, helper kill/reap, no false
+  `EXECUTED`/target terminal/audit event, full post-`EXECUTED` signal forwarding,
   no-deadline external-TERM escalation,
   target-ignore-TERM, target-status mirroring, no-numeric-Rust-signal, and
   no-fallback mutations.
@@ -1045,9 +1070,11 @@ to the same file are explicitly sequential.
   the patched-sandbox mappings and live exact tests. Include exact rows for
   `PARENT_SIGNAL_HANDOFF`, `HELPER_SIGNAL_INHERITED_IGNORED`,
   `HELPER_SIGNAL_HANDOFF`, `HELPER_GROUP_ESRCH`, `HELPER_GROUP_EPERM`,
-  `HELPER_GROUP_ERROR`, and `HELPER_GROUP_EARLY_EXIT`; their remedies preserve safe Rust mask handoff,
+  `HELPER_GROUP_ERROR`, `HELPER_GROUP_EARLY_EXIT`, and
+  `HELPER_PRE_EXEC_TERMINATION`; their remedies preserve safe Rust mask handoff,
   fail-before-fork ignored-disposition refusal, and group confirmation before
-  `READY` without suggesting Rust unsafe or numeric signaling.
+  `READY`, then prohibit signal forwarding and grace until `EXECUTED`, without
+  suggesting Rust unsafe or numeric signaling.
   Load the not-yet-wired recovery module through a test-local path.
 - [ ] T068 [owner: spec003w2-recovery] [files:
   packages/d2b-bazel-runner/src/recovery.rs] [depends: T067] Implement the

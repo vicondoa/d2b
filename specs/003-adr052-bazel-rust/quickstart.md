@@ -35,7 +35,7 @@ perl specs/003-adr052-bazel-rust/tools/validate-plan-structure.pl
 Expected:
 
 ```text
-PASS: 60 validator self-tests; positive fixture accepted; 47 independent negative fixtures cover noncanonical unchecked-list forms, census declarations, task parsing, ownership, dependency, adjacency, section, cycle, and conflict fixtures rejected; full stderr byte-matched against independent literals; physical census/mismatch and adjacency rows and bounded numeric, none, and overflow locators verified; actual temp-dir, path, open3, and subprocess setup failures plus injected warnings emit only their distinct fixed setup diagnostics after sentinel output is discarded; actual unreadable-source status 1 and unsupported-argument status 2 subprocesses verified
+PASS: 67 validator self-tests; positive fixture accepted; 47 independent negative fixtures cover noncanonical unchecked-list forms, census declarations, task parsing, ownership, dependency, adjacency, section, cycle, and conflict fixtures rejected; full stderr byte-matched against independent literals; physical census/mismatch and adjacency rows and bounded numeric, none, and overflow locators verified; actual temp-dir, path-resolution, make-path, copy, mkdir, open3, and subprocess failures and warnings emit only their seam-specific fixed setup diagnostics after sentinel output is discarded; actual unreadable-source status 1 and unsupported-argument status 2 subprocesses verified; self-test-contract is reserved for validator contract failures
 PASS: 120 unique tasks with exact canonical headers and owned paths; dependencies exist and precede consumers; adjacency matches; graph is acyclic; concurrently ready ownership is disjoint
 ```
 
@@ -48,11 +48,14 @@ entrypoint. Adjacency cases independently scan the physical fixture row;
 census, section, and mismatch locations use actual offsets and ordinals.
 Oversized inputs assert the closed `overflow` bound. Actual task omitted from
 census and malformed/unbalanced census markers have isolated exact fixtures.
-Temp-dir, path, open3, and subprocess setup failures plus injected warning
-paths call `run_cli_entrypoint --self-test` after the runner writes sentinel
-stdout/stderr. They assert status 1, empty stdout, exact distinct fixed
-setup-class stderr with validator-specific remedies, and absence of sentinel,
-raw exception/path, or task-rewrite content. Actual
+Temp-dir, path-resolution, make-path, copy, mkdir, open3, and subprocess
+capture/wait failures and warnings are injected at their actual operation
+seams and call `run_cli_entrypoint --self-test` after the runner writes
+sentinel stdout/stderr. No case passes an expected reason to a generic setup
+wrapper. Each asserts status 1, empty stdout, exact seam-specific fixed
+setup-class stderr and remedy, and absence of sentinel, raw exception/path,
+or task-rewrite content. The exact `self-test-contract` case is limited to an
+invalid validator self-test result. Actual
 unreadable-source and unsupported-argument subprocesses assert empty stdout
 plus status 1 and 2.
 The only actionable location is the fixed repository-relative source plus a
@@ -1118,9 +1121,11 @@ Run targeted tests for:
   dependency-leaf crate; reviewed safe `command-fds` mapping of the consumed
   verified description to a private fd; preserved stdin/stdout/stderr; and
   exactly one Rust invocation site for the exact immutable Nix store path.
-  Under a process-wide guard, the spawning thread uses reviewed safe
+  Under the one process-wide guard, the spawning thread uses reviewed safe
   `nix::sys::signal::SigSet` calls to block the full managed set before spawn
-  and restore its exact mask after successful and failed spawn;
+  and attempts restoration of its exact mask after successful and failed
+  spawn before unlock. Capture, block, poisoned-guard, restoration, and
+  overlapping-launch mutations prove one shared guard and restore-before-unlock;
 - the dedicated tiny single-threaded C supervisor, statically built outside
   the product Rust workspace, with exact source, derivation-dependency,
   protocol, output NAR, executable, static ELF, and native-system hashes;
@@ -1134,7 +1139,10 @@ Run targeted tests for:
   pre-`READY` termination ownership, child stdio installation,
   executable-fd CLOEXEC, same-open-file-description
   `execveat(AT_EMPTY_PATH)`, explicit framed `READY` then `EXECUTED`,
-  continued supervision, fixed signal allowlist,
+  deterministic post-`READY` pre-exec signal queuing for every managed signal,
+  helper-owned group kill/reap including child-death empty EOF, no forwarding
+  or grace and no false `EXECUTED`/target terminal/audit publication before
+  exec, continued supervision, fixed post-`EXECUTED` signal allowlist,
   external-TERM escalation without a case deadline, terminal record,
   direct-child reap, and exact normal/signaled target status;
 - the patched Linux sandbox's fresh PID-namespace monitor as the sole abnormal
@@ -1164,8 +1172,10 @@ Run targeted tests for:
   descriptor absence,
   private-fd identity, helper crash/EOF before `EXECUTED`, fast target exit
   with the same status as the crash, inherited ignored/`SA_NOCLDWAIT`
-  `SIGCHLD`, safe mask restoration, inherited managed `SIG_IGN` refusal,
-  handoff-window/normalization-time/blocked SIGTERM, setpgid races and typed
+  `SIGCHLD`, capture/block/guard-poison/restoration failure coverage,
+  overlapping-launch restore-before-unlock mutation, inherited managed
+  `SIG_IGN` refusal, handoff-window/normalization-time/blocked SIGTERM,
+  post-`READY` pre-exec signals and empty-EOF priority, setpgid races and typed
   confirmation failures, target-ignore-TERM, signal
   forwarding, target-status mismatch, and every cleanup/wait/reap failure.
 

@@ -361,13 +361,15 @@ Acceptance:
    API invokes the dedicated static C `d2b-bazel-exec-supervisor` only from its
    exact immutable Nix store output, maps the consumed descriptor with the
    pinned reviewed safe `command-fds` API, preserves declared stdio, and under
-   a process-wide guard uses reviewed safe `nix::sys::signal::SigSet` calls to
+   the one process-wide guard uses reviewed safe `nix::sys::signal::SigSet` calls to
    block the full managed set before spawn and restore the spawning thread's
-   exact prior mask after every spawn result. Every first-party crate remains
+   exact prior mask after every spawn result before unlock. Every first-party crate remains
    at `unsafe_code = "forbid"`. The
    single-threaded supervisor performs the sole fork, proves exec with its
    close-on-exec error pipe and explicit `READY` then `EXECUTED` records,
-   remains alive to forward signals, and reaps and mirrors the target status.
+   turns any managed signal observed before `EXECUTED` into typed helper-owned
+   setup termination without false execution/audit publication, then remains
+   alive to forward post-`EXECUTED` signals and reap and mirror target status.
 10. JUnit, `test.log`, unsealed evidence, and exporter diagnostics use closed
     age/count retention classes whose expiry is enforced before publication.
 
@@ -489,7 +491,12 @@ Acceptance:
   `SIGHUP`/`SIGINT`/`SIGTERM`/`SIGQUIT` before starting the helper, and restore
   the exact captured mask after successful or failed spawn before releasing
   the guard. Capture, block, guard, and restoration failures MUST be typed and
-  fail closed; no Rust disposition mutation or new unsafe is permitted.
+  fail closed; restoration MUST be attempted before unlock for both spawn
+  outcomes. Deterministic tests MUST cover capture failure, block failure,
+  poisoned-guard refusal, restoration failure after spawn success and spawn
+  failure, and two overlapping launches. The overlap test and mutations MUST
+  prove there is one process-wide guard and that restoration is attempted
+  before unlock. No Rust disposition mutation or new unsafe is permitted.
   The supervisor MUST be a dedicated static Nix derivation built from one
   reviewed tiny single-threaded C source. It is build/test tooling, not a
   product Rust crate or product workspace member. Its committed identity MUST
@@ -547,8 +554,18 @@ Acceptance:
   exactly empty EOF or one complete exec-error record with exact bounded
   `EINTR`/`EAGAIN`/short/partial/overlong/held-writer handling under the same
   original absolute deadline, emit
-  framed `EXECUTED` only for empty close-on-exec EOF, and otherwise emit one typed
-  failure. It MUST remain alive after `EXECUTED`, forward only
+  framed `EXECUTED` only for empty close-on-exec EOF when no managed signal has
+  been observed, and otherwise emit one typed failure. From group confirmation
+  through pending `ExecResult`, including after `READY`, it MUST NOT forward a
+  managed signal or begin group escalation. The first observed managed signal
+  MUST queue one closed pre-exec termination request; later managed signals
+  MUST coalesce. That request MUST take precedence over empty exec-pipe EOF,
+  suppress `EXECUTED`, every target terminal record, and the target-executed
+  audit event, immediately kill and consume-reap the confirmed child group as
+  helper-owned setup cleanup, emit typed `HELPER_PRE_EXEC_TERMINATION`, and
+  leave incomplete containment to the patched sandbox monitor. Only after
+  `EXECUTED` may forwarding or grace begin. It MUST remain alive after
+  `EXECUTED`, forward only
   `SIGHUP`/`SIGINT`/`SIGTERM`/`SIGQUIT` to the target process group, preserve
   the existing deadline escalation, and run that full fixed
   TERM/grace/unconditional-KILL sequence on external `SIGTERM` even without a
@@ -569,12 +586,19 @@ Acceptance:
   exec-error transport, fragmented/coalesced status transport,
   malformed/duplicate/order status frames, closed-reader `EPIPE`, fast same-status target exit versus helper
   crash, inherited ignored/`SA_NOCLDWAIT` `SIGCHLD`, inherited blocked
-  `SIGTERM`, exact spawning-thread mask restoration after successful and
-  failed spawn, managed `SIG_IGN` refusal before fork, `SIGTERM` in the
+  `SIGTERM`, mask capture and block failures, poisoned-guard refusal, exact
+  spawning-thread mask restoration and injected restoration failure after
+  successful and failed spawn, overlapping-launch serialization and
+  restore-before-unlock mutations, managed `SIG_IGN` refusal before fork,
+  `SIGTERM` in the
   Rust-to-helper handoff window, parent-first/child-first setpgid
   races, `ESRCH`, `EPERM`, other setpgid error, group mismatch, early child exit, a pending managed
-  signal before group confirmation, pre-`READY` termination,
-  target-ignore-TERM without a case deadline, private-fd
+  signal before group confirmation, pre-`READY` termination, and every managed
+  signal at a deterministic post-`READY`, post-barrier, pre-exec hold. One
+  pre-exec case MUST make the child die with empty exec-pipe EOF; every case
+  MUST prove one queued setup termination, helper kill/reap, no forwarding or
+  grace, no `EXECUTED` or target terminal frame, and no target-executed audit.
+  Tests MUST also cover target-ignore-TERM without a case deadline, private-fd
   identity, descriptor absence, executable and auxiliary close-on-exec,
   unchanged stdin and split stdout/stderr, signal forwarding, exact target
   status, and every cleanup/wait/reap failure. Real patched-sandbox integration
@@ -1290,11 +1314,15 @@ Acceptance:
   coalesced framed status, malformed/duplicate/order status frames, fast
   same-status target exit, ignored/`SA_NOCLDWAIT` inherited `SIGCHLD`,
   safe spawning-thread mask capture/block/exact restoration after successful
-  and failed spawn, inherited managed `SIG_IGN` refusal, handoff-window and
+  and failed spawn, capture/block/poison/restoration failures,
+  overlapping-launch and restore-before-unlock mutations, inherited managed
+  `SIG_IGN` refusal, handoff-window and
   normalization-time `SIGTERM`, parent/child setpgid handshake and confirmation
   races, typed `ESRCH`/`EPERM`/early-exit cleanup, pending signal before group
-  confirmation, wrong pre-`READY` ownership, target-ignore-TERM with no
-  case deadline, wrong signal forwarding or target status, every Rust-parent
+  confirmation, wrong pre-`READY` ownership, forwarding or grace before
+  `EXECUTED`, pre-exec signal success on empty EOF, false `EXECUTED` or
+  target-executed audit publication, target-ignore-TERM with no case deadline,
+  wrong signal forwarding or target status, every Rust-parent
   and C-supervisor ownership/closure/cleanup/wait/reap failure, ambiguous
   numeric Rust signaling, reopen, `/proc`, fallback, any first-party Rust unsafe
   exception, blocking-wait, early-reap, shortened-grace, and conditional
@@ -1397,12 +1425,15 @@ Acceptance:
   `none`/`overflow` record and line locators, fixed class reason, fixed remedy,
   and the exact rerun command. Adjacency rows are independently checked
   against physical lines; census/section/mismatch locations are actual;
-  oversized inputs assert both bounds. Temp-dir, path, open3, and subprocess
-  setup failures and injected warnings run through
-  `run_cli_entrypoint --self-test` after writing sentinel stdout/stderr. Each
-  produces empty stdout, exact status 1, and only its distinct fixed
-  setup-class diagnostic and validator-specific remedy; raw exception/path
-  content and task-rewrite remedies are absent. Actual unreadable-source and
+  oversized inputs assert both bounds. Temp-dir, path-resolution, make-path,
+  copy, mkdir, open3, and subprocess capture/wait failures and warnings are
+  injected at their actual operation seams and run through
+  `run_cli_entrypoint --self-test` after writing sentinel stdout/stderr. No
+  case supplies an expected reason to a generic setup wrapper. Each produces
+  empty stdout, exact status 1, and only its seam-specific fixed setup
+  diagnostic and remedy; raw exception/path content and task-rewrite remedies
+  are absent. `self-test-contract` is reserved for an exact invalid validator
+  self-test contract case. Actual unreadable-source and
   unsupported-argument subprocesses produce empty stdout and exact status 1
   and 2. No task/dependency ID, owned path, contents, or count is rendered.
 - **SC-041**: `promotion-record.json` validates against the actual sealed

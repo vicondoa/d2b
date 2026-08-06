@@ -521,10 +521,13 @@ consuming public API. That safe Rust API consumes the capability by value and
 invokes `d2b-bazel-exec-supervisor` only through the exact immutable Nix store
 path installed as its toolchain artifact. The pinned reviewed `command-fds`
 API maps the consumed verified description onto a private fd while preserving
-declared stdin/stdout/stderr. Under a process-wide serialization guard, its
+declared stdin/stdout/stderr. Under the one process-wide serialization guard, its
 spawning thread uses the already reviewed safe `nix::sys::signal::SigSet` API
 to capture its exact mask, block the full managed set before spawn, and restore
 the captured mask after either spawn result before releasing the guard.
+Injected capture, block, poisoned-guard, and restoration failures plus a
+deterministically overlapping pair of launches prove failure closure, one
+shared guard, and restoration attempt before unlock for both spawn outcomes.
 Exactly one Rust invocation site is permitted, and every Rust crate retains
 `unsafe_code = "forbid"`.
 
@@ -546,18 +549,24 @@ close-on-exec group-confirmation pipe and forks exactly once. The child and
 supervisor both call `setpgid`; the child waits with managed signals blocked
 until the supervisor confirms the exact group and liveness. `ESRCH`, `EPERM`,
 mismatch, and early child exit are typed failures with cleanup. Only after
-confirmation may the supervisor release the child, consume/forward a managed
-signal, or emit `READY`. The child then resets signal state, installs declared
+confirmation may the supervisor release the child or emit `READY`. The child
+then resets signal state, installs declared
 stdio, sets the executable fd CLOEXEC, closes supervisor-only descriptors, and
 calls `execveat(private_fd, "", argv, envp, AT_EMPTY_PATH)`. Failure writes one
 fixed record with bounded `EINTR`/`EAGAIN`/short-write handling under the
 absolute deadline, then `_exit`s. There is no target path, reopen,
 `/proc/self/fd`, `fexecve`, or fallback.
 
-The supervisor emits framed `READY`, interprets only empty close-on-exec EOF
-as exec success, emits framed `EXECUTED`, remains alive, forwards the fixed
-termination-signal allowlist, waits and reaps, emits framed terminal status,
-and mirrors the exact target status. Case expiry and external `SIGTERM`,
+The supervisor emits framed `READY`. Until `EXECUTED`, managed signals
+coalesce into one pre-exec setup termination and are never forwarded or
+escalated. That request overrides empty close-on-exec EOF, suppresses
+`EXECUTED`, target terminal status, and target-executed audit publication,
+and makes the helper kill and consume-reap the confirmed group before typed
+`HELPER_PRE_EXEC_TERMINATION`; the sandbox backstops incomplete cleanup. With
+no queued request, empty EOF proves exec and the supervisor emits framed
+`EXECUTED`, remains alive, forwards the fixed termination-signal allowlist,
+waits and reaps, emits framed terminal status, and mirrors the exact target
+status. Case expiry and external `SIGTERM`,
 including with no case deadline, both run the complete fixed
 TERM/grace/unconditional-KILL sequence. Exec-error stays a single-record
 EOF/record/one-overlong-byte protocol. Status uses fixed magic, version, type,
@@ -576,7 +585,11 @@ reap failure. Deterministic plants cover an inherited managed `SIG_IGN`
 refusal, `SIGTERM` in the Rust-to-helper handoff window, parent-first,
 child-first setpgid races, `ESRCH`, `EPERM`, other setpgid errors, early child
 exit, and a pending managed signal before group confirmation. Disposition planting
-stays in reviewed C test tooling; no Rust unsafe is added. The closed
+stays in reviewed C test tooling. Deterministic barriers after `READY` and
+before exec inject every managed signal, including a child-death case with
+empty exec-pipe EOF, and prove one setup request, helper group kill/reap, no
+grace, no `EXECUTED` or target terminal, and no target-executed audit event.
+No Rust unsafe is added. The closed
 invocation-site census rejects every runfiles, worktree, Rust, Bazel, Make, or
 workflow invocation except the one typed consumer.
 
@@ -1021,12 +1034,15 @@ dependency ID, owned path, contents, count, operator-derived value, or raw OS
 text. Every code has one exact remedy and rerun. The injectable entrypoint
 supplies every fixture's complete byte comparison. Separate actual
 subprocesses prove unreadable-source status 1 and unsupported-argument status
-2 with empty stdout and byte-exact stderr. Actual temp-dir, path, open3, and
-subprocess setup failures plus injected warnings run through
-`run_cli_entrypoint --self-test` after writing sentinel stdout/stderr. Each
-returns status 1, discards all sentinel and raw exception/path content, and
-emits only its distinct fixed setup class and class-specific validator remedy,
-never a task-rewrite remedy. This remains a planning tool under
+2 with empty stdout and byte-exact stderr. Temp-dir, path-resolution,
+make-path, copy, mkdir, open3, and subprocess capture/wait failures and
+warnings are injected at their actual operation seams and run through
+`run_cli_entrypoint --self-test` after writing sentinel stdout/stderr. No case
+passes an expected reason to a generic wrapper. Each returns status 1,
+discards all sentinel and raw exception/path content, and emits only its
+seam-specific fixed setup class and remedy, never a task-rewrite remedy.
+`self-test-contract` is reserved for the exact invalid validator self-test
+case. This remains a planning tool under
 the specification directory and is not a repository gate.
 
 ## Decision 23: Disclose retained hybrid execution
@@ -1095,8 +1111,10 @@ for:
   execution regression, first-party Rust unsafe exception, stdin,
   private-fd identity, CLOEXEC, held-open/closed-reader/partial typed transport,
   helper crash/EOF before `EXECUTED`, fast same-status target, non-waitable
-  SIGCHLD, mask-handoff restoration, managed-`SIG_IGN` refusal,
-  handoff-window/blocked SIGTERM, setpgid confirmation/race failure,
+  SIGCHLD, mask capture/block/guard-poison/restoration, per-launch guard,
+  unlock-before-restoration, managed-`SIG_IGN` refusal,
+  handoff-window/blocked SIGTERM, setpgid confirmation/race failure, pre-exec
+  forwarding/grace, child-death empty-EOF success, false `EXECUTED` or audit,
   target-ignore-TERM, numeric Rust signal, signal/status,
   ownership/cleanup/wait/reap regression, patched-Bazel
   PID-namespace/teardown/ceiling identity, crash containment, capability, or
