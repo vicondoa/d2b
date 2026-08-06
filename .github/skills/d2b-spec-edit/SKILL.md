@@ -20,8 +20,8 @@ with normal communication:
 
 The caller supplies:
 
-- `FEATURE_DIR`: one existing directory under `specs/`, resolved to its
-  canonical path;
+- `FEATURE_DIR`: one existing directory under the repository's `specs/` tree,
+  resolved to its canonical path;
 - one batch containing the caller, reason, accepted decisions or clarification
   answers, target files, expected sections, and requested follow-up commands.
 
