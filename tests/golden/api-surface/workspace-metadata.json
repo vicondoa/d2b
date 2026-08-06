@@ -868,14 +868,14 @@
       "crate_name": "d2bd",
       "private_census": {
         "external_crates": 258,
-        "index_items": 41416,
-        "path_items": 21619
+        "index_items": 41418,
+        "path_items": 21620
       },
       "private_hidden_items": 356,
       "private_json_file": "d2bd.json",
       "public_census": {
         "external_crates": 258,
-        "index_items": 14582,
+        "index_items": 14583,
         "path_items": 20401
       },
       "public_json_file": "d2bd.json"
