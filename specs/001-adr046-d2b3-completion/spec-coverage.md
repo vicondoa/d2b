@@ -15,12 +15,18 @@ once.
 
 ### The binding rule
 
-The manifests are authoritative. For every work item, these fields are **carried verbatim**
-into `tasks.md` and into the implementing change; they are never paraphrased, condensed, or
-selectively quoted:
+The manifests are authoritative. A primary manifest-backed row in `tasks.md` carries the
+stable `workItemId` pointer and may carry a non-authoritative orientation label; it does not
+copy manifest fields into a second source of truth. Before dispatch, that id MUST resolve to
+exactly one complete 15-field object, retrieved verbatim and carried unchanged in the work
+prompt. Selecting, paraphrasing, or copying only some fields is not equivalent to retrieving
+the object:
 
 | Field | Obligation it creates |
 | --- | --- |
+| `workItemId` | The authoritative lookup key, which MUST resolve to exactly one object |
+| `specId`, `specPath` | The owning specification identity and canonical specification path |
+| `implementationState` | The manifest-recorded lifecycle state |
 | `detailedDesign` | What must be built, including every named constant, algorithm, and prohibition |
 | `validation` | The exact tests and evidence required before the item can be `Merged` |
 | `destination` | The exact file paths the item may write |
@@ -29,7 +35,9 @@ selectively quoted:
 | `dataMigration` | The migration disposition for state the item touches |
 | `currentSource` | The existing code the item adapts, replaces, or extracts from |
 | `reuseAction` | One closed scalar governing how existing code may be reused |
+| `reuseSource` | The canonical source from which reuse is permitted |
 | `dependencyOwner` | The item or owner that must land first |
+| `evidence` | The manifest-recorded evidence obligations and references |
 
 Retrieve any item's full text with:
 
@@ -166,14 +174,15 @@ Each spec's work items are listed in the per-wave sections below.
 
 ## Complete work-item enumeration (all 545)
 
-Grouped by wave, then spec. `Dest` is the first destination path; the manifest holds the
-full list plus `detailedDesign`, `validation`, `integration`, `dataMigration`,
-`currentSource`, and `removalProof` for each item. Those fields are the authoritative
-obligation and are carried verbatim into tasks.
+Grouped by wave, then spec. The work-item id is the sole authoritative pointer. `Orientation`
+is a non-authoritative navigation label: it may be path-shaped, partial, or omitted, and is
+never the manifest `destination` or a writable-path grant. The other columns are generated
+coverage displays. No displayed column substitutes for resolving the id and retrieving the
+complete 15-field manifest object.
 
 ### W0 - 8 work items
 
-| Work item | Spec | State | Reuse | Dest (first path) |
+| Work item | Spec | State | Reuse | Orientation (non-authoritative) |
 | --- | --- | --- | --- | --- |
 | `ADR046-api-001` | `resource-api-and-authorization` | Merged | adapt | `packages/d2b-contracts/proto/d2b-resource-v3.proto` |
 | `ADR046-api-002` | `resource-api-and-authorization` | Merged | adapt | `packages/d2b-resource-api/src/authz.rs` |
@@ -186,7 +195,7 @@ obligation and are carried verbatim into tasks.
 
 ### W1 - 6 work items
 
-| Work item | Spec | State | Reuse | Dest (first path) |
+| Work item | Spec | State | Reuse | Orientation (non-authoritative) |
 | --- | --- | --- | --- | --- |
 | `ADR046-bus-001` | `componentsession-and-bus` | Merged | adapt | `packages/d2b-bus/src/{router |
 | `ADR046-feasibility-001` | `feasibility-and-spikes` | Merged | adapt | `proofs/redb-resource-store-spike/` |
@@ -197,7 +206,7 @@ obligation and are carried verbatim into tasks.
 
 ### W2 - 19 work items
 
-| Work item | Spec | State | Reuse | Dest (first path) |
+| Work item | Spec | State | Reuse | Orientation (non-authoritative) |
 | --- | --- | --- | --- | --- |
 | `ADR046-primitives-001` | `primitive-resource-composition` | Merged | adapt | `packages/d2b-contracts/src/v3/host.rs` |
 | `ADR046-primitives-002` | `primitive-resource-composition` | Merged | adapt | `packages/d2b-provider-system-systemd/` |
@@ -221,7 +230,7 @@ obligation and are carried verbatim into tasks.
 
 ### W3 - 4 work items
 
-| Work item | Spec | State | Reuse | Dest (first path) |
+| Work item | Spec | State | Reuse | Orientation (non-authoritative) |
 | --- | --- | --- | --- | --- |
 | `ADR046-provider-001` | `provider-model-and-packaging` | Merged | adapt | `packages/d2b-contracts/src/v3/provider.rs` |
 | `ADR046-provider-002` | `provider-model-and-packaging` | Merged | adapt | one `packages/d2b-provider-<base>-<implementation>/` per Provider with mandatory src/ |
@@ -230,7 +239,7 @@ obligation and are carried verbatim into tasks.
 
 ### W4 - 31 work items
 
-| Work item | Spec | State | Reuse | Dest (first path) |
+| Work item | Spec | State | Reuse | Orientation (non-authoritative) |
 | --- | --- | --- | --- | --- |
 | `ADR046-core-001` | `core-controllers` | Merged | adapt | `packages/d2b-core-controller/src/{main |
 | `ADR046-credential-001` | `resources-credential` | Merged | adapt | `packages/d2b-contracts/src/v3/credential.rs` |
@@ -266,7 +275,7 @@ obligation and are carried verbatim into tasks.
 
 ### W5 - 146 work items
 
-| Work item | Spec | State | Reuse | Dest (first path) |
+| Work item | Spec | State | Reuse | Orientation (non-authoritative) |
 | --- | --- | --- | --- | --- |
 | `ADR046-audit-001` | `telemetry-audit-and-support` | Planned | adapt | `packages/d2b-audit/src/{hash_chain.rs |
 | `ADR046-audit-002` | `telemetry-audit-and-support` | Planned | adapt | `packages/d2b-resource-store-redb/src/audit.rs` |
@@ -417,7 +426,7 @@ obligation and are carried verbatim into tasks.
 
 ### W6 - 258 work items
 
-| Work item | Spec | State | Reuse | Dest (first path) |
+| Work item | Spec | State | Reuse | Orientation (non-authoritative) |
 | --- | --- | --- | --- | --- |
 | `ADR046-aca-001` | `provider-runtime-azure-container-apps` | Planned | replace | `packages/d2b-provider-runtime-azure-container-apps/src/controller.rs` |
 | `ADR046-aca-002` | `provider-runtime-azure-container-apps` | Planned | adapt | `packages/d2b-provider-runtime-azure-container-apps/src/deployment_service.rs` |
@@ -680,7 +689,7 @@ obligation and are carried verbatim into tasks.
 
 ### W7 - 73 work items
 
-| Work item | Spec | State | Reuse | Dest (first path) |
+| Work item | Spec | State | Reuse | Orientation (non-authoritative) |
 | --- | --- | --- | --- | --- |
 | `ADR046-delivery-001` | `validation-and-delivery` | Planned | adapt | `packages/xtask/src/heavy_gate.rs` |
 | `ADR046-delivery-002` | `validation-and-delivery` | Planned | adapt | `packages/xtask/src/delivery/snapshot.rs` |
@@ -955,10 +964,12 @@ Run this against `tasks.md` before implementation starts.
       entries into Markdown creates exactly the unchecked second source of truth that the
       plan refuses to create elsewhere. The rule is **never paraphrase**; referencing the
       authoritative bytes satisfies it, copying them does not improve on it.
-- [x] Each task lists its item's first destination path and points at the full list
-- [x] Each task records its `reuseAction`
-- [ ] Before starting a task, the implementer retrieves the full manifest entry and treats
-      `detailedDesign`, `validation`, and `removalProof` as the task definition
+- [x] Every primary manifest-backed task carries the authoritative `workItemId` pointer.
+      Any trailing path-shaped, reuse, or descriptive text is explicitly a
+      non-authoritative orientation label, not a copied manifest field or writable-path grant.
+- [ ] Before starting a task, the implementer resolves its id to exactly one complete
+      15-field manifest object, carries that object unchanged, and treats all of its fields as
+      the task definition; selecting only named fields is not equivalent
 - [x] `dependencyOwner` edges are represented: 91 of 545 manifest work items are marked
       free-to-start, while the full `tasks.md` census has 99 `[P]` tasks of 605 total
 - [x] Wave assignment matches the implementation graph, with no item moved between waves

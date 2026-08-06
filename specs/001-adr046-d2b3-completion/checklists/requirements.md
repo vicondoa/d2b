@@ -6,9 +6,9 @@
 
 ## Content Quality
 
-- [x] No implementation details (languages, frameworks, APIs)
-- [x] Focused on user value and business needs
-- [x] Written for non-technical stakeholders
+- [x] Technical detail is limited to binding architecture, security, delivery, and validation contracts
+- [x] Focused on operator value, user-visible outcomes, and program completion
+- [x] Written for the technical implementers and operators who must apply the contracts
 - [x] All mandatory sections completed
 
 ## Requirement Completeness
@@ -16,7 +16,7 @@
 - [x] No [NEEDS CLARIFICATION] markers remain
 - [x] Requirements are testable and unambiguous
 - [x] Success criteria are measurable
-- [x] Success criteria are technology-agnostic (no implementation details)
+- [x] Success criteria are buildable and name technical bindings where mechanical proof requires them
 - [x] All acceptance scenarios are defined
 - [x] Edge cases are identified
 - [x] Scope is clearly bounded
@@ -27,7 +27,7 @@
 - [x] All functional requirements have clear acceptance criteria
 - [x] User scenarios cover primary flows
 - [x] Feature meets measurable outcomes defined in Success Criteria
-- [x] No implementation details leak into specification
+- [x] Every implementation-specific detail is deliberate and traceable to a binding contract or fail-closed gate
 
 ## Validation Notes
 
@@ -87,12 +87,28 @@ companion with no compatible version at release time, an operator who cannot att
 recovery point, and a capability discovered to have no successor only after its superseded
 path is removed.
 
-Revised shape: 45 functional requirements, 26 success criteria, 4 prioritized user stories,
-15 edge cases, 9 key entities, 12 assumptions, 5 recorded clarifications. Verified free of
-duplicate requirement ids, placeholder tokens, banned dash codepoints, and statements
-contradicted by the clarifications.
+Shape at the end of Iteration 3: 45 functional requirements, 26 success criteria, 4
+prioritized user stories, 15 edge cases, 9 key entities, 12 assumptions, and 5 recorded
+clarifications. Those counts are an historical checkpoint and are superseded by Iteration 4.
+At that checkpoint the artifacts were verified free of duplicate requirement ids,
+placeholder tokens, banned dash codepoints, and statements contradicted by the
+clarifications.
 
 Ready for `/speckit-plan`.
+
+**Iteration 4 (2026-08-06, current artifact reconciliation)** - all 16 items pass under the
+completion-program scope reflected by the current specification. The current shape is **74
+functional requirements and 34 buildable success criteria**. The earlier 45/26 shape records
+the end of Iteration 3; it is not the current census.
+
+This is a technical completion and delivery contract, not a technology-agnostic greenfield
+product brief. Exact APIs, paths, commands, protocol fields, timing bounds, candidate
+bindings, and validation procedures are present where removing them would make an
+architecture, security, or fail-closed delivery obligation ambiguous or untestable. The
+content-quality checks above therefore reject accidental or gratuitous implementation detail,
+while accepting the deliberate technical contract detail required by the current 74 FRs and
+34 SCs. This reconciliation changes planning prose only and records no implementation
+completion.
 
 ## Notes
 

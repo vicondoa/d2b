@@ -1103,7 +1103,9 @@ The boundary is explicit so that a delegated obligation is never mistaken for a 
 | The 129 frozen decisions | `decision-register` | **Binding.** See FR-047. |
 
 Delegation is not omission. Every delegated obligation is enumerated in
-[spec-coverage.md](./spec-coverage.md) and carried verbatim into tasks.
+[spec-coverage.md](./spec-coverage.md). Each manifest-backed task carries the authoritative
+`workItemId` pointer; dispatch resolves that id to one complete 15-field manifest object and
+carries the object verbatim rather than copying selected fields into the task row.
 
 ## Success Criteria *(mandatory)*
 
