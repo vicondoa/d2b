@@ -231,7 +231,7 @@ scan_dashes() {
       | { while IFS= read -r -d '' f; do files+=("$f"); done; }
   else
     (cd "$root" && find . -name .git -prune -o -name target -prune -o -type f -print0) \
-      | { while IFS= read -r -d '' f; do files+=("$f"); done; }
+      | { while IFS= read -r -d '' f; do files+=("${f#./}"); done; }
   fi
   enum_status=${PIPESTATUS[0]}
   set -e
