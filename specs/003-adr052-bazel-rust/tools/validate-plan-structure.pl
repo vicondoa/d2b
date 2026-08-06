@@ -64,6 +64,14 @@ my %specific_remedy = (
         'Provide at least one canonical unchecked task record before the dependency graph.',
     'parse:unsupported-arguments' =>
         'Invoke the validator with no argument or with only --self-test.',
+    'parse:self-test-setup-temp-dir' =>
+        'Correct validator self-test temporary-directory setup; do not rewrite tasks.md.',
+    'parse:self-test-setup-path' =>
+        'Correct validator self-test executable-path setup; do not rewrite tasks.md.',
+    'parse:self-test-setup-open3' =>
+        'Correct validator self-test process-creation setup; do not rewrite tasks.md.',
+    'parse:self-test-setup-subprocess' =>
+        'Correct validator self-test subprocess-capture setup; do not rewrite tasks.md.',
     'task_id:duplicate-task' =>
         'Assign every task one unique canonical TNNN identifier and update its dependency row.',
 );
@@ -88,6 +96,10 @@ my %known_reason = (
                 diagnostic-contract
                 unsupported-arguments
                 self-test-contract
+                self-test-setup-temp-dir
+                self-test-setup-path
+                self-test-setup-open3
+                self-test-setup-subprocess
             )
     },
     task_id => {
@@ -189,13 +201,28 @@ sub read_repository_file {
 
 sub run_subprocess {
     my (@command) = @_;
+    if (!@command) {
+        die D2B::Spec003::SelfTestSetupFailure->new(
+            'self-test-setup-subprocess'
+        );
+    }
     my $stderr_fh = gensym;
-    my $pid = open3(
-        my $stdin_fh,
-        my $stdout_fh,
-        $stderr_fh,
-        @command
-    );
+    my ($pid, $stdin_fh, $stdout_fh);
+    my $opened = eval {
+        local $SIG{__WARN__} = sub { die $_[0]; };
+        $pid = open3(
+            $stdin_fh,
+            $stdout_fh,
+            $stderr_fh,
+            @command
+        );
+        1;
+    };
+    if (!$opened) {
+        die D2B::Spec003::SelfTestSetupFailure->new(
+            'self-test-setup-open3'
+        );
+    }
     close $stdin_fh;
     local $/;
     my $stdout = <$stdout_fh> // '';
@@ -213,11 +240,17 @@ sub run_subprocess {
 
 sub resolve_self_test_path {
     my ($path) = @_;
-    die "invalid self-test path"
-        if !defined($path) || $path eq '';
+    if (!defined($path) || $path eq '') {
+        die D2B::Spec003::SelfTestSetupFailure->new(
+            'self-test-setup-path'
+        );
+    }
     my $resolved = File::Spec->rel2abs($path);
-    die "unresolved self-test path"
-        if !defined($resolved) || $resolved eq '';
+    if (!defined($resolved) || $resolved eq '') {
+        die D2B::Spec003::SelfTestSetupFailure->new(
+            'self-test-setup-path'
+        );
+    }
     return $resolved;
 }
 
@@ -311,6 +344,41 @@ sub self_test_contract_stderr {
         error_record('parse', 'self-test-contract'),
         'tasks'
     );
+}
+
+sub self_test_setup_stderr {
+    my ($reason) = @_;
+    return render_error(
+        error_record('parse', $reason),
+        'tasks'
+    );
+}
+
+{
+    package D2B::Spec003::SelfTestSetupFailure;
+
+    sub new {
+        my ($class, $reason) = @_;
+        return bless { reason => $reason }, $class;
+    }
+
+    sub reason {
+        my ($self) = @_;
+        return $self->{reason};
+    }
+}
+
+sub run_self_test_setup {
+    my ($reason, $operation) = @_;
+    my $completed = eval {
+        local $SIG{__WARN__} = sub { die $_[0]; };
+        $operation->();
+        1;
+    };
+    if (!$completed) {
+        die D2B::Spec003::SelfTestSetupFailure->new($reason);
+    }
+    return;
 }
 
 sub parse_owned_path {
@@ -1156,8 +1224,13 @@ sub run_self_test_entrypoint {
         1;
     };
     if (!$completed) {
+        my $failure = $@;
+        my $failure_stderr =
+            ref($failure) eq 'D2B::Spec003::SelfTestSetupFailure'
+            ? self_test_setup_stderr($failure->reason())
+            : self_test_contract_stderr();
         ${$args{stdout}} = '';
-        ${$args{stderr}} = self_test_contract_stderr();
+        ${$args{stderr}} = $failure_stderr;
         return 1;
     }
     ${$args{stdout}} .= $captured_stdout;
@@ -1429,7 +1502,13 @@ RERUN D2B-SPEC003-PLAN-PARSE perl specs/003-adr052-bazel-rust/tools/validate-pla
 REMEDY D2B-SPEC003-PLAN-READ Restore the repository-relative source and make it readable.
 RERUN D2B-SPEC003-PLAN-READ perl specs/003-adr052-bazel-rust/tools/validate-plan-structure.pl --self-test && perl specs/003-adr052-bazel-rust/tools/validate-plan-structure.pl
 |;
-    my $unreadable_root = tempdir(CLEANUP => 1);
+    my $unreadable_root;
+    run_self_test_setup(
+        'self-test-setup-temp-dir',
+        sub {
+            $unreadable_root = tempdir(CLEANUP => 1);
+        }
+    );
     my $unreadable_tools =
         File::Spec->catdir($unreadable_root, 'tools');
     make_path($unreadable_tools);
@@ -1459,10 +1538,28 @@ RERUN D2B-SPEC003-PLAN-READ perl specs/003-adr052-bazel-rust/tools/validate-plan
         return 1;
     }
 
-    my $self_test_contract_expected = self_test_contract_stderr();
+    my %setup_failure_expected = (
+        'self-test-setup-temp-dir' => q|FAIL D2B-SPEC003-PLAN-PARSE source=specs/003-adr052-bazel-rust/tasks.md record=none line=none reason=self-test-setup-temp-dir
+REMEDY D2B-SPEC003-PLAN-PARSE Correct validator self-test temporary-directory setup; do not rewrite tasks.md.
+RERUN D2B-SPEC003-PLAN-PARSE perl specs/003-adr052-bazel-rust/tools/validate-plan-structure.pl --self-test && perl specs/003-adr052-bazel-rust/tools/validate-plan-structure.pl
+|,
+        'self-test-setup-path' => q|FAIL D2B-SPEC003-PLAN-PARSE source=specs/003-adr052-bazel-rust/tasks.md record=none line=none reason=self-test-setup-path
+REMEDY D2B-SPEC003-PLAN-PARSE Correct validator self-test executable-path setup; do not rewrite tasks.md.
+RERUN D2B-SPEC003-PLAN-PARSE perl specs/003-adr052-bazel-rust/tools/validate-plan-structure.pl --self-test && perl specs/003-adr052-bazel-rust/tools/validate-plan-structure.pl
+|,
+        'self-test-setup-open3' => q|FAIL D2B-SPEC003-PLAN-PARSE source=specs/003-adr052-bazel-rust/tasks.md record=none line=none reason=self-test-setup-open3
+REMEDY D2B-SPEC003-PLAN-PARSE Correct validator self-test process-creation setup; do not rewrite tasks.md.
+RERUN D2B-SPEC003-PLAN-PARSE perl specs/003-adr052-bazel-rust/tools/validate-plan-structure.pl --self-test && perl specs/003-adr052-bazel-rust/tools/validate-plan-structure.pl
+|,
+        'self-test-setup-subprocess' => q|FAIL D2B-SPEC003-PLAN-PARSE source=specs/003-adr052-bazel-rust/tasks.md record=none line=none reason=self-test-setup-subprocess
+REMEDY D2B-SPEC003-PLAN-PARSE Correct validator self-test subprocess-capture setup; do not rewrite tasks.md.
+RERUN D2B-SPEC003-PLAN-PARSE perl specs/003-adr052-bazel-rust/tools/validate-plan-structure.pl --self-test && perl specs/003-adr052-bazel-rust/tools/validate-plan-structure.pl
+|,
+    );
     my @setup_failure_cases = (
         [
             'temp-dir',
+            'self-test-setup-temp-dir',
             sub {
                 tempdir(
                     DIR => File::Spec->catfile(
@@ -1474,12 +1571,14 @@ RERUN D2B-SPEC003-PLAN-READ perl specs/003-adr052-bazel-rust/tools/validate-plan
         ],
         [
             'path',
+            'self-test-setup-path',
             sub {
                 resolve_self_test_path(undef);
             },
         ],
         [
             'open3',
+            'self-test-setup-open3',
             sub {
                 run_subprocess(
                     File::Spec->catfile(
@@ -1491,29 +1590,49 @@ RERUN D2B-SPEC003-PLAN-READ perl specs/003-adr052-bazel-rust/tools/validate-plan
         ],
         [
             'subprocess',
+            'self-test-setup-subprocess',
             sub {
                 run_subprocess();
             },
         ],
     );
     for my $setup_case (@setup_failure_cases) {
-        my ($name, $failure) = @$setup_case;
-        my ($failure_stdout, $failure_stderr) = ('', '');
-        my $failure_status = run_self_test_entrypoint(
-            runner => sub {
-                $failure->();
-                return 0;
-            },
-            stdout => \$failure_stdout,
-            stderr => \$failure_stderr,
+        my ($name, $reason, $actual_failure) = @$setup_case;
+        my @failure_modes = (
+            [ 'die',  $actual_failure ],
+            [
+                'warn',
+                sub {
+                    warn
+                        "raw $name setup warning at /tmp/d2b-sensitive-self-test-path\n";
+                },
+            ],
         );
-        if (
-            $failure_status != 1
-            || $failure_stdout ne ''
-            || $failure_stderr ne $self_test_contract_expected
-        ) {
-            $$self_stderr .= self_test_contract_stderr();
-            return 1;
+        for my $failure_mode (@failure_modes) {
+            my ($mode, $failure) = @$failure_mode;
+            my ($failure_stdout, $failure_stderr) = ('', '');
+            my $failure_status = run_cli_entrypoint(
+                argv => ['--self-test'],
+                self_test_runner => sub {
+                    my ($runner_stdout, $runner_stderr) = @_;
+                    $$runner_stdout .=
+                        "sentinel $name $mode stdout /tmp/d2b-sensitive-self-test-path\n";
+                    $$runner_stderr .=
+                        "sentinel $name $mode stderr /tmp/d2b-sensitive-self-test-path\n";
+                    run_self_test_setup($reason, $failure);
+                    return 0;
+                },
+                stdout => \$failure_stdout,
+                stderr => \$failure_stderr,
+            );
+            if (
+                $failure_status != 1
+                || $failure_stdout ne ''
+                || $failure_stderr ne $setup_failure_expected{$reason}
+            ) {
+                $$self_stderr .= self_test_contract_stderr();
+                return 1;
+            }
         }
     }
 
@@ -1574,15 +1693,15 @@ RERUN D2B-SPEC003-PLAN-TASK-ID perl specs/003-adr052-bazel-rust/tools/validate-p
     }
 
     $$self_stdout .=
-        'PASS: 56 validator self-tests; positive fixture accepted; '
+        'PASS: 60 validator self-tests; positive fixture accepted; '
         . '47 independent negative fixtures cover noncanonical unchecked-list forms, census declarations, '
         . 'task parsing, ownership, dependency, adjacency, section, cycle, '
         . 'and conflict fixtures rejected; full stderr byte-matched against '
         . 'independent literals; physical census/mismatch and adjacency rows '
         . 'and bounded numeric, none, and overflow locators verified; actual '
-        . 'temp-dir, path, open3, '
-        . 'and subprocess setup failures emit only the fixed self-test-contract '
-        . 'diagnostic; actual unreadable-source status 1 and unsupported-argument '
+        . 'temp-dir, path, open3, and subprocess setup failures plus injected '
+        . 'warnings emit only their distinct fixed setup diagnostics after '
+        . 'sentinel output is discarded; actual unreadable-source status 1 and unsupported-argument '
         . "status 2 subprocesses verified\n";
     return 0;
 }

@@ -400,19 +400,31 @@ verified descriptor is mapped. Committed records persist no complete Nix store
 path.
 
 Rust parent spawn and descriptor mapping use the exact reviewed safe
-`command-fds` pin from `packages/Cargo.lock`. The C supervisor is the only
-fork owner. It is single-threaded, creates the close-on-exec child exec-error
-pipe, blocks managed signals before installing normalization and synchronous
-consumption, establishes the final mask afterward, and uses the fixed
-protocol described in
-`runner-environment.md`. No Rust unsafe exception, Rust helper crate,
+`command-fds` pin from `packages/Cargo.lock`. Under one process-wide
+serialization guard, the spawning thread uses the already reviewed safe
+`nix::sys::signal::SigSet` API to capture its exact mask, block the full
+managed set before `Command::spawn`, and restore the captured mask after
+successful or failed spawn before unlocking. The C supervisor is the only
+fork owner. It is single-threaded and inherits that blocked set. Its first
+setup operation inspects every managed disposition and fails with the typed
+ignored-disposition recovery code before fork if any is `SIG_IGN`; only after
+verification may it normalize dispositions, install synchronous consumption,
+and establish the final mask. Parent and child both perform `setpgid`, the
+parent confirms the exact group before `READY` or signal consumption, and
+managed signals stay blocked through that confirmation. It uses the fixed
+protocol described in `runner-environment.md`. No Rust unsafe exception, Rust helper crate,
 runfiles/worktree helper, numeric Rust PID/PGID signal, or fallback exists.
 The patched Bazel PID-namespace monitor, not Rust, is the abnormal-teardown
 owner. Its patch, userspace ceiling, `pending-kernel-cleanup` quarantine,
 no-success/no-reuse rules, canonical monitor identity digest, and ordinary
 plus beyond-ceiling crash plants are bound by
 `tests/golden/bazel-toolchain.json`. The patched sandbox owns every
-`SANDBOX_*` renderer and live exact test. A closed invocation-site policy
+`SANDBOX_*` renderer and live exact test. Its pending-cleanup diagnostic links
+to the governed
+`docs/contributing/critical-subsystems.md#bazel-pending-kernel-cleanup-quarantine`
+runbook. The original live monitor remains sole wait owner through consuming
+reap; no reboot, retry-before-release, replacement waiter, or manual release
+exists. A closed invocation-site policy
 permits exactly one Rust source location to spawn this exact output and rejects
 every other Rust, Bazel, Make, workflow, or documentation command site.
 

@@ -521,8 +521,12 @@ consuming public API. That safe Rust API consumes the capability by value and
 invokes `d2b-bazel-exec-supervisor` only through the exact immutable Nix store
 path installed as its toolchain artifact. The pinned reviewed `command-fds`
 API maps the consumed verified description onto a private fd while preserving
-declared stdin/stdout/stderr. Exactly one Rust invocation site is permitted,
-and every Rust crate retains `unsafe_code = "forbid"`.
+declared stdin/stdout/stderr. Under a process-wide serialization guard, its
+spawning thread uses the already reviewed safe `nix::sys::signal::SigSet` API
+to capture its exact mask, block the full managed set before spawn, and restore
+the captured mask after either spawn result before releasing the guard.
+Exactly one Rust invocation site is permitted, and every Rust crate retains
+`unsafe_code = "forbid"`.
 
 The helper is one tiny single-threaded C source, statically built as a
 dedicated build/test-tooling Nix derivation and excluded from the product Rust
@@ -531,13 +535,19 @@ closure, protocol, output NAR, executable, static ELF, and native-system
 hashes. Missing, wrong-output, copied, symlinked, dynamic, runfiles, and
 worktree paths refuse.
 
-The supervisor first blocks the complete managed signal set. While it remains
-blocked, the helper installs default dispositions, ignored `SIGPIPE`, waitable
-`SIGCHLD`, and synchronous consumption; only then does it establish the final
-mask. Pending-at-entry and normalization-time `SIGTERM` are consumed into the
-supervisor-owned pre-`READY` termination path. It creates one nonblocking
-close-on-exec child exec-error pipe and forks exactly once. The
-child establishes the target group, resets signal state, installs declared
+The supervisor inherits the complete managed signal set blocked. Its first
+setup operation observes every managed disposition; any inherited `SIG_IGN`
+produces the typed ignored-disposition recovery code and fails before fork
+without resetting and continuing. Only after verifying non-ignored
+dispositions and the complete inherited mask does it install defaults,
+ignored `SIGPIPE`, waitable `SIGCHLD`, synchronous consumption, and the final
+mask. It creates one nonblocking close-on-exec child exec-error pipe plus a
+close-on-exec group-confirmation pipe and forks exactly once. The child and
+supervisor both call `setpgid`; the child waits with managed signals blocked
+until the supervisor confirms the exact group and liveness. `ESRCH`, `EPERM`,
+mismatch, and early child exit are typed failures with cleanup. Only after
+confirmation may the supervisor release the child, consume/forward a managed
+signal, or emit `READY`. The child then resets signal state, installs declared
 stdio, sets the executable fd CLOEXEC, closes supervisor-only descriptors, and
 calls `execveat(private_fd, "", argv, envp, AT_EMPTY_PATH)`. Failure writes one
 fixed record with bounded `EINTR`/`EAGAIN`/short-write handling under the
@@ -560,11 +570,15 @@ Rust-parent and C-supervisor stage-error and owner/closure tables cover every
 path. Tests distinguish fast same-status target exit from helper crash or EOF
 before `EXECUTED` and cover held-open writers, closed-reader `EPIPE`, partial
 and malformed transport, inherited ignored/`SA_NOCLDWAIT` SIGCHLD,
-blocked/ignored SIGTERM, target-ignore-TERM, private-fd identity, descriptor
-absence, stdio, CLOEXEC, signal forwarding, exact status, and every cleanup,
-wait, and reap failure. The closed invocation-site census rejects every
-runfiles, worktree, Rust, Bazel, Make, or workflow invocation except the one
-typed consumer.
+blocked SIGTERM, target-ignore-TERM, private-fd identity, descriptor absence,
+stdio, CLOEXEC, signal forwarding, exact status, and every cleanup, wait, and
+reap failure. Deterministic plants cover an inherited managed `SIG_IGN`
+refusal, `SIGTERM` in the Rust-to-helper handoff window, parent-first,
+child-first setpgid races, `ESRCH`, `EPERM`, other setpgid errors, early child
+exit, and a pending managed signal before group confirmation. Disposition planting
+stays in reviewed C test tooling; no Rust unsafe is added. The closed
+invocation-site census rejects every runfiles, worktree, Rust, Bazel, Make, or
+workflow invocation except the one typed consumer.
 
 The supervisor is the normal teardown owner, not the final crash boundary.
 Every governed action already passes through the exact patched Bazel Linux
@@ -574,19 +588,27 @@ on setup/action exit, including Rust-parent or supervisor crash, it
 namespace-kills every other member and makes nonblocking reap progress. One
 fixed 10,000 ms ceiling bounds only userspace escalation and the
 close-or-quarantine decision. If PID 1 is not observably reaped, outer
-`linux-sandbox` remains the wait owner and enters typed
+`linux-sandbox` remains live as the sole wait owner and enters typed
 `pending-kernel-cleanup`; sandbox and outputs cannot succeed or be reused.
-Eventual consuming reap releases quarantine but never makes the action
-successful. Rust closes and fails the action; it never signals a numeric PID
-or PGID.
+Only that original monitor's consuming reap releases quarantine, and it never
+makes the action successful. The fixed pending diagnostic links to
+`docs/contributing/critical-subsystems.md#bazel-pending-kernel-cleanup-quarantine`,
+whose implementation task requires inspecting the typed state, draining new
+worker/provider admission without terminating the monitor, waiting for and
+confirming its fixed consuming-reap release, and only then rerunning. Reboot,
+retry-before-release, replacement wait ownership, and manual release are
+forbidden. Rust closes and fails the action; it never signals a numeric PID or
+PGID.
 
 Cargo tests inject transport, process, and containment mocks. They do not
 prove the kernel boundary. A real patched-sandbox integration crashes the
 helper before `READY`, after `READY`, after `EXECUTED`, during grace, and with
 direct and double-forked long-lived descendants. A deterministic
 beyond-ceiling plant proves pending cleanup, owned quarantine, no false reap,
-no success/reuse, and eventual consuming reap. PID-namespace removal,
-teardown-patch removal, ceiling/quarantine changes, false reap,
+no success/reuse, and eventual consuming reap by the same original monitor
+after the planted stall self-resolves. PID-namespace removal, teardown-patch
+removal, ceiling/quarantine changes, false reap, reboot remedy,
+retry-before-release, manual release, replacement waiter,
 success-after-quarantine, reuse, and strategy fallback are separate failing
 mutations.
 
@@ -1000,8 +1022,11 @@ text. Every code has one exact remedy and rerun. The injectable entrypoint
 supplies every fixture's complete byte comparison. Separate actual
 subprocesses prove unreadable-source status 1 and unsupported-argument status
 2 with empty stdout and byte-exact stderr. Actual temp-dir, path, open3, and
-subprocess setup failures run through the guard and emit only the fixed
-self-test-contract diagnostic. This remains a planning tool under
+subprocess setup failures plus injected warnings run through
+`run_cli_entrypoint --self-test` after writing sentinel stdout/stderr. Each
+returns status 1, discards all sentinel and raw exception/path content, and
+emits only its distinct fixed setup class and class-specific validator remedy,
+never a task-rewrite remedy. This remains a planning tool under
 the specification directory and is not a repository gate.
 
 ## Decision 23: Disclose retained hybrid execution
@@ -1070,8 +1095,10 @@ for:
   execution regression, first-party Rust unsafe exception, stdin,
   private-fd identity, CLOEXEC, held-open/closed-reader/partial typed transport,
   helper crash/EOF before `EXECUTED`, fast same-status target, non-waitable
-  SIGCHLD, blocked/ignored SIGTERM, target-ignore-TERM, numeric Rust signal,
-  signal/status, ownership/cleanup/wait/reap regression, patched-Bazel
+  SIGCHLD, mask-handoff restoration, managed-`SIG_IGN` refusal,
+  handoff-window/blocked SIGTERM, setpgid confirmation/race failure,
+  target-ignore-TERM, numeric Rust signal, signal/status,
+  ownership/cleanup/wait/reap regression, patched-Bazel
   PID-namespace/teardown/ceiling identity, crash containment, capability, or
   setup-before-payload gap,
   inherited ring/SQPOLL/fixed-socket gap, strategy/stage fallback, unsealed

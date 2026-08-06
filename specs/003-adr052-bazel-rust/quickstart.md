@@ -35,7 +35,7 @@ perl specs/003-adr052-bazel-rust/tools/validate-plan-structure.pl
 Expected:
 
 ```text
-PASS: 56 validator self-tests; positive fixture accepted; 47 independent negative fixtures cover noncanonical unchecked-list forms, census declarations, task parsing, ownership, dependency, adjacency, section, cycle, and conflict fixtures rejected; full stderr byte-matched against independent literals; physical census/mismatch and adjacency rows and bounded numeric, none, and overflow locators verified; actual temp-dir, path, open3, and subprocess setup failures emit only the fixed self-test-contract diagnostic; actual unreadable-source status 1 and unsupported-argument status 2 subprocesses verified
+PASS: 60 validator self-tests; positive fixture accepted; 47 independent negative fixtures cover noncanonical unchecked-list forms, census declarations, task parsing, ownership, dependency, adjacency, section, cycle, and conflict fixtures rejected; full stderr byte-matched against independent literals; physical census/mismatch and adjacency rows and bounded numeric, none, and overflow locators verified; actual temp-dir, path, open3, and subprocess setup failures plus injected warnings emit only their distinct fixed setup diagnostics after sentinel output is discarded; actual unreadable-source status 1 and unsupported-argument status 2 subprocesses verified
 PASS: 120 unique tasks with exact canonical headers and owned paths; dependencies exist and precede consumers; adjacency matches; graph is acyclic; concurrently ready ownership is disjoint
 ```
 
@@ -48,8 +48,11 @@ entrypoint. Adjacency cases independently scan the physical fixture row;
 census, section, and mismatch locations use actual offsets and ordinals.
 Oversized inputs assert the closed `overflow` bound. Actual task omitted from
 census and malformed/unbalanced census markers have isolated exact fixtures.
-Temp-dir, path, open3, and subprocess setup failures assert status 1, empty
-stdout, and only the fixed self-test-contract diagnostic. Actual
+Temp-dir, path, open3, and subprocess setup failures plus injected warning
+paths call `run_cli_entrypoint --self-test` after the runner writes sentinel
+stdout/stderr. They assert status 1, empty stdout, exact distinct fixed
+setup-class stderr with validator-specific remedies, and absence of sentinel,
+raw exception/path, or task-rewrite content. Actual
 unreadable-source and unsupported-argument subprocesses assert empty stdout
 plus status 1 and 2.
 The only actionable location is the fixed repository-relative source plus a
@@ -1114,15 +1117,21 @@ Run targeted tests for:
 - co-location of `VerifiedExecutable` and its only consuming public API in one
   dependency-leaf crate; reviewed safe `command-fds` mapping of the consumed
   verified description to a private fd; preserved stdin/stdout/stderr; and
-  exactly one Rust invocation site for the exact immutable Nix store path;
+  exactly one Rust invocation site for the exact immutable Nix store path.
+  Under a process-wide guard, the spawning thread uses reviewed safe
+  `nix::sys::signal::SigSet` calls to block the full managed set before spawn
+  and restore its exact mask after successful and failed spawn;
 - the dedicated tiny single-threaded C supervisor, statically built outside
   the product Rust workspace, with exact source, derivation-dependency,
   protocol, output NAR, executable, static ELF, and native-system hashes;
 - the supervisor's close-on-exec nonblocking child exec-error pipe, sole fork,
   ignored `SIGPIPE` with typed `EPIPE`, waitable default `SIGCHLD`, normalized
-  masks/dispositions with the managed set blocked before installation and the
-  final mask established afterward, pending-at-entry and normalization-time
-  `SIGTERM`, pre-`READY` termination ownership, child stdio installation,
+  masks/dispositions only after first-operation refusal of any inherited
+  managed `SIG_IGN`, one close-on-exec group-confirmation pipe, child and
+  supervisor `setpgid` calls, exact live-group confirmation before `READY` or
+  managed-signal consumption, handoff-window/normalization-time/
+  pre-confirmation `SIGTERM`, typed `ESRCH`/`EPERM`/early-exit cleanup,
+  pre-`READY` termination ownership, child stdio installation,
   executable-fd CLOEXEC, same-open-file-description
   `execveat(AT_EMPTY_PATH)`, explicit framed `READY` then `EXECUTED`,
   continued supervision, fixed signal allowlist,
@@ -1135,10 +1144,13 @@ Run targeted tests for:
   crash-after-`READY`, crash-after-`EXECUTED`, crash-during-grace, and
   direct/double-forked long-lived-descendant plants. A beyond-ceiling plant
   proves typed `pending-kernel-cleanup`, owned quarantine, no reaped claim,
-  no success/reuse, and eventual consuming reap while the action remains
-  failed. Namespace, teardown-patch, ceiling, quarantine, false-reap,
-  success/reuse, and fallback mutations fail; Cargo tests use containment
-  mocks only;
+  no success/reuse, and eventual consuming reap by the same original live
+  monitor while the action remains failed. The pending diagnostic links to
+  `docs/contributing/critical-subsystems.md#bazel-pending-kernel-cleanup-quarantine`;
+  its file/anchor and consuming-reap release bytes resolve exactly. Namespace,
+  teardown-patch, ceiling, quarantine, false-reap, reboot-remedy,
+  retry-before-release, replacement-waiter, manual-release, success/reuse, and
+  fallback mutations fail; Cargo tests use containment mocks only;
 - no runfiles/worktree/copied helper path, second Rust invocation, fd-0
   executable transport, Rust `pre_exec`, Rust raw fork, reopen,
   `/proc/self/fd`, `fexecve`, path fallback, provider-fd leak, or first-party
@@ -1152,8 +1164,9 @@ Run targeted tests for:
   descriptor absence,
   private-fd identity, helper crash/EOF before `EXECUTED`, fast target exit
   with the same status as the crash, inherited ignored/`SA_NOCLDWAIT`
-  `SIGCHLD`, inherited pending/normalization-time/blocked/ignored SIGTERM,
-  target-ignore-TERM, signal
+  `SIGCHLD`, safe mask restoration, inherited managed `SIG_IGN` refusal,
+  handoff-window/normalization-time/blocked SIGTERM, setpgid races and typed
+  confirmation failures, target-ignore-TERM, signal
   forwarding, target-status mismatch, and every cleanup/wait/reap failure.
 
 No test should fill a disk, require a privileged mount, sleep to reach expiry,

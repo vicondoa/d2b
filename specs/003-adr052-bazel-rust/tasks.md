@@ -189,8 +189,12 @@ to the same file are explicitly sequential.
   resolves `d2b-bazel-exec-supervisor` only from the exact immutable Nix
   toolchain output, and uses the pinned reviewed safe `command-fds` dependency
   to map the verified descriptor to a private fd while preserving
-  stdin/stdout/stderr. Add complete Rust-parent and C-supervisor stage-error
-  and owner/closure tables. Inject missing/wrong/rebound helper identity,
+  stdin/stdout/stderr. Under an injected process-wide serialization guard,
+  test the spawning thread's reviewed safe `nix::sys::signal::SigSet`
+  capture, full-managed-set block before helper spawn, and exact prior-mask
+  restoration after successful and failed spawn before unlock. Add complete
+  Rust-parent and C-supervisor stage-error and owner/closure tables. Inject
+  missing/wrong/rebound helper identity,
   private-fd identity, descriptor absence, CLOEXEC, stdin, held-open child
   exec-error writer, exact bounded single-record exec-error
   `EINTR`/`EAGAIN`/short/partial/overlong behavior under one absolute
@@ -202,16 +206,20 @@ to the same file are explicitly sequential.
   one-byte overlong probe. Inject closed status reader and typed `EPIPE`,
   helper crash/EOF before `EXECUTED`, fast target exit with the same status as
   the crash, ignored or `SA_NOCLDWAIT` inherited `SIGCHLD`,
-  pending-at-entry, normalization-time, blocked, and ignored inherited
-  `SIGTERM`, pre-`READY` termination ownership, target-ignore-TERM escalation
-  with no case deadline,
+  a managed `SIG_IGN` refusal before fork, pending-at-entry,
+  Rust-to-helper-handoff-window, normalization-time, and blocked `SIGTERM`,
+  parent-first/child-first setpgid confirmation races, typed
+  `ESRCH`/`EPERM`/other-error/group-mismatch/early-child-exit cleanup, a pending managed
+  signal before group confirmation, pre-`READY` termination ownership,
+  target-ignore-TERM escalation with no case deadline,
   signal-forwarding/status mismatch, spawn, close, cleanup, wait, and reap
   failures. The fixed protocol requires `READY`, then `EXECUTED`, then terminal
   target status; no process status is inferred before `EXECUTED`. Rust closes
   owned descriptors and returns the Bazel action nonzero on post-spawn failure;
-  it never signals a numeric PID or PGID. Use `std::process` and `command-fds`
-  only for safe Rust supervisor spawn. Add no Rust raw fork, `pre_exec`, signal
-  handler, or unsafe exception. Add an
+  it never signals a numeric PID or PGID. Use `std::process`, `command-fds`,
+  and `nix::sys::signal::SigSet` only through their safe APIs for Rust
+  supervisor spawn and signal handoff. Add no Rust raw fork, `pre_exec`, signal
+  handler, disposition mutation, or unsafe exception. Add an
   enforcing closed invocation-site test that permits exactly one Rust typed
   consumer and rejects helper invocation through runfiles, worktree paths,
   other Rust sources, Bazel rules, Make, or workflows. Reject fd-0 executable
@@ -254,9 +262,12 @@ to the same file are explicitly sequential.
   tests, declare the complete spec003w0 xtask dependency set, retain a green xtask
   root without declaring not-yet-present modules, implement the
   dependency-leaf owner, safe command-fd mapping, typed supervisor protocol,
-  and cleanup behavior required for every T005 test to pass. No Rust helper
-  crate, runner `sys.rs`, raw-fork implementation, `pre_exec`, or first-party
-  Rust unsafe allowance exists.
+  serialized safe signal-mask handoff, and cleanup behavior required for every
+  T005 test to pass. Add the already reviewed pinned `nix` 0.29 `signal`
+  feature to that leaf for safe `SigSet` mask operations; add no new signal
+  FFI dependency. No Rust helper crate, runner `sys.rs`, raw-fork
+  implementation, `pre_exec`, signal-disposition mutation, or first-party Rust
+  unsafe allowance exists.
 - [ ] T007 [owner: spec003w0-prep] [files: none] [depends: T006] Commit and
   validate prep with locked offline metadata and all T005 tests; open only the
   toolchain scope from this exact green tip.
@@ -273,6 +284,7 @@ to the same file are explicitly sequential.
   tests/unit/nix/pinned/common.txt,
   tests/unit/nix/pinned/x86_64-linux.txt,
   tests/unit/nix/pinned/aarch64-linux.txt,
+  docs/contributing/critical-subsystems.md,
   packages/d2b-contract-tests/tests/policy_bazel_toolchain.rs] [depends: T007]
   In one sequential toolchain scope, add and observe the exact Nix/package tests
   fail, then package Bazel 8.6.0 with the reviewed Linux sandbox patch and
@@ -283,8 +295,19 @@ to the same file are explicitly sequential.
   the close-or-quarantine decision. If a consuming wait has not proved PID 1
   reaped, outer `linux-sandbox` remains the wait owner, emits
   `pending-kernel-cleanup`, quarantines the sandbox and outputs, and permits
-  neither success nor reuse until eventual consuming reap; kernel task exit,
-  namespace destruction, and reap have no false ten-second bound. Build
+  neither success nor reuse until eventual consuming reap by that original
+  live monitor; it remains the sole wait owner and publishes the only valid
+  release. Kernel task exit, namespace destruction, and reap have no false
+  ten-second bound. Add the exact governed contributing section
+  `docs/contributing/critical-subsystems.md#bazel-pending-kernel-cleanup-quarantine`
+  with ordered steps to keep the original job/monitor live, inspect the typed
+  pending diagnostic, drain the CI worker/provider from new admission without
+  termination, wait for and confirm that same monitor's byte-exact
+  consuming-reap release, and only then rerun the diagnostic's exact closed
+  slice command. State that a GitHub-hosted job-exclusive allocation is
+  drained by leaving the original job running with no retry; a shared provider
+  without drain-without-terminate stays blocked. Prohibit reboot,
+  retry-before-release, replacement wait ownership, and manual release. Build
   the tiny single-threaded C `d2b-bazel-exec-supervisor` as a dedicated static
   immutable build/test-tooling derivation outside the product Rust workspace.
   Commit exact
@@ -297,32 +320,46 @@ to the same file are explicitly sequential.
   malformed/duplicate/order negative, and no status-stream overlong probe;
   separately test the single-record close-on-exec exec-error pipe and its
   one-byte overlong check, sole fork, `SIGPIPE` to typed `EPIPE`, waitable
-  default `SIGCHLD`, managed-signal block before normalization, disposition
-  and synchronous-consumer installation while blocked, final-mask
-  establishment, pending and normalization-time `SIGTERM`, pre-`READY`
-  termination ownership, signal forwarding,
+  default `SIGCHLD`, inherited full managed mask, first-operation observation
+  of every managed disposition, typed refusal of any managed `SIG_IGN` before
+  fork without reset-and-continue, disposition and synchronous-consumer
+  installation only after verification, and final-mask establishment. Add one
+  close-on-exec group-confirmation pipe; make child and supervisor both call
+  `setpgid`; keep both masks blocked until the supervisor confirms the exact
+  group and child liveness before `READY` or signal consumption/forwarding.
+  Test pending, handoff-window, normalization-time, and
+  pre-group-confirmation `SIGTERM`, pre-`READY` termination ownership,
+  parent-first/child-first confirmation races, typed
+  `ESRCH`/`EPERM`/other-error/group-mismatch/early-child-exit cleanup, signal forwarding,
   external-SIGTERM escalation with no case deadline, target wait/reap and exact
   status mirroring, held-open writer, exact single-record exec-error
   `EINTR`/`EAGAIN`/short/partial/overlong transport, fast-same-status target
-  versus helper crash, pending/normalization-time/blocked/ignored SIGTERM,
+  versus helper crash, pending/handoff-window/normalization-time/blocked
+  SIGTERM and ignored-disposition refusal,
   target-ignore-TERM,
   descriptor absence/private identity/CLOEXEC/stdin, and cleanup on every path.
   Make the patched sandbox own and render every `SANDBOX_*` recovery row and
   keep runner recovery free of those rows. Byte-test every sandbox row across
   all four slices and both diagnostic command versions, and resolve the patch
-  path plus the full repository-relative runner-contract anchor from the
-  repository root. Run real patched-Bazel Linux-sandbox plants for helper crash before `READY`,
+  path, the full repository-relative runner-contract anchor, and the exact
+  contributing runbook file/anchor from the repository root. Byte-test the
+  pending diagnostic, runbook link, and consuming-reap release record; reject
+  an absent runbook, reboot remedy, retry-before-release, replacement waiter,
+  manual release, or non-owner consuming wait. Run real patched-Bazel Linux-sandbox plants for helper crash before `READY`,
   after `READY`, after `EXECUTED`, during grace, and with direct and
   double-forked long-lived descendants. Require consuming namespace and
   outer-monitor reap and liveness-fd EOF on ordinary completion. Add a
-  deterministic beyond-ceiling plant that first proves typed
+  deterministic beyond-ceiling plant whose kernel stall self-resolves after a
+  test barrier. It first proves typed
   `pending-kernel-cleanup`, owned quarantine, no false PID-1-reaped claim, no
-  success, and no sandbox/output reuse, then releases the wait and proves
-  `complete-after-quarantine` while the action stays failed. Namespace
+  success, and no sandbox/output reuse, then proves the original monitor alone
+  publishes `complete-after-quarantine` while the action stays failed. No
+  release API exists. Namespace
   removal, teardown-patch removal, changed-ceiling, pending-state removal,
-  false-reaped, success-after-quarantine, reuse-while-quarantined, and every
-  forbidden strategy-fallback mutation must fail without signaling a host
-  process.
+  false-reaped, reboot-remedy, retry-before-release, manual-release,
+  replacement-waiter, success-after-quarantine, reuse-while-quarantined, and
+  every forbidden strategy-fallback mutation must fail without signaling a
+  host process.
   The Bazel startup probe, wrong-system, patch-removal, wrong-output,
   policy/filter-load, strategy-fallback, and supervisor
   missing/wrong/rebound/dynamic-output tests must pass. Prove no Rust helper
@@ -502,10 +539,15 @@ to the same file are explicitly sequential.
   refusal, closed-reader typed `EPIPE`, exact single-record exec-error
   `EINTR`/`EAGAIN`/short/partial/overlong transport, fast-same-status
   target/helper discrimination, ignored/`SA_NOCLDWAIT` SIGCHLD normalization,
-  block-first signal setup, pending/normalization-time/blocked/ignored SIGTERM,
-  pre-`READY` ownership, no-deadline external-TERM escalation,
+  serialized safe spawning-thread mask capture/block/restore after successful
+  and failed spawn, inherited-mask verification, managed-`SIG_IGN` refusal
+  before fork, pending/handoff-window/normalization-time/blocked SIGTERM,
+  parent-first/child-first setpgid races, typed
+  `ESRCH`/`EPERM`/other-error/group-mismatch/early-child-exit cleanup, pending signal before
+  group confirmation, pre-`READY` ownership, no-deadline external-TERM escalation,
   target-ignore-TERM, allowed-signal forwarding, exact target status, and
-  terminal child reap.
+  terminal child reap. Use reviewed C test tooling for disposition planting;
+  add no Rust unsafe.
 - [ ] T019 [owner: spec003w0-nix-policy] [files:
   nixos-modules/host-broker.nix, flake.nix,
   packages/d2b-guest-shell-runner/deny.toml] [depends: T018] Implement the
@@ -578,7 +620,10 @@ to the same file are explicitly sequential.
   semantic wording and no process markers. Change ADR 0052's amendment label,
   the ADR index summary, and the ADR 0054 changelog fragment from proposed to
   accepted and replace their retired four-hub summary. State that ADR 0054
-  governs the newer workspace shape and do not edit dated ADR 0038.
+  governs the newer workspace shape and do not edit dated ADR 0038. Preserve
+  the earlier T120-owned
+  `docs/contributing/critical-subsystems.md#bazel-pending-kernel-cleanup-quarantine`
+  section byte-for-byte and keep its repository-link existence check green.
 
 ### spec003w0 integration, validation, and merge
 
@@ -777,9 +822,12 @@ to the same file are explicitly sequential.
   coalesced reads and malformed/duplicate/order negatives, single-record
   exec-error EOF/overlong behavior, held-open/closed-reader/exact partial
   transport, helper crash versus fast same-status target, waitable SIGCHLD,
-  block-before-install signal normalization, pending-at-entry and
-  normalization-time SIGTERM, pre-`READY` termination ownership, full signal
-  forwarding, no-deadline external-TERM escalation,
+  serialized safe mask handoff and exact restoration, inherited managed
+  `SIG_IGN` refusal, handoff-window and normalization-time SIGTERM,
+  parent/child setpgid confirmation races, typed
+  `ESRCH`/`EPERM`/early-child-exit cleanup, pending signal before group
+  confirmation, pre-`READY` termination ownership, full signal forwarding,
+  no-deadline external-TERM escalation,
   target-ignore-TERM, target-status mirroring, no-numeric-Rust-signal, and
   no-fallback mutations.
   Each test loads its scope-owned not-yet-wired implementation modules through
@@ -994,7 +1042,12 @@ to the same file are explicitly sequential.
   path, and missing/duplicate-anchor plants. Reject numeric PID/PGID and raw
   protocol bytes in addition to the existing redaction set. Assert no
   `SANDBOX_*` row or renderer exists in runner recovery; sequential T120 owns
-  the patched-sandbox mappings and live exact tests.
+  the patched-sandbox mappings and live exact tests. Include exact rows for
+  `PARENT_SIGNAL_HANDOFF`, `HELPER_SIGNAL_INHERITED_IGNORED`,
+  `HELPER_SIGNAL_HANDOFF`, `HELPER_GROUP_ESRCH`, `HELPER_GROUP_EPERM`,
+  `HELPER_GROUP_ERROR`, and `HELPER_GROUP_EARLY_EXIT`; their remedies preserve safe Rust mask handoff,
+  fail-before-fork ignored-disposition refusal, and group confirmation before
+  `READY` without suggesting Rust unsafe or numeric signaling.
   Load the not-yet-wired recovery module through a test-local path.
 - [ ] T068 [owner: spec003w2-recovery] [files:
   packages/d2b-bazel-runner/src/recovery.rs] [depends: T067] Implement the
@@ -1002,7 +1055,9 @@ to the same file are explicitly sequential.
   enum, and versioned phase-valid slice-command enum, and satisfy T067. It
   rejects every `SANDBOX_*` mapping because the patched sandbox owns those
   lifetimes. No free-form remedy or command and no numeric signal instruction
-  is accepted.
+  is accepted. The ignored-disposition code never offers reset-and-continue,
+  and the group codes retain distinct `ESRCH`, `EPERM`, other-error, and
+  early-exit corrections.
 - [ ] T069 [owner: spec003w2-evidence] [files:
   packages/xtask/tests/bazel_evidence.rs] [depends: T060] Add failing
   cold-local preparation and evidence validation tests, loading the

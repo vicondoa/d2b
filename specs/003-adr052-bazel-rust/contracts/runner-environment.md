@@ -118,13 +118,16 @@ namespace destruction, or reap.
 If a consuming wait has not proved every member and PID 1 reaped at that
 ceiling, including when an uninterruptible `D`-state task delays kernel
 cleanup, outer `linux-sandbox` enters typed `pending-kernel-cleanup`, remains
-the wait owner, and quarantines the sandbox and its outputs. The action can
-never report success or reuse those resources. The owner continues
-nonblocking observation until a consuming wait proves PID 1 reaped. Cleanup
-then becomes `complete-after-quarantine`, but the action remains failed. A
-kill/reap operation failure takes the same quarantine path. There is no
-configurable second grace and no cgroup, PID-file, host PID, or process-group
-fallback.
+live as the sole wait owner, and quarantines the sandbox and its outputs. The
+action can never report success or reuse those resources. The original live
+monitor continues non-consuming observation and alone performs the eventual
+consuming wait. Only that wait may publish the fixed consuming-reap release
+and transition cleanup to `complete-after-quarantine`; the action remains
+failed. No retry may start before that release, and no operator, replacement
+process, reboot, manual flag, cgroup, PID file, host PID, or host process group
+may release quarantine or replace the wait owner. A kill/reap operation
+failure takes the same quarantine path. There is no configurable second
+grace.
 
 Rust never sends a signal to a numeric PID or PGID. On a post-spawn protocol
 or wait failure it closes owned descriptors, preserves the first typed cause,
@@ -141,47 +144,60 @@ supervisor TERM grace, and while direct and double-forked descendants remain
 live. Ordinary plants must leave the monitor and outer sandbox observably
 reaped and make the descendant's inherited liveness fd reach EOF. The
 beyond-ceiling plant must instead prove owned `pending-kernel-cleanup`, no
-reaped claim, no success, and no reuse before a controlled release permits
-eventual consuming reap. Separate mutations remove the PID namespace,
-teardown patch, quarantine state, no-reuse rule, or alter the ceiling, and
-select each forbidden fallback strategy; each mutation fails without
-signaling any host process.
+reaped claim, no success, and no reuse before the planted kernel stall
+self-resolves after a deterministic barrier and the same live monitor
+publishes consuming-reap release. No release API or replacement waiter exists.
+Separate mutations remove the PID namespace, teardown patch, quarantine state,
+no-reuse rule, or alter the ceiling, and select each forbidden fallback
+strategy; each mutation fails without signaling any host process.
 
 The Rust parent validates declared stdin, stdout, and stderr and creates the
 fixed supervisor status channel. The exact pinned reviewed safe
 `command-fds` API maps the consumed verified open file description to its
 fixed private fd outside 0, 1, and 2. `std::process::Command` preserves the
-three declared stdio streams and spawns the exact helper path. Every new Rust
-crate retains `unsafe_code = "forbid"`; first-party Rust defines no raw fork,
-`pre_exec`, signal callback, or unsafe helper exception.
+three declared stdio streams and spawns the exact helper path. A process-wide
+serialization guard encloses the entire signal handoff. Under that guard, the
+spawning thread uses the already reviewed safe
+`nix::sys::signal::SigSet` API to capture its exact prior mask, block the full
+managed set `SIGHUP`, `SIGINT`, `SIGTERM`, and `SIGQUIT`, spawn the helper, and
+restore the exact prior mask after either successful or failed spawn before
+releasing the guard. Capture, block, spawn, restoration, and guard failures are
+closed typed parent failures; restoration is attempted on every outcome and a
+failed restoration cannot report success. Every new Rust crate retains
+`unsafe_code = "forbid"`; first-party Rust defines no raw fork, `pre_exec`,
+signal callback, disposition mutation, or unsafe helper exception.
 
-The helper starts and remains single-threaded. Its first signal operation
-blocks the complete managed set `SIGHUP`, `SIGINT`, `SIGTERM`, and `SIGQUIT`;
-it does not first expose an inherited or empty mask. While that set remains
-blocked, it validates private-fd identity and declared stdio ownership,
-restores default dispositions for every catchable signal, explicitly ignores
-`SIGPIPE`, restores `SIGCHLD` to `SIG_DFL` with neither `SA_NOCLDWAIT` nor
-`SA_NOCLDSTOP`, and installs the fixed synchronous signal consumer. Only
-after every disposition and synchronous-consumption resource is ready does it
-establish the final mask: the managed set stays blocked for synchronous
-consumption and every other catchable signal is unblocked. A pending managed
-signal is consumed, never discarded, before fork and at each pre-`READY`
-transition.
+The helper starts and remains single-threaded with the managed set inherited
+blocked. Its first setup operation is observation-only inspection of every
+managed signal disposition. If any is `SIG_IGN`, it emits
+`HELPER_SIGNAL_INHERITED_IGNORED`, closes its inherited owned descriptors, and
+fails before fork; it never resets an ignored managed disposition and
+continues. It then verifies that the full managed set is inherited blocked.
+Only after both checks pass may it validate private-fd and stdio ownership,
+restore default dispositions for every catchable signal, explicitly ignore
+`SIGPIPE`, restore `SIGCHLD` to `SIG_DFL` with neither `SA_NOCLDWAIT` nor
+`SA_NOCLDSTOP`, install the fixed synchronous signal consumer, and establish
+the final mask. The managed set stays blocked for synchronous consumption and
+every other catchable signal is unblocked.
 
-The supervisor owns every managed termination signal from the first block. A
-managed signal already pending at entry or arriving during normalization
-records one `termination-requested` transition; the required fixtures plant
-`SIGTERM` at both times. Before a child exists it refuses without forking.
-After fork but before `READY` it performs the fixed child-group termination
-and direct-child reap, closes every owned descriptor, emits no `READY`, and
-exits with the closed helper failure status. The Rust parent therefore reports
-`PARENT_READY`; neither the target nor the sandbox monitor inherits ambiguous
-pre-`READY` termination ownership. `SIGPIPE` remains
-ignored, so a closed status reader is typed `EPIPE`. Child status remains
-waitable. The helper then creates exactly one
-`O_CLOEXEC|O_NONBLOCK` child exec-error pipe before forking exactly once.
-The child establishes the target process group, restores an empty signal mask
-and default dispositions for every catchable signal including `SIGTERM` and
+The supervisor creates exactly one `O_CLOEXEC|O_NONBLOCK` child exec-error
+pipe and one close-on-exec group-confirmation pipe before forking exactly
+once. The child calls `setpgid(0, 0)` and waits at the confirmation pipe with
+managed signals still blocked; the supervisor independently calls
+`setpgid(child, child)` and confirms `getpgid(child) == child` while checking
+that the child has not exited. `ESRCH`, `EPERM`, any other setpgid error, a
+mismatched group, or early child exit is a typed helper failure with
+direct-child reap and descriptor cleanup. Managed signals remain blocked and unconsumed in both
+processes through confirmation. Only after confirmation may the supervisor
+release the child setup barrier, consume or forward a pending managed signal,
+or emit `READY`. A pending managed signal at entry, in the Rust-to-helper
+handoff window, during normalization, or during the setpgid race records one
+`termination-requested` transition. Before a child exists it refuses without
+forking; after group confirmation and before `READY` it performs fixed
+child-group termination and direct-child reap, closes every owned descriptor,
+emits no `READY`, and exits with the closed helper failure status. After the
+barrier releases, the child restores an empty signal mask and
+default dispositions for every catchable signal including `SIGTERM` and
 `SIGPIPE`, installs the declared stdin/stdout/stderr at 0/1/2, sets the
 executable fd `FD_CLOEXEC`, closes every supervisor-only and non-surviving
 descriptor, and calls
@@ -192,7 +208,8 @@ writes exactly one fixed-size exec-error record with bounded
 then calls `_exit`.
 
 The supervisor closes its exec-error writer after fork and emits exactly one
-`READY` status frame to the Rust parent. It reads the exec-error pipe to
+`READY` status frame to the Rust parent only after process-group confirmation.
+It reads the exec-error pipe to
 either empty close-on-exec EOF or one complete fixed failure record. Every
 exec-error read and every supervisor-status read or write uses its original
 absolute monotonic deadline: `EINTR` retries only after a budget check,
@@ -286,7 +303,8 @@ than a Cargo mock.
 | `Verified` | Consumed handle exclusively owns the provider `OwnedFd`. | Identity or argument failure drops the provider once; no channel or child exists. |
 | `HelperIdentity` | Exact immutable store path and every C source/derivation-dependency/output/protocol digest match. | Missing, wrong, copied, symlinked, runfiles, worktree, or rebound output drops the provider; no spawn. |
 | `Prepared` | Rust owns provider fd, status reader/writer, mapping configuration, and declared stdio. | `PARENT_PREPARE`; close provider and both channel ends without changing stdio ownership. |
-| `Spawned` | `std::process::Child` becomes the sole wait owner for the supervisor. Rust immediately closes its mapped provider and helper-side status copies and retains only the reader plus `Child`. | `PARENT_SPAWN` before a child exists or `PARENT_CLOSE` after spawn; close owned fds and return the action nonzero without signaling a PID or PGID. |
+| `SignalHandoff` | Under the process-wide launch guard, the spawning thread captures its exact mask with safe `nix::sys::signal::SigSet`, blocks the full managed set, and keeps it blocked through `Command::spawn`. | `PARENT_SIGNAL_HANDOFF`; after either spawn result, restore the exact captured mask before releasing the guard. Capture, block, poisoned-guard, or restoration failure is typed, emits no raw OS text, and cannot report success. |
+| `Spawned` | `std::process::Child` becomes the sole supervisor wait owner. Still under the launch guard, Rust restores its spawning-thread mask, closes its mapped provider and helper-side status copies, and retains only the reader plus `Child`. | `PARENT_SPAWN` before a child exists or `PARENT_CLOSE` after spawn; restoration is still attempted, owned fds close, and the action returns nonzero without signaling a PID or PGID. |
 | `Ready` | The stateful decoder consumes one complete framed `READY`; supervisor remains wait-owned through `Child`. | `PARENT_READY` for EOF, exit, timeout, partial header/payload, buffer overflow, malformed header, duplicate, unknown, or out-of-order status; close owned fds and return the action nonzero so sandbox teardown owns survivors. |
 | `Executed` | The retained decoder consumes one complete framed `EXECUTED` after `READY`; no target status is inferred from helper wait status. | `PARENT_EXECUTED` for EOF, exit, timeout, malformed input, or any frame before `EXECUTED`; close and return nonzero without a Rust signal operation. |
 | `Terminal` | The decoder consumes one framed `EXITED` or `SIGNALED`, rejects retained or later trailing bytes, drains to EOF, then waits for the supervisor and verifies exact status equality. | `PARENT_TERMINAL`, `PARENT_WAIT`, or `PARENT_STATUS`; block publication, close owned fds, and return nonzero to the sandbox owner. |
@@ -296,13 +314,15 @@ than a Cargo mock.
 
 | Stage | Owned resources and success transition | Typed failure and mandatory cleanup |
 | --- | --- | --- |
-| `Adopted` | Supervisor owns mapped executable fd, status writer, argv/environment, and declared stdio. | `HELPER_ADOPT` for absent/colliding/wrong descriptors; close all owned fds; no fork. |
-| `Normalized` | Supervisor first blocks the managed set, then while blocked installs default dispositions, ignored `SIGPIPE`, waitable default `SIGCHLD`, and the synchronous consumer, and only then establishes the final mask. Pending or normalization-time `SIGTERM` is consumed into the owned pre-`READY` termination transition. | `HELPER_SIGNAL_NORMALIZE`; close all owned fds; no fork. |
-| `ExecPipe` | Supervisor creates and owns exactly one `O_CLOEXEC|O_NONBLOCK` reader/writer pair. | `HELPER_EXEC_PIPE`; close both ends and prior resources; no fork. |
-| `Forked` | Exactly one target child exists. Supervisor owns child pid, exec-error reader, and Rust status writer; child owns writer, executable fd, and stdio copies. | `HELPER_FORK` before child creation, or a later typed failure followed by target-group kill, direct-child reap, and closure of every supervisor fd. |
-| `ChildSetup` | Child establishes target group, resets mask/dispositions, installs 0/1/2, marks executable fd CLOEXEC, and closes supervisor-only fds. | Fixed `CHILD_GROUP`, `CHILD_SIGNAL`, `CHILD_STDIO`, `CHILD_CLOEXEC`, or `CHILD_CLOSE` exec-error record; bounded exact write; `_exit`. |
+| `InheritedSignals` | As its first setup operation, the supervisor observes every managed disposition while the full managed set remains inherited blocked. | `HELPER_SIGNAL_INHERITED_IGNORED` if any managed disposition is `SIG_IGN`, or `HELPER_SIGNAL_HANDOFF` if the inherited mask is incomplete; close fixed inherited fds and fail before fork. An ignored managed disposition is never reset-and-continued. |
+| `Adopted` | After signal-handoff verification, the supervisor owns mapped executable fd, status writer, argv/environment, and declared stdio. | `HELPER_ADOPT` for absent/colliding/wrong descriptors; close all owned fds; no fork. |
+| `Normalized` | While the managed set remains blocked, the supervisor installs default dispositions, ignored `SIGPIPE`, waitable default `SIGCHLD`, and the synchronous consumer, then establishes the final mask. | `HELPER_SIGNAL_NORMALIZE`; close all owned fds; no fork. |
+| `ExecPipe` | Supervisor creates and owns exactly one `O_CLOEXEC|O_NONBLOCK` exec-error reader/writer pair and one close-on-exec group-confirmation pipe. | `HELPER_EXEC_PIPE`; close both pairs and prior resources; no fork. |
+| `Forked` | Exactly one target child exists. Supervisor owns child pid, exec-error reader, group-confirmation writer, and Rust status writer; child owns the two readers/writers required for setup, executable fd, and stdio copies. | `HELPER_FORK` before child creation, or a later typed failure followed by direct-child reap and closure of every supervisor fd. |
+| `GroupConfirmed` | Child calls `setpgid(0, 0)` and waits with managed signals blocked. Supervisor calls `setpgid(child, child)`, confirms `getpgid(child) == child` and no early exit, then releases the child setup barrier. Only now may it consume/forward managed signals or emit `READY`. | `HELPER_GROUP_ESRCH`, `HELPER_GROUP_EPERM`, `HELPER_GROUP_ERROR`, or `HELPER_GROUP_EARLY_EXIT`; close the barrier, kill the confirmed group when one exists, consume-reap the direct child, close every fd, and emit no `READY`. |
+| `ChildSetup` | After group confirmation, child restores its empty mask/default dispositions, installs 0/1/2, marks executable fd CLOEXEC, and closes supervisor-only fds. | Fixed `CHILD_GROUP`, `CHILD_SIGNAL`, `CHILD_STDIO`, `CHILD_CLOEXEC`, or `CHILD_CLOSE` exec-error record; bounded exact write; `_exit`. |
 | `Execveat` | Child calls `execveat` on the same open file description. Successful exec closes the error writer and executable fd. | Fixed `CHILD_EXECVEAT` record, including typed `ENOSYS`; bounded exact write; `_exit`; no fallback. |
-| `ExecResult` | Supervisor emits framed `READY`, then accepts only empty EOF or one complete child failure record under one absolute deadline. Empty EOF emits framed `EXECUTED`; every exec-error cursor and retry remains under that deadline. | `HELPER_EXEC_TIMEOUT`, `HELPER_EXEC_PARTIAL`, `HELPER_EXEC_OVERLONG`, `HELPER_EXEC_UNKNOWN`, `HELPER_EXEC_EPIPE`, or `HELPER_EXEC_IO`; kill and reap target; close reader/status. |
+| `ExecResult` | Supervisor emits framed `READY` only after `GroupConfirmed`, then accepts only empty EOF or one complete child failure record under one absolute deadline. Empty EOF emits framed `EXECUTED`; every exec-error cursor and retry remains under that deadline. | `HELPER_EXEC_TIMEOUT`, `HELPER_EXEC_PARTIAL`, `HELPER_EXEC_OVERLONG`, `HELPER_EXEC_UNKNOWN`, `HELPER_EXEC_EPIPE`, or `HELPER_EXEC_IO`; kill and reap target; close reader/status. |
 | `Supervising` | Supervisor owns the live target group and status writer, forwards only the four allowed termination signals, and applies the fixed escalation on case expiry or external `SIGTERM`, including when no case deadline exists. | `HELPER_SIGNAL_FORWARD` or `HELPER_DEADLINE`; full grace and unconditional target-group kill when required, direct-child reap, typed failure. |
 | `Reaped` | Supervisor has exact terminal wait status and no live child; it writes the framed `EXITED` or `SIGNALED` terminal, closes the status writer, and mirrors that status. | `HELPER_WAIT`, `HELPER_REAP`, `HELPER_TERMINAL_WRITE`, or `HELPER_STATUS_MIRROR`; retain the first cause and close every remaining fd. |
 | `Closed` | No provider/private/pipe/status descriptor and no unreaped child remains. | `HELPER_CLEANUP` is attached to the first failure; cleanup is attempted on every reachable path. |
@@ -318,16 +338,56 @@ No child path returns through C after fork: it either execs or calls `_exit`.
 | `MonitorReady` | Namespace PID 1 owns the action command and is the adoption point for every orphan; outer sandbox wait-owns PID 1. | `SANDBOX_MONITOR`; close synchronization fds, force namespace-init exit, and outer-reap. |
 | `ActionRunning` | PID 1 waits and reaps descendants while the action command runs; normal target escalation remains supervisor-owned. | Abnormal setup/action exit, including parent or supervisor crash, transitions once to `Aborting`. |
 | `Aborting` | PID 1 sends namespace-local SIGKILL to all other namespace members and performs nonblocking reap progress. The fixed 10,000 ms ceiling bounds userspace TERM/KILL/monitor escalation and the decision to close or quarantine; it does not bound kernel task exit or reap. | `SANDBOX_KILL`, `SANDBOX_REAP`, or `SANDBOX_CEILING`; retain the first cause and never claim a namespace member or PID 1 reaped without a consuming wait result. |
-| `PendingKernelCleanup` | At the userspace ceiling, any namespace member or PID 1 still not observably reaped enters closed result `pending-kernel-cleanup`. Outer `linux-sandbox` remains the wait owner, marks the sandbox and outputs quarantined, continues bounded nonblocking observation, and permits neither success nor sandbox/output reuse. | `SANDBOX_PENDING_KERNEL_CLEANUP`; keep quarantine owned until an exact consuming wait proves PID 1 reaped. The operator removes the worker from admission, corrects the kernel, filesystem, or device stall or reboots it, and retries only after quarantine release. |
+| `PendingKernelCleanup` | At the userspace ceiling, any namespace member or PID 1 still not observably reaped enters closed result `pending-kernel-cleanup`. The original live outer `linux-sandbox` monitor remains the sole wait owner, marks the sandbox and outputs quarantined, continues non-consuming observation, and permits neither success nor sandbox/output reuse. | `SANDBOX_PENDING_KERNEL_CLEANUP`; follow [`docs/contributing/critical-subsystems.md#bazel-pending-kernel-cleanup-quarantine`](../../../docs/contributing/critical-subsystems.md#bazel-pending-kernel-cleanup-quarantine), drain new admission without terminating the monitor, and wait for that same monitor's fixed consuming-reap release before confirming release and rerunning. No reboot, retry-before-release, replacement waiter, or manual release is permitted. |
 | `Closed` | A consuming wait proved PID 1 reaped, no synchronization fd or outer waitable child remains, and cleanup is `complete` or `complete-after-quarantine`. Entry through quarantine keeps the action result nonzero permanently. | `SANDBOX_CLEANUP` attaches to the first sandbox failure; no host PID, PID file, or host process group is signaled. |
+
+### Governed pending-kernel-cleanup runbook contract
+
+Sequential T120 creates the exact governed section
+[`docs/contributing/critical-subsystems.md#bazel-pending-kernel-cleanup-quarantine`](../../../docs/contributing/critical-subsystems.md#bazel-pending-kernel-cleanup-quarantine);
+this plan does not edit that contributing document. The section gives these
+ordered steps and no release shortcut:
+
+1. Keep the original job and patched `linux-sandbox` monitor live. Do not
+   cancel, restart, reboot, retry, or start a replacement waiter.
+2. In that original job's sanitized stderr, inspect the byte-exact
+   `D2B-BZLEXEC-SANDBOX-PENDING-KERNEL-CLEANUP` diagnostic, require closed
+   state `pending-kernel-cleanup`, and follow only its fixed repository link.
+3. Drain the affected CI worker/provider from new admission without
+   terminating the original job. A job-exclusive GitHub-hosted allocation is
+   already drained by leaving that job running and admitting no retry. Any
+   future shared provider must expose a drain-without-terminate control;
+   absence of one leaves recovery blocked.
+4. Wait on the original job. Observation remains non-consuming; only its
+   original live monitor may wait and reap.
+5. Confirm that same monitor published the byte-exact
+   `D2B-BZLEXEC-SANDBOX-CONSUMING-REAP-RELEASE` record with
+   `cleanup=complete-after-quarantine` and
+   `quarantine=entered-and-released-after-consuming-reap`. No other record
+   releases quarantine.
+6. Only after step 5, rerun the exact closed slice command printed by the
+   original diagnostic. If release never appears, keep admission drained and
+   do not retry.
+
+The T120 policy test resolves the repository-relative file and normalized
+anchor exactly once, byte-matches the pending diagnostic, runbook link, and
+release record, and rejects an absent runbook, reboot remedy,
+retry-before-release, manual release, replacement waiter, or a consuming
+observer other than the original monitor.
 
 All absent, non-regular, non-executable, stale, wrong-digest, rebound-path,
 short-read, metadata-change, and exec-stage cases are injected. Host-backed
 conformance exercises the exact static supervisor against a declared
-first-party probe. It covers closed-reader `EPIPE`; inherited ignored and
-`SA_NOCLDWAIT` `SIGCHLD`; inherited blocked and ignored `SIGTERM`; a target
-that ignores TERM with no case deadline; each exact `EINTR`, `EAGAIN`, short,
-fragmented and coalesced status frames, partial single-record exec-error,
+first-party probe. It covers exact spawning-thread mask capture/block/restore
+after successful and failed spawn under the serialization guard; a
+deterministic managed-`SIG_IGN` disposition refusal before fork; a
+deterministic `SIGTERM` delivery in the block-to-helper handoff window;
+closed-reader `EPIPE`; inherited ignored and `SA_NOCLDWAIT` `SIGCHLD`;
+inherited blocked `SIGTERM`; a target that ignores TERM with no case deadline;
+parent-first and child-first setpgid races; typed `ESRCH`, `EPERM`, other-error,
+mismatched-group, and early-child-exit cleanup; a pending
+signal before group confirmation; each exact `EINTR`, `EAGAIN`, short,
+fragmented and coalesced status frame, partial single-record exec-error,
 duplicate, malformed, and held-writer transport boundary;
 a target that execs and exits immediately with the planted helper-crash
 status; exact signal forwarding and target status; unchanged declared stdin;

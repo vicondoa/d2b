@@ -253,18 +253,26 @@
   the only public consumer in the same dependency-leaf crate. That consumer
   invokes only the exact immutable Nix-built static C
   `d2b-bazel-exec-supervisor` output and maps the private executable fd with
-  the pinned safe `command-fds` API while preserving stdio. The single-threaded
-  helper blocks managed signals before installing dispositions and synchronous
-  consumption, establishes the final mask afterward, creates the close-on-exec
-  child error pipe, forks once, emits framed `READY` then `EXECUTED`, remains alive, forwards allowed
+  the pinned safe `command-fds` API while preserving stdio. Under a
+  process-wide guard, its spawning thread uses reviewed safe
+  `nix::sys::signal::SigSet` calls to block the full managed set before spawn
+  and restore its exact prior mask after successful and failed spawn. The
+  single-threaded helper inherits that mask, first refuses any managed
+  `SIG_IGN` before fork without reset-and-continue, then installs dispositions
+  and synchronous consumption. It creates the close-on-exec child error and
+  group-confirmation pipes, forks once, performs both child and supervisor
+  `setpgid`, confirms the exact live group before `READY` or signal
+  consumption/forwarding, emits framed `READY` then `EXECUTED`, remains alive, forwards allowed
   termination signals, and reaps and mirrors exact target status. Exact
   source/derivation-dependency/output/protocol identity, one Rust invocation
   site, private-fd identity, descriptor absence, exact
   single-record exec-error `EINTR`/`EAGAIN`/short/partial/overlong and
   fragmented/coalesced framed status with malformed/duplicate/order coverage,
   closed-reader `EPIPE`, waitable default `SIGCHLD`, fast-same-status crash
-  discrimination, pending/normalization-time/blocked/ignored SIGTERM,
-  pre-`READY` ownership, no-deadline external-TERM
+  discrimination, ignored-disposition refusal, handoff-window/
+  normalization-time/blocked SIGTERM, parent/child setpgid races,
+  `ESRCH`/`EPERM`/early-child-exit cleanup, pending signal before group
+  confirmation, pre-`READY` ownership, no-deadline external-TERM
   escalation, target-ignore-TERM, and every Rust-parent and C-supervisor
   ownership/closure/cleanup/wait/reap failure are covered. The patched
   sandbox's fresh PID-namespace monitor owns abnormal teardown under one fixed
@@ -272,7 +280,12 @@
   crash-before-`READY`, crash-after-`READY`,
   crash-after-`EXECUTED`, crash-during-grace, and long-lived-descendant plants
   plus a beyond-ceiling case and namespace/patch/ceiling/quarantine/false-reap/
-  success/reuse/fallback mutations prove it. Cargo tests use
+  reboot/retry-before-release/replacement-waiter/manual-release/
+  success/reuse/fallback mutations prove it. The original live monitor remains
+  sole wait owner through consuming reap; the pending diagnostic links to the
+  resolvable governed
+  `docs/contributing/critical-subsystems.md#bazel-pending-kernel-cleanup-quarantine`
+  runbook. Cargo tests use
   mocks and Rust never signals a numeric PID/PGID; no Rust helper crate, runner
   `sys.rs`, or first-party Rust unsafe exception remains.
 - [x] Cache deletion uses a closed typed prefix enum and mixed pagination
@@ -350,8 +363,11 @@
   through the injectable entrypoint. Adjacency rows are independently checked
   against physical lines; census/section/mismatch positions are actual;
   oversized record/line inputs assert closed bounds. Actual temp-dir, path,
-  open3, and subprocess setup failures emit only the fixed self-test-contract
-  diagnostic. Actual unreadable-source and unsupported-argument subprocesses
+  open3, and subprocess setup failures plus injected warnings execute through
+  `run_cli_entrypoint --self-test` after sentinel output and return status 1,
+  empty stdout, and only their distinct fixed setup-class diagnostics and
+  validator-specific remedies; no raw exception/path, sentinel, or task
+  rewrite appears. Actual unreadable-source and unsupported-argument subprocesses
   assert empty stdout and exact status 1 and 2. Diagnostics authorize only the fixed repository-relative source plus
   bounded numeric or closed `none`/`overflow` locators, never task/dependency
   IDs, owned paths, contents, or counts, and every code has one exact remedy

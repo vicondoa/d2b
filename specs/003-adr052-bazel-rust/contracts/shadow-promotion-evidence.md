@@ -314,17 +314,24 @@ It also proves:
     crash-after-`EXECUTED`, crash-during-grace, direct and double-forked
     long-lived-descendant results; fixed userspace containment ceiling; one
     beyond-ceiling `pending-kernel-cleanup` plant with owned quarantine,
-    no-success/no-reuse, no false-reaped claim, and eventual consuming reap;
-    and namespace/teardown-patch/ceiling/quarantine/fallback mutation results.
+    no-success/no-reuse, no false-reaped claim, and consuming reap by the
+    original live monitor; byte-exact pending/runbook-link/release results and
+    a resolved
+    `docs/contributing/critical-subsystems.md#bazel-pending-kernel-cleanup-quarantine`
+    locator; and namespace/teardown-patch/ceiling/quarantine/reboot/
+    retry-before-release/replacement-waiter/manual-release/fallback mutation
+    results.
 23. exact immutable static C `d2b-bazel-exec-supervisor` derivation,
     dependency-closure, output NAR/executable, source, and protocol hashes;
     one-site Rust invocation policy; private-fd identity; descriptor absence;
     CLOEXEC and stdin results; single-record exec-error plus stateful framed
     `READY`/`EXECUTED`/terminal transport; fragmented/coalesced and
     malformed/duplicate/order results; held-open-writer, closed-reader `EPIPE`,
-    exact partial-I/O, fast-same-status, waitable `SIGCHLD`, block-first signal
-    initialization, pending/normalization-time `SIGTERM`, pre-`READY`
-    termination ownership, and forwarding,
+    exact partial-I/O, fast-same-status, waitable `SIGCHLD`, safe serialized
+    spawning-thread mask block/exact restoration, inherited managed `SIG_IGN`
+    refusal, handoff-window/normalization-time `SIGTERM`, child/supervisor
+    setpgid confirmation races, typed `ESRCH`/`EPERM`/early-child-exit cleanup,
+    pending signal before confirmation, pre-`READY` termination ownership, and forwarding,
     no-deadline external-TERM escalation, target-ignore-TERM, absence of
     numeric Rust signaling; and every Rust-parent and C-supervisor
     ownership/closure/cleanup/wait/reap result; plus every parent/helper/child

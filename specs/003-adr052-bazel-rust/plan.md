@@ -156,6 +156,10 @@ Layer-1 surfaces. No new top-level shell gate or Layer-1 job.
 | Recovery diagnostics kept naming shadow aliases after the aliases were removed. | A fixed remedy, threshold, evidence variant, state label, or doc that invokes a nonexistent target is not actionable and violates the fail-closed contract. | Version the closed diagnostic command enum. Use shadow targets only in a pre-change fixture where they exist, then make T108 atomically own every production renderer, both module roots, qualification table, evidence/publication path, exact-message test, governed doc, evidence field, and semantic fragment while switching to enduring promoted aggregate/slice targets. |
 | Release queries suppressed `git` and `gh` errors while trying the next tag. | An unavailable query backend is degraded evidence, not proof that a release object is absent. | Use closed typed complete/degraded/refused outcomes, distinct query codes, no persisted or printed candidate/tag identifier, no raw output, and exact remedies. |
 | Artifact rows carried a size allowance beside the authorization, and evidence variants repeated sink classification. | Duplicated authorities admit contradictory records, and unrelated old/new arithmetic can authorize a real artifact. | Derive positive size delta only from `sizeGrowthAuthorization`, require its prior/new bytes to equal the baseline row and realized artifact, keep sink kind and retention once in the common evidence record, and reject duplicate authority fields. |
+| Blocking managed signals only inside the helper left an exec-time handoff window, and resetting inherited `SIG_IGN` would silently override caller intent. | A spawned image inherits the spawning thread's mask while ignored dispositions survive exec. | Under a process-wide guard, the safe Rust typed consumer uses reviewed safe `nix::sys::signal::SigSet` calls to capture and block the full managed set before spawn and restore the exact mask after every spawn result. The helper's first setup operation inspects managed dispositions while blocked and fails before fork with a typed recovery code on any `SIG_IGN`; it never resets and continues. Deterministic ignored-disposition and handoff-window `SIGTERM` tests add no Rust unsafe. |
+| The child alone created its process group, so `READY` or an early termination request could race group creation. | Forwarding is safe only after the supervisor has proved the target group exists and the child is still live. | Child and supervisor both call `setpgid`; a close-on-exec confirmation barrier keeps managed signals blocked until the supervisor confirms the exact group. `READY` and managed-signal consumption/forwarding wait for confirmation. Deterministic parent-first, child-first, early-signal, `ESRCH`, `EPERM`, other-error, mismatch, and early-child-exit tests require typed cleanup. |
+| Pending-kernel-cleanup recovery suggested reboot and had no governed operator path. | Reboot destroys the original wait owner and cannot prove a consuming reap. | Keep the original live patched-sandbox monitor as sole wait owner through its consuming reap. T120 creates and owns `docs/contributing/critical-subsystems.md#bazel-pending-kernel-cleanup-quarantine`, links the byte-exact pending diagnostic, and specifies inspection, drain-without-terminate, wait, release confirmation, then rerun. Reboot, retry-before-release, replacement wait ownership, and manual release are forbidden and mutation-tested. |
+| Validator setup exceptions collapsed into one generic diagnostic and tests bypassed the public CLI entrypoint. | An operator needs to repair validator setup rather than rewrite `tasks.md`, and buffered sentinel/error data must never leak. | Give temp-dir, path, open3, and subprocess setup distinct fixed classes and validator-specific remedies. Exercise `run_cli_entrypoint --self-test` with injected sentinel stdout/stderr followed by die and warn; require status 1, empty stdout, byte-exact class stderr, and no raw exception or path. |
 
 ## Shared Design Invariants
 
@@ -195,12 +199,15 @@ Layer-1 surfaces. No new top-level shell gate or Layer-1 job.
     `RESOLVE_NO_MAGICLINKS` only, uses no `RESOLVE_BENEATH` or
     `RESOLVE_NO_SYMLINKS`, executes the same verified open file description
     through a private descriptor mapped to the exact immutable Nix-built
-    static C `d2b-bazel-exec-supervisor`. The single-threaded supervisor
-    blocks managed signals before normalization, installs synchronous
-    consumption while blocked, creates a close-on-exec single-record
-    exec-error pipe, forks once, emits framed `READY` then `EXECUTED`, remains
-    alive, forwards the fixed signal allowlist, reaps, and mirrors exact target
-    status through the stateful framed stream. The patched sandbox's fresh
+    static C `d2b-bazel-exec-supervisor`. Under a serialization guard, the
+    safe Rust consumer blocks the spawning thread's complete managed set before
+    spawn and restores its exact prior mask after every spawn result. The
+    single-threaded supervisor first refuses any inherited managed `SIG_IGN`,
+    installs synchronous consumption while the inherited set stays blocked,
+    forks once, performs both sides of a confirmed setpgid handshake before
+    `READY` or managed-signal consumption, then emits framed `READY` and
+    `EXECUTED`, remains alive, forwards the fixed signal allowlist, reaps, and
+    mirrors exact target status through the stateful framed stream. The patched sandbox's fresh
     PID-namespace monitor owns abnormal teardown with one fixed userspace
     ceiling and typed pending-kernel-cleanup quarantine, including supervisor
     crash; Rust never signals a numeric PID or PGID. The child
@@ -413,9 +420,12 @@ own the same file.
   unordered/ordered/indented/blockquoted forms, and every remaining branch.
   Every negative compares complete stderr byte-for-byte with an independent
   literal through the injectable entrypoint, including exact exit status.
-  Temp-dir, path, open3, and subprocess setup failures execute through the
-  guarded entrypoint and produce status 1, empty stdout, and only the fixed
-  `self-test-contract` stderr. Unreadable-source status 1 and
+  Temp-dir, path, open3, and subprocess setup failures and injected warnings
+  execute through `run_cli_entrypoint --self-test` after the injected runner
+  writes sentinel stdout/stderr. Each produces status 1, empty stdout, and only
+  its distinct fixed setup-class stderr with a validator-specific remedy, not
+  a task rewrite; raw exception/path and sentinel content are discarded.
+  Unreadable-source status 1 and
   unsupported-argument status 2 execute actual subprocesses with empty stdout
   and byte-exact stderr. Adjacency tests
   independently scan the fixture to assert the reported physical row. Census,
@@ -511,17 +521,23 @@ The prep commit:
   `VerifiedExecutable` and the only public API that consumes it. The API uses
   the exact pinned reviewed safe `command-fds` dependency to map the verified
   descriptor to the fixed private fd while preserving declared stdio. The
-  safe Rust consumer has the only helper invocation site and models the fixed
-  single-record exec-error protocol and fixed-header stateful framed
+  safe Rust consumer has the only helper invocation site. Under a process-wide
+  serialization guard, its spawning thread uses the reviewed safe
+  pinned `nix` 0.29 `signal` feature's `nix::sys::signal::SigSet` API to
+  capture its exact mask, block the complete managed set before spawn, and
+  restore the captured mask after successful or failed spawn before unlock.
+  No new signal FFI dependency is added. It models the fixed single-record exec-error
+  protocol, group-confirmation barrier, and fixed-header stateful framed
   `READY`, `EXECUTED`, failure, and terminal status protocol;
 - adds no Rust helper crate. Injected prep tests cover the Rust-parent
   stage-error and owner/closure table, one-site invocation policy, private-fd
-  mapping, protocol discrimination, held-open/partial transport, and a fast
-  target status equal to a planted helper crash. The dedicated static C
+  mapping, exact signal-mask restoration, protocol discrimination,
+  held-open/partial transport, group-confirmation races, and a fast target
+  status equal to a planted helper crash. The dedicated static C
   supervisor source and real-output conformance land in the sequential
   toolchain scope. No runner `sys.rs`, Rust raw fork, `pre_exec`, Rust signal
-  handler, runfiles/worktree helper path, target reopen, or unsafe exception
-  exists;
+  handler, signal-disposition mutation, runfiles/worktree helper path, target
+  reopen, or unsafe exception exists;
 - creates and registers green runner and locator crate skeletons before any
   runner or locator test, with their complete future dependency sets and
   stable crate-root contract seams. Scope tests load their not-yet-wired
@@ -548,16 +564,23 @@ Before the Bazel generator opens, `spec003w0-toolchain` exclusively owns
 `tests/golden/{bazel-toolchain.json,bazel-exec-supervisor.json}`,
 `tests/unit/nix/cases/bazel-toolchain.nix`,
 `tests/unit/nix/pinned/{common,x86_64-linux,aarch64-linux}.txt`, and
+`docs/contributing/critical-subsystems.md`, and
 `packages/d2b-contract-tests/tests/policy_bazel_toolchain.rs`. It lands the
 green Nix packages, exact identity pins, startup capability, patch-removal,
 filter-load, fresh PID-namespace monitor, fixed abnormal-teardown ceiling,
 patched-sandbox-owned `SANDBOX_*` mapping/rendering and live exact tests,
 real crash-stage/long-lived-descendant integration, and a beyond-ceiling
 `pending-kernel-cleanup` plant with owned no-success/no-reuse quarantine and
-eventual consuming reap,
+eventual consuming reap by the original live monitor. It creates the governed
+`docs/contributing/critical-subsystems.md#bazel-pending-kernel-cleanup-quarantine`
+runbook section with exact inspect, drain-without-terminate, wait,
+release-confirmation, then rerun steps and no reboot, retry-before-release,
+replacement waiter, or manual release,
 static-supervisor source/dependency/output/protocol, and
-framed status, single-record exec-error, block-first signal initialization,
-pending/normalization-time `SIGTERM`, and no-first-party-Rust-unsafe tests.
+framed status, single-record exec-error, inherited-signal verification,
+ignored-disposition refusal, Rust-to-helper handoff-window `SIGTERM`,
+parent/child setpgid confirmation, early-signal/group-race cleanup, and
+no-first-party-Rust-unsafe tests.
 Cargo tests retain mocks; the real
 containment proof runs only through the patched Bazel Linux sandbox. It
 implements sandbox mapping/rendering only in
@@ -566,7 +589,9 @@ and the beyond-ceiling plant live only in
 `tests/tools/d2b-bazel-exec-supervisor/sandbox-crash-plant.c`,
 `tests/unit/nix/cases/bazel-toolchain.nix`, and
 `packages/d2b-contract-tests/tests/policy_bazel_toolchain.rs`; the two golden
-JSON files bind their identities. It
+JSON files bind their identities. The policy test resolves the contributing
+runbook file and anchor exactly once and byte-matches the pending diagnostic,
+runbook link, and consuming-reap release. It
 regenerates all three Nix-unit presence pins, proves a second regeneration is
 a clean no-op, and runs `make test-nix-unit` before the generator may open.
 The later Nix-policy scope is a dependency descendant and may extend
@@ -597,7 +622,10 @@ integrated. `spec003w0-policy-ci` begins only after all three new
 fixture-independent policy binaries exist; T022 then adds each exactly once
 to the fail-closed `test-policy` inventory and tests missing, extra, and
 duplicate membership. `spec003w0-binding-docs` begins
-after the integrated command and gate shapes are stable.
+after the integrated command and gate shapes are stable. Its later comparable
+ownership of `docs/contributing/critical-subsystems.md` preserves the exact
+T120-created pending-cleanup runbook section and edits only the workspace and
+gate guidance elsewhere in that file.
 The release-workflow substep of `spec003w0-policy-ci` begins after the root
 workspace and gate target directories are stable. These are real dependencies,
 not parallel work. The binding-doc scope records that ADR 0054 governs the
@@ -747,17 +775,26 @@ All must be true:
   consuming public API; that safe Rust API consumes the handle by value, maps
   it with the exact reviewed `command-fds` pin, preserves stdin/stdout/stderr,
   and is the one Rust site that invokes the exact immutable Nix store path of
-  `d2b-bazel-exec-supervisor`;
+  `d2b-bazel-exec-supervisor`. Under a process-wide guard, the spawning thread
+  uses reviewed safe `nix::sys::signal::SigSet` calls to capture its exact
+  mask, block the complete managed set before spawn, and restore the captured
+  mask after successful or failed spawn before unlock;
 - the C source, Nix expression, derivation dependency closure, static ELF,
   protocol, output NAR, native system, and executable digests match
   `tests/golden/bazel-exec-supervisor.json`; the helper is a dedicated static
   build/test-tooling derivation and no Rust workspace crate or unsafe exception
-  implements it. It stays single-threaded, blocks managed signals before
-  installing normalized dispositions and synchronous consumption, creates
-  one close-on-exec nonblocking child exec-error pipe, forks once, installs
-  child stdio and executable-fd CLOEXEC, and performs
-  same-open-file-description `execveat(AT_EMPTY_PATH)` with no reopen or
-  fallback. The exec-error pipe accepts one record or EOF and alone uses the
+  implements it. It stays single-threaded and inherits managed signals blocked.
+  Its first setup operation inspects inherited managed dispositions; any
+  `SIG_IGN` is a typed fail-before-fork refusal and is never
+  reset-and-continued. Only then does it install normalized dispositions and
+  synchronous consumption. It creates one close-on-exec nonblocking child
+  exec-error pipe plus a group-confirmation pipe and forks once. The child and
+  supervisor both call `setpgid`, the confirmation barrier keeps managed
+  signals blocked, and the supervisor proves the exact live group before
+  `READY` or consuming/forwarding termination. The child then installs stdio
+  and executable-fd CLOEXEC and performs same-open-file-description
+  `execveat(AT_EMPTY_PATH)` with no reopen or fallback. The exec-error pipe
+  accepts one record or EOF and alone uses the
   additional overlong byte. The status pipe emits fixed-header version-1
   `READY`, `EXECUTED`, and terminal frames; its 27-byte stateful decoder
   retains fragmented and coalesced frames and rejects malformed, duplicate,
@@ -765,17 +802,21 @@ All must be true:
   status probe. All I/O retains exact bounded
   `EINTR`/`EAGAIN`/short/partial/closed-reader/held-writer handling under the
   original deadline. The helper remains alive, forwards the fixed termination
-  signals, reaps, and mirrors exact target status. It blocks managed signals
-  before normalization, installs dispositions and synchronous consumption
-  while blocked, then establishes the final mask. It ignores `SIGPIPE`,
-  restores waitable default `SIGCHLD`, owns pending or normalization-time
-  `SIGTERM` before `READY`, and escalates external `SIGTERM` through the complete
-  fixed grace even with no case deadline. Missing/wrong output, rebind,
+  signals, reaps, and mirrors exact target status. After its initial
+  inherited-disposition and mask verification, it installs dispositions and
+  synchronous consumption while blocked and establishes the final mask. It
+  ignores `SIGPIPE`, restores waitable default `SIGCHLD`, owns pending,
+  handoff-window, normalization-time, or pre-group-confirmation `SIGTERM`
+  before `READY`, and escalates external `SIGTERM` through the complete fixed
+  grace even with no case deadline. Missing/wrong output, rebind,
   private-fd identity, descriptor absence, CLOEXEC, stdin, helper crash/EOF
   before `EXECUTED`, fast same-status target exit, inherited
-  ignored/`SA_NOCLDWAIT` SIGCHLD, blocked/ignored SIGTERM,
-  target-ignore-TERM, signal/status mismatch, and every Rust-parent and
-  C-supervisor ownership/closure/cleanup/wait/reap failure test passes; every
+  ignored/`SA_NOCLDWAIT` SIGCHLD, safe mask restoration, blocked SIGTERM,
+  managed-`SIG_IGN` refusal, handoff-window SIGTERM, parent-first/child-first
+  setpgid races, typed `ESRCH`/`EPERM`/other-error/early-exit cleanup,
+  pre-confirmation signal ownership, target-ignore-TERM, signal/status
+  mismatch, and every Rust-parent and C-supervisor
+  ownership/closure/cleanup/wait/reap failure test passes; every
   invocation outside the one typed Rust consumer fails the closed policy;
 - the actual Bazel executable matches `tests/golden/bazel-toolchain.json` and
   its exact Bazel 8.6.0 source, Linux sandbox patch, fixed policy, output NAR,
@@ -790,14 +831,22 @@ All must be true:
   The fixed 10,000 ms ceiling bounds userspace escalation and the
   close-or-quarantine decision only. A not-yet-reaped PID 1 enters owned
   `pending-kernel-cleanup`; sandbox and outputs cannot succeed or be reused,
-  and outer `linux-sandbox` remains the wait owner through consuming reap.
+  and the original live outer `linux-sandbox` monitor remains the sole wait
+  owner through consuming reap and publishes the only release. Its fixed
+  pending diagnostic links to the governed
+  `docs/contributing/critical-subsystems.md#bazel-pending-kernel-cleanup-quarantine`
+  runbook, which requires inspect, drain-without-terminate, wait, release
+  confirmation, then rerun and prohibits reboot, retry-before-release,
+  replacement wait ownership, and manual release.
   Real sandbox plants crash the helper before `READY`, after `READY`, after
   `EXECUTED`, during grace, with direct and double-forked descendants, and in
   a beyond-ceiling pending cleanup. PID-namespace, teardown-patch, ceiling,
-  quarantine, false-reap, no-success/no-reuse, and strategy-fallback
-  mutations fail. The patched sandbox owns every `SANDBOX_*` renderer and
-  live byte-exact test; exact stage diagnostics and full repository-relative
-  locator resolution pass leak-rejection tests;
+  quarantine, false-reap, reboot-remedy, retry-before-release,
+  replacement-waiter, manual-release, no-success/no-reuse, and
+  strategy-fallback mutations fail. The patched sandbox owns every
+  `SANDBOX_*` renderer and live byte-exact test; exact stage diagnostics,
+  pending/runbook/release bytes, and full repository-relative locator
+  resolution pass leak-rejection tests;
 - `gen-bazel --check` and `gen-package-policy-inputs --check` pass;
 - the selected-context oracle joins locked offline target-filtered root
   metadata (identities, sources, candidate edges, `cfg`),
@@ -1086,8 +1135,13 @@ The exact `spec003w2-recovery` ownership is parent/helper/child mapping and
 tests only. It contains no `SANDBOX_*` mapping, renderer, or byte-exact case;
 those were already landed in the sequential spec003w0 toolchain files that
 exist before action setup and remain through quarantine and consuming reap.
-Both recovery harnesses resolve every governed fixed file and Markdown anchor
-from the repository root.
+Its closed rows include `PARENT_SIGNAL_HANDOFF`,
+`HELPER_SIGNAL_INHERITED_IGNORED`, `HELPER_SIGNAL_HANDOFF`,
+`HELPER_GROUP_ESRCH`, `HELPER_GROUP_EPERM`, `HELPER_GROUP_ERROR`, and
+`HELPER_GROUP_EARLY_EXIT`. Both recovery harnesses resolve every governed
+fixed file and Markdown anchor from the repository root; the T120 sandbox
+harness additionally resolves the contributing runbook and byte-matches
+pending, link, and consuming-reap release records.
 
 Any shared support trait change belongs in prep. No slice extends it.
 
@@ -1579,9 +1633,9 @@ old-rerun-after-failure fixtures prove both rules.
 | A rerun of an old run inflates the streak or reorders behind newer failures. | Streak positions are distinct push-created (run ID, head SHA) units ordered by `createdAt` then run ID, with repeated-attempt and old-rerun-after-failure fixtures. |
 | The pre-merge rollback rehearsal reads a promotion record that does not exist yet and silently rehearses nothing. | Rehearsal resolves the candidate from verified candidate HEAD and the recorded spec003w5 parent; promotion-record reads are post-merge only. |
 | A verified executable becomes forgeable or descriptor-revealing through a harmless-looking trait, formatter, serializer, constructor, or accessor. | Compiler-derived closed public/hidden/inherent/explicit/auto/blanket API snapshots plus focused rustdoc compile-fail examples. |
-| The immutable helper is rebound, fd 0 stops being stdin, a mapped descriptor is wrong, or a fast target exit is mistaken for a helper crash with the same status. | The dependency-leaf safe Rust consumer uses the exact static C Nix output and reviewed safe command-fd mapping at its one invocation site. The single-threaded supervisor emits framed `READY` then `EXECUTED`, retains coalesced terminal state, remains alive, forwards signals, reaps, and mirrors exact target status; source/dependency/output identity plus stdio, CLOEXEC, held-open/partial transport, crash/EOF, signal initialization, ownership, cleanup, wait, and reap plants cover every stage. |
-| The supervisor crashes after forking and leaves a target or daemonized descendant alive, or Rust cleanup signals a reused numeric identity. | The patched Bazel sandbox creates one fresh PID namespace whose PID-1 monitor survives the action tree. Its fixed ceiling bounds userspace escalation and the close-or-quarantine decision, while pending kernel cleanup remains wait-owned, quarantined, failed, and non-reusable until consuming reap. Rust only closes and fails the action. Real crash-stage, descendant, and beyond-ceiling plants plus namespace/patch/ceiling/quarantine/false-reap/reuse/fallback mutations prove the boundary. |
-| Inherited `SIGPIPE`, non-waitable `SIGCHLD`, pending or ignored `SIGTERM`, or a stalled short-I/O loop defeats supervision. | Block-first signal initialization, typed closed-reader `EPIPE`, default waitable `SIGCHLD`, pre-`READY` termination ownership, no-deadline external-TERM escalation, single-record exec-error, and stateful framed-status tests cover every boundary. |
+| The immutable helper is rebound, fd 0 stops being stdin, a mapped descriptor is wrong, a signal lands between Rust and helper setup, inherited `SIG_IGN` is silently overridden, group creation races `READY`, or a fast target exit is mistaken for a helper crash with the same status. | The dependency-leaf safe Rust consumer uses the exact static C Nix output, reviewed safe command-fd mapping, and safe serialized `SigSet` mask handoff at its one invocation site. The helper refuses ignored managed dispositions before fork; parent and child setpgid under a confirmation barrier before `READY`; framed status, source/dependency/output identity, mask restoration, handoff-window, setpgid race/failure, stdio, CLOEXEC, transport, crash/EOF, ownership, cleanup, wait, and reap plants cover every stage without Rust unsafe. |
+| The supervisor crashes after forking and leaves a target or daemonized descendant alive, Rust cleanup signals a reused numeric identity, or recovery destroys the only wait owner before reap. | The patched Bazel sandbox creates one fresh PID namespace whose original live monitor survives the action tree and remains sole wait owner. Its fixed ceiling bounds userspace escalation and the close-or-quarantine decision, while pending kernel cleanup remains quarantined, failed, and non-reusable until that monitor publishes consuming-reap release. The governed runbook drains without terminating it and forbids reboot, early retry, replacement waiter, and manual release. Real crash-stage, descendant, beyond-ceiling, byte-exact diagnostic/link/release, and recovery mutations prove the boundary. |
+| Inherited `SIGPIPE`, non-waitable `SIGCHLD`, a pending managed signal, an ignored managed disposition, or a stalled short-I/O loop defeats supervision. | Safe Rust block-before-spawn and exact restore, helper first-operation ignored-disposition refusal, typed closed-reader `EPIPE`, default waitable `SIGCHLD`, confirmed group before signal consumption or `READY`, no-deadline external-TERM escalation, single-record exec-error, and stateful framed-status tests cover every boundary. |
 | A cache API page interleaves a foreign prefix and maintenance adopts it. | Closed typed prefix enum, mixed-page fixtures, preservation checks, and zero delete calls on every authorization refusal. |
 | Tests pass while forbidden values persist in `test.log` or exporter output. | Pre-sink streaming sanitization, committed measured bounds, planted-value absence across every sink, and typed degraded evidence rejected by qualification. |
 | Old or excessive diagnostics accumulate after passing sanitizer bounds. | Four closed age/count retention classes, descriptor-relative expiry before publication, and injected boundary/failure tests. |
@@ -1632,8 +1686,11 @@ After the desired waves:
     section, adjacency, and mismatch locators name actual physical positions;
     non-record and overflow locators are closed; oversized record/line inputs
     and real unreadable-source and unsupported-argument subprocesses pass.
-    Temp-dir, path, open3, and subprocess setup failures return only the fixed
-    self-test-contract diagnostic.
+    Temp-dir, path, open3, and subprocess setup failures plus injected
+    warnings pass through `run_cli_entrypoint --self-test` after sentinel
+    output, return status 1 with empty stdout, and emit only their distinct
+    fixed setup-class diagnostics and validator-specific remedies; no raw
+    exception/path, sentinel, or task-rewrite remedy appears.
 13. process references use exactly `spec003w0` through `spec003w7` plus
     `spec003w5fu1`; no other qualified Spec 003 wave is accepted.
 14. every authoritative native inventory is six checks per system, artifact
@@ -1654,15 +1711,21 @@ After the desired waves:
     stateful framed `READY`/`EXECUTED`/terminal transport, fragmented/coalesced
     input, malformed/duplicate/order negatives, held-open writer, partial I/O,
     fast-same-status discrimination, closed-reader `EPIPE`, waitable default
-    `SIGCHLD`, block-first signal initialization, pending and
-    normalization-time `SIGTERM`, pre-`READY` ownership, no-deadline
-    external-TERM escalation, target-status
+    `SIGCHLD`, safe serialized spawning-thread mask block/exact restoration,
+    helper first-operation managed-`SIG_IGN` refusal, handoff-window and
+    normalization-time `SIGTERM`, parent/child setpgid confirmation races,
+    typed `ESRCH`/`EPERM`/early-child-exit cleanup, pending signal before group
+    confirmation, pre-`READY` ownership, no-deadline external-TERM escalation,
+    target-status
     mirroring, ownership, cleanup, wait, and reap coverage all pass. The real
     patched-sandbox integration passes crash-before-`READY`,
     crash-after-`READY`, crash-after-`EXECUTED`, crash-during-grace, and
     direct/double-forked long-lived-descendant plants plus a beyond-ceiling
-    `pending-kernel-cleanup` quarantine plant. PID-namespace, teardown-patch,
-    ceiling, quarantine, false-reap, no-success/no-reuse, and fallback
+    `pending-kernel-cleanup` quarantine plant whose original live monitor alone
+    publishes consuming-reap release. Its governed runbook path resolves and
+    its pending/link/release bytes match. PID-namespace, teardown-patch,
+    ceiling, quarantine, false-reap, reboot-remedy, retry-before-release,
+    replacement-waiter, manual-release, no-success/no-reuse, and fallback
     mutations fail; Cargo tests claim only mock coverage. No Rust
     helper crate, runner `sys.rs`, target path/reopen/fallback, fd-0 transport,
     ambiguous Rust numeric signal, or first-party Rust unsafe exception

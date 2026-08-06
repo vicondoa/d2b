@@ -97,6 +97,7 @@ Every parent code names the fixed input
 | Internal stage | Public code | Exact correction |
 | --- | --- | --- |
 | `PARENT_PREPARE` | `D2B-BZLEXEC-PARENT-PREPARE` | Correct status-channel construction and private-fd mapping in `packages/d2b-bazel-exec/src/execute.rs`. |
+| `PARENT_SIGNAL_HANDOFF` | `D2B-BZLEXEC-PARENT-SIGNAL-HANDOFF` | Under the process-wide launch guard, use the reviewed safe `nix::sys::signal::SigSet` API to capture and block the full managed set before spawn and restore the exact spawning-thread mask after every spawn result; add no Rust unsafe or disposition mutation. |
 | `PARENT_SPAWN` | `D2B-BZLEXEC-PARENT-SPAWN` | Correct the exact immutable-helper spawn in `packages/d2b-bazel-exec/src/execute.rs`; do not add a path fallback. |
 | `PARENT_CLOSE` | `D2B-BZLEXEC-PARENT-CLOSE` | Correct single-owner post-spawn descriptor closure in `packages/d2b-bazel-exec/src/execute.rs`. |
 | `PARENT_READY` | `D2B-BZLEXEC-PARENT-READY` | Correct the bounded stateful framed `READY` decoder in `packages/d2b-bazel-exec/src/execute.rs`. |
@@ -112,10 +113,16 @@ Every helper code names the fixed input
 
 | Internal stage | Public code | Exact correction |
 | --- | --- | --- |
+| `HELPER_SIGNAL_INHERITED_IGNORED` | `D2B-BZLEXEC-HELPER-SIGNAL-INHERITED-IGNORED` | Restore a non-ignored disposition for every managed signal in the launching environment, then rerun; the helper must inspect first and fail before fork rather than reset and continue. |
+| `HELPER_SIGNAL_HANDOFF` | `D2B-BZLEXEC-HELPER-SIGNAL-HANDOFF` | Correct the typed Rust launch handoff so the helper inherits the complete managed set blocked before its first setup operation. |
 | `HELPER_ADOPT` | `D2B-BZLEXEC-HELPER-ADOPT` | Correct private-fd, status-fd, argv, environment, and stdio adoption before fork. |
-| `HELPER_SIGNAL_NORMALIZE` | `D2B-BZLEXEC-HELPER-SIGNAL-NORMALIZE` | Block managed signals first, install dispositions and synchronous consumption while blocked, establish the final mask, preserve pending termination, ignore `SIGPIPE`, and restore waitable default `SIGCHLD` without `SA_NOCLDWAIT`. |
-| `HELPER_EXEC_PIPE` | `D2B-BZLEXEC-HELPER-EXEC-PIPE` | Correct creation and ownership of the single nonblocking close-on-exec exec-error pipe. |
+| `HELPER_SIGNAL_NORMALIZE` | `D2B-BZLEXEC-HELPER-SIGNAL-NORMALIZE` | After refusing any inherited managed `SIG_IGN`, install dispositions and synchronous consumption while the inherited managed set remains blocked, establish the final mask, preserve pending termination, ignore `SIGPIPE`, and restore waitable default `SIGCHLD` without `SA_NOCLDWAIT`. |
+| `HELPER_EXEC_PIPE` | `D2B-BZLEXEC-HELPER-EXEC-PIPE` | Correct creation and ownership of the single nonblocking close-on-exec exec-error pipe and the close-on-exec group-confirmation pipe. |
 | `HELPER_FORK` | `D2B-BZLEXEC-HELPER-FORK` | Correct the sole supervisor fork and leave no child on a reported fork failure. |
+| `HELPER_GROUP_ESRCH` | `D2B-BZLEXEC-HELPER-GROUP-ESRCH` | Correct the parent-and-child `setpgid` handshake and group-confirmation barrier; an absent child or group must fail before `READY` with direct-child cleanup. |
+| `HELPER_GROUP_EPERM` | `D2B-BZLEXEC-HELPER-GROUP-EPERM` | Correct the parent-and-child `setpgid` handshake without changing session or group authority; `EPERM` must fail before `READY` with direct-child cleanup. |
+| `HELPER_GROUP_ERROR` | `D2B-BZLEXEC-HELPER-GROUP-ERROR` | Correct the parent-and-child `setpgid` handshake; any other setpgid error or confirmed-group mismatch must fail before `READY` with direct-child cleanup and no raw errno text. |
+| `HELPER_GROUP_EARLY_EXIT` | `D2B-BZLEXEC-HELPER-GROUP-EARLY-EXIT` | Keep the child blocked at the group-confirmation barrier and reject an early exit before `READY`; consume-reap it and close every owned descriptor. |
 | `HELPER_EXEC_TIMEOUT` | `D2B-BZLEXEC-HELPER-EXEC-TIMEOUT` | Correct absolute-deadline accounting without resetting time after retry or short I/O. |
 | `HELPER_EXEC_PARTIAL` | `D2B-BZLEXEC-HELPER-EXEC-PARTIAL` | Correct exact record cursors so EOF after any byte is partial. |
 | `HELPER_EXEC_OVERLONG` | `D2B-BZLEXEC-HELPER-EXEC-OVERLONG` | Correct the one-record-plus-one-byte overlong check. |
@@ -135,7 +142,7 @@ Every child code names the same fixed supervisor source and the contract row
 
 | Internal stage | Public code | Exact correction |
 | --- | --- | --- |
-| `CHILD_GROUP` | `D2B-BZLEXEC-CHILD-GROUP` | Correct creation of the target's private process group before exec. |
+| `CHILD_GROUP` | `D2B-BZLEXEC-CHILD-GROUP` | Correct the child's `setpgid(0, 0)` half of the target-group handshake and keep managed signals blocked until the supervisor confirms that exact group. |
 | `CHILD_SIGNAL` | `D2B-BZLEXEC-CHILD-SIGNAL` | Restore the empty child mask and default disposition for every catchable signal. |
 | `CHILD_STDIO` | `D2B-BZLEXEC-CHILD-STDIO` | Correct exact installation of declared stdin, stdout, and stderr at fds 0, 1, and 2. |
 | `CHILD_CLOEXEC` | `D2B-BZLEXEC-CHILD-CLOEXEC` | Set close-on-exec on the private executable fd and every non-surviving descriptor. |
@@ -153,8 +160,14 @@ Every sandbox code names the fixed inputs
 | `SANDBOX_KILL` | `D2B-BZLEXEC-SANDBOX-KILL` | Correct namespace-local kill of every member other than PID 1; do not signal a host PID or PGID. |
 | `SANDBOX_REAP` | `D2B-BZLEXEC-SANDBOX-REAP` | Correct nonblocking adopted-child reap progress and require a consuming wait before recording any PID-1 reap. |
 | `SANDBOX_CEILING` | `D2B-BZLEXEC-SANDBOX-CEILING` | Restore the single fixed 10,000 ms userspace TERM/KILL/monitor escalation and close-or-quarantine ceiling; do not use it as a kernel cleanup bound. |
-| `SANDBOX_PENDING_KERNEL_CLEANUP` | `D2B-BZLEXEC-SANDBOX-PENDING-KERNEL-CLEANUP` | Keep the action failed and the sandbox and outputs quarantined under the outer wait owner; remove the worker from admission, correct the uninterruptible `D`-state kernel, filesystem, or device stall or reboot it, and retry only after consuming reap releases quarantine. |
+| `SANDBOX_PENDING_KERNEL_CLEANUP` | `D2B-BZLEXEC-SANDBOX-PENDING-KERNEL-CLEANUP` | Keep the action failed and quarantined under the original live monitor as sole wait owner; drain new admission without terminating it; do not reboot, retry, or release manually; follow `docs/contributing/critical-subsystems.md#bazel-pending-kernel-cleanup-quarantine` and rerun only after that monitor publishes and the operator confirms consuming-reap release. |
 | `SANDBOX_CLEANUP` | `D2B-BZLEXEC-SANDBOX-CLEANUP` | Correct consuming PID-1 reap and owned quarantine release while preserving the first sandbox failure; never convert a quarantined action to success. |
+
+Successful release from quarantine is not a recovery error code. Only the
+original live monitor may publish the fixed
+`D2B-BZLEXEC-SANDBOX-CONSUMING-REAP-RELEASE` record with
+`cleanup=complete-after-quarantine` and
+`quarantine=entered-and-released-after-consuming-reap`.
 
 T067 owns table-driven byte-exact tests for every parent, helper, and child
 public code crossed with all four slices and both closed command versions.
@@ -175,10 +188,15 @@ exists before action setup and remains the wait owner through normal cleanup
 or `pending-kernel-cleanup`. Sequential T120 owns the byte-exact sandbox
 cross-product tests in its exact toolchain files. Those tests apply the same
 repository-root path and unique-anchor resolver to both fixed sandbox inputs,
+and to
+`docs/contributing/critical-subsystems.md#bazel-pending-kernel-cleanup-quarantine`,
 cover every sandbox code across all slices and both command versions, and
-plant omitted/wrong/borrowed remedies, unresolved locators, pending-state
-removal, false-reaped reporting, success-after-quarantine, and reuse while
-quarantined. No runner recovery file renders a sandbox code.
+plant omitted/wrong/borrowed remedies, unresolved locators, missing runbook or
+anchor, wrong runbook link, reboot, retry-before-release, manual release,
+replacement waiter, pending-state removal, false-reaped reporting,
+success-after-quarantine, and reuse while quarantined. Pending and
+consuming-reap release diagnostics are byte-exact. No runner recovery file
+renders a sandbox code.
 
 Together the T067 runner harness and T120 live sandbox harness cover every
 execution parent/helper/child/sandbox code, sandbox-policy stage and slice,

@@ -142,7 +142,12 @@ SIGKILL and nonblocking adopted-child reap progress. One fixed 10,000 ms
 monotonic ceiling bounds userspace TERM/KILL/monitor escalation and the
 close-or-quarantine decision only, never kernel cleanup. A PID 1 not proved
 reaped by a consuming wait enters outer-owned `pending-kernel-cleanup`;
-sandbox and outputs cannot succeed or be reused until eventual consuming reap.
+sandbox and outputs cannot succeed or be reused until the original live
+monitor's eventual consuming reap. That monitor remains sole wait owner and
+publishes the only release; reboot, retry-before-release, replacement wait
+ownership, and manual release are forbidden. The fixed pending diagnostic
+links to
+`docs/contributing/critical-subsystems.md#bazel-pending-kernel-cleanup-quarantine`.
 The supervisor retains normal TERM/grace/KILL/reap. Rust never signals a
 numeric PID or PGID.
 
@@ -151,10 +156,12 @@ after `READY`, after `EXECUTED`, during grace, and with direct and
 double-forked long-lived descendants. Ordinary cases require liveness-fd EOF
 plus consuming outer-sandbox reap; Cargo mocks are not evidence. A
 deterministic beyond-ceiling plant proves pending cleanup, owned quarantine,
-no reaped claim, no success/reuse, and eventual consuming reap while the
-action stays failed. Separate mutations remove `CLONE_NEWPID`, the teardown
-patch, fixed ceiling, pending state, no-success/no-reuse rule, or select every
-forbidden strategy fallback. The patched sandbox owns the
+no reaped claim, no success/reuse, and eventual consuming reap by that same
+monitor while the action stays failed. Separate mutations remove
+`CLONE_NEWPID`, the teardown patch, fixed ceiling, pending state,
+no-success/no-reuse rule, runbook/link/release records, or select reboot,
+retry-before-release, replacement-waiter, manual-release, and every forbidden
+strategy fallback. The patched sandbox owns the
 execution-containment codes, corrections, renderer, and live byte-exact cases; T067/T068
 own no `SANDBOX_*` row. The closed table is in `recovery-deadline.md`.
 
