@@ -97,10 +97,19 @@ Neither lane sets a foreign system, `--builders`, or a remote builder.
 
 ## Trimming and maintenance
 
+`packages/xtask/src/bazel_cache_contract.rs` owns a closed typed prefix enum
+whose committed values are the retired Cargo cache prefixes and the action and
+repository Bazel prefixes. The workflow, API response, command line, record,
+and caller cannot add a prefix. Each cache entry is classified against exactly
+one enum value before retention is evaluated. An unknown, caller-supplied, or
+multiply matching prefix is preserved and reported as an authorization
+refusal; it is never adopted as a new generation and never deleted.
+
 1. Stop retired Cargo cache writes at promotion.
 2. Enumerate all cache pages.
 3. Refuse failed, incomplete, or ambiguous enumeration.
-4. Delete only authorized retired or superseded generations.
+4. Classify every entry through the closed committed prefix enum and delete
+   only authorized retired or superseded generations.
    For each authorized Bazel prefix, retain the newest complete generation and
    delete only older generations beyond retention. Completion order, not
    lexical run-ID order, selects the newest generation.
@@ -119,6 +128,16 @@ instead of the newest, a missing `bazelRestoreCount`, `bazelSaveCount`,
 `bazelPublicationCount`, or `sliceDurationsSeconds` entry, and every row
 of the bound-input table. A missing row, a mutation that leaves an applicable
 key unchanged, or equal action/repository namespaces fails.
+
+Pagination fixtures interleave authorized retired, authorized current,
+authorized superseded, unknown, caller-supplied, and ambiguously matching
+entries across at least three page boundaries. The positive result deletes
+only the authorized retired and superseded entries, preserves every unknown
+or unauthorized entry byte-for-byte, and retains the newest complete
+generation. Separate mutations drop the middle page, repeat a cursor, move an
+unauthorized entry between pages, supply a prefix through the record, and make
+one entry match two enum variants. Each refuses before any delete call; a
+recording API proves the delete-call list is empty on refusal.
 
 ## Policy fixtures
 

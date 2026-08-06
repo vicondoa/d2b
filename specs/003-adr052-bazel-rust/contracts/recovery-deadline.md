@@ -37,6 +37,16 @@ wrong command, borrowed remedy, absolute path, secret, identifier, or echoed
 ambient value. The retired-hub diagnostic bytes are unchanged and remain
 outside that table.
 
+Provider and evidence failures use the exact tables in
+`runner-environment.md`. Provider rows name the stable declared
+runfiles-relative key, corrective action, and owning slice rerun.
+`D2B-BZLEVIDENCE-SANITIZE`, `D2B-BZLEVIDENCE-LIMIT`,
+`D2B-BZLEVIDENCE-PUBLISH`, and `D2B-BZLEVIDENCE-NO-VERDICT` name their stable
+repository-relative policy row, carrier, or workflow plus the exact correction
+and rerun. They emit no planted forbidden value and do not rewrite the
+underlying `testVerdict`; they produce typed degraded evidence that completion
+and qualification reject.
+
 ## Deadline
 
 Promoted checkout has a two-minute bound. The first post-checkout action reads

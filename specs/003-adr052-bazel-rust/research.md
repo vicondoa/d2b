@@ -345,21 +345,25 @@ added or removed by target cfg changes the generated artifact and fails
 The existing ADR 0052 pinned source materialization is reused. No second vendor
 authority is introduced.
 
-ADR 0052's literal no-socket action wording conflicts with committed mandatory
-tests. The tree binds loopback TCP in `d2b-realm-transport`,
-`d2b-session-unix`, and daemon readiness tests, and binds many sandbox-local
-Unix listeners and seqpacket endpoints in CLI, daemon, broker, helper, and
-Wayland tests. Existing code is canon. Bazel Rust actions may therefore use
-only declared sandbox-local loopback TCP and Unix sockets required by those
-tests. Host/external egress, DNS, live indexes, advisory fetches, and
-undeclared listeners remain forbidden.
+ADR 0052's literal no-network action invariant remains binding. The committed
+tree also has mandatory tests that bind loopback TCP and Unix sockets.
+Neither fact is discarded. Those exact cases remain on the current Cargo
+compatibility executor under their existing surface IDs, with a generated
+census and same-commit non-advisory verdict. Promotion identifies those
+surfaces as hybrid, and Cargo retirement retains the compatibility carriers
+until a separately authorized design exists.
 
-Pinned repository-rule fetches are the only network-capable fetch phase:
+Every Bazel action remains no-network, including loopback and Unix sockets.
+Linux network namespaces enforce that action-wide rule and cannot distinguish
+a declared endpoint from an undeclared one; no per-endpoint enforcement claim
+is made. Pinned repository-rule fetches are the only network-capable fetch
+phase:
 registry archives bind the root lock checksum, and `wl-proxy` binds both
 revision and archive sha256. Actions receive all resulting sources, policy
-snapshots, databases, and tools as declared inputs. A forbidden-external-egress
-plant and a live-index plant prove the narrowed boundary; canonical local
-socket tests prove it is not a blanket socket syscall ban.
+snapshots, databases, and tools as declared inputs. Loopback-TCP, Unix-socket,
+forbidden-external-egress, and live-index plants prove the Bazel boundary; the
+Cargo compatibility census proves mandatory coverage was preserved rather than
+silently dropped.
 
 ## Decision 9: Keep deny and audit package-scoped and offline
 
@@ -424,14 +428,15 @@ guest-static-elf
 
 X86 realizes these natively on the x86 runner. The existing
 `test-flake-aarch64` job keeps its ID but changes to native
-`ubuntu-24.04-arm`, a 60-minute timeout, and the same five aarch64 checks.
+`ubuntu-24.04-arm`, a 60-minute timeout, and six aarch64 checks, adding the
+broker artifact contract to the four package checks and guest static check.
 Neither lane supplies a foreign system, `--builders`, or a remote builder.
 The arm job also runs `make test-rust-supply-chain`. The layer1 renderer test
-must assert that command is present, and both the five-check realization and
+must assert that command is present, and both the six-check realization and
 the supply-chain result must come from one unchanged stable PR head.
 
 `make flake-matrix-pin` regenerates both system inventories.
-`D2B_FLAKE_REALIZED_CHECKS` contains the five checks above plus the existing
+`D2B_FLAKE_REALIZED_CHECKS` contains the six checks above plus the existing
 `video-binary-contract`. `make test-flake` owns realization,
 `make test-drift` owns inventory and runner mapping, and
 `make test-rust-supply-chain` owns native package source, deny, and pinned
@@ -469,6 +474,18 @@ provider opens must fail. Strict result, JUnit, execution-manifest, and cleanup
 paths retain `RESOLVE_BENEATH|RESOLVE_NO_SYMLINKS|RESOLVE_NO_MAGICLINKS`.
 Every auxiliary descriptor is close-on-exec and a child descriptor-table test
 proves inheritance behavior.
+
+The verified handle is also sealed at compile time. External compile-fail
+fixtures must be unable to construct it, recover a path, convert an unchecked
+path or descriptor into it, duplicate/default it, or implement its private
+minting trait. Runtime tests alone cannot prove an API is absent.
+
+The runner is multithreaded, so all argv, envp, descriptor mapping, and
+fixed-size exec-error data is prepared in the parent. Between fork and
+`execveat`, the child uses only async-signal-safe raw descriptor operations,
+the `execveat` call, one fixed-record write to a close-on-exec pipe on failure,
+and `_exit`. Allocation, formatting, logging, locking, path lookup, panic, and
+unwinding are forbidden and mutation-tested.
 
 On expiry, the independently timed full grace contains repeated non-consuming
 nonblocking `waitid(EXITED|NOWAIT|NOHANG)` observations. They are
@@ -571,10 +588,20 @@ exactly while dedicated contexts retain every selector.
 
 The spec003w1 runner tests cover prior-evidence invalidation, multi-carrier
 attribution, success/failure/handled-interruption sorted atomic manifest v1
-evidence, original-status preservation, ignored-case fidelity, and enforcing
-JUnit publication. A planted failure carries every forbidden redaction value;
-the test proves the values are planted, absent from JUnit, and retained only
-in `test.log`.
+evidence, original-verdict preservation, ignored-case fidelity, and complete
+structured publication. A planted failure carries every forbidden redaction
+value; the test proves the values are planted before sanitization and absent
+from JUnit, bounded `test.log`, emitted execution/qualification evidence, and
+exporter diagnostics.
+
+Sanitization happens before every sink, under a committed generated policy
+whose byte and record limits come from measured sanitized fixtures. No raw
+child output is persisted. The underlying `testVerdict` is independent of
+`evidenceStatus`. An exporter or publication failure preserves the verdict,
+emits a closed bounded degraded code, and is rejected separately by surface
+completion and qualification. A protected-`v3` push where either or both
+workflows reach no verdict emits a degraded record and resets the streak
+instead of disappearing.
 
 Repository-owned execution paths use no shell. `D2B_RUST_BUDGET` is parsed
 once and propagated to Bazel scheduling and suite concurrency as one combined
@@ -587,21 +614,23 @@ layers multiply are enforcing negatives.
 carrier files. `main.bzl` is not a shared writer. Schema runs two independent
 generations, requires the same nonempty exact census from each, and rejects
 empty or mismatched output. Stub-no-socket rejects a missing executable, wrong
-binary identity, runtime state, and forbidden undeclared listener. Pinned
+binary identity and runtime state. Pinned
 inventory rejects empty, missing, and extra results.
 
 No-shell is bound to a generated, drift-checked
 `bazel/generated/no-shell-inventory.json` rather than an implied file set: an
 implied set cannot detect a new runner source that spawns a shell and is never
-scanned. Each of its three sets is nonempty by construction and it compares
-governed sources, declared carrier inputs, and discovered spawn sites
-bidirectionally: all three source projections are equal in both directions,
-and a fresh scan's keyed spawn-site set equals the committed `spawnSites` set
-in both directions,
+scanned. Governed sources and declared carrier inputs are nonempty and equal
+in both directions. Every spawn-site source is governed, but a governed source
+may validly have zero spawn sites; exactly one successful scan record is
+required for every governed source, including a zero-site record. A fresh
+scan's keyed spawn-site set equals the committed `spawnSites` set in both
+directions,
 with `no-shell-inventory-empty`, `no-shell-inventory-missing-entry`,
-`no-shell-inventory-extra-entry`, and `no-shell-inventory-planted-shell`
-plants. The integrator commits it with the rest of `bazel/generated/`; slices
-preview under `.scratch/` only.
+`no-shell-inventory-extra-entry`, `no-shell-inventory-unguarded-spawn`,
+`no-shell-inventory-missing-zero-site-record`, and
+`no-shell-inventory-planted-shell` plants. The integrator commits it with the
+rest of `bazel/generated/`; slices preview under `.scratch/` only.
 
 `APPROVED_MAKE_TARGETS` in `packages/xtask/tests/policy_ci.rs` is measured to
 be the only workflow allowlist, and nothing today asserts that an approved name
@@ -703,12 +732,21 @@ eligible/count/ID fields are ignored. Retirement requires the derived final ten
 distinct ordered units to be successful with no intervening failure or
 cancellation.
 
+The complete paginated stream is transient and is fetched again for every
+derivation. `post-promotion.json` persists only a fixed checkpoint digest and
+cursor plus the final ten normalized units, each with attempt count and
+attempt-history digest rather than an attempt array. The schema bounds records
+and bytes, and refresh atomically replaces rather than appends. An oversized
+transient fixture proves the bounded record and complete in-memory oracle
+derive the same verdict.
+
 Alias removal has a separate clock: entry requires a containing published
 semantic release tag matching `v<major>.<minor>.<patch>`. Containment alone is
 insufficient because the repository already carries two-component tags
 `v1.0`, `v1.1`, and `v1.2`; entry filters `git tag --contains` through
 `^v[0-9]+\.[0-9]+\.[0-9]+$`, proves ancestry, proves the tag resolves on
-origin, and proves a non-draft release exists.
+origin, and proves a release exists with both `isDraft` and `isPrerelease`
+false.
 
 spec003w5 output is integrated or squashed into one atomic promotion commit relative
 to the recorded spec003w5 parent. The integrator asserts its complete path diff and
@@ -719,6 +757,14 @@ candidate HEAD and the recorded spec003w5 parent, and promotion-record reads
 stay post-merge. Every code-changing wave, including spec003w1, owns a semantic
 changelog fragment.
 
+After merge, a typed validator requires the promotion record's SHA to equal the
+actual protected-`v3` pull-request merge and re-derives the exact sealed
+`spec003w5` candidate, content, and snapshot identities. Both post-promotion
+entry paths run it first. Qualification clocks remain independent, but to keep
+concurrently ready ownership disjoint, spec003w7 shared documentation/evidence
+and merge wait for merged spec003w6; its qualification and code preparation
+may proceed earlier.
+
 ## Decision 20: Derive qualification from immutable references
 
 A boolean verdict field in `qualification.json` is self-asserted and cannot be
@@ -726,8 +772,9 @@ evidence. A typed validator in `packages/xtask/src/bazel_qualification.rs`,
 with tests in `packages/xtask/tests/bazel_qualification.rs` and implemented no
 later than spec003w3, derives every threshold by counting or comparing the
 record's immutable evidence references: workflow run references
-(`runId` plus `headSha`), commit SHAs, content path-plus-digest references,
-and generated-artifact path-plus-digest references.
+(`runId`, positive `attempt`, and `headSha`), commit SHAs, content
+path-plus-digest references, and generated-artifact path-plus-digest
+references.
 
 It refuses an omitted reference for a threshold it must derive, a forged or
 ill-formed reference, duplicate references inside or across independent
@@ -739,6 +786,27 @@ validation run `cargo xtask bazel-qualification-validate`, and contributor
 validation runs it before any informational `jq` inspection. The command takes
 no arguments, reads a fixed repository-relative path, and is unreachable from
 Make and workflows.
+
+## Decision 21: Seal artifacts, cache authority, and enforcement classification
+
+ADR 0054 preserves dedicated broker and guest derivations, so qualification
+must realize both rather than infer their artifacts from policy checks. A
+committed per-system baseline generated from each realization records exact
+binary bytes, closure paths and digest, selected-policy digest, ELF type and
+machine, exact broker interpreter and `DT_NEEDED` SONAMEs, and absent guest
+interpreter and `DT_NEEDED`. Initial allowed growth is zero. A later growth
+delta is accepted only when measured old and new bytes, their exact difference,
+rationale, and review land together. No byte ceiling is invented in prose.
+
+Cache deletion uses a closed typed prefix enum. Neither API data nor a caller
+can supply authorization. Mixed-page fixtures interleave retired,
+superseded, current, unknown, caller-supplied, and ambiguous entries; only
+authorized retired or superseded entries are deleted, and any authorization or
+pagination refusal records zero delete calls.
+
+`test-flake-aarch64`, every promoted Rust slice, and `test-rust` are enforcing.
+Renderer and manifest tests mutate each class to advisory and require failure,
+because an advisory job can skip and cannot qualify evidence.
 
 ## Seeded refusal classes
 
@@ -763,13 +831,19 @@ for:
   from metadata, or dev edges derived by post-filtering;
 - module lock refreshed before a hub lock, or an untouched hub input changed;
 - pinned-inventory lock mutation or nested-lock input;
-- empty, missing-entry, extra-entry, or planted-shell no-shell inventory;
+- empty, missing-entry, extra-entry, ungoverned-spawn,
+  missing-zero-site-record, or planted-shell no-shell inventory;
 - omitted, forged, duplicate, inconsistent, or wrong-candidate qualification
   reference;
 - unapproved shadow Make target call or approved target with no Makefile rule;
-- non-semantic, unpushed, or draft-only release tag at spec003w6 entry;
+- non-semantic, unpushed, draft, or prerelease tag at spec003w6 entry;
 - repeated attempt counted as a streak position, or an old rerun ordered after
   a newer failure.
+- advisory arm, Rust slice, or rollup classification;
+- unknown, caller-supplied, ambiguous, or mixed-page cache prefix;
+- forged `VerifiedExecutable` API, unsafe post-fork child operation, unsealed
+  promotion SHA, sink value leak, sink bound overflow, or success-shaped
+  exporter degradation.
 
 The harness fails if a mutation reaches a later predicate, returns zero, or
 reuses another mutation's diagnostic.
@@ -808,7 +882,7 @@ run the generator, repin, refresh, pin regeneration, or
 `cargo generate-lockfile --offline`, then assert the same set is still clean.
 Printing `git status` is not evidence.
 
-The post-promotion conditions remain independent. spec003w7 may merge before
-spec003w6. Only actual shared-file edits serialize; whichever child merges
-second rebases onto the merged first child, reruns its whole validation, and
-obtains a fresh panel verdict.
+The post-promotion conditions remain independent. spec003w7 qualification and
+code preparation may run before spec003w6. Its shared-file task and merge wait
+for merged spec003w6, then rebase, rerun whole validation, and obtain a fresh
+panel verdict. This is the static ownership order the plan validator checks.

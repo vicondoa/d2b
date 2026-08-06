@@ -16,16 +16,23 @@ Requirements:
 - Success, failure, and handled interruption publish sorted atomic manifest v1
   evidence. Partial evidence contains only completed leaves and the exact
   failed/interrupted surfaces available at the boundary.
-- A publication failure after an existing test failure or handled interruption
-  preserves the original status and adds only a bounded publication error.
+- The underlying `testVerdict` and typed `evidenceStatus` are separate. A
+  sanitizer, bound, exporter, or publication failure preserves the original
+  passed, failed, or interrupted test verdict and emits
+  `evidenceStatus = "degraded"` with one closed bounded code. Surface
+  completion and qualification reject degraded evidence without relabelling
+  the underlying test as failed.
 - Fixture IDs are emitted only by the unchanged fixture path.
 - Executor, Cargo workspace, hub, architecture, and policy context are
   migration evidence and are not new v1 fields.
 - Per-case results remain in the executor's per-target JUnit document, with
-  exact passed, failed, and ignored outcomes. Publication is enforcing.
+  exact passed, failed, and ignored outcomes. Complete publication is required
+  for surface completion.
 - One planted result contains every forbidden redaction value in its
-  environment, argv, failure text, and raw output. JUnit contains none of
-  them; `test.log` retains the raw diagnostic.
+  environment, argv, failure text, stdout, and stderr. JUnit, `test.log`,
+  execution-manifest output, qualification output, and exporter diagnostics
+  contain none of them. Every sink stays within the byte and record bounds in
+  `bazel/generated/evidence-sink-policy.json`.
 - Repository-owned manifest, runner, timeout, cleanup, and process-control
   paths use no shell.
 - `D2B_RUST_BUDGET` is validated once and propagated as one combined Bazel and

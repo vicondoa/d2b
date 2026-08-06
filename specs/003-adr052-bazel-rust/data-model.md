@@ -12,12 +12,13 @@ data. Execution-manifest v1 remains authoritative for Rust gate evidence.
 - Repository-relative paths are normalized and sorted.
 - An absence predicate is evaluated only after its root and complete nonempty
   census are established.
-- Bazel Rust actions may use declared sandbox-local loopback TCP and Unix
-  sockets required by committed tests. Host/external egress, DNS, live
-  indexes, advisory fetches, and undeclared listeners are forbidden. Fetches
-  exist only in explicitly invoked contributor updaters and pinned repository
-  rules.
-- Result publication is enforcing rather than advisory.
+- Bazel Rust actions are no-network, including loopback TCP and Unix sockets.
+  Mandatory socket-using tests remain exact non-advisory Cargo compatibility
+  carriers under their existing surface IDs. Fetches exist only in explicitly
+  invoked contributor updaters and pinned repository rules.
+- Underlying test verdict and evidence status are separate. Degraded evidence
+  preserves the verdict and is rejected by surface completion and
+  qualification.
 
 ## Product Workspace
 
@@ -294,6 +295,26 @@ Every `GuestStatic` result additionally binds:
 
 Non-PIE and wrong-machine artifacts are required invalid variants.
 
+## Native Artifact Baseline
+
+One row per Nix Artifact Context and native system is generated only from a
+realized derivation.
+
+| Field | Rule |
+| --- | --- |
+| `binaryBytes` | Measured executable size. |
+| `allowedGrowthBytes` | Separately reviewed measured delta, initially zero. |
+| `elfType`, `elfMachine` | Exact realized values. |
+| `interpreter`, `needed` | Exact broker interpreter and sorted SONAMEs, or absent and empty for guest. |
+| `closurePaths`, `closureSha256` | Exact sorted recursive Nix closure and digest. |
+| `selectedPolicyDigest` | Exact selected package-policy graph digest. |
+| `measurementCommand`, `candidateCommit` | Immutable measurement provenance. |
+
+The size predicate is `actual <= binaryBytes + allowedGrowthBytes`. A changed
+allowance is valid only with measured prior/new bytes, their exact difference,
+a repository-relative rationale, and review in the same change. No prose byte
+ceiling exists.
+
 ## Flake Check Wrapper
 
 For each root flake system:
@@ -303,6 +324,7 @@ broker-production-dependency-policy
 guest-shell-runner-static-dependency-policy
 broker-production-package-policy
 guest-real-libshpool-package-policy
+broker-host-artifact-contract
 guest-static-elf
 ```
 
@@ -316,7 +338,8 @@ guest-static-elf
 | `realized` | Required. |
 
 The package wrapper set has eight entries, four policy checks times two
-systems. `guest-static-elf` adds one native realization per system.
+systems. `broker-host-artifact-contract` and `guest-static-elf` add two native
+artifact realizations per system.
 
 ## Rust Surface
 
@@ -393,6 +416,8 @@ count of twenty consecutive executions for its own context.
 | `execution` | `execveat(descriptor, "", argv, envp, AT_EMPTY_PATH)` on that same descriptor. |
 | `enosys` | Named refusal requiring a kernel with `execveat`; no fallback. |
 | `auxiliary_descriptors` | All close-on-exec and proven by child descriptor-table behavior. |
+| `api_seal` | Private fields and minting trait; no unchecked constructor, path accessor/conversion, `Default`, `From`, `Into`, `AsRef`, `Clone`, or `Copy`. |
+| `post_fork` | Parent-prepared argv/envp/descriptors/error record; child uses only async-signal-safe raw operations, fixed error-pipe write, `execveat`, and `_exit`. |
 
 There is no path accessor or public unchecked constructor. No
 `std::process::Command` by path, `fexecve`, `/proc/self/fd`, reopen, or
@@ -466,11 +491,16 @@ qualification, and promotion.
 
 | Field | Rule |
 | --- | --- |
-| `local_socket_positives` | Canonical declared loopback TCP and Unix-socket tests pass. |
+| `bazel_loopback_denial` | A Bazel action attempts loopback TCP socket use and is denied. |
+| `bazel_unix_denial` | A Bazel action attempts Unix socket use and is denied. |
 | `external_egress_plant` | A build/test action attempts host/external egress and is denied. |
 | `live_index_plant` | The offline yanked validator receives a live-index source and refuses before resolution or socket use. |
 | `repository_fetch_inventory` | Exact fetch sites, each a repository rule pinned by lock checksum or git revision plus archive sha256. |
-| `qualification_result` | Local positives pass, both forbidden plants fail at their own predicate, and the inventory is complete. |
+| `cargo_compatibility_carriers` | Exact generated test identities, Cargo selectors, existing surface IDs, same-commit verdicts, and non-advisory classification for mandatory socket users. |
+| `qualification_result` | All four Bazel denial plants fail at their own predicate, the inventory is complete, and every compatibility carrier passes on the same head. |
+
+There is no endpoint declaration field. A network namespace cannot enforce
+one, and no such claim is part of qualification.
 
 ## Qualification Record
 
@@ -511,7 +541,7 @@ Qualification additionally binds:
 - product and walker hub generation;
 - all four Package Policy Contexts;
 - eight package check wrappers;
-- native x86_64 and aarch64 five-check realization sets;
+- native x86_64 and aarch64 six-check realization sets;
 - the selected-source and checksum refusal matrix;
 - the narrow six-entry guest license policy.
 - module-refresh mutation and remediation evidence;
@@ -519,7 +549,8 @@ Qualification additionally binds:
 - broker `exclusive` tags, no-overlap mutation, and twenty-run result for each
   context;
 - action-network and live-index plants;
-- canonical local-socket positives and forbidden external-egress plant;
+- all four Bazel socket/egress denial plants and the exact Cargo compatibility
+  census;
 - product-only yanked authority and exact broker/guest projections;
 - all three Supply Chain Equivalence Results;
 - native arm `make test-rust-supply-chain` and stable-head renderer evidence.
@@ -544,8 +575,9 @@ the namespace so action and repository keys can never collapse.
 
 ## Post-Promotion Run Unit
 
-A run unit is one distinct push-created `(runId, headSha)` pair. It is the
-only streak-bearing entity; an attempt never is.
+A transient run unit is one distinct push-created `(runId, headSha)` pair. It
+is the only streak-bearing entity; an attempt never is. The validator fetches
+the complete stream on every run before deriving the streak.
 
 | Field | Rule |
 | --- | --- |
@@ -590,13 +622,30 @@ the streak. A repeated successful attempt of an already-counted unit never
 increments the streak, and a later rerun of an older unit never reorders it
 behind newer failures.
 
+## Bounded Post-Promotion Checkpoint
+
+`post-promotion.json` persists no complete stream and no complete attempt
+array.
+
+| Field | Rule |
+| --- | --- |
+| `streamCount`, `finalCursor`, `streamSha256` | Fixed-shape checkpoint of the complete transient stream. |
+| `promotionCommit` | Validated by the typed Promotion Record validator. |
+| `lastTen` | At most the final ten normalized units, in immutable order. |
+| `attemptCount`, `attemptHistorySha256` | Fixed-size summary per persisted unit. |
+| `maxBytes`, `maxRecords` | Schema constants; overflow refuses before atomic replacement. |
+
+The checkpoint is output only. Every refresh re-fetches the complete stream,
+derives the verdict independently, replaces the bounded file, and proves the
+bounded and complete-stream verdicts equal.
+
 ## Typed Qualification Validator
 
 | Field | Rule |
 | --- | --- |
 | `module` | `packages/xtask/src/bazel_qualification.rs` with tests in `packages/xtask/tests/bazel_qualification.rs`, implemented no later than spec003w3. |
 | `command` | `cargo xtask bazel-qualification-validate`, no arguments, fixed repository-relative record path, unreachable from Make and workflows. |
-| `reference_kinds` | Workflow run (`runId` plus `headSha`), commit SHA, content path plus digest, generated path plus digest. |
+| `reference_kinds` | Workflow run (`runId`, positive `attempt`, and `headSha`), commit SHA, content path plus digest, generated path plus digest. |
 | `derivation` | Every threshold is computed by counting or comparing referenced evidence; no stated number is trusted. |
 | `refusals` | Omitted, forged or ill-formed, duplicate, inconsistent, and wrong-candidate references. |
 | `booleans` | Informational mirrors only; a mirror disagreeing with the derived result is a refusal. |
@@ -609,10 +658,37 @@ behind newer failures.
 | `path` | `bazel/generated/no-shell-inventory.json`, generated, integrator-committed, drift-checked. |
 | `governedSources` | Every repository-owned runner, cleanup, timeout, and process-control source derived from the first-party configured-target census. |
 | `declaredInputs` | The exact declared inputs of the no-shell carrier. |
+| `scanResults` | Exactly one successful scan record per governed source, including zero-site sources. |
 | `spawnSites` | Every discovered spawn construct with its governed source, span, spawned program expression, and typed `shellInvocation` verdict; any true verdict refuses. |
-| `nonempty` | Each of the three sets is required nonempty; an empty set is a refusal, never a vacuous pass. |
-| `bidirectional` | The governed-source, declared-input, and spawn-site source projections are equal in both directions; a fresh scan's keyed spawn-site set and committed `spawnSites` are equal in both directions; every governed source records a successful scan result. |
+| `nonempty` | `governedSources` and `declaredInputs` are nonempty. A source may validly record zero spawn sites. |
+| `set_relationships` | Governed and declared source sets are equal; every spawn source is governed; scan-result sources equal governed sources; fresh and committed spawn-site keys are equal. |
 | `plants` | `no-shell-inventory-empty`, `no-shell-inventory-missing-entry`, `no-shell-inventory-extra-entry`, and `no-shell-inventory-planted-shell`. |
+
+## Evidence Sink Result
+
+| Field | Rule |
+| --- | --- |
+| `testVerdict` | Underlying passed, failed, ignored, or interrupted result. |
+| `evidenceStatus` | `complete` or `degraded`; never inferred from `testVerdict`. |
+| `degradationCode` | Closed bounded code, present only when degraded. |
+| `sinkKind` | JUnit, `test.log`, execution evidence, qualification evidence, or exporter diagnostic. |
+| `bytes`, `records` | At or below the committed measured sink-policy limits. |
+
+Every forbidden planted value is absent from every sink. Qualification accepts
+only complete evidence but never rewrites the underlying verdict.
+
+## Promotion Record
+
+| Field | Rule |
+| --- | --- |
+| `promotionCommit` | Actual protected-`v3` pull-request merge commit. |
+| `sealedCandidateId`, `sealedContentId`, `sealedSnapshotSha256` | Exact identities from the `spec003w5` seal. |
+| `pullRequestMergeCommit` | Immutable merge SHA from the merged PR record; equals `promotionCommit`. |
+| `originV3Contains` | Derived ancestry result, never trusted. |
+| `validation` | Typed re-derivation of seal/content/merge equality. |
+
+A candidate head, older containing SHA, wrong seal, or unsealed merge is
+invalid.
 
 ## Lifecycle
 
@@ -636,10 +712,11 @@ No lifecycle state is inherited from a parked Spec 003 foundation branch. The fi
 is reached only by merging and sealing the new `spec003w0` built from current
 `v3`.
 
-The two post-promotion branches are independent children, not a sequence.
-Either `spec003w6` or `spec003w7` may merge first. If both touch a shared file,
-the second child rebases onto the first child's merged head, revalidates, and
-obtains a new panel result.
+The two post-promotion eligibility clocks are independent. spec003w7
+qualification and code preparation may run before spec003w6, but its shared
+documentation/evidence task and merge depend on merged spec003w6. It then
+rebases, revalidates, and obtains a new panel result. This encodes disjoint
+ownership for every concurrently ready task.
 
 ## Relationships
 

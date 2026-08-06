@@ -32,8 +32,13 @@ zero. Every cold record additionally carries `sliceDurationsSeconds` with four
 complete durations and `bazelRestoreCount` of zero. A missing count or
 duration makes the record non-qualifying; it is never read as zero.
 
-Differing verdicts reset the streak. A Bazel run with no verdict beside a Cargo
-verdict is a mismatch. A push where neither reaches a verdict is no record.
+Differing verdicts reset the streak. For every protected-`v3` push, a missing
+Cargo, Bazel, fixture, exporter, or publication verdict produces a bounded
+record with the available underlying `testVerdict` values,
+`evidenceStatus = "degraded"`, and one closed degradation code. This includes
+a push where neither workflow reaches a verdict. Degraded records never extend
+the streak and reset it. Pull-request, `main`, scheduled, and dispatched runs
+remain non-records.
 
 ## Typed qualification validator
 
@@ -147,6 +152,7 @@ broker-production-dependency-policy
 guest-shell-runner-static-dependency-policy
 broker-production-package-policy
 guest-real-libshpool-package-policy
+broker-host-artifact-contract
 guest-static-elf
 ```
 
@@ -158,8 +164,13 @@ It also proves:
 - no `--builders`;
 - no remote builder;
 - both generated system inventories current.
+- realization of both dedicated Nix derivations;
+- exact broker interpreter and `DT_NEEDED` SONAME set;
+- broker and guest binary sizes checked against committed measured baselines
+  and separately reviewed allowed deltas;
+- exact selected Nix closure inventories and forbidden-sibling absence;
 - `make test-rust-supply-chain` passed on the same native arm stable head as
-  the five aarch64 realizations;
+  the six aarch64 realizations;
 - the workflow renderer test covers that arm command and the PR head did not
   change between rendered-workflow validation and native evidence.
 - every guest static ELF is `ET_DYN` for the native system's expected
@@ -188,19 +199,29 @@ It also proves:
 11. complete locator and per-case evidence guards;
 12. all workflow, cache, deadline, cleanup, repin, and seeded policy
     refusals.
-13. canonical declared loopback TCP and Unix-socket tests passing, plus
-    external-egress and live-index plants proving host/external egress was
-    denied and every permitted fetch was a pinned repository rule;
+13. loopback-TCP, Unix-socket, external-egress, and live-index Bazel plants
+    denied, and every permitted fetch a pinned repository rule;
 14. exact Cargo/decomposed-Bazel supply-chain equivalence for all three
     contexts;
-15. manifest/JUnit/redaction/ignored-case/original-status/no-shell evidence and
-    combined-budget mutations;
+15. manifest/JUnit/bounded-test.log/emitted-evidence/exporter redaction,
+    ignored-case, original-verdict, typed-degraded-status, no-shell evidence,
+    and combined-budget mutations;
 16. the committed `bazel/generated/no-shell-inventory.json` reference and
-    digest, its nonempty result, its bidirectional three-source-projection and
-    fresh-scan/committed spawn-site-key equality results, and the empty,
-    missing-entry, extra-entry, and planted-shell plant results;
+    digest, equal nonempty governed/declared sets, governed spawn sources,
+    complete per-source scan records including zero-site sources,
+    fresh-scan/committed spawn-site-key equality, and all six relationship and
+    planted-shell results;
 17. a successful `cargo xtask bazel-qualification-validate` verdict derived
     from the references above.
+18. manifest evidence that `test-flake-aarch64`, all four promoted Rust slice
+    jobs, and the `test-rust` rollup are enforcing and not advisory, plus
+    advisory-classification mutations for each class;
+19. exact same-commit Cargo compatibility-carrier verdicts for every mandatory
+    socket-using test, with every Bazel action retaining `actionNetwork =
+    "none"`;
+20. complete evidence-sink sanitization and bound results, with no forbidden
+    planted value in JUnit, `test.log`, emitted evidence, or exporter
+    diagnostics and no degraded evidence in the qualified set.
 
 Candidate-specific evidence binds one integrated commit. A content change
 invalidates affected evidence. The qualified record merges before promotion
@@ -215,23 +236,49 @@ merge; the pre-merge rollback rehearsal therefore resolves its candidate from
 the verified current atomic candidate HEAD and the recorded spec003w5 parent,
 and no pre-merge step reads the promotion record.
 
+After merge, `cargo xtask bazel-promotion-record-validate` reads the fixed
+promotion record and the sealed `spec003w5` delivery record. It requires the
+recorded promotion SHA to equal the actual protected-`v3` merge commit reported
+by the merged pull request, requires that commit to be reachable from
+`origin/v3`, re-derives the sealed content and candidate identities from the
+merge, and requires them to equal the seal. A pre-merge candidate SHA, an older
+containing SHA, an unsealed merge, a seal for another candidate, and a wrong
+pull-request merge SHA each fail. The command has no override and runs before
+`spec003w5fu1` seals, before alias-removal entry, and before Cargo-retirement
+entry.
+
 Post-promotion run-unit inventory keeps independent release-containment and
-green-run clocks. Alias removal depends only on containment in a published semantic
-release tag matching `v<major>.<minor>.<patch>`. Cargo implementation
-retirement depends only on ten distinct ordered green promoted `v3` run
-units. Either child may land first. If both edit a shared file, the child
-that lands second rebases onto the merged first child, reruns its complete
-validation on the new stable head, and obtains a new ten-seat panel result.
+green-run clocks. Alias removal depends only on containment in a published
+semantic release tag matching `v<major>.<minor>.<patch>`. Cargo implementation
+retirement eligibility depends only on ten distinct ordered green promoted
+`v3` run units. Its qualification and code preparation may run first, but its
+shared documentation/evidence task and merge depend on merged alias removal,
+then rebase, rerun complete validation, and obtain a new ten-seat panel result.
 Neither removes a public Rust Make name.
 
 ## Typed post-promotion run units
 
-The run-unit source paginates the authoritative workflow-run API to
-completion and inventories every promoted protected-`v3` `test-rust` run
-unit. A run unit is one distinct push-created `(runId, headSha)` pair. An
-attempt is never a unit and never a streak position.
+The validator paginates the authoritative workflow-run API to completion into
+a transient protected stream and inventories every promoted protected-`v3`
+`test-rust` run unit. Eligibility is derived from that complete transient
+stream on every run. `post-promotion.json` is not the input authority and does
+not persist the complete stream.
 
-Each unit contains:
+The persisted record contains only a fixed-shape checkpoint
+(`streamCount`, final cursor, complete-stream SHA-256, promotion SHA, and
+validation time), the final ten normalized run units needed for the eligibility
+decision, and for each persisted unit an attempt-history count and SHA-256
+rather than the attempt array. The schema sets a fixed maximum record count
+and byte size and rejects unknown fields or overflow before atomic rename.
+Refreshing evidence replaces the prior bounded record; it never appends.
+Tests feed a complete transient stream larger than the persistence limit,
+derive the same verdict as the unbounded in-memory oracle, and prove the saved
+file remains within both limits.
+
+A run unit is one distinct push-created `(runId, headSha)` pair. An attempt is
+never a unit and never a streak position.
+
+Each transient unit contains:
 
 - immutable `runId` and `headSha`, whose pair is the unit identity;
 - `event`, exactly `push`;

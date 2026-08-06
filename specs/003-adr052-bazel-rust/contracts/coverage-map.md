@@ -46,10 +46,13 @@ Each row contains:
 - locator migration dispositions;
 - deliberate ADR 0052 differences;
 - generated BUILD digest.
-- `actionNetwork = "sandbox-local-declared"` only for carriers whose committed
-  tests require declared loopback TCP or Unix sockets, otherwise
-  `actionNetwork = "none"`; every row still records the declared-input source
-  for every tool, advisory database, yanked record, and vendored crate;
+- `actionNetwork = "none"` for every Bazel action, plus the declared-input
+  source for every tool, advisory database, yanked record, and vendored crate;
+- `cargoCompatibilityCarriers`, an exact sorted census of mandatory
+  socket-using Rust tests that cannot run as Bazel actions under ADR 0052.
+  Each entry binds its existing surface ID, Cargo selector, test identity,
+  socket class, and same-commit verdict owner. A row with no such carrier uses
+  an empty array;
 - for each broker row, the literal target tag set `["exclusive"]`.
 
 Rows and arrays are sorted. Required collections cannot be empty.
@@ -85,20 +88,28 @@ present; every run must show the broker suite alone.
 
 ## Action network inventory
 
-Every carrier row identifies whether an input was produced by a pinned
-repository rule or is a committed/generated declared input. Actions may open
-only declared sandbox-local loopback TCP and Unix sockets required by the
-committed tests. Host or external egress, DNS, live package or advisory
-indexes, and undeclared listeners are forbidden. The only fetch rows are
-repository-rule rows pinned by a Cargo checksum or the `wl-proxy` revision
-plus archive sha256.
+ADR 0052's action no-network rule remains absolute: no Bazel Rust action may
+open an IPv4, IPv6, netlink, packet, or Unix socket, including loopback and
+sandbox-local listeners. Network namespaces prevent host and external egress;
+they do not enforce per-endpoint declarations, and this contract makes no such
+claim. Structural inventory and sandbox strategy checks reject an action-level
+URL, live-index input, downloader, network-enabling tag, local-strategy
+fallback, or missing declared offline input. Behavioral plants attempt one
+loopback TCP socket and one Unix socket from a Bazel action and must both fail.
+The existing external-egress and live-index plants remain additional
+failures. The only fetch rows are repository rules pinned by a Cargo checksum
+or the `wl-proxy` revision plus archive sha256.
 
-The guard rejects an action-level URL, live-index input, downloader, external
-destination, DNS resolver, undeclared listener, unpinned repository rule, or
-missing declared input. The seeded matrix includes separate live-index and
-external-egress plants, and both must fail their owning policy predicate rather
-than a later carrier assertion. A blanket socket-syscall denial is itself a
-failing mutation because it breaks canonical local-socket tests.
+Committed mandatory tests that use sockets remain on the existing
+non-Bazel Cargo compatibility path until a separately authorized design
+changes the invariant. Their exact case census is generated from the Cargo
+listing and committed in the coverage map. The same protected commit must
+produce both the Bazel carrier verdict and every compatibility-carrier verdict
+for their shared surface. Missing, skipped, advisory, stale-head, or
+misattributed compatibility evidence fails surface completion and promotion.
+Promotion reports these surfaces as hybrid and Cargo retirement retains the
+compatibility executor and its public target. No endpoint declaration or
+network namespace is cited as enforcement.
 
 ## Test-first non-main carriers
 
@@ -107,7 +118,7 @@ The generated carrier files are deliberately disjoint:
 | Carrier file | Surface |
 | --- | --- |
 | `bazel/carriers/schema.bzl` | One action runs two sequential generations into distinct directories, proving two independent nonempty exact censuses before comparison; mismatch and empty-output plants. |
-| `bazel/carriers/stub.bzl` | Stub-no-socket executable identity and runtime-state checks; missing executable, wrong identity, state creation, and forbidden undeclared-listener plants. |
+| `bazel/carriers/stub.bzl` | Stub-no-socket executable identity and runtime-state checks; missing executable, wrong identity, and state-creation plants. |
 | `bazel/carriers/inventory.bzl` | Pinned test inventory; empty, missing, and extra inventory plants. |
 | `bazel/carriers/no_bash.bzl` | No-bash walker input and parsed-census wiring, separate from main. |
 
@@ -150,9 +161,9 @@ their current surface semantics and forward to these exact carrier subsets:
 | Hub and lock containment | Selected-context query checks |
 | Generated BUILD and policy output current | `test-drift` |
 | Broker suite keeps `tags = ["exclusive"]` and cannot overlap any test | Coverage test plus scheduling mutation |
-| Only declared sandbox-local sockets are usable; external/live-index egress is denied; every fetch is a pinned repository rule | Hermeticity inventory, local-socket positives, external-egress/live-index plants, and `test-policy` |
+| Every Bazel action is no-network; mandatory socket tests remain exact same-commit Cargo compatibility carriers; every fetch is a pinned repository rule | Linux-sandbox and strategy inventory, loopback-TCP and Unix-socket denial plants, external-egress/live-index plants, compatibility census, and `test-policy` |
 | No-bash parsed-file census equals governed manifest and declared inputs | Walker unit tests plus coverage test |
-| Generated `bazel/generated/no-shell-inventory.json` is nonempty; its three source projections agree in both directions; fresh-scan and committed spawn-site keys agree in both directions | Census-generator tests, coverage test, and `test-drift` |
+| Generated `bazel/generated/no-shell-inventory.json` has equal nonempty governed and declared sets, one scan record per governed source including zero-site records, only governed spawn sites, and exact fresh-scan/committed spawn-site keys | Census-generator tests, coverage test, and `test-drift` |
 
 No Bazel test invokes `bazel query` or starts a nested server.
 
@@ -177,8 +188,11 @@ census; stale query or BUILD output; missing fragment; empty scan or companion
 sets; mismatched configured native target dependencies, cfgs, or features;
 wrong product or walker containment; cross-context edges; unrelated
 first-party siblings; any first-party target represented as an external
-generated crate; a broker tag removal or overlap; forbidden external egress or
-a live-index input; a no-bash walk, read, or parse failure or mismatch among
+generated crate; a broker tag removal or overlap; any Bazel socket use,
+forbidden external egress, a live-index input, or missing, stale, advisory, or
+wrong-head Cargo compatibility evidence; a no-bash walk, read, or parse
+failure or mismatch among
 the governed manifest, declared inputs, and parsed-file census; and an empty,
-missing-entry, extra-entry, planted-shell, source-projection-mismatch, or
+missing-entry, extra-entry, planted-shell, governed/declared mismatch,
+unguarded-spawn-site, missing-zero-site-scan-record, or
 fresh-scan/committed-spawn-mismatch no-shell inventory.

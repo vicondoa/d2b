@@ -49,6 +49,7 @@ cargo xtask gen-package-policy-inputs
 cargo xtask gen-package-policy-inputs --check
 cargo xtask bazel-evidence prepare-cold-local
 cargo xtask bazel-qualification-validate
+cargo xtask bazel-promotion-record-validate
 cargo generate-lockfile --offline
 cargo generate-lockfile --offline --manifest-path ../tests/tools/no-bash-ast-walker/Cargo.toml
 ```
@@ -61,6 +62,13 @@ fixed repository-relative qualification record path, derives every threshold
 from the record's immutable evidence references, and refuses omitted, forged,
 duplicate, inconsistent, and wrong-candidate references. It is not a Make
 target and no workflow names it.
+
+`cargo xtask bazel-promotion-record-validate` also takes no arguments and is
+unreachable from Make and workflows. After promotion merges, it binds the
+fixed promotion record to the actual protected-`v3` pull-request merge commit
+and the sealed `spec003w5` delivery identities. Alias-removal and
+Cargo-retirement entry run it before consulting their own eligibility
+evidence.
 
 `main`, `broker`, and `guest` repin identifiers are retired and fail with the
 exact product remediation contract before Bazel starts.
@@ -161,8 +169,11 @@ while IFS= read -r candidate; do
   ) || continue
   test -n "$remote_commit" || continue
   test "$(git rev-parse "$candidate^{commit}")" = "$remote_commit" || continue
-  test "$(gh release view "$candidate" --json isDraft --jq .isDraft \
-    2>/dev/null)" = "false" || continue
+  release_state=$(
+    gh release view "$candidate" --json isDraft,isPrerelease \
+      --jq '[.isDraft, .isPrerelease] | @tsv' 2>/dev/null
+  ) || continue
+  test "$release_state" = "$(printf 'false\tfalse')" || continue
   tag=$candidate
   break
 done < <(
@@ -176,7 +187,7 @@ test -n "$tag"
 A containing tag that does not match `^v[0-9]+\.[0-9]+\.[0-9]+$` is not a
 release tag: the repository already carries two-component tags such as
 `v1.0`, `v1.1`, and `v1.2`. An unpushed tag, a divergent same-named local and
-remote tag, or a draft-only release also fails entry.
+remote tag, a draft release, or a prerelease also fails entry.
 
 spec003w6 first updates
 `packages/d2b-bazel-runner/tests/make_interface.rs` to expect removal and
@@ -190,6 +201,9 @@ remove:
 - `make test-rust`;
 - any existing `make test-rust-<leaf>` name;
 - fixture-contract mode or either fixture-backed surface.
+- the exact Cargo compatibility carriers for mandatory socket-using tests,
+  their census, or their same-commit verdict contribution to existing surface
+  IDs.
 
 ## Guards
 

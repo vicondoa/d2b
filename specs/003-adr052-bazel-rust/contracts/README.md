@@ -22,12 +22,14 @@ Contracts:
 - `make-target-compatibility.md` - shadow, contributor mutation, promotion,
   and retirement command surface.
 - `runner-environment.md` - test topology, provider, environment, and
-  per-case evidence contract, including same-descriptor kernel execution.
+  sanitized bounded per-case evidence contract, compile-sealed verified
+  executable, and async-signal-safe same-descriptor kernel execution.
 - `execution-manifest-binding.md` - Bazel carrier results bound to existing
   execution-manifest v1.
 - `shadow-promotion-evidence.md` - qualification, the typed qualification
   validator, dual-architecture, promotion evidence, cache counts, broker
-  repetition, stable-head rules, and typed post-promotion run-unit derivation.
+  repetition, stable-head rules, typed sealed-merge promotion binding, and
+  complete-transient/bounded-persisted post-promotion run-unit derivation.
 - `cache-workflow-boundaries.md` - permissions, credentials, key inputs,
   trimming, and cache generations.
 - `recovery-deadline.md` - cleanup, shutdown, deadline, and recovery behavior.

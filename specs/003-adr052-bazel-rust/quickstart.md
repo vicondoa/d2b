@@ -10,6 +10,7 @@ set -euo pipefail
 export D2B_WORKTREE=/absolute/path/to/the/worktree
 cd "$D2B_WORKTREE"
 test -z "$(git status --porcelain --untracked-files=all)"
+mkdir -p .scratch
 nix develop
 rustc --version
 ```
@@ -22,6 +23,19 @@ set -euo pipefail
 cd packages
 cargo --version
 cd ..
+```
+
+Validate the plan structure before a plan panel:
+
+```bash
+set -euo pipefail
+perl specs/003-adr052-bazel-rust/tools/validate-plan-structure.pl
+```
+
+Expected:
+
+```text
+PASS: 118 unique tasks; dependencies exist and precede consumers; adjacency matches; graph is acyclic; concurrently ready ownership is disjoint
 ```
 
 Do not use parked historical `spec003-w0-*` or `spec003-w0` branches as
@@ -273,9 +287,41 @@ test "$(grep -c 'skip_cargo_lockfile_overwrite = True' MODULE.bazel)" -eq 2
 test "$(grep -Ec '^[[:space:]]*cargo_lockfile[[:space:]]*=' MODULE.bazel)" -eq 2
 test "$(grep -Ec '^[[:space:]]*lockfile[[:space:]]*=' MODULE.bazel)" -eq 2
 
-! grep -Eq 'name = "(main|broker|guest)"' MODULE.bazel
-! grep -F 'Cargo.guest.lock' MODULE.bazel
-! grep -R 'crate.spec' MODULE.bazel bazel packages/*/BUILD.bazel
+assert_no_ere() {
+  pattern=$1
+  shift
+  if grep -Eq -- "$pattern" "$@"; then
+    return 1
+  else
+    status=$?
+    test "$status" -eq 1
+  fi
+}
+assert_no_fixed() {
+  pattern=$1
+  shift
+  if grep -Fq -- "$pattern" "$@"; then
+    return 1
+  else
+    status=$?
+    test "$status" -eq 1
+  fi
+}
+assert_no_recursive_fixed() {
+  pattern=$1
+  shift
+  if grep -RFq -- "$pattern" "$@"; then
+    return 1
+  else
+    status=$?
+    test "$status" -eq 1
+  fi
+}
+test -r MODULE.bazel
+assert_no_ere 'name = "(main|broker|guest)"' MODULE.bazel
+assert_no_fixed 'Cargo.guest.lock' MODULE.bazel
+test -d bazel
+assert_no_recursive_fixed 'crate.spec' MODULE.bazel bazel packages
 ```
 
 Supported repins run from `packages/`, and the module lock is always last:
@@ -368,7 +414,8 @@ A walker manifest or lock change is exactly:
 ```bash
 set -euo pipefail
 before_product=$(sha256sum packages/Cargo.lock bazel/cargo/product.lock)
-(cd tests/tools/no-bash-ast-walker && cargo generate-lockfile --offline)
+(cd packages && cargo generate-lockfile --offline \
+  --manifest-path ../tests/tools/no-bash-ast-walker/Cargo.toml)
 (cd packages && cargo xtask bazel-repin --hub walker)
 (cd packages && cargo xtask bazel-module-refresh)
 test "$before_product" = \
@@ -460,8 +507,19 @@ checks stay independent:
 
 ```bash
 set -euo pipefail
-! grep -Fq 'packages/d2b-priv-broker/Cargo.lock' tests/test-rust.sh
-! grep -Fq 'packages/d2b-guest-shell-runner/Cargo.lock' tests/test-rust.sh
+assert_no_fixed() {
+  pattern=$1
+  shift
+  if grep -Fq -- "$pattern" "$@"; then
+    return 1
+  else
+    status=$?
+    test "$status" -eq 1
+  fi
+}
+test -r tests/test-rust.sh
+assert_no_fixed 'packages/d2b-priv-broker/Cargo.lock' tests/test-rust.sh
+assert_no_fixed 'packages/d2b-guest-shell-runner/Cargo.lock' tests/test-rust.sh
 grep -Fq 'broker-production/policy/Cargo.lock' tests/test-rust.sh
 grep -Fq 'broker-production/policy/metadata.json' tests/test-rust.sh
 grep -Fq 'guest-real-libshpool/production/Cargo.lock' tests/test-rust.sh
@@ -485,10 +543,32 @@ tree:
 ```bash
 set -euo pipefail
 pinned_tool=tests/tools/assert-pinned-tests.sh
-! grep -Fq 'packages/d2b-priv-broker/Cargo.lock' "$pinned_tool"
-! grep -Eq 'assert-pinned-broker-lock|broker_lock_backup|restore_broker_lock' \
+test -r "$pinned_tool"
+assert_no_fixed() {
+  pattern=$1
+  shift
+  if grep -Fq -- "$pattern" "$@"; then
+    return 1
+  else
+    status=$?
+    test "$status" -eq 1
+  fi
+}
+assert_no_ere() {
+  pattern=$1
+  shift
+  if grep -Eq -- "$pattern" "$@"; then
+    return 1
+  else
+    status=$?
+    test "$status" -eq 1
+  fi
+}
+assert_no_fixed 'packages/d2b-priv-broker/Cargo.lock' "$pinned_tool"
+assert_no_ere \
+  'assert-pinned-broker-lock|broker_lock_backup|restore_broker_lock' \
   "$pinned_tool"
-! grep -Eq 'trap[[:space:]]+[^#]*EXIT' "$pinned_tool"
+assert_no_ere 'trap[[:space:]]+[^#]*EXIT' "$pinned_tool"
 grep -Fq -- 'cargo nextest list --locked --workspace' "$pinned_tool"
 grep -Fq -- 'cargo nextest list --locked -p d2b-priv-broker' "$pinned_tool"
 
@@ -512,6 +592,16 @@ entry changed:
 
 ```bash
 set -euo pipefail
+assert_no_ere() {
+  pattern=$1
+  shift
+  if grep -Eq -- "$pattern" "$@"; then
+    return 1
+  else
+    status=$?
+    test "$status" -eq 1
+  fi
+}
 for name in \
   kernel-canaries \
   usbip-firewall-skeleton \
@@ -519,7 +609,9 @@ for name in \
   broker-socket-acl \
   broker-export-audit
 do
-  ! grep -Eq '^#.*broker[- ]workspace' "tests/golden/pinned/$name.txt"
+  path="tests/golden/pinned/$name.txt"
+  test -r "$path"
+  assert_no_ere '^#.*broker[- ]workspace' "$path"
 done
 ```
 
@@ -574,6 +666,7 @@ for system in x86_64-linux aarch64-linux; do
     guest-shell-runner-static-dependency-policy \
     broker-production-package-policy \
     guest-real-libshpool-package-policy \
+    broker-host-artifact-contract \
     guest-static-elf
   do
     nix eval --raw ".#checks.$system.$check.name" >/dev/null
@@ -590,6 +683,7 @@ nix build --no-link \
   .#checks.x86_64-linux.guest-shell-runner-static-dependency-policy \
   .#checks.x86_64-linux.broker-production-package-policy \
   .#checks.x86_64-linux.guest-real-libshpool-package-policy \
+  .#checks.x86_64-linux.broker-host-artifact-contract \
   .#checks.x86_64-linux.guest-static-elf \
   .#checks.x86_64-linux.rust-deny \
   .#checks.x86_64-linux.rust-audit
@@ -606,6 +700,7 @@ nix build --no-link \
   .#checks.aarch64-linux.guest-shell-runner-static-dependency-policy \
   .#checks.aarch64-linux.broker-production-package-policy \
   .#checks.aarch64-linux.guest-real-libshpool-package-policy \
+  .#checks.aarch64-linux.broker-host-artifact-contract \
   .#checks.aarch64-linux.guest-static-elf \
   .#checks.aarch64-linux.rust-deny \
   .#checks.aarch64-linux.rust-audit
@@ -615,8 +710,19 @@ make test-rust-supply-chain
 Neither block may set `--system`, `--builders`, or a remote builder. The
 generated CI must retain job ID `test-flake-aarch64`, use
 `ubuntu-24.04-arm`, use a 60-minute timeout, and run
-`make test-rust-supply-chain` after the five native realizations. The renderer
+`make test-rust-supply-chain` after the six native realizations. The renderer
 regression and both native results must refer to one unchanged stable PR head.
+
+Inspect `tests/golden/bazel-rust-artifact-baselines.json`. Each native broker
+and guest row must come from the realized derivation, carry zero initial
+`allowedGrowthBytes`, exact binary bytes, exact recursive closure and digest,
+and exact selected-policy digest. Broker rows additionally carry the exact ELF
+interpreter and sorted `DT_NEEDED` SONAMEs; guest rows require `ET_DYN`, the
+native machine, no interpreter, and no `DT_NEEDED`. Run the size-plus-one,
+closure-add/remove, cross-artifact, unrelated-sibling, broker-linkage,
+static-broker, dynamic-guest, non-PIE, and wrong-machine mutations. A later
+growth is accepted only with measured old/new bytes, their exact reviewed
+delta, and a repository-relative rationale in the same change.
 
 For every native guest artifact, the automated check must report `ET_DYN`, the
 native expected machine (`EM_X86_64` or `EM_AARCH64`), no `PT_INTERP`, and no
@@ -746,23 +852,29 @@ test -s bazel/generated/no-shell-inventory.json
 jq -e '
   (.governedSources | length) > 0 and
   (.declaredInputs | length) > 0 and
-  (.spawnSites | length) > 0 and
   ([.governedSources[].path] - [.declaredInputs[].path] | length) == 0 and
   ([.declaredInputs[].path] - [.governedSources[].path] | length) == 0 and
   ([.spawnSites[].source] - [.governedSources[].path] | length) == 0 and
-  ([.governedSources[].path] - [.spawnSites[].source] | length) == 0 and
+  ([.scanResults[].source] - [.governedSources[].path] | length) == 0 and
+  ([.governedSources[].path] - [.scanResults[].source] | length) == 0 and
+  ([.scanResults[].source] | unique | length) ==
+    (.governedSources | length) and
   ([.spawnSites[] | select(.shellInvocation)] | length) == 0 and
-  ([.governedSources[] | select(.scanned | not)] | length) == 0
+  ([.scanResults[] | select(.status != "scanned")] | length) == 0
 ' bazel/generated/no-shell-inventory.json
 ```
 
 `gen-bazel --check` freshly rediscovers spawn sites and compares their stable
 source/span/program keys with the committed `spawnSites` set in both
-directions. An empty inventory is a refusal, never a vacuous pass. The four mandatory
-plants (`no-shell-inventory-empty`, `no-shell-inventory-missing-entry`,
-`no-shell-inventory-extra-entry`, and `no-shell-inventory-planted-shell`)
-must each fail at their own diagnostic. Scopes produce `.scratch/` previews
-only; the integrator commits the generated inventory.
+directions. A governed source with no spawn construct remains present through
+one successful zero-site `scanResults` row. Empty governed input is a refusal,
+not a vacuous pass. The mandatory plants
+(`no-shell-inventory-empty`, `no-shell-inventory-missing-entry`,
+`no-shell-inventory-extra-entry`, `no-shell-inventory-unguarded-spawn`,
+`no-shell-inventory-missing-zero-site-record`, and
+`no-shell-inventory-planted-shell`) must each fail at their own diagnostic.
+Scopes produce `.scratch/` previews only; the integrator commits the generated
+inventory.
 
 Capture execution evidence:
 
@@ -793,7 +905,8 @@ Inspect:
 - no broker-to-guest or unrelated first-party edge;
 - main and guest per-case topology;
 - broker process-per-binary topology;
-- result document redaction and raw `test.log` availability;
+- forbidden-value absence and committed byte/record bounds across JUnit,
+  sanitized `test.log`, emitted evidence, and exporter diagnostics;
 - exact schema, no-bash, companion, API, and pinned-test censuses.
 - two independent nonempty schema generations, with empty and mismatch plants;
 - stub missing-executable, wrong-identity, runtime-state, and forbidden
@@ -801,9 +914,9 @@ Inspect:
 - pinned inventory empty, missing, and extra plants;
 - prior-evidence invalidation, multi-carrier attribution, sorted atomic
   success/failure/interruption manifest v1 evidence, original-status
-  preservation, ignored-case fidelity, and enforcing JUnit publication;
-- one planted failed result containing every forbidden redaction value, absent
-  from JUnit and present only in `test.log`;
+  preservation, ignored-case fidelity, and typed complete/degraded publication;
+- one planted failed result containing every forbidden redaction value before
+  sanitization and absent from every emitted sink;
 - no shell in repository-owned runner paths;
 - invalid `D2B_RUST_BUDGET`, scheduler-only, suite-only, and combined-limit
   mutations.
@@ -820,12 +933,15 @@ test "$(grep -Fc 'tags = ["exclusive"]' bazel/carriers/broker.bzl)" -eq 3
 
 The broker tests must include a tag-removal mutation that overlaps a planted
 ordinary test. Qualification, not this smoke block, runs each context with
-`--runs_per_test=20`. The action-network test includes canonical declared
-loopback TCP and Unix socket positives, a forbidden external-egress plant, and
-a live-index plant. The committed yanked snapshot key set comes only from
-`packages/Cargo.lock`; main checks the full set, while broker and guest check
-exact projections of their selected package-policy graphs. The walker and
-`Cargo.guest.lock` must not contribute keys.
+`--runs_per_test=20`. The action-network test proves loopback TCP, Unix socket,
+external-egress, and live-index use all fail in Bazel actions. Mandatory
+socket-using Rust tests remain on their exact same-commit non-advisory Cargo
+compatibility carriers; inspect the generated census and verify no namespace
+or policy output claims per-endpoint enforcement. The committed yanked
+snapshot key set comes only from `packages/Cargo.lock`; main checks the full
+set, while broker and guest check exact projections of their selected
+package-policy graphs. The walker and `Cargo.guest.lock` must not contribute
+keys.
 
 Keep adjacent authority green:
 
@@ -884,6 +1000,12 @@ Run targeted tests for:
 - a provider mutation that reintroduces `RESOLVE_BENEATH`, while strict
   result and cleanup paths retain
   `RESOLVE_BENEATH|RESOLVE_NO_SYMLINKS|RESOLVE_NO_MAGICLINKS`.
+- compile-fail attempts to construct, convert, inspect, clone, copy, default,
+  or externally mint `VerifiedExecutable`;
+- parent-prepared argv/envp/descriptors and fixed error record, with no
+  allocator, logger, formatter, lock, panic, or variable write between fork and
+  `execveat`; the failure path writes the close-on-exec pipe then calls
+  `_exit`.
 
 No test should fill a disk, require a privileged mount, sleep to reach expiry,
 or write a stale executable into `packages/target/`.
@@ -902,6 +1024,16 @@ Inspect exact recovery bytes:
 - `D2B-BZLSERVER-STUCK`: close other clients and run
   `make bazel-shutdown`; never delete `.scratch/bazel/` or signal a process
   identifier manually.
+- `D2B-BZLEVIDENCE-SANITIZE`, `D2B-BZLEVIDENCE-LIMIT`,
+  `D2B-BZLEVIDENCE-PUBLISH`, and `D2B-BZLEVIDENCE-NO-VERDICT`: name the stable
+  repository-relative input or carrier/workflow, the corrective action, and
+  the exact owning-slice or protected-workflow rerun. They preserve
+  `testVerdict`, emit degraded evidence, and contain no planted value.
+
+Also inspect the provider table in `contracts/runner-environment.md`: every
+provider refusal names the declared repository-relative provider key, its
+specific correction, and the owning rerun command without an absolute
+runfiles location or descriptor.
 
 Run the ADR-0054 drift/refusal table tests for stale product and walker hub
 locks, module lock, generator output, package-policy output, yanked snapshot,
@@ -951,6 +1083,19 @@ qualification record must carry explicit `bazelRestoreCount`,
 `sliceDurationsSeconds` entries. Those four camelCase names are canonical
 everywhere; no snake_case spelling is accepted.
 
+Run the fixture-backed validator tests in spec003w3:
+
+```bash
+set -euo pipefail
+(cd packages && cargo test -p xtask --test bazel_qualification)
+```
+
+Do not run the no-argument `cargo xtask bazel-qualification-validate` command
+yet. Its fixed `evidence/qualification.json` input is initialized and
+completed only in spec003w4. The fixture suite must cover a protected push
+where either or both workflows have no verdict and require a bounded degraded
+record that preserves available test verdicts and resets the streak.
+
 ## spec003w4 qualification audit
 
 The typed validator is the authority. Run it first and require success; the
@@ -982,14 +1127,17 @@ jq -e '
   .package_policy.all_checksums_verified and
   .package_policy.all_audits_no_fetch and
   .package_policy.guest_license_exception_count == 6 and
-  .architecture.x86_native_five_checks_passed and
-  .architecture.aarch64_native_five_checks_passed and
+  .architecture.x86_native_six_checks_passed and
+  .architecture.aarch64_native_six_checks_passed and
   .architecture.aarch64_supply_chain_passed_on_same_stable_head and
   .broker.all_contexts_exclusive and
   .broker.all_contexts_twenty_consecutive and
-  .action_network.canonical_local_sockets_passed and
+  .action_network.bazel_loopback_denied and
+  .action_network.bazel_unix_socket_denied and
   .action_network.external_egress_plant_refused and
   .action_network.live_index_plant_refused and
+  .action_network.cargo_compatibility_census_exact and
+  .action_network.compatibility_verdicts_same_head_non_advisory and
   .supply_chain.all_three_contexts_equal and
   .architecture.all_guest_elf_et_dyn and
   .architecture.all_guest_elf_machine_matches and
@@ -1014,10 +1162,15 @@ jq -e '
     | select(.cold_ci == true)
     | (.sliceDurationsSeconds | length) == 4]
     | all) and
-  (.no_shell_inventory.nonempty and
-   .no_shell_inventory.source_projections_bidirectional and
+  (.no_shell_inventory.governed_and_declared_nonempty and
+   .no_shell_inventory.governed_declared_equal and
+   .no_shell_inventory.spawn_sources_governed and
+   .no_shell_inventory.zero_site_scan_records_complete and
    .no_shell_inventory.spawn_sites_bidirectional and
-   (.no_shell_inventory.plants | length) == 4)
+   (.no_shell_inventory.plants | length) == 6) and
+  .evidence_sinks.all_forbidden_values_absent and
+  .evidence_sinks.all_bounds_hold and
+  .enforcement.required_jobs_non_advisory
 ' specs/003-adr052-bazel-rust/evidence/qualification.json
 ```
 
@@ -1066,12 +1219,17 @@ After promotion:
 - output base is not cached;
 - one protected-`v3` writer publishes after synchronous trim and two headroom
   checks.
+- cache deletion authority comes only from the closed committed typed prefix
+  set; mixed authorized/unauthorized pagination preserves every unauthorized
+  entry and every authorization refusal records zero delete calls;
 - each primary key is unique for its successful protected-`v3` run;
 - restore prefixes contain neither run ID nor commit SHA;
 - maintenance retains the newest complete generation for each authorized
   prefix.
 - the table-driven cache test mutates every bound input and changes every
   applicable action/repository key without collapsing namespaces.
+- `test-flake-aarch64`, all four Rust slices, and the `test-rust` rollup are
+  non-advisory; advisory-classification mutations fail.
 
 The alias replacements are exactly:
 
@@ -1106,8 +1264,20 @@ for doc in \
 do
   grep -Fq 'test-rust-slice-main' "$doc"
 done
-! grep -Fq 'eight CI leaf targets' tests/README.md
-! grep -Fq \
+assert_no_fixed() {
+  pattern=$1
+  shift
+  if grep -Fq -- "$pattern" "$@"; then
+    return 1
+  else
+    status=$?
+    test "$status" -eq 1
+  fi
+}
+test -r tests/README.md
+test -r docs/reference/test-execution-manifest.md
+assert_no_fixed 'eight CI leaf targets' tests/README.md
+assert_no_fixed \
   'runs API, main, broker, guest, no-bash, schema, inventory and supply chain' \
   docs/reference/test-execution-manifest.md
 ```
@@ -1140,6 +1310,18 @@ D2B_ENABLE_FIXTURE_BUILD=1 make test-fixture-contracts
 Discard the rehearsal worktree. `promotion-record.json` is read only after
 merge; any pre-merge command that reads it is wrong by construction.
 
+After the promotion merge and record creation, run:
+
+```bash
+set -euo pipefail
+(cd packages && cargo xtask bazel-promotion-record-validate)
+```
+
+It must bind the record to the actual protected-`v3` pull-request merge commit
+and re-derive the exact sealed `spec003w5` candidate, content, and snapshot
+identities. Run old-SHA, candidate-SHA, wrong-seal, unsealed-merge, and wrong
+PR merge-SHA negatives before `spec003w5fu1` seals.
+
 ## spec003w6 and spec003w7 independent checks
 
 Alias removal requires a containing published semantic release tag, not any
@@ -1165,8 +1347,11 @@ while IFS= read -r candidate; do
   ) || continue
   test -n "$remote_commit" || continue
   test "$(git rev-parse "$candidate^{commit}")" = "$remote_commit" || continue
-  test "$(gh release view "$candidate" --json isDraft --jq .isDraft \
-    2>/dev/null)" = "false" || continue
+  release_state=$(
+    gh release view "$candidate" --json isDraft,isPrerelease \
+      --jq '[.isDraft, .isPrerelease] | @tsv' 2>/dev/null
+  ) || continue
+  test "$release_state" = "$(printf 'false\tfalse')" || continue
   tag=$candidate
   break
 done < <(
@@ -1178,13 +1363,15 @@ test -n "$tag"
 ```
 
 A two-component tag, a local-only tag, a divergent same-named local and remote
-tag, and a draft-only release each fail entry, and the owning interface test
-carries all four as negatives.
+tag, a draft release, and a prerelease each fail entry, and the owning
+interface test carries all five as negatives. Run
+`cargo xtask bazel-promotion-record-validate` before this containment check.
 
 Cargo implementation retirement:
 
 ```bash
 set -euo pipefail
+(cd packages && cargo xtask bazel-promotion-record-validate)
 (cd packages && cargo test -p xtask --test post_promotion_observations)
 ```
 
@@ -1206,9 +1393,16 @@ Eligibility, count, and run IDs are derived; self-asserted summary fields are
 ignored. The derived final ten distinct ordered units must be successes with no
 intervening failure or cancellation.
 
-After either change, every public Rust Make name and fixture mode must still
-work. spec003w7 may land before spec003w6. If both changes edit a binding doc
-or `post-promotion.json`, the child that lands second rebases onto the merged
-first child, reruns its complete validation, and receives a new panel verdict.
+The API stream is complete but transient. `post-promotion.json` persists only
+the fixed stream checkpoint and final ten normalized units, with an
+attempt-history count and digest per unit. Verify its schema byte and record
+bounds and atomic replacement, and use an oversized transient fixture to prove
+the bounded record yields the same decision as the complete in-memory oracle.
+
+After either change, every public Rust Make name, fixture mode, and mandatory
+socket-test Cargo compatibility carrier must still work. spec003w7
+qualification and code preparation may run first, but its shared documentation
+and evidence task waits for merged spec003w6, rebases, reruns complete
+validation, and receives a new panel verdict.
 Do not cite container, VM, live-host, hardware, or deployed-host tiers for this
 internal build scheduler.

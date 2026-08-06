@@ -170,16 +170,20 @@ Out of scope:
 
 ### Action network and yanked authority
 
-- Bazel Rust actions may open only declared sandbox-local Unix sockets and
-  loopback TCP listeners or connections required by the committed tests.
-  Host or external egress, DNS, live package or advisory indexes, and
-  undeclared listeners are forbidden.
+- Bazel Rust actions remain no-network under ADR 0052, including loopback TCP
+  and Unix sockets. Linux network namespaces enforce only the action-wide
+  boundary and are not claimed to enforce per-endpoint declarations.
 - Only pinned repository rules may fetch: registry sources use the root lock
   URL and checksum, and `wl-proxy` uses its pinned revision and archive
   sha256.
-- Plants exercise forbidden external egress and live-index access. They do not
-  reject all socket syscalls. Qualification proves the narrowed boundary while
-  the canonical loopback and Unix-socket tests remain unchanged.
+- Mandatory committed socket-using tests remain on exact non-Bazel Cargo
+  compatibility carriers under their existing surface IDs until a separate
+  authorized design exists. Their generated case census, same-commit verdict,
+  and non-advisory classification are qualification inputs and survive Cargo
+  implementation retirement.
+- Plants deny loopback TCP, Unix sockets, external egress, and live-index
+  access from Bazel actions. Promotion identifies affected surfaces as hybrid
+  and never claims those compatibility cases ran under Bazel.
 - One committed yanked snapshot has the exact key set derived only from
   `packages/Cargo.lock`; the walker lock and `Cargo.guest.lock` are excluded.
 - `rust-deny-main` evaluates the full product snapshot. Broker and guest deny
@@ -217,8 +221,9 @@ Out of scope:
   `x86_64-unknown-linux-gnu` and `aarch64-unknown-linux-gnu`.
 - Guest static contexts use matching musl targets:
   `x86_64-unknown-linux-musl` and `aarch64-unknown-linux-musl`.
-- The four package checks and `guest-static-elf` realize natively on both
-  architectures. No lane passes a foreign `--system`, configures
+- The four package checks, `broker-host-artifact-contract`, and
+  `guest-static-elf` realize natively on both architectures. No lane passes a
+  foreign `--system`, configures
   `--builders`, or depends on a remote builder.
 - The existing `test-flake-aarch64` job ID and rollup context remain. Its
   implementation changes from x86-hosted eval-only smoke to native
@@ -266,6 +271,8 @@ Acceptance:
    refuse an unexpectedly empty set.
 6. First-party binaries and fixtures are declared inputs, resolved once, and
    never silently taken from another executor.
+7. Mandatory socket-using cases keep exact same-commit Cargo compatibility
+   coverage, while every Bazel action remains no-network.
 
 ### User Story 3 - Keep supply-chain policy enforcing - P1
 
@@ -310,6 +317,9 @@ Acceptance:
    only then reaps.
 7. Each cleanup or server code emits its exact ADR 0052 recovery commands and
    no other code's remedy.
+8. JUnit, `test.log`, execution evidence, qualification evidence, and exporter
+   diagnostics are sanitized and bounded before publication. Degraded evidence
+   preserves the underlying test verdict and is rejected separately.
 
 ### User Story 5 - Compare safely in continuous integration - P2
 
@@ -325,7 +335,7 @@ Acceptance:
    `v3` push commit, include the fixture companion, and carry explicit
    `bazelRestoreCount`, `bazelSaveCount`, and `bazelPublicationCount`
    plus four complete `sliceDurationsSeconds` entries.
-4. Native x86_64 and aarch64 lanes each realize their own five package and ELF
+4. Native x86_64 and aarch64 lanes each realize their own six policy and artifact
    checks without foreign-system or remote-builder arguments; the arm lane
    also runs the native package supply-chain target on the same stable head.
 5. Cache maintenance remains a separate verdict and credentials never enter
@@ -407,6 +417,13 @@ Acceptance:
   evidence paths MUST retain
   `RESOLVE_BENEATH|RESOLVE_NO_SYMLINKS|RESOLVE_NO_MAGICLINKS`. Every auxiliary
   descriptor MUST be close-on-exec and behaviorally tested.
+  `VerifiedExecutable` MUST have private fields and sealed construction with no
+  public unchecked constructor, path accessor or conversion, `Default`,
+  `From`, `Into`, `AsRef`, `Clone`, or `Copy`, enforced by compile-fail API
+  fixtures. Argv, envp, descriptor mappings, and the fixed exec-error record
+  MUST be prepared before fork; the child MUST perform only async-signal-safe
+  raw descriptor operations, `execveat`, a fixed-size error-pipe write, and
+  `_exit`.
 - **FR-019**: `crate_universe` MUST declare exactly `product` from
   `packages/{Cargo.toml,Cargo.lock}` and `walker` from the no-bash walker
   manifest and lock. Product first-party crates MUST be native Bazel targets.
@@ -450,7 +467,11 @@ Acceptance:
 - **FR-032**: Broker dynamic-host and guest static-PIE, interpreter,
   `NEEDED`, native `e_machine`, binary-size, and closure-isolation checks MUST
   remain independently enforcing. Guest ELF checks MUST require `ET_DYN` and
-  reject a non-PIE or wrong-machine artifact.
+  reject a non-PIE or wrong-machine artifact. Both dedicated derivations MUST
+  realize natively. The broker interpreter and `DT_NEEDED` SONAME set and both
+  recursive Nix closures MUST match committed exact baselines. Size thresholds
+  MUST come from realized measured baselines plus separately committed,
+  reviewed measured deltas; no prose byte ceiling is accepted.
 - **FR-033**: The four package checks and `guest-static-elf` MUST exist and
   realize for both root flake systems, each reading only its exact
   system-and-target policy input.
@@ -470,7 +491,9 @@ Acceptance:
   the exact ADR 0052 command sequence for its own code.
 - **FR-039**: Refusal and result messages MUST omit local identifiers, secrets,
   raw paths, handles, and cross-condition remedies while naming exact
-  repository-relative remediation.
+  repository-relative input, corrective action, and rerun command. Provider,
+  sanitizer, sink-limit, exporter, publication, and qualification-degradation
+  classes MUST each have an exact tested row.
 - **FR-040**: The shadow workflow MUST remain non-required, keep the required
   graph unchanged, and publish no cache.
 - **FR-041**: Pull-request jobs MUST remain read-only, request no
@@ -484,8 +507,11 @@ Acceptance:
   per successful protected-`v3` run; restore prefixes MUST omit run ID and
   commit SHA; retention MUST preserve the newest complete generation.
 - **FR-044**: Cache maintenance MUST run only on protected `v3`, paginate
-  completely, delete only authorized generations, verify headroom twice, and
-  remain outside the Rust verdict.
+  completely, derive authorization only from a closed committed typed prefix
+  enum, reject caller-supplied, unknown, or ambiguous prefixes, preserve
+  unauthorized entries, delete only authorized generations, verify headroom
+  twice, and remain outside the Rust verdict. Mixed authorized and unauthorized
+  entries across pagination boundaries MUST be mutation-tested.
 - **FR-045**: Warm local, cold local, and cold CI profiles MUST retain ADR
   0052's 10, 15, and 15 minute ceilings and 1.2 maximum multiplier.
 - **FR-046**: A promoted job MUST enforce the ADR 0052 in-band deadline and
@@ -496,34 +522,42 @@ Acceptance:
   eighteen-surface failure matrix, topology, selected package policy, native
   dual-architecture realization, performance, cache, and ten-record
   equivalence evidence, including the three explicit camelCase cache counts,
-  broker twenty-run exclusivity, action-network plants, and arm
-  supply-chain stable-head evidence.
+  broker twenty-run exclusivity, all four Bazel no-network plants, exact
+  same-commit Cargo compatibility-carrier coverage, complete sink
+  sanitization/bounds, non-advisory arm/four-slice/rollup classification, both
+  realized artifact contracts, and arm supply-chain stable-head evidence.
 - **FR-049**: Promotion MUST preserve required context `test-rust`, public
   `test-rust-*` names, and the fixture lane.
 - **FR-050**: Bazel-specific aliases MUST forward with status preservation and
   MUST NOT be called by workflows after promotion.
 - **FR-051**: Alias removal MUST wait for a release containing promotion and
-  MUST be a separate change.
+  MUST be a separate change. The release MUST be neither draft nor prerelease.
 - **FR-052**: Cargo implementation retirement MUST wait for ten consecutive
   green promoted `v3` runs and MUST remove no public Make name or fixture
   behavior.
 - **FR-053**: Every guard MUST land with a positive case and a planted negative
   or mutation in an existing Rust, policy, drift, or workflow-policy carrier.
 - **FR-054**: Migrated test suites MUST publish enforcing, redacted per-case
-  result documents while retaining raw child output only in the ordinary
-  per-target test log.
+  result documents. JUnit, `test.log`, emitted evidence, and exporter
+  diagnostics MUST be sanitized and bounded before writing and MUST contain no
+  forbidden planted value. `testVerdict` MUST remain the underlying operation
+  result; publication failure MUST emit separately typed degraded evidence
+  that surface completion and qualification reject.
 - **FR-055**: No new top-level shell gate, Layer-1 job, required context,
   linter, formatter, hook, remote cache, or remote execution surface may be
   added.
 - **FR-056**: Qualification MUST run each broker context twenty consecutive
   times with `--runs_per_test=20`, exclusivity in force, and a passing
   tag-removal/overlap mutation.
-- **FR-057**: Bazel Rust actions MAY use only declared sandbox-local Unix
-  sockets and loopback TCP required by committed tests. Host or external
-  egress, DNS, live indexes, advisory fetches, and undeclared listeners MUST
-  be denied. Only pinned repository-rule fetches are permitted. Separate
-  forbidden-external-egress and live-index plants MUST fail and enter
-  qualification evidence without redesigning canonical tests.
+- **FR-057**: Bazel Rust actions MUST use no sockets, including loopback TCP
+  and Unix sockets. Only pinned
+  repository-rule fetches are permitted. Loopback, Unix-socket,
+  forbidden-external-egress, and live-index plants MUST fail and enter
+  qualification. Mandatory socket-using Rust tests MUST remain on an exact
+  non-advisory Cargo compatibility path under their existing surface IDs until
+  separately authorized; qualification MUST bind their same-commit census and
+  verdict and MUST NOT claim namespace isolation enforces endpoint
+  declarations.
 - **FR-058**: `cargo xtask bazel-module-refresh` MUST be test-first,
   no-argument, `MODULE.bazel.lock`-only, idempotent, and use the same absolute
   server-selecting startup options. Module drift MUST name its exact
@@ -532,9 +566,11 @@ Acceptance:
   sequences and external-content prohibitions. Redaction, missing-remedy,
   borrowed-remedy, wrong-external-target, replacement-directory,
   recursive-removal, and manual-signal mutations MUST fail.
-- **FR-060**: `spec003w6` and `spec003w7` MUST remain independent children of
-  promotion. Either may land first; the second shared-file editor MUST rebase,
-  revalidate, and receive a new panel result.
+- **FR-060**: Release containment and green-run qualification remain
+  independent inputs. `spec003w7` qualification and code preparation MAY run
+  before `spec003w6`, but its shared documentation/evidence task and merge MUST
+  depend on merged `spec003w6`, then rebase, revalidate, and receive a new
+  panel result. This keeps concurrently ready file ownership disjoint.
 - **FR-061**: Every qualification record MUST carry the explicit camelCase
   fields `bazelRestoreCount`, `bazelSaveCount`, and
   `bazelPublicationCount`. Every cold record MUST additionally carry
@@ -687,7 +723,11 @@ Acceptance:
   promotion ancestry. Pagination gaps, missing or duplicate identities,
   non-v3, non-push, pre-promotion, and nonterminal units MUST fail.
   Eligibility, count, and run IDs MUST be derived, never trusted from
-  self-asserted fields.
+  self-asserted fields. Derivation MUST consume the complete transient stream
+  on every run, while `post-promotion.json` persists only a bounded fixed-shape
+  stream checkpoint and final ten normalized units with attempt-history
+  digests. Persisted bytes and records MUST be schema-bounded and atomically
+  replaced, never appended.
 - **FR-084**: Retirement MUST require the derived last ten distinct ordered run
   units to be successes with no intervening failure or cancellation.
   Promotion MUST integrate all spec003w5 scope results into one atomic candidate
@@ -695,8 +735,11 @@ Acceptance:
   exact commit in rehearsal. Pre-merge rehearsal MUST identify the candidate
   from the verified current atomic candidate HEAD and the recorded spec003w5
   parent; `promotion-record.json` is created only after merge and MUST NOT be
-  a pre-merge input. Every code-changing wave MUST own one semantic
-  changelog fragment.
+  a pre-merge input. After merge, a typed validator MUST bind
+  `promotion-record.json` to the actual protected-`v3` pull-request merge
+  commit and the exact sealed `spec003w5` candidate, content, and snapshot
+  identities before the follow-up seals or either post-promotion child enters.
+  Every code-changing wave MUST own one semantic changelog fragment.
 
 - **FR-085**: The same change that introduces each shadow Make target MUST add
   that target to `APPROVED_MAKE_TARGETS`. All six shadow targets (the
@@ -710,7 +753,8 @@ Acceptance:
   exposed as the contributor-only `cargo xtask bazel-qualification-validate`,
   MUST derive every qualification
   threshold from complete paginated, attempt-aware Cargo, Bazel, and fixture
-  run inventories plus immutable content references. It MUST reject page gaps,
+  run inventories plus immutable content references. Every workflow reference
+  MUST bind `(runId, positive attempt, headSha)`. It MUST reject page gaps,
   missing attempts, omitted intervening protected-`v3` pushes, omitted,
   forged, duplicate, inconsistent, and wrong-candidate references.
   It MUST normalize each run ID to its highest terminal attempt, derive
@@ -723,17 +767,14 @@ Acceptance:
   informational inspection.
 - **FR-087**: The no-shell property MUST be bound to
   `bazel/generated/no-shell-inventory.json`, an exact, generated,
-  drift-checked source and spawn-site inventory whose three sets are each
-  nonempty. Governed sources,
-  declared carrier inputs, and discovered spawn sites MUST agree
-  bidirectionally: the governed-source, declared-input, and spawn-site source
-  projections MUST be equal in both directions, and a fresh scan's exact
+  drift-checked source, scan-result, and spawn-site inventory. Governed sources
+  and declared carrier inputs MUST be equal and nonempty. Every spawn-site
+  source MUST be governed, but a governed source MAY have zero spawn sites and
+  MUST then carry a successful zero-site scan record. A fresh scan's exact
   spawn-site keys MUST equal the committed `spawnSites` keys in both
-  directions. No governed source may be missing from either projection, no
-  declared input or spawn-site source may be ungoverned, and no discovered or
-  recorded spawn site may be missing from the other set. Empty, missing-entry,
-  extra-entry, and planted-shell inventories MUST fail. The integrator commits
-  the generated inventory; slices preview it only.
+  directions. Empty governed input, missing/extra entry, ungoverned spawn,
+  missing zero-site scan result, and planted-shell inventories MUST fail. The
+  integrator commits the generated inventory; slices preview it only.
 - **FR-088**: The spec003w0 Cargo gate MUST take its package supply-chain
   inputs from the native-system selected policy inputs for broker GNU and
   guest musl, with an exact source census, deny, and pinned `--no-fetch`
@@ -747,7 +788,13 @@ Acceptance:
   release tag matching `v<major>.<minor>.<patch>` exactly, not any containing
   tag. Entry MUST prove the tag matches the anchored pattern, contains the
   promotion commit, resolves to the same peeled commit locally and on the
-  origin remote, and carries a published non-draft release.
+  origin remote, and carries a published release that is neither draft nor
+  prerelease.
+- **FR-090**: A read-only Spec 003 plan-structure validator under this
+  specification directory MUST check task-ID uniqueness, dependency
+  existence, dependency order, adjacency equality, acyclicity, and overlapping
+  ownership between incomparable concurrently ready scopes. It MUST run
+  without production-code changes and be required before every plan panel.
 
 ## Key Entities
 
@@ -778,8 +825,9 @@ Acceptance:
   retention, counted in a record as `bazelRestoreCount`, `bazelSaveCount`,
   and `bazelPublicationCount`.
 - **No-Shell Spawn Inventory**: One generated, drift-checked, nonempty record
-  of governed sources, declared carrier inputs, and discovered spawn sites that
-  must agree bidirectionally.
+  whose governed and declared source sets agree, whose scan results cover
+  every governed source including zero-site sources, and whose discovered
+  spawn sites are an exact governed subset.
 - **Rust Surface**: One of the existing eighteen execution-manifest IDs.
 - **Carrier Target**: One independently reported Bazel target assigned to one
   Rust surface.
@@ -799,6 +847,11 @@ Acceptance:
   provenance, normalized terminal conclusion, immutable creation ordering, and
   verified promotion ancestry. A unit contributes exactly one streak position;
   an attempt never does.
+- **Bounded Post-Promotion Checkpoint**: A fixed-shape digest and final-ten
+  suffix derived from the complete transient run stream; never an eligibility
+  input or an append-only history.
+- **Evidence Sink Result**: An underlying test verdict plus complete or
+  degraded evidence status, bounded under the committed sink policy.
 
 ## Success Criteria
 
@@ -838,9 +891,10 @@ Acceptance:
 - **SC-016**: All three broker suites retain `tags = ["exclusive"]`, fail the
   tag-removal mutation, and pass twenty consecutive executions per context
   without overlapping any test.
-- **SC-017**: External-egress and live-index plants fail, canonical declared
-  local-socket tests pass, and the fetch inventory contains only pinned
-  repository rules.
+- **SC-017**: Loopback TCP, Unix-socket, external-egress, and live-index Bazel
+  plants fail; every mandatory socket-using test passes through its exact
+  same-commit non-advisory Cargo compatibility carrier; and the fetch inventory
+  contains only pinned repository rules.
 - **SC-018**: Both dedicated Nix derivations contain the exact
   `wl-proxy-0.1.2` hash, and missing, wrong, or one-sided pins fail.
 - **SC-019**: Module refresh changes only `MODULE.bazel.lock` when stale,
@@ -854,24 +908,27 @@ Acceptance:
   cache
   retention keeps the newest generation and restore prefixes contain neither
   run ID nor commit SHA.
-- **SC-022**: Native `test-flake-aarch64` passes five realizations and
+- **SC-022**: Native `test-flake-aarch64` passes six realizations and
   `make test-rust-supply-chain` on one renderer-covered stable head.
 - **SC-023**: Every mutating validation command leaves the committed candidate
   clean under tracked, staged, and untracked-path assertions.
 - **SC-024**: Main, broker, and guest yanked checks use the one product-lock
   snapshot with exact full-set or projection semantics; walker and
   `Cargo.guest.lock` never enter its key authority.
-- **SC-025**: Canonical loopback TCP and Unix-socket tests pass under the
-  declared local-socket policy, while external-egress, DNS, live-index, and
-  undeclared-listener plants fail.
+- **SC-025**: Every Bazel action remains no-network and no namespace or policy
+  check claims per-endpoint enforcement. The compatibility census is complete,
+  and missing, skipped, advisory, wrong-head, or misattributed compatibility
+  evidence fails.
 - **SC-026**: Provider tests accept escaping runfiles leaf symlinks without
   `RESOLVE_BENEATH`, reject reintroducing it, and preserve strict flags on
   result and cleanup paths.
 - **SC-027**: Native guest artifacts are `ET_DYN` for the expected x86_64 or
   aarch64 `e_machine` and have no interpreter or `DT_NEEDED`; non-PIE and
   wrong-machine plants fail.
-- **SC-028**: Manifest, JUnit, no-shell, redaction, ignored-case, original
-  status, and combined-budget mutations all fail their exact guards.
+- **SC-028**: Manifest, JUnit, bounded sanitized `test.log`, emitted-evidence,
+  exporter, no-shell, redaction, ignored-case, original-verdict,
+  typed-degraded-status, and combined-budget mutations all fail their exact
+  guards.
 - **SC-029**: Every bound cache input changes each applicable primary key and
   restore prefix, and action and repository namespaces never collapse.
 - **SC-030**: Cargo and decomposed Bazel supply-chain exit statuses and
@@ -891,10 +948,12 @@ Acceptance:
   references; page-gap, missing-attempt, omitted-push, omitted, forged,
   duplicate, inconsistent, and wrong-candidate plants each fail, and no
   trusted boolean can qualify a record.
-- **SC-035**: Each of the generated no-shell inventory's three sets is nonempty;
-  the three source projections and the fresh-scan/committed spawn-site keys are
-  equal in both directions; empty, missing-entry, extra-entry, and
-  planted-shell cases each fail.
+- **SC-035**: The generated no-shell governed and declared source sets are
+  nonempty and equal; every spawn source is governed; every governed source
+  has exactly one successful scan record including zero-site sources; and the
+  fresh-scan/committed spawn-site keys are equal. Empty, missing-entry,
+  extra-entry, ungoverned-spawn, missing-zero-site-record, and planted-shell
+  cases each fail.
 - **SC-036**: The pinned inventory lists under the one root lock with no lock
   backup or restore, the four native selected policy inputs drive the package
   census, deny, and pinned `--no-fetch` audit, guest static dependency policy
@@ -903,10 +962,27 @@ Acceptance:
 - **SC-037**: spec003w6 entry accepts only a containing published
   `v<major>.<minor>.<patch>` tag whose peeled local and origin commits match;
   a two-component tag, an unpushed tag, a divergent local/remote tag, and a
-  draft-only release each fail entry.
+  draft or prerelease each fail entry.
 - **SC-038**: The last ten distinct ordered run units succeed, while a
   repeated-attempt plant and an old-rerun-after-failure plant each fail to
   extend the streak.
+- **SC-039**: Both dedicated Nix derivations realize on each native system;
+  exact broker linkage, guest static linkage, selected closures, and measured
+  size baselines pass, while linkage, closure, size-plus-one, static-broker,
+  dynamic-guest, non-PIE, and wrong-machine mutations fail and qualification
+  references the results.
+- **SC-040**: The read-only plan-structure validator reports all task IDs
+  unique, every dependency present and earlier, adjacency equal, the graph
+  acyclic, and no ownership conflict among incomparable scopes.
+- **SC-041**: `promotion-record.json` validates against the actual sealed
+  `spec003w5` protected-`v3` merge; old-SHA, candidate-SHA, wrong-seal, and
+  unsealed-merge plants fail before either post-promotion eligibility check.
+- **SC-042**: Qualification rejects advisory classification for
+  `test-flake-aarch64`, each of the four Rust slices, and `test-rust`; each
+  advisory mutation fails.
+- **SC-043**: Post-promotion eligibility is identical when derived from the
+  complete transient stream and from its in-memory oracle, while persisted
+  `post-promotion.json` remains within its fixed record and byte bounds.
 
 ## Assumptions and Dependencies
 

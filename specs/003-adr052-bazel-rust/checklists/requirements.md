@@ -47,7 +47,10 @@
   `cargoLock.outputHashes."wl-proxy-0.1.2"` value and mutations.
 - [x] Binary size, closure isolation, broker dynamic linkage, guest `ET_DYN`
   PIE, native `e_machine`, interpreter, and `NEEDED` checks remain enforcing,
-  with non-PIE and wrong-machine plants.
+  with both dedicated derivations realized on both native systems, exact
+  broker interpreter/SONAME and recursive-closure baselines, measured
+  zero-delta size baselines, and linkage/closure/size/non-PIE/wrong-machine
+  plants.
 - [x] Libshpool is normal while code activation stays feature-gated.
 - [x] Unsupported `crate.spec` use is forbidden.
 - [x] The selected-context oracle is a three-way join: target-filtered locked
@@ -100,11 +103,12 @@
   projections.
 - [x] The reviewed networked refresh and offline exact-key check remain
   separate, with live-index and key-set plants.
-- [x] Declared sandbox-local loopback TCP and Unix sockets remain available to
-  canonical tests while host/external egress, DNS, live indexes, advisory
-  fetches, and undeclared listeners are denied.
-- [x] External-egress and live-index plants, plus canonical local-socket
-  positives, enter qualification evidence.
+- [x] Every Bazel action remains no-network, including loopback TCP and Unix
+  sockets, without claiming namespace enforcement of endpoint declarations.
+- [x] Mandatory socket-using tests remain on exact same-commit non-advisory
+  Cargo compatibility carriers under their existing surface IDs.
+- [x] Loopback, Unix-socket, external-egress, and live-index Bazel plants plus
+  the compatibility census enter qualification evidence.
 - [x] Cargo current enforcing status and normalized findings are compared with
   the decomposed deny/audit/yanked union for main, broker, and guest.
 
@@ -118,6 +122,8 @@
   coverage and stable-head evidence.
 - [x] Foreign-system, wrong-runner, and remote-builder refusals are distinct.
 - [x] Aarch64 build evidence does not expand broker runtime support.
+- [x] Native arm and x86 each realize six checks, including the broker
+  artifact contract, and `test-flake-aarch64` is non-advisory with a mutation.
 
 ## Repin and Mutation Safety
 
@@ -154,8 +160,8 @@
 - [x] Exact coverage, topology, locator, per-case evidence, cache, deadline,
   performance, qualification, promotion, alias, and retirement requirements
   remain.
-- [x] FR identifiers are sequential from FR-001 through FR-089.
-- [x] Success criteria are sequential from SC-001 through SC-038.
+- [x] FR identifiers are sequential from FR-001 through FR-090.
+- [x] Success criteria are sequential from SC-001 through SC-043.
 - [x] Fixture-backed surfaces remain outside the eighteen-surface migration.
 - [x] Public Make names and required context remain compatibility contracts.
 - [x] Provider `RESOLVE_NO_MAGICLINKS`-only opens, deliberate absence of
@@ -176,9 +182,10 @@
 - [x] Run-unique keys, run/SHA-free restore prefixes, and newest-generation
   retention are explicit.
 - [x] Manifest/JUnit prior invalidation, multi-carrier attribution, sorted
-  atomic partial evidence, status preservation, ignored fidelity, full
-  redaction fixture, no-shell enforcement, and combined budget mutations are
-  explicit.
+  atomic partial evidence, original-verdict preservation, ignored fidelity,
+  full forbidden-value absence and bounds across JUnit, `test.log`, emitted
+  evidence and exporter diagnostics, typed degraded evidence, no-shell
+  enforcement, and combined budget mutations are explicit.
 - [x] Every cache key input has an action/repository applicability row and a
   table-driven mutation of every applicable primary key and restore prefix.
 - [x] Four authoritative promoted slice targets and exact mappings for all
@@ -202,18 +209,27 @@
   boolean can qualify a record.
 - [x] The qualification task and the promotion validation both run the
   validator, and quickstart invokes it before any informational `jq`.
-- [x] No-shell is bound to an exact generated, drift-checked, nonempty
-  source/spawn inventory compared bidirectionally across governed sources,
-  declared inputs, and discovered spawn sites, with empty, missing, extra, and
-  planted-shell negatives in spec003w1 and in qualification evidence; the
-  integrator commits it and slices preview only.
+- [x] No-shell is bound to exact equal nonempty governed/declared sets, one
+  successful scan result per governed source including zero-site sources, and
+  an exact governed spawn-site subset, with all relationship negatives.
 - [x] All six shadow Make targets enter `APPROVED_MAKE_TARGETS` in
   `packages/xtask/tests/policy_ci.rs` in the same wave, with positive and
   negative policy tests.
 - [x] spec003w6 entry requires a containing published semantic release tag
   matching `v<major>.<minor>.<patch>`, proved by an anchored tag filter,
   ancestry, equal peeled local/origin tag commits, and a non-draft release,
-  with an exact command and validation contract.
+  with both draft and prerelease false and an exact command and validation
+  contract.
+- [x] VerifiedExecutable has compile-fail construction, conversion, accessor,
+  trait, clone/copy/default, and minting seals.
+- [x] Post-fork execution uses only async-signal-safe operations over
+  parent-prepared argv/envp/descriptors and a fixed close-on-exec error pipe.
+- [x] Cache deletion uses a closed typed prefix enum and mixed pagination
+  negatives preserve unauthorized entries.
+- [x] The promotion record is typed and bound to the actual sealed merge before
+  either post-promotion eligibility check.
+- [x] Persisted post-promotion evidence is bounded while every decision derives
+  from the complete transient protected stream.
 
 ## Plan and Task Quality
 
@@ -239,7 +255,8 @@
 - [x] spec003w1 owns the no-bash walker implementation and fail-closed
   walk/read/parse census tests.
 - [x] Schema, stub, inventory, and no-bash spec003w1 carriers are file-disjoint and
-  carry their empty/mismatch/missing/extra/identity/state/listener plants.
+  carry their empty/mismatch/missing/extra/identity/state and no-shell
+  relationship plants; socket denial belongs to the hermeticity carrier.
 - [x] spec003w0 updates the release workflow and both existing fail-closed gate
   scripts rather than deleting either gate.
 - [x] spec003w0 and spec003w5 include same-change binding-doc tasks without
@@ -257,19 +274,21 @@
   rehearses reverting that exact commit, resolving the candidate from the
   verified current candidate HEAD and the recorded parent; `promotion-record.json`
   is read only after merge.
-- [x] spec003w6 and spec003w7 evidence independence is preserved; either may
-  land first and the second shared-file editor rebases, revalidates, and
-  re-panels.
+- [x] spec003w6 and spec003w7 eligibility clocks remain independent;
+  spec003w7 qualification/code prep may run early, while its shared-file task
+  and merge depend on merged spec003w6 and then rebase, revalidate, and
+  re-panel.
 - [x] Task IDs, inline dependencies, and the adjacency graph pass the
-  mechanical sequence/duplicate/dependency check.
+  read-only plan-structure validator, which also checks acyclicity and
+  concurrent ownership conflicts.
 
 ## Documentation Hygiene
 
 - [x] Every existing Spec 003 artifact is updated.
 - [x] Every contract is internally aligned with ADR 0054.
 - [x] Planning artifacts use qualified wave IDs: a scan of this artifact set
-  finds only `spec003w0` through `spec003w8` process references, and only
-  historical literal branch names remain otherwise.
+  finds exactly `spec003w0` through `spec003w7` plus `spec003w5fu1` process
+  references, and only historical literal branch names remain otherwise.
 - [x] Quickstart executable blocks use `set -euo pipefail`, check the complete
   absent path set, compare the exact lock inventory, and anchor lockfile grep.
 - [x] Quickstart separates pull-request no-record/zero-cache-action inspection
