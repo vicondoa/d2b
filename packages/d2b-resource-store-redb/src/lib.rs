@@ -24,7 +24,7 @@ use d2b_audit::{
     AuditHash, AuditRecord, AuditRecordError, AuditRecordFields, AuditSink, AuditWriteClass,
     AuditWriteOutcome,
 };
-use d2b_contracts::v3::{ResourceUid, Timestamp, ZoneId};
+use d2b_contracts::v3::{ResourceUid, Timestamp, ZoneId, identity::STANDARD_RESOURCE_TYPES};
 use d2b_resource_store::mutation_seal::{MutationSealAcceptor, SealedMutation};
 use d2b_resource_store::{
     PolicySnapshot, StoreCommitResult, StoreError, StoreGetRequest, StoreInspectSchemaRequest,
@@ -147,13 +147,13 @@ fn audit_write_class(record: &AuditRecord) -> AuditWriteClass {
         return AuditWriteClass::Standard;
     };
     if fields.outcome == "denied"
+        || fields.resource_type.as_str() == STANDARD_RESOURCE_TYPES[4]
         || matches!(
             fields.resource_type.as_str(),
             "Zone"
                 | "ZoneLink"
                 | "Provider"
                 | "Role"
-                | "RoleBinding"
                 | "Quota"
                 | "EmergencyPolicy"
                 | "Credential"
