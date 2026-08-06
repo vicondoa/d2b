@@ -12,6 +12,46 @@
   happens to find, and records the measured `crate_universe` repin controls
   that make a scoped, reviewed lock regeneration possible without a gate-path
   escape hatch. No decision here is reversed and nothing here is superseded.
+- Proposed amendment (2026-08-05):
+  [ADR 0054](0054-single-product-cargo-workspace.md) replaces this record's
+  three-workspace and four-hub lock inventory with one product Cargo workspace
+  and hub plus one separate walker workspace and hub. It leaves distinct
+  broker, guest, and test-context execution surfaces unchanged, accepts the
+  repository-owner-approved shared product external repository's feature and
+  package union without requiring per-context third-party feature parity, and
+  makes selected Cargo closure policy the security authority while exact native
+  first-party context censuses still refuse unrelated sibling leakage. It
+  preserves the baseline contract-crate clippy, policy, test, and fixture
+  compilation surfaces. Broker and guest production inventories and
+  root-dev-inclusive deny and audit inputs are generated separately for the
+  root flake's x86_64-linux and aarch64-linux systems. Broker artifacts use
+  matching GNU targets; static guest artifacts use matching musl targets.
+  Every Nix dependency and package check binds one exact system-and-target
+  artifact and has early wrong-system, wrong-target, and wrong-edge-kind
+  refusals. Contributor-only repin and policy mutations follow existing
+  repository practice: from the repository root the trusted operator enters
+  `nix develop`, then runs `cd packages` and the named `cargo xtask` command.
+  They are unreachable from workflows and Make targets and are not a
+  credential or sandbox boundary; local `HOME`, startup configuration, and
+  shell functions are outside the security model. Gates call approved Make
+  targets in controlled environments, while package policy remains hermetic
+  through vendored sources and the pinned advisory database. `main`, `broker`,
+  and `guest` hub inputs are retired with fixed diagnostics that, after the
+  operator has entered `nix develop`, say to run
+  `cargo xtask bazel-repin --hub product` from `packages/`. They never say
+  `cd packages`. Tests pass that exact argv and cwd through an injected
+  non-mutating executor, never the genuine repin, and reject a duplicated
+  `packages/packages` path. The implementation adds all eight per-system
+  dependency/package installables. Existing Layer-1
+  supply-chain, drift, and flake targets execute their shared checker logic,
+  enforce generated inventory and target mapping with wrong-runner and
+  wrong-system refusals plus independent x86_64 and aarch64 foreign-system and
+  remote-builder seeds, each expecting its own diagnostic. Each system's four
+  wrappers plus `guest-static-elf` realize on its native runner. Neither native
+  block uses a foreign system or remote builder; common cross-system
+  configuration pins and drift remain one step. The Layer-1, realized-class,
+  and dual-system matrix pins are regenerated. If accepted, Spec 003 must be
+  amended and re-panelled before implementation resumes.
 - Related: [ADR 0009](0009-rust-toolchain-msrv-and-supply-chain.md) (Rust
   toolchain, MSRV, and supply-chain policy), which keeps its authority
   unchanged and is not superseded;
