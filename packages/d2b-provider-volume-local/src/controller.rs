@@ -217,7 +217,7 @@ impl<S: VolumeSourceEffectPort, L: VolumeLayoutEffectPort> VolumeLocalController
         let mut ordered_entries: Vec<_> = spec.layout().iter().collect();
         ordered_entries.sort_by_key(|entry| {
             (
-                !entry.path().is_empty(),
+                entry.path().is_empty(),
                 core::cmp::Reverse(entry.path().split('/').count()),
                 core::cmp::Reverse(entry.path()),
             )

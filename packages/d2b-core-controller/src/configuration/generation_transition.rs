@@ -324,10 +324,10 @@ pub fn plan_generation_transition(
         .collect();
     let declared_set: BTreeSet<ResourceKey> = declared.iter().cloned().collect();
 
-    let mut foreign_occupied_names = BTreeSet::new();
+    let mut foreign_occupied_keys = BTreeSet::new();
     for record in stored {
         if record.metadata().managed_by() != ManagedBy::Configuration {
-            foreign_occupied_names.insert(record.key().name());
+            foreign_occupied_keys.insert(record.key().clone());
         }
     }
     let configuration_managed: BTreeMap<_, _> = stored
@@ -339,7 +339,7 @@ pub fn plan_generation_transition(
     let mut upserts = Vec::new();
     let mut name_conflicts = Vec::new();
     for key in declared {
-        let conflicts = foreign_occupied_names.contains(key.name());
+        let conflicts = foreign_occupied_keys.contains(&key);
         if conflicts {
             name_conflicts.push(NameConflict { key });
         } else {

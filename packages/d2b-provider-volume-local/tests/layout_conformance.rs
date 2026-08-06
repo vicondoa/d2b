@@ -8,8 +8,8 @@ use std::collections::BTreeSet;
 
 use d2b_provider_volume_local::testing::{PortCall, ScriptedPort, block_on, fixtures};
 use d2b_provider_volume_local::{
-    ConditionSeverity, DriftClass, LayoutPhase, MarkerState, ObservedEntry, OwnerProof,
-    VolumeLocalController, VolumeLocalError, VolumeLocalProfile,
+    ConditionSeverity, DriftClass, EntryDigest, LayoutPhase, MarkerState, ObservedEntry,
+    OwnerProof, VolumeLocalController, VolumeLocalError, VolumeLocalProfile,
 };
 
 fn controller(port: &ScriptedPort) -> VolumeLocalController<&ScriptedPort, &ScriptedPort> {
@@ -208,6 +208,37 @@ fn cleanup_preserves_every_never_policy_entry() {
             .iter()
             .any(|call| matches!(call, PortCall::Cleanup(_)))
     );
+}
+
+#[test]
+fn cleanup_is_leaf_first_and_root_last() {
+    let mut rendered = serde_json::to_value(fixtures::state_volume()).expect("fixture serializes");
+    rendered["layout"][0]["cleanupPolicy"] = serde_json::json!("boot");
+    let mut child = rendered["layout"][0].clone();
+    child["path"] = serde_json::json!("child");
+    let mut leaf = child.clone();
+    leaf["path"] = serde_json::json!("child/leaf");
+    rendered["layout"] = serde_json::json!([rendered["layout"][0].clone(), child, leaf]);
+    let spec = serde_json::from_value(rendered).expect("fixture remains valid");
+
+    let port = ScriptedPort::converged();
+    let removed =
+        block_on(controller(&port).cleanup(&fixtures::volume_uid(), &spec)).expect("cleanup");
+    let expected = vec![
+        EntryDigest::derive(&fixtures::volume_uid(), "child/leaf"),
+        EntryDigest::derive(&fixtures::volume_uid(), "child"),
+        EntryDigest::derive(&fixtures::volume_uid(), ""),
+    ];
+    let calls = port.calls();
+    let cleanup_calls: Vec<_> = calls
+        .iter()
+        .filter_map(|call| match call {
+            PortCall::Cleanup(digest) => Some(*digest),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(cleanup_calls, expected);
+    assert_eq!(removed, expected);
 }
 
 #[test]

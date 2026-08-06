@@ -9,8 +9,19 @@ and injected `WallClock` as `ZoneClient`.
 
 `ProcessAttachTarget` accepts exactly one of:
 
-- an existing `EphemeralProcess/<name>` in an exact Zone; or
-- a configured `Process/<name>` launcher in an exact Zone.
+- an existing `EphemeralProcess/<name>` in an exact Zone;
+- a configured `Process/<name>` launcher in an exact Zone; or
+- a persistent `shell-terminal.d2bus.org.ShellSession/<name>` in an exact
+  Zone.
+
+The `ProcessAttachTarget::ShellSession` variant accepts an optional execution
+reference and a force-attach flag. When present, the execution reference must
+be a `Host/<name>` or `Guest/<name>` resource. A `Create` request must supply
+this trusted execution reference; it binds the new or reopened named session.
+An `Attach` reconnect omits the execution reference; the daemon resolves the
+already-created session's binding. The force flag requests the provider's
+force-attachment behavior and does not select an execution identity or grant
+authorization.
 
 Target construction checks the ResourceType and does not authorize the
 operation. The authenticated ComponentSession adapter must independently
@@ -25,8 +36,9 @@ route, checks the authenticated session pin against that route, and asks the
 session adapter to open the named stream. The adapter is the integration point
 for `ComponentSessionDriver`; it owns session authorization, stream allocation,
 credit accounting, transport I/O, and workload-user resolution from the
-Process or EphemeralProcess resource. The attach request never selects a user
-or carries an execution admission result.
+Process or EphemeralProcess resource. For `ShellSession`, the daemon resolves
+the already-bound `Host` or `Guest` execution target. The attach request never
+selects a user or carries an execution admission result.
 
 TTY requests require a non-empty initial geometry. Non-TTY requests reject
 geometry. One stream message is non-empty and no larger than the negotiated
