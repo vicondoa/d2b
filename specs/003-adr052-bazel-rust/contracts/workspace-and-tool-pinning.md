@@ -360,7 +360,9 @@ Enforcement includes:
 Qualification contains exact package identity and startup capability,
 patch-removal/filter-load/setup placement, strategy inventory, all eight
 socket/io_uring plants, external-egress and live-index results, the exact
-offline repository-fetch inventory, and the complete Cargo compatibility census. Promotion describes
+offline repository-fetch inventory, fresh PID-namespace containment,
+crash-stage/long-lived-descendant plant results, and the complete Cargo
+compatibility census. Promotion describes
 affected surfaces as hybrid. The Cargo compatibility carriers cannot be
 retired until a separate authorized design changes the no-network invariant.
 
@@ -382,8 +384,9 @@ build/test-tooling derivation. It is not a Rust crate, is absent from
 - separate output NAR and matching native executable SHA-256 values;
 - static ELF evidence with no interpreter or dynamic `NEEDED` entry; and
 - the fixed private executable fd, supervisor status fd, exec-error record
-  shape, `READY`/`EXECUTED`/terminal shapes, signal allowlist, and protocol
-  version.
+  shape, `READY`/`EXECUTED`/terminal shapes, signal allowlist, ignored
+  `SIGPIPE`, waitable default `SIGCHLD`, fixed external-TERM escalation,
+  absolute-deadline transport, and protocol version.
 
 The safe typed Rust consumer embeds the exact helper store path from that Nix
 toolchain artifact and accepts no path parameter or environment override. It
@@ -398,7 +401,10 @@ Rust parent spawn and descriptor mapping use the exact reviewed safe
 fork owner. It is single-threaded, creates the close-on-exec child exec-error
 pipe, normalizes signal state, and uses the fixed protocol described in
 `runner-environment.md`. No Rust unsafe exception, Rust helper crate,
-runfiles/worktree helper, or fallback exists. A closed invocation-site policy
+runfiles/worktree helper, numeric Rust PID/PGID signal, or fallback exists.
+The patched Bazel PID-namespace monitor, not Rust, is the abnormal-teardown
+owner; its patch/ceiling and real crash plants are bound by
+`tests/golden/bazel-toolchain.json`. A closed invocation-site policy
 permits exactly one Rust source location to spawn this exact output and rejects
 every other Rust, Bazel, Make, workflow, or documentation command site.
 

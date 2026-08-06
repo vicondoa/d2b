@@ -35,7 +35,7 @@ perl specs/003-adr052-bazel-rust/tools/validate-plan-structure.pl
 Expected:
 
 ```text
-PASS: 47 validator self-tests; positive fixture accepted; 44 independent negative fixtures cover noncanonical unchecked-list forms, census declarations, task parsing, ownership, dependency, adjacency, section, cycle, and conflict fixtures rejected; full stderr byte-matched against independent literals; bounded record/line locators, unreadable-source status 1, and unsupported-argument status 2 verified
+PASS: 49 validator self-tests; positive fixture accepted; 44 independent negative fixtures cover noncanonical unchecked-list forms, census declarations, task parsing, ownership, dependency, adjacency, section, cycle, and conflict fixtures rejected; full stderr byte-matched against independent literals; physical adjacency rows and bounded numeric, none, and overflow locators verified; actual unreadable-source status 1 and unsupported-argument status 2 subprocesses verified
 PASS: 120 unique tasks with exact canonical headers and owned paths; dependencies exist and precede consumers; adjacency matches; graph is acyclic; concurrently ready ownership is disjoint
 ```
 
@@ -44,10 +44,13 @@ blockquoted, nested-blockquoted, zero-task, whole-task-omission, malformed
 census, and every isolated validation branch. The main check compares parsed
 IDs with the independent exact census in `tasks.md`. Every negative expectation
 is an independent literal for complete stderr and runs through the injectable
-entrypoint. Unreadable source and unsupported arguments assert status 1 and 2.
+entrypoint. Adjacency cases independently scan the physical fixture row;
+census, section, and mismatch locations use actual offsets and ordinals.
+Oversized inputs assert the closed `overflow` bound. Actual unreadable-source
+and unsupported-argument subprocesses assert empty stdout plus status 1 and 2.
 The only actionable location is the fixed repository-relative source plus a
-bounded 1-based numeric record ordinal and fixed line number. Those numeric
-locators are the only dynamic values authorized; no diagnostic may contain a
+bounded 1-based numeric record/line locator or closed `none`/`overflow`
+sentinel. No diagnostic may contain a
 task ID, dependency ID, owned path, contents, count, or operator-derived value.
 Every code has one exact remedy and rerun command.
 
@@ -1112,22 +1115,31 @@ Run targeted tests for:
   the product Rust workspace, with exact source, derivation-dependency,
   protocol, output NAR, executable, static ELF, and native-system hashes;
 - the supervisor's close-on-exec nonblocking child exec-error pipe, sole fork,
-  normalized masks/dispositions, child stdio installation, executable-fd
+  ignored `SIGPIPE` with typed `EPIPE`, waitable default `SIGCHLD`, normalized
+  masks/dispositions, child stdio installation, executable-fd
   CLOEXEC, same-open-file-description `execveat(AT_EMPTY_PATH)`, explicit
   `READY` then `EXECUTED`, continued supervision, fixed signal allowlist,
-  terminal record, direct-child reap, and exact normal/signaled target status;
+  external-TERM escalation without a case deadline, terminal record,
+  direct-child reap, and exact normal/signaled target status;
+- the patched Linux sandbox's fresh PID-namespace monitor as the sole abnormal
+  teardown owner, with namespace kill/reap, one fixed 10,000 ms ceiling,
+  outer-monitor reap, and real helper-crash-before-`READY`,
+  crash-after-`READY`, crash-after-`EXECUTED`, crash-during-grace, and
+  long-lived-descendant plants. Namespace, teardown-patch, ceiling, and
+  fallback mutations fail; Cargo tests use containment mocks only;
 - no runfiles/worktree/copied helper path, second Rust invocation, fd-0
   executable transport, Rust `pre_exec`, Rust raw fork, reopen,
   `/proc/self/fd`, `fexecve`, path fallback, provider-fd leak, or first-party
-  Rust unsafe allowance;
+  Rust unsafe allowance or numeric Rust PID/PGID signal;
 - complete Rust-parent and C-supervisor prepare, identity, map, adopt,
   normalize, pipe, fork, child-setup, execveat, exec-result, supervise, wait,
   terminal, cleanup, and reap tables, with injected held-open writer,
+  closed-reader `EPIPE`, exact
   `EINTR`/`EAGAIN`/short/partial/overlong transport, descriptor absence,
   private-fd identity, helper crash/EOF before `EXECUTED`, fast target exit
-  with the same status as the crash, inherited blocked/ignored SIGTERM,
-  signal forwarding, target-status mismatch, and every cleanup/wait/reap
-  failure.
+  with the same status as the crash, inherited ignored/`SA_NOCLDWAIT`
+  `SIGCHLD`, inherited blocked/ignored SIGTERM, target-ignore-TERM, signal
+  forwarding, target-status mismatch, and every cleanup/wait/reap failure.
 
 No test should fill a disk, require a privileged mount, sleep to reach expiry,
 or write a stale executable into `packages/target/`.

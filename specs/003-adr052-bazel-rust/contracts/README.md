@@ -25,8 +25,9 @@ Contracts:
 - `runner-environment.md` - test topology, provider, environment, and
   sanitized bounded per-case evidence contract, compile-sealed verified
   executable, immutable static C execution supervisor, safe Rust command-fd
-  mapping, typed ownership/error transport, retention classes, and canonical
-  closed complete/degraded evidence.
+  mapping, typed ownership/error transport, patched-sandbox PID-namespace
+  crash containment, retention classes, and canonical closed
+  complete/degraded evidence.
 - `execution-manifest-binding.md` - Bazel carrier results bound to existing
   execution-manifest v1.
 - `shadow-promotion-evidence.md` - qualification, the typed qualification

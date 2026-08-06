@@ -531,8 +531,10 @@ closure, protocol, output NAR, executable, static ELF, and native-system
 hashes. Missing, wrong-output, copied, symlinked, dynamic, runfiles, and
 worktree paths refuse.
 
-The supervisor normalizes signal masks and dispositions, creates one
-nonblocking close-on-exec child exec-error pipe, and forks exactly once. The
+The supervisor clears inherited signal masks and dispositions, ignores
+`SIGPIPE` so a closed status reader becomes typed `EPIPE`, restores `SIGCHLD`
+to waitable `SIG_DFL` without `SA_NOCLDWAIT`, creates one nonblocking
+close-on-exec child exec-error pipe, and forks exactly once. The
 child establishes the target group, resets signal state, installs declared
 stdio, sets the executable fd CLOEXEC, closes supervisor-only descriptors, and
 calls `execveat(private_fd, "", argv, envp, AT_EMPTY_PATH)`. Failure writes one
@@ -543,16 +545,37 @@ absolute deadline, then `_exit`s. There is no target path, reopen,
 The supervisor emits `READY`, interprets only empty close-on-exec EOF as exec
 success, emits `EXECUTED`, remains alive, forwards the fixed termination-signal
 allowlist, waits and reaps, emits terminal status, and mirrors the exact target
-status. Every pipe and status operation has bounded
-`EINTR`/`EAGAIN`/short-I/O handling under the absolute deadline. Complete
+status. Case expiry and external `SIGTERM`, including with no case deadline,
+both run the complete fixed TERM/grace/unconditional-KILL sequence. Every
+exec-error and status operation has exact bounded
+`EINTR`/`EAGAIN`/short/partial/overlong/held-writer behavior under one original
+absolute deadline. Complete
 Rust-parent and C-supervisor stage-error and owner/closure tables cover every
 path. Tests distinguish fast same-status target exit from helper crash or EOF
-before `EXECUTED` and cover held-open writers, partial and malformed
-transport, inherited blocked/ignored SIGTERM, private-fd identity, descriptor
+before `EXECUTED` and cover held-open writers, closed-reader `EPIPE`, partial
+and malformed transport, inherited ignored/`SA_NOCLDWAIT` SIGCHLD,
+blocked/ignored SIGTERM, target-ignore-TERM, private-fd identity, descriptor
 absence, stdio, CLOEXEC, signal forwarding, exact status, and every cleanup,
 wait, and reap failure. The closed invocation-site census rejects every
 runfiles, worktree, Rust, Bazel, Make, or workflow invocation except the one
 typed consumer.
+
+The supervisor is the normal teardown owner, not the final crash boundary.
+Every governed action already passes through the exact patched Bazel Linux
+sandbox, which creates a fresh PID namespace and a PID-1 monitor outside the
+action command tree. The patch makes that monitor the abnormal-teardown owner:
+on setup/action exit, including Rust-parent or supervisor crash, it
+namespace-kills every other member, reaps adopted children through `ECHILD`
+under one fixed 10,000 ms monotonic ceiling, then exits so the kernel destroys
+any remainder and outer `linux-sandbox` reaps it. Rust closes and fails the
+action; it never signals a numeric PID or PGID.
+
+Cargo tests inject transport, process, and containment mocks. They do not
+prove the kernel boundary. A real patched-sandbox integration crashes the
+helper before `READY`, after `READY`, after `EXECUTED`, during grace, and with
+direct and double-forked long-lived descendants. PID-namespace removal,
+teardown-patch removal, ceiling change, and strategy fallback are separate
+failing mutations.
 
 On expiry, the independently timed full grace contains repeated non-consuming
 nonblocking `waitid(EXITED|NOWAIT|NOHANG)` observations. They are
@@ -943,15 +966,17 @@ fixtures, including whole-task omission, empty input, every noncanonical list
 class, and every remaining validation branch. Every negative compares the
 complete rendered stderr byte-for-byte with an independent literal. A
 diagnostic contains only fixed code, fixed repository-relative source, a
-bounded 1-based numeric record ordinal, a bounded fixed 1-based numeric line
-number, fixed class reason, fixed remedy, and the exact rerun command. Those
-two numeric locators are the only dynamic values authorized. It never contains
-a task or dependency ID, owned path, contents, count, operator-derived value,
-or raw OS text. Every code has one exact remedy and rerun. The injectable
-entrypoint supplies every fixture's complete byte comparison and separately
-proves unreadable-source status 1 and unsupported-argument status 2 with
-byte-exact stderr. This remains a planning tool under the specification
-directory and is not a repository gate.
+bounded 1-based numeric record/line locator or closed `none`/`overflow`
+sentinel, fixed class reason, fixed remedy, and the exact rerun command.
+Census, section, adjacency, and mismatch errors derive actual source
+positions; adjacency tests independently scan their physical rows. Oversized
+record and line inputs assert both closed bounds. It never contains a task or
+dependency ID, owned path, contents, count, operator-derived value, or raw OS
+text. Every code has one exact remedy and rerun. The injectable entrypoint
+supplies every fixture's complete byte comparison. Separate actual
+subprocesses prove unreadable-source status 1 and unsupported-argument status
+2 with empty stdout and byte-exact stderr. This remains a planning tool under
+the specification directory and is not a repository gate.
 
 ## Decision 23: Disclose retained hybrid execution
 
@@ -1017,10 +1042,12 @@ for:
 - forged `VerifiedExecutable` API, wrong/rebound immutable static supervisor
   output, second Rust invocation, runfiles/worktree helper, fd-0/reopen
   execution regression, first-party Rust unsafe exception, stdin,
-  private-fd identity, CLOEXEC, held-open/partial typed transport,
-  helper crash/EOF before `EXECUTED`, fast same-status target,
-  blocked/ignored SIGTERM, signal/status, ownership/cleanup/wait/reap
-  regression, patched-Bazel identity/capability or setup-before-payload gap,
+  private-fd identity, CLOEXEC, held-open/closed-reader/partial typed transport,
+  helper crash/EOF before `EXECUTED`, fast same-status target, non-waitable
+  SIGCHLD, blocked/ignored SIGTERM, target-ignore-TERM, numeric Rust signal,
+  signal/status, ownership/cleanup/wait/reap regression, patched-Bazel
+  PID-namespace/teardown/ceiling identity, crash containment, capability, or
+  setup-before-payload gap,
   inherited ring/SQPOLL/fixed-socket gap, strategy/stage fallback, unsealed
   promotion SHA, sink value leak, duplicate sink classification, sink bound or
   retention overflow, duplicate size allowance, suppressed release query,

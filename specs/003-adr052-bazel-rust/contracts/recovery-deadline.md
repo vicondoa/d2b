@@ -69,13 +69,111 @@ variant naming a target absent from that state is a policy failure. Version 1
 is retained only in the closed pre-change fixture where every shadow rule
 exists.
 
-The exact-message harness covers every sandbox-policy stage and slice, every
-qualification query/refusal/publication class, and every release
-query/refusal class. It rejects descriptor numbers, absolute, runfiles,
-socket, and Nix store paths, OS/errno text, raw child/tool/API output, argv,
-environment values, and process, user, run, attempt, candidate, object, or tag
-identifiers. Repository-relative policy rows and SHA-256 digests are the only
-artifact locators permitted.
+### Execution containment recovery
+
+Every Rust-parent, C-helper, child-setup, and patched-sandbox cleanup failure
+has one public code. Its diagnostic names only the code, closed stage, closed
+slice, command version, and fixed repository-relative input below. The remedy
+is the literal correction in the same row. The rerun is the literal cell
+selected from the command-version table. There is no generic `owning slice`
+text, free-form command, dynamic path, numeric PID/PGID, errno text, or raw
+transport byte.
+
+| Command version | Phase where valid | `main` | `api` | `broker` | `aux` |
+| --- | --- | --- | --- | --- | --- |
+| `bazel-diagnostic-v1` | Shadow targets exist and aliases have not been removed | `make test-bazel-rust-main` | `make test-bazel-rust-api` | `make test-bazel-rust-broker` | `make test-bazel-rust-aux` |
+| `bazel-diagnostic-v2` | Alias removal has landed | `make test-rust-slice-main` | `make test-rust-slice-api` | `make test-rust-slice-broker` | `make test-rust-slice-aux` |
+
+The renderer accepts the eight cells above as a closed enum. It refuses
+`bazel-diagnostic-v1` after alias removal, `bazel-diagnostic-v2` before alias
+removal, an unknown slice, or a command that is not present in that repository
+state. The
+alias-removal commit changes the selected version and byte-exact expectations
+atomically; it does not change a code, input, or correction.
+
+Every parent code names the fixed input
+`contracts/runner-environment.md#rust-parent-stage-owner-and-closure-contract`.
+
+| Internal stage | Public code | Exact correction |
+| --- | --- | --- |
+| `PARENT_PREPARE` | `D2B-BZLEXEC-PARENT-PREPARE` | Correct status-channel construction and private-fd mapping in `packages/d2b-bazel-exec/src/execute.rs`. |
+| `PARENT_SPAWN` | `D2B-BZLEXEC-PARENT-SPAWN` | Correct the exact immutable-helper spawn in `packages/d2b-bazel-exec/src/execute.rs`; do not add a path fallback. |
+| `PARENT_CLOSE` | `D2B-BZLEXEC-PARENT-CLOSE` | Correct single-owner post-spawn descriptor closure in `packages/d2b-bazel-exec/src/execute.rs`. |
+| `PARENT_READY` | `D2B-BZLEXEC-PARENT-READY` | Correct the bounded exact `READY` decoder in `packages/d2b-bazel-exec/src/execute.rs`. |
+| `PARENT_EXECUTED` | `D2B-BZLEXEC-PARENT-EXECUTED` | Correct the bounded exact `EXECUTED` decoder without inferring exec from process status. |
+| `PARENT_TERMINAL` | `D2B-BZLEXEC-PARENT-TERMINAL` | Correct the bounded exact terminal-record decoder in `packages/d2b-bazel-exec/src/execute.rs`. |
+| `PARENT_WAIT` | `D2B-BZLEXEC-PARENT-WAIT` | Correct supervisor wait ownership and return the Bazel action nonzero on failure; do not signal a numeric PID or PGID. |
+| `PARENT_STATUS` | `D2B-BZLEXEC-PARENT-STATUS` | Correct terminal-record and supervisor-status equality checking. |
+| `PARENT_CLEANUP` | `D2B-BZLEXEC-PARENT-CLEANUP` | Correct idempotent owned-fd closure and preserve the first parent failure. |
+
+Every helper code names the fixed input
+`tests/tools/d2b-bazel-exec-supervisor/supervisor.c` and the contract row
+`contracts/runner-environment.md#c-supervisor-stage-error-owner-and-closure-contract`.
+
+| Internal stage | Public code | Exact correction |
+| --- | --- | --- |
+| `HELPER_ADOPT` | `D2B-BZLEXEC-HELPER-ADOPT` | Correct private-fd, status-fd, argv, environment, and stdio adoption before fork. |
+| `HELPER_SIGNAL_NORMALIZE` | `D2B-BZLEXEC-HELPER-SIGNAL-NORMALIZE` | Clear inherited masks/dispositions, ignore `SIGPIPE`, and restore waitable default `SIGCHLD` without `SA_NOCLDWAIT`. |
+| `HELPER_EXEC_PIPE` | `D2B-BZLEXEC-HELPER-EXEC-PIPE` | Correct creation and ownership of the single nonblocking close-on-exec exec-error pipe. |
+| `HELPER_FORK` | `D2B-BZLEXEC-HELPER-FORK` | Correct the sole supervisor fork and leave no child on a reported fork failure. |
+| `HELPER_EXEC_TIMEOUT` | `D2B-BZLEXEC-HELPER-EXEC-TIMEOUT` | Correct absolute-deadline accounting without resetting time after retry or short I/O. |
+| `HELPER_EXEC_PARTIAL` | `D2B-BZLEXEC-HELPER-EXEC-PARTIAL` | Correct exact record cursors so EOF after any byte is partial. |
+| `HELPER_EXEC_OVERLONG` | `D2B-BZLEXEC-HELPER-EXEC-OVERLONG` | Correct the one-record-plus-one-byte overlong check. |
+| `HELPER_EXEC_UNKNOWN` | `D2B-BZLEXEC-HELPER-EXEC-UNKNOWN` | Correct the closed exec-error and status-record decoder. |
+| `HELPER_EXEC_EPIPE` | `D2B-BZLEXEC-HELPER-EXEC-EPIPE` | Keep `SIGPIPE` ignored and map a closed status reader to typed `EPIPE`. |
+| `HELPER_EXEC_IO` | `D2B-BZLEXEC-HELPER-EXEC-IO` | Correct bounded `EINTR`, `EAGAIN`, short-read, and short-write handling without rendering OS text. |
+| `HELPER_SIGNAL_FORWARD` | `D2B-BZLEXEC-HELPER-SIGNAL-FORWARD` | Correct the four-signal allowlist and target-group forwarding in the supervisor. |
+| `HELPER_DEADLINE` | `D2B-BZLEXEC-HELPER-DEADLINE` | Correct TERM, full fixed grace, unconditional KILL, and direct-child reap for deadline or external `SIGTERM`, including no-deadline cases. |
+| `HELPER_WAIT` | `D2B-BZLEXEC-HELPER-WAIT` | Correct wait ownership without `SA_NOCLDWAIT` and retain exact child status. |
+| `HELPER_REAP` | `D2B-BZLEXEC-HELPER-REAP` | Correct direct-child reap after escalation and before terminal publication. |
+| `HELPER_TERMINAL_WRITE` | `D2B-BZLEXEC-HELPER-TERMINAL-WRITE` | Correct the bounded exact terminal write and typed closed-reader handling. |
+| `HELPER_STATUS_MIRROR` | `D2B-BZLEXEC-HELPER-STATUS-MIRROR` | Correct exact normal-exit or terminating-signal mirroring. |
+| `HELPER_CLEANUP` | `D2B-BZLEXEC-HELPER-CLEANUP` | Correct idempotent target-group, child, and descriptor cleanup while preserving the first helper failure. |
+
+Every child code names the same fixed supervisor source and the contract row
+`contracts/runner-environment.md#c-supervisor-stage-error-owner-and-closure-contract`.
+
+| Internal stage | Public code | Exact correction |
+| --- | --- | --- |
+| `CHILD_GROUP` | `D2B-BZLEXEC-CHILD-GROUP` | Correct creation of the target's private process group before exec. |
+| `CHILD_SIGNAL` | `D2B-BZLEXEC-CHILD-SIGNAL` | Restore the empty child mask and default disposition for every catchable signal. |
+| `CHILD_STDIO` | `D2B-BZLEXEC-CHILD-STDIO` | Correct exact installation of declared stdin, stdout, and stderr at fds 0, 1, and 2. |
+| `CHILD_CLOEXEC` | `D2B-BZLEXEC-CHILD-CLOEXEC` | Set close-on-exec on the private executable fd and every non-surviving descriptor. |
+| `CHILD_CLOSE` | `D2B-BZLEXEC-CHILD-CLOSE` | Correct closure of every supervisor-only and non-surviving child descriptor. |
+| `CHILD_EXECVEAT` | `D2B-BZLEXEC-CHILD-EXECVEAT` | Correct same-open-file-description `execveat(AT_EMPTY_PATH)`; do not add a reopen or path fallback. |
+
+Every sandbox code names the fixed inputs
+`pkgs/bazel-8.6.0-seccomp/linux-sandbox-seccomp.patch` and
+`contracts/runner-environment.md#patched-sandbox-stage-error-owner-and-closure-contract`.
+
+| Internal stage | Public code | Exact correction |
+| --- | --- | --- |
+| `SANDBOX_NAMESPACE` | `D2B-BZLEXEC-SANDBOX-NAMESPACE` | Restore one fresh `CLONE_NEWPID` namespace for every governed action and refuse every fallback strategy. |
+| `SANDBOX_MONITOR` | `D2B-BZLEXEC-SANDBOX-MONITOR` | Restore namespace PID 1 as the action's adoption, abnormal-teardown, and reap owner. |
+| `SANDBOX_KILL` | `D2B-BZLEXEC-SANDBOX-KILL` | Correct namespace-local kill of every member other than PID 1; do not signal a host PID or PGID. |
+| `SANDBOX_REAP` | `D2B-BZLEXEC-SANDBOX-REAP` | Correct PID-1 adopted-child reap through `ECHILD` and outer-monitor reap. |
+| `SANDBOX_CEILING` | `D2B-BZLEXEC-SANDBOX-CEILING` | Restore the single fixed 10,000 ms monotonic abnormal-teardown ceiling. |
+| `SANDBOX_CLEANUP` | `D2B-BZLEXEC-SANDBOX-CLEANUP` | Correct final namespace-init exit, kernel namespace destruction, and outer reap while preserving the first sandbox failure. |
+
+T067 owns the table-driven byte-exact tests for every public code crossed with
+all four slices and both closed command versions. Each case asserts nonzero
+status, empty stdout, the fixed safe input, exact correction, exact
+phase-valid rerun command, and absence of forbidden values. Isolated plants
+cover omitted input, omitted correction, omitted rerun, wrong command version,
+command absent in phase, wrong slice, borrowed parent/helper/child/sandbox
+remedy, wrong code, numeric PID/PGID, descriptor, absolute/runfiles/store
+path, errno/OS text, raw protocol bytes, argv/environment, and dynamic
+identifier. T068 implements only this closed mapping and makes T067 pass.
+
+The exact-message harness covers every execution parent/helper/child/sandbox
+code, sandbox-policy stage and slice, qualification
+query/refusal/publication class, and release query/refusal class. It rejects
+missing or wrong remedies and command versions, descriptor numbers, absolute,
+runfiles, socket, and Nix store paths, OS/errno text, raw
+child/tool/API/protocol output, argv, environment values, numeric PID/PGID,
+and process, user, run, attempt, candidate, object, or tag identifiers.
+Repository-relative policy rows and SHA-256 digests are the only artifact
+locators permitted.
 
 ## Deadline
 

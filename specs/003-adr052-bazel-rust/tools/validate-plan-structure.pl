@@ -2,7 +2,12 @@
 use strict;
 use warnings;
 use FindBin qw($Bin);
+use File::Copy qw(copy);
+use File::Path qw(make_path);
 use File::Spec;
+use File::Temp qw(tempdir);
+use IPC::Open3 qw(open3);
+use Symbol qw(gensym);
 
 my $tool_path = 'specs/003-adr052-bazel-rust/tools/validate-plan-structure.pl';
 my $tasks_path = 'specs/003-adr052-bazel-rust/tasks.md';
@@ -179,6 +184,56 @@ sub read_repository_file {
     return $text;
 }
 
+sub run_subprocess {
+    my (@command) = @_;
+    my $stderr_fh = gensym;
+    my $pid = open3(
+        my $stdin_fh,
+        my $stdout_fh,
+        $stderr_fh,
+        @command
+    );
+    close $stdin_fh;
+    local $/;
+    my $stdout = <$stdout_fh> // '';
+    my $stderr = <$stderr_fh> // '';
+    close $stdout_fh;
+    close $stderr_fh;
+    waitpid($pid, 0);
+    my $wait_status = $?;
+    my $status =
+        $wait_status == -1 || ($wait_status & 127)
+        ? 255
+        : $wait_status >> 8;
+    return ($status, $stdout, $stderr);
+}
+
+sub physical_line_of {
+    my ($text, $needle, $wanted_occurrence) = @_;
+    my $occurrence = 0;
+    my $line_number = 0;
+    for my $line (split /\n/, $text, -1) {
+        $line_number++;
+        $line =~ s/\r\z//;
+        next unless $line eq $needle;
+        $occurrence++;
+        return $line_number if $occurrence == $wanted_occurrence;
+    }
+    return;
+}
+
+sub canonical_task_ordinal_for {
+    my ($text, $wanted_id) = @_;
+    my $ordinal = 0;
+    for my $line (split /\n/, $text, -1) {
+        $line =~ s/\r\z//;
+        next unless $line =~ /\A- \[ \] (T[0-9]{3})(?=\s|\z)/;
+        $ordinal++;
+        return $ordinal if $1 eq $wanted_id;
+    }
+    return;
+}
+
 sub trim {
     my ($value) = @_;
     $value =~ s/^\s+|\s+$//g;
@@ -187,16 +242,18 @@ sub trim {
 
 sub error_record {
     my ($kind, $reason, $record, $line) = @_;
-    $record = 1
-        if !defined($record)
-        || $record !~ /\A[0-9]+\z/
-        || $record < 1
-        || $record > $max_record_ordinal;
-    $line = 1
-        if !defined($line)
-        || $line !~ /\A[0-9]+\z/
-        || $line < 1
-        || $line > $max_line_number;
+    $record =
+        !defined($record) || $record !~ /\A[0-9]+\z/ || $record < 1
+        ? 'none'
+        : $record > $max_record_ordinal
+        ? 'overflow'
+        : $record;
+    $line =
+        !defined($line) || $line !~ /\A[0-9]+\z/ || $line < 1
+        ? 'none'
+        : $line > $max_line_number
+        ? 'overflow'
+        : $line;
     return {
         kind   => $kind,
         reason => $reason,
@@ -329,51 +386,94 @@ sub parse_census_declaration {
     my ($text) = @_;
     my $begin = '<!-- D2B-SPEC003-PLAN-TASK-CENSUS:BEGIN -->';
     my $end = '<!-- D2B-SPEC003-PLAN-TASK-CENSUS:END -->';
-    my @begins = $text =~ /^\Q$begin\E[ \t]*\r?$/mg;
-    my @ends = $text =~ /^\Q$end\E[ \t]*\r?$/mg;
-    my @mentions =
-        $text =~ /^.*D2B-SPEC003-PLAN-TASK-CENSUS.*$/mg;
-
-    if (@mentions > @begins + @ends) {
-        return (undef, error_record('census', 'malformed-declaration'));
+    my @lines = split /\n/, $text, -1;
+    my (@begins, @ends);
+    my $mention_ordinal = 0;
+    for my $index (0 .. $#lines) {
+        my $line = $lines[$index];
+        $line =~ s/\r\z//;
+        next unless $line =~ /D2B-SPEC003-PLAN-TASK-CENSUS/;
+        $mention_ordinal++;
+        if ($line =~ /\A\Q$begin\E[ \t]*\z/) {
+            push @begins, $index;
+            next;
+        }
+        if ($line =~ /\A\Q$end\E[ \t]*\z/) {
+            push @ends, $index;
+            next;
+        }
+        return (
+            undef,
+            undef,
+            error_record(
+                'census',
+                'malformed-declaration',
+                $mention_ordinal,
+                $index + 1
+            )
+        );
     }
 
     if (!@begins && !@ends) {
-        return (undef, error_record('census', 'missing-declaration'));
+        return (
+            undef,
+            undef,
+            error_record('census', 'missing-declaration')
+        );
     }
     if (@begins > 1 || @ends > 1) {
-        return (undef, error_record('census', 'duplicate-declaration'));
+        my $duplicate_index =
+            @begins > 1 ? $begins[1] : $ends[1];
+        return (
+            undef,
+            undef,
+            error_record(
+                'census',
+                'duplicate-declaration',
+                2,
+                $duplicate_index + 1
+            )
+        );
     }
-    if (@begins != 1 || @ends != 1) {
-        return (undef, error_record('census', 'malformed-declaration'));
+    if (@begins != 1 || @ends != 1 || $begins[0] >= $ends[0]) {
+        my $bad_index = @ends ? $ends[0] : $begins[0];
+        return (
+            undef,
+            undef,
+            error_record(
+                'census',
+                'malformed-declaration',
+                1,
+                $bad_index + 1
+            )
+        );
     }
 
-    my @blocks;
-    while (
-        $text =~
-        /^\Q$begin\E[ \t]*\r?\n(.*?)^\Q$end\E[ \t]*\r?$/msg
-    ) {
-        push @blocks, $1;
-    }
-    if (@blocks != 1) {
-        return (undef, error_record('census', 'malformed-declaration'));
-    }
-
-    my $body = $blocks[0];
-    $body =~ s/\r\n/\n/g;
-    $body =~ s/\r/\n/g;
-    my @ids = split /\n/, $body, -1;
-    pop @ids if @ids && $ids[-1] eq '';
-    for my $id (@ids) {
-        return (undef, error_record('census', 'malformed-declaration'))
-            unless $id =~ /\AT[0-9]{3}\z/;
-    }
+    my (@ids, @locations);
     my %seen;
-    for my $id (@ids) {
-        return (undef, error_record('census', 'malformed-declaration'))
-            if $seen{$id}++;
+    for my $index ($begins[0] + 1 .. $ends[0] - 1) {
+        my $id = $lines[$index];
+        $id =~ s/\r\z//;
+        my $ordinal = scalar(@ids) + 1;
+        if ($id !~ /\AT[0-9]{3}\z/ || $seen{$id}++) {
+            return (
+                undef,
+                undef,
+                error_record(
+                    'census',
+                    'malformed-declaration',
+                    $ordinal,
+                    $index + 1
+                )
+            );
+        }
+        push @ids, $id;
+        push @locations, {
+            record => $ordinal,
+            line   => $index + 1,
+        };
     }
-    return (\@ids, undef);
+    return (\@ids, \@locations, undef);
 }
 
 sub same_id_census {
@@ -419,21 +519,38 @@ sub validate_text {
     }
     return (\@errors, 0) if @errors;
 
-    my ($expected_ids, $census_error) = parse_census_declaration($text);
+    my ($expected_ids, $census_locations, $census_error) =
+        parse_census_declaration($text);
     return ([$census_error], 0) if defined $census_error;
 
-    my @sections = $text =~ /^## Dependency graph[ \t]*$/mg;
-    if (@sections != 1) {
-        my $reason = @sections ? 'duplicate' : 'missing';
-        return ([error_record('section', $reason)], 0);
+    my (@section_offsets, @section_lines);
+    while ($text =~ /^## Dependency graph[ \t]*$/mg) {
+        push @section_offsets, $-[0];
+        push @section_lines, line_number_at($text, $-[0]);
+    }
+    if (@section_offsets != 1) {
+        if (@section_offsets) {
+            return (
+                [
+                    error_record(
+                        'section',
+                        'duplicate',
+                        2,
+                        $section_lines[1]
+                    )
+                ],
+                0
+            );
+        }
+        return ([error_record('section', 'missing')], 0);
     }
     my ($task_text, $adjacency_text) =
         split /^## Dependency graph[ \t]*$/m, $text, 2;
     $task_text //= '';
     $adjacency_text //= '';
-    my $graph_offset = index($text, '## Dependency graph');
+    my $graph_offset = $section_offsets[0];
     my $adjacency_first_line =
-        line_number_at($text, $graph_offset) + 1;
+        line_number_at($text, $graph_offset);
 
     my @records;
     while (
@@ -574,7 +691,37 @@ sub validate_text {
     }
     my @actual_ids = map { $_->{id} } @tasks;
     if (!same_id_census(\@actual_ids, $expected_ids)) {
-        push @errors, error_record('census', 'mismatch');
+        my %actual = map { $_->{id} => 1 } @tasks;
+        my $located = 0;
+        for my $index (0 .. $#$expected_ids) {
+            next if $actual{$expected_ids->[$index]};
+            push @errors,
+                error_record(
+                    'census',
+                    'mismatch',
+                    $census_locations->[$index]->{record},
+                    $census_locations->[$index]->{line}
+                );
+            $located = 1;
+            last;
+        }
+        if (!$located) {
+            my %expected = map { $_ => 1 } @$expected_ids;
+            for my $task (@tasks) {
+                next if $expected{$task->{id}};
+                push @errors,
+                    error_record(
+                        'census',
+                        'mismatch',
+                        $task->{record},
+                        $task->{line}
+                    );
+                $located = 1;
+                last;
+            }
+        }
+        push @errors, error_record('census', 'mismatch')
+            if !$located;
         return (\@errors, scalar @tasks);
     }
 
@@ -640,7 +787,7 @@ sub validate_text {
             + line_number_at($adjacency_text, $-[0])
             - 1;
         my $row_record =
-            exists($by_id{$id}) ? $by_id{$id}->{record} : 1;
+            exists($by_id{$id}) ? $by_id{$id}->{record} : undef;
         if ($row_seen{$id}++) {
             push @errors,
                 error_record(
@@ -846,27 +993,27 @@ RERUN D2B-SPEC003-PLAN-PARSE perl specs/003-adr052-bazel-rust/tools/validate-pla
 REMEDY D2B-SPEC003-PLAN-PARSE Move every unchecked task record before the canonical ## Dependency graph section.
 RERUN D2B-SPEC003-PLAN-PARSE perl specs/003-adr052-bazel-rust/tools/validate-plan-structure.pl --self-test && perl specs/003-adr052-bazel-rust/tools/validate-plan-structure.pl
 |,
-    'empty.md' => q|FAIL D2B-SPEC003-PLAN-PARSE source=specs/003-adr052-bazel-rust/tools/validator-fixtures/empty.md record=1 line=1 reason=no-tasks
+    'empty.md' => q|FAIL D2B-SPEC003-PLAN-PARSE source=specs/003-adr052-bazel-rust/tools/validator-fixtures/empty.md record=none line=none reason=no-tasks
 REMEDY D2B-SPEC003-PLAN-PARSE Provide at least one canonical unchecked task record before the dependency graph.
 RERUN D2B-SPEC003-PLAN-PARSE perl specs/003-adr052-bazel-rust/tools/validate-plan-structure.pl --self-test && perl specs/003-adr052-bazel-rust/tools/validate-plan-structure.pl
 |,
-    'whole-task-omission.md' => q|FAIL D2B-SPEC003-PLAN-CENSUS source=specs/003-adr052-bazel-rust/tools/validator-fixtures/whole-task-omission.md record=1 line=1 reason=mismatch
+    'whole-task-omission.md' => q|FAIL D2B-SPEC003-PLAN-CENSUS source=specs/003-adr052-bazel-rust/tools/validator-fixtures/whole-task-omission.md record=2 line=5 reason=mismatch
 REMEDY D2B-SPEC003-PLAN-CENSUS Declare one independent task-ID census with exactly the canonical task IDs.
 RERUN D2B-SPEC003-PLAN-CENSUS perl specs/003-adr052-bazel-rust/tools/validate-plan-structure.pl --self-test && perl specs/003-adr052-bazel-rust/tools/validate-plan-structure.pl
 |,
-    'census-missing.md' => q|FAIL D2B-SPEC003-PLAN-CENSUS source=specs/003-adr052-bazel-rust/tools/validator-fixtures/census-missing.md record=1 line=1 reason=missing-declaration
+    'census-missing.md' => q|FAIL D2B-SPEC003-PLAN-CENSUS source=specs/003-adr052-bazel-rust/tools/validator-fixtures/census-missing.md record=none line=none reason=missing-declaration
 REMEDY D2B-SPEC003-PLAN-CENSUS Declare one independent task-ID census with exactly the canonical task IDs.
 RERUN D2B-SPEC003-PLAN-CENSUS perl specs/003-adr052-bazel-rust/tools/validate-plan-structure.pl --self-test && perl specs/003-adr052-bazel-rust/tools/validate-plan-structure.pl
 |,
-    'census-duplicate.md' => q|FAIL D2B-SPEC003-PLAN-CENSUS source=specs/003-adr052-bazel-rust/tools/validator-fixtures/census-duplicate.md record=1 line=1 reason=duplicate-declaration
+    'census-duplicate.md' => q|FAIL D2B-SPEC003-PLAN-CENSUS source=specs/003-adr052-bazel-rust/tools/validator-fixtures/census-duplicate.md record=2 line=6 reason=duplicate-declaration
 REMEDY D2B-SPEC003-PLAN-CENSUS Declare one independent task-ID census with exactly the canonical task IDs.
 RERUN D2B-SPEC003-PLAN-CENSUS perl specs/003-adr052-bazel-rust/tools/validate-plan-structure.pl --self-test && perl specs/003-adr052-bazel-rust/tools/validate-plan-structure.pl
 |,
-    'census-malformed.md' => q|FAIL D2B-SPEC003-PLAN-CENSUS source=specs/003-adr052-bazel-rust/tools/validator-fixtures/census-malformed.md record=1 line=1 reason=malformed-declaration
+    'census-malformed.md' => q|FAIL D2B-SPEC003-PLAN-CENSUS source=specs/003-adr052-bazel-rust/tools/validator-fixtures/census-malformed.md record=1 line=4 reason=malformed-declaration
 REMEDY D2B-SPEC003-PLAN-CENSUS Declare one independent task-ID census with exactly the canonical task IDs.
 RERUN D2B-SPEC003-PLAN-CENSUS perl specs/003-adr052-bazel-rust/tools/validate-plan-structure.pl --self-test && perl specs/003-adr052-bazel-rust/tools/validate-plan-structure.pl
 |,
-    'census-duplicate-id.md' => q|FAIL D2B-SPEC003-PLAN-CENSUS source=specs/003-adr052-bazel-rust/tools/validator-fixtures/census-duplicate-id.md record=1 line=1 reason=malformed-declaration
+    'census-duplicate-id.md' => q|FAIL D2B-SPEC003-PLAN-CENSUS source=specs/003-adr052-bazel-rust/tools/validator-fixtures/census-duplicate-id.md record=2 line=5 reason=malformed-declaration
 REMEDY D2B-SPEC003-PLAN-CENSUS Declare one independent task-ID census with exactly the canonical task IDs.
 RERUN D2B-SPEC003-PLAN-CENSUS perl specs/003-adr052-bazel-rust/tools/validate-plan-structure.pl --self-test && perl specs/003-adr052-bazel-rust/tools/validate-plan-structure.pl
 |,
@@ -898,23 +1045,23 @@ RERUN D2B-SPEC003-PLAN-DEPENDENCY perl specs/003-adr052-bazel-rust/tools/validat
 REMEDY D2B-SPEC003-PLAN-ADJACENCY Make the dependency-graph row exactly equal the task depends field.
 RERUN D2B-SPEC003-PLAN-ADJACENCY perl specs/003-adr052-bazel-rust/tools/validate-plan-structure.pl --self-test && perl specs/003-adr052-bazel-rust/tools/validate-plan-structure.pl
 |,
-    'adjacency-extra-row.md' => q|FAIL D2B-SPEC003-PLAN-ADJACENCY source=specs/003-adr052-bazel-rust/tools/validator-fixtures/adjacency-extra-row.md record=1 line=14 reason=extra-row
+    'adjacency-extra-row.md' => q|FAIL D2B-SPEC003-PLAN-ADJACENCY source=specs/003-adr052-bazel-rust/tools/validator-fixtures/adjacency-extra-row.md record=none line=13 reason=extra-row
 REMEDY D2B-SPEC003-PLAN-ADJACENCY Make the dependency-graph row exactly equal the task depends field.
 RERUN D2B-SPEC003-PLAN-ADJACENCY perl specs/003-adr052-bazel-rust/tools/validate-plan-structure.pl --self-test && perl specs/003-adr052-bazel-rust/tools/validate-plan-structure.pl
 |,
-    'adjacency-duplicate-row.md' => q|FAIL D2B-SPEC003-PLAN-ADJACENCY source=specs/003-adr052-bazel-rust/tools/validator-fixtures/adjacency-duplicate-row.md record=1 line=14 reason=duplicate-row
+    'adjacency-duplicate-row.md' => q|FAIL D2B-SPEC003-PLAN-ADJACENCY source=specs/003-adr052-bazel-rust/tools/validator-fixtures/adjacency-duplicate-row.md record=1 line=13 reason=duplicate-row
 REMEDY D2B-SPEC003-PLAN-ADJACENCY Make the dependency-graph row exactly equal the task depends field.
 RERUN D2B-SPEC003-PLAN-ADJACENCY perl specs/003-adr052-bazel-rust/tools/validate-plan-structure.pl --self-test && perl specs/003-adr052-bazel-rust/tools/validate-plan-structure.pl
 |,
-    'adjacency-malformed.md' => q|FAIL D2B-SPEC003-PLAN-ADJACENCY source=specs/003-adr052-bazel-rust/tools/validator-fixtures/adjacency-malformed.md record=1 line=13 reason=malformed
+    'adjacency-malformed.md' => q|FAIL D2B-SPEC003-PLAN-ADJACENCY source=specs/003-adr052-bazel-rust/tools/validator-fixtures/adjacency-malformed.md record=1 line=12 reason=malformed
 REMEDY D2B-SPEC003-PLAN-ADJACENCY Make the dependency-graph row exactly equal the task depends field.
 RERUN D2B-SPEC003-PLAN-ADJACENCY perl specs/003-adr052-bazel-rust/tools/validate-plan-structure.pl --self-test && perl specs/003-adr052-bazel-rust/tools/validate-plan-structure.pl
 |,
-    'adjacency-duplicate-dependency.md' => q|FAIL D2B-SPEC003-PLAN-ADJACENCY source=specs/003-adr052-bazel-rust/tools/validator-fixtures/adjacency-duplicate-dependency.md record=2 line=16 reason=duplicate-dependency
+    'adjacency-duplicate-dependency.md' => q|FAIL D2B-SPEC003-PLAN-ADJACENCY source=specs/003-adr052-bazel-rust/tools/validator-fixtures/adjacency-duplicate-dependency.md record=2 line=15 reason=duplicate-dependency
 REMEDY D2B-SPEC003-PLAN-ADJACENCY Make the dependency-graph row exactly equal the task depends field.
 RERUN D2B-SPEC003-PLAN-ADJACENCY perl specs/003-adr052-bazel-rust/tools/validate-plan-structure.pl --self-test && perl specs/003-adr052-bazel-rust/tools/validate-plan-structure.pl
 |,
-    'adjacency-mismatch.md' => q|FAIL D2B-SPEC003-PLAN-ADJACENCY source=specs/003-adr052-bazel-rust/tools/validator-fixtures/adjacency-mismatch.md record=2 line=16 reason=mismatch
+    'adjacency-mismatch.md' => q|FAIL D2B-SPEC003-PLAN-ADJACENCY source=specs/003-adr052-bazel-rust/tools/validator-fixtures/adjacency-mismatch.md record=2 line=15 reason=mismatch
 REMEDY D2B-SPEC003-PLAN-ADJACENCY Make the dependency-graph row exactly equal the task depends field.
 RERUN D2B-SPEC003-PLAN-ADJACENCY perl specs/003-adr052-bazel-rust/tools/validate-plan-structure.pl --self-test && perl specs/003-adr052-bazel-rust/tools/validate-plan-structure.pl
 |,
@@ -926,11 +1073,11 @@ RERUN D2B-SPEC003-PLAN-CYCLE perl specs/003-adr052-bazel-rust/tools/validate-pla
 REMEDY D2B-SPEC003-PLAN-CONFLICT Order the conflicting tasks by dependency or give them disjoint owned paths.
 RERUN D2B-SPEC003-PLAN-CONFLICT perl specs/003-adr052-bazel-rust/tools/validate-plan-structure.pl --self-test && perl specs/003-adr052-bazel-rust/tools/validate-plan-structure.pl
 |,
-    'section-missing.md' => q|FAIL D2B-SPEC003-PLAN-SECTION source=specs/003-adr052-bazel-rust/tools/validator-fixtures/section-missing.md record=1 line=1 reason=missing
+    'section-missing.md' => q|FAIL D2B-SPEC003-PLAN-SECTION source=specs/003-adr052-bazel-rust/tools/validator-fixtures/section-missing.md record=none line=none reason=missing
 REMEDY D2B-SPEC003-PLAN-SECTION Create or retain exactly one canonical ## Dependency graph section.
 RERUN D2B-SPEC003-PLAN-SECTION perl specs/003-adr052-bazel-rust/tools/validate-plan-structure.pl --self-test && perl specs/003-adr052-bazel-rust/tools/validate-plan-structure.pl
 |,
-    'section-duplicate.md' => q|FAIL D2B-SPEC003-PLAN-SECTION source=specs/003-adr052-bazel-rust/tools/validator-fixtures/section-duplicate.md record=1 line=1 reason=duplicate
+    'section-duplicate.md' => q|FAIL D2B-SPEC003-PLAN-SECTION source=specs/003-adr052-bazel-rust/tools/validator-fixtures/section-duplicate.md record=2 line=15 reason=duplicate
 REMEDY D2B-SPEC003-PLAN-SECTION Create or retain exactly one canonical ## Dependency graph section.
 RERUN D2B-SPEC003-PLAN-SECTION perl specs/003-adr052-bazel-rust/tools/validate-plan-structure.pl --self-test && perl specs/003-adr052-bazel-rust/tools/validate-plan-structure.pl
 |,
@@ -946,7 +1093,7 @@ sub run_plan_entrypoint {
     my $text = $reader->();
     if (!defined $text) {
         $$stderr .= render_error(
-            error_record('read', 'unreadable', 1, 1),
+            error_record('read', 'unreadable'),
             $source_key
         );
         return 1;
@@ -975,7 +1122,7 @@ sub run_cli_entrypoint {
             return $args{self_test_runner}->($stdout, $stderr);
         }
         $$stderr .= render_error(
-            error_record('parse', 'unsupported-arguments', 1, 1),
+            error_record('parse', 'unsupported-arguments'),
             'tasks'
         );
         return 2;
@@ -1076,6 +1223,19 @@ sub run_self_tests {
         ['section-duplicate',            'section',    'duplicate'],
     );
 
+    my %adjacency_physical_locator = (
+        'adjacency-extra-row' =>
+            ['T002 <- none', 1, 'T002'],
+        'adjacency-duplicate-row' =>
+            ['T001 <- none', 2, 'T001'],
+        'adjacency-malformed' =>
+            ['T001 <- bad', 1, 'T001'],
+        'adjacency-duplicate-dependency' =>
+            ['T002 <- T001, T001', 1, 'T002'],
+        'adjacency-mismatch' =>
+            ['T002 <- none', 1, 'T002'],
+    );
+
     for my $case (@cases) {
         my ($stem, $expected_kind, $expected_reason) = @$case;
         my $name = "$stem.md";
@@ -1112,22 +1272,52 @@ sub run_self_tests {
             );
             return 1;
         }
+    if (exists $adjacency_physical_locator{$stem}) {
+        my ($needle, $occurrence, $task_id) =
+            @{$adjacency_physical_locator{$stem}};
+        my $physical_line =
+            physical_line_of($text, $needle, $occurrence);
+        my $task_ordinal =
+            canonical_task_ordinal_for($text, $task_id);
+        my $expected_record =
+            defined($task_ordinal) ? $task_ordinal : 'none';
+        my ($reported_record, $reported_line) =
+            $case_stderr =~
+            /\brecord=([^ ]+) line=([^ ]+) reason=/;
+        if (
+            !defined($physical_line)
+            || !defined($reported_record)
+            || !defined($reported_line)
+            || $reported_record ne $expected_record
+            || $reported_line ne "$physical_line"
+        ) {
+            $$self_stderr .= render_error(
+                error_record(
+                    'parse',
+                    'diagnostic-contract',
+                    1,
+                    1
+                ),
+                $name
+            );
+            return 1;
+        }
+    }
     }
 
-    my $unsupported_expected = q|FAIL D2B-SPEC003-PLAN-PARSE source=specs/003-adr052-bazel-rust/tasks.md record=1 line=1 reason=unsupported-arguments
+    my $unsupported_expected = q|FAIL D2B-SPEC003-PLAN-PARSE source=specs/003-adr052-bazel-rust/tasks.md record=none line=none reason=unsupported-arguments
 REMEDY D2B-SPEC003-PLAN-PARSE Invoke the validator with no argument or with only --self-test.
 RERUN D2B-SPEC003-PLAN-PARSE perl specs/003-adr052-bazel-rust/tools/validate-plan-structure.pl --self-test && perl specs/003-adr052-bazel-rust/tools/validate-plan-structure.pl
 |;
-    my ($unsupported_stdout, $unsupported_stderr) = ('', '');
-    my $unsupported_status = run_cli_entrypoint(
-        argv             => ['--unsupported'],
-        reader           => sub { die 'unsupported arguments must not read'; },
-        self_test_runner => sub { die 'unsupported arguments must not self-test'; },
-        stdout           => \$unsupported_stdout,
-        stderr           => \$unsupported_stderr,
+    my $script_path = File::Spec->rel2abs($0);
+    my ($unsupported_status, $unsupported_stdout, $unsupported_stderr) =
+    run_subprocess(
+        $^X,
+        $script_path,
+        '--unsupported'
     );
     if (
-        $unsupported_status != 2
+    $unsupported_status != 2
         || $unsupported_stdout ne ''
         || $unsupported_stderr ne $unsupported_expected
     ) {
@@ -1138,22 +1328,84 @@ RERUN D2B-SPEC003-PLAN-PARSE perl specs/003-adr052-bazel-rust/tools/validate-pla
         return 1;
     }
 
-    my $read_expected = q|FAIL D2B-SPEC003-PLAN-READ source=specs/003-adr052-bazel-rust/tasks.md record=1 line=1 reason=unreadable
+    my $read_expected = q|FAIL D2B-SPEC003-PLAN-READ source=specs/003-adr052-bazel-rust/tasks.md record=none line=none reason=unreadable
 REMEDY D2B-SPEC003-PLAN-READ Restore the repository-relative source and make it readable.
 RERUN D2B-SPEC003-PLAN-READ perl specs/003-adr052-bazel-rust/tools/validate-plan-structure.pl --self-test && perl specs/003-adr052-bazel-rust/tools/validate-plan-structure.pl
 |;
-    my ($read_stdout, $read_stderr) = ('', '');
-    my $read_status = run_cli_entrypoint(
-        argv             => [],
-        reader           => sub { return undef; },
-        self_test_runner => sub { die 'no self-test expected'; },
-        stdout           => \$read_stdout,
-        stderr           => \$read_stderr,
-    );
+    my $unreadable_root = tempdir(CLEANUP => 1);
+    my $unreadable_tools =
+        File::Spec->catdir($unreadable_root, 'tools');
+    make_path($unreadable_tools);
+    my $unreadable_script =
+        File::Spec->catfile($unreadable_tools, 'validate-plan-structure.pl');
+    if (!copy($script_path, $unreadable_script)) {
+        $$self_stderr .= render_error(
+            error_record('parse', 'self-test-contract', 1, 1),
+            'tasks'
+        );
+        return 1;
+    }
+    my $unreadable_source =
+        File::Spec->catdir($unreadable_root, 'tasks.md');
+    if (!mkdir($unreadable_source)) {
+        $$self_stderr .= render_error(
+            error_record('parse', 'self-test-contract', 1, 1),
+            'tasks'
+        );
+        return 1;
+    }
+    my ($read_status, $read_stdout, $read_stderr) =
+        run_subprocess($^X, $unreadable_script);
     if (
         $read_status != 1
         || $read_stdout ne ''
         || $read_stderr ne $read_expected
+    ) {
+        $$self_stderr .= render_error(
+            error_record('parse', 'diagnostic-contract', 1, 1),
+            'tasks'
+        );
+        return 1;
+    }
+
+    my $oversized_record_text =
+        join('', ("* [ ] T001 oversized record\n")
+                x ($max_record_ordinal + 1));
+    my ($oversized_record_errors) =
+        validate_text($oversized_record_text);
+    my $oversized_record_expected = q|FAIL D2B-SPEC003-PLAN-TASK-ID source=specs/003-adr052-bazel-rust/tasks.md record=overflow line=1000 reason=noncanonical-task-form
+REMEDY D2B-SPEC003-PLAN-TASK-ID Use the exact unindented - [ ] TNNN header and one unique three-digit task ID.
+RERUN D2B-SPEC003-PLAN-TASK-ID perl specs/003-adr052-bazel-rust/tools/validate-plan-structure.pl --self-test && perl specs/003-adr052-bazel-rust/tools/validate-plan-structure.pl
+|;
+    if (
+        @$oversized_record_errors != $max_record_ordinal + 1
+        || render_error(
+            $oversized_record_errors->[-1],
+            'tasks'
+        ) ne $oversized_record_expected
+    ) {
+        $$self_stderr .= render_error(
+            error_record('parse', 'diagnostic-contract', 1, 1),
+            'tasks'
+        );
+        return 1;
+    }
+
+    my $oversized_line_text =
+        ("\n" x $max_line_number)
+        . "* [ ] T001 oversized line\n";
+    my ($oversized_line_errors) =
+        validate_text($oversized_line_text);
+    my $oversized_line_expected = q|FAIL D2B-SPEC003-PLAN-TASK-ID source=specs/003-adr052-bazel-rust/tasks.md record=1 line=overflow reason=noncanonical-task-form
+REMEDY D2B-SPEC003-PLAN-TASK-ID Use the exact unindented - [ ] TNNN header and one unique three-digit task ID.
+RERUN D2B-SPEC003-PLAN-TASK-ID perl specs/003-adr052-bazel-rust/tools/validate-plan-structure.pl --self-test && perl specs/003-adr052-bazel-rust/tools/validate-plan-structure.pl
+|;
+    if (
+        @$oversized_line_errors != 1
+        || render_error(
+            $oversized_line_errors->[0],
+            'tasks'
+        ) ne $oversized_line_expected
     ) {
         $$self_stderr .= render_error(
             error_record('parse', 'diagnostic-contract', 1, 1),
@@ -1173,12 +1425,13 @@ RERUN D2B-SPEC003-PLAN-READ perl specs/003-adr052-bazel-rust/tools/validate-plan
     }
 
     $$self_stdout .=
-        'PASS: 47 validator self-tests; positive fixture accepted; '
+        'PASS: 49 validator self-tests; positive fixture accepted; '
         . '44 independent negative fixtures cover noncanonical unchecked-list forms, census declarations, '
         . 'task parsing, ownership, dependency, adjacency, section, cycle, '
         . 'and conflict fixtures rejected; full stderr byte-matched against '
-        . 'independent literals; bounded record/line locators, unreadable-source '
-        . "status 1, and unsupported-argument status 2 verified\n";
+        . 'independent literals; physical adjacency rows and bounded numeric, '
+        . 'none, and overflow locators verified; actual unreadable-source '
+        . "status 1 and unsupported-argument status 2 subprocesses verified\n";
     return 0;
 }
 

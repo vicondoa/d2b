@@ -253,11 +253,18 @@
   once, emits `READY` then `EXECUTED`, remains alive, forwards allowed
   termination signals, and reaps and mirrors exact target status. Exact
   source/derivation-dependency/output/protocol identity, one Rust invocation
-  site, private-fd identity, descriptor absence, held-open and partial
-  transport, fast-same-status crash discrimination, blocked/ignored SIGTERM,
-  and every Rust-parent and C-supervisor ownership/closure/cleanup/wait/reap
-  failure are covered; no Rust helper crate, runner `sys.rs`, or first-party
-  Rust unsafe exception remains.
+  site, private-fd identity, descriptor absence, exact
+  `EINTR`/`EAGAIN`/short/partial/overlong/held-writer transport,
+  closed-reader `EPIPE`, waitable default `SIGCHLD`, fast-same-status crash
+  discrimination, blocked/ignored SIGTERM, no-deadline external-TERM
+  escalation, target-ignore-TERM, and every Rust-parent and C-supervisor
+  ownership/closure/cleanup/wait/reap failure are covered. The patched
+  sandbox's fresh PID-namespace monitor owns abnormal teardown under one fixed
+  ceiling; real crash-before-`READY`, crash-after-`READY`,
+  crash-after-`EXECUTED`, crash-during-grace, and long-lived-descendant plants
+  plus namespace/patch/ceiling/fallback mutations prove it. Cargo tests use
+  mocks and Rust never signals a numeric PID/PGID; no Rust helper crate, runner
+  `sys.rs`, or first-party Rust unsafe exception remains.
 - [x] Cache deletion uses a closed typed prefix enum and mixed pagination
   negatives preserve unauthorized entries.
 - [x] The promotion record is typed and bound to the actual sealed merge before
@@ -328,11 +335,14 @@
   conflicts. One positive plus forty-four isolated negative fixtures cover
   whole-task omission, empty input, every list class, and every branch.
   Complete negative stderr is compared byte-exactly with independent literals
-  through the injectable entrypoint; unreadable source and unsupported
-  argument cases assert exact status 1 and 2. Diagnostics authorize only the
-  fixed repository-relative source plus bounded 1-based numeric record and
-  fixed line locators, never task/dependency IDs, owned paths, contents, or
-  counts, and every code has one exact remedy and rerun command.
+  through the injectable entrypoint. Adjacency rows are independently checked
+  against physical lines; census/section/mismatch positions are actual;
+  oversized record/line inputs assert closed bounds. Actual unreadable-source
+  and unsupported-argument subprocesses assert empty stdout and exact status 1
+  and 2. Diagnostics authorize only the fixed repository-relative source plus
+  bounded numeric or closed `none`/`overflow` locators, never task/dependency
+  IDs, owned paths, contents, or counts, and every code has one exact remedy
+  and rerun command.
 
 ## Documentation Hygiene
 

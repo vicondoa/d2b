@@ -192,21 +192,28 @@ to the same file are explicitly sequential.
   stdin/stdout/stderr. Add complete Rust-parent and C-supervisor stage-error
   and owner/closure tables. Inject missing/wrong/rebound helper identity,
   private-fd identity, descriptor absence, CLOEXEC, stdin, held-open child
-  exec-error writer, bounded `EINTR`/`EAGAIN`/short/partial/overlong/malformed
-  status transport, helper crash/EOF before `EXECUTED`, fast target exit with
-  the same status as the crash, blocked/ignored inherited SIGTERM,
+  exec-error writer, exact bounded
+  `EINTR`/`EAGAIN`/short/partial/overlong/malformed status transport under one
+  absolute deadline, closed status reader and typed `EPIPE`, helper crash/EOF
+  before `EXECUTED`, fast target exit with the same status as the crash,
+  ignored or `SA_NOCLDWAIT` inherited `SIGCHLD`, blocked/ignored inherited
+  `SIGTERM`, target-ignore-TERM escalation with no case deadline,
   signal-forwarding/status mismatch, spawn, close, cleanup, wait, and reap
   failures. The fixed protocol requires `READY`, then `EXECUTED`, then terminal
-  target status; no process status is inferred before `EXECUTED`. Use
-  `std::process` and `command-fds` only for safe Rust supervisor spawn. Add no
-  Rust raw fork, `pre_exec`, signal handler, or unsafe exception. Add an
+  target status; no process status is inferred before `EXECUTED`. Rust closes
+  owned descriptors and returns the Bazel action nonzero on post-spawn failure;
+  it never signals a numeric PID or PGID. Use `std::process` and `command-fds`
+  only for safe Rust supervisor spawn. Add no Rust raw fork, `pre_exec`, signal
+  handler, or unsafe exception. Add an
   enforcing closed invocation-site test that permits exactly one Rust typed
   consumer and rejects helper invocation through runfiles, worktree paths,
   other Rust sources, Bazel rules, Make, or workflows. Reject fd-0 executable
   transport, first-party Rust unsafe, and broad lint overrides. These prep
-  tests use injected identity/spawn/fd/protocol backends and do not execute a
-  Cargo, runfiles, or worktree helper. The sequential toolchain scope owns the
-  static C source and host-backed real-output conformance. Add a
+  tests use injected identity/spawn/fd/protocol/containment backends and do not
+  execute a Cargo, runfiles, worktree, or sandbox helper. Cargo mocks are not
+  crash-containment evidence. The sequential toolchain scope owns the static C
+  source, real patched-sandbox crash plants, and host-backed real-output
+  conformance. Add a
   mutation that rejects reintroducing
   `RESOLVE_BENEATH` on
   provider opens and retain all three strict resolve flags in result/cleanup
@@ -251,6 +258,7 @@ to the same file are explicitly sequential.
   pkgs/bazel-8.6.0-seccomp/linux-sandbox-seccomp.patch,
   pkgs/bazel-8.6.0-seccomp/seccomp-policy.json,
   tests/tools/d2b-bazel-exec-supervisor/supervisor.c,
+  tests/tools/d2b-bazel-exec-supervisor/sandbox-crash-plant.c,
   pkgs/d2b-bazel-exec-supervisor/default.nix,
   tests/golden/bazel-toolchain.json,
   tests/golden/bazel-exec-supervisor.json,
@@ -261,7 +269,11 @@ to the same file are explicitly sequential.
   packages/d2b-contract-tests/tests/policy_bazel_toolchain.rs] [depends: T007]
   In one sequential toolchain scope, add and observe the exact Nix/package tests
   fail, then package Bazel 8.6.0 with the reviewed Linux sandbox patch and
-  fixed policy, make that package the only Bazel in the dev shell, and build
+  fixed policy, make that package the only Bazel in the dev shell, and patch
+  its fresh PID-namespace monitor to own abnormal action teardown: namespace
+  PID 1 kills every other member, reaps through `ECHILD`, and uses one fixed
+  10,000 ms monotonic ceiling before exiting so the kernel destroys any
+  remainder and the outer sandbox reaps the monitor. Build
   the tiny single-threaded C `d2b-bazel-exec-supervisor` as a dedicated static
   immutable build/test-tooling derivation outside the product Rust workspace.
   Commit exact
@@ -270,10 +282,19 @@ to the same file are explicitly sequential.
   compiler/libc/header/dependency-closure hashes plus per-native-system
   derivation/output-NAR/executable/static-ELF hashes, never full store paths.
   Test exact `READY`/`EXECUTED`/failure/terminal records, the close-on-exec
-  exec-error pipe, sole fork, signal normalization and forwarding, target
-  wait/reap and exact status mirroring, held-open writer, partial I/O,
-  fast-same-status target versus helper crash, blocked/ignored SIGTERM,
+  exec-error pipe, sole fork, `SIGPIPE` to typed `EPIPE`, waitable default
+  `SIGCHLD`, complete mask/disposition normalization, signal forwarding,
+  external-SIGTERM escalation with no case deadline, target wait/reap and exact
+  status mirroring, held-open writer, exact
+  `EINTR`/`EAGAIN`/short/partial/overlong transport, fast-same-status target
+  versus helper crash, blocked/ignored SIGTERM, target-ignore-TERM,
   descriptor absence/private identity/CLOEXEC/stdin, and cleanup on every path.
+  Run real patched-Bazel Linux-sandbox plants for helper crash before `READY`,
+  after `READY`, after `EXECUTED`, during grace, and with direct and
+  double-forked long-lived descendants. Require namespace-local kill/reap,
+  outer-monitor reap, and liveness-fd EOF within the fixed ceiling. Namespace
+  removal, teardown-patch removal, changed-ceiling, and every forbidden
+  strategy-fallback mutation must fail without signaling a host process.
   The Bazel startup probe, wrong-system, patch-removal, wrong-output,
   policy/filter-load, strategy-fallback, and supervisor
   missing/wrong/rebound/dynamic-output tests must pass. Prove no Rust helper
@@ -449,9 +470,12 @@ to the same file are explicitly sequential.
   prove provider-path rebind resistance, same-open-file-description execution,
   private-fd identity, declared stdin and split stdout/stderr, target
   descriptor absence, exact `READY`/`EXECUTED`/terminal transport, held-open
-  writer refusal, fast-same-status target/helper discrimination,
-  blocked/ignored SIGTERM normalization, allowed-signal forwarding, exact
-  target status, and terminal child reap.
+  writer refusal, closed-reader typed `EPIPE`, exact
+  `EINTR`/`EAGAIN`/short/partial/overlong transport, fast-same-status
+  target/helper discrimination, ignored/`SA_NOCLDWAIT` SIGCHLD normalization,
+  blocked/ignored SIGTERM normalization, no-deadline external-TERM escalation,
+  target-ignore-TERM, allowed-signal forwarding, exact target status, and
+  terminal child reap.
 - [ ] T019 [owner: spec003w0-nix-policy] [files:
   nixos-modules/host-broker.nix, flake.nix,
   packages/d2b-guest-shell-runner/deny.toml] [depends: T018] Implement the
@@ -719,9 +743,11 @@ to the same file are explicitly sequential.
   declared-stdin preservation, auxiliary-CLOEXEC, no-provider-fd leak, no
   second Rust helper invocation, no runfiles/worktree helper, no target
   path/fd-0 transport, exact `READY`/`EXECUTED`/terminal protocol,
-  held-open/partial transport, helper crash versus fast same-status target,
-  signal normalization/forwarding, target-status mirroring, and no-fallback
-  mutations.
+  held-open/closed-reader/exact partial transport, helper crash versus fast
+  same-status target, waitable SIGCHLD, full signal
+  normalization/forwarding, no-deadline external-TERM escalation,
+  target-ignore-TERM, target-status mirroring, no-numeric-Rust-signal, and
+  no-fallback mutations.
   Each test loads its scope-owned not-yet-wired implementation modules through
   test-local paths.
 - [ ] T047 [owner: spec003w1-runner] [files:
@@ -920,11 +946,21 @@ to the same file are explicitly sequential.
   socket, and Nix store paths, errno/OS text, raw child/tool/API output, raw
   cursors, opaque handles, argv/environment values, dynamic identifiers,
   generic owning-slice placeholders, query-as-absence mappings, and free-form
-  commands.
+  commands. Add the complete Rust-parent, C-helper, child-setup, and
+  patched-sandbox cleanup code tables from `recovery-deadline.md`, crossed
+  with all four slices and both closed command versions. Assert the fixed
+  repository-relative input, exact correction, phase-valid literal rerun,
+  nonzero status, empty stdout, and byte-exact stderr for every row. Add
+  isolated missing-input, missing-correction, missing-rerun, wrong-version,
+  absent-in-phase command, wrong-slice, wrong-code, and borrowed
+  parent/helper/child/sandbox remedy plants. Reject numeric PID/PGID and raw
+  protocol bytes in addition to the existing redaction set.
   Load the not-yet-wired recovery module through a test-local path.
 - [ ] T068 [owner: spec003w2-recovery] [files:
   packages/d2b-bazel-runner/src/recovery.rs] [depends: T067] Implement the
-  exact per-code recovery mapping and satisfy T067.
+  closed per-code recovery mapping, safe-input enum, correction enum, and
+  versioned phase-valid slice-command enum, and satisfy T067. No free-form
+  remedy or command and no numeric signal instruction is accepted.
 - [ ] T069 [owner: spec003w2-evidence] [files:
   packages/xtask/tests/bazel_evidence.rs] [depends: T060] Add failing
   cold-local preparation and evidence validation tests, loading the

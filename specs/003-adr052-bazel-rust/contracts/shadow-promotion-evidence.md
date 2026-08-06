@@ -291,14 +291,22 @@ It also proves:
     strategy inventories; patch-removal, wrong-output, filter-load, and
     setup-before-payload results; inherited socket/ring/SQPOLL/fixed-socket
     preflight; every closed stage diagnostic; all eight pre-action plants; and
-    no process/local/standalone/worker/remote fallback.
+    no process/local/standalone/worker/remote fallback; fresh PID-namespace
+    monitor identity; crash-before-`READY`, crash-after-`READY`,
+    crash-after-`EXECUTED`, crash-during-grace, and long-lived-descendant
+    results; fixed containment ceiling; and namespace/teardown-patch/ceiling/
+    fallback mutation results.
 23. exact immutable static C `d2b-bazel-exec-supervisor` derivation,
     dependency-closure, output NAR/executable, source, and protocol hashes;
     one-site Rust invocation policy; private-fd identity; descriptor absence;
     CLOEXEC and stdin results; `READY`/`EXECUTED`/terminal transport;
-    held-open-writer, partial-I/O, fast-same-status, signal-normalization and
-    forwarding results; and every Rust-parent and C-supervisor
-    ownership/closure/cleanup/wait/reap result.
+    held-open-writer, closed-reader `EPIPE`, exact partial-I/O,
+    fast-same-status, waitable `SIGCHLD`, signal-normalization and forwarding,
+    no-deadline external-TERM escalation, target-ignore-TERM, absence of
+    numeric Rust signaling; and every Rust-parent and C-supervisor
+    ownership/closure/cleanup/wait/reap result; plus every parent/helper/child/
+    sandbox recovery-code byte-exact result for the phase-valid diagnostic
+    command version.
 
 Candidate-specific evidence binds one integrated commit. A content change
 invalidates affected evidence. The qualified record merges before promotion

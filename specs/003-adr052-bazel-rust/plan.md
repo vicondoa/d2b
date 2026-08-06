@@ -136,8 +136,12 @@ Layer-1 surfaces. No new top-level shell gate or Layer-1 job.
 | Network namespaces were described as action-wide no-socket enforcement, then an action wrapper was claimed to cover only payload descendants. | A namespace does not deny socket creation, socketpair, or io_uring networking, and a payload wrapper cannot cover Bazel's `test-setup.sh`. | Patch the Nix-pinned Bazel 8.6.0 Linux sandbox so its child preflights inherited authority and loads the fixed filter before exec of the complete action command. Bind configured action and strategy inventories, setup-before-payload and patch-removal plants, and no process/local/standalone/worker/remote fallback. |
 | The runner planned a repository-authored post-fork raw-syscall child under a workspace that forbids unsafe code, then treated a runner-local unsafe quarantine as pre-authorized. | ADR 0009 permits no new first-party Rust unsafe exception without another ADR, and safe Rust helper wrappers cannot make post-fork supervision unambiguous. | Keep every new crate at `unsafe_code = "forbid"`. Put `VerifiedExecutable` and its sole consuming API in one dependency-leaf crate; use pinned safe command-fd mapping; invoke one exact immutable statically linked single-threaded C supervisor built as dedicated Nix tooling outside the Rust workspace; bind its complete protocol and identity; close every other invocation by policy. |
 | The exec helper treated close-on-exec EOF as success after replacing itself with the target, so a fast target exit and a helper failure could carry the same status with no surviving authority to distinguish them. | Exec success needs an observer that remains alive after the target image starts and owns signal forwarding, wait, and reap. | Make the static C helper a supervisor: it creates the child exec-error pipe, forks once, emits `READY` and `EXECUTED`, remains alive, forwards the fixed termination-signal set, reaps, and mirrors exact target status. EOF or crash before `EXECUTED` is always typed helper failure. |
+| The surviving C supervisor was treated as the final target owner, so supervisor crash could orphan a target group and long-lived descendants. | The exact patched Bazel Linux sandbox already creates a fresh PID namespace with a distinct PID-1 monitor; that monitor can remain crash-surviving without adding Rust unsafe or ambiguous host PID signaling. | Patch and pin namespace PID 1 as the abnormal-teardown owner. It namespace-kills, reaps through `ECHILD`, and exits under one fixed 10,000 ms ceiling so kernel namespace destruction is the final coupling. Rust closes and fails the action without signaling numeric PID/PGID. Real patched-sandbox plants cover crash before `READY`, after `READY`, after `EXECUTED`, during grace, and long-lived descendants; namespace, patch, ceiling, and fallback mutations fail. |
+| Supervisor signal prose left inherited `SIGPIPE`, non-waitable `SIGCHLD`, and external `SIGTERM` without a case deadline undefined. | A closed status reader must be typed transport failure, child status must remain waitable, and operator termination cannot wait forever. | Ignore supervisor `SIGPIPE` and map it to `EPIPE`; restore `SIGCHLD` to `SIG_DFL` without `SA_NOCLDWAIT`; normalize masks/dispositions; make external `SIGTERM` always run the fixed TERM/full-grace/unconditional-KILL sequence. Add closed-reader, inherited-SIGCHLD, blocked/ignored-SIGTERM, and target-ignore-TERM fixtures. |
+| Supervisor transport described bounded I/O but did not close every retry, cursor, EOF, overlong, or held-writer boundary. | A fixed-record protocol is safe only when every byte and retry consumes one original absolute deadline. | Pin exact `EINTR`, `EAGAIN`, short, partial, overlong, duplicate, closed-reader, and held-writer behavior for both exec-error and status channels, with no deadline reset and one overlong-detection byte. |
+| HELPER/CHILD and parent/sandbox cleanup stages had typed names but no complete operator recovery mapping. | Every refusal needs a stable code, safe fixed input, literal correction, and a rerun target that exists in that phase. | T067 byte-tests and T068 implements the complete parent/helper/child/sandbox matrix, crossed with four slices and both closed command versions, including wrong-version, missing-remedy, borrowed-remedy, and redaction plants. |
 | Ad hoc Cargo-shelling compile fixtures were the VerifiedExecutable API proof. | `tests/AGENTS.md` makes the compiler-derived API census primary and reserves rustdoc compile-fail for downstream type properties. | Make VerifiedExecutable a capability root with empty public-inherent and locally-authored explicit-trait allowlists, pin compiler auto/blanket impls, and use focused rustdoc compile-fail examples only. |
-| The plan validator truncated aggregate ownership prose after `and every`, and its first census saw only unordered unquoted checkboxes. | An ordered, indented, blockquoted, omitted, or zero-task plan can evade canonical parsing; dynamic values in diagnostics can also leak plan content. | Census every Markdown unchecked task-list form before parsing; reject all noncanonical forms and zero tasks; compare parsed IDs with an independent exact census in `tasks.md`; isolate every branch; byte-match complete stderr through an injectable entrypoint; authorize only bounded numeric record/line locators; and exercise unreadable source and unsupported arguments with exact status. |
+| The plan validator truncated aggregate ownership prose after `and every`, and its first census saw only unordered unquoted checkboxes. | An ordered, indented, blockquoted, omitted, or zero-task plan can evade canonical parsing; dynamic values in diagnostics can also leak plan content. | Census every Markdown unchecked task-list form before parsing; reject all noncanonical forms and zero tasks; compare parsed IDs with an independent exact census in `tasks.md`; isolate every branch; byte-match complete stderr through an injectable entrypoint; authorize only bounded numeric plus closed `none`/`overflow` record/line locators; derive actual census, section, adjacency, and mismatch positions; and run real unreadable-source and unsupported-argument subprocesses with exact status and streams. |
 | Native inventory prose alternated between five checks, two artifact rows, and six checks. | There are exactly six native checks per system and exactly four artifact baseline rows. | Normalize every inventory, task, evidence threshold, quickstart check, and checklist item to those cardinalities. |
 | Size growth relied on prose review without a typed authorization. | A changed baseline must bind its exact candidate and review. | Add closed positive/negative size-growth authorization fixtures and require all four row digests plus every nonzero authorization digest in qualification. |
 | Artifact baselines persisted exact Nix closure paths and post-promotion checkpoints persisted a cursor. | Exact store paths and pagination tokens are transient validation data. | Persist only closed states, counts, and SHA-256 digests; make fixed-code diagnostics repository-relative and digest-only. |
@@ -193,7 +197,10 @@ Layer-1 surfaces. No new top-level shell gate or Layer-1 job.
     static C `d2b-bazel-exec-supervisor`. The single-threaded supervisor
     normalizes signal state, creates a close-on-exec exec-error pipe, forks
     once, emits `READY` then `EXECUTED`, remains alive, forwards the fixed
-    signal allowlist, reaps, and mirrors exact target status. The child
+    signal allowlist, reaps, and mirrors exact target status. The patched
+    sandbox's fresh PID-namespace monitor owns abnormal teardown with one fixed
+    ceiling, including supervisor crash; Rust never signals a numeric PID or
+    PGID. The child
     installs stdio, sets the executable fd CLOEXEC, and calls
     `execveat(AT_EMPTY_PATH)` with no path fallback. Forced walk applies
     `O_NOFOLLOW` only to intermediates. Strict result and cleanup paths keep
@@ -311,7 +318,7 @@ tests/
   layer1-jobs.json
   test-rust.sh
   tools/assert-pinned-tests.sh
-  tools/d2b-bazel-exec-supervisor/supervisor.c
+  tools/d2b-bazel-exec-supervisor/{supervisor.c,sandbox-crash-plant.c}
   tools/no-bash-ast-walker/src/main.rs
   tools/flake-check-classes.sh
   unit/nix/pinned/{common,x86_64-linux,aarch64-linux}.txt
@@ -401,12 +408,15 @@ own the same file.
   unordered/ordered/indented/blockquoted forms, and every remaining branch.
   Every negative compares complete stderr byte-for-byte with an independent
   literal through the injectable entrypoint, including exact exit status.
-  Unreadable-source status 1 and unsupported-argument status 2 are exercised
-  through that entrypoint with byte-exact stderr. A diagnostic contains only
-  its fixed code, fixed repository-relative source, bounded 1-based numeric
-  record ordinal, bounded fixed 1-based numeric line number, fixed class
-  reason, fixed remedy, and exact self-test-plus-plan rerun. Those two numeric
-  locators are the only dynamic values authorized. It emits no task/dependency
+  Unreadable-source status 1 and unsupported-argument status 2 execute actual
+  subprocesses with empty stdout and byte-exact stderr. Adjacency tests
+  independently scan the fixture to assert the reported physical row. Census,
+  section, and mismatch diagnostics retain actual offsets and ordinals. A
+  diagnostic contains only its fixed code, fixed repository-relative source,
+  a bounded 1-based numeric locator or the closed `none`/`overflow` sentinel,
+  fixed class reason, fixed remedy, and exact self-test-plus-plan rerun.
+  Oversized record and line inputs assert both sentinels. It emits no
+  task/dependency
   ID, owned path, content, count, operator value, raw OS text, or absolute path.
   Every code has one exact remedy and rerun command. A nonzero result blocks
   dispatch. It remains a planning tool under this directory and is not added
@@ -524,20 +534,24 @@ additional prep commit lands before scopes resume.
 
 Before the Bazel generator opens, `spec003w0-toolchain` exclusively owns
 `flake.nix`, `pkgs/bazel-8.6.0-seccomp/{default.nix,linux-sandbox-seccomp.patch,seccomp-policy.json}`,
-`tests/tools/d2b-bazel-exec-supervisor/supervisor.c`,
+`tests/tools/d2b-bazel-exec-supervisor/{supervisor.c,sandbox-crash-plant.c}`,
 `pkgs/d2b-bazel-exec-supervisor/default.nix`,
 `tests/golden/{bazel-toolchain.json,bazel-exec-supervisor.json}`,
 `tests/unit/nix/cases/bazel-toolchain.nix`,
 `tests/unit/nix/pinned/{common,x86_64-linux,aarch64-linux}.txt`, and
 `packages/d2b-contract-tests/tests/policy_bazel_toolchain.rs`. It lands the
 green Nix packages, exact identity pins, startup capability, patch-removal,
-filter-load, static-supervisor source/dependency/output/protocol, and
-no-first-party-Rust-unsafe tests. It regenerates all three Nix-unit presence
-pins, proves a second regeneration is a clean no-op, and runs
-`make test-nix-unit` before the generator may open. The later Nix-policy scope
-is a dependency descendant and may extend `flake.nix`; it must preserve these
-identity pins byte-for-byte. T020 may regenerate the same three pins after its
-later Nix cases land. No concurrent scope overlaps this ownership.
+filter-load, fresh PID-namespace monitor, fixed abnormal-teardown ceiling,
+real crash-stage/long-lived-descendant integration,
+static-supervisor source/dependency/output/protocol, and
+no-first-party-Rust-unsafe tests. Cargo tests retain mocks; the real
+containment proof runs only through the patched Bazel Linux sandbox. It
+regenerates all three Nix-unit presence pins, proves a second regeneration is
+a clean no-op, and runs `make test-nix-unit` before the generator may open.
+The later Nix-policy scope is a dependency descendant and may extend
+`flake.nix`; it must preserve these identity pins byte-for-byte. T020 may
+regenerate the same three pins after its later Nix cases land. No concurrent
+scope overlaps this ownership.
 
 ### Parallel slice ownership
 
@@ -722,15 +736,19 @@ All must be true:
   child stdio and executable-fd CLOEXEC, and performs
   same-open-file-description `execveat(AT_EMPTY_PATH)` with no reopen or
   fallback. The supervisor emits exact `READY`/`EXECUTED`/failure/terminal
-  records with bounded `EINTR`/`EAGAIN`/short-I/O handling under the absolute
-  deadline, remains alive, forwards the fixed termination signals, reaps, and
-  mirrors exact target status. Missing/wrong output, rebind, private-fd
-  identity, descriptor absence, CLOEXEC, stdin, held-open writer,
-  partial/overlong/malformed transport, helper crash/EOF before `EXECUTED`,
-  fast same-status target exit, blocked/ignored SIGTERM, signal/status
-  mismatch, and every Rust-parent and C-supervisor ownership/closure/cleanup/
-  wait/reap failure test passes; every invocation outside the one typed Rust
-  consumer fails the closed policy;
+  records with exact bounded
+  `EINTR`/`EAGAIN`/short/partial/overlong/closed-reader/held-writer handling
+  under one absolute deadline, remains alive, forwards the fixed termination
+  signals, reaps, and mirrors exact target status. It ignores `SIGPIPE` to
+  report typed `EPIPE`, restores waitable default `SIGCHLD`, normalizes masks
+  and dispositions, and escalates external `SIGTERM` through the complete
+  fixed grace even with no case deadline. Missing/wrong output, rebind,
+  private-fd identity, descriptor absence, CLOEXEC, stdin, helper crash/EOF
+  before `EXECUTED`, fast same-status target exit, inherited
+  ignored/`SA_NOCLDWAIT` SIGCHLD, blocked/ignored SIGTERM,
+  target-ignore-TERM, signal/status mismatch, and every Rust-parent and
+  C-supervisor ownership/closure/cleanup/wait/reap failure test passes; every
+  invocation outside the one typed Rust consumer fails the closed policy;
 - the actual Bazel executable matches `tests/golden/bazel-toolchain.json` and
   its exact Bazel 8.6.0 source, Linux sandbox patch, fixed policy, output NAR,
   executable, and capability hashes. The startup probe passes; patch-removal,
@@ -740,7 +758,14 @@ All must be true:
   standalone, worker, remote, or other fallback. Inherited socket,
   ordinary-ring, SQPOLL-ring, and fixed-socket-ring plants refuse before load;
   setup-before-payload and all eight pre-action socket/io_uring plants return
-  the policy errno; exact stage diagnostics pass leak-rejection tests;
+  the policy errno. Its fresh PID-namespace monitor owns abnormal teardown,
+  namespace-kills and reaps through `ECHILD` under one fixed 10,000 ms
+  ceiling, then exits so kernel namespace destruction catches any remainder
+  and the outer sandbox reaps it. Real sandbox plants crash the helper before
+  `READY`, after `READY`, after `EXECUTED`, during grace, and with direct and
+  double-forked long-lived descendants. PID-namespace removal, teardown-patch
+  removal, ceiling, and strategy-fallback mutations fail; exact stage
+  diagnostics pass leak-rejection tests;
 - `gen-bazel --check` and `gen-package-policy-inputs --check` pass;
 - the selected-context oracle joins locked offline target-filtered root
   metadata (identities, sources, candidate edges, `cfg`),
@@ -1509,6 +1534,8 @@ old-rerun-after-failure fixtures prove both rules.
 | The pre-merge rollback rehearsal reads a promotion record that does not exist yet and silently rehearses nothing. | Rehearsal resolves the candidate from verified candidate HEAD and the recorded spec003w5 parent; promotion-record reads are post-merge only. |
 | A verified executable becomes forgeable or descriptor-revealing through a harmless-looking trait, formatter, serializer, constructor, or accessor. | Compiler-derived closed public/hidden/inherent/explicit/auto/blanket API snapshots plus focused rustdoc compile-fail examples. |
 | The immutable helper is rebound, fd 0 stops being stdin, a mapped descriptor is wrong, or a fast target exit is mistaken for a helper crash with the same status. | The dependency-leaf safe Rust consumer uses the exact static C Nix output and reviewed safe command-fd mapping at its one invocation site. The single-threaded supervisor emits `READY` then `EXECUTED`, remains alive, forwards signals, reaps, and mirrors exact target status; source/dependency/output identity plus stdio, CLOEXEC, held-open/partial transport, crash/EOF, signal normalization, ownership, cleanup, wait, and reap plants cover every stage. |
+| The supervisor crashes after forking and leaves a target or daemonized descendant alive, or Rust cleanup signals a reused numeric identity. | The patched Bazel sandbox creates one fresh PID namespace whose PID-1 monitor survives the action tree, namespace-kills and reaps under one fixed ceiling, and exits to invoke kernel namespace destruction. Rust only closes and fails the action. Real crash-stage and long-lived-descendant plants plus namespace/patch/ceiling/fallback mutations prove the boundary. |
+| Inherited `SIGPIPE`, non-waitable `SIGCHLD`, ignored `SIGTERM`, or a stalled short-I/O loop defeats supervision. | Exact mask/disposition normalization, typed closed-reader `EPIPE`, default waitable `SIGCHLD`, no-deadline external-TERM escalation, and one-deadline exact transport tests cover every boundary. |
 | A cache API page interleaves a foreign prefix and maintenance adopts it. | Closed typed prefix enum, mixed-page fixtures, preservation checks, and zero delete calls on every authorization refusal. |
 | Tests pass while forbidden values persist in `test.log` or exporter output. | Pre-sink streaming sanitization, committed measured bounds, planted-value absence across every sink, and typed degraded evidence rejected by qualification. |
 | Old or excessive diagnostics accumulate after passing sanitizer bounds. | Four closed age/count retention classes, descriptor-relative expiry before publication, and injected boundary/failure tests. |
@@ -1553,7 +1580,10 @@ After the desired waves:
     literal exact ownership, a pre-parse census rejecting every unordered,
     ordered, indented, or blockquoted noncanonical task form, and no conflict
     among incomparable scopes; its positive and all forty-four isolated
-    negative fixtures and byte-exact closed diagnostic contract pass.
+    negative fixtures and byte-exact closed diagnostic contract pass. Census,
+    section, adjacency, and mismatch locators name actual physical positions;
+    non-record and overflow locators are closed; oversized record/line inputs
+    and real unreadable-source and unsupported-argument subprocesses pass.
 13. process references use exactly `spec003w0` through `spec003w7` plus
     `spec003w5fu1`; no other qualified Spec 003 wave is accepted.
 14. every authoritative native inventory is six checks per system, artifact
@@ -1572,10 +1602,16 @@ After the desired waves:
     supervisor identity, safe command-fd mapping, one-site invocation policy,
     same-open-file-description, stdio, CLOEXEC, `READY`/`EXECUTED`/terminal
     transport, held-open writer, partial I/O, fast-same-status discrimination,
-    signal normalization/forwarding, target-status mirroring, ownership,
-    cleanup, wait, and reap coverage all pass; no Rust helper crate, runner
-    `sys.rs`, target path/reopen/fallback, fd-0 transport, or first-party Rust
-    unsafe exception remains.
+    closed-reader `EPIPE`, waitable default `SIGCHLD`, complete mask/disposition
+    normalization, no-deadline external-TERM escalation, target-status
+    mirroring, ownership, cleanup, wait, and reap coverage all pass. The real
+    patched-sandbox integration passes crash-before-`READY`,
+    crash-after-`READY`, crash-after-`EXECUTED`, crash-during-grace, and
+    long-lived-descendant plants plus PID-namespace, teardown-patch, ceiling,
+    and fallback mutations; Cargo tests claim only mock coverage. No Rust
+    helper crate, runner `sys.rs`, target path/reopen/fallback, fd-0 transport,
+    ambiguous Rust numeric signal, or first-party Rust unsafe exception
+    remains.
 19. the exact Nix-patched Bazel 8.6.0 identity and startup capability pass;
     its sandbox child loads the fixed filter before compile/build/test-setup/
     test action-command exec; configured action and strategy inventories,

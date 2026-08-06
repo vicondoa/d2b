@@ -135,6 +135,23 @@ grandfathered. The filter returns the fixed `EACCES` sentinel for `socket`,
 where the native architecture exposes it. There is no identity, policy-open,
 digest, preflight, `no_new_privs`, filter-load, or action-exec fallback.
 
+The same pinned Linux sandbox patch also binds crash containment. Every
+governed action has a fresh `CLONE_NEWPID` namespace. Namespace PID 1 remains
+outside the action command tree and owns abnormal teardown: namespace-local
+SIGKILL, adopted-child reap through `ECHILD`, one fixed 10,000 ms monotonic
+ceiling, PID-1 exit for kernel destruction of any remainder, and outer-sandbox
+reap. The supervisor retains normal TERM/grace/KILL/reap. Rust never signals a
+numeric PID or PGID.
+
+A real patched-sandbox integration plants supervisor crash before `READY`,
+after `READY`, after `EXECUTED`, during grace, and with direct and
+double-forked long-lived descendants. Liveness-fd EOF plus outer-sandbox
+completion proves teardown; Cargo mocks are not evidence. Separate mutations
+remove `CLONE_NEWPID`, remove the teardown patch, change the fixed ceiling,
+and select every forbidden strategy fallback. The execution-containment
+codes, corrections, and phase-valid reruns are the closed table in
+`recovery-deadline.md`.
+
 Runtime failures use this closed stage table:
 
 | Stage | Code | Exact correction before rerun |
