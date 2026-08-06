@@ -58,10 +58,13 @@ receipt-bound progress reconciliation both pass.
 **Language/Version**: Rust 1.94.1 (pinned via `packages/rust-toolchain.toml`, components
 `rustfmt` and `clippy`); Nix for the NixOS module surface
 
-**Primary Dependencies**: redb `=4.1.0` (provisional pin, quarantined in the proof workspace
-until the corrected backend lands per D128); ttrpc/protobuf for the resource service; Noise
-handshakes for ComponentSession; Cloud Hypervisor and crosvm as runtime backends. No new
-toolchain, linter, formatter, or nixpkgs overlay is introduced.
+**Primary Dependencies**: redb `=4.1.0` is a direct dependency of the production
+`packages/d2b-resource-store-redb` backend. The disposable
+`proofs/redb-resource-store-spike` workspace separately retains its provisional `=4.1.0`
+pin and remains quarantined under D128; that quarantine does not apply to the production
+crate. Other primary dependencies are ttrpc/protobuf for the resource service, Noise
+handshakes for ComponentSession, and Cloud Hypervisor and crosvm as runtime backends. No
+new toolchain, linter, formatter, or nixpkgs overlay is introduced.
 
 **Storage**: One embedded redb database per Zone, opened by owned fd, with full crash-safe
 durability - one fsync per write transaction, no reduced-durability mode. Write queue 256,

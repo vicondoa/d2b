@@ -51,14 +51,17 @@ delivery at W2.
 ### Approved Wave 5 production-completion amendment (2026-08-06)
 
 The preceding Context is retained as the feature's historical starting record. The committed
-tree has moved beyond it: the production redb
-backend, a store watch primitive, a controller fan-in fixture, and a fail-closed daemon
-runtime skeleton now exist. They do not make the resource plane production-reachable. The
-daemon still opens the store with mutable revision identities pinned to bootstrap constants,
-installs no Zone policy, registers no authenticated ComponentSession route or controller
-endpoint, admits no production watch, and leaves the mutation audit outbox without a
-production drainer. Existing RSS and watch fixtures exercise in-process services or a fixed
-fixture endpoint, not the published daemon boundary.
+tree has moved beyond it: the production redb backend now exists in
+`packages/d2b-resource-store-redb`, which directly depends on redb `=4.1.0`. The disposable
+`proofs/redb-resource-store-spike` workspace separately retains its provisional `=4.1.0`
+pin and quarantine under D128; that quarantine does not apply to the production crate. A
+store watch primitive, a controller fan-in fixture, and a fail-closed daemon runtime skeleton
+also exist. They do not make the resource plane production-reachable. The daemon still opens
+the store with mutable revision identities pinned to bootstrap constants, installs no Zone
+policy, registers no authenticated ComponentSession route or controller endpoint, admits no
+production watch, and leaves the mutation audit outbox without a production drainer.
+Existing RSS and watch fixtures exercise in-process services or a fixed fixture endpoint,
+not the published daemon boundary.
 
 The operator has approved the missing production wiring as Wave 5 work. It is not deferred
 to W6 or W7, and a readiness bit, direct `WatchService` call, fake endpoint, disabled audit
