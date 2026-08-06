@@ -195,8 +195,9 @@ that need the complete gate must use `make test-rust`. The focused
 Before that aggregate starts, local `make check` runs `make test-lint`
 serially. Its Rust precheck shares the normal target directories, so
 changed-package clippy both reports common failures before the long parallel
-phase and warms the later full workspace gate. The API check in this lane is a
-fast structural-diff hint, not a replacement for the compiler-derived census.
+phase and warms the later full workspace gate. The API check compares a
+generated fingerprint over the main workspace's census inputs; the later
+compiler-derived census remains the authoritative snapshot check.
 
 CI invokes one Make target per Rust leaf, so local-only dependency edges do
 not repeat schema or inventory work in the main and broker jobs. A cold local

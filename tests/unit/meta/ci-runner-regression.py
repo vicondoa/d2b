@@ -527,6 +527,7 @@ set -euo pipefail
 
         lint_driver = (ROOT / "tests" / "test-lint.sh").read_text(encoding="utf-8")
         self.assertIn("compiler-derived API pin precheck", lint_driver)
+        self.assertIn("api-surface-input-fingerprint.sh", lint_driver)
         self.assertIn("tests/test-rust.sh\" fast-lint", lint_driver)
         self.assertIn("run_fast_lint_gate", RUST_DRIVER.read_text(encoding="utf-8"))
 

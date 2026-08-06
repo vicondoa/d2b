@@ -2,7 +2,7 @@
 # tests/test-lint.sh - `make test-lint`: fail-fast lint before long Layer-1 jobs.
 #
 #   * preflight disk-space guard (fail closed before the Nix-heavy siblings)
-#   * likely compiler-derived API pin drift from structural Rust changes
+#   * compiler-derived API input fingerprint drift
 #   * Rust formatting across every gated workspace
 #   * changed-scope clippy for the main and guest-shell-runner workspaces
 #   * nix-instantiate --parse on every .nix file
@@ -61,38 +61,15 @@ resolve_lint_base() {
 lint_base=$(resolve_lint_base)
 export D2B_LINT_BASE="$lint_base"
 
-# --- compiler-derived API pin hint ---------------------------------------
-# The authoritative census still runs in test-rust-api-surface. This cheap
-# precheck catches the common omission: a structural Rust or workspace change
-# with no compiler-derived snapshot refresh anywhere on the branch.
+# --- compiler-derived API input fingerprint -------------------------------
+# The authoritative census still runs in test-rust-api-surface. This generated
+# fingerprint proves that make api-surface-pin ran for the exact workspace
+# source state before the expensive census starts.
 log "--> compiler-derived API pin precheck"
-api_inputs_changed=0
-if ! git diff --quiet "$lint_base" -- \
-  packages/Cargo.toml packages/Cargo.lock \
-  ':(glob)packages/*/Cargo.toml'; then
-  api_inputs_changed=1
-fi
-rust_diff=$(git diff --unified=0 --no-ext-diff "$lint_base" -- \
-  ':(glob)packages/**/*.rs')
-changed_rust_lines=$(
-  printf '%s\n' "$rust_diff" |
-    sed -n -e '/^+++ /d' -e '/^--- /d' -e 's/^[+-]//p'
-)
-if printf '%s\n' "$changed_rust_lines" | grep -Eq \
-  '^[[:space:]]*(#\[(cfg|cfg_attr|derive|doc|non_exhaustive|repr)|pub([[:space:]]*\([^)]*\))?[[:space:]]|((async|const|default|unsafe)[[:space:]]+)*fn[[:space:]]|((default|unsafe)[[:space:]]+)*impl([[:space:]<]|$)|trait[[:space:]]|struct[[:space:]]|enum[[:space:]]|union[[:space:]]|type[[:space:]]|const[[:space:]]|static[[:space:]]|mod[[:space:]]|use[[:space:]]|extern[[:space:]]+crate[[:space:]]|macro_rules!)'; then
-  api_inputs_changed=1
-fi
-
-if [ "$api_inputs_changed" -eq 1 ] && git diff --quiet "$lint_base" -- \
-  tests/golden/api-surface/workspace-metadata.json \
-  tests/golden/api-surface/public-api.txt \
-  tests/golden/api-surface/capability-api.txt \
-  tests/golden/api-surface/hidden-public-api.txt \
-  tests/golden/api-surface/capability-trait-impls.txt; then
-  fail "likely compiler-derived API census drift: structural Rust inputs changed but no API snapshot was refreshed"
-  echo "      Run 'make api-surface-pin' and commit the resulting tests/golden/api-surface changes." >&2
+bash "$ROOT/tests/tools/api-surface-input-fingerprint.sh" --check || {
+  fail "compiler-derived API pin is stale"
   exit 1
-fi
+}
 ok "compiler-derived API pin precheck"
 
 # --- Rust format + changed-scope clippy ----------------------------------

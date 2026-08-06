@@ -1,3 +1,3 @@
 ### Changed
 
-- Report likely Rust formatting, clippy, and compiler-derived API snapshot drift before long local validation jobs begin.
+- Report Rust formatting, changed-package clippy, and stale compiler-derived API snapshot inputs before long local validation jobs begin.
