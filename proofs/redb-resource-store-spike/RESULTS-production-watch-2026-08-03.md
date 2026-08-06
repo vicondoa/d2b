@@ -91,3 +91,27 @@ named-stream route. The controller queue consumed the 100 deliveries with
 same-resource fan-in coalescing, and transport grants released the watch
 budget. The zero-credit admission and slow-watcher signal assertions also
 passed.
+
+## Current-tip rerun (2026-08-06)
+
+The read-only validation lane reran the documented production watch command at
+repository HEAD `da9295e7ff370b22cdd6c413e8d82b33936f285e`. This is a
+current-tip rerun added to the dated 2026-08-03 artifact; it does not replace
+the historical source SHA, measurements, or signal table above. The command
+used the public heavy-gate slot:
+
+```text
+cargo run --quiet --manifest-path packages/Cargo.toml -p xtask -- heavy-gate -- cargo test --release --manifest-path packages/Cargo.toml -p d2b-bus --features production-rss-fixture --test production_watch_rss production_backend_hard_fixture_rss -- --ignored --nocapture --test-threads=1
+```
+
+The harness exercised the production `WatchService`, authenticated
+`ZoneBus`, and controller fan-in in-process, not test no-op ports.
+
+| Item | Value |
+| --- | --- |
+| Source SHA | `da9295e7ff370b22cdd6c413e8d82b33936f285e` |
+| Validation result | **PASS** |
+| RSS runs | 20,724 / 20,788 / 21,072 KiB |
+| Median RSS | 20,788 KiB |
+| Threshold | 24,576 KiB |
+| Median headroom | 3,788 KiB |

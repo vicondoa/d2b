@@ -362,16 +362,26 @@ and `ADR046-reconcile-003` remain `Planned` in W5: the passing rerun measures a 
 crate, not `packages/d2b-resource-store-redb`, and supplies none of those items' production
 evidence.
 
-That caveat is load bearing rather than ceremonial, and it became more so once the production
+That caveat remains load bearing rather than ceremonial, and it became more so once the production
 backend landed. `packages/d2b-resource-store-redb/src/{actor,transaction,revision_log,backup}.rs`
 were added by `0a080828` on 2026-07-31, 349 commits before this amendment's base `c3e15b66`.
-The code exists; the measurement does not. The crate has **no `benches/` directory and no
-resident-memory harness of any kind**, so the production whole-process RSS obligation named by
-`ADR046-store-004`, `ADR046-store-002`, and `ADR046-store-005` is not merely unmet, it is
-currently unmeasurable. A reviewer who sees a green spike rerun beside a landed backend and
-concludes the backend's RSS gate is satisfied has made exactly the inference this amendment
-exists to block. All four items therefore stay `Planned` in the manifest, and the delivery
-obligation is a production measurement, not a re-reading of the proof result.
+The code exists, and the production measurement gap described above is now closed for the
+exercised hard fixtures. The current-tip reruns recorded in
+`proofs/redb-resource-store-spike/RESULTS-production-2026-08-03.md` and
+`proofs/redb-resource-store-spike/RESULTS-production-watch-2026-08-03.md` were run at HEAD
+`da9295e7ff370b22cdd6c413e8d82b33936f285e` through the public heavy-gate slot. The backend-only
+fixture passed with RSS values 18,784 / 18,788 / 19,160 KiB and a 18,788 KiB median against the
+24,576 KiB threshold; the production watch fixture passed with RSS values 20,724 / 20,788 /
+21,072 KiB and a 20,788 KiB median against the same threshold. The watch harness exercises the
+production `WatchService`, authenticated `ZoneBus`, and controller fan-in in-process, not test
+no-op ports.
+
+These current-tip results replace the stale claim that production RSS was unmeasured or
+unmeasurable; they do not alter the older 2026-08-03 measurements or discharge the broader
+disconnect, fan-in, and compaction acceptance matrices outside the hard fixtures. All four items
+therefore stay `Planned` in the manifest until their complete validation obligations are met; the
+evidence is a production measurement for the exercised paths, not a re-reading of the disposable
+proof result.
 
 The backend commit predates the amendment base, so it is outside this focused Gate 0 review and
 is not reverted or re-adjudicated here.

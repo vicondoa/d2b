@@ -84,3 +84,29 @@ only. End-to-end named-stream integration through the future resource API and
 bus watch surface remains outstanding, as do the broader disconnect, fan-in,
 and compaction acceptance matrices outside this hard fixture. Those are not
 claimed by this artifact.
+
+## Current-tip rerun (2026-08-06)
+
+The read-only validation lane reran the documented backend production command
+at repository HEAD `da9295e7ff370b22cdd6c413e8d82b33936f285e`. This is a
+current-tip rerun added to the dated 2026-08-03 artifact; it does not replace
+the historical source SHA, measurements, or signal table above. The command
+used the public heavy-gate slot:
+
+```text
+cargo run --quiet --manifest-path packages/Cargo.toml -p xtask -- heavy-gate -- cargo test --release --locked --manifest-path packages/Cargo.toml -p d2b-resource-store-redb --lib production_backend_hard_fixture_rss -- --ignored --nocapture --test-threads=1
+```
+
+| Item | Value |
+| --- | --- |
+| Source SHA | `da9295e7ff370b22cdd6c413e8d82b33936f285e` |
+| Validation result | **PASS** |
+| RSS runs | 18,784 / 18,788 / 19,160 KiB |
+| Median RSS | 18,788 KiB |
+| Threshold | 24,576 KiB |
+| Median headroom | 5,788 KiB |
+
+This rerun is the backend-only `--lib` fixture represented by this artifact;
+it is distinct from the production watch-path rerun recorded in the sibling
+artifact. The remaining-obligation paragraph above describes the dated
+2026-08-03 run and does not claim coverage from that sibling rerun.
