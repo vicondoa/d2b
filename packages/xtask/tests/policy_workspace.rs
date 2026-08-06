@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 const CONTRACTS_CRATE: &str = "d2b-contracts";
-const EXCLUDED_WORKSPACES: &[&str] = &["d2b-priv-broker", "d2b-guest-shell-runner"];
+const PRODUCT_CONTEXT_PACKAGES: &[&str] = &["d2b-priv-broker", "d2b-guest-shell-runner"];
 const API_SURFACE_CRATE: &str = "packages/d2b-api-surface";
 const RUST_DRIVER: &str = "tests/test-rust.sh";
 const RUST_DAG_LEAVES: &[&str] = &[
@@ -151,12 +151,17 @@ fn assert_fast_dev_profile(manifest: &str, workspace: &str) {
 }
 
 #[test]
-fn every_tested_workspace_uses_fast_debug_profiles() {
+fn product_workspace_owns_fast_debug_profiles() {
     assert_fast_dev_profile(&read_repo_file("packages/Cargo.toml"), "main workspace");
-    for workspace in EXCLUDED_WORKSPACES {
-        assert_fast_dev_profile(
-            &read_repo_file(&format!("packages/{workspace}/Cargo.toml")),
-            workspace,
+    for package in PRODUCT_CONTEXT_PACKAGES {
+        let manifest = read_repo_file(&format!("packages/{package}/Cargo.toml"));
+        assert!(
+            !manifest.contains("[workspace]"),
+            "{package} must inherit the product workspace rather than define a nested root"
+        );
+        assert!(
+            !manifest.contains("[profile."),
+            "{package} must inherit the product workspace profiles"
         );
     }
 }
@@ -173,7 +178,8 @@ fn compiler_derived_api_surface_is_pinned_and_enforcing() {
     assert!(workspace.contains("\"d2b-api-surface\""));
     assert!(driver.contains("tests/tools/api-surface-json.sh"));
     assert!(api_driver.contains("--document-private-items --document-hidden-items"));
-    assert!(api_driver.contains("--workspace --lib --no-deps"));
+    assert!(api_driver.contains("--workspace"));
+    assert!(api_driver.contains("--lib --no-deps"));
     assert!(policy_manifest.contains("public-api = { version = \"=0.52.0\""));
     assert!(policy_manifest.contains("rustdoc-types = \"=0.57.4\""));
     assert!(toolchain.contains("nightly-2026-02-16"));
@@ -195,32 +201,40 @@ fn compiler_derived_api_surface_is_pinned_and_enforcing() {
 }
 
 #[test]
-fn excluded_workspaces_keep_own_lock_and_supply_chain_policy() {
+fn product_context_packages_use_the_single_lock_and_scoped_policy() {
     let root = repo_root();
     let main_workspace = read_repo_file("packages/Cargo.toml");
     let flake = read_repo_file("flake.nix");
     let driver = read_repo_file(RUST_DRIVER);
-    let violations = excluded_workspace_violations(&main_workspace, &flake, &driver);
+    let violations = unified_workspace_violations(&main_workspace, &flake, &driver);
     assert!(
         violations.is_empty(),
-        "excluded Rust workspaces must retain independent lock, deny, and driver policy:\n{}",
+        "product packages must share one lock without losing scoped policy:\n{}",
         violations.join("\n")
     );
-    for workspace in EXCLUDED_WORKSPACES {
+    assert!(
+        !main_workspace.contains("exclude ="),
+        "the product workspace must not exclude broker or guest packages"
+    );
+    for package in PRODUCT_CONTEXT_PACKAGES {
         assert!(
-            main_workspace.contains(&format!("\"{workspace}\"")),
-            "main workspace exclude list must mention {workspace}"
+            main_workspace.contains(&format!("\"{package}\"")),
+            "product workspace must include {package}"
         );
-        for required in ["Cargo.toml", "Cargo.lock", "deny.toml"] {
-            let path = root.join("packages").join(workspace).join(required);
+        for required in ["Cargo.toml", "deny.toml"] {
+            let path = root.join("packages").join(package).join(required);
             assert!(path.exists(), "{} must exist", path.display());
         }
         assert!(
-            flake.contains(&format!("packages/{workspace}/Cargo.lock"))
-                && flake.contains(&format!("packages/{workspace}/deny.toml")),
-            "flake supply-chain gates must cover {workspace}"
+            !root
+                .join("packages")
+                .join(package)
+                .join("Cargo.lock")
+                .exists(),
+            "{package} must not retain a second authoritative Cargo.lock"
         );
     }
+    assert!(flake.contains("packages/Cargo.lock"));
 }
 
 fn non_comment_lines(source: &str) -> Vec<&str> {
@@ -290,18 +304,6 @@ fn discovered_broker_features(manifest: &str) -> BTreeSet<String> {
             let (name, _) = line.split_once('=')?;
             Some(name.trim().to_owned())
         })
-        .collect()
-}
-
-fn discovered_workspace_excludes(manifest: &str) -> BTreeSet<String> {
-    let Some(exclude) = manifest.split("exclude = [").nth(1) else {
-        return BTreeSet::new();
-    };
-    let exclude = exclude.split(']').next().unwrap_or(exclude);
-    exclude
-        .split('"')
-        .enumerate()
-        .filter_map(|(index, value)| (index % 2 == 1).then_some(value.to_owned()))
         .collect()
 }
 
@@ -665,38 +667,31 @@ fn rust_mode_violations(driver: &str) -> Vec<String> {
     violations
 }
 
-fn excluded_workspace_violations(main_workspace: &str, flake: &str, driver: &str) -> Vec<String> {
-    let discovered = discovered_workspace_excludes(main_workspace);
-    let expected = EXCLUDED_WORKSPACES
-        .iter()
-        .copied()
-        .map(str::to_owned)
-        .collect::<BTreeSet<_>>();
+fn unified_workspace_violations(main_workspace: &str, flake: &str, _driver: &str) -> Vec<String> {
     let mut violations = Vec::new();
-    if discovered.is_empty() {
-        violations.push("main Cargo workspace exclusion discovery is empty".to_owned());
-    } else if discovered != expected {
-        violations.push(format!(
-            "main Cargo workspace exclusions changed: expected {expected:?}, found {discovered:?}"
-        ));
+    if main_workspace.contains("exclude =") {
+        violations.push("product Cargo workspace still has an exclusion list".to_owned());
     }
-    for workspace in EXCLUDED_WORKSPACES {
-        for suffix in ["Cargo.toml", "Cargo.lock", "deny.toml"] {
-            let rel = format!("packages/{workspace}/{suffix}");
-            if !driver.contains(&rel) {
-                violations.push(format!(
-                    "test-rust.sh no longer governs excluded workspace input `{rel}`"
-                ));
-            }
+    for package in PRODUCT_CONTEXT_PACKAGES {
+        if !main_workspace.contains(&format!("\"{package}\"")) {
+            violations.push(format!(
+                "product Cargo workspace no longer includes `{package}`"
+            ));
         }
-        for suffix in ["Cargo.lock", "deny.toml"] {
-            let rel = format!("packages/{workspace}/{suffix}");
-            if !flake.contains(&rel) {
-                violations.push(format!(
-                    "flake supply-chain policy no longer covers excluded workspace input `{rel}`"
-                ));
-            }
+        if !repo_root()
+            .join("packages")
+            .join(package)
+            .join("Cargo.toml")
+            .is_file()
+        {
+            violations.push(format!(
+                "product package manifest is missing for `{package}`"
+            ));
         }
+    }
+    if !flake.contains("packages/Cargo.lock") {
+        violations
+            .push("flake supply-chain policy no longer covers packages/Cargo.lock".to_owned());
     }
     violations
 }
@@ -1083,21 +1078,62 @@ esac
 }
 
 #[test]
-fn excluded_workspace_policy_rejects_mutated_governed_inputs() {
+fn unified_workspace_policy_rejects_mutated_governed_inputs() {
     let main_workspace = read_repo_file("packages/Cargo.toml");
     let flake = read_repo_file("flake.nix");
     let driver = read_repo_file(RUST_DRIVER);
-    let removed_exclude = main_workspace.replacen("\"d2b-priv-broker\"", "", 1);
-    let violations = excluded_workspace_violations(&removed_exclude, &flake, &driver);
+    let removed_member = main_workspace.replacen("\"d2b-priv-broker\"", "", 1);
+    let violations = unified_workspace_violations(&removed_member, &flake, &driver);
     assert!(
         !violations.is_empty(),
-        "removing an excluded workspace from the governed manifest must be rejected"
+        "removing a product package from the governed manifest must be rejected"
     );
 
-    let removed_supply_chain = flake.replace("packages/d2b-priv-broker/Cargo.lock", "");
-    let violations = excluded_workspace_violations(&main_workspace, &removed_supply_chain, &driver);
+    let removed_supply_chain = flake.replace("packages/Cargo.lock", "");
+    let violations = unified_workspace_violations(&main_workspace, &removed_supply_chain, &driver);
     assert!(
         !violations.is_empty(),
-        "removing an excluded workspace supply-chain input must be rejected"
+        "removing the root supply-chain input must be rejected"
     );
+}
+
+#[test]
+fn bazel_prep_crates_are_registered_with_dependency_leaf_ownership() {
+    let workspace = read_repo_file("packages/Cargo.toml");
+    for package in [
+        "d2b-bazel-support",
+        "d2b-bazel-exec",
+        "d2b-bazel-runner",
+        "d2b-test-locator",
+    ] {
+        assert!(workspace.contains(&format!("\"{package}\"")));
+        assert!(
+            repo_root()
+                .join("packages")
+                .join(package)
+                .join("src/lib.rs")
+                .is_file()
+        );
+    }
+    let support = read_repo_file("packages/d2b-bazel-support/Cargo.toml");
+    let execution = read_repo_file("packages/d2b-bazel-exec/Cargo.toml");
+    let runner = read_repo_file("packages/d2b-bazel-runner/Cargo.toml");
+    let locator = read_repo_file("packages/d2b-test-locator/Cargo.toml");
+    assert!(!support.contains("d2b-bazel-exec"));
+    assert!(execution.contains("d2b-bazel-support"));
+    assert!(execution.contains("command-fds"));
+    assert!(execution.contains("version = \"=0.29.0\""));
+    assert!(runner.contains("d2b-test-locator"));
+    assert!(locator.contains("d2b-bazel-exec"));
+}
+
+#[test]
+fn xtask_does_not_route_to_absent_generator_modules() {
+    let main = read_repo_file("packages/xtask/src/main.rs");
+    for module in ["bazel", "hermeticity", "schema", "package_policy"] {
+        assert!(
+            !main.contains(&format!("mod {module};")),
+            "not-yet-present generator module {module} must not be declared"
+        );
+    }
 }
