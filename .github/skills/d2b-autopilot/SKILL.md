@@ -39,6 +39,13 @@ Pass an operator's explicit `normal` or `off` request unchanged; either
 overrides the optional `caveman-full-optional` default. Do not score output
 for brevity and do not claim a lane used compressed wording.
 
+<!-- D2B-FEATURE-ARTIFACT-ROUTING: d2b-spec-edit-exclusive-v1 -->
+All writes under an active feature directory, including task checkbox,
+specification, plan, checklist, contract, research, data-model, quickstart,
+and evidence changes, go through one `/d2b-spec-edit` batch. Initial creation
+exceptions remain in the eight `speckit-*` routing markers; autopilot itself
+does not edit an existing feature artifact.
+
 ## Preconditions
 
 Autopilot refuses to start unless all of these hold. Each is checked, not

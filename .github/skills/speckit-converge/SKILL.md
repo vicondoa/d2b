@@ -1,11 +1,18 @@
 ---
 name: "speckit-converge"
-description: "Assess the current codebase against the feature's spec, plan, and tasks, then append any remaining unbuilt work as new tasks to tasks.md so implement can complete it."
+description: "Assess the current codebase against the feature's spec, plan, and tasks, then prepare any remaining work for one editor append to tasks.md."
 compatibility: "Requires spec-kit project structure with .specify/ directory"
 metadata:
   author: "github-spec-kit"
   source: "templates/commands/converge.md"
 ---
+
+
+## d2b feature artifact routing
+
+<!-- D2B-SPECKIT-ROUTE: converge initial-create=none; existing=editor-append -->
+
+Compute the convergence section read-only. If work remains, send the exact append as one /d2b-spec-edit batch; the editor performs the append to an existing tasks.md. Do not append directly.
 
 
 ## User Input
@@ -63,8 +70,8 @@ Close the gap between what a feature's specification, plan, and tasks call for a
 codebase currently implements. Read `spec.md`, `plan.md`, and `tasks.md` as the **sole
 source of intent** (with the constitution as governing constraints), assess the current
 state of the code, determine which requirements, acceptance criteria, plan decisions, and
-existing tasks are unmet, incomplete, or only partially satisfied, and **append each piece
-of remaining work as a new, traceable task** at the bottom of `tasks.md` so that
+existing tasks are unmet, incomplete, or only partially satisfied, and **prepare each piece
+of remaining work as a new, traceable task** for one editor append to `tasks.md` so that
 `/speckit-implement` can complete it. This command MUST run only after
 `/speckit-implement` has run on the current `tasks.md`, and after `/speckit-tasks` has produced a complete `tasks.md`.
 
@@ -73,8 +80,9 @@ of the code relative to the feature's artifacts - no git, no branch comparison, 
 
 ## Operating Constraints
 
-**APPEND-ONLY, NEVER REWRITE**: The command's **only** write is appending a new
-`## Phase N: Convergence` section to `tasks.md`. It MUST NOT:
+**APPEND-ONLY, NEVER REWRITE**: The command's only mutation request is an append
+of a new `## Phase N: Convergence` section to `tasks.md`, performed by
+`/d2b-spec-edit`. It MUST NOT:
 
 - modify `spec.md` or `plan.md` in any way;
 - rewrite, renumber, reorder, or delete any existing task (including tasks from a prior
@@ -204,8 +212,8 @@ Append to the **end** of `tasks.md`, per the append contract:
 
 1. Scan all existing task IDs; let `M` be the maximum. Determine the next phase number `N`
    (highest existing phase + 1).
-2. Write a single new section header `## Phase N: Convergence`.
-3. Emit one checklist item per actionable finding, ordered CRITICAL/HIGH first, assigning
+2. Include a single new section header `## Phase N: Convergence`.
+3. Include one checklist item per actionable finding, ordered CRITICAL/HIGH first, assigning
    zero-padded IDs `T{M+1:03d}, T{M+2:03d}, …`:
 
    ```markdown

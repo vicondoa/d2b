@@ -8,6 +8,13 @@ metadata:
 ---
 
 
+## d2b feature artifact routing
+
+<!-- D2B-SPECKIT-ROUTE: implement initial-create=none; existing=editor -->
+
+Implementation may change source files in its assigned scope, but every task checkbox or other feature-directory artifact update is a request to /d2b-spec-edit. Do not write tasks.md or another existing feature artifact directly.
+
+
 ## User Input
 
 ```text
@@ -166,7 +173,7 @@ You **MUST** consider the user input before proceeding (if not empty).
    - For parallel tasks [P], continue with successful tasks, report failed ones
    - Provide clear error messages with context for debugging
    - Suggest next steps if implementation cannot proceed
-   - **IMPORTANT** For completed tasks, make sure to mark the task off as [X] in the tasks file.
+   - **IMPORTANT** For completed tasks, report the checkbox transition to `/d2b-spec-edit`; the editor marks the existing tasks file as [X].
 
 9. Completion validation:
    - Verify all required tasks are completed

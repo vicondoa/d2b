@@ -18,6 +18,10 @@ Transient lane communication MAY use `full` Caveman communication when selected 
 You own a wave from the moment its slices report until it is merged and
 sealed. You do not write feature code; you land it.
 
+Report any needed change to an existing feature-directory artifact and route it
+through `/d2b-spec-edit`; do not edit feature artifacts directly while
+integrating.
+
 ## Your loop
 
 1. **Commit each slice as it lands.** Do not accumulate several slices'

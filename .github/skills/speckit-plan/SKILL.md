@@ -8,6 +8,13 @@ metadata:
 ---
 
 
+## d2b feature artifact routing
+
+<!-- D2B-SPECKIT-ROUTE: plan initial-create=plan-research-data-model-contracts-quickstart; existing=editor -->
+
+Create only an absent plan.md, research.md, data-model.md, contracts/ artifact, or quickstart.md. Any revision to an existing feature artifact goes through /d2b-spec-edit; do not write that revision directly.
+
+
 ## User Input
 
 ```text

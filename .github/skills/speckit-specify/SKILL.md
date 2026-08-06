@@ -8,6 +8,13 @@ metadata:
 ---
 
 
+## d2b feature artifact routing
+
+<!-- D2B-SPECKIT-ROUTE: specify initial-create=spec-and-checklist; existing=editor -->
+
+This command may create the initial feature directory, spec.md, and the first checklists/requirements.md. Once either feature file exists, corrections, clarification replacements, and later checklist edits go through one /d2b-spec-edit batch. Do not write an existing feature artifact directly.
+
+
 ## User Input
 
 ```text
@@ -138,7 +145,7 @@ Given that feature description, do this:
     7. Identify Key Entities (if data involved)
     8. Return: SUCCESS (spec ready for planning)
 
-7. Write the specification to SPEC_FILE using the template structure, replacing placeholders with concrete details derived from the feature description (arguments) while preserving section order and headings.
+7. If SPEC_FILE is absent, write the initial specification using the template structure, replacing placeholders with concrete details derived from the feature description (arguments) while preserving section order and headings. If it exists, collect the requested replacement and send it through one `/d2b-spec-edit` batch instead of writing it directly.
 
 8. **Specification Quality Validation**: After writing the initial spec, validate it against quality criteria:
 
@@ -191,7 +198,7 @@ Given that feature description, do this:
 
       - **If items fail (excluding [NEEDS CLARIFICATION])**:
         1. List the failing items and specific issues
-        2. Update the spec to address each issue
+        2. Add each correction to one pending `/d2b-spec-edit` batch; the editor updates an existing spec
         3. Re-run validation until all items pass (max 3 iterations)
         4. If still failing after 3 iterations, document remaining issues in checklist notes and warn user
 
@@ -227,10 +234,10 @@ Given that feature description, do this:
         5. Number questions sequentially (Q1, Q2, Q3 - max 3 total)
         6. Present all questions together before waiting for responses
         7. Wait for user to respond with their choices for all questions (e.g., "Q1: A, Q2: Custom - [details], Q3: B")
-        8. Update the spec by replacing each [NEEDS CLARIFICATION] marker with the user's selected or provided answer
+        8. Add each [NEEDS CLARIFICATION] replacement to the pending `/d2b-spec-edit` batch
         9. Re-run validation after all clarifications are resolved
 
-   d. **Update Checklist**: After each validation iteration, update the checklist file with current pass/fail status
+   d. **Update Checklist**: After each validation iteration, collect current pass/fail changes. If the checklist exists, apply them through the pending `/d2b-spec-edit` batch.
 
 ## Mandatory Post-Execution Hooks
 

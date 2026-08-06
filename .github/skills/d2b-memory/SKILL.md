@@ -19,6 +19,11 @@ The registers exist because the alternative is that every run rediscovers the
 same friction, and every deferral is either forgotten or silently carried
 forever. They are:
 
+<!-- D2B-FEATURE-ARTIFACT-ROUTING: d2b-spec-edit-exclusive-v1 -->
+The `fold` operation may prepare an insertion for an active plan or tasks
+artifact, but `/d2b-spec-edit` performs every feature-directory write. Memory
+registers remain outside that feature root and keep their existing ownership.
+
 | Register | Holds |
 |---|---|
 | `.specify/memory/deferred-work.md` | work a wave consciously chose not to do |

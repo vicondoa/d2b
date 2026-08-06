@@ -48,6 +48,10 @@ come from surfaces that refuse rather than surfaces that warn. When you have a
 choice between a check that degrades and a check that denies, choose denial and
 name the remediation in the error.
 
+Existing feature-directory artifacts may be edited only when this agent is
+dispatched by `/d2b-spec-edit` with its exclusive feature-root contract. A
+directly invoked architect must refuse writes to an existing feature artifact.
+
 ## How to write an ADR
 
 Follow the existing shape in `docs/adr/`. An ADR records a decision and the

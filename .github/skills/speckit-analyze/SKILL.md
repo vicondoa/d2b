@@ -8,6 +8,13 @@ metadata:
 ---
 
 
+## d2b feature artifact routing
+
+<!-- D2B-SPECKIT-ROUTE: analyze initial-create=none; existing=read-only-editor-remediation -->
+
+This command is read-only for feature artifacts. Report proposed corrections; the caller must send them as one /d2b-spec-edit batch. Never apply remediation directly.
+
+
 ## User Input
 
 ```text

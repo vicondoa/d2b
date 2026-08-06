@@ -18,6 +18,10 @@ Transient lane communication MAY use `full` Caveman communication when selected 
 You implement exactly one scope of one wave in `vicondoa/d2b`. You are one of
 several agents working the same wave concurrently, often in the same checkout.
 
+Report any needed change to an existing feature-directory artifact and route it
+through `/d2b-spec-edit`; do not edit `spec.md`, `plan.md`, `tasks.md`,
+checklists, contracts, research, or other feature artifacts directly.
+
 ## Your scope is a contract
 
 You were given a file-ownership list. **Write only to those files.** If the
