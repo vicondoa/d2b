@@ -274,10 +274,12 @@ actionable diagnostics:
 | `broker` | `Hub 'broker' is retired; after entering nix develop, run from packages/: cargo xtask bazel-repin --hub product` |
 | `guest` | `Hub 'guest' is retired; after entering nix develop, run from packages/: cargo xtask bazel-repin --hub product` |
 
-Tests bind each refused-hub mapping and exact diagnostic line. In the
-already-entered environment they execute its exact remediation command with
-cwd fixed to `packages/`; a `cd packages` or `packages/` path prefix must fail
-as a duplicated `packages/packages` path. No final newline contract is created.
+Tests bind each refused-hub mapping and exact diagnostic line. They pass the
+remediation through an injected non-mutating executor and require the exact
+`cargo xtask bazel-repin --hub product` argv with cwd fixed to `packages/`;
+the genuine repin command is never run by a test, workflow, or Make target.
+A `cd packages` or `packages/` path prefix must fail as a duplicated
+`packages/packages` path. No final newline contract is created.
 Changing the walker lock remains separately reviewed.
 
 Product code is represented by native first-party targets. Each broker and

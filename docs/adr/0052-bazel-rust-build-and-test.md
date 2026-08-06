@@ -39,9 +39,10 @@
   and `guest` hub inputs are retired with fixed diagnostics that, after the
   operator has entered `nix develop`, say to run
   `cargo xtask bazel-repin --hub product` from `packages/`. They never say
-  `cd packages`. Tests execute that exact remediation with `packages/` as cwd
-  and reject a duplicated `packages/packages` path. The implementation adds
-  all eight per-system dependency/package installables. Existing Layer-1
+  `cd packages`. Tests pass that exact argv and cwd through an injected
+  non-mutating executor, never the genuine repin, and reject a duplicated
+  `packages/packages` path. The implementation adds all eight per-system
+  dependency/package installables. Existing Layer-1
   supply-chain, drift, and flake targets execute their shared checker logic,
   enforce generated inventory and target mapping with wrong-runner and
   wrong-system refusals plus independent x86_64 and aarch64 foreign-system and
