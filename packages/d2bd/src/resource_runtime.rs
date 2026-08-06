@@ -18,18 +18,29 @@ use std::{
 use d2b_contracts::{
     broker_wire::{OpenZoneStoreResponse, ZoneStoreDisposition},
     v3::{
-        AuthenticatedSubjectContext, ConfigurationGeneration, ControllerGeneration, EvidenceClass,
-        Locality, MAX_FILTER_VALUES, MAX_LIST_FILTERS, MAX_LIST_PAGE_SIZE, MAX_PAGE_CURSOR_BYTES,
-        MAX_RESPONSE_CANONICAL_BYTES, ResourceError, ResourceErrorKind, ResourceName, ResourceRef,
-        ResourceTypeName, ResourceUid, RetryClass, Timestamp, ZoneId, ZoneRevision,
+        AuthenticatedSubjectContext, ConfigurationGeneration, ControllerGeneration,
+        DEFAULT_LIST_PAGE_SIZE, DEFAULT_REQUEST_DEADLINE_MS, EvidenceClass, Locality,
+        MAX_FILTER_VALUES, MAX_LIST_FILTERS, MAX_LIST_PAGE_SIZE, MAX_LIST_RESOURCE_TYPES,
+        MAX_PAGE_CURSOR_BYTES, MAX_RESPONSE_CANONICAL_BYTES, ResourceError, ResourceErrorKind,
+        ResourceErrorReason, ResourceName, ResourceRef, ResourceTypeName, ResourceUid, RetryClass,
+        Timestamp, ZoneId, ZoneRevision,
     },
 };
-use d2b_core_controller::main::{CoreProcess, StartupStage};
-use d2b_resource_api::{
-    RedbBackend, ResourceService,
-    authz::{ApiCatalog, AuthorizationState, NativeAuthorizer},
+use d2b_core_controller::main::{
+    CoreProcess, RecoverySnapshot, RuntimeReadiness as CoreRuntimeReadiness, StartupError,
+    StartupStage,
 };
-use d2b_resource_store::{PolicySnapshot, StoreListResult, StoreSlot};
+use d2b_resource_api::{
+    RedbBackend, ResourceService, ResourceStoreBackend,
+    authz::{
+        ApiCatalog, ApiMethod, AuthorizationDenial, AuthorizationRequest, AuthorizationState,
+        AuthorizationTarget, NativeAuthorizer, ResourceVerb,
+    },
+};
+use d2b_resource_store::{
+    PolicySnapshot, StoreFilter, StoreListRequest, StoreListResult, StoreOperationContext,
+    StoreProjection, StoreSlot,
+};
 use d2b_resource_store_redb::{RedbResourceStore, StoreIdentity, write_provisioning_marker};
 use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
@@ -68,6 +79,20 @@ pub enum ResourceRuntimeError {
     RequestInvalid,
     /// The underlying store refused a read.
     StoreReadFailed,
+    /// The installed native policy is not available for this Zone.
+    PolicyUnavailable,
+    /// The production ResourceService endpoint is not registered.
+    ControllerEndpointUnavailable,
+    /// The authenticated Zone session is not available.
+    AuthenticationUnavailable,
+    /// The store watch/recovery admission is not available.
+    WatchUnavailable,
+    /// The fixed core handlers have not converged.
+    HandlerNotReady,
+    /// The provider path has not completed startup.
+    ProviderPathUnavailable,
+    /// A shutdown was refused because request owners are still live.
+    LiveRequestOwners,
     /// No authenticated subject was bound to the request.
     IdentityUnbound,
     /// The requested operation is not exposed by the registered service.
@@ -92,6 +117,15 @@ impl ResourceRuntimeError {
             Self::RouteMismatch => "resource-runtime-route-mismatch",
             Self::RequestInvalid => "resource-runtime-request-invalid",
             Self::StoreReadFailed => "resource-runtime-store-read-failed",
+            Self::PolicyUnavailable => "resource-runtime-policy-unavailable",
+            Self::ControllerEndpointUnavailable => {
+                "resource-runtime-controller-endpoint-unavailable"
+            }
+            Self::AuthenticationUnavailable => "resource-runtime-authentication-unavailable",
+            Self::WatchUnavailable => "resource-runtime-watch-unavailable",
+            Self::HandlerNotReady => "resource-runtime-handler-not-ready",
+            Self::ProviderPathUnavailable => "resource-runtime-provider-path-unavailable",
+            Self::LiveRequestOwners => "resource-runtime-live-request-owners",
             Self::IdentityUnbound => "resource-runtime-identity-unbound",
             Self::CapabilityUnavailable => "resource-runtime-capability-unavailable",
         }
@@ -125,15 +159,31 @@ pub struct ZoneRuntimeReadiness {
     pub core_stage: StartupStage,
 }
 
+impl ZoneRuntimeReadiness {
+    /// Return true only after every externally visible startup gate is ready.
+    pub const fn is_ready(self) -> bool {
+        self.store_ready
+            && self.resource_api_ready
+            && self.local_session_ready
+            && self.provider_path_ready
+            && matches!(self.core_stage, StartupStage::Ready)
+    }
+}
+
 /// A production Resource API and core-controller runtime for one Zone.
 pub struct ZoneResourceRuntime {
     zone: ZoneId,
     store_id: String,
     store: Arc<RedbResourceStore>,
+    backend: Arc<RedbBackend>,
     api: Arc<ResourceService<RedbBackend>>,
+    authorizer: Arc<NativeAuthorizer>,
     authorization_state: AuthorizationState,
     core: Mutex<CoreProcess>,
     readiness: ZoneRuntimeReadiness,
+    policy_installed: bool,
+    controller_endpoint_registered: bool,
+    watch_admitted: bool,
 }
 
 impl core::fmt::Debug for ZoneResourceRuntime {
@@ -186,33 +236,57 @@ impl ZoneResourceRuntime {
         .map_err(|_| ResourceRuntimeError::StoreOpenFailed)?;
         let store = Arc::new(store);
         let authorization_state = runtime_authorization_state()?;
+        let backend = Arc::new(RedbBackend::from_arc(Arc::clone(&store)));
         let api = Arc::new(
-            ResourceService::new(
-                Arc::new(RedbBackend::from_arc(Arc::clone(&store))),
-                authorizer,
-            )
-            .map_err(|_| ResourceRuntimeError::ResourceApiBindFailed)?,
+            ResourceService::new(Arc::clone(&backend), Arc::clone(&authorizer))
+                .map_err(|_| ResourceRuntimeError::ResourceApiBindFailed)?,
         );
 
-        // The public daemon has no authenticated Zone-session binding at this
-        // seam, so the controller must remain waiting rather than fabricate
-        // endpoint or session readiness.
-        let core = CoreProcess::new();
+        // The public daemon currently has no registered ResourceService
+        // endpoint or authenticated ComponentSession. Drive the real core
+        // startup state machine with those facts instead of manufacturing
+        // readiness. `drive_core_startup` also owns the later recovery/watch
+        // and handler-readiness transitions when a trusted runtime supplies
+        // them.
+        let mut core = CoreProcess::new();
+        let _ = drive_core_startup(
+            &mut core,
+            CoreRuntimeReadiness {
+                store_ready: true,
+                resource_api_ready: false,
+                local_bus_ready: false,
+                controller_endpoint_registered: false,
+                authenticated_system_core_session: false,
+            },
+            RecoverySnapshot {
+                checkpoint_revision: 0,
+                active_configuration_revision: 1,
+                provider_lease_count: 0,
+                controller_lease_count: 0,
+                ambiguous_operation_count: 0,
+                watch_admitted: false,
+            },
+        );
         let stage = core.stage();
         Ok(Self {
             zone,
             store_id: expected_store_id,
             store,
+            backend,
             api,
+            authorizer,
             authorization_state,
             core: Mutex::new(core),
             readiness: ZoneRuntimeReadiness {
                 store_ready: true,
-                resource_api_ready: true,
+                resource_api_ready: false,
                 local_session_ready: false,
                 provider_path_ready: false,
                 core_stage: stage,
             },
+            policy_installed: false,
+            controller_endpoint_registered: false,
+            watch_admitted: false,
         })
     }
 
@@ -237,6 +311,54 @@ impl ZoneResourceRuntime {
             .lock()
             .map(|core| core.stage())
             .map_err(|_| ResourceRuntimeError::CoreStartupFailed)
+    }
+
+    /// Mark the trusted Provider path after the daemon has configured it.
+    ///
+    /// Provider configuration is loaded outside this Zone store boundary, so
+    /// `open` cannot claim this bit from the descriptor alone.
+    pub(crate) fn set_provider_path_ready(&mut self, ready: bool) {
+        self.readiness.provider_path_ready = ready;
+    }
+
+    /// Return the first startup gate that prevents publication.
+    pub fn readiness_error(&self) -> Option<ResourceRuntimeError> {
+        if !self.policy_installed {
+            return Some(ResourceRuntimeError::PolicyUnavailable);
+        }
+        if !self.readiness.store_ready {
+            return Some(ResourceRuntimeError::StoreOpenFailed);
+        }
+        if !self.readiness.resource_api_ready {
+            return Some(ResourceRuntimeError::PolicyUnavailable);
+        }
+        if !self.controller_endpoint_registered {
+            return Some(ResourceRuntimeError::ControllerEndpointUnavailable);
+        }
+        if !self.readiness.local_session_ready {
+            return Some(ResourceRuntimeError::AuthenticationUnavailable);
+        }
+        if !self.watch_admitted {
+            return Some(ResourceRuntimeError::WatchUnavailable);
+        }
+        if !self.readiness.provider_path_ready {
+            return Some(ResourceRuntimeError::ProviderPathUnavailable);
+        }
+        if !matches!(self.core_stage().ok(), Some(StartupStage::Ready)) {
+            return Some(ResourceRuntimeError::HandlerNotReady);
+        }
+        None
+    }
+
+    /// Require a runtime that is safe to publish through the public plane.
+    pub fn require_ready(&self) -> Result<(), ResourceRuntimeError> {
+        if let Some(error) = self.readiness_error() {
+            return Err(error);
+        }
+        if !matches!(self.core_stage()?, StartupStage::Ready) {
+            return Err(ResourceRuntimeError::CoreStartupFailed);
+        }
+        Ok(())
     }
 
     /// Refuse an unbound direct read.
@@ -274,12 +396,43 @@ impl ZoneResourceRuntime {
         self.dispatch_cli_request_with_subject(request, None).await
     }
 
+    /// Dispatch the public socket compatibility route without treating its
+    /// peer-role admission as a Zone ComponentSession.
+    pub async fn dispatch_public_cli_request(
+        &self,
+        request: &Value,
+    ) -> Result<Value, ResourceRuntimeError> {
+        let requested_zone = request
+            .get("zoneRef")
+            .and_then(Value::as_str)
+            .ok_or(ResourceRuntimeError::RequestInvalid)?;
+        if requested_zone != format!("Zone/{}", self.zone.as_str()) {
+            return Err(ResourceRuntimeError::RouteMismatch);
+        }
+        let method = request
+            .get("method")
+            .and_then(Value::as_str)
+            .ok_or(ResourceRuntimeError::RequestInvalid)?;
+        if !route_service_matches(request.get("service"), method)? {
+            return Err(ResourceRuntimeError::RouteMismatch);
+        }
+        if let Some(error) = self.readiness_error() {
+            return Ok(resource_error_envelope(&readiness_resource_error(error)));
+        }
+        // A public peer role is not a ComponentSession. Keep this branch
+        // unreachable for ResourceService calls even if another startup path
+        // later makes the store and policy ready.
+        Ok(resource_error_envelope(&readiness_resource_error(
+            ResourceRuntimeError::AuthenticationUnavailable,
+        )))
+    }
+
     /// Dispatch a request carrying an authenticated local session context.
     ///
     /// The context is supplied by the authenticated Zone/session boundary,
     /// never decoded from the request. The current public daemon path does
-    /// not have this binding and consequently uses
-    /// [`Self::dispatch_cli_request`], which fails closed.
+    /// not have this binding and consequently uses the public compatibility
+    /// route, which fails closed.
     #[allow(dead_code)]
     pub(crate) async fn dispatch_authenticated_cli_request(
         &self,
@@ -306,6 +459,12 @@ impl ZoneResourceRuntime {
             .get("method")
             .and_then(Value::as_str)
             .ok_or(ResourceRuntimeError::RequestInvalid)?;
+        if !route_service_matches(request.get("service"), method)? {
+            return Err(ResourceRuntimeError::RouteMismatch);
+        }
+        if let Some(error) = self.readiness_error() {
+            return Ok(resource_error_envelope(&readiness_resource_error(error)));
+        }
         match method {
             "Get" => {
                 let target = request
@@ -339,8 +498,8 @@ impl ZoneResourceRuntime {
                 }
             }
             "List" => {
-                let resource_type = match parse_list_request(request) {
-                    Ok(resource_type) => resource_type,
+                let query = match parse_list_request(request) {
+                    Ok(query) => query,
                     Err(ResourceRuntimeError::CapabilityUnavailable) => {
                         return Ok(resource_error_envelope(&capability_error()));
                     }
@@ -353,30 +512,24 @@ impl ZoneResourceRuntime {
                 if !subject_matches_runtime(subject, &self.zone) {
                     return Ok(resource_error_envelope(&identity_unbound_error()));
                 }
-                let result = match self
-                    .api
-                    .list_runtime(
-                        subject.clone(),
-                        self.authorization_state.clone(),
-                        resource_type,
-                        operation_id,
-                    )
-                    .await
-                {
+                let result = match self.list_authenticated(subject, query, operation_id).await {
                     Ok(result) => result,
                     Err(error) => return Ok(resource_error_envelope(&error)),
                 };
-                match encode_list_result(result) {
-                    Ok(value) => Ok(value),
-                    Err(error) => Ok(resource_error_envelope(&error)),
-                }
+                Ok(result)
             }
-            "ZoneList" | "ZoneStatus" => Ok(json!({
-                "zoneRef": format!("Zone/{}", self.zone.as_str()),
-                "store": "ready",
-                "resourceApi": "ready",
-                "core": format!("{:?}", self.readiness.core_stage),
-            })),
+            "ZoneList" | "ZoneStatus" => {
+                if let Err(error) = self.require_ready() {
+                    return Ok(resource_error_envelope(&readiness_resource_error(error)));
+                }
+                let core_stage = self.core_stage()?;
+                Ok(json!({
+                    "zoneRef": format!("Zone/{}", self.zone.as_str()),
+                    "store": "ready",
+                    "resourceApi": "ready",
+                    "core": format!("{core_stage:?}"),
+                }))
+            }
             "Watch" | "Status" | "Create" | "Update" | "UpdateSpec" | "UpdateStatus"
             | "UpdateMetadata" | "UpdateFinalizers" | "Delete" | "Upgrade" | "Reconcile"
             | "ProcessAttach" => Ok(resource_error_envelope(&capability_error())),
@@ -386,14 +539,113 @@ impl ZoneResourceRuntime {
 
     /// Close the production redb workers before the runtime is discarded.
     pub async fn shutdown(self) -> Result<(), ResourceRuntimeError> {
-        let ZoneResourceRuntime { store, api, .. } = self;
+        let ZoneResourceRuntime {
+            store,
+            backend,
+            api,
+            ..
+        } = self;
         drop(api);
+        drop(backend);
         let store = Arc::try_unwrap(store).map_err(|_| ResourceRuntimeError::CoreStartupFailed)?;
         store
             .shutdown()
             .await
             .map_err(|_| ResourceRuntimeError::StoreOpenFailed)
     }
+
+    async fn list_authenticated(
+        &self,
+        subject: &AuthenticatedSubjectContext,
+        query: ParsedListRequest,
+        operation_id: String,
+    ) -> Result<Value, ResourceError> {
+        // ResourceService::list_runtime currently exposes only the default
+        // collection query. Keep the richer public List contract on the same
+        // native authorizer and checked backend ordering rather than dropping
+        // its selectors or inventing a second mutation path.
+        let zone = ZoneId::parse(subject.zone_ref().name().as_str())
+            .map_err(|_| resource_result_error("authenticated Zone is invalid"))?;
+        let targets = if query.resource_names.is_empty() {
+            query
+                .resource_types
+                .iter()
+                .cloned()
+                .map(|resource_type| AuthorizationTarget {
+                    resource_type,
+                    resource_name: None,
+                    verb: ResourceVerb::List,
+                    subresource: None,
+                    execution_ref: None,
+                })
+                .collect()
+        } else {
+            query
+                .resource_types
+                .iter()
+                .cloned()
+                .flat_map(|resource_type| {
+                    query
+                        .resource_names
+                        .iter()
+                        .cloned()
+                        .map(move |resource_name| AuthorizationTarget {
+                            resource_type: resource_type.clone(),
+                            resource_name: Some(resource_name),
+                            verb: ResourceVerb::List,
+                            subresource: None,
+                            execution_ref: None,
+                        })
+                })
+                .collect()
+        };
+        let authorization = AuthorizationRequest {
+            method: ApiMethod::List,
+            zone: zone.clone(),
+            targets,
+        };
+        self.authorizer
+            .authorize(subject, &authorization, &self.authorization_state)
+            .map_err(authorization_error)?;
+
+        let result = self
+            .backend
+            .list(StoreListRequest {
+                operation: StoreOperationContext {
+                    operation_id: operation_id.clone(),
+                    idempotency_key: None,
+                    correlation_id: operation_id,
+                    trace_id: None,
+                    deadline_ms: DEFAULT_REQUEST_DEADLINE_MS,
+                },
+                zone,
+                resource_types: query.resource_types,
+                resource_names: query.resource_names,
+                filters: query.filters,
+                page_size: query.page_size,
+                cursor: query.cursor,
+                projection: query.projection,
+            })
+            .await
+            .map_err(d2b_resource_api::error::map_store_error)?;
+        encode_list_result(result)
+    }
+}
+
+fn route_service_matches(
+    service: Option<&Value>,
+    method: &str,
+) -> Result<bool, ResourceRuntimeError> {
+    let Some(service) = service else {
+        return Ok(true);
+    };
+    let service = service
+        .as_str()
+        .ok_or(ResourceRuntimeError::RequestInvalid)?;
+    Ok(match method {
+        "ZoneList" | "ZoneStatus" => service == "d2b.zone.v3",
+        _ => service == "d2b.resource.v3",
+    })
 }
 
 const MAX_OPERATION_ID_BYTES: usize = 128;
@@ -410,102 +662,165 @@ fn operation_id(request: &Value) -> Result<String, ResourceRuntimeError> {
     }
 }
 
-fn parse_list_request(request: &Value) -> Result<ResourceTypeName, ResourceRuntimeError> {
-    let resource_type = request
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ParsedListRequest {
+    resource_types: Vec<ResourceTypeName>,
+    resource_names: Vec<ResourceName>,
+    filters: Vec<StoreFilter>,
+    page_size: u32,
+    cursor: Option<String>,
+    projection: StoreProjection,
+}
+
+fn parse_list_request(request: &Value) -> Result<ParsedListRequest, ResourceRuntimeError> {
+    const LIST_FIELDS: &[&str] = &[
+        "service",
+        "method",
+        "zoneRef",
+        "schemaVersion",
+        "sessionVerb",
+        "operationId",
+        "resourceType",
+        "resourceTypes",
+        "resourceNames",
+        "filters",
+        "limit",
+        "pageSize",
+        "pageToken",
+        "cursor",
+        "pageCursor",
+        "executionRef",
+        "domain",
+        "phase",
+        "labelSelector",
+        "updates",
+        "revisionCursor",
+        "sinceRevision",
+        "afterRevision",
+        "revision",
+        "projection",
+    ];
+    if request.as_object().is_none_or(|object| {
+        object
+            .keys()
+            .any(|key| !LIST_FIELDS.contains(&key.as_str()))
+    }) {
+        return Err(ResourceRuntimeError::RequestInvalid);
+    }
+    let singular_type = request
         .get("resourceType")
         .and_then(Value::as_str)
-        .and_then(|value| ResourceTypeName::parse(value).ok())
-        .ok_or(ResourceRuntimeError::RequestInvalid)?;
-
-    if let Some(resource_types) = request.get("resourceTypes") {
-        let resource_types = resource_types
-            .as_array()
-            .ok_or(ResourceRuntimeError::RequestInvalid)?;
-        if resource_types.is_empty() {
-            return Err(ResourceRuntimeError::RequestInvalid);
-        }
-        let parsed = resource_types
-            .iter()
-            .map(|value| {
-                value
-                    .as_str()
-                    .and_then(|value| ResourceTypeName::parse(value).ok())
-                    .ok_or(ResourceRuntimeError::RequestInvalid)
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-        if parsed.len() != 1 || parsed[0] != resource_type {
-            return Err(ResourceRuntimeError::CapabilityUnavailable);
-        }
-    }
-
-    if let Some(filters) = request.get("filters") {
-        let filters = filters
-            .as_array()
-            .ok_or(ResourceRuntimeError::RequestInvalid)?;
-        if filters.len() > MAX_LIST_FILTERS {
-            return Err(ResourceRuntimeError::RequestInvalid);
-        }
-        for filter in filters {
-            let object = filter
-                .as_object()
+        .map(|value| {
+            ResourceTypeName::parse(value).map_err(|_| ResourceRuntimeError::RequestInvalid)
+        })
+        .transpose()?;
+    let resource_types = match request.get("resourceTypes") {
+        None | Some(Value::Null) => singular_type
+            .clone()
+            .map(|resource_type| vec![resource_type])
+            .ok_or(ResourceRuntimeError::RequestInvalid)?,
+        Some(value) => {
+            let values = value
+                .as_array()
                 .ok_or(ResourceRuntimeError::RequestInvalid)?;
-            let field = object
-                .get("field")
-                .and_then(Value::as_str)
-                .filter(|field| !field.is_empty() && field.len() <= 64)
-                .ok_or(ResourceRuntimeError::RequestInvalid)?;
-            let values = object
-                .get("values")
-                .and_then(Value::as_array)
-                .ok_or(ResourceRuntimeError::RequestInvalid)?;
-            if values.is_empty() || values.len() > MAX_FILTER_VALUES {
+            if values.is_empty() || values.len() > MAX_LIST_RESOURCE_TYPES {
                 return Err(ResourceRuntimeError::RequestInvalid);
             }
-            for value in values {
-                if !value
-                    .as_str()
-                    .is_some_and(|value| !value.is_empty() && value.len() <= 256)
-                {
-                    return Err(ResourceRuntimeError::RequestInvalid);
-                }
+            let parsed = values
+                .iter()
+                .map(|value| {
+                    value
+                        .as_str()
+                        .ok_or(ResourceRuntimeError::RequestInvalid)
+                        .and_then(|value| {
+                            ResourceTypeName::parse(value)
+                                .map_err(|_| ResourceRuntimeError::RequestInvalid)
+                        })
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            if let Some(singular_type) = singular_type
+                && (parsed.len() != 1 || parsed[0] != singular_type)
+            {
+                return Err(ResourceRuntimeError::RequestInvalid);
             }
-            if field == "metadata.name" {
-                for value in values {
-                    let value = value.as_str().ok_or(ResourceRuntimeError::RequestInvalid)?;
-                    ResourceName::parse(value).map_err(|_| ResourceRuntimeError::RequestInvalid)?;
-                }
-            }
+            parsed
         }
-        if !filters.is_empty() {
-            return Err(ResourceRuntimeError::CapabilityUnavailable);
+    };
+
+    let mut resource_names = parse_resource_names(request)?;
+    let mut filters = parse_typed_filters(request)?;
+    for filter in &filters {
+        if filter.field == "metadata.name" {
+            resource_names.extend(
+                filter
+                    .values
+                    .iter()
+                    .map(|value| {
+                        ResourceName::parse(value).map_err(|_| ResourceRuntimeError::RequestInvalid)
+                    })
+                    .collect::<Result<Vec<_>, _>>()?,
+            );
         }
     }
-
+    if let Some(selector) = request.get("labelSelector") {
+        if !selector.is_null() {
+            let selector = selector
+                .as_str()
+                .ok_or(ResourceRuntimeError::RequestInvalid)?;
+            if !selector.is_empty() {
+                let (field, value) = selector
+                    .split_once('=')
+                    .ok_or(ResourceRuntimeError::RequestInvalid)?;
+                if filters.len() >= MAX_LIST_FILTERS {
+                    return Err(ResourceRuntimeError::RequestInvalid);
+                }
+                let filter = typed_filter(field, vec![value.to_owned()])?;
+                if field == "metadata.name" {
+                    resource_names.extend(
+                        filter
+                            .values
+                            .iter()
+                            .map(|value| {
+                                ResourceName::parse(value)
+                                    .map_err(|_| ResourceRuntimeError::RequestInvalid)
+                            })
+                            .collect::<Result<Vec<_>, _>>()?,
+                    );
+                }
+                filters.push(filter);
+            }
+        }
+    }
     if let Some(domain) = request.get("domain").and_then(Value::as_str)
         && !domain.is_empty()
         && !matches!(domain, "system" | "user")
     {
         return Err(ResourceRuntimeError::RequestInvalid);
     }
-    if let Some(execution_ref) = request.get("executionRef").and_then(Value::as_str)
-        && !execution_ref.is_empty()
-    {
-        ResourceRef::parse(execution_ref).map_err(|_| ResourceRuntimeError::RequestInvalid)?;
+    if let Some(execution_ref) = request.get("executionRef") {
+        if !execution_ref.is_null() {
+            let execution_ref = execution_ref
+                .as_str()
+                .ok_or(ResourceRuntimeError::RequestInvalid)?;
+            if !execution_ref.is_empty() {
+                ResourceRef::parse(execution_ref)
+                    .map_err(|_| ResourceRuntimeError::RequestInvalid)?;
+                return Err(ResourceRuntimeError::CapabilityUnavailable);
+            }
+        }
     }
-    optional_list_string(request, "executionRef", 256, true)?;
-    optional_list_string(request, "domain", 16, true)?;
-    optional_list_string(request, "phase", 128, true)?;
-    optional_list_string(request, "labelSelector", 320, true)?;
-    optional_list_string(request, "pageToken", MAX_PAGE_CURSOR_BYTES, true)?;
-    optional_list_string(request, "cursor", MAX_PAGE_CURSOR_BYTES, true)?;
-    optional_list_string(request, "pageCursor", MAX_PAGE_CURSOR_BYTES, true)?;
-
-    optional_list_number(request, "limit", true)?;
-    optional_list_number(request, "pageSize", true)?;
-    optional_list_number(request, "revisionCursor", false)?;
-    optional_list_number(request, "sinceRevision", false)?;
-    optional_list_number(request, "afterRevision", false)?;
-    optional_list_number(request, "revision", false)?;
+    optional_capability_string(request, "domain", 16)?;
+    optional_capability_string(request, "phase", 128)?;
+    if let Some(schema_version) = request.get("schemaVersion") {
+        if !schema_version.is_null() && schema_version.as_u64() != Some(1) {
+            return Err(ResourceRuntimeError::RequestInvalid);
+        }
+    }
+    if let Some(session_verb) = request.get("sessionVerb") {
+        if !session_verb.is_null() && session_verb.as_str() != Some("Invoke") {
+            return Err(ResourceRuntimeError::CapabilityUnavailable);
+        }
+    }
     if request.get("updates").is_some_and(|value| !value.is_null()) {
         let updates = request
             .get("updates")
@@ -515,40 +830,145 @@ fn parse_list_request(request: &Value) -> Result<ResourceTypeName, ResourceRunti
             return Err(ResourceRuntimeError::CapabilityUnavailable);
         }
     }
-    if request
-        .get("resourceNames")
-        .is_some_and(|value| !value.is_null())
-    {
-        let names = request
-            .get("resourceNames")
-            .and_then(Value::as_array)
-            .ok_or(ResourceRuntimeError::RequestInvalid)?;
-        if names.len() > MAX_FILTER_VALUES {
-            return Err(ResourceRuntimeError::RequestInvalid);
+
+    let cursor = aliased_cursor(request)?;
+    let page_size = aliased_page_size(request)?;
+    let projection = parse_projection(request.get("projection"))?;
+    for field in [
+        "revisionCursor",
+        "sinceRevision",
+        "afterRevision",
+        "revision",
+    ] {
+        if let Some(value) = request.get(field) {
+            if value.is_null() {
+                continue;
+            }
+            let value = value.as_u64().ok_or(ResourceRuntimeError::RequestInvalid)?;
+            if value != 0 {
+                return Err(ResourceRuntimeError::CapabilityUnavailable);
+            }
         }
-        for name in names {
-            let name = name.as_str().ok_or(ResourceRuntimeError::RequestInvalid)?;
-            ResourceName::parse(name).map_err(|_| ResourceRuntimeError::RequestInvalid)?;
-        }
-        if !names.is_empty() {
-            return Err(ResourceRuntimeError::CapabilityUnavailable);
-        }
-    }
-    if request
-        .get("projection")
-        .is_some_and(|value| !value.is_null())
-    {
-        return Err(ResourceRuntimeError::CapabilityUnavailable);
     }
 
-    Ok(resource_type)
+    Ok(ParsedListRequest {
+        resource_types,
+        resource_names,
+        filters,
+        page_size,
+        cursor,
+        projection,
+    })
 }
 
-fn optional_list_string(
+fn parse_resource_names(request: &Value) -> Result<Vec<ResourceName>, ResourceRuntimeError> {
+    let Some(value) = request.get("resourceNames") else {
+        return Ok(Vec::new());
+    };
+    if value.is_null() {
+        return Ok(Vec::new());
+    }
+    let values = value
+        .as_array()
+        .ok_or(ResourceRuntimeError::RequestInvalid)?;
+    if values.len() > MAX_FILTER_VALUES {
+        return Err(ResourceRuntimeError::RequestInvalid);
+    }
+    values
+        .iter()
+        .map(|value| {
+            value
+                .as_str()
+                .ok_or(ResourceRuntimeError::RequestInvalid)
+                .and_then(|value| {
+                    ResourceName::parse(value).map_err(|_| ResourceRuntimeError::RequestInvalid)
+                })
+        })
+        .collect()
+}
+
+fn parse_typed_filters(request: &Value) -> Result<Vec<StoreFilter>, ResourceRuntimeError> {
+    let Some(value) = request.get("filters") else {
+        return Ok(Vec::new());
+    };
+    if value.is_null() {
+        return Ok(Vec::new());
+    }
+    let values = value
+        .as_array()
+        .ok_or(ResourceRuntimeError::RequestInvalid)?;
+    if values.len() > MAX_LIST_FILTERS {
+        return Err(ResourceRuntimeError::RequestInvalid);
+    }
+    values
+        .iter()
+        .map(|value| {
+            let object = value
+                .as_object()
+                .ok_or(ResourceRuntimeError::RequestInvalid)?;
+            if object
+                .keys()
+                .any(|key| !matches!(key.as_str(), "field" | "values"))
+            {
+                return Err(ResourceRuntimeError::RequestInvalid);
+            }
+            let field = object
+                .get("field")
+                .and_then(Value::as_str)
+                .ok_or(ResourceRuntimeError::RequestInvalid)?;
+            let values = object
+                .get("values")
+                .and_then(Value::as_array)
+                .ok_or(ResourceRuntimeError::RequestInvalid)?
+                .iter()
+                .map(|value| {
+                    value
+                        .as_str()
+                        .map(ToOwned::to_owned)
+                        .ok_or(ResourceRuntimeError::RequestInvalid)
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            typed_filter(field, values)
+        })
+        .collect()
+}
+
+fn typed_filter(field: &str, values: Vec<String>) -> Result<StoreFilter, ResourceRuntimeError> {
+    if field.is_empty()
+        || field.len() > 64
+        || !field
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b'_'))
+        || values.is_empty()
+        || values.len() > MAX_FILTER_VALUES
+        || values
+            .iter()
+            .any(|value| value.is_empty() || value.len() > 256)
+    {
+        return Err(ResourceRuntimeError::RequestInvalid);
+    }
+    if !matches!(field, "metadata.name" | "type") {
+        return Err(ResourceRuntimeError::CapabilityUnavailable);
+    }
+    if field == "metadata.name" {
+        for value in &values {
+            ResourceName::parse(value).map_err(|_| ResourceRuntimeError::RequestInvalid)?;
+        }
+    } else {
+        for value in &values {
+            ResourceTypeName::parse(value).map_err(|_| ResourceRuntimeError::RequestInvalid)?;
+        }
+    }
+    Ok(StoreFilter {
+        field: field.to_owned(),
+        values,
+    })
+}
+
+fn optional_capability_string(
     request: &Value,
     field: &str,
     max_bytes: usize,
-    capability_on_value: bool,
 ) -> Result<(), ResourceRuntimeError> {
     let Some(value) = request.get(field) else {
         return Ok(());
@@ -560,31 +980,104 @@ fn optional_list_string(
     if value.len() > max_bytes {
         return Err(ResourceRuntimeError::RequestInvalid);
     }
-    if capability_on_value && !value.is_empty() {
+    if !value.is_empty() {
         return Err(ResourceRuntimeError::CapabilityUnavailable);
     }
     Ok(())
 }
 
-fn optional_list_number(
-    request: &Value,
-    field: &str,
-    page_size: bool,
-) -> Result<(), ResourceRuntimeError> {
-    let Some(value) = request.get(field) else {
-        return Ok(());
-    };
-    if value.is_null() {
-        return Ok(());
+fn aliased_cursor(request: &Value) -> Result<Option<String>, ResourceRuntimeError> {
+    let mut values = Vec::new();
+    for field in ["cursor", "pageCursor", "pageToken"] {
+        let Some(value) = request.get(field) else {
+            continue;
+        };
+        if value.is_null() {
+            continue;
+        }
+        let value = value.as_str().ok_or(ResourceRuntimeError::RequestInvalid)?;
+        if value.len() > MAX_PAGE_CURSOR_BYTES {
+            return Err(ResourceRuntimeError::RequestInvalid);
+        }
+        values.push(value.to_owned());
     }
-    let value = value.as_u64().ok_or(ResourceRuntimeError::RequestInvalid)?;
-    if page_size && (value == 0 || value > u64::from(MAX_LIST_PAGE_SIZE)) {
+    if values.windows(2).any(|pair| pair[0] != pair[1]) {
         return Err(ResourceRuntimeError::RequestInvalid);
     }
-    if value != 0 {
-        return Err(ResourceRuntimeError::CapabilityUnavailable);
+    Ok(values.into_iter().next().filter(|value| !value.is_empty()))
+}
+
+fn aliased_page_size(request: &Value) -> Result<u32, ResourceRuntimeError> {
+    let mut values = Vec::new();
+    for field in ["pageSize", "limit"] {
+        let Some(value) = request.get(field) else {
+            continue;
+        };
+        if value.is_null() {
+            continue;
+        }
+        let value = value.as_u64().ok_or(ResourceRuntimeError::RequestInvalid)?;
+        if value == 0 || value > u64::from(MAX_LIST_PAGE_SIZE) {
+            return Err(ResourceRuntimeError::RequestInvalid);
+        }
+        values.push(u32::try_from(value).map_err(|_| ResourceRuntimeError::RequestInvalid)?);
     }
-    Ok(())
+    if values.windows(2).any(|pair| pair[0] != pair[1]) {
+        return Err(ResourceRuntimeError::RequestInvalid);
+    }
+    Ok(values.first().copied().unwrap_or(DEFAULT_LIST_PAGE_SIZE))
+}
+
+fn parse_projection(value: Option<&Value>) -> Result<StoreProjection, ResourceRuntimeError> {
+    let Some(value) = value else {
+        return Ok(StoreProjection::Full);
+    };
+    if value.is_null() {
+        return Ok(StoreProjection::Full);
+    }
+    let kind = match value {
+        Value::String(value) => value.as_str(),
+        Value::Object(object) => {
+            if object.len() != 1 {
+                return Err(ResourceRuntimeError::RequestInvalid);
+            }
+            object
+                .get("kind")
+                .and_then(Value::as_str)
+                .ok_or(ResourceRuntimeError::RequestInvalid)?
+        }
+        _ => return Err(ResourceRuntimeError::RequestInvalid),
+    };
+    match kind {
+        "full" | "FULL" | "projection-kind-full" => Ok(StoreProjection::Full),
+        "baseOnly" | "base-only" | "BASE_ONLY" => Ok(StoreProjection::BaseOnly),
+        "metadataOnly" | "metadata-only" | "METADATA_ONLY" => Ok(StoreProjection::MetadataOnly),
+        _ => Err(ResourceRuntimeError::RequestInvalid),
+    }
+}
+
+fn drive_core_startup(
+    core: &mut CoreProcess,
+    readiness: CoreRuntimeReadiness,
+    recovery: RecoverySnapshot,
+) -> Result<StartupStage, ResourceRuntimeError> {
+    core.start_production(readiness, recovery)
+        .map_err(map_startup_error)?;
+    core.publish_readiness().map_err(map_startup_error)
+}
+
+fn map_startup_error(error: StartupError) -> ResourceRuntimeError {
+    match error {
+        StartupError::ControllerEndpointUnavailable => {
+            ResourceRuntimeError::ControllerEndpointUnavailable
+        }
+        StartupError::AuthenticationUnavailable => ResourceRuntimeError::AuthenticationUnavailable,
+        StartupError::WatchAdmissionUnavailable => ResourceRuntimeError::WatchUnavailable,
+        StartupError::MandatoryHandlerNotReady => ResourceRuntimeError::HandlerNotReady,
+        StartupError::RuntimeNotReady | StartupError::InvalidRecoverySnapshot => {
+            ResourceRuntimeError::CoreStartupFailed
+        }
+    }
 }
 
 fn subject_matches_runtime(subject: &AuthenticatedSubjectContext, zone: &ZoneId) -> bool {
@@ -606,6 +1099,59 @@ fn identity_unbound_error() -> ResourceError {
         .expect("fixed resource error reason"),
     )
     .expect("fixed resource error fields")
+}
+
+fn authorization_error(denial: AuthorizationDenial) -> ResourceError {
+    let reason = match denial {
+        AuthorizationDenial::PolicyUnavailable => "installed resource policy is unavailable",
+        AuthorizationDenial::PolicyRevisionChanged => "resource policy revision changed",
+        AuthorizationDenial::ZoneMismatch => "resource zone authorization boundary denied",
+        AuthorizationDenial::NoMatchingGrant => "resource authorization denied",
+        AuthorizationDenial::RelayOriginInvalid => "resource relay origin denied",
+        AuthorizationDenial::RelayGrantMissing => "resource relay grant unavailable",
+        AuthorizationDenial::RelayTargetGrantMissing => "resource relay target denied",
+        AuthorizationDenial::BootstrapDenied => "resource bootstrap authorization denied",
+        AuthorizationDenial::UnknownResourceType => "resource type is not installed",
+    };
+    ResourceError::new(
+        denial.resource_error_kind(),
+        None,
+        None,
+        RetryClass::Reauthorize,
+        ResourceErrorReason::parse(reason).expect("fixed authorization error reason"),
+    )
+    .expect("fixed authorization error fields")
+}
+
+fn readiness_resource_error(error: ResourceRuntimeError) -> ResourceError {
+    let (kind, retry_class, reason) = match error {
+        ResourceRuntimeError::PolicyUnavailable
+        | ResourceRuntimeError::ControllerEndpointUnavailable
+        | ResourceRuntimeError::AuthenticationUnavailable
+        | ResourceRuntimeError::IdentityUnbound => (
+            ResourceErrorKind::AuthorizationDenied,
+            RetryClass::Reauthorize,
+            "authenticated zone session and installed policy are unavailable",
+        ),
+        ResourceRuntimeError::WatchUnavailable | ResourceRuntimeError::HandlerNotReady => (
+            ResourceErrorKind::ResourcePlaneUnavailable,
+            RetryClass::AfterDelay,
+            "zone resource runtime is still converging",
+        ),
+        _ => (
+            ResourceErrorKind::ResourcePlaneUnavailable,
+            RetryClass::AfterDelay,
+            "zone resource runtime is unavailable",
+        ),
+    };
+    ResourceError::new(
+        kind,
+        None,
+        None,
+        retry_class,
+        ResourceErrorReason::parse(reason).expect("fixed readiness error reason"),
+    )
+    .expect("fixed readiness error fields")
 }
 
 fn capability_error() -> ResourceError {
@@ -656,7 +1202,7 @@ fn encode_list_result(result: StoreListResult) -> Result<Value, ResourceError> {
     );
     response.insert("truncated".to_owned(), Value::Bool(result.truncated));
     if let Some(cursor) = result.next_cursor {
-        response.insert("nextPageToken".to_owned(), Value::String(cursor));
+        response.insert("nextCursor".to_owned(), Value::String(cursor));
     }
     let value = Value::Object(response);
     let encoded = serde_json::to_vec(&value)
@@ -721,10 +1267,13 @@ const fn retry_class_name(retry_class: RetryClass) -> &'static str {
 const fn resource_error_remediation(kind: ResourceErrorKind) -> &'static str {
     match kind {
         ResourceErrorKind::AuthorizationDenied => {
-            "authenticate an exact local Zone session and retry"
+            "authenticate an exact local Zone session and install its matching policy before retrying"
         }
         ResourceErrorKind::UnsupportedCapability => {
             "use a method exposed by the registered Zone service"
+        }
+        ResourceErrorKind::ResourcePlaneUnavailable => {
+            "wait for Zone runtime readiness and retry after the authoritative plane is published"
         }
         ResourceErrorKind::InternalIntegrityFailure => "repair the resource result before retrying",
         _ => "follow the typed resource error retry policy",
@@ -783,8 +1332,19 @@ impl ResourcePlane {
     pub fn ready_zone_count(&self) -> usize {
         self.zones
             .values()
-            .filter(|runtime| runtime.readiness().store_ready)
+            .filter(|runtime| runtime.require_ready().is_ok())
             .count()
+    }
+
+    /// Return whether a request still owns any Zone runtime.
+    ///
+    /// The plane itself owns one strong reference to every runtime. Any
+    /// additional reference is an in-flight request owner and must keep the
+    /// store open.
+    pub fn has_live_request_owners(&self) -> bool {
+        self.zones
+            .values()
+            .any(|runtime| Arc::strong_count(runtime) > 1)
     }
 
     /// Return the authoritative Zone identities currently owned by the plane.
@@ -793,11 +1353,23 @@ impl ResourcePlane {
     }
 
     /// Drain runtimes and close every production backend.
-    pub async fn shutdown(mut self) -> Result<(), ResourceRuntimeError> {
+    ///
+    /// The map remains owned by the caller when a live request owner is
+    /// observed, so a refused shutdown cannot drop the last backend owner and
+    /// leave its clean-shutdown marker dirty.
+    pub async fn shutdown(&mut self) -> Result<(), ResourceRuntimeError> {
+        if self.has_live_request_owners() {
+            return Err(ResourceRuntimeError::LiveRequestOwners);
+        }
         let runtimes = std::mem::take(&mut self.zones);
         for (_, runtime) in runtimes {
-            let runtime =
-                Arc::try_unwrap(runtime).map_err(|_| ResourceRuntimeError::CoreStartupFailed)?;
+            let runtime = match Arc::try_unwrap(runtime) {
+                Ok(runtime) => runtime,
+                Err(runtime) => {
+                    self.zones.insert(runtime.zone().clone(), runtime);
+                    return Err(ResourceRuntimeError::LiveRequestOwners);
+                }
+            };
             runtime.shutdown().await?;
         }
         Ok(())
@@ -812,7 +1384,11 @@ fn runtime_authorizer() -> Result<NativeAuthorizer, ResourceRuntimeError> {
 fn runtime_authorization_state() -> Result<AuthorizationState, ResourceRuntimeError> {
     Ok(AuthorizationState {
         snapshot: PolicySnapshot {
-            policy_revision: 1,
+            // No policy is installed at this seam. Zero is the explicit
+            // unavailable/bootstrap revision; a nonzero revision without a
+            // matching PolicySet would make the API look configured while
+            // every request is denied internally.
+            policy_revision: 0,
             api_catalog_revision: 1,
             active_configuration_revision: ConfigurationGeneration::new(1)
                 .map_err(|_| ResourceRuntimeError::AuthorizationUnavailable)?,
@@ -836,7 +1412,7 @@ fn store_identity(
     let created_at = Timestamp::parse("1970-01-01T00:00:00.000Z")
         .map_err(|_| ResourceRuntimeError::StoreOpenFailed)?;
     let revisions = PolicySnapshot {
-        policy_revision: 1,
+        policy_revision: 0,
         api_catalog_revision: 1,
         active_configuration_revision: ConfigurationGeneration::new(1)
             .map_err(|_| ResourceRuntimeError::StoreOpenFailed)?,
@@ -902,6 +1478,42 @@ mod tests {
     }
 
     #[test]
+    fn unavailable_policy_never_uses_a_nonzero_revision() {
+        assert_eq!(
+            runtime_authorization_state()
+                .unwrap()
+                .snapshot
+                .policy_revision,
+            0
+        );
+    }
+
+    #[test]
+    fn core_progression_reaches_handler_gate_before_readiness_check() {
+        let mut core = CoreProcess::new();
+        let result = drive_core_startup(
+            &mut core,
+            CoreRuntimeReadiness {
+                store_ready: true,
+                resource_api_ready: true,
+                local_bus_ready: true,
+                controller_endpoint_registered: true,
+                authenticated_system_core_session: true,
+            },
+            RecoverySnapshot {
+                checkpoint_revision: 0,
+                active_configuration_revision: 1,
+                provider_lease_count: 0,
+                controller_lease_count: 0,
+                ambiguous_operation_count: 0,
+                watch_admitted: true,
+            },
+        );
+        assert_eq!(result, Err(ResourceRuntimeError::HandlerNotReady));
+        assert_eq!(core.stage(), StartupStage::ReconcilingSystemCore);
+    }
+
+    #[test]
     fn broker_response_requires_one_canonical_zone_store() {
         let response = OpenZoneStoreResponse {
             zone_store_id: d2b_contracts::v3::storage::ZoneStoreId::parse("zone-store-work")
@@ -929,16 +1541,48 @@ mod tests {
     }
 
     #[test]
-    fn list_rejects_query_fields_the_runtime_cannot_forward() {
+    fn list_preserves_typed_pagination_and_filters() {
         let request = json!({
             "resourceType": "Guest",
             "limit": 10,
             "pageToken": "opaque-cursor",
+            "filters": [{
+                "field": "metadata.name",
+                "values": ["corp-vm"],
+            }],
+        });
+        let parsed = parse_list_request(&request).unwrap();
+        assert_eq!(parsed.page_size, 10);
+        assert_eq!(parsed.cursor.as_deref(), Some("opaque-cursor"));
+        assert_eq!(parsed.resource_types[0].as_str(), "Guest");
+        assert_eq!(parsed.resource_names[0].as_str(), "corp-vm");
+        assert_eq!(parsed.filters[0].field, "metadata.name");
+    }
+
+    #[test]
+    fn list_refuses_query_fields_without_a_store_semantic() {
+        let request = json!({
+            "resourceType": "Guest",
             "executionRef": "Host/host-system",
         });
         assert_eq!(
             parse_list_request(&request),
             Err(ResourceRuntimeError::CapabilityUnavailable)
+        );
+    }
+
+    #[test]
+    fn list_rejects_conflicting_legacy_and_typed_pagination_aliases() {
+        let request = json!({
+            "resourceType": "Guest",
+            "limit": 10,
+            "pageSize": 20,
+            "pageToken": "opaque-cursor",
+            "cursor": "different-cursor",
+        });
+        assert_eq!(
+            parse_list_request(&request),
+            Err(ResourceRuntimeError::RequestInvalid)
         );
     }
 
@@ -968,7 +1612,8 @@ mod tests {
         })
         .unwrap();
         assert_eq!(result["snapshotRevision"], 7);
-        assert_eq!(result["nextPageToken"], "opaque-cursor");
+        assert_eq!(result["nextCursor"], "opaque-cursor");
+        assert!(result.get("nextPageToken").is_none());
         assert_eq!(result["truncated"], true);
     }
 
@@ -1047,10 +1692,17 @@ mod tests {
         .unwrap();
         assert_eq!(runtime.zone(), &zone);
         assert!(runtime.readiness().store_ready);
-        assert!(runtime.readiness().resource_api_ready);
+        assert!(!runtime.readiness().resource_api_ready);
         assert!(!runtime.readiness().local_session_ready);
         assert!(!runtime.readiness().provider_path_ready);
-        assert_eq!(runtime.core_stage().unwrap(), StartupStage::WaitingForStore);
+        assert_eq!(
+            runtime.core_stage().unwrap(),
+            StartupStage::WaitingForResourceApi
+        );
+        assert_eq!(
+            runtime.readiness_error(),
+            Some(ResourceRuntimeError::PolicyUnavailable)
+        );
         let zone_status = runtime
             .dispatch_cli_request(&json!({
                 "method": "ZoneStatus",
@@ -1058,7 +1710,8 @@ mod tests {
             }))
             .await
             .unwrap();
-        assert_eq!(zone_status["store"], "ready");
+        assert_eq!(zone_status["type"], "error");
+        assert_eq!(zone_status["error"]["kind"], "authorization-denied");
         let list = runtime
             .dispatch_cli_request(&json!({
                 "method": "List",
@@ -1078,7 +1731,7 @@ mod tests {
             }))
             .await
             .unwrap();
-        assert_eq!(watch["error"]["kind"], "unsupported-capability");
+        assert_eq!(watch["error"]["kind"], "authorization-denied");
         let status = runtime
             .dispatch_cli_request(&json!({
                 "method": "Status",
@@ -1087,7 +1740,7 @@ mod tests {
             }))
             .await
             .unwrap();
-        assert_eq!(status["error"]["kind"], "unsupported-capability");
+        assert_eq!(status["error"]["kind"], "authorization-denied");
         runtime.shutdown().await.unwrap();
         assert!(fd >= 0);
     }
@@ -1122,7 +1775,18 @@ mod tests {
         .await
         .unwrap();
         assert!(runtime.readiness().store_ready);
-        assert!(runtime.readiness().resource_api_ready);
-        runtime.shutdown().await.unwrap();
+        assert!(!runtime.readiness().resource_api_ready);
+        let mut plane = ResourcePlane::new();
+        let owner = plane.insert(runtime).unwrap();
+        assert_eq!(plane.ready_zone_count(), 0);
+        assert!(plane.has_live_request_owners());
+        assert_eq!(
+            plane.shutdown().await,
+            Err(ResourceRuntimeError::LiveRequestOwners)
+        );
+        assert!(plane.has_live_request_owners());
+        drop(owner);
+        assert!(!plane.has_live_request_owners());
+        plane.shutdown().await.unwrap();
     }
 }

@@ -79,7 +79,6 @@ use d2b_core::processes::{ProcessNode, ProcessRole, ProcessesJson, ReadinessPred
 use d2b_core::realm_controller_config::{RealmControllerMetadataSummary, RealmControllersJson};
 use d2b_core::workload_identity::WorkloadIdentity;
 use d2b_core_controller::coordinator::{CoordinatorError, ZoneCoordinator};
-use d2b_core_controller::main::StartupStage;
 use d2b_gateway::{
     AgentHandle, AgentSpawnRequest, AppCommand, Clock, ContextSeed, DisplayListener,
     DisplaySessionContext, GatewayDeps, GatewayError, GatewayOrchestrator, GatewayWorkload,
@@ -3570,7 +3569,7 @@ fn dispatch_resource_request(
 ) -> Result<Value, TypedError> {
     if !matches!(peer.role, PeerRole::Admin | PeerRole::Launcher) {
         return Ok(resource_runtime_error_frame(
-            resource_runtime::ResourceRuntimeError::RouteMismatch,
+            resource_runtime::ResourceRuntimeError::AuthenticationUnavailable,
         ));
     }
     let typed_shell = typed_shell_resource_request(&request.value());
@@ -3588,7 +3587,10 @@ fn dispatch_resource_request(
                 .unwrap_or_else(|error| typed_shell_resource_error_frame(&error)),
         );
     }
-    match block_on_future(runtime.dispatch_cli_request(&request.value())) {
+    // The public socket currently authenticates only the local peer role. It
+    // does not carry a ComponentSession, so never let this compatibility
+    // route turn SO_PEERCRED into a Resource API subject.
+    match block_on_future(runtime.dispatch_public_cli_request(&request.value())) {
         Ok(value) => Ok(value),
         Err(error) => Ok(resource_runtime_error_frame(error)),
     }
@@ -3729,14 +3731,48 @@ fn list_all_typed_shell_sessions(
 }
 
 fn resource_runtime_error_frame(error: resource_runtime::ResourceRuntimeError) -> Value {
+    let code = error.code();
+    let (kind, retry_class, message, remediation) = match error {
+        resource_runtime::ResourceRuntimeError::AuthenticationUnavailable
+        | resource_runtime::ResourceRuntimeError::ControllerEndpointUnavailable
+        | resource_runtime::ResourceRuntimeError::PolicyUnavailable
+        | resource_runtime::ResourceRuntimeError::IdentityUnbound => (
+            "authorization-denied",
+            "reauthorize",
+            "authenticated Zone ComponentSession or installed policy is unavailable",
+            "establish an authenticated local Zone session and install its matching policy before retrying",
+        ),
+        resource_runtime::ResourceRuntimeError::WatchUnavailable
+        | resource_runtime::ResourceRuntimeError::HandlerNotReady
+        | resource_runtime::ResourceRuntimeError::ProviderPathUnavailable
+        | resource_runtime::ResourceRuntimeError::PlaneUnavailable
+        | resource_runtime::ResourceRuntimeError::CoreStartupFailed => (
+            "resource-plane-unavailable",
+            "after-delay",
+            "the Zone resource runtime has not completed readiness",
+            "wait for authoritative Zone startup and retry after the resource plane is published",
+        ),
+        resource_runtime::ResourceRuntimeError::CapabilityUnavailable => (
+            code,
+            "never",
+            "the requested resource operation is not registered",
+            "use a method exposed by the registered Zone service",
+        ),
+        _ => (
+            code,
+            "never",
+            code,
+            "inspect the typed resource error and the authoritative Zone route",
+        ),
+    };
     json!({
         "type": "error",
         "error": {
-            "kind": error.code(),
-            "errorClass": error.code(),
-            "retryClass": "never",
-            "message": error.code(),
-            "remediation": "inspect the Zone runtime readiness and retry after the authoritative resource plane is ready",
+            "kind": kind,
+            "errorClass": kind,
+            "retryClass": retry_class,
+            "message": message,
+            "remediation": remediation,
         }
     })
 }
@@ -12910,7 +12946,7 @@ async fn open_resource_plane(
     provider_ready: bool,
 ) -> Result<Arc<resource_runtime::ResourcePlane>, resource_runtime::ResourceRuntimeError> {
     if !provider_ready {
-        return Err(resource_runtime::ResourceRuntimeError::CoreStartupFailed);
+        return Err(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable);
     }
     let mut plane = resource_runtime::ResourcePlane::new();
     let zones = authoritative_zone_ids(resolver)
@@ -12923,17 +12959,18 @@ async fn open_resource_plane(
                 return Err(resource_runtime::ResourceRuntimeError::StoreOpenFailed);
             }
         };
-        let runtime = match resource_runtime::ZoneResourceRuntime::open(zone, opened).await {
+        let mut runtime = match resource_runtime::ZoneResourceRuntime::open(zone, opened).await {
             Ok(runtime) => runtime,
             Err(error) => {
                 let _ = plane.shutdown().await;
                 return Err(error);
             }
         };
-        if !matches!(runtime.core_stage(), Ok(StartupStage::Ready)) {
+        runtime.set_provider_path_ready(provider_ready);
+        if let Err(error) = runtime.require_ready() {
             let _ = runtime.shutdown().await;
             let _ = plane.shutdown().await;
-            return Err(resource_runtime::ResourceRuntimeError::CoreStartupFailed);
+            return Err(error);
         }
         if let Err(error) = plane.insert(runtime) {
             let _ = plane.shutdown().await;
@@ -12972,23 +13009,72 @@ async fn shutdown_resource_plane(state: &ServerState) {
         .ok()
         .and_then(|mut slot| slot.take());
     if let Some(plane) = plane {
-        for zone in plane.zone_ids() {
-            audit_resource_plane(
-                state,
-                &zone,
-                daemon_audit::ResourcePlaneAction::Shutdown,
-                daemon_audit::ResourcePlaneResult::Closed,
-            );
-        }
+        let zones = plane.zone_ids();
         match Arc::try_unwrap(plane) {
-            Ok(plane) => {
-                if let Err(error) = plane.shutdown().await {
-                    tracing::warn!(error = %error, "resource plane shutdown failed");
+            Ok(plane) if plane.has_live_request_owners() => {
+                for zone in &zones {
+                    audit_resource_plane(
+                        state,
+                        zone,
+                        daemon_audit::ResourcePlaneAction::Shutdown,
+                        daemon_audit::ResourcePlaneResult::Refused,
+                    );
+                }
+                match state.resource_plane.lock() {
+                    Ok(mut slot) => *slot = Some(Arc::new(plane)),
+                    Err(_) => std::mem::forget(plane),
                 }
             }
+            Ok(mut plane) => match plane.shutdown().await {
+                Ok(()) => {
+                    for zone in &zones {
+                        audit_resource_plane(
+                            state,
+                            zone,
+                            daemon_audit::ResourcePlaneAction::Shutdown,
+                            daemon_audit::ResourcePlaneResult::Closed,
+                        );
+                    }
+                }
+                Err(resource_runtime::ResourceRuntimeError::LiveRequestOwners) => {
+                    for zone in &zones {
+                        audit_resource_plane(
+                            state,
+                            zone,
+                            daemon_audit::ResourcePlaneAction::Shutdown,
+                            daemon_audit::ResourcePlaneResult::Refused,
+                        );
+                    }
+                    match state.resource_plane.lock() {
+                        Ok(mut slot) => *slot = Some(Arc::new(plane)),
+                        Err(_) => std::mem::forget(plane),
+                    }
+                    tracing::warn!("resource plane still has live request owners during shutdown");
+                }
+                Err(error) => {
+                    for zone in &zones {
+                        audit_resource_plane(
+                            state,
+                            zone,
+                            daemon_audit::ResourcePlaneAction::Shutdown,
+                            daemon_audit::ResourcePlaneResult::Error,
+                        );
+                    }
+                    tracing::warn!(error = %error, "resource plane shutdown failed");
+                }
+            },
             Err(plane) => {
-                if let Ok(mut slot) = state.resource_plane.lock() {
-                    *slot = Some(plane);
+                match state.resource_plane.lock() {
+                    Ok(mut slot) => *slot = Some(plane),
+                    Err(_) => std::mem::forget(plane),
+                }
+                for zone in &zones {
+                    audit_resource_plane(
+                        state,
+                        zone,
+                        daemon_audit::ResourcePlaneAction::Shutdown,
+                        daemon_audit::ResourcePlaneResult::Refused,
+                    );
                 }
                 tracing::warn!("resource plane still has live request owners during shutdown");
             }
