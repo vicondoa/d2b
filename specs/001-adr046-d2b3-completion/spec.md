@@ -335,9 +335,13 @@ artifacts, complete Story 1, and exercise each desktop companion against it.
   single-owner ComponentSession admitted by the authoritative Zone registrar and routed by
   the ZoneBus. The registrar MUST derive the subject from verified peer evidence in its
   private state and propagate that authoritative subject through every Resource API
-  operation. Unix peer evidence MUST bind `SO_PEERCRED` to a live pidfd and expected process
-  generation/cgroup evidence; restart MUST rediscover the peer and open a fresh pidfd, while
-  numeric-PID reuse, mismatch, `ESRCH`, or ambiguity denies admission. A caller-supplied
+  operation. Unix peer evidence MUST obtain the process descriptor directly from the accepted
+  socket with `SO_PEERPIDFD`; opening a pidfd later from `SO_PEERCRED.pid` is forbidden.
+  Credential, process-generation, cgroup, and liveness evidence MUST be verified against that
+  exact `CLOEXEC` fd and consumed by one registrar-private issuer. Unavailable kernel support,
+  numeric-PID reuse, dead-fd or evidence mismatch, or ambiguity denies admission. Public peer
+  credentials/evidence accessors and bootstrap-identity construction, verification, cloning,
+  or conversion paths are forbidden. A caller-supplied
   subject, daemon peer role treated as a resource subject,
   unauthenticated direct service call, fixed fixture endpoint, or readiness flag MUST NOT
   satisfy this requirement.
@@ -389,15 +393,27 @@ artifacts, complete Story 1, and exercise each desktop companion against it.
 - **FR-070**: Wave 5 MUST provide one production audit owner per Zone runtime. The same
   transaction that commits each privileged resource mutation MUST create an immutable
   authoritative journal row for each bounded mutation ordinal. Segment export completion is
-  separate mutable state and MUST NOT delete or rewrite that authority. Journal, segment, and
+  separate mutable state and MUST NOT delete or rewrite an unexported authority; deletion is
+  permitted only after durable export completion plus the configured journal-retention
+  interval. Journal, segment, and
   export records MUST use domain-separated fixed digests for operation, correlation,
   authoritative subject, Zone, and resource identifiers; raw values MUST remain private and
-  absent from audit output, errors, logs, metrics, spans, and redacted `Debug`. Only validated
-  propagated trace context may be retained. Replay after restart MUST be idempotent by fixed
-  operation digest and mutation ordinal. Configured retention days, record limits, and segment
-  byte limits MUST be enforced at startup and rotation; prune failure MUST produce typed
-  degraded health and block publication. Mutation success MUST NOT be acknowledged until the
-  required segment export and its completion state are durable. If export cannot finish after
+  absent from audit output, errors, logs, metrics, spans, and redacted `Debug`. Raw propagated
+  trace context MUST remain private; an authoritative row or export may retain only its typed
+  domain-separated fixed digest. Audit constructors MUST accept typed fixed digests rather
+  than raw identifiers, and encoded records MUST reject bytes beyond the fixed limit. Replay
+  after restart MUST be idempotent by fixed operation digest and mutation ordinal.
+  `audit.retentionDays`, default 30 and range 1 through 3650, MUST govern segments and
+  export-completed journal rows; `audit.maxRecordsPerSegment`, default 65536 and range 1
+  through 1000000, and `audit.maxSegmentBytes`, default 67108864 and range 1048576 through
+  1073741824, MUST be enforced at startup and rotation. Prune, limit, file-sync, or
+  directory-sync failure MUST produce typed degraded health and block publication. The
+  unprivileged Zone runtime MUST own drain sequencing but route every root-owned filesystem
+  effect through one typed broker op carrying only fixed-digest bounded records. The root
+  broker alone owns `SegmentWriter`; append, rotation, export, and prune MUST remain under one
+  root-owned held directory fd with fd-relative operations. No service or unit is added.
+  Mutation success MUST NOT be acknowledged until the required
+  segment file and directory, export, and completion state are durable. If export cannot finish after
   the mutation and authoritative row commit, the API MUST NOT return ordinary success or imply
   rollback. It MUST return `CommittedPendingAudit` through the layered `ResourceStatus`
   composite: `ResourceStatus.phase` is
@@ -453,8 +469,10 @@ artifacts, complete Story 1, and exercise each desktop companion against it.
   `system-core-handler-contract`, `operator-nix-activation-cleanup`,
   `resource-plane-rss-owner-fanin`, `wave5-removal-proofs`, and
   `cli-reference-conformance`. T600 exclusively owns the first five; T601 exclusively owns
-  the final three. T602 MUST reject an unknown, duplicate, missing, extra, wrong-lane, or
-  conflated identifier and MUST require all eight records to bind F and F's tree. T219 alone
+  the final three. Before F freezes, T589 MUST implement one hermetic closed-profile validator
+  used by panel-request, seal, and merge-eligibility, with negative tests for missing, extra,
+  duplicate, unknown, wrong-lane, and conflated mappings. T602 MUST invoke that validator and
+  MUST require all eight records to bind F and F's tree. T219 alone
   runs the one binding panel, seal, and merge after T602; no content, evidence identity, or
   candidate change and no second binding panel is permitted after its panel request. Before
   T603 implementation, clean base A and feature snapshot P0 MUST pass current cross-artifact
@@ -469,8 +487,10 @@ artifacts, complete Story 1, and exercise each desktop companion against it.
   then may T603 write the closed
   immutable external authorization receipt at
   `.scratch/autopilot/adr046w5/reconciliation.json`, account for exactly every T073-T218
-  obligation against clean resume base B and delivery records, bind repository identity plus
-  a repository-relative feature path, and bind both post-validator cross-artifact analysis
+  obligation against clean resume base B and delivery records, bind opaque project sentinel
+  `7f6d0beab0ce4c13a89f6865d5ac42e2`, the Git-discovered root, and a
+  repository-relative feature path without a hosting domain, account, remote URL, or checkout
+  path, and bind both post-validator cross-artifact analysis
   and unanimous plan-panel receipts to B and pre-edit snapshot P. The validator MUST derive the
   sole authorized post-edit snapshot Q for the 147 checkbox changes. T605 appears only as
   future work after resume, never as a 147th obligation row or 148th checkbox transition. If
@@ -480,7 +500,10 @@ artifacts, complete Story 1, and exercise each desktop companion against it.
   commit C, whose sole parent MUST be B and whose only diff MUST be P-to-Q. The prepare,
   apply, and finalize protocol MUST resume safely from exact B/P, B/Q, or C/Q and refuse every other
   state. T589 MUST require the finalized progress receipt, clean HEAD C, and those checked
-  boxes. T602 later validates B/P, C/Q, exact `C^ = B`, C as an ancestor of final candidate F
+  boxes. Before F freezes, T589's hermetic closed-profile validator is wired into
+  panel-request, seal, and merge-eligibility and its exact-eight positive plus missing, extra,
+  duplicate, unknown, wrong-lane, and conflated negatives pass. T602 later invokes that same
+  validator and validates B/P, C/Q, exact `C^ = B`, C as an ancestor of final candidate F
   frozen by T220, the exact eight-record T600/T601 closed set bound to F and F's tree, HEAD
   exactly F, and no staged, unstaged, or non-ignored untracked state. An absent, stale,
   ambiguous, structurally open,
@@ -500,7 +523,11 @@ artifacts, complete Story 1, and exercise each desktop companion against it.
   treatment, and contract coverage. A typed unavailable state is valid only when the frozen
   contract already defines it or that explicit path introduces it; candidate absence alone
   never authorizes rewriting the promise. Reference documentation MUST NOT invent an absent
-  command, field, fallback, or production route.
+  command, field, fallback, or production route. Pending-audit recovery MUST either conform to
+  accepted `ADR-046-cli-and-operations` Version 1 or land T599's coordinated Version 2
+  amendment with migration guidance, mandatory `zoneRef`/`schemaVersion`, DTO/schema and
+  contract tests, release treatment, and closed remediation actions that contain no executable
+  Zone/operation-ID argv or free-form command text.
 
 #### Provider model
 
@@ -1014,15 +1041,19 @@ Delegation is not omission. Every delegated obligation is enumerated in
 - **SC-030**: On the exact Wave 5 candidate, every successful Resource API request and watch
   is traceable to one registrar-admitted ComponentSession and its authoritative subject, and
   100 percent of attempted cross-Zone or self-named-subject accesses are denied and audited.
-  Unix admission is bound to a live pidfd and expected generation/cgroup evidence; restart
-  opens a fresh pidfd, and PID reuse, mismatch, `ESRCH`, and ambiguity are denied.
+  Unix admission obtains a live pidfd directly with `SO_PEERPIDFD` and verifies credentials,
+  generation, cgroup, and liveness against that fd; restart obtains a new fd from the newly
+  accepted socket, and unavailable support, numeric-only identity, PID reuse, dead fd,
+  mismatch, and ambiguity are denied. API-surface and compile-fail seals expose no public
+  registrar issuer, peer credential/evidence accessor, or bootstrap-identity mint path.
 - **SC-031**: Crash injection at every boundary from generation commit through effect
   completion leaves zero lost effects and zero lost cleanup intents after restart. Every
   stale, zero, or wrong-UID cleanup completion is denied without changing durable state.
 - **SC-032**: For every privileged mutation in the audit matrix, an immutable authoritative
   journal row commits transactionally with the mutation before any success-shaped effect.
-  For every ordinary successful mutation, append-only segment export and its separate
-  completion state are durable before success is returned. At every post-commit export crash
+  For every ordinary successful mutation, append-only segment file and directory sync, export,
+  and its separate completion state are durable before success is returned. At every
+  post-commit export crash
   boundary, the mutation instead returns `CommittedPendingAudit` through the additive
   protobuf status field as `ResourceStatus.phase = ResourcePhase::Degraded`,
   `ResourceStatus.outcome.code = StatusCode("committed-pending-audit")`,
@@ -1035,9 +1066,12 @@ Delegation is not omission. Every delegated obligation is enumerated in
   idempotency, and restart mismatches are denied and audited; a different-ID retry obeys
   revision/conflict rules. Restart replay produces zero missing records and zero duplicate
   logical exports by fixed operation digest plus mutation ordinal. Raw operation,
-  correlation, subject, Zone, and resource canaries occur zero times in audit/export/error/
-  log/metric/span/Debug output. Configured retention and segment limits hold, and a prune
-  failure produces typed degraded health.
+  correlation, subject, Zone, resource, and trace canaries occur zero times in audit/export/
+  error/log/metric/span/Debug output; constructors accept only typed fixed digests and
+  oversize records refuse. Configured segment limits and post-export journal retention hold,
+  early journal prune refuses, and any prune or file/directory-sync failure produces typed
+  degraded health. The typed `InspectOperation` path returns the same durable pending/final
+  state across restart and never observes a wrong binding.
 - **SC-033**: Removing the `Provider/system-core` registration or either required
   `Zone.status.handlers[]` record in turn prevents publication of only the affected Zone.
   Acceptance also rejects duplicate records, a missing record, a wrong `name`, and an
@@ -1053,8 +1087,9 @@ Delegation is not omission. Every delegated obligation is enumerated in
   A..B plus the full feature artifacts and the plan panel are rerun and bound to B/P before
   T603 creates any authorization. A finding or later validator change invalidates B and both
   post-validator receipts. T603's immutable external authorization contains exactly the
-  closed task-ID set T073-T218 with one `satisfied|open` row each, repository identity,
-  relative feature path, B/tree, P, and validator-derived post-edit snapshot Q. Any open row
+  closed task-ID set T073-T218 with one `satisfied|open` row each, opaque project sentinel
+  `7f6d0beab0ce4c13a89f6865d5ac42e2`, Git-root-relative feature path, B/tree, P, and
+  validator-derived post-edit snapshot Q. Any open row
   leaves T603 unchecked and changes no checkbox. Only 146 satisfied rows, post-validator
   analysis with no unresolved HIGH or CRITICAL finding, and the post-validator unanimous
   plan panel at B/P authorize the sole `/d2b-spec-edit` progress batch. Dedicated checkbox

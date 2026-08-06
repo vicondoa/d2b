@@ -26,6 +26,7 @@ controller-owned effect, and declared-resource removal cleanup.
 | NIX-4 | Removing a declared resource activates the new generation immediately and requests async owner- and finalizer-safe deletion with visible cleanup status | FR-005 | W5 |
 | NIX-5 | Extend the `eval-*` flake checks with Zone and resource examples | FR-032 | W5 |
 | NIX-6 | Prove the exact-candidate positive operator path from a Nix declaration of every supported representative Guest, Volume, Network, and Device through the emitted bundle and automatic startup/declaration/removal ingestion to durable reconciliation and each resource's real owned effect/readiness, then dependency-safe removal cleanup with unrelated resources still ready; refusal cases are separate | FR-001, FR-005, FR-072, SC-034 | W5 |
+| NIX-7 | T592 owns the audit option/compiler schema: `audit.retentionDays` defaults to 30 with range 1-3650 and governs exported segments plus export-completed journal rows; `audit.maxRecordsPerSegment` defaults to 65536 with range 1-1000000; `audit.maxSegmentBytes` defaults to 67108864 with range 1048576-1073741824. T595 versions the accepted Nix specification and T220 coordinates generated schemas, tests, references, and changelog treatment | FR-070, SC-032 | W5 |
 
 ## Invariants
 
@@ -33,6 +34,9 @@ controller-owned effect, and declared-resource removal cleanup.
   rejected misconfiguration into runtime breakage.
 - Generated Nix is generated. Hand-editing a `generated/` file is a drift-gate failure.
 - No new `nixpkgs.overlays` entry and no `nixpkgs.url` change.
+- Missing, invalid, or unenforceable audit bounds fail closed. A journal row cannot be pruned
+  before durable export completion plus `retentionDays`; prune or sync failure degrades and
+  blocks publication of only the affected Zone.
 
 ## Acceptance
 
@@ -47,3 +51,6 @@ controller-owned effect, and declared-resource removal cleanup.
   owned effect and readiness in the positive leg. Direct ResourceService calls, status-only
   effects, and actionable refusals are ineligible for that positive proof.
 - `make test-drift` is clean after regeneration.
+- Nix-unit and bundle tests pin every audit default, lower/upper bound, unknown field, and
+  out-of-range refusal; production tests pin post-export-only journal retention and degraded
+  health on prune or file/directory-sync failure.

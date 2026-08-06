@@ -89,9 +89,10 @@ git worktree add -b adr046-w2-routing    ../d2b-w2-routing    adr046-w2-integrat
 A ready slice left unlaunched without a recorded blocker fails wave entry.
 
 For `adr046w5`, the exact implementation and close chain is
-`T589 -> {T590,T591,T592,T593,T594,T605} -> T595 ->
-{T596,T597,T598,T599,T604} -> T220 -> F -> {T600,T601} -> T602 -> T219`.
-T595 may not start until all six slices converge and consumes T605's
+`T589 -> {T590,T591,T593,T594}; T591 -> T592; T593 -> T605;
+{T590,T592,T594,T605} -> T595 -> {T596,T597,T598,T599,T604} ->
+T220 -> F -> {T600,T601} -> T602 -> T219`.
+T595 may not start until both serialized branches and the other completion slices converge and consumes T605's
 `SystemCoreHost` and `SystemCoreUser` variants. T220 reconciles generated manifests and every
 remaining content change before F; T219 alone runs the binding panel, seal, and merge.
 

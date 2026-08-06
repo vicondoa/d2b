@@ -308,12 +308,17 @@ checkpoint, and commit-tag instruction for this graph uses qualified lowercase `
    without weakening authentication or D106.
 3. The registrar consumes verified transport evidence into one ComponentSession, derives the
    authoritative subject from registrar-private state, and registers both ResourceService and
-   the controller endpoint on the exact ZoneBus route. Unix admission binds `SO_PEERCRED` to a
-   live pidfd plus the expected process generation/cgroup evidence; a daemon restart opens a
-   fresh pidfd from a newly observed peer and never revives persisted numeric-PID evidence.
-   PID reuse, `ESRCH`, generation/cgroup mismatch, or ambiguous identity refuses admission.
-   The public daemon bridge may request registration but may not construct or pass a subject
-   claim.
+   the controller endpoint on the exact ZoneBus route. Unix admission obtains the peer process
+   descriptor directly from the accepted socket with `SO_PEERPIDFD`; opening a pidfd later from
+   the `SO_PEERCRED` numeric PID is forbidden because PID reuse can redirect that lookup. The
+   kernel floor must provide `SO_PEERPIDFD`; unavailable support, a non-`CLOEXEC` descriptor,
+   or any mismatch between `SO_PEERCRED` and the credential, process-generation, cgroup, or
+   liveness evidence verified against that exact pidfd refuses admission. A daemon restart
+   acquires a new peer pidfd from the newly accepted socket and never revives persisted
+   numeric-PID evidence. The public daemon bridge may request registration but may not
+   construct or pass a subject claim. `VerifiedUnixPeer` exposes no credentials or evidence
+   accessor, `ZoneBootstrapIdentity` exposes no public issuer, constructor, verifier, clone, or
+   identity accessor, and one registrar-private issuer consumes the complete pidfd evidence.
 4. The admitted ResourceService watch opens through that registered route, replays from the
    durable checkpoint without a replay/live gap, and feeds the registered controller fan-in.
    Before any EffectPort call, the core controller records an outstanding effect in the
@@ -325,11 +330,21 @@ checkpoint, and commit-tag instruction for this graph uses qualified lowercase `
 5. The Zone runtime owns the mutation-audit drainer. The same redb transaction that commits
    each privileged mutation also creates its immutable authoritative journal rows, one per
    mutation ordinal; export completion is separate mutable state and can never delete or
-   rewrite those rows. Audit and export records carry only fixed-size, domain-separated
-   digests for operation, correlation, subject, Zone, and resource identifiers. Raw values
-   stay in private operation/replay state with redacted `Debug`. A normal successful mutation
-   response is released only after the required append-only segment export is durable and its
-   completion state is durable. If export remains incomplete after commit, the API returns
+   rewrite an unexported row. Audit constructors accept typed fixed 32-byte,
+   domain-separated digests for operation, correlation, subject, Zone, resource, replay
+   binding, and any retained trace correlation; no constructor accepts their raw string
+   equivalents. Raw values stay only in bounded private operation/replay state with redacted
+   `Debug`, and raw trace context is excluded from authoritative rows and exports. The
+   unprivileged Zone runtime owns the drain state machine, but every root-owned filesystem
+   effect crosses one typed broker op carrying only fixed-digest records and bounded rotation
+   policy. The root broker is the sole `SegmentWriter` owner and holds the root-owned segment
+   directory fd; segment append, rotation, export, and prune use fd-relative
+   `openat2`/`openat`/`unlinkat`, never joined paths. No service or unit is added. Export
+   completion may advance only after the broker response proves the segment file and its
+   directory have both been `fsync`ed and the opened segment inode has been revalidated. A
+   normal successful mutation response is
+   released only after the required append-only segment export and its completion state are
+   durable. If export remains incomplete after commit, the API returns
    semantic `CommittedPendingAudit` through the layered `ResourceStatus` composite:
    `ResourceStatus.phase` is
    `ResourcePhase::Degraded`; `ResourceStatus.outcome.code` is
@@ -345,8 +360,18 @@ checkpoint, and commit-tag instruction for this graph uses qualified lowercase `
    persisted replay-binding digest over the registrar-derived subject, Zone, semantic request,
    target, verb, expected revision, and idempotency data. A mismatch is denied and audited.
    An exact retry returns the pending or one stored final result without reapplication; a
-   different ID follows normal revision/conflict semantics. Restart deduplicates by fixed
-   operation digest plus mutation ordinal and produces one logical exported record.
+   different ID follows normal revision/conflict semantics. A typed `InspectOperation`
+   ResourceService request/response carries this lookup through the store, generated protobuf
+   and ttrpc bindings, method catalogue, authorization/router, daemon client, and CLI; no
+   in-memory-only or CLI-local status path is eligible. Restart deduplicates by fixed operation
+   digest plus mutation ordinal and produces one logical exported record. The existing
+   `audit.retentionDays` field, default 30 and range 1 through 3650, governs both exported
+   segments and journal rows, but a journal row becomes prune-eligible only after durable
+   export completion plus that retention interval. `audit.maxRecordsPerSegment`, default
+   65536 and range 1 through 1000000,
+   and `audit.maxSegmentBytes`, default 67108864 and range 1048576 through 1073741824, bound
+   rotation. Missing, invalid, or unenforceable limits and any journal or segment prune failure
+   produce typed degraded Zone health and block publication.
 6. One readiness projection is computed from store recovery, policy match, authenticated
    session/router admission, controller registration, watch admission, audit catch-up,
    mandatory controller health, and the `d2b-core-controller`-owned
@@ -376,11 +401,11 @@ route, watch, audit export, controller, or the exact system-core Provider owners
 | Stage | Task(s) | Ownership and concurrency |
 | --- | --- | --- |
 | Resume reconciliation | T603 | Pre-T603 analysis and plan panel at A/P0 authorize only `packages/xtask/src/delivery/{mod.rs,resume.rs}`. T603 lands dedicated validator commit V with sole parent A and no other repository change, freezes B exactly at V and P byte-identical to P0, reruns analysis and the plan panel at B/P, then and only then writes the immutable authorization receipt at `.scratch/autopilot/adr046w5/reconciliation.json` and routes the sole receipt-bound checkbox transition through `/d2b-spec-edit`. It writes no feature prose; the Wave 5 integrator alone owns dedicated checkbox commit C. |
-| Integrator prep | T589 | Its sole direct prerequisite is T603. It remains blocked until the finalized editor progress receipt exists, T073-T218 and T603 are checked, and HEAD is the clean dedicated checkbox commit. It lands the shared sealed capability, transactional audit-journal, mutation-response wire, and dependency contracts first, including capability-root registration and regenerated baseline API snapshots. No implementation slice branches before this commit. |
-| File-disjoint implementation | T590-T594, T605 | Six slices start together from T589. T590-T594 own policy, D106, store/audit persistence, pidfd-bound authenticated routing, and controller ledger files. T591 owns `transaction.rs` after T589 freezes its audit hook; T592 owns the extracted audit journal/export contract, so those parallel slices share no file. Read-only inspection found no competing feature-task owner for `packages/d2b-contract-tests/tests/policy_contracts.rs`. T605 alone owns that guard, `packages/d2b-contracts/src/v3/zone.rs`, both governing normative specifications, `docs/reference/resource-plane-runtime.md`, and compiler-regenerated public/private outputs under `tests/golden/api-surface/`; snapshots are regenerated only by `make api-surface-pin`. It treats the Zone desired schema, its generator, T595/T599 downstream files, and generated spec manifests as read-only. T605 proves only its owned pre-consumer contract; it neither waits for downstream emitters/consumers nor runs the full drift gate. No slice edits `d2bd/src/resource_runtime.rs` or `d2bd/src/lib.rs`. |
-| Serial daemon composition | T595 | Sole writer for `d2bd/src/resource_runtime.rs`, `d2bd/src/lib.rs`, `d2bd/Cargo.toml`, and `nixos-modules/{bundle-zones,host-daemon}.nix`; begins only after all six slices converge. It owns startup ingestion and the bundle-generation change trigger on the existing `d2bd.service`; it adds no unit. |
-| File-disjoint acceptance and docs | T596-T599, T604 | T599 additionally owns the resource mutation/operation-inspection CLI implementation files needed for exact same-ID recovery and reconciles its downstream status consumers with T595's emitter and T605's contract. T604 owns new `packages/d2b-contract-tests/tests/resource_operator_activation.rs`, `packages/d2bd/tests/resource_operator_activation.rs`, and `tests/host-integration/resource-operator-activation.nix`; the other tasks retain their named files. All five tasks may proceed together after T595 and share no file. |
-| Integrator convergence and freeze | T220 | Merges every slice, reconciles T605's version changes into integrator-owned generated spec manifests, checks the T595 emitter and T599 consumers, folds changelog fragments, and, after W4 seals and merges, rebases onto the updated `v3` and records that exact base for panel-base eligibility. It then runs integration, CI, and the full drift gate, opens or updates the PR, and freezes clean final candidate F. It runs no panel or seal operation. Any later content or history change invalidates F and restarts T220 plus T600-T602. |
+| Integrator prep | T589 | Its sole direct prerequisite is T603. It remains blocked until the finalized editor progress receipt exists, T073-T218 and T603 are checked, and HEAD is the clean dedicated checkbox commit. It lands the shared sealed capability, transactional audit-journal, mutation-response wire, typed `InspectOperation` store/API/protobuf contract, and the typed broker audit-drain op in `packages/d2b-contracts/src/broker_wire.rs` plus `packages/d2b-priv-broker/src/ops/mod.rs`; that op carries only fixed-digest records and returns file/directory durability. It also owns the `adr046w5` closed-evidence-profile implementation in `packages/xtask/src/delivery/{evidence,panel,seal,eligibility}.rs`, with table-driven negative tests, and the versioned amendment to `docs/specs/ADR-046-resource-api-and-authorization.md`. No implementation slice branches before this commit. |
+| Serialized implementation | T590-T594, T605 | T590, T591, T593, and T594 start together from T589. T592 starts only after T591, because T591 first removes policy ownership from `transaction.rs` and T592 then becomes the sole serialized audit/replay owner of that file. T605 starts only after T593 and regenerates the one shared API-snapshot set after both T593's registrar surface reduction and its own Zone enum addition. T592 also owns `d2b-audit` record, segment, sink, and export files; `packages/d2b-priv-broker/src/{audit.rs,live_handlers.rs,runtime.rs,ops/audit_op.rs,ops/mod.rs}`; and the audit option/compiler schema. The Zone runtime owns drain sequencing but never performs the root-owned filesystem mutation itself. T593 owns the private registrar issuer, direct `SO_PEERPIDFD` admission, method-catalogue/router status wiring, and post-change API/compile-fail seals. T605 owns its Zone enum, targeted guard, governing specifications, paired reference, and final shared API snapshots; generated manifests remain T220-only. The affected accepted normative specifications are explicitly versioned by T589, T592, T593, T595, T599, and T605; no slice treats accepted prose as an unowned follow-up. No slice edits `d2bd/src/resource_runtime.rs` or `d2bd/src/lib.rs`. |
+| Serial daemon composition | T595 | Sole writer for `d2bd/src/resource_runtime.rs`, `d2bd/src/lib.rs`, `d2bd/Cargo.toml`, and `nixos-modules/{bundle-zones,host-daemon}.nix`; begins only after T590, T592, T594, and T605 converge. It owns startup ingestion, the daemon/client `InspectOperation` path, the bundle-generation change trigger on the existing `d2bd.service`, and the versioned amendment to `docs/specs/ADR-046-nix-configuration.md`; it adds no unit. |
+| File-disjoint acceptance and docs | T596-T599, T604 | T599 owns the ResourceService-backed operation-inspection CLI, its version-2 DTO/schema and contract tests, the coordinated `ADR-046-cli-and-operations` version amendment and migration guidance, and downstream status reconciliation with T595/T605. T604 owns new `packages/d2b-contract-tests/tests/resource_operator_activation.rs`, `packages/d2bd/tests/resource_operator_activation.rs`, and `tests/host-integration/resource-operator-activation.nix`; the other tasks retain their named files. All five tasks may proceed together after T595 and share no file. |
+| Integrator convergence and freeze | T220 | Merges every slice; reconciles every accepted-spec version change into integrator-owned generated spec manifests; verifies T605's shared API snapshots include both T593 and T605; verifies coordinated normative/reference/test/schema/changelog treatment for T589, T592, T593, T595, T599, and T605; checks the T595 emitter and T599 consumers; folds changelog fragments; and, after W4 seals and merges, rebases onto the updated `v3` and records that exact base for panel-base eligibility. It runs the closed-evidence-profile negative suite and proves the validator is active at panel-request, seal, and merge-eligibility before freezing F. It then runs integration, CI, and the full drift gate, opens or updates the PR, and freezes clean final candidate F. It runs no panel or seal operation. Any later content or history change invalidates F and restarts T220 plus T600-T602. |
 | Frozen-candidate evidence | T600-T601 | Read-only evidence lanes run against F. They write delivery evidence only, not repository files, and emit the exact closed validation identifiers assigned below. They may run together subject to the heavy-gate limit. |
 | Mechanical evidence convergence | T602 | Verifies dependency closure, resume identities, clean F, and the exact evidence-identifier multiset. T219 is blocked until it passes. |
 | Single binding close and merge | T219 | Runs pre-panel read-only checks against F, then the wave's one binding panel, seal, and merge. From panel request through merge, no repository content, candidate, generated output, or evidence identity may change; the merge commit must preserve F's tree. |
@@ -390,7 +415,10 @@ The implementation and close dependency chain is exactly:
 ```text
 pre-T603 analysis + plan panel at A/P0 -> T603 validator commit V
 V = B -> post-T603 analysis + plan panel at B/P -> receipt/editor transition C
-C -> T589 -> {T590,T591,T592,T593,T594,T605} -> T595
+C -> T589 -> {T590,T591,T593,T594}
+T591 -> T592
+T593 -> T605
+{T590,T592,T594,T605} -> T595
 T595 -> {T596,T597,T598,T599,T604} -> T220 -> freeze F
 F -> {T600,T601} -> T602 -> T219
 ```
@@ -433,11 +461,14 @@ shape; every object rejects unknown fields:
   `feature_path`; `feature_files`; `pre_edit_feature_snapshot_sha256`;
   `authorized_post_edit_feature_snapshot_sha256`; `resume_base_commit`; `resume_base_tree`;
   nonempty `branch`; `analysis`; `plan_panel`; `changed_task_ids`; and `items`;
-- `repository`: `id` exactly `github.com/vicondoa/d2b` and `object_format` exactly the format
-  reported by Git. `feature_path` is exactly the repository-relative path
+- `repository`: `project_id` exactly `7f6d0beab0ce4c13a89f6865d5ac42e2` and
+  `object_format` exactly the format reported by Git. The project ID is an opaque, non-routing
+  repository sentinel; no hosting domain, account, remote URL, or checkout path is receipt
+  identity. `feature_path` is exactly the repository-relative path
   `specs/001-adr046-d2b3-completion`, never an absolute checkout path. The validator discovers
-  the current checkout root with Git, verifies that root has the stated repository identity,
-  and resolves `feature_path` beneath the held checkout-root directory fd;
+  the current checkout root with Git, verifies the compiled project sentinel at that Git root,
+  does not consult `remote.origin.url`, and resolves `feature_path` beneath the held
+  checkout-root directory fd;
 - `analysis`: the post-validator result, whose closed values are `pass` and `fail`; the same
   pre-edit snapshot P and resume-base commit B as the top level; and one nonempty local receipt
   or session locator, with no transcript. An A/P0 receipt is stale for this field;
@@ -501,11 +532,19 @@ the read. The mode-`0700` receipt directory is opened and verified through its h
 Temporary files are created exclusively relative to the appropriate held dirfd with
 `O_CREAT|O_EXCL|O_CLOEXEC|O_NOFOLLOW`, written completely, and `fsync`ed. Immutable receipts
 with mode `0600` use `renameat2(..., RENAME_NOREPLACE)` and then `fsync` the receipt directory.
-The `tasks.md` editor preserves the verified original mode, revalidates the original leaf
-identity relative to the held feature dirfd, uses `renameat` to atomically replace only that
-leaf, and `fsync`s the feature directory. A wrong owner, broader receipt mode, mount crossing,
-replacement race, partial write, or failed sync is a hard failure. Readers validate through
-the same opened fds; file existence alone is not a receipt.
+The `tasks.md` editor preserves the verified original owner and mode and holds the original
+leaf fd and its device/inode identity. It creates and `fsync`s the replacement through the
+held feature dirfd, reopens the original with `openat2` immediately before publication, and
+requires the same device/inode. Publication uses
+`renameat2(..., RENAME_EXCHANGE)` relative to that dirfd. The displaced leaf is reopened and
+must be the held original inode before it is removed with `unlinkat`; a mismatch triggers a
+validated exchange-back and hard failure rather than accepting a raced replacement.
+`RENAME_EXCHANGE` unavailability fails closed. The replacement file and feature directory are
+both `fsync`ed before completion is reported. No editor, reader, segment writer, exporter, or
+pruner joins a pathname after acquiring its governing directory fd. A wrong owner, broader
+receipt mode, mount crossing, replacement race, partial write, or failed file/directory sync
+is a hard failure. Readers validate through the same opened fds; file existence alone is not
+a receipt.
 
 The checkbox transition is a three-step prepare/apply/finalize protocol:
 
@@ -581,39 +620,45 @@ ResourceService or `WatchService` call, `ProductionWatchHarness`, fixed subject,
 endpoint, or manually set readiness field may remain useful unit coverage but is explicitly
 ineligible as T219 evidence.
 
-After T220 completes every repository change and freezes F, T600 and T601 import generic
-`EvidenceRecord` objects bound to F. The source validator remains unchanged: this feature
-closes its otherwise free-form `validation` field by requiring the union of imported records
-to equal the following table byte-for-byte. T602 compares the multiset of `(lane, validation)`
-pairs with these eight rows; an unknown, duplicate, missing, extra, wrong-lane, or conflated
-record is a hard failure.
+T589 implements one hermetic `adr046w5` closed-evidence profile in the delivery validator
+before any final candidate can be frozen. The profile compares the imported record multiset
+to the following table byte-for-byte and is invoked at panel-request, seal, and
+merge-eligibility, not only by T602 prose. Its table-driven negative suite must independently
+reject a missing row, an extra row, a duplicate pair, an unknown identifier, a right
+identifier in the wrong lane, and one record conflating two required rows. T220 reruns that
+suite before freezing F. After T220 completes every repository change and freezes F, T600 and
+T601 import generic `EvidenceRecord` objects bound to F. T602 invokes the same validator and
+adds the receipt, ancestry, and clean-tree checks; it does not implement or substitute a
+second validator.
 
 | Closed `validation` identifier | Owner | Delivery lane | Required content |
 | --- | --- | --- | --- |
-| `production-session-watch` | T600 | `github-ci` | Same-Zone request/watch through the production session/router plus cross-Zone, self-named subject, pidfd reuse/mismatch/`ESRCH`/ambiguity refusals and fresh restart pidfd |
+| `production-session-watch` | T600 | `github-ci` | Same-Zone request/watch through the production session/router plus cross-Zone and self-named subject denial, direct `SO_PEERPIDFD` acquisition, unsupported/dead/numeric-only/reuse/credential/generation/cgroup/ambiguity refusals, private registrar issuance, and a fresh restart peer pidfd |
 | `effect-replay-cleanup` | T600 | `github-ci` | Every generation/effect-ledger crash window, replay/adoption, and stale/zero/wrong-UID/ambiguous cleanup refusal |
-| `audit-drain-replay` | T600 | `github-ci` | Transactional authoritative rows, export/restart replay, digest-plus-ordinal deduplication, pending-audit recovery, replay-binding denials, retention/prune health, and raw-canary absence |
+| `audit-drain-replay` | T600 | `github-ci` | Transactional authoritative rows, fd-anchored file/directory-durable export and restart replay, digest-plus-ordinal deduplication, durable operation inspection, replay-binding denials, fixed-digest/record limits, post-export journal retention and prune health, and raw identifier/trace-canary absence |
 | `system-core-handler-contract` | T600 | `github-ci` | T605 enum/list/API/reference/schema proof, T595 emission, T599 consumer agreement, exact live handler readiness, non-substitution, and multi-Zone isolation |
 | `operator-nix-activation-cleanup` | T600 | `local-host` | T604 emitted bundle identity, initial and declaration/removal public switches, four representative owned effects/readiness, idempotency, dependency-safe cleanup, and ready unrelated resources |
 | `resource-plane-rss-owner-fanin` | T601 | `local-host` | Whole-process RSS at 10,000 resources/100 authenticated watches with no baseline subtraction and store, policy, ResourceService, controller endpoint/fan-in, and audit journal/export owner counts exactly one; the system-core registration/list belongs only to `system-core-handler-contract` |
 | `wave5-removal-proofs` | T601 | `github-ci` | Every manifest-label W5 removal predicate rerun against F |
-| `cli-reference-conformance` | T601 | `github-ci` | Emitted CLI/help/JSON/wire behavior, same-ID recovery forms and exits, and all T599 reference comparisons |
+| `cli-reference-conformance` | T601 | `github-ci` | Emitted CLI/help/JSON/wire behavior; accepted Version 2 amendment and Version 1 migration guidance; exact ID, exits, mandatory envelope fields, DTO/schema, and closed non-executable remediation actions; and all T599 reference comparisons |
 
 The five T600 identifiers and three T601 identifiers are exclusive ownership. A record may
 contain several test cases only when all cases belong to that row's required-content cell; it
 may not use one free-form validation name to satisfy two rows. T600 and T601 then establish:
 
-- authenticated same-Zone request/watch and cross-Zone/self-named-subject denial, with
-  pidfd-bound peer admission and PID-reuse, mismatch, `ESRCH`, and ambiguity refusals;
+- authenticated same-Zone request/watch and cross-Zone/self-named-subject denial, with direct
+  `SO_PEERPIDFD` peer admission, private issuance, and unsupported/dead/numeric-only/reuse/
+  credential/generation/cgroup/ambiguity refusals;
 - restart at each generation-commit/effect-ledger/dispatch/completion window, plus stale,
   zero, wrong-UID, and ambiguous cleanup negatives;
-- transactional authoritative-journal creation, segment-export completion, every crash
-  boundary, logical deduplication by fixed operation digest plus mutation ordinal, configured
-  retention/segment-limit enforcement, and typed degraded health on prune failure;
+- transactional authoritative-journal creation, fd-anchored segment file/directory durability,
+  export completion, every crash boundary, logical deduplication by fixed operation digest
+  plus mutation ordinal, fixed-digest/record limits, configured post-export journal and
+  segment retention, and typed degraded health on prune or sync failure;
 - export-pending failure returning `CommittedPendingAudit`, same-ID no-reapply and
   eventual-final-result behavior, cross-subject/Zone/request/restart replay-binding denial,
-  different-ID revision/conflict behavior, raw-identifier canaries, and degraded status
-  observability;
+  different-ID revision/conflict behavior, typed durable operation inspection, raw identifier
+  and trace canaries, and degraded status observability;
 - 10,000 resources and 100 watches with whole-process RSS, one store owner, one watch fan-in,
   one controller endpoint, one `Provider/system-core` registration, healthy
   `Zone.status.handlers[]` records named `system-core-host` and `system-core-user`, and no
@@ -624,7 +669,9 @@ may not use one free-form validation name to satisfy two rows. T600 and T601 the
 - re-run removal proofs against the candidate rather than citing
   `removal-proof-w5.md`'s older snapshot; and
 - emitted CLI/help/JSON/wire output compared with the desktop-wrapper, companion, audio, USB,
-  security-key, Resource API, and error reference pages; and
+  security-key, Resource API, and error reference pages, including Version 2 migration,
+  mandatory envelope fields, exact ID/exit/DTO schema, and absence of Zone/ID-bearing
+  executable remediation; and
 - T604's exact-candidate operator activation-to-effect-and-cleanup result, including the
   emitted bundle identity, public switch-triggered production daemon entry point, owned
   effect/readiness for every representative Guest, Volume, Network, and Device, cleanup of
@@ -636,7 +683,10 @@ against resume base B and pre-edit snapshot P; the progress receipt validates de
 checkbox commit C, exact parent `C^ = B`, authorized post-edit snapshot Q, and exact diff; C
 is an ancestor of final candidate F; and every T073-T218 receipt row is satisfied. The
 T600/T601 record union names F and F's tree produced by T220 and its `(lane, validation)`
-multiset equals the eight-row closed table exactly. T604's exact-candidate activation result
+multiset passes T589's checked-in eight-row closed-profile validator exactly; T220 has proved
+the same validator is wired to panel-request, seal, and merge-eligibility, and its missing,
+extra, duplicate, unknown, wrong-lane, and conflated negative tests are green. T604's
+exact-candidate activation result
 appears only in `operator-nix-activation-cleanup`; the coordinated T605 contract, T595 emitter,
 and T599 consumer result appears only in `system-core-handler-contract`; and no record names a
 direct/fake boundary. HEAD MUST equal F exactly. `git diff --cached --exit-code`,
@@ -848,5 +898,5 @@ These rows are not Constitution Principle VI deviations.
 
 | Risk | Why Tracked | Guard and Rejected Alternative |
 | --- | --- | --- |
-| FR-043 (recovery-point attestation) is tracked program-local, outside the work-item manifest, so the manifest census alone cannot enforce it | FR-043 is locally added and **stricter** than `ADR-046-reset-and-cutover`, which permits proceeding past the rollback boundary without attestation. Creating a manifest work item would require amending that member spec, which re-opens its validation and panel evidence and re-triggers Gate 0. | Keep it program-local, but close the safety gap at the W7 exit boundary: T580 emits the exact candidate-bound `recovery-point-attestation` primary recovery-guard record only after the refusal/recording matrix passes; T555 refuses panel request, seal, and merge eligibility if T580 or that record is absent, failed, or stale; T556 repeats the check before PR merge. A manifest-only green result therefore cannot authorize W7 close. |
+| FR-043 (recovery-point attestation) is tracked program-local, outside the work-item manifest, so the manifest census alone cannot enforce it | FR-043 is locally added and **stricter** than `ADR-046-reset-and-cutover`, which permits proceeding past the rollback boundary without attestation. Creating a manifest work item would require amending that member spec, which re-opens its validation and panel evidence and re-triggers Gate 0. | Keep it program-local, but close the safety gap at the W7 exit boundary: before T580 records evidence, the integrator merges every W7 slice, resolves all content-changing integration and CI results, and freezes one clean candidate F7. T580 emits the exact F7-bound `recovery-point-attestation` only after the refusal/recording matrix passes; T555 reviews, panels, seals, and approves that unchanged F7; T556 is merge-only, preserves F7's tree, runs no second panel, and refuses any late slice merge or content/history change. A manifest-only green result therefore cannot authorize W7 close. |
 | Pipelined dispatch can create successor rework when a predecessor panel finding invalidates in-flight work | Constitution 2.1.0 expressly authorizes implementation of wave N+1 to begin at 5 of 10 wave-N panel returns plus green integration. It is therefore current policy, not a constitution deviation. | Unanimity, roster, seal ordering, and merge ordering remain unchanged. The successor rebases onto the merged predecessor before its own panel, so no panel reviews a tree built on unreviewed contracts. Strict serialization was rejected because it adds idle time without strengthening the exit gate. FR-050 forbids citing rework as grounds to shorten a panel. |

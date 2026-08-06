@@ -42,14 +42,14 @@ Making this reachable is the core of User Story 1 and the precondition for SC-02
 | RA-4 | Deliver replay and live watch with one global bounded admission budget, typed backpressure, and deterministic slow-watcher eviction with cursor resume | FR-002 | W5 |
 | RA-5 | Enforce exact, subject-bound, revision-bound, Zone-checked routing on every operation | FR-009, SC-008 | W2 |
 | RA-6 | Audit every denial | FR-007 | W2-W5 |
-| RA-7 | Publish ResourceService only from a registrar-consumed authenticated ComponentSession, with Unix peer evidence bound to a live pidfd plus expected generation/cgroup evidence, the registrar's authoritative subject propagated internally, and no request subject field | FR-066, SC-030 | W5 |
+| RA-7 | Publish ResourceService only from a registrar-consumed authenticated ComponentSession, with the peer pidfd obtained directly from the accepted socket by `SO_PEERPIDFD`, credential/generation/cgroup/liveness verified against that fd, one private registrar issuer, no public evidence accessor or bootstrap mint, the registrar's authoritative subject propagated internally, and no request subject field | FR-066, SC-030 | W5 |
 | RA-8 | Install and recover policy under `ZoneResourceRuntime`: consume one private-issuer, compiler/API-sealed, non-fabricable one-shot `PolicyBootstrapRead` for the first exact-revision envelope snapshot, then use authenticated Resource API reads/updates only; keep both stores policy-neutral | FR-067, FR-073 | W5 |
 | RA-9 | Register the production controller endpoint and admit its watch through ResourceService, ZoneBus, the production store, and controller fan-in | FR-068, FR-069 | W5 |
 | RA-10 | Persist every committed effect and cleanup intent before dispatch, replay/adopt it after restart, and complete cleanup only for the same UID and exact nonzero revision | FR-068, SC-031 | W5 |
-| RA-11 | Commit an immutable authoritative audit journal row transactionally with each mutation, export by fixed digest plus ordinal with separate completion/retention health, represent export-pending `CommittedPendingAudit` on every mutation response including delete, and require exact replay-binding before same-ID observation/resumption | FR-070, SC-032 | W5 |
+| RA-11 | Commit an immutable authoritative audit journal row transactionally with each mutation, export through a root-owned fd-anchored segment owner by typed fixed digest plus ordinal with file/directory durability, prune journal rows only after durable export plus bounded retention, represent export-pending `CommittedPendingAudit` on every mutation response including delete, expose a typed durable `InspectOperation` method, and require exact replay-binding before same-ID observation/resumption | FR-070, SC-032 | W5 |
 | RA-12 | Reopen advanced mutable revisions from durable metadata and isolate per-Zone startup/close failures without dropping later Zones | FR-071, SC-033 | W5 |
 | RA-13 | Keep all RBAC DTO deserialization, compilation, and ownership outside both store crates | FR-073, D106 | W5 |
-| RA-14 | Bind amended-plan resume to pre-validator A/P0 analysis/panel, validator-only V/B, rerun B/P analysis/panel, T603's immutable B/P authorization, exact B-to-C editor transition, and finalized progress receipt; after T220 freezes F, require the exact eight closed evidence identifiers before T219's one binding panel and tree-preserving merge | FR-072, SC-034 | W5 |
+| RA-14 | Bind amended-plan resume to pre-validator A/P0 analysis/panel, validator-only V/B, rerun B/P analysis/panel, T603's opaque-sentinel B/P authorization, exact atomic-exchange B-to-C editor transition, and finalized progress receipt; before T220 freezes F, install the hermetic exact-eight evidence validator at panel-request/seal/merge-eligibility with all six negative classes; then require the exact eight closed evidence identifiers before T219's one binding panel and tree-preserving merge | FR-072, SC-034 | W5 |
 | RA-15 | Make the readiness Provider member exactly the `d2b-core-controller`-owned `Provider/system-core` registration plus exactly one `Zone.status.handlers[]` record named `system-core-host` and one named `system-core-user`, each carrying phase/timestamp from the active, initialized, current `HostReconciler` or `UserReconciler`; reject duplicates, missing/wrong names, and `ProviderLifecycle` substitution; do not wait for other W6 dossiers | FR-069, SC-033 | W5 |
 | RA-16 | Under Constitution 2.2.0, add the two omitted closed-enum values with exact kebab-case Zone wire names, retain underscore spellings only for internal telemetry labels, complete T605 on its owned normative/test/API/reference artifacts, reconcile the T595 emitter and T599 consumers, then reconcile generated manifests/full drift at T220 so all coordinated artifacts and exact-candidate evidence land in the same Wave 5 PR | FR-072, SC-033, SC-034 | W5 |
 
@@ -64,10 +64,13 @@ Making this reachable is the core of User Story 1 and the precondition for SC-02
   raw-claim registration path. Production currently fails closed here; that is correct until
   an authoritative resolver is wired, and "fixing" it by accepting caller claims is the exact
   defect the W1 hardening rounds closed repeatedly.
-- **Unix process identity is pidfd-bound.** `SO_PEERCRED` supplies attributes, not a durable
-  process identity. Admission also consumes a live pidfd and expected generation/cgroup
-  evidence. Restart opens a fresh pidfd; numeric-PID reuse, mismatch, `ESRCH`, or ambiguity
-  refuses.
+- **Unix process identity is socket-derived pidfd-bound.** `SO_PEERCRED` supplies attributes,
+  not a durable process identity. Admission obtains the pidfd directly from the accepted
+  socket with `SO_PEERPIDFD`; `pidfd_open(SO_PEERCRED.pid)` is forbidden. Credentials,
+  generation, cgroup, and liveness are verified against and consumed with that exact fd by one
+  registrar-private issuer. Unsupported kernels, numeric-PID reuse, dead fd, mismatch, or
+  ambiguity refuse. Public peer evidence accessors and bootstrap-identity mint paths remain
+  sealed.
 - **Zone equality is proven before every capability mint.**
 - **Policy has one lifecycle owner.** `ZoneResourceRuntime` owns install/recovery and
   publication; `NativeAuthorizer` interprets an immutable installed set. Initial install and
@@ -96,7 +99,14 @@ Making this reachable is the core of User Story 1 and the precondition for SC-02
   current API snapshots and a byte-identical generated desired Zone schema.
 - **Effect and audit recovery precede publication.** A committed effect intent and an
   immutable authoritative audit journal row survive restart; neither may be forgotten,
-  bypassed, or treated as ready. Export completion is separate. A commit whose export is
+  bypassed, or treated as ready. Export completion is separate. Audit row constructors accept
+  typed fixed digests; raw identifiers and trace context are excluded from rows and exports.
+  The unprivileged runtime owns drain sequencing, but a typed broker op carrying only bounded
+  fixed-digest records routes every root-owned mutation. The root broker alone owns the
+  held-dirfd-relative segment append/rotation/export/prune path, and completion waits for file
+  and directory durability. Exported rows become prune-eligible only after
+  `audit.retentionDays`; configured record/byte limits and prune health are readiness inputs.
+  A commit whose export is
   pending returns semantic `CommittedPendingAudit` through the layered `ResourceStatus`:
   `ResourceStatus.phase = ResourcePhase::Degraded`;
   `ResourceStatus.outcome.code = StatusCode("committed-pending-audit")` with retryable safe
@@ -117,8 +127,10 @@ Making this reachable is the core of User Story 1 and the precondition for SC-02
   operation and watch through the registered ZoneBus route, and is refused an unauthorized
   or cross-Zone operation, with the denial audited.
 - A component presenting a self-named subject, a reused admission, or only a public daemon
-  peer role is refused before ResourceService. PID reuse, mismatch, `ESRCH`, ambiguity, and a
-  stale pre-restart pidfd are also refused.
+  peer role is refused before ResourceService. Unsupported `SO_PEERPIDFD`, numeric-only
+  identity, PID reuse, dead fd, credential/generation/cgroup mismatch, ambiguity, and a stale
+  pre-restart pidfd are also refused. API-surface/compile-fail checks expose no public issuer,
+  verifier, clone, or peer evidence accessor.
 - Conformance evidence shows a registered backend mutates only through verified admission and
   exposes no independent write path, plus a recorded security review of each registered
   backend. The `adr046w5` seal must not close without both.
@@ -130,14 +142,17 @@ Making this reachable is the core of User Story 1 and the precondition for SC-02
   clean.
 - Restart evidence covers every generation-commit/effect-ledger/dispatch/completion crash
   window and the stale, zero, wrong-UID, and ambiguous cleanup negatives.
-- Audit evidence proves the immutable authoritative row commits with each mutation and durable
-  export completion precedes ordinary success. Export-pending returns only the exact
+- Audit evidence proves the immutable authoritative row commits with each mutation and segment
+  file/directory durability plus export completion precede ordinary success. Export-pending
+  returns only the exact
   protobuf-represented `ResourceStatus` composite above; same-ID retries with matching replay
   bindings apply once and converge on one final result, cross-subject/Zone/request/restart
   mismatches deny, different-ID retries retain normal revision/conflict behavior, status
   remains visible across restart, multi-mutation replay yields one export per fixed digest
-  plus ordinal, raw identifier canaries never escape, configured limits hold, and prune
-  failure degrades health.
+  plus ordinal, raw identifier/trace canaries never escape, fixed-digest and record-size
+  constructor seals hold, configured segment and post-export journal retention limits hold,
+  and prune/sync failure degrades health. `InspectOperation` traverses the typed durable
+  backend and preserves wrong-binding indistinguishability across restart.
 - The full readiness projection publishes no partial path; one failed Zone is reported while
   later unrelated Zones still open and close. Removing the `Provider/system-core`
   registration or either required `Zone.status.handlers[]` record in turn degrades only that
@@ -152,13 +167,17 @@ Making this reachable is the core of User Story 1 and the precondition for SC-02
 - Before T589, pre-validator analysis and plan panel at A/P0 authorize only T603's two
   validator source paths. Validator-only commit V becomes B, P remains byte-identical to P0,
   and analysis plus the plan panel rerun at B/P. T603 then writes the closed external
-  receipt, accounts for all T073-T218 obligations, and binds repository identity, relative
+  receipt, accounts for all T073-T218 obligations, and binds opaque project sentinel
+  `7f6d0beab0ce4c13a89f6865d5ac42e2`, Git-root-relative
   feature path, post-validator analysis, and the unanimous post-validator plan receipt at
   `adr046w5-r<n>` to B/P. Only the validator-derived P-to-Q `/d2b-spec-edit` batch may check
   T073-T218 and T603; dedicated commit C has exact parent B. T589 requires the finalized
   editor receipt, clean HEAD C, and those checkboxes. Before T219, no reconciled obligation
   remains open, T220 has converged and frozen clean exact F, C is an ancestor of F, and the
-  F/tree-bound evidence union contains exactly the eight closed validation identifiers.
+  F/tree-bound evidence union contains exactly the eight closed validation identifiers, as
+  accepted by T589's pre-freeze validator that also guards panel-request, seal, and
+  merge-eligibility and rejects missing, extra, duplicate, unknown, wrong-lane, and conflated
+  fixtures.
   T604's result appears only as `operator-nix-activation-cleanup`; the coordinated T605
   contract, T595 emitter, and T599 consumers appear only as
   `system-core-handler-contract`. T219 runs the one binding panel and permits no
