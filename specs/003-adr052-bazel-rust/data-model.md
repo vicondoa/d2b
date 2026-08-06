@@ -1,665 +1,901 @@
-# Data Model: ADR 0052 Bazel Rust Gate
+# Data Model: ADR 0052 Under ADR 0054
 
-These are internal migration and evidence entities, not application data or a
-new public API. The existing execution-manifest v1 reference and schema remain
-authoritative.
+These are internal migration and evidence entities, not public application
+data. Execution-manifest v1 remains authoritative for Rust gate evidence.
 
 ## Modelling rules
 
-Two rules apply to every entity below, because the round-one plan panel found
-both classes of defect in an earlier draft:
+- Variants carry only fields valid for that variant.
+- A constant invariant is prose, not a mutable field.
+- Exact censuses are generated from authoritative inputs. Hand-written package
+  or file counts are observations only.
+- Repository-relative paths are normalized and sorted.
+- An absence predicate is evaluated only after its root and complete nonempty
+  census are established.
+- Bazel Rust actions are no-network under the Nix-pinned patched Bazel Linux
+  sandbox, whose child loads the fixed filter before exec of the full action
+  command. Coverage includes IPv4, IPv6, netlink, packet, pathname/abstract
+  Unix, socketpair, and io_uring paths in setup, compile/build, test, and
+  descendants. Network namespaces are defense in depth and are not
+  socket-creation proof. Mandatory socket-using tests remain exact
+  non-advisory Cargo compatibility carriers under their existing surface IDs.
+  Repository fetches stay outside governed actions, offline, and pinned.
+- Underlying test verdict and evidence status are separate. Degraded evidence
+  preserves the verdict and is rejected by surface completion and
+  qualification.
 
-1. **Variants, not a tag plus optional members.** Where a record has several
-   shapes, the shape is the variant and the variant carries its own members. A
-   `kind` field beside members that only some kinds may use admits states that
-   cannot exist, and a validator then has to re-derive the invariant that the
-   type should have made unrepresentable.
-2. **No constant fields.** A field whose only legal value is a constant is not
-   data; it is an invariant, and it belongs in prose where it cannot be set to
-   the other value. Global invariants are listed once, below.
-
-Global invariants, formerly modelled as always-true or always-false fields:
-
-- No carrier action opens a network socket.
-- Every carrier reports an independent verdict.
-- No fixture-backed identifier is part of this model; the two fixture surfaces
-  stay on the Cargo and Nix path.
-- The two locator arms never chain, no located path is an absolute
-  execution-root path, and a located provider is opened once and executed
-  through that same descriptor.
-- Concurrency is always derived from `D2B_RUST_BUDGET`, which remains the only
-  resource control.
-- Under Bazel, every binary is resolved through declared runfiles, and only the
-  declared test environment is forwarded to a child.
-- Repository-owned execution paths are shell-free. The
-  `rules_rust`-generated stable-channel doctest runner is not repository-owned
-  and is a recorded deliberate difference.
-- Result publication is enforcing for every test carrier.
-
-## Rust Surface
-
-Common to every variant:
+## Product Workspace
 
 | Field | Rule |
 | --- | --- |
-| `surface_id` | Unique member of the fixed eighteen-ID baseline. |
-| `cargo_baseline` | Current Make leaf/mode and command family. |
-| `carriers` | Nonempty set of Carrier Targets; exactly one owns the verdict. |
-| `slice_id` | Exactly one of `main`, `api`, `broker`, `aux`. |
+| `manifest` | Exactly `packages/Cargo.toml`. |
+| `resolver` | Exactly `2`. |
+| `members` | Generated Cargo metadata member set containing main, broker, and guest. |
+| `lock` | Exactly `packages/Cargo.lock`. |
+| `nested_workspaces` | Empty for broker and guest. |
+| `nested_locks` | Empty for broker and guest. |
 
-The variant is the shape, and each variant carries only what it can have:
+The member and lock package counts are derived. A lock entry is a resolution
+member, not evidence that a selected package reaches it.
 
-| Variant | Members | Baseline identifiers |
-| --- | --- | --- |
-| `Compile` | none beyond the common set | `rust-main-format`, `rust-main-clippy` |
-| `TestSuite` | every carrier is a Test Carrier and therefore has a topology | `rust-main-workspace-tests`, `rust-guest-shell-runner`, `rust-broker-default`, `rust-broker-layer1`, `rust-broker-fakebackends` |
-| `Policy` | `check_inputs`: the committed policy files, pinned snapshots, and pinned artifacts the carriers declare, nonempty | `rust-deny-main`, `rust-deny-broker`, `rust-deny-guest`, `rust-audit-main`, `rust-audit-broker`, `rust-audit-guest`, `rust-stub-no-socket` |
-| `Census` | `census_ref`: one generator-derived census artifact plus its derivation | `rust-api-surface`, `rust-assert-pinned` |
-| `Scan` | `governed_source_ref`: the exact generated input manifest | `rust-no-bash-ast` |
-| `Reproducibility` | `emitted_census_ref`: the census the generator returns, not a literal | `rust-schema-reproducibility` |
-
-A `Compile` surface has no census member to leave empty and a `Policy` surface
-has no topology member to leave absent, so neither state is expressible. The
-identifier column is the current assignment and is itself checked against the
-coverage map; moving an identifier between variants is a contract decision, not
-a map edit.
-
-The mapping is total and unambiguous: every `surface_id` has a nonempty
-`carriers` set, and every carrier belongs to exactly one `surface_id`.
-Cardinality one is not required and never was; `rust-main-workspace-tests`
-already needs three carriers. Removing or adding a baseline ID requires a
-separate contract decision, not a map edit.
-
-## Carrier Target
-
-Common to both variants:
+## Walker Workspace
 
 | Field | Rule |
 | --- | --- |
-| `label` | Unique Bazel label; ADR-fixed labels live below `//ci/rust`. |
-| `surface_id` | Exactly one Rust Surface. |
-| `owns_verdict` | True for exactly one carrier per surface. |
-| `declared_inputs` | Closed, nonempty input set. |
-| `declared_outputs` | Exact outputs, if any; generated outputs must be nonempty. |
-| `handwritten_fragments` | Every non-generated BUILD fragment used. |
-| `runfiles_data` | Every binary and fixture this carrier's actions locate, as declared data. |
-| `binary_identities` | The expected byte digest of every executable in `runfiles_data`, one per executable, no more and no fewer. Each is compared against the descriptor the provider was opened on, never against a second open. |
+| `manifest` | `tests/tools/no-bash-ast-walker/Cargo.toml`. |
+| `lock` | `tests/tools/no-bash-ast-walker/Cargo.lock`. |
+| `product_path_dependencies` | Empty. |
 
-Variants:
+The walker remains separate because it is gate plumbing outside the product
+package tree.
 
-| Variant | Members |
-| --- | --- |
-| `TestCarrier` | `topology`: exactly one Test Topology. `test_targets`: the Rust test targets carried, nonempty. `result_document`: the Per-Case Result Document this carrier publishes. |
-| `CheckCarrier` | `check_inputs`: the committed configuration, snapshot, manifest, or pinned artifact the check consumes, nonempty. |
-
-Topology and the per-case result document belong to the carrier, not to the
-surface. `rust-main-workspace-tests` carries a process-per-case suite, a
-doctest carrier, and a harness-free carrier, and those are three different
-topologies under one identifier; a surface-level topology field could not
-represent that without lying about two of them.
-
-Label existence is proved at analysis time by a real dependency edge from the
-coverage guard, not by a query issued from inside a test. Every Rust test
-target and hand-written fragment is claimed exactly once across carriers.
-
-## Coverage Map
+## Generated Static-Guest Lock Input
 
 | Field | Rule |
 | --- | --- |
-| `baseline_source` | Existing execution-manifest reference. |
-| `surfaces` | Exactly eighteen Rust Surface records, sorted by ID. |
-| `carriers` | Referenced Carrier Targets, with no orphan and no carrier claimed twice. |
-| `slices` | Fixed four-slice assignment. |
-| `generated_build_digest` | Digest of generated first-party BUILD tree. |
-| `governed_source_manifest` | Exact no-bash input manifest. |
-| `derived_censuses` | Generator-derived executed harness-free, doctest, and emitted-schema censuses. |
-| `out_of_census_entries` | Every manifest entry the executed selector excludes, each with its reason. |
-| `handwritten_fragments` | Every non-generated fragment, including the channel transition rule, the `rustdoc_json` rule, the vendor repository rule, and the yanked-state carrier fragment. |
-| `query_result_ref` | The committed drift-checked graph query result the out-of-test completeness check consumes. |
-| `locator_migration` | Reference to the Test Locator Migration record set. |
-| `deliberate_differences` | ADR section 13 difference and rationale per affected surface. |
+| `path` | `packages/Cargo.guest.lock`. |
+| `producer` | Existing generated static-guest closure process. |
+| `consumer` | Existing aggregate static-guest package and policy checks. |
+| `cargo_workspace_authority` | Not present as a field because it is always false. |
+| `hub_authority` | Not present as a field because it is always false. |
 
-Validation is bidirectional: every baseline ID has one map row, every mapped
-label exists at analysis time, every test target and fragment is claimed
-exactly once, and every referenced census and topology exists. A minimum count
-is invalid where an exact derivation exists, and a literal count committed by
-hand is invalid where the generator can derive one.
+## Dependency Hub
 
-## Test Topology
+Two variants exist:
 
-Common to every variant:
-
-| Field | Rule |
-| --- | --- |
-| `topology_id` | Unique stable internal ID. |
-| `carrier_label` | The one Test Carrier this topology describes. |
-| `case_tmpdir` | Each unit of execution gets its own directory beneath the executor temporary root. |
-
-Variants:
-
-| Variant | Members |
-| --- | --- |
-| `ProcessPerCase` | `suite`: main workspace or guest shell runner. `case_census`: exact nonempty libtest listing. `ignored_census`: exact ignored names and count. One fresh process per case. |
-| `ProcessPerBinary` | `suite`: one broker feature suite. `binary_census`: exact nonempty binary listing. `case_census` and `ignored_census` as above. `internal_threads`: positive bounded value. Exclusive by construction. |
-| `Doctest` | `discovered_census`: derived, nonempty. |
-| `HarnessFree` | `discovered_census`: derived, nonempty, matching the selector the Cargo gate uses. |
-
-`internal_threads` exists only where a binary runs several cases in one
-process, and exclusivity is a property of the `ProcessPerBinary` variant rather
-than a boolean any topology could set. Exclusive carriers run one at a time and
-strictly after the parallel phase, which is a property of the schedule rather
-than of the carrier. `Doctest` and `HarnessFree` discovery is derived and
-refuses an empty result; those two variants carry a census rather than a
-process contract, so the qualification evidence records exactly five topology
-proofs, two `ProcessPerCase` and three `ProcessPerBinary`.
-
-## Per-Case Result Document
-
-| Field | Rule |
-| --- | --- |
-| `path_source` | The path the executor supplies through `XML_OUTPUT_FILE`. |
-| `entries` | One per enumerated case, with `passed`, `failed`, or `ignored`. |
-| `permitted_content` | Stable case name, outcome, bounded duration, bounded sanitized failure text. |
-| `forbidden_content` | Environment values, arguments, absolute paths, store paths, socket paths, the runfiles root and any resolved absolute runfiles or worktree location, unit names, PIDs, UIDs, opaque handles, terminal bytes, shell names, raw child output. |
-| `raw_output_location` | The ordinary per-target `test.log` artifact only. |
-| `write_semantics` | Anchored close-on-exec parent descriptor, link and magic-link refusal, close-on-exec same-directory temporary, sync, descriptor-relative rename. |
-| `ownership` | Only a runner-created temporary is ever unlinked; a failed creation unlinks nothing. |
-| `ordering` | No output descriptor is opened before every child is reaped. |
-| `failure_precedence` | An existing test failure remains primary; publication failure is reported additionally. |
-
-Publication is enforcing, per the global invariants: a passing carrier fails
-when publication fails. Every property in this table has a planted mutation the
-test must reject, and every one of those mutations is produced through the
-injected boundaries below rather than by arranging host state.
-
-## Injected Boundaries
-
-Four boundaries exist so that failure states are supplied rather than
-provoked. All are W0-frozen module paths, so later scopes open against a stable
-surface. The first two live in `packages/d2b-bazel-support/`, the neutral
-internal crate that declares no first-party dependency, because the runner, the
-locator, `xtask`, and, as a dev-dependency only, `packages/d2b-contract-tests`
-all read them; the crate exists so that no consumer has to depend on another
-consumer to reach a boundary.
-
-| Boundary | Path | Serves | Supplied states |
+| Variant | Manifest | Cargo lock | Bazel-side lock |
 | --- | --- | --- | --- |
-| `FileSystem` | `packages/d2b-bazel-support/src/fsops.rs` | Per-case result publication, scratch cleanup, wave-note corpus enumeration, and every provider open, check, and execution | `openat2` and forced component-walk routes, both resolve policies on each route, a leaf symlink and an intermediate symlink under each policy, magic-link parents, anchored `..` escape, `EEXIST` collision, short write, `EINTR`, `EAGAIN`, `ENOSPC`, replacement race, tracked entry, foreign decoy, an unreadable and an empty note corpus, note-directory enumeration returned in two different orders, note entries failing `EACCES`, `EISDIR`, `ELOOP`, and non-UTF-8 content, a note entry whose raw name is not valid UTF-8 and a second whose raw name differs from it only in bytes a lossy conversion would collapse, an absent, non-regular, non-executable, out-of-date, or wrong-digest provider, a path rebound to a different inode after the provider open, handle metadata that changes across the digest read, and `spawn_verified` returning `ENOSYS`, `EACCES`, `ENOEXEC`, `ENOENT`, or `ETXTBSY` |
-| `RunfilesView` | `packages/d2b-bazel-support/src/runfiles.rs` | The locator's Bazel arm and the runner's child-binary resolution | A declared entry present, a declared entry missing, and a runfiles environment that indicates no Bazel test at all |
-| `Clock` and `UptimeSource` | `packages/d2b-bazel-runner/src/clock.rs` | Deadline parsing, remaining-budget arithmetic, child duration, expiry escalation | Every accepted and rejected uptime field, truncate on capture and round up on read, exactly-zero remaining budget, overflow, expiry reached without sleeping |
-| `YankedIndex` | `packages/xtask/src/bazel_yanked.rs` | The reviewed networked yanked-snapshot refresh | All-clear index, a yanked version, a key the locks declare and the index omits, a key no lock declares, a missing index revision, a transport failure, a malformed payload |
+| `Product` | `packages/Cargo.toml` | `packages/Cargo.lock` | `bazel/cargo/product.lock` |
+| `Walker` | walker manifest | walker lock | `bazel/cargo/walker.lock` |
 
-Execution of a verified provider is an operation on `FileSystem` rather than a
-fifth boundary. Splitting verification and execution across two injectable
-traits would let a composition satisfy both fakes while still executing by
-path, which is the exact defect the single-open rule removes; keeping them on
-one trait makes "holds a verified handle" and "can reach an execution route"
-the same reachability question.
+The accepted identifier set is exactly `product`, `walker`.
 
-The resolve policy is one parameter with two routes and one meaning. On the
-`openat2` route it selects the resolve flags; on the forced component-walk
-route it selects `O_NOFOLLOW` on the final component, which every intermediate
-component carries under both policies. Strict callers are cleanup, the per-case
-directories, the `XML_OUTPUT_FILE` parent, and the wave-note lint; the provider
-open and each declared input its freshness check reads are the permissive ones.
-The route never changes what a policy means, which is why the fake supplies
-both routes for both policies and each call site's choice is asserted.
+`main`, `broker`, and `guest` are retired inputs, represented only by the
+Retired Hub Refusal entity. They cannot be hub variants or aliases.
 
-`Clock` and `UptimeSource` stay in the runner rather than moving to the support
-crate, because only the runner's deadline and process paths read them. The
-locator needs no clock: provider freshness compares two timestamps the
-`FileSystem` boundary already returns from the provider's own descriptor, and
-provider identity is a byte digest read from that same descriptor rather than
-an execution.
+Every hub sets `lockfile`, `cargo_lockfile`, and
+`skip_cargo_lockfile_overwrite = True`.
 
-## Verified Executable Handle
-
-The record that makes provider verification and provider execution one
-operation rather than two resolutions of one name.
+## Retired Hub Refusal
 
 | Field | Rule |
 | --- | --- |
-| `anchor` | Close-on-exec directory descriptor: the runfiles root under Bazel, the parent of the `CARGO_BIN_EXE_<name>` value under Cargo. |
-| `relative` | One declared relative path, never absolute, never empty, never carrying `..`. |
-| `descriptor` | Exactly one `O_RDONLY` plus `O_CLOEXEC` open of `relative` beneath `anchor`, resolved with `RESOLVE_NO_MAGICLINKS`, or on the forced component-walk route with `O_NOFOLLOW` on every component except the leaf. `O_PATH` is invalid here because identity requires reading the bytes. |
-| `stat_before` and `stat_after` | `fstat` on the descriptor immediately before and immediately after the digest read; `st_dev`, `st_ino`, `st_size`, `st_mtim`, and `st_ctim` must agree. |
-| `kind_and_mode` | Regular file with an executable mode, from `stat_before`. The kernel's `EACCES` at exec time maps to the same refusal. |
-| `freshness` | `stat_before.st_mtim` at least the newest declared input's, each input read from its own descriptor through the same boundary. |
-| `identity` | Digest of `stat_before.st_size` bytes read from the descriptor at offset zero, equal to the value the coverage map records for this provider. |
-| `execution` | `execveat(descriptor, "", argv, envp, AT_EMPTY_PATH)` in a forked child. No `Command`, no `fexecve`, no `/proc/self/fd/<n>`, and no fallback on `ENOSYS`. |
-| `ownership` | The parent holds the descriptor for the whole carrier invocation and closes it through the boundary after the last child using it is reaped, still before any output descriptor opens. |
-| `child_inheritance` | The three stdio descriptors only. Close-on-exec removes the provider descriptor from the child; a non-close-on-exec control descriptor proves the assertion can fail. |
+| `retired_hub` | Exactly `main`, `broker`, or `guest`. |
+| `diagnostic` | Exact ADR 0054 line for that hub. |
+| `remediation_argv` | `["cargo", "xtask", "bazel-repin", "--hub", "product"]`. |
+| `remediation_cwd` | Repository-relative `packages/`. |
+| `executor` | Injected non-mutating executor. |
 
-There is no `path` field and no accessor that yields one, because a path is
-what a second resolution would need. The type has no public constructor: it is
-produced only by consuming a provider handle that passed every check above, so
-"unverified executable" is not a representable state and a compile-level test
-asserts it. One handle serves every case of a process-per-case topology, which
-is what makes "every case ran the bytes that were digested" true rather than
-merely likely.
+The refusal occurs before any Bazel child is started. A command containing
+`cd packages` or a `packages/` argv prefix is invalid because cwd is already
+`packages/`. No final-newline field exists.
 
-Every row above holds identically on both resolution routes. A leaf the
-provider policy accepted through a symlink is still `fstat`ed for kind and
-mode, still compared for freshness, still digested from offset zero to
-`st_size` against the coverage map's value, and still `fstat`ed again after the
-read. The route decides only what may be traversed to reach the leaf; it never
-decides what is proved about the descriptor that comes back.
+## Cargo Build Context
 
-## Wave-Note Lint Refusal
+The command shape is the variant. Package, lock, feature, exclusion, and
+target-directory members exist only on variants that use them.
 
-The type-5 policy lint's outputs, modelled because an earlier draft rendered
-one remedy for two unrelated conditions.
+Variants:
 
-Entry, as the enumerator returns it:
+| Variant | Selector | Lock and target rule | Topology |
+| --- | --- | --- | --- |
+| `GuestFormat` | `cargo fmt -p d2b-guest-shell-runner --check` | No `--locked`, feature selector, or target directory. | Package-only formatting. |
+| `MainClippy` | locked workspace excluding broker and guest | Product lock; gate-owned main target. | Clippy all targets; includes contract crate. |
+| `MainTests` | locked workspace excluding contract, broker, and guest | Product lock; gate-owned main target. | Process per case plus companions. |
+| `BrokerDefault` | locked broker, no default features, empty features | Product lock; `packages/d2b-priv-broker/target`. | Process per test binary. |
+| `BrokerLayer1` | locked broker, no default features, `layer1-bootstrap` | Product lock; `packages/d2b-priv-broker/target-layer1`. | Process per test binary. |
+| `BrokerFake` | locked broker, no default features, `fake-backends` | Product lock; `packages/d2b-priv-broker/target-fakebackends`. | Process per test binary. |
+| `GuestProduction` | locked guest, no default features, `real-libshpool` | Product lock; `packages/d2b-guest-shell-runner/target`. | Process per case plus companions. |
 
-| Field | Type | Why this type |
-| --- | --- | --- |
-| `name` | `std::ffi::OsString` | The raw directory-entry name, exactly the bytes the enumeration returned. A Linux directory entry is any NUL-free, `/`-free byte string; it is not a `str`. |
-| `content` | `std::io::Result<String>` | Exactly what the boundary read returned, never mapped onto `None` and never onto an empty string. |
+Broker contexts are serialized and use distinct target directories. Generic
+main companion discovery uses the `MainTests` exclusions exactly.
 
-**The name is raw bytes because `String` cannot hold every name the kernel
-permits.** An enumerator whose name field is `String` has only two ways to
-handle an entry the directory really contains and UTF-8 cannot represent, and
-both break a fail-closed guard. Dropping the entry is the worse one: the
-`w<digits>.md` name-shape refusal is what makes *anything else in this
-directory* a refusal, so an entry the enumerator never returns is an entry that
-rule never sees, and a guard that silently omits the one entry a contributor
-could not name is fail-open in the position it is fail-closed everywhere else.
-Lossy conversion is the other, and it is not benign either. Measured on this
-host with the pinned stable toolchain: the distinct raw names `w\xff9.md` and
-`w\xfe9.md` both convert to the identical lossy text, so two entries collapse
-onto one rendered label and onto one sort key, and the tie is then broken by
-directory order, which is the exact irreproducibility the sort exists to
-remove. Lossy conversion also inverts the order against clean names, not only
-against other broken ones: raw `w\x80.md` sorts before the perfectly valid
-UTF-8 name `w\xc3\xa9.md`, while their lossy forms sort the other way, because
-`U+FFFD` encodes to `0xEF 0xBF 0xBD` and outranks `0xC3`. A `Position` label
-derived from a lossy sort therefore names the wrong entry for entries that were
-never broken.
+## Configured First-Party Bazel Target
 
-Holding `OsString` costs nothing at the boundary. Measured: the enumeration
-returns those names unchanged, `CString::new(name.as_bytes())` round-trips each
-one for the descriptor-relative open, and a mode `0000` or symlinked entry with
-a non-UTF-8 name still yields its own `EACCES` or `ELOOP`. The type change
-moves where UTF-8 is required, from the corpus to the renderer, which is the
-only place it was ever needed.
-
-Corpus level, returned instead of an entry list:
-
-| Variant | Members | Remedy |
-| --- | --- | --- |
-| `Unreadable` | The real `std::io::Error` from the anchored open or the entry enumeration | Restore `specs/003-adr052-bazel-rust/wave-notes/` and its permissions. |
-| `Empty` | none | Add this wave's note under `specs/003-adr052-bazel-rust/wave-notes/`. |
-
-Entry level:
-
-| Variant | Members | Remedy |
-| --- | --- | --- |
-| `PathLeak` | `NoteLabel` and the one-based line | Rewrite the path as a `<worktree>`-rooted shape or drop it. |
-| `ReadError` | `NoteLabel` and the preserved `std::io::Error` | Fix the entry's permissions or remove the invalid entry. |
-
-`NoteLabel` is `Name(String)` or `Position(NonZeroUsize)`. The `String` in
-`Name` is a rendered label, never the stored name: it exists only where
-`OsStr::to_str()` on the raw name returned `Some`, so the conversion is a check
-that can fail rather than one that launders.
-
-| Variant | When |
+| Field | Rule |
 | --- | --- |
-| `Name` | `OsStr::to_str()` on the raw name returns `Some`, and that `&str` passes the lint's own `/`-rooted-token and worktree-substring rules. |
-| `Position` | Anything else: a name that carries a leak, or a name whose `to_str()` is `None` and which therefore has no rendering. The value is the entry's one-based index in the **sorted** enumeration. |
+| `label` | Native repository label, never a generated external first-party crate. |
+| `cargo_context` | Exactly one Cargo Build Context. |
+| `direct_first_party_deps` | Exact generated set. |
+| `direct_product_deps` | Exact generated `@product` labels. |
+| `cfgs` | Exact generated values. |
+| `features` | Exact generated first-party feature set. |
+| `closure_census` | Exact nonempty configured target and external identity set. |
 
-`PathLeak` has no error member to be absent and `ReadError` has no line member
-to be zero, so neither impossible state is expressible. No variant carries the
-offending token and none renders an absolute path. The note label is checked
-before it is rendered, which is what makes the self-application test a property
-rather than a coincidence about the names that happen to be committed.
-Remedies cannot be borrowed across variants, and a test asserts per variant
-that the other three remedies are absent; the assertion is on the whole remedy
-sentence, because the two corpus remedies deliberately share the directory
-literal.
+`@product` may be a third-party package and feature superset. The configured
+native target defines actual first-party edges and features.
 
-The two corpus remedies name the corpus, and they name it as the fixed
-repository-relative literal `specs/003-adr052-bazel-rust/wave-notes/`. A corpus
-error names no entry, so a remedy without the directory tells the contributor
-to repair something unnamed. The literal is compile-time text, never the
-rendered form of the path the enumerator opened beneath `repo_root()`: that
-rendered form is an absolute path, FR-029 forbids one in a refusal, and the
-lint's own self-application case would catch its own message. The literal is
-safe under the lint's rules by construction, because every `/` in it is
-preceded by an ordinary path character and so is not a `/`-rooted token.
+## Selected Context Oracle
 
-**Enumeration order is defined, not inherited.** The enumerator sorts entry
-names by unsigned byte order over `OsStr::as_bytes()` before opening anything,
-and the returned entry sequence, the violation order, and every `Position`
-value derive from that sorted sequence. The comparison names `as_bytes()`
-rather than leaning on `OsString`'s own `Ord`, whose relation to the raw bytes
-the standard library does not promise across targets; measured here the two
-agree and `0x80` sorts above `0x7f`, and pinning the byte comparison is what
-keeps that agreement from being load-bearing. Measured, the same seven note
-names enumerate as
-`w2 w0 w1 w11 w3 w10 w9` on ext4 and `w3 w11 w1 w0 w2 w10 w9` on tmpfs, so an
-unsorted `Position` names a different entry in CI than it does locally and the
-refusal is not reproducible from the message. Byte order rather than a locale
-collation, because it is total over raw directory-entry bytes and identical
-everywhere. Total is the operative word: the corpus may hold a name no locale
-collation is defined over, which is the second reason the sort key is the raw
-bytes and not a rendered string.
+The oracle is a three-way join. Each source supplies only the columns it owns.
 
-`ReadError` preserves the boundary's error unchanged for `EACCES`, `EISDIR`,
-`ELOOP`, and non-UTF-8 content. The one constructed error is
-`ErrorKind::InvalidInput` for an entry whose name does not match `w<digits>.md`
-and which is therefore never opened; a test pins the exact `raw_os_error` of
-the other four so this stays the only construction.
+| Field | Source | Rule |
+| --- | --- | --- |
+| `metadata_command` | metadata | `cargo metadata --locked --offline --format-version 1 --filter-platform <target>` from `packages/`. |
+| `identities` | metadata | Package identity, name, version, and `source` for every node. |
+| `candidate_edges` | metadata | `resolve.nodes[].deps[].dep_kinds`, giving dependency kind and `cfg` predicate. |
+| `checksums` | lock and pin | Registry `checksum` from `packages/Cargo.lock`; git `rev` and archive hash from the committed pin. Metadata carries no checksum field. |
+| `tree_command` | tree | `cargo tree --locked --offline --manifest-path Cargo.toml -p <package> --target <target> --no-default-features --features <exact list> --edges <kinds> --charset ascii --prefix depth --no-dedupe --format '\|{p}\|{f}\|'`. |
+| `root` | tree | Exactly one broker or guest package selection; metadata `resolve.root` is null for a workspace and is never used. |
+| `target` | metadata and tree | Exact native GNU or musl target for the variant, identical in both. |
+| `edge_kinds` | tree | Separate production (`normal,build`) and dev-inclusive (`normal,build,dev`) traversals; never post-filtered from one another. |
+| `default_features` | tree | Explicitly disabled with `--no-default-features`; never inferred. |
+| `features` | tree | Exact sorted requested set and the resolved `{f}` column. |
+| `cross_check` | all three | Every traversal row's identity exists in metadata, its edge kind and `cfg` agree with `dep_kinds`, and every non-path identity has a lock-supplied checksum. |
+| `parser_input` | tree | Pinned charset, depth prefix, no-dedupe, and repository-pinned delimited format; `--prefix depth` prints the depth with no separator, so the format begins with a delimiter. |
+| `synthetic_input` | - | Absent: no synthetic manifest or splice exists. |
 
-A non-UTF-8 *name* and non-UTF-8 *content* are different conditions and must
-not be conflated. Content is read and its decoding failure is
-`ErrorKind::InvalidData` on an entry the lint did open. A name is never
-decoded: the shape rule runs over the raw bytes, so `w\xff9.md` fails
-`^w[0-9]+\.md$` because `0xff` is not a digit, and the entry is refused
-`ErrorKind::InvalidInput` without being opened, carrying a `Position` label
-because it has no rendering. One planted entry, one refusal, no silent
-omission. This is the state the previous `String` name field could not reach.
+The feature canary is a required invalid variant: an unrelated workspace member
+enables an otherwise-absent feature on a dependency shared with broker or
+guest. The whole-workspace union may contain that feature, but it must not
+appear in the `{f}` column of the broker or guest selected traversal. Generic
+Cargo/Nix build/test and Clippy variants exclude broker and guest exactly;
+dedicated variants retain exact selection.
 
-No test of cleanup, result publication, deadline handling, wave-note corpus
-enumeration, or provider resolution may depend on live host filesystem state, a
-full disk, a privileged mount, or the host clock. A property that can only be
-exercised by arranging host state is a property that will be marked ignored,
-which is the same as not testing it. That applies with particular force to the
-stale-provider case: a test that writes an out-of-date executable into
-`packages/target/` has planted the exact hazard the locator exists to refuse,
-on the host every other suite shares, and leaves it there if the run is
-interrupted.
+Only `BrokerDefault`, `BrokerLayer1`, `BrokerFake`, and `GuestProduction`
+carry this oracle. `GuestFormat` resolves no dependency graph, and
+`MainClippy` and `MainTests` are multi-root workspace selections enforced by
+their exact exclusion census rather than by a single-root oracle.
 
-One test is exempt, deliberately and by name. Every claim the Verified
-Executable Handle makes about `execveat`, close-on-exec inheritance, and
-repeated execution of one descriptor is a claim about the kernel, and a fake
-cannot prove a kernel. `packages/d2b-bazel-runner/tests/exec_handle.rs` drives
-the host-backed implementation against the first-party probe binary
-`packages/d2b-bazel-runner/src/bin/d2b-exec-probe.rs`, which reports its own
-descriptor table. It arranges nothing on the host and writes no executable
-anywhere; it executes a declared input the graph already builds, which is what
-the runner does in normal operation.
+## Libshpool Dependency Contract
 
-The same rule holds for the network. `IndexClient` is the single networked
-implementation of `YankedIndex` and the only site permitted to open a socket
-for the refresh; every unit test of the refresh injects a fake instead, so no
-test resolves a name or reaches the live index. `bazel-yanked-check` names
-neither the trait nor its networked implementation, which is what makes the
-offline validator offline by construction. Real-index behavior is measured
-separately, by the reviewed contributor-run refresh whose diff and observed
-index revision the committing wave records.
+| Field | Rule |
+| --- | --- |
+| `dependency` | Normal `libshpool = "0.11.0"`. |
+| `feature` | `real-libshpool = []`. |
+| `code_activation` | Existing `cfg(feature = "real-libshpool")`. |
+| `crate_spec_sites` | Exact empty set. |
 
-## Test Locator Migration
-
-Every record identifies one affected first-party file and one of two
-dispositions. The disposition is the variant, so a record cannot claim to need
-no migration while also carrying a declared runfiles-relative path.
+## Package Policy Context
 
 Common:
 
 | Field | Rule |
 | --- | --- |
-| `file` | Repository-relative path of one affected first-party file. |
-| `site` | `binary-location`, `manifest-path`, or `repo-root-walk` with the helper named. |
+| `nix_system` | `x86_64-linux` or `aarch64-linux`. |
+| `cargo_target` | Exact matching GNU or musl target. |
+| `root_package` | Broker or guest shell runner. |
+| `default_features` | Disabled. |
+| `features` | Empty for broker; `real-libshpool` for guest. |
+| `root_lock` | `packages/Cargo.lock`. |
 
 Variants:
 
-| Variant | Members |
+| Variant | Target class |
 | --- | --- |
-| `Migrated` | `bazel_runfiles_path` and the `data` label providing it; `cargo_call_site_crate`, the test crate the Cargo arm expands in; for a `binary-location` site, the Verified Executable Handle record, whose digest the located descriptor must match before that same descriptor is executed. |
-| `NoMigrationNeeded` | `reason`: the recorded reason this file needs no change. |
+| `BrokerProduction` | matching GNU target |
+| `GuestRealLibshpool` | matching musl target |
 
-The affected set is enumerated, not sampled: 25 files locating binaries through
-compile-time Cargo environment expansion and 20 test files resolving
-`CARGO_MANIFEST_DIR`, 11 of those through a `repo_root()` helper. A file that
-is in neither variant is a gap the coverage map makes visible. Both arms stay
-green on the Cargo path for the whole shadow stage.
+There are exactly four system-and-target contexts.
 
-Provider negatives are supplied, never arranged. The absent, non-regular,
-non-executable, out-of-date, and wrong-identity providers, the path rebound to
-a different inode after the open, and the missing runfiles entry that turns a
-Bazel-mode lookup into a refusal, are all states of the `FileSystem` and
-`RunfilesView` fakes in `packages/d2b-bazel-support/`. No record in this set is
-proven by writing an executable to `packages/target/` or to any other live
-path, no provider check executes a provider to learn its identity, and no
-migrated call site spawns by path: identity is the digest of the descriptor's
-bytes, and execution is `execveat` on that same descriptor.
+## Package Policy Graph
 
-## Hermeticity Inventory
+Common:
 
 | Field | Rule |
 | --- | --- |
-| `hub` | One of the four `crate_universe` hubs: `main`, `broker`, `guest`, `walker`. |
-| `hub_lock_attrs` | `lockfile`, `cargo_lockfile`, and `skip_cargo_lockfile_overwrite = True` are all present. |
-| `build_script_crates` | Every third-party crate for which a build-script target is generated. |
-| `required_annotations` | Per crate: build-script environment, data, and toolchain requirements. |
-| `action_env_allowlist` | The explicit minimal set of host environment values any action may observe. |
-| `bazelignore_entries` | `.scratch/` plus every Cargo output directory any workspace or tool creates. |
-| `symlink_prefix` | Absolute path beneath `.scratch/`. |
-| `startup_options` | Absolute values supplied by the wrapper from the one construction in `packages/d2b-bazel-support/src/startup.rs`, byte-identical across build, test, query, info, shutdown, clean, and, from W2, the repin and module-refresh children. |
-| `generator_pin` | `cargo-bazel` URL plus sha256; source bootstrap refused. |
-| `module_lock_modes` | `.bazelrc` carries `common --lockfile_mode=error` and `common --check_direct_dependencies=error`; neither may be relaxed by a wrapper argument. |
+| `selected_root` | Exactly one package identity. |
+| `system` | Matches parent Package Policy Context. |
+| `target` | Matches parent context. |
+| `nodes` | Exact nonempty sorted package set. |
+| `edges` | Exact sorted set with authoritative `normal`, `build`, or `dev` kind and cfg. |
+| `features` | Exact resolved feature set per node. |
+| `filtered_lock` | Contains exactly reached external package identities. |
+| `selected_sources` | One exact Selected Source Census. |
 
-Repin controls are absent from the wrapper and from every
-continuous-integration environment. The single scoped exception is the child
-environment `cargo xtask bazel-repin --hub <name>` constructs, which sets
-`CARGO_BAZEL_REPIN` and `CARGO_BAZEL_REPIN_ONLY=<hub>` for that one process,
-writes only that hub's Bazel-side lock, and fails when any other tracked
-derived artifact changed. `cargo xtask bazel-module-refresh` sets no repin
-control at all, refuses to run when one is ambient, writes only
-`MODULE.bazel.lock`, fails when any other tracked derived artifact changed, and
-changes nothing on an already-current tree. Neither command is a Make target or
-reachable from a workflow.
+Variants:
 
-Every field here is a cache-key input. A change to `action_env_allowlist`
-invalidates the entire action cache and is reviewed against the promoted size
-budget in the same change.
+- `ProductionGraph`: selected normal and build closure only.
+- `PolicyGraph`: production graph plus every root dev edge and the complete
+  transitive normal and build closure reached from each dev package.
 
-## Execution Manifest Binding
+Generated paths:
+
+```text
+packages/policy-inputs/<system>/<target>/<context>/production/closure.json
+packages/policy-inputs/<system>/<target>/<context>/production/Cargo.lock
+packages/policy-inputs/<system>/<target>/<context>/policy/metadata.json
+packages/policy-inputs/<system>/<target>/<context>/policy/Cargo.lock
+```
+
+## Selected Source Census
 
 | Field | Rule |
 | --- | --- |
-| `authority` | `docs/reference/test-execution-manifest.md` and its v1 schema. |
-| `executor` | `cargo` during shadow; `bazel` after promotion. Not a schema field. |
-| `surface_mapping` | Carrier result to existing surface ID. |
-| `completed_mapping` | Success only after all commands for that surface complete. |
-| `failure_mapping` | Observed carrier failures to existing `failed_surfaces`. |
-| `interruption_mapping` | Handled interruption publishes available partial evidence. |
+| `identities` | Exact sorted non-path `(name, version, source)` set from metadata. |
+| `lock_identities` | Exact sorted non-path identity set from filtered lock. |
+| `count` | Derived length of `identities`, positive. |
+| `registry_sources` | URL plus Cargo checksum for every registry identity. |
+| `git_sources` | URL, pinned rev, and committed archive checksum for every git identity. |
+| `materialized_sources` | Exact readable set, no missing or extra item. |
 
-This binding cannot add, rename, reinterpret, or version manifest fields.
-Prior evidence is invalidated before dispatch. Passing promotion evidence
-requires a v1 `passed` manifest with all eighteen IDs; partial evidence is
-diagnostic only.
+Validity requires identity equality between metadata and filtered lock, exact
+count equality after materialization, readability, and checksum verification
+before policy execution.
+
+## Package Policy Result
+
+Variants:
+
+| Variant | Inputs | Invariants |
+| --- | --- | --- |
+| `DependencyPolicy` | ProductionGraph | closure minimality and forbidden production classes |
+| `PackageDeny` | PolicyGraph and sources | bans, licenses, sources, no `--exclude-dev` |
+| `PackageAudit` | PolicyGraph filtered lock and pinned RustSec DB | `--no-fetch`; exact context ignore set |
+
+Broker audit has no ignore. Guest audit has exactly
+`RUSTSEC-2024-0384`.
+
+## Guest License Exception
+
+| Field | Rule |
+| --- | --- |
+| `package` | One of `bindgen`, `instant`, `inotify`, `inotify-sys`, `libloading`, `notify`. |
+| `license` | Exact package-paired license from ADR 0054. |
+| `scope` | Guest real-libshpool policy only. |
+
+The set has exactly six entries:
+
+```text
+bindgen        BSD-3-Clause
+instant        BSD-3-Clause
+inotify        ISC
+inotify-sys    ISC
+libloading     ISC
+notify         CC0-1.0
+```
+
+There is no global-license-allow field. A different package with one of these
+licenses remains denied.
+
+## Nix Artifact Context
+
+Variants:
+
+| Variant | Package target | Linkage |
+| --- | --- | --- |
+| `BrokerHost` | matching GNU | host dynamic artifact |
+| `GuestStatic` | matching musl through `pkgsStatic` | static PIE |
+
+Both consume root product source and lock and explicit package and binary
+selectors. Guest additionally selects `real-libshpool`.
+
+Each context retains its dedicated derivation, selected dependency policy,
+binary-size evidence, and closure evidence. Both carry exactly:
+
+```text
+cargoLock.outputHashes."wl-proxy-0.1.2" =
+  "sha256-1yO1zgzSyzQ2DnDMpVxcnI5BsTNvXfzIUS+RNlPj4A8="
+```
+
+Every `GuestStatic` result additionally binds:
+
+| Field | Rule |
+| --- | --- |
+| `elf_type` | Exactly `ET_DYN`; `ET_EXEC` is rejected as non-PIE. |
+| `elf_machine` | `EM_X86_64` on `x86_64-linux`; `EM_AARCH64` on `aarch64-linux`. |
+| `program_interpreter` | Absent. |
+| `needed_entries` | Empty. |
+
+Non-PIE and wrong-machine artifacts are required invalid variants.
+
+## Native Artifact Baseline
+
+Exactly four rows exist: broker and guest for each native system. A row is
+generated only from a realized derivation.
+
+| Field | Rule |
+| --- | --- |
+| `binaryBytes` | Measured executable size. |
+| `elfType`, `elfMachine` | Exact realized values. |
+| `interpreter`, `needed` | Exact broker interpreter and sorted SONAMEs, or absent and empty for guest. |
+| `closureCount`, `closureSha256` | Count and digest derived transiently from the exact sorted recursive Nix closure; no store path is persisted. |
+| `selectedPolicyDigest` | Exact selected package-policy graph digest. |
+| `measurementCommand`, `candidateCommit` | Immutable measurement provenance. |
+| `sizeGrowthAuthorization` | The only allowance source: null for unchanged or smaller size, otherwise the closed approved object below carrying `priorBinaryBytes == binaryBytes`, `newBinaryBytes == actual realized bytes`, positive exact `deltaBytes`, normalized `rationalePath`, candidate/review digests, matching system/artifact, and `decision = "approved"`. |
+
+The size predicate is `actual <= binaryBytes` when authorization is null and
+`actual <= binaryBytes + sizeGrowthAuthorization.deltaBytes` otherwise. No
+row-level allowance field exists. Authorization is valid only when
+`priorBinaryBytes` equals the row baseline, `newBinaryBytes` equals the
+realized artifact measurement, those values have the exact positive
+`deltaBytes` difference, the rationale is repository-relative, both digests
+bind the candidate and review, the system/artifact matches, and the decision is
+approved in the same change. No prose byte ceiling exists. The positive
+fixtures are unchanged size without authorization and exact authorized growth.
+Missing, denied, stale, replayed, wrong-system/artifact, wrong-prior,
+wrong-realized-new, absolute-rationale, arithmetic-mismatch, duplicate
+allowance-source, and size-plus-one authorizations are invalid.
+
+## Flake Check Wrapper
+
+For each root flake system:
+
+```text
+broker-production-dependency-policy
+guest-shell-runner-static-dependency-policy
+broker-production-package-policy
+guest-real-libshpool-package-policy
+broker-host-artifact-contract
+guest-static-elf
+```
+
+| Field | Rule |
+| --- | --- |
+| `system` | Exact native system. |
+| `runner` | Matching native runner architecture. |
+| `policy_input` | Exact Package Policy Context path. |
+| `foreign_system_args` | Empty. |
+| `builder_args` | Empty. |
+| `realized` | Required. |
+
+The authoritative wrapper set has exactly twelve entries: six checks per
+system. Eight are package-policy wrappers and four are artifact-baseline
+wrappers.
+
+## Rust Surface
+
+The existing fixed set remains:
+
+```text
+rust-api-surface
+rust-main-format
+rust-main-clippy
+rust-main-workspace-tests
+rust-no-bash-ast
+rust-schema-reproducibility
+rust-stub-no-socket
+rust-assert-pinned
+rust-broker-default
+rust-broker-layer1
+rust-broker-fakebackends
+rust-guest-shell-runner
+rust-deny-main
+rust-deny-broker
+rust-deny-guest
+rust-audit-main
+rust-audit-broker
+rust-audit-guest
+```
+
+Each surface has a nonempty carrier set, one verdict owner, one of four slices,
+and an exact generated census where applicable. Fixture-backed IDs are not
+members.
+
+## Carrier Target and Coverage Map
+
+A carrier has:
+
+- one Rust Surface;
+- one native Bazel label;
+- closed declared inputs and outputs;
+- one configured first-party context where applicable;
+- one topology where applicable;
+- exact test or policy census;
+- every hand-written fragment it consumes;
+- declared runfiles and provider identities.
+
+The mapping is total and unambiguous, not one-to-one. Label existence is proved
+at analysis time. Graph completeness and query drift are proved outside Bazel
+tests. No Bazel test invokes `bazel query`.
+
+## Test Topology
+
+Variants remain:
+
+- `ProcessPerCase` for main and guest;
+- `ProcessPerBinary` for each broker feature context;
+- `Doctest`;
+- `HarnessFree`.
+
+The existing per-case result, verified executable handle, injected filesystem,
+runfiles, clock, and index boundary models remain as decided by ADR 0052.
+Changing the product workspace does not weaken them.
+
+Every `ProcessPerBinary` broker variant carries exactly
+`tags = ["exclusive"]`, cannot overlap any other test, and has a qualification
+count of twenty consecutive executions for its own context.
+
+## Verified Executable Handle
+
+| Field | Rule |
+| --- | --- |
+| `anchor` | Close-on-exec runfiles or Cargo provider-root descriptor. |
+| `relative` | Nonempty declared relative path with no absolute or `..` component. |
+| `descriptor` | One `O_RDONLY|O_CLOEXEC` open using `RESOLVE_NO_MAGICLINKS` only, deliberately without `RESOLVE_BENEATH` or `RESOLVE_NO_SYMLINKS`. |
+| `fallback` | Forced component walk: intermediate `O_DIRECTORY|O_NOFOLLOW|O_CLOEXEC`; declared leaf symlink permitted; leaf opened `O_RDONLY|O_CLOEXEC` without `O_NOFOLLOW`. |
+| `identity` | Kind, executable mode, freshness, byte digest, and matching pre/post descriptor metadata. |
+| `execution` | The sole safe Rust consuming API maps the verified open file description to a private fd; immutable static C `d2b-bazel-exec-supervisor` forks once, uses the exec-error pipe only for failure, and proves the exact `execveat(private_fd, "", argv, envp, AT_EMPTY_PATH)` through a kernel `PTRACE_EVENT_EXEC` followed by zero-signal detach before `EXECUTED`. |
+| `enosys` | Named refusal requiring a kernel with `execveat`; no fallback. |
+| `auxiliary_descriptors` | All close-on-exec and proven by child descriptor-table behavior. |
+| `api_seal` | Private fields and minting trait; empty public inherent API and empty locally-authored explicit trait-impl allowlists; exact compiler-derived public, hidden, auto, and blanket API snapshots; no descriptor/path accessor or extraction, `Deref`, descriptor `Borrow`, `AsFd`, raw-fd trait, formatting, serialization, conversion, default, or duplication API. |
+| `owner` | One dependency-leaf crate owns the type and the only public API that consumes it. |
+| `execution_transfer` | The public API consumes the handle by value and uses the exact pinned reviewed safe `command-fds` mapping dependency to install the verified description at a fixed private fd while leaving declared stdin/stdout/stderr unchanged. Under the one process-wide serialization guard, its spawning thread uses safe `nix::sys::signal::SigSet` to capture its mask, block the full managed set before spawn, and attempt exact restoration after successful or failed spawn before unlocking. Capture, block, poison, restoration, per-launch-guard, and unlock-before-restoration mutations refuse. |
+| `helper_identity` | Exact immutable dedicated Nix store artifact, bound by C source, derivation dependency closure, output NAR, executable, protocol, and native-system hashes; runfiles, worktree, copied, symlinked, missing, and wrong outputs refuse. |
+| `helper` | One tiny statically linked single-threaded C supervisor built outside the product Rust workspace. It creates the close-on-exec exec-error pipe, forks exactly once, owns the natural parent-child trace through the exec event only, detaches without a signal, and owns later target supervision; no Rust unsafe exception exists. |
+| `spawn_owner` | Safe Rust `std::process`, `command-fds`, and `nix::sys::signal::SigSet` spawn and wait-own the supervisor with no Rust unsafe or disposition mutation. The C supervisor owns the only fork, inherited-disposition refusal, signal normalization/forwarding, parent-and-child setpgid handshake, target wait, and reap. Rust never signals a numeric PID/PGID. The patched sandbox PID-1 monitor owns abnormal teardown. No Rust `pre_exec`, raw fork, or signal-handler path exists. |
+| `invocation_policy` | Closed source/call-site census permits only the typed consumer to invoke the exact helper and rejects every other Rust, Bazel, Make, workflow, runfiles, or worktree invocation. |
+
+There is no path accessor or public unchecked constructor. No
+runfiles/worktree/copied helper path, direct helper invocation outside the
+typed consumer, fd-0 executable transport, target path, `fexecve`,
+`/proc/self/fd`, reopen, or post-`ENOSYS` fallback exists. Successful exec
+preserves declared stdio and leaks no provider, private executable,
+status-pipe, or auxiliary descriptor.
+
+## Immutable Supervisor Launch
+
+| Stage | Rust parent ownership, transition, and failure |
+| --- | --- |
+| `Verified` | Consumed `VerifiedExecutable` exclusively owns the provider `OwnedFd`; failure drops it once. |
+| `HelperIdentity` | Exact immutable Nix path plus C source, derivation dependency, output NAR, executable, protocol, and native-system hashes validate before spawn; missing/wrong/rebound output closes the provider and creates no child. |
+| `Mapped` | Parent owns the provider fd, protocol reader/writer ends, declared stdio, and mapping configuration. The pinned safe mapper uses fixed private fds outside 0/1/2; collision or preparation failure closes every private end and the provider without changing stdio. |
+| `SignalHandoff` | Under the one process-wide guard, the spawning thread captures its exact mask, blocks all four managed signals, and keeps them blocked through spawn using the reviewed safe `nix::sys::signal::SigSet` API. Capture, block, poisoned-guard, or exact-mask restoration failure is typed `PARENT_SIGNAL_HANDOFF`; restoration is attempted after every spawn outcome before unlock. A deterministically overlapping launch cannot capture until that attempt. |
+| `Spawned` | `std::process::Child` becomes the sole supervisor wait owner. Still under the guard, parent attempts exact spawning-thread mask restoration before unlock and closes its mapped provider and supervisor-side protocol copies; spawn failure creates no child, while restoration failure after spawn leaves the child wait-owned and fails the action. RAII cleanup runs for every outcome. |
+| `Ready` | Parent's stateful framed decoder accepts exactly `D2BS`, version 1, type `READY`, and zero payload. Fragmented input is retained; coalesced later frames remain buffered. EOF, helper exit, timeout, malformed header, wrong length, overflow, duplicate, or out-of-order status is typed failure independent of process status. |
+| `Executed` | The same decoder accepts version-1 zero-length `EXECUTED` only after `READY`. A fast target exit remains distinguishable because a coalesced terminal stays buffered; helper crash or EOF before this frame is never target status. |
+| `Terminal` | Decoder accepts one version-1 `EXITED` or `SIGNALED` frame with its exact one-byte bounded payload, rejects any retained or later trailing frame or byte, drains to EOF, then waits for the supervisor and requires exact status equality. No status-stream one-byte overlong probe exists. |
+| `Cleaned` | The successful path closes remaining protocol fds once and reaps the supervisor. A post-spawn failure closes owned fds and returns the Bazel action nonzero without signaling a numeric PID/PGID; the sandbox owns survivors. Injected close/read/wait failures preserve the first typed cause plus cleanup stage without raw OS text. |
+
+| Stage | C supervisor ownership, transition, and failure |
+| --- | --- |
+| `InheritedSignals` | With the managed set inherited blocked, the helper's first setup operation observes every managed disposition. Any `SIG_IGN` emits typed `HELPER_SIGNAL_INHERITED_IGNORED` and fails before fork without resetting and continuing; an incomplete inherited mask emits `HELPER_SIGNAL_HANDOFF`. |
+| `Adopted` | Only after signal-handoff verification, supervisor exclusively owns the mapped executable fd, declared stdio, and Rust status writer; wrong identity or absent descriptor emits a typed failure and closes all owned fds. |
+| `Normalized` | While the managed set stays blocked, the single thread installs default dispositions, ignored `SIGPIPE`, waitable default `SIGCHLD`, and fixed synchronous consumption, then establishes the final mask. Normalization failure emits a typed failure before fork. |
+| `ExecPipe` | Supervisor creates exactly one `O_CLOEXEC|O_NONBLOCK` exec-error pipe; the kernel trace stop is the sole release barrier. Pipe failure emits a typed failure and forks no child. |
+| `Forked` | Exactly one fork creates the target child. Supervisor owns child pid, exec-error reader, and status writer; the child owns the error writer, executable fd, and stdio copies. |
+| `ChildSetup` | In order, child calls `setpgid`, installs 0/1/2, sets CLOEXEC, closes supervisor-only fds, calls `ptrace(PTRACE_TRACEME, 0, (void *)0, (void *)0)`, restores final signal state, and only then raises `SIGSTOP`. At that stop all fallible setup is complete and its next operation after release is the sole `execveat`. A stage failure writes one fixed `CHILD_*` record and `_exit`s. |
+| `TraceReady` | Supervisor confirms `getpgid(child) == child` plus direct-parent and wait ownership, consumes exactly the initial `SIGSTOP` with event zero, calls `ptrace(PTRACE_SETOPTIONS, child, (void *)0, (void *)(uintptr_t)PTRACE_O_TRACEEXEC)`, emits `READY`, and releases with `ptrace(PTRACE_CONT, child, (void *)0, (void *)0)`. Group, relation, stop, option, continuation, or early-death failure is typed and consume-reaped. Pre-helper system, kernel, Yama, probe, and sandbox-policy refusal cannot enter this state. |
+| `ExecEvent` | One absolute deadline covers trace waits, the single-record exec-error decoder, and status writes. Empty EOF is writer closure only. Success requires the wait-owned child's exact `WIFSTOPPED`/`SIGTRAP`/`PTRACE_EVENT_EXEC` followed by `ptrace(PTRACE_DETACH, child, (void *)0, (void *)0)`; only then may `EXECUTED` be emitted. Managed termination, pre-exec death, `SIGSYS`/fault, missing or wrong event, EOF without event, or detach failure suppresses execution/terminal/audit publication and causes helper kill/consume-reap. |
+| `Supervising` | After `EXECUTED`, supervisor remains alive, forwards only `SIGHUP`, `SIGINT`, `SIGTERM`, and `SIGQUIT` to the target group, and applies the complete fixed TERM/grace/unconditional-KILL policy on case expiry or external `SIGTERM`, including with no case deadline. |
+| `Reaped` | Supervisor waits and reaps the direct target, emits framed `EXITED` or `SIGNALED`, closes the Rust status writer, and mirrors the exact target normal exit or terminating signal. A mirror, signal, wait, or reap failure is typed and cannot be reported as target status. |
+| `Closed` | Every non-exec and post-exec path closes each owned fd once and reaps every created child. The first operation failure and any cleanup failure retain distinct fixed stages. |
+
+The execution entity is valid only on native `x86_64-linux` or
+`aarch64-linux`, Linux >= 3.19, and an actual passing parent-child ptrace
+startup probe. Yama, when present, is restricted to unprivileged mode 0 or 1.
+The static action seccomp rule admits only `PTRACE_TRACEME`,
+`PTRACE_SETOPTIONS`, `PTRACE_CONT`, and `PTRACE_DETACH` plus their enforceable
+constant arguments. It does not match the future child pid for the three
+parent-issued requests; the owned fork result, confirmed group/direct-parent
+relation, traced initial stop, wait ownership, and exact event enforce dynamic
+identity. It preserves the complete network-denial set and grants no
+capability. Unsupported system is Nix-evaluation-owned;
+minimum kernel, Yama, and startup-probe refusal are toolchain-startup-owned;
+ptrace seccomp-policy drift is patched-sandbox-owned. Each is a distinct
+pre-helper code with fixed input, exact repair, phase-valid rerun, byte-exact
+and wrong-remedy test, and qualification result. Helper initial-stop, options,
+continuation, event, and detach codes exist only after spawn.
+
+| Stage | Patched sandbox ownership, transition, and failure |
+| --- | --- |
+| `NamespaceCreated` | Outer `linux-sandbox` owns one fresh `CLONE_NEWPID` monitor and synchronization pipes; failure reaps any created monitor and execs no action. |
+| `MonitorReady` | Namespace PID 1 remains outside the action command tree, adopts every orphan, owns abnormal namespace kill/reap, and is wait-owned by outer `linux-sandbox`. |
+| `ActionRunning` | The supervisor owns normal target TERM/grace/KILL/reap. Abnormal setup/action exit, including parent or supervisor crash, transitions once to `Aborting`. |
+| `Aborting` | PID 1 namespace-kills every other member and makes nonblocking reap progress. One fixed 10,000 ms ceiling bounds userspace TERM/KILL/monitor escalation and the close-or-quarantine decision only. Kill, reap, and ceiling failures are distinct typed stages. |
+| `PendingKernelCleanup` | If a consuming wait has not proved namespace members and PID 1 reaped at the userspace ceiling, the original live outer `linux-sandbox` monitor remains the sole wait owner and records `pending-kernel-cleanup`. Sandbox and outputs are quarantined; success, reuse, retry, reboot, replacement wait ownership, and manual release are prohibited while non-consuming observation continues. The fixed diagnostic links to `docs/contributing/critical-subsystems.md#bazel-pending-kernel-cleanup-quarantine`. |
+| `Closed` | The original monitor's consuming wait proved PID 1 reaped and published the fixed release. Cleanup is `complete` or `complete-after-quarantine`; a quarantined action remains failed. No host PID, PID file, cgroup, host process group, or operator action is a fallback. |
+
+The public API census is primary. Focused rustdoc `compile_fail` examples prove
+downstream construction, descriptor access/extraction, trait coercion,
+formatting/serialization, duplication/conversion, and mint-trait absence.
+Cargo-shelling compile fixtures are not part of this entity.
+
+Strict result, execution-manifest, JUnit-parent, and cleanup entities are a
+different path variant and retain
+`RESOLVE_BENEATH|RESOLVE_NO_SYMLINKS|RESOLVE_NO_MAGICLINKS`. Reintroducing
+`RESOLVE_BENEATH` on a provider open is a required invalid mutation.
+
+## PID-Namespace Containment Qualification Result
+
+Qualification carries exactly one bounded result for each closed stage:
+
+1. `crash-before-ready`;
+2. `crash-after-ready`;
+3. `crash-after-executed`;
+4. `crash-during-grace`;
+5. `direct-long-lived-descendant`;
+6. `double-forked-long-lived-descendant`;
+7. `beyond-ceiling-pending-cleanup`.
+
+| Field | Rule |
+| --- | --- |
+| `stage` | One value from the seven-entry closed census above, occurring exactly once. |
+| `supervisorRecoveryClass` | Closed `not-yet-ready`, `ready-not-executed`, `executed`, `grace-active`, `descendant-only`, or `pending-kernel-cleanup`; each stage has one permitted class. |
+| `userspaceEscalationResult` | Closed `kill-monitor-complete` or `ceiling-entered-quarantine`. The fixed ceiling says nothing about kernel task exit. |
+| `cleanupResult` | Closed `complete` or `complete-after-quarantine`; neither may be recorded until a consuming wait proves PID 1 reaped. |
+| `quarantineResult` | Closed `not-entered` or `entered-and-released-after-consuming-reap`. The beyond-ceiling stage must use the latter and bind its prior pending observation. |
+| `sandboxPatchSha256` | Exactly 64 lowercase hexadecimal characters matching the reviewed patch identity. |
+| `sandboxMonitorIdentitySha256` | Exactly 64 lowercase hexadecimal characters over the canonical monitor source, executable, protocol-version, and patch-digest tuple; no free-form or opaque monitor identity exists. |
+| `pendingObservationSha256` | `none` for ordinary stages; otherwise exactly 64 lowercase hexadecimal characters binding the typed pending transition, owned wait state, quarantine entry, no-success/no-reuse results, and absence of a reaped claim. |
+| `resultSha256` | Exactly 64 lowercase hexadecimal characters over the closed fields and referenced plant verdict. |
+
+The permitted tuples are exact:
+
+| Stage | `supervisorRecoveryClass` | `userspaceEscalationResult` | `cleanupResult` | `quarantineResult` |
+| --- | --- | --- | --- | --- |
+| `crash-before-ready` | `not-yet-ready` | `kill-monitor-complete` | `complete` | `not-entered` |
+| `crash-after-ready` | `ready-not-executed` | `kill-monitor-complete` | `complete` | `not-entered` |
+| `crash-after-executed` | `executed` | `kill-monitor-complete` | `complete` | `not-entered` |
+| `crash-during-grace` | `grace-active` | `kill-monitor-complete` | `complete` | `not-entered` |
+| `direct-long-lived-descendant` | `descendant-only` | `kill-monitor-complete` | `complete` | `not-entered` |
+| `double-forked-long-lived-descendant` | `descendant-only` | `kill-monitor-complete` | `complete` | `not-entered` |
+| `beyond-ceiling-pending-cleanup` | `pending-kernel-cleanup` | `ceiling-entered-quarantine` | `complete-after-quarantine` | `entered-and-released-after-consuming-reap` |
+
+Containment evidence contains no raw PID, process-group ID, descriptor, path,
+process output, kernel text, command line, environment value, handle, or
+opaque identity. The record carries only the closed fields above and digests.
+The containment validator requires all seven results and passing results for
+each mutation class: omitted stage, duplicate stage, unknown stage, wrong
+supervisor recovery class, malformed digest, patch digest mismatch, monitor
+digest mismatch, illegal cleanup/quarantine combination, false PID-1 reaped
+claim, success after quarantine, resource reuse while quarantined, and every
+forbidden raw or opaque field. Qualification cannot omit or summarize these
+mutation results.
+
+## Process Escalation
+
+| Field | Rule |
+| --- | --- |
+| `group` | Dedicated child process group created by child and supervisor `setpgid` calls, confirmed by the supervisor before `READY` or any managed-signal consumption/forwarding. |
+| `grace` | Independently timed fixed interval, always elapsed in full. |
+| `observations` | Repeated `waitid(EXITED|NOWAIT|NOHANG)` polls throughout grace. |
+| `observation_effect` | Informational only; never consuming, blocking, shortening grace, or authorizing reap. |
+| `escalation` | Unconditional group SIGKILL at grace expiry. |
+| `reap` | Direct child only, after SIGKILL. |
+
+Blocking-wait, early-reap, shortened-grace, and conditional-SIGKILL mutations
+are required invalid variants.
+
+## Module Lock Refresh
+
+| Field | Rule |
+| --- | --- |
+| `command` | `cargo xtask bazel-module-refresh`, no arguments. |
+| `child` | `bazel mod deps --lockfile_mode=update`. |
+| `startup_options` | Absolute and byte-identical to other server-selecting commands. |
+| `allowed_mutation` | Exactly `MODULE.bazel.lock`. |
+| `idempotent` | Second run on current state changes nothing and exits zero. |
+| `reachability` | Contributor shell only; absent from Make and workflows. |
+| `remediation` | Exact repository line naming this command and only this command. |
+| `refresh_order` | Always last. A product manifest change runs product lock, product hub, then this; a walker manifest or lock change runs walker lock, walker hub, then this; initial or combined setup runs product hub, walker hub, then this. |
+| `byte_identity_proof` | The untouched hub's Cargo and Bazel inputs are proved byte-identical across the refresh. |
+
+## Product Yanked Snapshot
+
+| Field | Rule |
+| --- | --- |
+| `path` | `bazel/supply_chain/yanked-snapshot.json`. |
+| `authority` | Exact sorted `(name, version)` key set from `packages/Cargo.lock` only. |
+| `excluded_locks` | Walker lock and `packages/Cargo.guest.lock`. |
+| `main_projection` | Full product snapshot. |
+| `broker_projection` | Exact keys from the broker root-dev-inclusive package-policy graph. |
+| `guest_projection` | Exact keys from the guest root-dev-inclusive package-policy graph. |
+| `refresh` | Reviewed networked `cargo xtask bazel-yanked-refresh`; snapshot-only mutation. |
+| `check` | Offline no-write `cargo xtask bazel-yanked-check`; no network client construction. |
+
+## Supply Chain Equivalence Result
+
+One result exists for each of `main`, `broker`, and `guest`.
+
+| Field | Rule |
+| --- | --- |
+| `context` | Main full product, broker selected projection, or guest selected projection. |
+| `cargo_exit_status` | Raw enforcing status from current `cargo deny check`. |
+| `bazel_union_exit_status` | Cargo-compatible status for decomposed deny, audit, and yanked union. |
+| `cargo_findings` | Sorted normalized finding keys. |
+| `bazel_union_findings` | Sorted normalized union from all three decomposed carriers. |
+| `equal` | Derived exact status and set equality. |
+
+A finding key is
+`(class, package, version, source, finding_id, detail)`. Operational errors
+are separate invalid variants, not policy findings. A false `equal` blocks spec003w1,
+qualification, and promotion.
+
+## Action Network Evidence
+
+| Field | Rule |
+| --- | --- |
+| `sandboxProvider` | Exact Nix-pinned Bazel 8.6.0 upstream source, Linux sandbox patch, fixed-policy, output NAR, executable, and capability-ABI hashes. |
+| `actionKinds` | Exact stable/nightly Rustc, metadata, Clippy, rustdoc, doctest compile/run, rustfmt, unpretty, build-script, repository, setup, and test coverage from configured-target and `aquery` inventories. |
+| `strategyInventory` | Every governed action uses the patched Linux `sandboxed` strategy; process, local, standalone, worker, remote, and every fallback are absent. |
+| `loadPoint` | Sandbox child verifies and loads the fixed filter after sandbox construction and before exec of the full action command, covering compile/build commands, test setup, tests, and descendants. |
+| `startupProbe` | The exact Nix output reports the fixed capability ABI and denies a planted syscall before any server or governed action starts. |
+| `inheritedCapabilities` | Complete pre-filter descriptor census rejects sockets and every io_uring ring, including SQPOLL and registered/fixed-socket states. |
+| `syscalls` | Closed denied socket-operation, `pidfd_getfd`, `socketcall` when present, and three-io_uring-entry-point set, plus an exact ptrace request allowlist of `TRACEME`, `SETOPTIONS`, `CONT`, and `DETACH`; all other ptrace requests remain denied. |
+| `plants` | Patch-removal, wrong-output, filter-load, strategy fallback, inherited socket/ring/SQPOLL/fixed-socket, setup-before-payload, compile/build, test, descendant, and exact eight IPv4, IPv6, netlink, packet, pathname Unix, abstract Unix, socketpair, and io_uring pre-action results. |
+| `external_egress_plant` | A build/test action attempts host/external egress and is denied. |
+| `live_index_plant` | The offline yanked validator receives a live-index source and refuses before resolution or socket use. |
+| `repository_fetch_inventory` | Exact fetch sites outside governed actions, offline during gates, each pinned by lock checksum or git revision plus archive sha256. |
+| `cargo_compatibility_carriers` | Exact generated test identities, Cargo selectors, existing surface IDs, same-commit verdicts, and non-advisory classification for mandatory socket users. |
+| `containmentQualification` | Exact seven-stage bounded containment result set with closed recovery/escalation/cleanup/quarantine values, patch/monitor/pending/result digests, forbidden-field absence, and every validator mutation result. |
+| `execEventQualification` | Both native systems bind Linux minimum, Yama parent-child mode, passing real ptrace startup/host conformance, all four exact request/pid values and pointer-position/type call shapes, descriptor-setup/`TRACEME`/final-signal-restoration/`SIGSTOP` and stop/options/continue/event/detach order, dynamic child relation, wrong-pid/nonchild refusal, fast-exit positive, pre-exec death/fault/EOF/wrong-event/detach negatives, every omitted/integer-in-pointer-position/exchanged/wrong-pid/nonchild/options-in-address/nonzero-signal argument mutation, static four-request plus enforceable constant-argument seccomp allowance, forbidden-request mutations, unchanged no-network plants, each pre-helper Nix/toolchain/sandbox code and wrong-remedy result, and every post-spawn helper recovery code. |
+| `qualification_result` | Identity, startup, strategy, inherited-capability, exec-event qualification, setup-before-payload, all eight socket/io_uring, external-egress, and live-index plants fail or pass at their own predicates as declared; every sandbox-policy stage has its fixed redacted code/remedy; inventories are complete; and every compatibility carrier passes on the same head. |
+
+There is no endpoint declaration field. A network namespace cannot enforce
+one, and no such claim is part of qualification.
 
 ## Qualification Record
 
-| Field | Rule |
-| --- | --- |
-| `head_sha` | The commit both workflows tested; identical for both run IDs. |
-| `source_event` | `push` on `refs/heads/v3` produced by a merged pull request. |
-| `bazel_run_id` | Unique immutable shadow workflow run ID. |
-| `cargo_run_id` | Unique immutable required workflow run ID at the same `head_sha`. |
-| `cargo_verdict` | `passed` or `failed` from `D2B_SKIP_FIXTURE_BUILD=1 make test-rust`. |
-| `bazel_verdict` | `passed` or `failed` from the Bazel rollup. |
-| `fixture_verdict` | `passed` required, from same-commit `D2B_ENABLE_FIXTURE_BUILD=1 make test-fixture-contracts`. |
-| `slice_verdicts` | Exactly four attributed results. |
-| `slice_seconds` | Four complete job durations; required for a cold-sample record. |
-| `manifest_ref` | Immutable evidence reference. |
-| `cache_restored` | Must equal zero for a qualifying cold sample. |
-| `cache_writes` | Must equal zero during the shadow stage. |
-| `permissions` | PR-reachable jobs: only `contents: read`; no `actions: write`. |
+Each record remains a protected `v3` push produced by a merged pull request and
+contains:
 
-Records are ordered by `v3` push completion. The promotion streak is ten
-consecutive records whose two compared verdicts match with a passing
-`fixture_verdict`. Streak arithmetic is fail-closed:
+- one head commit shared by Cargo and Bazel runs;
+- Cargo, Bazel, and fixture run references, each binding immutable run ID,
+  positive attempt, head SHA, and terminal verdict;
+- a passing same-commit fixture verdict;
+- four Bazel slice verdicts;
+- explicit `bazelRestoreCount`, `bazelSaveCount`, and
+  `bazelPublicationCount`;
+- `sliceDurationsSeconds` with four complete durations in every cold record;
+- effective workflow permissions.
 
-- differing verdicts reset the streak to zero;
-- a Bazel run that reaches no verdict while its paired Cargo run reaches one
-  counts as a mismatch and resets the streak;
-- a push where neither side reaches a verdict is not a record and neither
-  extends nor resets.
+Those four camelCase names are the canonical spellings. All three counts are
+mandatory in every record and zero during shadow. Every cold record also
+requires `bazelRestoreCount` of zero and four `sliceDurationsSeconds`
+entries. A missing field is a refusal, never an implied zero.
 
-Pull-request, `main`-push, scheduled, and dispatched runs are diagnostic. They
-never enter a streak or a measurement set, because `refs/pull/N/merge` is
-recomputed against a moving base and a Bazel-path-filtered pull-request sample
-cannot contain the divergence class the streak exists to detect.
+A pull-request shadow run is not a Qualification Record variant. It executes
+zero cache actions and emits no qualification object. Only a protected-`v3`
+push record carries the explicit zero counts and four durations.
 
-## Seeded Failure Record
+`qualified` is derived by the Typed Qualification Validator below. Boolean and
+summary fields in the record are informational mirrors; a mirror that disagrees
+with the derived result is a refusal.
 
-| Field | Rule |
-| --- | --- |
-| `surface_id` | Unique across the evidence set; all eighteen required. |
-| `seed_commit` | Immutable disposable commit or patch digest. |
-| `seed_description` | The single protected invariant intentionally broken. |
-| `invoked_make_target` | Owning approved slice or aggregate target. |
-| `expected_carrier` | Carrier for `surface_id`. |
-| `observed_failed_surfaces` | Exactly `[surface_id]`. |
-| `unrelated_failures` | Empty. |
-| `partial_manifest_ref` | Failed v1 manifest reference. |
+The validator receives complete paginated Cargo, Bazel, and fixture run
+inventories. It rejects page gaps, missing attempts, duplicate/conflicting run
+identities, or omitted intervening protected-`v3` pushes; normalizes a run ID
+to its highest terminal attempt; derives same-head pairing and streak resets;
+and selects the five newest qualifying cold records from that complete stream.
 
-A record is invalid if the seed changes more than one protected condition or
-if an unrelated surface fails.
+Qualification additionally binds:
 
-## Performance Measurement Set
-
-| Field | Rule |
-| --- | --- |
-| `profile` | `warm-local`, `cold-local`, or `cold-ci`. |
-| `environment` | ADR reference local host or runner facts and tool pins. |
-| `sample_commits` | One SHA per sample. Local samples use one candidate SHA; cold-CI samples use each record's `head_sha`. |
-| `sample_refs` | Run IDs for every sample; cold-CI refs also carry the `push`-on-`v3` source event. |
-| `cache_state` | Exact ADR profile; warm records the edit and live server, cold local retains only the repository cache, cold CI restores nothing. |
-| `invocation_flags` | The exact flags each sample ran under; `--test_output=streamed` invalidates the sample. |
-| `samples_seconds` | Three local samples, or the five most recent qualifying cold qualification records. |
-| `qualifying_rule` | A cold-CI sample qualifies only when no Bazel cache was restored and all four slice jobs completed with a recorded duration. |
-| `record_duration_seconds` | For `cold-ci`, the maximum of the record's four complete slice job durations. Local profiles use the measured aggregate duration. |
-| `ceiling_seconds` | 600 warm; 900 cold local and cold CI. |
-| `feasibility_ref` | Required for `cold-ci`: the W3 feasibility measurement that made the ceiling binding, or the pre-authorized remedy taken instead. |
-| `median_seconds` | Computed over all required valid samples. |
-| `maximum_seconds` | Maximum sample. |
-| `output_root_sizes` | Before/after for local samples. |
-| `valid` | True only if median is at/below ceiling and max is at/below 1.2 times ceiling. |
-
-A cleanup, hard refusal, server restart, wrong edit, cache-state change, heavy
-lane overlap, streamed test output, or mismatched environment invalidates a
-sample. Invalid samples are retained with their reason and replaced; they do
-not enter the median. The `api` slice's samples include the second
-configuration the channel transition creates; that cost is inside the ceiling,
-not carved out of it.
+- product and walker hub generation;
+- all four Package Policy Contexts;
+- exactly twelve native check wrappers, six per system;
+- native x86_64 and aarch64 six-check realization sets;
+- the selected-source and checksum refusal matrix;
+- the narrow six-entry guest license policy.
+- module-refresh mutation and remediation evidence;
+- exact `wl-proxy` output-hash evidence for the broker and guest Nix
+  derivations;
+- broker `exclusive` tags, no-overlap mutation, and twenty-run result for each
+  context;
+- exact patched-Bazel source/patch/policy/output/executable/capability
+  identities, startup probe, configured-target plus `aquery` stable/nightly
+  action-kind inventory, strategy inventory, patch-removal/filter-load/
+  setup-before-payload/inherited-capability/fallback results, eight pre-action
+  socket/io_uring plants, external-egress and live-index plants, and exact
+  Cargo compatibility census;
+- exact static-supervisor protocol identity, Linux/Yama/platform gates,
+  static four-request plus enforceable constant-argument ptrace seccomp
+  allowance, supervisor-owned dynamic child relation, both native startup and
+  host conformance wrong-pid/nonchild refusal results, kernel exec-event plus
+  zero-signal detach positive,
+  fast-exit result, pre-exec death/fault/empty-EOF/wrong-event/detach
+  negatives, forbidden-request mutations, and every typed recovery result;
+- all seven PID-namespace containment results, the exact sandbox patch and
+  canonical monitor identity digests, closed supervisor recovery classes,
+  cleanup/quarantine results, pending observation, and every
+  containment-validator mutation result;
+- product-only yanked authority and exact broker/guest projections;
+- all three Supply Chain Equivalence Results;
+- native arm `make test-rust-supply-chain` and stable-head renderer evidence.
 
 ## Cache Generation
 
 | Field | Rule |
 | --- | --- |
-| `generation_id` | Unique successful protected-`v3` run identifier. |
-| `kind` | `action` or `repository`; never `output-base`. |
-| `key_input_digest` | Digest over `.bazelversion`, `MODULE.bazel`, `MODULE.bazel.lock`, `.bazelrc`, both `rust-toolchain.toml` files, all four hub Cargo locks, `packages/Cargo.guest.lock`, all four per-hub `crate_universe` Bazel-side locks, the `cargo-bazel` URL and sha256, all deny configurations, the advisory-database pin, the committed yanked snapshot, `.bazelignore`, the symlink-prefix and startup-option configuration, the build-script annotation and action-environment digest, and the generated BUILD tree digest. |
+| `primary_key` | Unique per successful protected-`v3` run and cache kind; includes run ID. |
 | `restore_prefix` | Omits run ID and commit SHA. |
-| `trim_evidence` | Reference proving the explicit synchronous collector completed before measurement. |
-| `size_bytes` | At most 4 GiB action or 1 GiB repository, measured after the trim. |
-| `writer_job` | Same single protected-`v3` writer for both coordinated saves. |
-| `source_event` | Protected-`v3` push only. |
-| `state` | `planned`, `restored-read-only`, `trimmed`, `published`, `superseded`, `deleted`. |
+| `kind` | `action` or `repository`, never output base. |
+| `bazelRestoreCount` | Explicit nonnegative count; present in every record. |
+| `bazelSaveCount` | Explicit nonnegative count; present in every record. |
+| `bazelPublicationCount` | Explicit nonnegative count; present in every record. |
+| `sliceDurationsSeconds` | Exactly four complete durations in every cold record. |
+| `retention` | Keep the newest complete generation for each authorized prefix; delete only older authorized generations. |
 
-PR jobs can only reach `restored-read-only`. Publication requires complete
-maintenance pagination, unambiguous authorized prefixes, an observed
-synchronous trim, and two checks that repository usage plus planned snapshot is
-at most 8 GiB. Credentials cannot enter a run step or a Bazel environment. Any
-key input changing without changing the key is a defect, not a tuning choice.
+The bound-input applicability table in
+`contracts/cache-workflow-boundaries.md` is part of this entity. Every marked
+action or repository dependency is mutation-tested, and `kind` is embedded in
+the namespace so action and repository keys can never collapse.
 
-## Recovery Condition
+## Post-Promotion Run Unit
 
-Common:
+A transient run unit is one distinct push-created `(runId, headSha)` pair. It
+is the only streak-bearing entity; an attempt never is. The validator fetches
+the complete stream on every run before deriving the streak.
 
 | Field | Rule |
 | --- | --- |
-| `code` | Unique stable static code. |
-| `trigger` | One exact refusal or expiry class. |
-| `message_template` | Fixed and actionable. |
-| `required_steps` | Exact repository-relative remedy for this code. |
-| `forbidden_values` | Absolute path, output hash, user/PID, raw deadline, opaque handle. |
-| `forbidden_actions` | Code-specific unsafe actions. |
+| `runId` | Required immutable workflow run ID. |
+| `headSha` | Exact tested commit; `(runId, headSha)` is the unit identity. |
+| `event` | Exactly `push`. |
+| `branch` | Exactly `v3`. |
+| `attempts` | Complete nested history `1..maxAttempt`; a missing attempt is invalid. |
+| `conclusion` | Normalized to the conclusion of the highest terminal attempt. |
+| `createdAt` | Immutable creation timestamp; primary ordering key. |
+| `promotionAncestor` | Derived true only when promotion is an ancestor of `headSha`. |
 
-Variants:
+### Run Attempt
 
-| Variant | Members | Codes |
-| --- | --- | --- |
-| `CleanupRefusal` | Deletes nothing, by construction of the variant. Exercised through the injected `FileSystem`. | `D2B-BZLCLEAN-TRACKED`, `D2B-BZLCLEAN-SYMLINK`, `D2B-BZLCLEAN-ESCAPE`, `D2B-BZLCLEAN-LIVE` |
-| `ServerRefusal` | Bounded shutdown attempt, no manual signal instruction. | `D2B-BZLSERVER-STUCK` |
-| `DeadlineOutcome` | `measured_duration` and `target`. Exercised through the injected `Clock`. | Expired budget and ceiling miss |
-
-`deletes_nothing` is not a field, because only `CleanupRefusal` can carry it
-and it is always true there. Expired budget and ceiling miss are normal
-deadline outcomes rather than refusals. Remedies cannot be
-borrowed across codes. A ceiling miss names only a larger runner or further
-disjoint split.
-
-## Qualification Evidence Record
-
-This is the concrete immutable record for the feature specification's
-Promotion Evidence Set before executor authority changes.
-
-| Field | Validity rule |
+| Field | Rule |
 | --- | --- |
-| `candidate_commit` | One immutable integrated commit. |
-| `coverage_map_digest` | Both guard halves pass for all eighteen. |
-| `qualification_records` | Ten consecutive matching push-to-`v3` records, each with one shared `head_sha`, both run IDs, and a passing fixture-contract verdict. |
-| `seeded_failures` | Exact eighteen-record set. |
-| `topology_proofs` | Main, guest, and three broker suites; exact generator-derived censuses and ignored counts, plus per-case result publication. |
-| `locator_migration_proof` | Every enumerated file migrated or recorded as needing none, plus the passing injected stale-provider negative in which the `FileSystem` fake reports an out-of-date, wrong-digest executable at the Cargo path while the `RunfilesView` fake reports the entry missing, plus the passing injected post-open path-rebind negative, plus the host-backed `execveat` conformance result. |
-| `broker_repetitions` | Twenty consecutive passes per broker suite with exclusivity. |
-| `performance_sets` | Three valid profiles. Local sets bind the candidate; cold-CI samples carry their own `head_sha` values and reference the W3 feasibility measurement. |
-| `supply_chain_comparison` | Three locks, no differing enforcing outcome, with the yanked carrier landed and `cargo xtask bazel-yanked-check` passing offline against all three. |
-| `cache_shadow_proof` | Zero shadow publications. |
-| `workflow_policy_proof` | Positive and every required negative fixture pass. |
-| `status` | `collecting`, `qualified`, or `invalidated`. |
+| `attempt` | Positive integer, unique inside its unit. |
+| `conclusion` | Terminal or nonterminal conclusion of that attempt. |
+| `runStartedAt` | Orders attempts inside a unit only; never orders units. |
+| `completedAt` | Terminal timestamp not earlier than that attempt's start. |
+| `headSha`, `event`, `branch`, provenance | Must equal the unit's values; any conflict is invalid. |
 
-Before W4 merge, any candidate-content change invalidates evidence tied to
-affected content and returns the draft to `collecting`. `qualified` is
-required before promotion. Once committed as `qualified`, the record is
-immutable. Promotion references its digest and does not mutate it.
+The source inventory carries page/cursor continuity and is complete before
+derivation. Units sort by `(createdAt, runId)`. `runStartedAt` is never a
+unit-ordering input, because a rerun updates it and would let an old rerun move
+behind newer failures. Pagination gaps, missing attempts, conflicting attempt
+provenance, missing or duplicate unit identities, a nonterminal highest
+attempt, non-push/non-v3 records, and pre-promotion commits are invalid.
 
-Historical qualification records are a sequence, not candidate-owned samples.
-Each retains its own `head_sha` and run IDs. Candidate-bound coverage,
-seeded-failure, topology, locator, local-performance, and supply-chain evidence
-must match `candidate_commit`.
+## Derived Promotion Streak
+
+| Field | Rule |
+| --- | --- |
+| `ordered_units` | Complete validated Post-Promotion Run Unit set in `(createdAt, runId)` order. |
+| `reset_positions` | Derived positions of every terminal non-success unit. |
+| `current_successes` | Derived suffix length after the last reset, counting each unit once. |
+| `retirement_eligible` | Derived true only when the final ten distinct ordered units are successes. |
+
+No persisted `eligible`, count, or run-ID list is an input. A failure,
+cancellation, timeout, or other terminal non-success between successes resets
+the streak. A repeated successful attempt of an already-counted unit never
+increments the streak, and a later rerun of an older unit never reorders it
+behind newer failures.
+
+## Bounded Post-Promotion Checkpoint
+
+`post-promotion.json` persists no complete stream and no complete attempt
+array.
+
+| Field | Rule |
+| --- | --- |
+| `paginationState`, `pageCount`, `streamCount`, `streamSha256` | Closed `complete` state, counts, and digest of the complete transient stream; no raw cursor is persisted. |
+| `promotionCommit` | Validated by the typed Promotion Record validator. |
+| `lastTen` | At most the final ten normalized units, in immutable order. |
+| `attemptCount`, `attemptHistorySha256` | Fixed-size summary per persisted unit. |
+| `maxBytes`, `maxRecords` | Schema constants; overflow refuses before atomic replacement. |
+
+The checkpoint is output only. Every refresh re-fetches the complete stream,
+derives the verdict independently, replaces the bounded file, and proves the
+bounded and complete-stream verdicts equal.
+
+## Typed Qualification Validator
+
+| Field | Rule |
+| --- | --- |
+| `module` | `packages/xtask/src/bazel_qualification.rs` with tests in `packages/xtask/tests/bazel_qualification.rs`, implemented no later than spec003w3. |
+| `command` | `cargo xtask bazel-qualification-validate`, no arguments, fixed repository-relative record path, unreachable from Make and workflows. |
+| `refreshCommand` | `cargo xtask bazel-evidence refresh-qualification`, no arguments, atomic fixed-record replacement, unreachable from Make and workflows. |
+| `reference_kinds` | Workflow run (`runId`, positive `attempt`, and `headSha`), commit SHA, content path plus digest, generated path plus digest. |
+| `derivation` | Every threshold is computed by counting or comparing referenced evidence; no stated number is trusted. |
+| `outcomes` | Closed complete, typed degraded query/publication failure, or semantic refusal; query failure is never an empty inventory. |
+| `refusals` | Inventory, omitted, forged or ill-formed, duplicate, inconsistent, wrong-candidate, and degraded-evidence classes. |
+| `booleans` | Informational mirrors only; a mirror disagreeing with the derived result is a refusal. |
+| `containment` | Derives the seven-stage census, stage-to-recovery-class mapping, patch/monitor digest equality, cleanup/quarantine legality, pending observation, no-success/no-reuse results, forbidden-field absence, and every required mutation result. |
+| `callers` | Evidence curation, promotion validation, and contributor validation before any informational inspection. |
+
+## No-Shell Spawn Inventory
+
+| Field | Rule |
+| --- | --- |
+| `path` | `bazel/generated/no-shell-inventory.json`, generated, integrator-committed, drift-checked. |
+| `governedSources` | Every repository-owned runner, cleanup, timeout, and process-control source derived from the first-party configured-target census. |
+| `declaredInputs` | The exact declared inputs of the no-shell carrier. |
+| `scanResults` | Exactly one successful scan record per governed source, including zero-site sources; raw record count and unique-source count each equal the governed-source count. |
+| `spawnSites` | Every discovered spawn construct with its governed source, span, spawned program expression, and typed `shellInvocation` verdict; any true verdict refuses. |
+| `nonempty` | `governedSources` and `declaredInputs` are nonempty. A source may validly record zero spawn sites. |
+| `set_relationships` | Governed and declared source sets are equal; every spawn source is governed; scan-result sources equal governed sources; fresh and committed spawn-site keys are equal. |
+| `plants` | Exactly `no-shell-inventory-empty`, `no-shell-inventory-missing-entry`, `no-shell-inventory-extra-entry`, `no-shell-inventory-unguarded-spawn`, `no-shell-inventory-missing-zero-site-record`, and `no-shell-inventory-planted-shell`. |
+
+## Hybrid Disclosure Census
+
+| Field | Rule |
+| --- | --- |
+| `source` | Exact sorted nonempty `cargoCompatibilityCarriers` entries from `tests/golden/bazel-rust-coverage.json`, each retaining surface ID, Cargo selector, test identity, and socket class; no surface-only projection. |
+| `fixedDocuments` | Exactly `AGENTS.md`, `tests/AGENTS.md`, `docs/contributing/gates-and-lints.md`, `tests/README.md`, and `docs/reference/test-execution-manifest.md`. |
+| `candidateFragments` | The promotion, alias-removal, and Cargo-retirement semantic fragments when present. |
+| `comparison` | Every governed semantic block equals the complete carrier-identity source in both directions, with no duplicate or malformed entry; distinct cases sharing one surface remain distinct. |
+| `enforcement` | Fixture-independent type-5 `policy_bazel_hybrid_docs.rs` under `make test-policy`, with isolated empty-census, missing, extra, malformed/duplicate block, malformed/duplicate identity, stale-attribution, and governed-document mismatch negatives. |
+
+## Diagnostic Command Version
+
+| Version | Valid repository state | Closed commands |
+| --- | --- | --- |
+| `bazel-diagnostic-v1` | Shadow through promoted aliases | `make test-bazel-rust`, `make test-bazel-rust-main`, `make test-bazel-rust-api`, `make test-bazel-rust-broker`, `make test-bazel-rust-aux` |
+| `bazel-diagnostic-v2` | Alias removal and later | `make test-rust`, `make test-rust-slice-main`, `make test-rust-slice-api`, `make test-rust-slice-broker`, `make test-rust-slice-aux` |
+
+Alias removal owns the only transition. It updates every production provider,
+sandbox-policy, qualification-threshold, evidence/publication, cleanup, and
+recovery renderer; both module-wiring roots; every byte-exact test; all
+governed docs; the evidence record; and the semantic changelog in one change.
+Version 1 survives only in the pre-change fixture with all shadow rules. A
+state is invalid if any diagnostic, threshold, evidence variant, task-state
+label, or document names a target absent from that state.
+
+Execution recovery is a closed cross-product. Each Rust-parent, C-helper,
+child-setup, and patched-sandbox cleanup stage maps to one stable public code,
+one fixed repository-relative input, and one literal correction. The closed
+slice plus the diagnostic version selects exactly one phase-valid command from
+the table above. Missing, wrong-version, absent-in-phase, wrong-slice,
+borrowed-remedy, free-form, numeric-PID/PGID, and unredacted variants are
+invalid. T067 and T068 own only the runner parent/helper/child tests and
+mapping. The patched sandbox and sequential T120 own sandbox mapping,
+rendering, and live byte-exact tests.
+
+## Evidence Sink Result
+
+| Field | Rule |
+| --- | --- |
+| `testVerdict` | Underlying passed, failed, ignored, or interrupted result. |
+| `evidenceStatus` | Closed tagged `Complete` or `Degraded` variant; never inferred from `testVerdict`. |
+| `sinkKind` | Common field occurring exactly once: JUnit, `test.log`, execution evidence, qualification evidence, or exporter diagnostic. |
+| `retentionClass` | Common field occurring exactly once and derived exactly from `sinkKind`. |
+| `Complete` | Requires only `kind = "complete"` and `sinkPolicySha256`; rejects degradation fields and repeated sink/retention fields. |
+| `Degraded` | Requires only `kind = "degraded"`, closed code, policy-row SHA-256, and closed retry command; rejects complete fields and repeated sink/retention fields. |
+| `bytes`, `records` | At or below the committed measured sink-policy limits. |
+
+Every forbidden planted value is absent from every sink. Qualification accepts
+only the structurally valid complete variant but never rewrites the underlying
+verdict. Execution-manifest v1 contains neither status variant.
 
 ## Promotion Record
 
 | Field | Rule |
 | --- | --- |
-| `promotion_commit` | Immutable SHA that changes executor authority. |
-| `qualification_digest` | Digest of the immutable qualified W4 record. |
-| `maintenance_run_id` | Protected-`v3` cache maintenance run. |
-| `deleted_generations` | Only authorized retired/superseded keys. |
-| `trim_evidence` | Reference proving the synchronous collector completed before both headroom checks. |
-| `headroom_checks` | Both pre-save checks at or below 8 GiB. |
-| `writer_run_id` | The one authorized publishing job. |
-| `first_promoted_verdict` | Required `test-rust` verdict after promotion. |
-| `rollback_rehearsal` | Reference proving one revert restores Cargo authority. |
+| `promotionCommit` | Actual protected-`v3` pull-request merge commit. |
+| `sealedCandidateId`, `sealedContentId`, `sealedSnapshotSha256` | Exact identities from the `spec003w5` seal. |
+| `pullRequestMergeCommit` | Immutable merge SHA from the merged PR record; equals `promotionCommit`. |
+| `originV3Contains` | Derived ancestry result, never trusted. |
+| `validation` | Typed re-derivation of seal/content/merge equality. |
 
-The record is written after the ordered protected-`v3` promotion run and is
-immutable once reviewed.
+A candidate head, older containing SHA, wrong seal, or unsealed merge is
+invalid.
 
-## Post-Promotion Observation
+## Release Containment Result
 
 | Field | Rule |
 | --- | --- |
-| `promotion_commit` | Must equal Promotion Record SHA. |
-| `release_tags` | Tags that contain promotion, recorded independently. |
-| `green_run_ids` | Ordered promoted `v3` `test-rust` run IDs. |
-| `consecutive_green_count` | Derived from uninterrupted green run sequence. |
-| `alias_removal_eligible` | True when at least one containing release exists. |
-| `cargo_retirement_eligible` | True when consecutive green count is at least ten. |
+| `command` | No-argument `cargo xtask bazel-release-containment-validate`, unreachable from Make and workflows. |
+| `tagReferenceSha256` | Digest of the validated semantic tag reference; the tag identifier remains transient and is never persisted or printed. |
+| `containment` | Promotion commit is an ancestor of the peeled tag commit. |
+| `origin` | Peeled local and origin tag commits agree. |
+| `release` | Present, not draft, and not prerelease. |
+| `outcome` | Closed `Complete`, typed query `Degraded`, or semantic `Refused`; query failure is never absence. |
+| `diagnostic` | One fixed code and exact closed remedy; no tag/candidate/object/run/attempt identifier, raw output, OS text, path, cursor, descriptor, or handle. |
 
-The two eligibility values are independent. Either may become true first and
-neither depends on the corresponding change having landed.
-
-## Migration Lifecycle
+## Lifecycle
 
 ```text
 planned
-  -> foundation-ready
+  -> product-foundation-ready
   -> coverage-complete
   -> safety-complete
   -> shadowing
@@ -669,50 +905,47 @@ planned
   -> green-run-qualified -> cargo-retired
 ```
 
-Transition rules:
+`release-qualified` requires a containing published semantic release tag
+matching `v<major>.<minor>.<patch>`. `green-run-qualified` requires ten
+distinct ordered green post-promotion run units.
 
-- Each transition before promotion requires the prior wave merged and sealed
-  by the unanimous ten-role panel. After promotion, each independent child
-  transition requires W5 plus its own evidence gate and panel.
-- `shadowing -> evidence-qualified` requires a valid Qualification Evidence
-  Record.
-- `evidence-qualified -> promoted` is the only executor-authority change.
-- Before `cargo-retired`, rollback is one promotion revert because Cargo
-  implementation still exists.
-- `promoted -> release-qualified` requires a release containing promotion and
-  is independent of the green-run clock and Cargo retirement.
-- `promoted -> green-run-qualified` requires ten consecutive green promoted
-  `v3` runs and is independent of release containment and alias
-  removal.
-- `release-qualified -> aliases-removed` removes only compatibility aliases.
-- `green-run-qualified -> cargo-retired` removes only the eighteen Cargo
-  implementations and unreachable Cargo-only plumbing. It must preserve the
-  fixture mode and every public Make name, which continue to invoke the
-  authoritative Bazel carriers.
-- A failure before promotion remains in `shadowing`; it never weakens a gate.
-- A promoted correctness failure reverts promotion and returns to
-  `safety-complete` or `shadowing`, retaining evidence only as historical.
+No lifecycle state is inherited from a parked Spec 003 foundation branch. The first transition
+is reached only by merging and sealing the new `spec003w0` built from current
+`v3`.
+
+The two post-promotion eligibility clocks are independent. spec003w7
+qualification and code preparation may run before spec003w6, but its shared
+documentation/evidence task and merge depend on merged spec003w6. It then
+rebases, revalidates, and obtains a new panel result. This encodes disjoint
+ownership for every concurrently ready task.
 
 ## Relationships
 
 ```text
+Product Workspace 1 -- 1 Product Hub
+Walker Workspace 1 -- 1 Walker Hub
+Product Workspace 1 -- many Cargo Build Contexts
+Package-resolving Broker/Guest Cargo Build Context 1 -- 1 Selected Context Oracle
+Cargo Build Context 1 -- many Configured First-Party Bazel Targets
+Package Policy Context 1 -- 1 ProductionGraph
+Package Policy Context 1 -- 1 PolicyGraph
+Package Policy Graph 1 -- 1 Selected Source Census
+Package Policy Context 1 -- many Package Policy Results
+Nix Artifact Context 1 -- 1 Package Policy Context
+Flake Check Wrapper 1 -- 1 exact system-and-target policy input
 Coverage Map 1 -- 18 Rust Surfaces
 Rust Surface 1 -- 1..n Carrier Targets
-Carrier Target 1 -- 1 Rust Surface
-Carrier Target (TestCarrier) 1 -- 1 Test Topology
-Carrier Target (TestCarrier) 1 -- 1 Per-Case Result Document
-Carrier Target many -- 1 CI Slice
-Injected Boundaries 2 -- many Carrier Targets and cleanup paths
-Carrier Target 1 -- 1..n Verified Executable Handles
-Test Locator Migration (Migrated, binary-location) 1 -- 1 Verified Executable Handle
-Coverage Map 1 -- many Test Locator Migration records
-Wave-Note Lint Refusal many -- 1 wave-note corpus
-Hermeticity Inventory 4 -- 1 Coverage Map
-Qualification Record many -- many protected-v3 push events
-Seeded Failure Record 18 -- 1 Qualification Evidence Record
-Performance Measurement Set 3 -- 1 Qualification Evidence Record
-Cache Generation many -- 1 authorized writer policy
-Recovery Condition many -- 1 owning safety subsystem
-Qualification Evidence Record 1 -- 1 Promotion Record
-Promotion Record 1 -- 1 Post-Promotion Observation
+Qualification Evidence 1 -- 4 Package Policy Contexts
+Qualification Evidence 1 -- 3 Supply Chain Equivalence Results
+Qualification Evidence 1 -- 2 native architecture realization sets
+Qualification Evidence 1 -- 1 Typed Qualification Validator verdict
+Qualification Evidence 1 -- 1 No-Shell Spawn Inventory digest
+Qualification Evidence 1 -- 7 PID-Namespace Containment Qualification Results
+Qualification Evidence 1 -- 1 Promotion Record
+Coverage Map 1 -- 1 Hybrid Disclosure Census
+Hybrid Disclosure Census 1 -- many governed documents
+Repository State 1 -- 1 Diagnostic Command Version
+Promotion Record 1 -- many Post-Promotion Run Units
+Post-Promotion Run Unit 1 -- 1..n Run Attempts
+Post-Promotion Run Units many -- 1 Derived Promotion Streak
 ```
