@@ -35,6 +35,33 @@ pub const MAX_PUBLICATION_NAME_BYTES: usize = 128;
 
 const BACKUP_DIGEST_DOMAIN: &str = "d2b:v3:resource-store-backup";
 
+/// Account one row before retaining its bytes in a logical backup.
+///
+/// Capture must reject a row as soon as the cumulative bound is crossed;
+/// checking only after the table has been collected would let an oversized
+/// database consume unbounded memory first.
+pub(crate) fn account_capture_row(
+    total_rows: &mut usize,
+    total_row_bytes: &mut usize,
+    key_bytes: usize,
+    value_bytes: usize,
+) -> Result<(), crate::StoreError> {
+    *total_rows = total_rows
+        .checked_add(1)
+        .ok_or_else(|| integrity("backup-row-count-overflow"))?;
+    if *total_rows > MAX_LOGICAL_BACKUP_ROWS {
+        return Err(integrity("backup-row-count-over-limit"));
+    }
+    *total_row_bytes = total_row_bytes
+        .checked_add(key_bytes)
+        .and_then(|bytes| bytes.checked_add(value_bytes))
+        .ok_or_else(|| integrity("backup-size-over-limit"))?;
+    if *total_row_bytes > MAX_LOGICAL_BACKUP_BYTES {
+        return Err(integrity("backup-size-over-limit"));
+    }
+    Ok(())
+}
+
 /// One raw logical row from a named physical table.
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -130,6 +157,8 @@ impl LogicalBackup {
             .map_err(|error| error.with_store_slot(identity.slot()))?;
 
         let mut tables = Vec::with_capacity(TABLE_SCHEMAS.len());
+        let mut total_rows = 0_usize;
+        let mut total_row_bytes = 0_usize;
         for schema in TABLE_SCHEMAS {
             let definition = table_definition(schema.key_space)
                 .ok_or_else(|| integrity("backup-table-definition-missing"))?;
@@ -146,6 +175,13 @@ impl LogicalBackup {
                 let (key, value) = row
                     .map_err(integrity)
                     .map_err(|error| error.with_store_slot(identity.slot()))?;
+                account_capture_row(
+                    &mut total_rows,
+                    &mut total_row_bytes,
+                    key.value().len(),
+                    value.value().len(),
+                )
+                .map_err(|error| error.with_store_slot(identity.slot()))?;
                 rows.push(BackupRow {
                     key: key.value().to_vec(),
                     value: value.value().to_vec(),
@@ -230,24 +266,17 @@ impl LogicalBackup {
             {
                 return Err(integrity("backup-table-schema-mismatch"));
             }
-            total_rows = total_rows
-                .checked_add(table.rows.len())
-                .ok_or_else(|| integrity("backup-row-count-overflow"))?;
-            if total_rows > MAX_LOGICAL_BACKUP_ROWS {
-                return Err(integrity("backup-row-count-over-limit"));
-            }
             if checksum_rows(&table.rows) != table.checksum {
                 return Err(integrity("backup-table-checksum-mismatch"));
             }
             let mut previous_key: Option<&[u8]> = None;
             for row in &table.rows {
-                total_row_bytes = total_row_bytes
-                    .checked_add(row.key.len())
-                    .and_then(|bytes| bytes.checked_add(row.value.len()))
-                    .ok_or_else(|| integrity("backup-size-over-limit"))?;
-                if total_row_bytes > MAX_LOGICAL_BACKUP_BYTES {
-                    return Err(integrity("backup-size-over-limit"));
-                }
+                account_capture_row(
+                    &mut total_rows,
+                    &mut total_row_bytes,
+                    row.key.len(),
+                    row.value.len(),
+                )?;
                 if previous_key.is_some_and(|previous| previous >= row.key.as_slice()) {
                     return Err(integrity("backup-table-rows-not-sorted"));
                 }

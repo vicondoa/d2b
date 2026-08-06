@@ -1,11 +1,7 @@
-use std::fs::OpenOptions;
-use std::os::fd::{AsFd, AsRawFd};
-use std::os::unix::fs::MetadataExt;
-use std::os::unix::process::CommandExt;
-use std::process::{Command, Stdio};
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Barrier};
-
+use crate::audit::DurableMutationAudit;
+use crate::metrics::{NoopStoreTelemetry, StoreMetric};
+use d2b_audit::{AuditHash, AuditRecord, AuditRecordError, AuditRecordFields, genesis_hash};
+use d2b_contracts::v3::identity::STANDARD_RESOURCE_TYPES;
 use d2b_contracts::v3::{
     CanonicalJsonValue, ConfigurationGeneration, RESOURCE_ENVELOPE_DOMAIN_TAG, ResourceEnvelope,
     ResourceRef, ResourceTypeName, ResourceUid, Timestamp, ZoneId, canonical_digest,
@@ -24,8 +20,45 @@ use rustix::net::{
     AddressFamily, SendAncillaryBuffer, SendAncillaryMessage, SendFlags, SocketFlags, SocketType,
     sendmsg, socketpair,
 };
+use std::fs::OpenOptions;
+use std::os::fd::{AsFd, AsRawFd};
+use std::os::unix::fs::MetadataExt;
+use std::os::unix::process::CommandExt;
+use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Barrier, Mutex};
 
 use super::*;
+
+#[derive(Default)]
+struct RecordingAudit(Mutex<Vec<AuditRecord>>);
+
+impl RecordingAudit {
+    fn records(&self) -> Vec<AuditRecord> {
+        self.0.lock().unwrap().clone()
+    }
+}
+
+impl DurableMutationAudit for RecordingAudit {
+    fn previous_hash(&self) -> Result<AuditHash, AuditRecordError> {
+        Ok(self
+            .0
+            .lock()
+            .unwrap()
+            .last()
+            .map_or_else(genesis_hash, |record| record.record_hash().clone()))
+    }
+
+    fn append_before_commit(&self, record: &AuditRecord) -> Result<(), AuditRecordError> {
+        let mut records = self.0.lock().unwrap();
+        let previous = records
+            .last()
+            .map_or_else(genesis_hash, |record| record.record_hash().clone());
+        record.verify(&previous)?;
+        records.push(record.clone());
+        Ok(())
+    }
+}
 
 fn identity() -> StoreIdentity {
     identity_for(
@@ -402,6 +435,201 @@ fn contract_constants_are_exact() {
     assert_eq!(MAX_CONCURRENT_READS, 16);
     assert_eq!(READ_LIFETIME, std::time::Duration::from_millis(250));
     assert_eq!(REDB_CACHE_SIZE, 4 * 1024 * 1024);
+}
+
+#[test]
+fn backup_capture_limits_are_accounted_cumulatively() {
+    let mut rows = MAX_LOGICAL_BACKUP_ROWS - 1;
+    let mut bytes = 0;
+    crate::backup::account_capture_row(&mut rows, &mut bytes, 1, 0)
+        .expect("the final row below the count bound is admitted");
+    assert_eq!(
+        crate::backup::account_capture_row(&mut rows, &mut bytes, 1, 0)
+            .unwrap_err()
+            .reason_code(),
+        "backup-row-count-over-limit"
+    );
+
+    let mut rows = 0;
+    let mut bytes = MAX_LOGICAL_BACKUP_BYTES;
+    assert_eq!(
+        crate::backup::account_capture_row(&mut rows, &mut bytes, 1, 0)
+            .unwrap_err()
+            .reason_code(),
+        "backup-size-over-limit"
+    );
+}
+
+#[test]
+fn production_ports_use_real_telemetry_and_durable_audit_adapters() {
+    let (directory, file) = owned_file();
+    let ports = super::StorePorts::production(&file).expect("production ports");
+    assert!(ports.audit.enabled());
+    assert!(directory.path().join("audit").is_dir());
+    ports.telemetry.metric(
+        StoreMetric::QueueDepth,
+        std::collections::BTreeMap::from([("operation".to_owned(), "write".to_owned())]),
+        1.0,
+    );
+}
+
+#[tokio::test]
+async fn initialized_schema_catalog_is_digest_bound_and_complete() {
+    let (_directory, file, marker) = provisioned_store();
+    let store = provision_store(file, marker, identity()).await.unwrap();
+    let backup = store.logical_backup().await.unwrap();
+    let table = backup
+        .tables
+        .iter()
+        .find(|table| table.name == "api_schemas")
+        .expect("schema table");
+    assert_eq!(table.rows.len(), STANDARD_RESOURCE_TYPES.len());
+
+    let mut resource_types = std::collections::BTreeSet::new();
+    for row in &table.rows {
+        let key = DecodedKey::decode(&row.key).unwrap();
+        let [DecodedKeyComponent::Text(schema_digest)] = key.components() else {
+            panic!("schema key shape");
+        };
+        let value = DecodedValue::decode(&row.value).unwrap();
+        let json: serde_json::Value = serde_json::from_slice(value.canonical_json()).unwrap();
+        assert_eq!(
+            json.get("schemaDigest").and_then(serde_json::Value::as_str),
+            Some(schema_digest.as_str())
+        );
+        resource_types.insert(
+            json.get("resourceType")
+                .and_then(serde_json::Value::as_str)
+                .unwrap()
+                .to_owned(),
+        );
+    }
+    assert_eq!(
+        resource_types,
+        STANDARD_RESOURCE_TYPES
+            .into_iter()
+            .map(str::to_owned)
+            .collect()
+    );
+
+    let schema = store
+        .inspect_schema(StoreInspectSchemaRequest {
+            operation: operation("inspect-host-schema"),
+            zone: ZoneId::parse("work").unwrap(),
+            resource_type: ResourceTypeName::parse("Host").unwrap(),
+        })
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&schema.canonical_json).unwrap();
+    assert_eq!(
+        schema.payload_digest,
+        json.get("schemaDigest")
+            .and_then(serde_json::Value::as_str)
+            .unwrap()
+    );
+    assert_eq!(
+        store
+            .inspect_schema(StoreInspectSchemaRequest {
+                operation: operation("inspect-unknown-schema"),
+                zone: ZoneId::parse("work").unwrap(),
+                resource_type: ResourceTypeName::parse("vendor.d2bus.org.Unknown").unwrap(),
+            })
+            .await
+            .unwrap_err()
+            .reason_code(),
+        "resource-not-found"
+    );
+}
+
+#[tokio::test]
+async fn mutation_audit_uses_result_identity_and_failure_revision() {
+    let (_directory, file, marker) = provisioned_store();
+    let store_identity = identity();
+    let (issuer, acceptor) = mutation_seal_pair(store_identity.seal_identity());
+    let audit = Arc::new(RecordingAudit::default());
+    let store = RedbResourceStore::provision_owned_with_test_ports(
+        file,
+        marker,
+        store_identity,
+        acceptor,
+        Arc::new(NoopStoreTelemetry),
+        audit.clone(),
+    )
+    .await
+    .unwrap();
+
+    let name = "audited-create";
+    let canonical = create_body(name);
+    let payload_digest = canonical_digest(RESOURCE_ENVELOPE_DOMAIN_TAG, &canonical);
+    let created = store
+        .commit_verified(issuer.seal(create_seal_body_with_resource(
+            "audited-create",
+            name,
+            canonical.clone(),
+            payload_digest.clone(),
+        )))
+        .await
+        .unwrap();
+
+    let conflict = store
+        .commit_verified(issuer.seal(create_seal_body_with_resource(
+            "audited-conflict",
+            name,
+            canonical.clone(),
+            payload_digest.clone(),
+        )))
+        .await
+        .unwrap_err();
+    assert_eq!(conflict.reason_code(), "resource-already-exists");
+
+    let denied_canonical = create_body("audited-denied");
+    let denied_payload_digest = canonical_digest(RESOURCE_ENVELOPE_DOMAIN_TAG, &denied_canonical);
+    let mut denied_body = create_seal_body_with_resource(
+        "audited-denied",
+        "audited-denied",
+        denied_canonical,
+        denied_payload_digest,
+    );
+    denied_body.authorization.targets.clear();
+    let denied = store
+        .commit_verified(issuer.seal(denied_body))
+        .await
+        .unwrap_err();
+    assert_eq!(
+        denied.kind(),
+        d2b_resource_store::StoreErrorKind::AuthorizationDenied
+    );
+    store.shutdown().await.unwrap();
+
+    let records = audit.records();
+    assert_eq!(records.len(), 3);
+    let fields = records
+        .iter()
+        .map(|record| match record.fields() {
+            AuditRecordFields::ResourceMutation(fields) => fields,
+            _ => panic!("resource mutation audit record"),
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(fields[0].outcome, "ok");
+    assert_eq!(fields[0].resource_uid, created.resources[0].uid.as_str());
+    assert_eq!(fields[0].generation, 1);
+    assert_eq!(fields[0].resulting_revision, 1);
+    assert_eq!(fields[1].outcome, "invalid");
+    assert_eq!(
+        fields[1].resource_uid,
+        crate::audit::opaque_digest("Host/audited-create")
+    );
+    assert_eq!(fields[1].resulting_revision, 1);
+    assert_eq!(
+        fields[1].error_code.as_deref(),
+        Some("resource-already-exists")
+    );
+    assert_eq!(fields[2].outcome, "denied");
+    assert_eq!(
+        fields[2].resource_uid,
+        crate::audit::opaque_digest("Host/audited-denied")
+    );
+    assert_eq!(fields[2].resulting_revision, 1);
 }
 
 #[test]

@@ -1,5 +1,6 @@
 //! Persisted store DTOs, recovery validation, and crash-safe write transactions.
 
+use d2b_contracts::v3::identity::STANDARD_RESOURCE_TYPES;
 use d2b_contracts::v3::{
     CanonicalJsonValue, ControllerGeneration, FinalizerId, RESOURCE_ENVELOPE_DOMAIN_TAG,
     ResourceEnvelope, ResourceGeneration, ResourceName, ResourceRef, ResourceTypeName, ResourceUid,
@@ -10,7 +11,9 @@ use d2b_resource_store::{
     StoreCommitResult, StoreError, StoreErrorKind, StoreMutation, StoreOperationContext,
     StoredResource,
 };
-use redb::{Database, Durability, ReadableDatabase, ReadableTable, TableDefinition};
+use redb::{
+    Database, Durability, ReadableDatabase, ReadableTable, ReadableTableMetadata, TableDefinition,
+};
 use serde::{Deserialize, Serialize};
 
 use crate::{DecodedKey, KeyComponent, KeySpace, ValueKind, encode_key, encode_value};
@@ -51,6 +54,11 @@ pub(crate) const ALL_TABLES: [TableDefinition<'static, &[u8], &[u8]>; 10] = [
 ];
 
 pub(crate) const PHYSICAL_SCHEMA_VERSION: u32 = 1;
+const STANDARD_SCHEMA_VERSION: &str = "1.0";
+const RESOURCE_SCHEMA_DOMAIN_TAG: &str = "d2b:v3:resource-schema";
+
+/// The standard ResourceType catalog bound by a freshly provisioned store.
+pub(crate) const STANDARD_SCHEMA_CATALOG: [&str; 19] = STANDARD_RESOURCE_TYPES;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -322,6 +330,7 @@ impl ChangeBatch {
 pub(crate) struct CommittedGroup {
     pub results: Vec<Result<StoreCommitResult, StoreError>>,
     pub batch: Option<ChangeBatch>,
+    pub resulting_revision: u64,
 }
 
 pub(crate) struct VerifiedWrite {
@@ -452,6 +461,16 @@ pub(crate) fn initialize(
     meta.insert(key.as_slice(), value.as_slice())
         .map_err(integrity)?;
     drop(meta);
+    let mut schemas = write.open_table(API_SCHEMAS).map_err(integrity)?;
+    for resource_type in STANDARD_SCHEMA_CATALOG {
+        let schema = api_schema_record(resource_type)?;
+        let schema_key = api_schema_key(resource_type)?;
+        let schema_value = encode(ValueKind::ApiSchemaRecord, &schema)?;
+        schemas
+            .insert(schema_key.as_slice(), schema_value.as_slice())
+            .map_err(integrity)?;
+    }
+    drop(schemas);
     write.commit().map_err(integrity)
 }
 
@@ -483,8 +502,6 @@ pub(crate) fn validate_identity(
 }
 
 pub(crate) fn validate_consistency(database: &Database) -> Result<(), StoreError> {
-    use redb::ReadableTableMetadata;
-
     let read = database.begin_read().map_err(integrity)?;
     let meta = read_meta(&read)?;
     let revisions = read.open_table(REVISION_LOG).map_err(integrity)?;
@@ -705,11 +722,15 @@ fn operation_id_from_key(bytes: &[u8]) -> Result<String, StoreError> {
     Ok((*operation_id).to_owned())
 }
 
-#[derive(Deserialize)]
+#[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ApiSchemaRecord {
     #[serde(rename = "resourceType", alias = "x-d2b-resource-type")]
     resource_type: ResourceTypeName,
+    #[serde(rename = "schemaDigest", alias = "x-d2b-schema-digest", default)]
+    schema_digest: String,
+    #[serde(rename = "schemaVersion", default)]
+    schema_version: String,
     #[serde(rename = "validatorFingerprint", alias = "x-d2b-schema-fingerprint")]
     validator_fingerprint: String,
     #[serde(rename = "additionalProperties", default)]
@@ -730,8 +751,55 @@ struct ZoneLinkCursorRecord {
     applied: u64,
 }
 
+fn schema_digest_for_type(resource_type: &str) -> Result<String, StoreError> {
+    if !STANDARD_SCHEMA_CATALOG.contains(&resource_type) {
+        return Err(integrity("api-schema-resource-type-unknown"));
+    }
+    let descriptor = serde_json::json!({
+        "resourceType": resource_type,
+        "schemaVersion": STANDARD_SCHEMA_VERSION,
+        "validator": "d2b-resource-store-redb/standard",
+    });
+    let bytes = d2b_contracts::v3::canonical_json_bytes(&descriptor).map_err(integrity)?;
+    Ok(canonical_digest(RESOURCE_SCHEMA_DOMAIN_TAG, &bytes))
+}
+
+fn api_schema_key(resource_type: &str) -> Result<Vec<u8>, StoreError> {
+    let digest = schema_digest_for_type(resource_type)?;
+    encode_key(KeySpace::ApiSchemas, &[KeyComponent::Text(&digest)])
+        .map(|key| key.into_bytes())
+        .map_err(integrity)
+}
+
+fn api_schema_record(resource_type: &str) -> Result<ApiSchemaRecord, StoreError> {
+    let resource_type = ResourceTypeName::parse(resource_type).map_err(integrity)?;
+    let schema_digest = schema_digest_for_type(resource_type.as_str())?;
+    Ok(ApiSchemaRecord {
+        resource_type,
+        schema_digest: schema_digest.clone(),
+        schema_version: STANDARD_SCHEMA_VERSION.to_owned(),
+        validator_fingerprint: schema_digest,
+        additional_properties: Some(false),
+        properties: std::collections::BTreeMap::new(),
+        required: Vec::new(),
+    })
+}
+
+pub(crate) fn api_schema_key_for_type(
+    resource_type: &ResourceTypeName,
+) -> Result<Vec<u8>, StoreError> {
+    api_schema_key(resource_type.as_str())
+}
+
+pub(crate) fn api_schema_digest_for_type(
+    resource_type: &ResourceTypeName,
+) -> Result<String, StoreError> {
+    schema_digest_for_type(resource_type.as_str())
+}
+
 fn validate_api_schemas(read: &redb::ReadTransaction, _meta: &StoreMeta) -> Result<(), StoreError> {
     let table = read.open_table(API_SCHEMAS).map_err(integrity)?;
+    let mut resource_types = std::collections::BTreeSet::new();
     for row in table.iter().map_err(integrity)? {
         let (key, value) = row.map_err(integrity)?;
         let decoded = DecodedKey::decode(key.value()).map_err(integrity)?;
@@ -742,7 +810,10 @@ fn validate_api_schemas(read: &redb::ReadTransaction, _meta: &StoreMeta) -> Resu
             return Err(integrity("api-schema-key-shape-invalid"));
         };
         let schema: ApiSchemaRecord = decode(ValueKind::ApiSchemaRecord, value.value())?;
-        if schema.resource_type.as_str() != schema_key
+        let expected_digest = schema_digest_for_type(schema.resource_type.as_str())?;
+        if schema.schema_digest.as_str() != schema_key.as_str()
+            || schema.schema_digest != expected_digest
+            || schema.schema_version != STANDARD_SCHEMA_VERSION
             || !valid_digest(&schema.validator_fingerprint)
             || schema.additional_properties == Some(true)
             || !schema
@@ -752,6 +823,16 @@ fn validate_api_schemas(read: &redb::ReadTransaction, _meta: &StoreMeta) -> Resu
         {
             return Err(integrity("api-schema-record-invalid"));
         }
+        resource_types.insert(schema.resource_type);
+    }
+    if table.len().map_err(integrity)? != STANDARD_SCHEMA_CATALOG.len() as u64
+        || resource_types.len() != STANDARD_SCHEMA_CATALOG.len()
+        || STANDARD_SCHEMA_CATALOG.iter().any(|resource_type| {
+            !resource_types
+                .contains(&ResourceTypeName::parse(*resource_type).expect("standard catalog type"))
+        })
+    {
+        return Err(integrity("api-schema-catalog-invalid"));
     }
     Ok(())
 }
@@ -825,28 +906,31 @@ fn validate_active_schema(
     }
 
     let standard = validate_standard_base(envelope)?;
-    if !standard {
-        return Err(schema_invalid("resource-type-schema-not-installed"));
-    }
     let schemas = write.open_table(API_SCHEMAS).map_err(integrity)?;
-    let key = encode_key(
-        KeySpace::ApiSchemas,
-        &[KeyComponent::Text(envelope.resource_type().as_str())],
-    )
-    .map_err(integrity)?;
-    let installed = schemas.get(key.as_bytes()).map_err(integrity)?;
-    if let Some(value) = installed {
-        let schema: ApiSchemaRecord = decode(ValueKind::ApiSchemaRecord, value.value())?;
-        if schema.resource_type != *envelope.resource_type()
-            || !valid_digest(&schema.validator_fingerprint)
-            || schema.additional_properties == Some(true)
-            || !schema
-                .required
-                .iter()
-                .all(|field| schema.properties.contains_key(field))
-        {
-            return Err(schema_invalid("resource-schema-record-invalid"));
-        }
+    let key = api_schema_key_for_type(envelope.resource_type())
+        .map_err(|_| schema_invalid("resource-type-schema-not-installed"))?;
+    let value = schemas
+        .get(key.as_slice())
+        .map_err(integrity)?
+        .ok_or_else(|| schema_invalid("resource-type-schema-not-installed"))?;
+    let schema: ApiSchemaRecord = decode(ValueKind::ApiSchemaRecord, value.value())?;
+    let expected_digest = api_schema_digest_for_type(envelope.resource_type())
+        .map_err(|_| schema_invalid("resource-type-schema-not-installed"))?;
+    if schema.resource_type != *envelope.resource_type()
+        || schema.schema_digest != expected_digest
+        || !valid_digest(&schema.schema_digest)
+        || schema.schema_version != STANDARD_SCHEMA_VERSION
+        || !valid_digest(&schema.validator_fingerprint)
+        || schema.additional_properties == Some(true)
+        || !schema
+            .required
+            .iter()
+            .all(|field| schema.properties.contains_key(field))
+    {
+        return Err(schema_invalid("resource-schema-record-invalid"));
+    }
+    if !standard {
+        return Err(schema_invalid("resource-type-schema-validator-unavailable"));
     }
     if envelope.spec().provider().is_some() || envelope.status().provider().is_some() {
         return Err(schema_invalid("provider-schema-not-installed"));
@@ -920,19 +1004,31 @@ pub(crate) fn set_clean_shutdown(
     write.commit().map_err(integrity)
 }
 
+#[cfg(test)]
 pub(crate) fn apply_group(
     database: &Database,
     group: Vec<VerifiedWrite>,
+) -> Result<CommittedGroup, StoreError> {
+    apply_group_with_hook(database, group, |_| Ok(()))
+}
+
+pub(crate) fn apply_group_with_hook(
+    database: &Database,
+    group: Vec<VerifiedWrite>,
+    before_commit: impl FnOnce(&CommittedGroup) -> Result<(), StoreError>,
 ) -> Result<CommittedGroup, StoreError> {
     #[cfg(test)]
     if FAIL_NEXT_APPLY_GROUP.swap(false, std::sync::atomic::Ordering::SeqCst) {
         return Err(durability_failure("injected-commit-failure"));
     }
     if group.is_empty() {
-        return Ok(CommittedGroup {
+        let committed = CommittedGroup {
             results: Vec::new(),
             batch: None,
-        });
+            resulting_revision: current_meta(database)?.current_revision,
+        };
+        before_commit(&committed)?;
+        return Ok(committed);
     }
 
     let mut write = database.begin_write().map_err(integrity)?;
@@ -1071,11 +1167,17 @@ pub(crate) fn apply_group(
     }
 
     if entries.is_empty() {
-        write.abort().map_err(integrity)?;
-        return Ok(CommittedGroup {
+        let committed = CommittedGroup {
             results,
             batch: None,
-        });
+            resulting_revision: meta.current_revision,
+        };
+        if let Err(error) = before_commit(&committed) {
+            let _ = write.abort();
+            return Err(error);
+        }
+        write.abort().map_err(integrity)?;
+        return Ok(committed);
     }
     for (ordinal, entry) in entries.iter_mut().enumerate() {
         entry.ordinal = u32::try_from(ordinal).map_err(integrity)?;
@@ -1095,11 +1197,17 @@ pub(crate) fn apply_group(
         .map_err(integrity)?
         .insert(meta_key().as_slice(), meta_value.as_slice())
         .map_err(integrity)?;
-    write.commit().map_err(integrity)?;
-    Ok(CommittedGroup {
+    let committed = CommittedGroup {
         results,
-        batch: Some(batch),
-    })
+        batch: Some(batch.clone()),
+        resulting_revision: revision,
+    };
+    if let Err(error) = before_commit(&committed) {
+        let _ = write.abort();
+        return Err(error);
+    }
+    write.commit().map_err(integrity)?;
+    Ok(committed)
 }
 
 #[cfg(test)]

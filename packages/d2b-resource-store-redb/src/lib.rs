@@ -16,10 +16,12 @@ pub mod values;
 use std::collections::BTreeMap;
 use std::fs::File;
 use std::io::{Read as _, Seek as _, SeekFrom, Write as _};
-use std::os::fd::{AsFd, OwnedFd};
+use std::os::fd::{AsFd, AsRawFd, OwnedFd};
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use actor::{ReadPool, SignalCounters, WriterHandle};
+use d2b_audit::AuditSink;
 use d2b_contracts::v3::{ResourceUid, Timestamp, ZoneId};
 use d2b_resource_store::mutation_seal::{MutationSealAcceptor, SealedMutation};
 use d2b_resource_store::{
@@ -28,10 +30,18 @@ use d2b_resource_store::{
     StoreSealIdentity, StoreSlot, StoreWatchReceipt, StoreWatchRequest, StoredResource,
     StoredSchema,
 };
+use d2b_telemetry::BoundedEmitter;
 use redb::Database;
 use redb::backends::FileBackend;
 use rustix::io::{FdFlags, fcntl_getfd};
 use rustix::net::{RecvAncillaryBuffer, RecvAncillaryMessage, RecvFlags, recvmsg};
+
+#[cfg(test)]
+use crate::audit::NoopMutationAudit;
+use crate::audit::{AuditSinkMutationAudit, DurableMutationAudit};
+#[cfg(test)]
+use crate::metrics::NoopStoreTelemetry;
+use crate::metrics::{EmitterStoreTelemetry, StoreTelemetry};
 
 pub use actor::{
     BackendSignals, GROUP_COMMIT_MAX, MAX_CONCURRENT_READS, READ_LIFETIME, READ_POOL_THREADS,
@@ -70,6 +80,56 @@ pub use values::{
 
 /// Bound redb's page cache so database scale cannot turn into process RSS.
 pub(crate) const REDB_CACHE_SIZE: usize = 4 * 1024 * 1024;
+
+struct StorePorts {
+    telemetry: Arc<dyn StoreTelemetry>,
+    audit: Arc<dyn DurableMutationAudit>,
+}
+
+impl StorePorts {
+    fn production(file: &File) -> Result<Self, StoreError> {
+        let audit_directory = audit_directory_for_file(file)?;
+        let audit_sink = Arc::new(
+            AuditSink::open(audit_directory)
+                .map_err(|_| transaction::durability_failure("audit-unavailable"))?,
+        );
+        let telemetry_emitter = BoundedEmitter::with_default_capacity("/run/d2b/telemetry.sock")
+            .map_err(|_| transaction::durability_failure("telemetry-unavailable"))?;
+        Ok(Self {
+            telemetry: Arc::new(EmitterStoreTelemetry::new(telemetry_emitter)),
+            audit: Arc::new(AuditSinkMutationAudit::new(audit_sink)),
+        })
+    }
+
+    #[cfg(test)]
+    fn for_file(_file: &File) -> Result<Self, StoreError> {
+        Ok(Self {
+            telemetry: Arc::new(NoopStoreTelemetry),
+            audit: Arc::new(NoopMutationAudit),
+        })
+    }
+
+    #[cfg(not(test))]
+    fn for_file(file: &File) -> Result<Self, StoreError> {
+        Self::production(file)
+    }
+}
+
+fn audit_directory_for_file(file: &File) -> Result<PathBuf, StoreError> {
+    let fd_path = PathBuf::from(format!("/proc/self/fd/{}", file.as_raw_fd()));
+    let database_path = std::fs::read_link(fd_path)
+        .map_err(|_| transaction::durability_failure("audit-unavailable"))?;
+    if !database_path.is_absolute()
+        || database_path.to_string_lossy().ends_with(" (deleted)")
+        || database_path.file_name().is_none()
+    {
+        return Err(transaction::durability_failure("audit-unavailable"));
+    }
+    let parent = database_path
+        .parent()
+        .ok_or_else(|| transaction::durability_failure("audit-unavailable"))?;
+    Ok(parent.join("audit"))
+}
 
 /// Immutable identity and generation binding for one already-provisioned store.
 #[derive(Clone, PartialEq, Eq)]
@@ -146,9 +206,38 @@ impl RedbResourceStore {
     /// Initialize one unpublished empty database after validating its durable marker.
     pub async fn provision_owned(
         file: File,
+        marker: File,
+        identity: StoreIdentity,
+        acceptor: MutationSealAcceptor,
+    ) -> Result<Self, StoreError> {
+        Self::provision_owned_with_ports(file, marker, identity, acceptor, None).await
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn provision_owned_with_test_ports(
+        file: File,
+        marker: File,
+        identity: StoreIdentity,
+        acceptor: MutationSealAcceptor,
+        telemetry: Arc<dyn StoreTelemetry>,
+        audit: Arc<dyn DurableMutationAudit>,
+    ) -> Result<Self, StoreError> {
+        Self::provision_owned_with_ports(
+            file,
+            marker,
+            identity,
+            acceptor,
+            Some(StorePorts { telemetry, audit }),
+        )
+        .await
+    }
+
+    async fn provision_owned_with_ports(
+        file: File,
         mut marker: File,
         identity: StoreIdentity,
         acceptor: MutationSealAcceptor,
+        ports: Option<StorePorts>,
     ) -> Result<Self, StoreError> {
         let slot = identity.slot();
         validate_acceptor(&identity, &acceptor)?;
@@ -167,6 +256,9 @@ impl RedbResourceStore {
         }
         validate_provisioning_marker(&mut marker, &identity)
             .map_err(|error| error.with_store_slot(slot))?;
+        let ports = ports
+            .map_or_else(|| StorePorts::for_file(&file), Ok)
+            .map_err(|error| error.with_store_slot(slot))?;
         let open_identity = identity.clone();
         let database = tokio::task::spawn_blocking(move || {
             let backend = FileBackend::new(file).map_err(transaction::integrity)?;
@@ -182,7 +274,7 @@ impl RedbResourceStore {
             transaction::integrity("database-provision-task-failed").with_store_slot(slot)
         })?
         .map_err(|error| error.with_store_slot(slot))?;
-        Self::start(database, identity, false, acceptor)
+        Self::start(database, identity, false, acceptor, ports)
             .map_err(|error| error.with_store_slot(slot))
     }
 
@@ -208,6 +300,7 @@ impl RedbResourceStore {
                 transaction::quarantined_reason("provisioned-store-empty").with_store_slot(slot)
             );
         }
+        let ports = StorePorts::for_file(&file).map_err(|error| error.with_store_slot(slot))?;
         let open_identity = identity.clone();
         let database = tokio::task::spawn_blocking(move || {
             let backend = FileBackend::new(file).map_err(transaction::integrity)?;
@@ -224,7 +317,7 @@ impl RedbResourceStore {
         .map_err(|_| transaction::integrity("database-open-task-failed").with_store_slot(slot))?
         .map_err(|error| error.with_store_slot(slot))?;
         let (database, recovered_after_crash) = database;
-        Self::start(database, identity, recovered_after_crash, acceptor)
+        Self::start(database, identity, recovered_after_crash, acceptor, ports)
             .map_err(|error| error.with_store_slot(slot))
     }
 
@@ -233,15 +326,22 @@ impl RedbResourceStore {
         identity: StoreIdentity,
         recovered_after_crash: bool,
         seal: MutationSealAcceptor,
+        ports: StorePorts,
     ) -> Result<Self, StoreError> {
         let database = Arc::new(database);
         let signals = Arc::new(SignalCounters::default());
-        let reads = ReadPool::start(Arc::clone(&database), identity.zone.clone())?;
+        let reads = ReadPool::start_with_telemetry(
+            Arc::clone(&database),
+            identity.zone.clone(),
+            Arc::clone(&ports.telemetry),
+        )?;
         let watch_coordinator = Arc::new(Mutex::new(WatchCoordinator::default()));
-        let writer = WriterHandle::start(
+        let writer = WriterHandle::start_with_ports(
             database,
             Arc::clone(&signals),
             Arc::clone(&watch_coordinator),
+            ports.telemetry,
+            ports.audit,
         )?;
         Ok(Self {
             identity,
@@ -332,6 +432,7 @@ impl RedbResourceStore {
                 transaction::quarantined_reason("restore-target-not-empty").with_store_slot(slot)
             );
         }
+        let ports = StorePorts::for_file(&file).map_err(|error| error.with_store_slot(slot))?;
         let open_identity = identity.clone();
         let database =
             tokio::task::spawn_blocking(move || backup.restore_file(file, &open_identity))
@@ -340,7 +441,7 @@ impl RedbResourceStore {
                     transaction::integrity("database-restore-task-failed").with_store_slot(slot)
                 })?
                 .map_err(|error| error.with_store_slot(slot))?;
-        Self::start(database, identity, false, acceptor)
+        Self::start(database, identity, false, acceptor, ports)
             .map_err(|error| error.with_store_slot(slot))
     }
 }

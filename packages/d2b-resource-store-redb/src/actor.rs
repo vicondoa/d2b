@@ -14,18 +14,21 @@ use d2b_resource_store::{
 use redb::{Database, ReadableDatabase, ReadableTable};
 use tokio::sync::{OwnedSemaphorePermit, mpsc, oneshot};
 
-use crate::audit::{
-    DurableMutationAudit, NoopMutationAudit, opaque_digest, resource_mutation_record,
-};
+use crate::ValueKind;
+#[cfg(test)]
+use crate::audit::NoopMutationAudit;
+use crate::audit::{DurableMutationAudit, opaque_digest, resource_mutation_record};
 use crate::backup::LogicalBackup;
-use crate::metrics::{NoopStoreTelemetry, StoreMetric, StoreTelemetry};
+#[cfg(test)]
+use crate::metrics::NoopStoreTelemetry;
+use crate::metrics::{StoreMetric, StoreTelemetry};
 use crate::revision_log::{WatchCoordinator, WatchRegistrationId, WatchSelector, WatchStream};
 use crate::tracing::{STORE_READ_SPAN, STORE_WRITE_SPAN};
 use crate::transaction::{
     API_SCHEMAS, ChangeBatch, CommittedGroup, RESOURCES, ResourceRecord, StoreMeta, VerifiedWrite,
-    apply_group, backpressure, current_meta, decode, resource_key, stored_resource, timeout,
+    apply_group_with_hook, backpressure, current_meta, decode, resource_key, stored_resource,
+    timeout,
 };
-use crate::{KeySpace, ValueKind};
 use d2b_resource_store::mutation_seal::OpenedMutation;
 
 /// Bounded public writer admission queue.
@@ -97,6 +100,7 @@ pub(crate) struct SignalCounters {
     writer_queue_depth: AtomicU64,
 }
 
+#[derive(Clone)]
 struct AuditIntent {
     zone: String,
     operation_id: String,
@@ -106,10 +110,12 @@ struct AuditIntent {
     mutations: Vec<AuditMutation>,
 }
 
+#[derive(Clone)]
 struct AuditMutation {
     verb: &'static str,
     resource_type: &'static str,
-    resource_uid: String,
+    resource_uid: Option<String>,
+    target_digest: String,
     generation: u64,
     expected_revision: u64,
 }
@@ -120,17 +126,19 @@ fn audit_intent(body: &d2b_resource_store::mutation_seal::MutationSealBody) -> A
         .iter()
         .map(|prepared| {
             let mutation = prepared.mutation();
-            let resource_uid = prepared
-                .resource_uid()
-                .or(mutation.expected_uid.as_ref())
-                .map_or_else(
-                    || opaque_digest(&mutation.target.to_canonical_string()),
-                    |uid| uid.as_str().to_owned(),
-                );
+            let resource_uid = (mutation.kind != ResourceMutationKind::Create)
+                .then(|| {
+                    prepared
+                        .resource_uid()
+                        .or(mutation.expected_uid.as_ref())
+                        .map(|uid| uid.as_str().to_owned())
+                })
+                .flatten();
             AuditMutation {
                 verb: mutation_audit_verb(mutation.kind),
                 resource_type: audit_resource_type(mutation.target.resource_type().as_str()),
                 resource_uid,
+                target_digest: opaque_digest(&mutation.target.to_canonical_string()),
                 generation: 0,
                 expected_revision: match mutation.expected {
                     ExpectedRevision::CreateAbsent => 0,
@@ -195,20 +203,6 @@ pub(crate) struct WriterHandle {
 }
 
 impl WriterHandle {
-    pub(crate) fn start(
-        database: Arc<Database>,
-        signals: Arc<SignalCounters>,
-        watch_coordinator: Arc<std::sync::Mutex<WatchCoordinator>>,
-    ) -> Result<Self, StoreError> {
-        Self::start_with_ports(
-            database,
-            signals,
-            watch_coordinator,
-            Arc::new(NoopStoreTelemetry),
-            Arc::new(NoopMutationAudit),
-        )
-    }
-
     pub(crate) fn start_with_ports(
         database: Arc<Database>,
         signals: Arc<SignalCounters>,
@@ -338,9 +332,16 @@ impl WriterHandle {
                 }
             });
         }
-        receiver
-            .await
-            .map_err(|_| crate::transaction::integrity("writer-response-closed"))?
+        match receiver.await {
+            Ok(result) => result,
+            Err(_) => {
+                let _ = self
+                    .audit_intents
+                    .lock()
+                    .map(|mut intents| intents.remove(&sequence));
+                Err(crate::transaction::integrity("writer-response-closed"))
+            }
+        }
     }
 
     pub(crate) async fn replay(
@@ -489,6 +490,9 @@ impl Drop for WriterHandle {
         self.sender.take();
         if let Some(thread) = self.thread.take() {
             let _ = thread.join();
+        }
+        if let Ok(mut intents) = self.audit_intents.lock() {
+            intents.clear();
         }
     }
 }
@@ -674,6 +678,7 @@ impl WriterActor {
         loop {
             let command = deferred.take().or_else(|| self.receiver.blocking_recv());
             let Some(command) = command else {
+                self.clear_all_audit_intents();
                 break;
             };
             match command {
@@ -846,30 +851,12 @@ impl WriterActor {
                 u64::try_from(requests.len()).unwrap_or(u64::MAX),
                 Ordering::Relaxed,
             );
-            if let Err(error) = self.append_mutation_audits(&requests) {
-                self.telemetry.metric(
-                    StoreMetric::WriteDuration,
-                    BTreeMap::from([
-                        ("kind".to_owned(), commit_kind(requests.len()).to_owned()),
-                        ("outcome".to_owned(), "error".to_owned()),
-                    ]),
-                    0.0,
-                );
-                self.telemetry.span(
-                    STORE_WRITE_SPAN,
-                    BTreeMap::from([
-                        ("kind".to_owned(), commit_kind(requests.len()).to_owned()),
-                        ("outcome".to_owned(), "error".to_owned()),
-                    ]),
-                    None,
-                );
-                for request in requests {
-                    let _ = request.response.send(Err(error.clone()));
-                }
-                continue;
-            }
             let started = Instant::now();
             let request_count = requests.len();
+            let sequences = requests
+                .iter()
+                .map(|request| request.sequence)
+                .collect::<Vec<_>>();
             let owned = requests
                 .into_iter()
                 .map(|request| {
@@ -883,8 +870,10 @@ impl WriterActor {
                 BTreeMap::new(),
                 request_count as f64,
             );
-            match apply_group(&self.database, mutations) {
-                Ok(CommittedGroup { results, batch }) => {
+            match apply_group_with_hook(&self.database, mutations, |committed| {
+                self.append_mutation_audits(&sequences, committed)
+            }) {
+                Ok(CommittedGroup { results, batch, .. }) => {
                     let outcome = commit_outcome(&results);
                     self.telemetry.metric(
                         StoreMetric::WriteDuration,
@@ -943,6 +932,7 @@ impl WriterActor {
                     }
                 }
                 Err(error) => {
+                    self.clear_audit_intents(&sequences);
                     self.telemetry.metric(
                         StoreMetric::WriteDuration,
                         BTreeMap::from([
@@ -971,33 +961,43 @@ impl WriterActor {
         }
     }
 
-    fn append_mutation_audits(&self, requests: &[WriteRequest]) -> Result<(), StoreError> {
+    fn append_mutation_audits(
+        &self,
+        sequences: &[u64],
+        committed: &CommittedGroup,
+    ) -> Result<(), StoreError> {
+        let mut intents = self.audit_intents.lock().map_err(|_| {
+            crate::transaction::durability_failure("audit-intent-registry-poisoned")
+        })?;
         if !self.audit.enabled() {
-            if let Ok(mut intents) = self.audit_intents.lock() {
-                for request in requests {
-                    intents.remove(&request.sequence);
-                }
+            for sequence in sequences {
+                intents.remove(sequence);
             }
             return Ok(());
         }
-        let meta = current_meta(&self.database)?;
-        let resulting_revision = meta
-            .current_revision
-            .checked_add(1)
-            .ok_or_else(|| crate::transaction::integrity("zone-revision-exhausted"))?;
+        if committed.results.len() != sequences.len() {
+            return Err(crate::transaction::durability_failure(
+                "audit-result-count-mismatch",
+            ));
+        }
+        let snapshots = sequences
+            .iter()
+            .map(|sequence| intents.get(sequence).cloned())
+            .collect::<Vec<_>>();
+        drop(intents);
         let mut previous_hash = self
             .audit
             .previous_hash()
             .map_err(|_| crate::transaction::durability_failure("audit-unavailable"))?;
-        let mut intents = self.audit_intents.lock().map_err(|_| {
-            crate::transaction::durability_failure("audit-intent-registry-poisoned")
-        })?;
         let mut append = |zone: String,
                           operation_id: String,
                           correlation_id: String,
                           subject_digest: String,
                           policy_revision: u64,
-                          mutation: AuditMutation|
+                          mutation: AuditMutation,
+                          outcome: &'static str,
+                          error_code: Option<String>,
+                          resulting_revision: u64|
          -> Result<(), StoreError> {
             let record = resource_mutation_record(
                 unix_timestamp_ms(),
@@ -1008,14 +1008,14 @@ impl WriterActor {
                 previous_hash.clone(),
                 mutation.verb,
                 mutation.resource_type,
-                mutation.resource_uid,
+                mutation.resource_uid.unwrap_or(mutation.target_digest),
                 mutation.generation,
                 mutation.expected_revision,
                 resulting_revision,
                 subject_digest,
                 policy_revision,
-                "ok",
-                None,
+                outcome,
+                error_code,
             )
             .map_err(|_| crate::transaction::durability_failure("audit-record-invalid"))?;
             self.audit
@@ -1024,9 +1024,48 @@ impl WriterActor {
             previous_hash = record.record_hash().clone();
             Ok(())
         };
-        for request in requests {
-            if let Some(intent) = intents.remove(&request.sequence) {
-                for mutation in intent.mutations {
+        for ((sequence, intent), result) in sequences.iter().zip(snapshots).zip(&committed.results)
+        {
+            let outcome = result
+                .as_ref()
+                .map(|_| "ok")
+                .unwrap_or_else(|error| audit_failure_outcome(error));
+            let error_code = result
+                .as_ref()
+                .err()
+                .map(|error| error.reason_code().to_owned());
+            let resulting_revision = match result {
+                Ok(commit) => commit.revision.get(),
+                Err(_) => committed.resulting_revision,
+            };
+            if let Some(intent) = intent {
+                let resources = result.as_ref().ok().map(|commit| &commit.resources);
+                let mut mutations = intent.mutations;
+                if mutations.is_empty() {
+                    mutations.push(AuditMutation {
+                        verb: "update-spec",
+                        resource_type: "vendor",
+                        resource_uid: None,
+                        target_digest: opaque_digest(&format!("writer-target-{sequence}")),
+                        generation: 0,
+                        expected_revision: 0,
+                    });
+                }
+                for (index, mutation) in mutations.into_iter().enumerate() {
+                    let (resource_uid, generation) = resources
+                        .and_then(|resources| resources.get(index))
+                        .map(|resource| {
+                            (
+                                Some(resource.uid.as_str().to_owned()),
+                                resource.generation.get(),
+                            )
+                        })
+                        .unwrap_or((mutation.resource_uid.clone(), mutation.generation));
+                    let mutation = AuditMutation {
+                        resource_uid,
+                        generation,
+                        ..mutation
+                    };
                     append(
                         intent.zone.clone(),
                         intent.operation_id.clone(),
@@ -1034,31 +1073,63 @@ impl WriterActor {
                         intent.subject_digest.clone(),
                         intent.policy_revision,
                         mutation,
+                        outcome,
+                        error_code.clone(),
+                        resulting_revision,
                     )?;
                 }
             } else {
-                let Some(resource) = request.resources.first() else {
+                #[cfg(not(test))]
+                {
                     return Err(crate::transaction::durability_failure(
                         "audit-mutation-target-missing",
                     ));
-                };
-                append(
-                    meta.zone_name.clone(),
-                    format!("writer-{}", request.sequence),
-                    format!("writer-correlation-{}", request.sequence),
-                    opaque_digest(&request.principal),
-                    meta.policy_revision,
-                    AuditMutation {
-                        verb: "update-spec",
-                        resource_type: audit_resource_type(resource.resource_type().as_str()),
-                        resource_uid: opaque_digest(&resource.to_canonical_string()),
-                        generation: 0,
-                        expected_revision: meta.current_revision,
-                    },
-                )?;
+                }
+                #[cfg(test)]
+                {
+                    let target_digest = opaque_digest(&format!("writer-target-{sequence}"));
+                    append(
+                        "unknown".to_owned(),
+                        format!("writer-{}", sequence),
+                        format!("writer-correlation-{}", sequence),
+                        opaque_digest(&format!("writer-subject-{sequence}")),
+                        0,
+                        AuditMutation {
+                            verb: "update-spec",
+                            resource_type: "vendor",
+                            resource_uid: None,
+                            target_digest,
+                            generation: 0,
+                            expected_revision: 0,
+                        },
+                        outcome,
+                        error_code.clone(),
+                        resulting_revision,
+                    )?;
+                }
             }
         }
+        let mut intents = self.audit_intents.lock().map_err(|_| {
+            crate::transaction::durability_failure("audit-intent-registry-poisoned")
+        })?;
+        for sequence in sequences {
+            intents.remove(sequence);
+        }
         Ok(())
+    }
+
+    fn clear_audit_intents(&self, sequences: &[u64]) {
+        if let Ok(mut intents) = self.audit_intents.lock() {
+            for sequence in sequences {
+                intents.remove(sequence);
+            }
+        }
+    }
+
+    fn clear_all_audit_intents(&self) {
+        if let Ok(mut intents) = self.audit_intents.lock() {
+            intents.clear();
+        }
     }
 
     fn dispatch_live(&self, batch: ChangeBatch) -> Result<(), StoreError> {
@@ -1089,6 +1160,7 @@ impl WriterActor {
                 Ordering::Relaxed,
             );
             for request in requests {
+                self.clear_audit_intents(&[request.sequence]);
                 let _ = request
                     .response
                     .send(Err(crate::transaction::quarantined()));
@@ -1097,6 +1169,7 @@ impl WriterActor {
         while let Ok(command) = self.receiver.try_recv() {
             match command {
                 WriterCommand::Commit(request) => {
+                    self.clear_audit_intents(&[request.sequence]);
                     self.signals
                         .writer_queue_depth
                         .fetch_sub(1, Ordering::Relaxed);
@@ -1124,6 +1197,7 @@ impl WriterActor {
                 }
             }
         }
+        self.clear_all_audit_intents();
     }
 }
 
@@ -1216,6 +1290,31 @@ fn commit_outcome(
     }
 }
 
+fn audit_failure_outcome(error: &StoreError) -> &'static str {
+    match error.kind() {
+        d2b_resource_store::StoreErrorKind::ResourceConflict => "conflict",
+        d2b_resource_store::StoreErrorKind::AuthorizationDenied => "denied",
+        d2b_resource_store::StoreErrorKind::ResourceNotFound
+        | d2b_resource_store::StoreErrorKind::ResourceAlreadyExists
+        | d2b_resource_store::StoreErrorKind::ResourceSchemaInvalid
+        | d2b_resource_store::StoreErrorKind::ResourceRefInvalid
+        | d2b_resource_store::StoreErrorKind::ResourceOwnerCycle
+        | d2b_resource_store::StoreErrorKind::ResourceOwnerDepth
+        | d2b_resource_store::StoreErrorKind::ResourceFinalizerDenied
+        | d2b_resource_store::StoreErrorKind::ResourceControllerMismatch
+        | d2b_resource_store::StoreErrorKind::ResourceStatusOwnerMismatch
+        | d2b_resource_store::StoreErrorKind::StatusOversize
+        | d2b_resource_store::StoreErrorKind::StatusProviderSchemaInvalid
+        | d2b_resource_store::StoreErrorKind::StatusProviderOverlap
+        | d2b_resource_store::StoreErrorKind::SpecProviderSchemaInvalid
+        | d2b_resource_store::StoreErrorKind::SpecProviderShadow
+        | d2b_resource_store::StoreErrorKind::UnsupportedCapability
+        | d2b_resource_store::StoreErrorKind::ExpeditedNotAuthorized
+        | d2b_resource_store::StoreErrorKind::ExpeditedQuotaExceeded => "invalid",
+        _ => "error",
+    }
+}
+
 fn audit_resource_type(resource_type: &str) -> &'static str {
     match resource_type {
         "Zone" => "Zone",
@@ -1250,10 +1349,6 @@ pub(crate) struct ReadPool {
 }
 
 impl ReadPool {
-    pub(crate) fn start(database: Arc<Database>, zone: ZoneId) -> Result<Self, StoreError> {
-        Self::start_with_telemetry(database, zone, Arc::new(NoopStoreTelemetry))
-    }
-
     pub(crate) fn start_with_telemetry(
         database: Arc<Database>,
         zone: ZoneId,
@@ -1875,13 +1970,10 @@ fn read_schema(
     let table = read
         .open_table(API_SCHEMAS)
         .map_err(crate::transaction::integrity)?;
-    let key = crate::encode_key(
-        KeySpace::ApiSchemas,
-        &[crate::KeyComponent::Text(request.resource_type.as_str())],
-    )
-    .map_err(crate::transaction::integrity)?;
+    let key = crate::transaction::api_schema_key_for_type(&request.resource_type)
+        .map_err(|_| not_found())?;
     let bytes = table
-        .get(key.as_bytes())
+        .get(key.as_slice())
         .map_err(crate::transaction::integrity)?
         .ok_or_else(not_found)?;
     let decoded =
@@ -1890,8 +1982,8 @@ fn read_schema(
         return Err(crate::transaction::integrity("table-value-kind-mismatch"));
     }
     let canonical_json = decoded.canonical_json().to_vec();
-    let payload_digest =
-        d2b_contracts::v3::canonical_digest("d2b:v3:resource-schema", &canonical_json);
+    let payload_digest = crate::transaction::api_schema_digest_for_type(&request.resource_type)
+        .map_err(|_| not_found())?;
     Ok(StoredSchema {
         resource_type: request.resource_type,
         canonical_json,
