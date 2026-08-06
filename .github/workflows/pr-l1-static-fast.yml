@@ -1330,8 +1330,8 @@ jobs:
 
   test-flake-aarch64:
     needs: [tier0]
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
@@ -1341,11 +1341,28 @@ jobs:
           nix_path: nixpkgs=channel:nixos-unstable
           extra_nix_config: |
             experimental-features = nix-command flakes
-      - name: aarch64 smoke eval
+      - name: Measure aarch64 Bazel toolchain
         run: |
-          nix-instantiate --eval --strict \
-            -E 'let f = import ./tests/unit/smoke/smoke-eval-aarch64.nix; r = f {}; in r.drvPath' \
-            >/dev/null
+          set -euo pipefail
+          ref="git+file://$PWD"
+          expr="let f = builtins.getFlake \"$ref\"; in f.packages.aarch64-linux.\"bazel-8.6.0-seccomp\""
+          out=$(nix build --impure --expr "$expr" --no-link --print-out-paths)
+          drv=$(nix path-info --impure --expr "$expr" --derivation)
+          wrapped=$(find "$out/bin" -maxdepth 1 -type f \
+            -name '.bazel-*-wrapped' -print -quit)
+          test -n "$wrapped"
+          printf 'D2B_ARM_OUT=%s\n' "$out"
+          printf 'D2B_ARM_DRV=%s\n' "$drv"
+          printf 'D2B_ARM_NAR_SHA256=%s\n' \
+            "$(nix hash path --base16 "$out")"
+          printf 'D2B_ARM_EXECUTABLE_SHA256=%s\n' \
+            "$(sha256sum "$wrapped" | cut -d' ' -f1)"
+          printf 'D2B_ARM_DRV_FILE_SHA256=%s\n' \
+            "$(sha256sum "$drv" | cut -d' ' -f1)"
+          printf 'D2B_ARM_DRV_NAR_SHA256=%s\n' \
+            "$(nix hash path --base16 "$drv")"
+          printf 'D2B_ARM_DRV_JSON_SHA256=%s\n' \
+            "$(nix derivation show "$drv" | jq -cS . | sha256sum | cut -d' ' -f1)"
 
   test-drift:
     needs: [tier0]
