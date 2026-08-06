@@ -1,11 +1,16 @@
 #!/usr/bin/env bash
-# tests/test-lint.sh - `make test-lint`: fast static lint, no Nix eval, no cargo.
+# tests/test-lint.sh - `make test-lint`: fail-fast lint before long Layer-1 jobs.
 #
 #   * preflight disk-space guard (fail closed before the Nix-heavy siblings)
+#   * likely compiler-derived API pin drift from structural Rust changes
+#   * Rust formatting across every gated workspace
+#   * changed-scope clippy for the main and guest-shell-runner workspaces
 #   * nix-instantiate --parse on every .nix file
 #   * shellcheck --severity=warning on the d2b shell scripts
 #
-# CI runs this as its own job; locally it is one prerequisite of `make test-unit`.
+# CI leaves clippy to the required full Rust shard because its fresh runner has
+# no shared target with this job. Local `make check` runs this phase serially
+# before dispatching the long parallel jobs.
 # Driver script name matches the make target (tests/test-<target>.sh).
 
 set -euo pipefail
@@ -29,6 +34,74 @@ else
   fail "required preflight gate is missing: tests/tools/preflight-disk-space.sh"
   exit 1
 fi
+
+# --- change scope ---------------------------------------------------------
+resolve_lint_base() {
+  local base_ref
+  if [ -n "${D2B_LINT_BASE:-}" ]; then
+    git rev-parse --verify "${D2B_LINT_BASE}^{commit}" >/dev/null 2>&1 || {
+      fail "D2B_LINT_BASE does not name a commit"
+      return 1
+    }
+    git rev-parse "${D2B_LINT_BASE}^{commit}"
+    return
+  fi
+
+  base_ref=${GITHUB_BASE_REF:-v3}
+  if git rev-parse --verify --quiet "origin/$base_ref" >/dev/null; then
+    git merge-base HEAD "origin/$base_ref"
+  elif git rev-parse --verify --quiet HEAD^ >/dev/null; then
+    echo "WARN: origin/$base_ref not found; using HEAD^ for fast lint scope" >&2
+    git rev-parse HEAD^
+  else
+    git rev-parse HEAD
+  fi
+}
+
+lint_base=$(resolve_lint_base)
+export D2B_LINT_BASE="$lint_base"
+
+# --- compiler-derived API pin hint ---------------------------------------
+# The authoritative census still runs in test-rust-api-surface. This cheap
+# precheck catches the common omission: a structural Rust or workspace change
+# with no compiler-derived snapshot refresh anywhere on the branch.
+log "--> compiler-derived API pin precheck"
+api_inputs_changed=0
+if ! git diff --quiet "$lint_base" -- \
+  packages/Cargo.toml packages/Cargo.lock \
+  ':(glob)packages/*/Cargo.toml'; then
+  api_inputs_changed=1
+fi
+rust_diff=$(git diff --unified=0 --no-ext-diff "$lint_base" -- \
+  ':(glob)packages/**/*.rs')
+changed_rust_lines=$(
+  printf '%s\n' "$rust_diff" |
+    sed -n -e '/^+++ /d' -e '/^--- /d' -e 's/^[+-]//p'
+)
+if printf '%s\n' "$changed_rust_lines" | grep -Eq \
+  '^[[:space:]]*(#\[(cfg|cfg_attr|derive|doc|non_exhaustive|repr)|pub([[:space:]]*\([^)]*\))?[[:space:]]|((async|const|default|unsafe)[[:space:]]+)*fn[[:space:]]|((default|unsafe)[[:space:]]+)*impl([[:space:]<]|$)|trait[[:space:]]|struct[[:space:]]|enum[[:space:]]|union[[:space:]]|type[[:space:]]|const[[:space:]]|static[[:space:]]|mod[[:space:]]|use[[:space:]]|extern[[:space:]]+crate[[:space:]]|macro_rules!)'; then
+  api_inputs_changed=1
+fi
+
+if [ "$api_inputs_changed" -eq 1 ] && git diff --quiet "$lint_base" -- \
+  tests/golden/api-surface/workspace-metadata.json \
+  tests/golden/api-surface/public-api.txt \
+  tests/golden/api-surface/capability-api.txt \
+  tests/golden/api-surface/hidden-public-api.txt \
+  tests/golden/api-surface/capability-trait-impls.txt; then
+  fail "likely compiler-derived API census drift: structural Rust inputs changed but no API snapshot was refreshed"
+  echo "      Run 'make api-surface-pin' and commit the resulting tests/golden/api-surface changes." >&2
+  exit 1
+fi
+ok "compiler-derived API pin precheck"
+
+# --- Rust format + changed-scope clippy ----------------------------------
+log "--> Rust format + changed-scope clippy"
+env -u D2B_EXECUTION_MANIFEST \
+  D2B_LINT_BASE="$lint_base" \
+  D2B_RUST_CARGO_JOBS="${D2B_LINT_RUST_JOBS:-2}" \
+  bash "$ROOT/tests/test-rust.sh" fast-lint
+ok "Rust format + changed-scope clippy"
 
 # --- nix-instantiate --parse ---------------------------------------------
 log "--> nix-instantiate --parse on all .nix files"

@@ -498,6 +498,38 @@ set -euo pipefail
         with self.assertRaises(SystemExit):
             layer1_jobs.validate_job_id("bad-${{ github.token }}", "test")
 
+    def test_local_runner_places_fast_lint_before_long_jobs(self) -> None:
+        layer1_jobs = load_layer1_jobs()
+        manifest = layer1_jobs.load_manifest()
+        phases = manifest["local"]["phases"]
+
+        self.assertEqual(
+            [(phase["id"], phase["mode"]) for phase in phases[:4]],
+            [
+                ("preflight", "serial"),
+                ("fast-lint", "serial"),
+                ("inventory", "serial"),
+                ("parallel", "parallel"),
+            ],
+        )
+        self.assertEqual(phases[0]["jobs"], ["tier0"])
+        self.assertEqual(phases[1]["jobs"], ["test-lint"])
+        self.assertEqual(phases[2]["jobs"], ["check-inventory"])
+        self.assertNotIn("test-lint", phases[3]["jobs"])
+
+        lint_job = manifest["jobs"]["test-lint"]
+        self.assertEqual(lint_job["checkoutFetchDepth"], 0)
+        self.assertEqual(lint_job["ciEnv"]["D2B_LINT_CHANGED_CLIPPY"], "0")
+        workflow = layer1_jobs.render_workflow(manifest)
+        lint_workflow = workflow_job_block(workflow, "test-lint")
+        self.assertIn("fetch-depth: 0", lint_workflow)
+        self.assertIn('D2B_LINT_CHANGED_CLIPPY: "0"', lint_workflow)
+
+        lint_driver = (ROOT / "tests" / "test-lint.sh").read_text(encoding="utf-8")
+        self.assertIn("compiler-derived API pin precheck", lint_driver)
+        self.assertIn("tests/test-rust.sh\" fast-lint", lint_driver)
+        self.assertIn("run_fast_lint_gate", RUST_DRIVER.read_text(encoding="utf-8"))
+
     def test_rust_gate_is_three_required_shards_with_one_stable_rollup(self) -> None:
         layer1_jobs = load_layer1_jobs()
         manifest = layer1_jobs.load_manifest()

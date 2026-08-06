@@ -2,7 +2,7 @@
 # tests/test-rust.sh - one Rust execution leaf for `make test-rust`.
 #
 # GNU Make owns the Rust DAG. This file owns leaf environment setup and the
-# explicit leaf modes only: api-surface, main-workspace, broker,
+# explicit leaf modes only: fast-lint, api-surface, main-workspace, broker,
 # guest-shell-runner, no-bash-ast, schema-reproducibility, supply-chain,
 # inventory-stub, and fixture-contracts. The fixture mode emits the contract
 # and CLI surfaces separately.
@@ -17,14 +17,14 @@ if [ "$#" -eq 0 ]; then
   exit 2
 fi
 case "$rust_mode" in
-  api-surface|main-workspace|broker|guest-shell-runner|no-bash-ast|schema-reproducibility|supply-chain|inventory-stub|fixture-contracts)
+  fast-lint|api-surface|main-workspace|broker|guest-shell-runner|no-bash-ast|schema-reproducibility|supply-chain|inventory-stub|fixture-contracts)
     [ "$#" -eq 1 ] || {
       printf '%s\n' "test-rust.sh accepts one leaf mode; run make test-rust" >&2
       exit 2
     }
     ;;
   *)
-    printf '%s\n' "usage: tests/test-rust.sh {api-surface|main-workspace|broker|guest-shell-runner|no-bash-ast|schema-reproducibility|supply-chain|inventory-stub|fixture-contracts}; run make test-rust" >&2
+    printf '%s\n' "usage: tests/test-rust.sh {fast-lint|api-surface|main-workspace|broker|guest-shell-runner|no-bash-ast|schema-reproducibility|supply-chain|inventory-stub|fixture-contracts}; run make test-rust" >&2
     exit 2
     ;;
 esac
@@ -130,7 +130,8 @@ broker_deny_config="$ROOT/packages/d2b-priv-broker/deny.toml"
 guest_shell_runner_manifest="$ROOT/packages/d2b-guest-shell-runner/Cargo.toml"
 guest_shell_runner_lock_file="$ROOT/packages/d2b-guest-shell-runner/Cargo.lock"
 guest_shell_runner_deny_config="$ROOT/packages/d2b-guest-shell-runner/deny.toml"
-for required in "$manifest" "$lock_file" "$deny_config" "$broker_manifest" "$broker_lock_file" "$broker_deny_config" "$guest_shell_runner_manifest" "$guest_shell_runner_lock_file" "$guest_shell_runner_deny_config"; do
+no_bash_manifest="$ROOT/tests/tools/no-bash-ast-walker/Cargo.toml"
+for required in "$manifest" "$lock_file" "$deny_config" "$broker_manifest" "$broker_lock_file" "$broker_deny_config" "$guest_shell_runner_manifest" "$guest_shell_runner_lock_file" "$guest_shell_runner_deny_config" "$no_bash_manifest"; do
   if [ ! -f "$required" ]; then
     fail "missing Rust workspace input: $required"
     exit 1
@@ -606,6 +607,116 @@ if [ "$fixture_contracts_only" = 1 ]; then
   exit 0
 fi
 
+# The local fail-fast lane uses the normal stable targets, so checking a changed
+# package also warms the later authoritative workspace clippy pass.
+run_fast_lint_gate() {
+  local lint_base path package
+  local main_workspace_changed=0
+  local guest_shell_runner_changed=0
+  local -a main_package_args=()
+  declare -A main_packages=()
+
+  lint_base=${D2B_LINT_BASE:-}
+  if [ -z "$lint_base" ]; then
+    if git rev-parse --verify --quiet "origin/${GITHUB_BASE_REF:-v3}" >/dev/null; then
+      lint_base=$(git merge-base HEAD "origin/${GITHUB_BASE_REF:-v3}")
+    elif git rev-parse --verify --quiet HEAD^ >/dev/null; then
+      lint_base=$(git rev-parse HEAD^)
+    else
+      lint_base=$(git rev-parse HEAD)
+    fi
+  fi
+  git rev-parse --verify "${lint_base}^{commit}" >/dev/null 2>&1 || {
+    fail "fast-lint base does not name a commit"
+    exit 1
+  }
+
+  log "--> cargo fmt --check (gated Rust workspaces)"
+  cargo fmt --manifest-path "$manifest" --all --check
+  cargo fmt --manifest-path "$broker_manifest" --all --check
+  cargo fmt --manifest-path "$guest_shell_runner_manifest" --all --check
+  cargo fmt --manifest-path "$no_bash_manifest" --all --check
+  ok "cargo fmt --check"
+
+  case "${D2B_LINT_CHANGED_CLIPPY:-1}" in
+    0)
+      log "  changed-scope clippy skipped; the full CI Rust shard remains enforcing"
+      log "test-rust fast-lint OK (duration: $((SECONDS - suite_started))s)"
+      return
+      ;;
+    1) ;;
+    *)
+      fail "D2B_LINT_CHANGED_CLIPPY must be 0 or 1"
+      exit 2
+      ;;
+  esac
+
+  while IFS= read -r path; do
+    [ -n "$path" ] || continue
+    case "$path" in
+      packages/Cargo.toml|packages/Cargo.lock|packages/rust-toolchain.toml|packages/.cargo/*)
+        main_workspace_changed=1
+        guest_shell_runner_changed=1
+        ;;
+      packages/d2b-priv-broker/*)
+        ;;
+      packages/d2b-guest-shell-runner/*)
+        case "$path" in
+          *.rs|*/Cargo.toml|*/Cargo.lock|*/build.rs)
+            guest_shell_runner_changed=1
+            ;;
+        esac
+        ;;
+      packages/*)
+        case "$path" in
+          *.rs|*/Cargo.toml|*/build.rs)
+            package=${path#packages/}
+            package=${package%%/*}
+            [ -f "$ROOT/packages/$package/Cargo.toml" ] && main_packages["$package"]=1
+            ;;
+        esac
+        ;;
+    esac
+  done < <(
+    {
+      git diff --name-only --diff-filter=ACMRTD "$lint_base" --
+      git ls-files --others --exclude-standard
+    } | sort -u
+  )
+
+  if [ "$main_workspace_changed" -eq 1 ]; then
+    main_package_args=(--workspace)
+  elif [ "${#main_packages[@]}" -gt 0 ]; then
+    while IFS= read -r package; do
+      [ -n "$package" ] || continue
+      main_package_args+=(-p "$package")
+    done < <(printf '%s\n' "${!main_packages[@]}" | sort)
+  fi
+
+  if [ "${#main_package_args[@]}" -gt 0 ]; then
+    log "--> cargo clippy --locked --all-targets (changed main workspace scope)"
+    CARGO_TARGET_DIR="$workspace_target_dir" \
+      cargo clippy --jobs "$D2B_RUST_CARGO_JOBS" --locked \
+        --manifest-path "$manifest" "${main_package_args[@]}" --all-targets -- -D warnings
+    ok "changed main workspace clippy"
+  else
+    log "  changed main workspace clippy: no Rust package changes"
+  fi
+
+  if [ "$guest_shell_runner_changed" -eq 1 ]; then
+    log "--> cargo clippy --all-targets --features real-libshpool (changed guest shell runner)"
+    CARGO_TARGET_DIR="$guest_shell_runner_target_dir" \
+      cargo clippy --jobs "$D2B_RUST_CARGO_JOBS" \
+        --manifest-path "$guest_shell_runner_manifest" --workspace --all-targets \
+        --features real-libshpool -- -D warnings
+    ok "changed guest shell runner clippy"
+  else
+    log "  changed guest shell runner clippy: no Rust package changes"
+  fi
+
+  log "test-rust fast-lint OK (duration: $((SECONDS - suite_started))s)"
+}
+
 # The compiler-derived API census. Its own CI shard, because it shares nothing
 # with the workspace build that would make serialising it behind one worthwhile:
 # it renders through a separately pinned nightly toolchain into its own target
@@ -882,6 +993,9 @@ ok "assert-pinned-tests"
 # status. Internal clock, process, and path boundaries are injectable for
 # hermetic tests; there is no public shutdown-grace knob.
 case "$rust_mode" in
+  fast-lint)
+    run_fast_lint_gate
+    ;;
   api-surface)
     run_api_surface_gate
     ;;

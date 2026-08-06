@@ -54,7 +54,7 @@ Rust tests (types 2-5: unit, integration, contract, policy-lint) live under
 | `make test` | `test-unit` + `test-integration` | local host; still run `make test-host-integration` before opening an agent-owned PR |
 | `make check-tier0` | sub-60s syntax + shellcheck gate | local + CI |
 | `make check-inventory` | fail-closed migration-ledger drift check | local + CI |
-| `make test-lint` | preflight + nix-parse + shellcheck | local + CI |
+| `make test-lint` | serial fail-fast API-pin hint + Rust fmt + local changed-scope clippy + nix-parse + shellcheck; CI leaves clippy to the full Rust shard | local + CI |
 | `make test-changelog` | require release notes for code changes and validate every changelog fragment | local + CI |
 | `make test-rust` | bounded Make DAG for the Rust leaves (API, fmt, clippy, workspace tests, conditional fixture/CLI, broker x3, deny/audit, schema, inventory, and no-bash); fixture/CLI are included once when Nix is available | local + CI |
 | `make test-rust-<leaf>` | eight CI leaf targets (API, main, broker, guest shell runner, no-bash AST, schema, inventory, supply chain) behind the stable `test-rust` rollup; each receives the full runner budget | CI (local for a focused rerun) |
@@ -191,6 +191,12 @@ to the measured API long pole while the complete frontier stays bounded.
 Direct calls to `tests/test-rust.sh` require one explicit leaf mode; callers
 that need the complete gate must use `make test-rust`. The focused
 `make test-rust-main` also retains conditional fixture/CLI coverage.
+
+Before that aggregate starts, local `make check` runs `make test-lint`
+serially. Its Rust precheck shares the normal target directories, so
+changed-package clippy both reports common failures before the long parallel
+phase and warms the later full workspace gate. The API check in this lane is a
+fast structural-diff hint, not a replacement for the compiler-derived census.
 
 CI invokes one Make target per Rust leaf, so local-only dependency edges do
 not repeat schema or inventory work in the main and broker jobs. A cold local

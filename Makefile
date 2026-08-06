@@ -55,9 +55,9 @@ NIX_FLAKE := nix --extra-experimental-features 'nix-command flakes'
 # ===========================================================================
 
 ## check - the Layer-1 PR-equivalent done-gate. The manifest runner executes
-##          check-tier0 first, then safe L1 sub-targets in parallel, then
-##          drift after the parallel phase. Tune with D2B_CHECK_JOBS and
-##          D2B_FLAKE_JOBS.
+##          check-tier0 first, then the fail-fast lint and inventory phases,
+##          then safe L1 sub-targets in parallel, followed by the serial gates.
+##          Tune with D2B_CHECK_JOBS and D2B_FLAKE_JOBS.
 check:
 	bash tests/tools/layer1-jobs run-local
 
@@ -105,7 +105,7 @@ test-unit:
 # Sub-targets. Each has a corresponding tests/test-<name>.sh driver.
 # ===========================================================================
 
-## test-lint - preflight + nix-instantiate --parse + shellcheck (no eval, no cargo).
+## test-lint - fail-fast Rust/API hints + nix parse + shellcheck (no Nix eval).
 test-lint:
 	bash tests/test-lint.sh
 

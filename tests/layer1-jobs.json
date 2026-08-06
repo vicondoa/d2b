@@ -6,12 +6,22 @@
       {
         "id": "preflight",
         "mode": "serial",
-        "jobs": ["tier0", "check-inventory"]
+        "jobs": ["tier0"]
+      },
+      {
+        "id": "fast-lint",
+        "mode": "serial",
+        "jobs": ["test-lint"]
+      },
+      {
+        "id": "inventory",
+        "mode": "serial",
+        "jobs": ["check-inventory"]
       },
       {
         "id": "parallel",
         "mode": "parallel",
-        "jobs": ["test-lint", "test-changelog", "test-rust", "test-proofs", "test-flake", "test-nix-unit", "test-policy"]
+        "jobs": ["test-changelog", "test-rust", "test-proofs", "test-flake", "test-nix-unit", "test-policy"]
       },
       {
         "id": "serial-after-parallel",
@@ -105,11 +115,15 @@
       "runsOn": "ubuntu-latest"
     },
     "test-lint": {
-      "displayName": "Lint gate (preflight + parse + shellcheck)",
+      "displayName": "Fast lint gate (API hint + fmt + local changed-scope clippy)",
       "makeTarget": "test-lint",
+      "ciEnv": {
+        "D2B_LINT_CHANGED_CLIPPY": "0"
+      },
       "ciKind": "simple-nix",
       "ciJobId": "test-lint",
       "needs": ["tier0"],
+      "checkoutFetchDepth": 0,
       "timeoutMinutes": 10,
       "runsOn": "ubuntu-latest"
     },
