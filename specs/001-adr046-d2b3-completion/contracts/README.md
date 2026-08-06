@@ -105,5 +105,7 @@ third source of truth that the drift gates do not check.
     `operator-nix-activation-cleanup`; T601 owns exactly
     `resource-plane-rss-owner-fanin`, `wave5-removal-proofs`, and
     `cli-reference-conformance`. T602 rejects any unknown, duplicate, missing, extra,
-    wrong-lane, or conflated identifier. T219 alone runs the one binding panel, seal, and
-    tree-preserving merge; no post-request content change or second binding panel is allowed.
+    wrong-lane, or conflated identifier. T219 alone runs F's one binding panel, seal, and
+    tree-preserving merge. F cannot change or receive a second request. Nonunanimity retains F
+    as failed and routes scoped fixes through a fully revalidated successor and
+    delta/full-context follow-up panel before that candidate's one request.

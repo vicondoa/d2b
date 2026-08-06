@@ -210,11 +210,14 @@ proof passes, and required CI reruns regardless.
 ### If content changes after snapshotting
 
 Any content change before the binding panel request invalidates validation evidence: converge,
-re-snapshot, and rerun before requesting the panel. For `adr046w5`, no content or evidence
-identity may change after T219's binding request and no second binding panel may run; such a
-state fails closed for integrator escalation rather than silently re-attesting changed
-content. The eligible integration-lineage merge may change history only while preserving F's
-tree.
+re-snapshot, and rerun before requesting the panel. For `adr046w5`, F and its evidence
+identity may not change after F's binding request, and F can never receive a second request.
+A nonunanimous F is retained as failed; route only its recommendations through scoped fixes,
+return through T220 and T600-T602, and run the delta/full-context follow-up panel before a
+distinct successor receives its one request. If the current external ADR or tooling refuses
+that successor flow, stop for integrator scope escalation rather than silently re-attesting
+changed content or waiving findings. The eligible integration-lineage merge may change
+history only while preserving the successful candidate's tree.
 
 ---
 

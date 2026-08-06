@@ -843,9 +843,10 @@ The completion boundary is:
   panel bound to B/P; then T603's immutable B/P authorization for every T073-T218 obligation,
   repository identity and relative feature path, validator-derived P-to-Q checkbox edit,
   exact child commit C and progress receipt, and separate C-ancestor-of-F evidence;
-- T220 convergence of every content change before clean exact F, followed by T219's one
-  binding panel/seal and a tree-preserving merge with no post-request change or second
-  binding panel; and
+- T220 convergence of every content change before clean exact F, followed by F's one binding
+  panel/seal and a tree-preserving merge with no post-request change or second request for F;
+  nonunanimity retains F as failed and routes scoped fixes plus delta/full-context follow-up
+  review through a distinct, fully revalidated successor; and
 - exact-candidate evidence whose `EvidenceRecord.validation` multiset is exactly
   `production-session-watch`, `effect-replay-cleanup`, `audit-drain-replay`,
   `system-core-handler-contract`, `operator-nix-activation-cleanup`,
@@ -859,7 +860,8 @@ authoritative row, incomplete export, ordinary success for a
 committed-pending-audit mutation, a claim that `ResourceUpdateStatus` owns phase/code, an
 operator test that bypasses the public Nix switch or accepts a refusal as a positive
 representative path, a stale receipt, a dirty candidate tree, a free-form/duplicate/conflated
-evidence identifier, post-attestation content, a second binding panel, or evidence from another commit cannot cover
+evidence identifier, post-attestation content under the same candidate, a second request for
+one immutable candidate, or evidence from another commit cannot cover
 FR-066 through FR-072 or SC-030 through SC-034.
 
 ### D106 keeps policy interpretation out of both store crates
@@ -956,10 +958,14 @@ Run this against `tasks.md` before implementation starts.
 - [x] Wave assignment matches the implementation graph, with no item moved between waves
 - [x] Parallel groups are preserved so file-disjoint slices launch together (FR-028)
 - [x] The 14 `file-overlap-order` edges are recorded as explicit ordering constraints
-- [x] The approved W5 completion graph has one integrator-prep commit, six file-disjoint
-      implementation slices, one serial daemon composition owner, five disjoint
-      acceptance/docs slices including T604's operator activation coverage, and
-      T220 convergence/freeze plus exact-candidate evidence before T219's one binding panel
+- [x] The approved W5 completion graph has one integrator-prep commit; parallel T590, T591,
+      and T594 starts; the serialized `T591 -> T592 -> T593 -> T605` chain; one serial daemon
+      composition owner; five disjoint acceptance/docs slices including T604's operator
+      activation coverage; and T220 convergence/freeze plus exact-candidate evidence before
+      T219's binding close. T591 and T592 deliberately overlap
+      `packages/d2b-resource-store-redb/src/transaction.rs`, so T592 starts only after T591.
+      T592 and T593 deliberately serialize `packages/Cargo.lock`, so T593 starts only after
+      T592. The six implementation tasks are not all file-disjoint.
 - [x] T603 is the sole direct prerequisite of T589; pre-T603 A/P0 analysis and panel authorize
       only validator implementation, validator-only V becomes B, post-T603 analysis and panel
       rerun at B/P, and only those post-validator receipts authorize immutable

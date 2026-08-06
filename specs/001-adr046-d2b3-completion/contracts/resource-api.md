@@ -180,5 +180,7 @@ Making this reachable is the core of User Story 1 and the precondition for SC-02
   fixtures.
   T604's result appears only as `operator-nix-activation-cleanup`; the coordinated T605
   contract, T595 emitter, and T599 consumers appear only as
-  `system-core-handler-contract`. T219 runs the one binding panel and permits no
-  post-request content change or second binding panel.
+  `system-core-handler-contract`. T219 runs F's one binding panel; F permits no post-request
+  content change or second request. A nonunanimous F is retained as failed and only a
+  distinct, fully revalidated successor may receive its own one request after scoped fixes
+  and a delta/full-context follow-up panel.

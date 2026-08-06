@@ -473,8 +473,12 @@ artifacts, complete Story 1, and exercise each desktop companion against it.
   used by panel-request, seal, and merge-eligibility, with negative tests for missing, extra,
   duplicate, unknown, wrong-lane, and conflated mappings. T602 MUST invoke that validator and
   MUST require all eight records to bind F and F's tree. T219 alone
-  runs the one binding panel, seal, and merge after T602; no content, evidence identity, or
-  candidate change and no second binding panel is permitted after its panel request. Before
+  runs F's one binding panel, seal, and merge after T602; no content, evidence identity, or
+  candidate change is permitted under F after its request, and F can never receive a second
+  request. A nonunanimous F is retained as failed, its recommendations alone scope the fix
+  round, and a distinct successor must repeat T220 and T600-T602 plus the delta/full-context
+  follow-up panel before receiving its own one request. An external policy/tooling refusal is
+  an integrator scope escalation, never a finding waiver. Before
   T603 implementation, clean base A and feature snapshot P0 MUST pass current cross-artifact
   analysis with no unresolved HIGH or CRITICAL finding and a unanimous plan panel that
   authorizes only `packages/xtask/src/delivery/{mod.rs,resume.rs}`. T603 MUST land one
@@ -973,8 +977,9 @@ artifacts, complete Story 1, and exercise each desktop companion against it.
 - **Cutover**: The one-time, host-scoped, previewable, consent-gated, partially reversible
   procedure that replaces the pre-ADR-046 control plane with a live Zone runtime, assigning
   every existing artifact a disposition of adopt, preserve, or destroy.
-- **Wave**: The delivery unit. Each wave has entry criteria, an immutable candidate
-  snapshot, validation evidence, exactly one binding panel, a seal, and exit criteria.
+- **Wave**: The delivery unit. Each wave has entry criteria, immutable candidate snapshots,
+  candidate-bound validation, at most one binding panel per candidate, one unanimously
+  accepted candidate and seal, and exit criteria.
 - **Work item**: The smallest tracked unit of implementation, bound to one owning
   specification with exact destination paths and required validation, and holding a state
   that must reach merged before its wave can seal.
@@ -1105,8 +1110,9 @@ Delegation is not omission. Every delegated obligation is enumerated in
   carries the coordinated T605 contract, T595 emitter, and T599 consumer result; production
   RSS is at or below 24,576 KiB with no baseline subtraction; owner fan-in is singular;
   current removal proofs pass; and checked reference behavior matches emitted CLI and wire
-  output. T219 then runs exactly one binding panel and seal; no post-request content change
-  or second binding panel is permitted, and the merge preserves F's tree.
+  output. T219 then runs F's exactly one binding panel and seal. F stays immutable and cannot
+  receive another request. Nonunanimity fails F and routes scoped fixes through a distinct,
+  fully revalidated successor; the successful merge preserves that candidate's tree.
 
 #### Scale and footprint
 
