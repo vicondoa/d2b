@@ -2280,8 +2280,10 @@ the existing paired `docs/reference/resource-plane-runtime.md`. It treats
 `packages/xtask/src/zone_schema.rs` and
 `docs/reference/schemas/v3/core.d2bus.org_Zone.schema.json` as read-only proof inputs and must
 show that generator output remains byte-identical because the desired Zone spec is unchanged.
-T595 consumes the variants in the production emitter; T596, T599-T602, and T219 consume the
-list-shape and T605 evidence.
+T605 completes on those owned pre-consumer artifacts and does not run the full drift gate.
+T595 consumes the variants in the production emitter; T599 reconciles downstream consumers;
+T220 reconciles integrator-owned generated spec manifests and the full drift gate; T596,
+T600-T602, and T219 consume the coordinated list-shape evidence after those stages.
 
 No `apiVersion`, `schemaVersion`, `manifestVersion`, `bundleVersion`, or wire-field version
 bump is required: no field or operation changes, the desired-state Zone schema is unchanged,
@@ -2290,5 +2292,6 @@ tests, API snapshots, reference status docs, consumers/emitters, generator no-dr
 and panel evidence.
 
 CHK054 is checked only as a specification-quality resolution. Implementation remains
-unchecked. Normal read-only analysis, unanimous plan panel signoff, and T603's exact
-T073-T218 reconciliation still gate resume.
+unchecked. Pre-validator analysis and plan signoff at A/P0 authorize only T603's validator
+paths. After validator-only V becomes B, analysis and the plan panel rerun at B/P; those
+post-validator receipts and T603's exact T073-T218 reconciliation still gate resume.

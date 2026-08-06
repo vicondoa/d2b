@@ -72,24 +72,38 @@ third source of truth that the drift gates do not check.
     fixed domain-separated digests, and retention/prune failure is typed degraded health
     (FR-070).
 11. **Amended-plan resume is receipt-bound.** T603 is the sole direct prerequisite of T589
-    and writes immutable authorization R at clean B/P using repository identity plus a
-    relative feature path. If all rows and analysis/panel identities pass, only the
-    validator-derived P-to-Q `/d2b-spec-edit` batch may check T073-T218 and T603. The Wave 5
-    integrator owns exact child commit C; T589 requires finalized progress receipt E, clean
-    HEAD C, and the checked task set. T602 later validates the B-to-C ancestry/snapshots and
-    separate final-candidate F/tree evidence (FR-072, SC-034).
+    but pre-validator analysis and plan panel at A/P0 authorize only its two validator source
+    paths. Validator-only commit V becomes B, P remains byte-identical to P0, and analysis
+    plus the plan panel rerun at B/P before T603 writes immutable authorization R using
+    repository identity plus a relative feature path. If all rows and post-validator
+    analysis/panel identities pass, only the validator-derived P-to-Q `/d2b-spec-edit` batch
+    may check T073-T218 and T603. The Wave 5 integrator owns exact child commit C; T589
+    requires finalized progress receipt E, clean HEAD C, and the checked task set. T602 later
+    validates the B-to-C ancestry/snapshots and separate final-candidate F/tree evidence
+    (FR-072, SC-034).
 12. **Operator activation is acceptance evidence.** T604 starts from the emitted Nix
     resource declaration and per-Zone bundle, activates on startup and public declaration and
     removal switches without manual restart, observes a real owned effect and readiness for
     every representative Guest, Volume, Network, and Device, then removes one declaration and
     proves dependency-safe cleanup without disturbing ready unrelated resources. Refusals are
     separate negative cases. The exact
-    candidate result is required by T600, T601, T602, and T219.
+    candidate result is emitted once by T600 as
+    `operator-nix-activation-cleanup` and is required by T602 and T219.
 13. **C1 is a coordinated unreleased-v3 correction.** Constitution 2.2.0 authorizes T605 to
     add `ZoneHandlerName::SystemCoreHost` and `ZoneHandlerName::SystemCoreUser`, serialized only
     as `system-core-host` and `system-core-user`; underscore spellings remain internal
     telemetry labels. Both governing normative specs and their version metadata move with
     targeted Rust/contract tests, compiler-derived public/private API snapshots, paired
-    reference status text, and byte-identical Zone desired-schema proof. T595 consumes the
-    variants and T599 reconciles other consumers in the same Wave 5 PR. C1 changes no desired
-    Zone field or JSON schema version. Implementation remains pending.
+    reference status text, and byte-identical Zone desired-schema proof. T605 completes on
+    those owned pre-consumer artifacts; T595 consumes the variants, T599 reconciles other
+    consumers, and T220 reconciles generated spec manifests plus the full drift gate in the
+    same Wave 5 PR. C1 changes no desired Zone field or JSON schema version. Implementation
+    remains pending.
+14. **Exact-candidate evidence and close are closed.** T220 converges every repository change
+    before freezing F. T600 owns exactly `production-session-watch`,
+    `effect-replay-cleanup`, `audit-drain-replay`, `system-core-handler-contract`, and
+    `operator-nix-activation-cleanup`; T601 owns exactly
+    `resource-plane-rss-owner-fanin`, `wave5-removal-proofs`, and
+    `cli-reference-conformance`. T602 rejects any unknown, duplicate, missing, extra,
+    wrong-lane, or conflated identifier. T219 alone runs the one binding panel, seal, and
+    tree-preserving merge; no post-request content change or second binding panel is allowed.

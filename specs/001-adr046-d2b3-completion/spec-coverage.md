@@ -791,8 +791,9 @@ choice.
 The approved 2026-08-06 amendment now adds sixteen local completion/evidence tasks without
 changing the 545-item manifest census. T589-T602 plus T604-T605 own the missing production
 composition, coordinated handler-contract correction, operator activation boundary, and
-exact-candidate evidence; T603 is the seventeenth local Wave 5 completion/resume task. The
-feature task total is 605.
+exact-candidate evidence; existing T220 is the integrator convergence/freeze boundary before
+that evidence, and T603 is the seventeenth local Wave 5 completion/resume task. The feature
+task total is 605.
 The completion boundary is:
 
 - registrar-consumed, pidfd-bound authenticated ComponentSession and authoritative subject,
@@ -819,25 +820,37 @@ The completion boundary is:
   `system-core-user` record, each carrying `phase` and `lastReconciledAt` from an active,
   initialized, current handler; `ProviderLifecycle` remains distinct and cannot substitute,
   and Wave 5 does not wait for other Wave 6 dossiers;
-- T605's `ZoneHandlerName::SystemCoreHost` and `ZoneHandlerName::SystemCoreUser` kebab-case
+- T605's pre-consumer `ZoneHandlerName::SystemCoreHost` and
+  `ZoneHandlerName::SystemCoreUser` kebab-case
   round-trip as `system-core-host`/`system-core-user`, underscore-label rejection on the Zone
   wire, both governing normative specs and version metadata, exact-list acceptance and
   rejection coverage, current compiler-derived public/private API snapshots, paired
   `docs/reference/resource-plane-runtime.md`, and read-only proof that
   `packages/xtask/src/zone_schema.rs` leaves
   `docs/reference/schemas/v3/core.d2bus.org_Zone.schema.json` byte-identical because the
-  desired Zone spec is unchanged;
+  desired Zone spec is unchanged; T595 owns later emission, T599 owns remaining consumer
+  reconciliation, and T220 reconciles integrator-owned generated spec manifests and runs the
+  full drift gate;
 - per-Zone failure isolation;
 - T604 exact-candidate coverage from an operator Nix declaration and emitted bundle through
   startup and public declaration/removal switches without manual restart to a real owned
   effect/readiness for every representative Guest, Volume, Network, and Device, followed by
   dependency-safe removal cleanup with ready unrelated resources intact; refusals remain
   separate negative cases;
-- T603's immutable B/P authorization for every T073-T218 obligation plus current analysis and
-  unanimous `adr046w5-r<n>` plan receipt, repository identity and relative feature path,
-  validator-derived P-to-Q checkbox edit, exact child commit C and progress receipt, then
-  separate C-ancestor-of-F and clean exact-F candidate evidence; and
-- exact-candidate production-boundary, RSS, owner, removal, and reference evidence.
+- pre-T603 analysis and unanimous plan panel at clean A/P0 authorizing only T603's two
+  validator source paths; validator-only commit V with sole parent A; B exactly V and P
+  byte-identical to P0; rerun analysis over A..B plus the feature artifacts and a rerun plan
+  panel bound to B/P; then T603's immutable B/P authorization for every T073-T218 obligation,
+  repository identity and relative feature path, validator-derived P-to-Q checkbox edit,
+  exact child commit C and progress receipt, and separate C-ancestor-of-F evidence;
+- T220 convergence of every content change before clean exact F, followed by T219's one
+  binding panel/seal and a tree-preserving merge with no post-request change or second
+  binding panel; and
+- exact-candidate evidence whose `EvidenceRecord.validation` multiset is exactly
+  `production-session-watch`, `effect-replay-cleanup`, `audit-drain-replay`,
+  `system-core-handler-contract`, `operator-nix-activation-cleanup`,
+  `resource-plane-rss-owner-fanin`, `wave5-removal-proofs`, and
+  `cli-reference-conformance`, with the first five owned by T600 and the final three by T601.
 
 A direct ResourceService or `WatchService` call, `ProductionWatchHarness`, fixed/fake endpoint,
 constructed subject, numeric-PID-only identity, fabricable/reusable bootstrap reader,
@@ -845,7 +858,8 @@ independent readiness bit, status-only Provider substitute, disabled audit owner
 authoritative row, incomplete export, ordinary success for a
 committed-pending-audit mutation, a claim that `ResourceUpdateStatus` owns phase/code, an
 operator test that bypasses the public Nix switch or accepts a refusal as a positive
-representative path, a stale receipt, a dirty candidate tree, or evidence from another commit cannot cover
+representative path, a stale receipt, a dirty candidate tree, a free-form/duplicate/conflated
+evidence identifier, post-attestation content, a second binding panel, or evidence from another commit cannot cover
 FR-066 through FR-072 or SC-030 through SC-034.
 
 ### D106 keeps policy interpretation out of both store crates
@@ -945,16 +959,21 @@ Run this against `tasks.md` before implementation starts.
 - [x] The approved W5 completion graph has one integrator-prep commit, six file-disjoint
       implementation slices, one serial daemon composition owner, five disjoint
       acceptance/docs slices including T604's operator activation coverage, and
-      exact-candidate evidence before T219
-- [x] T603 is the sole direct prerequisite of T589, writes immutable repository-relative B/P
-      authorization, accounts for all T073-T218 obligations without checking them from code
-      presence, authorizes only the validator-derived P-to-Q `/d2b-spec-edit` batch, binds the
-      exact child checkbox commit C in the finalized receipt, and leaves descendant final
-      candidate F/tree evidence separate
+      T220 convergence/freeze plus exact-candidate evidence before T219's one binding panel
+- [x] T603 is the sole direct prerequisite of T589; pre-T603 A/P0 analysis and panel authorize
+      only validator implementation, validator-only V becomes B, post-T603 analysis and panel
+      rerun at B/P, and only those post-validator receipts authorize immutable
+      repository-relative B/P reconciliation. T603 accounts for all T073-T218 obligations
+      without checking them from code presence, authorizes only the validator-derived P-to-Q
+      `/d2b-spec-edit` batch, binds exact child checkbox commit C in the finalized receipt,
+      and leaves descendant final candidate F/tree evidence separate
 - [x] C1 is resolved as a specification-quality assignment under Constitution 2.2.0: T605
-      adds the two closed-enum values and paired contract/drift artifacts, T595 consumes them,
-      and the same Wave 5 PR carries the remaining consumers, docs, and evidence. No
-      implementation or delivery result is claimed
+      adds the two closed-enum values and owned pre-consumer artifacts, T595 emits them, T599
+      reconciles downstream consumers, and T220 reconciles generated manifests and full drift
+      before F. The same Wave 5 PR carries the coordinated result. No implementation or
+      delivery result is claimed
+- [x] T600 and T601 have disjoint ownership of the closed eight-identifier FR-072 evidence
+      set, and T602 compares the exact lane/identifier multiset before T219
 - [ ] No task contradicts a decision in the register (checked per task at implementation time,
       per FR-047)
 - [x] Contended files are integrator-prep, not slice-owned
@@ -1019,7 +1038,7 @@ content. The original clarification family and the later approved additions are:
 | FR-043 | Clarification: recovery-point attestation required | Tightens `reset-and-cutover`. The owning spec permits proceeding past the rollback boundary without attestation; this program does not. |
 | FR-046 | Applies the repository's existing-code-is-canon rule to spec-versus-manifest drift | Governs the recorded W2 destination drift. |
 | FR-061 - FR-065 | Companion contract/artifact, classification, membership, and verification clarifications | Makes the locally added companion release blocker mechanically decidable. |
-| FR-066 - FR-072, FR-074 | Operator-approved Wave 5 production-completion amendment plus analysis remediation | Adds sixteen completion/evidence tasks including T604 and T605 plus T603, blocks T589 on the reconciliation receipt, sole editor checkbox transition, editor progress receipt, and checked prerequisites, blocks T219 on production wiring and exact-candidate evidence, and does not change the 545-item manifest. |
+| FR-066 - FR-072, FR-074 | Operator-approved Wave 5 production-completion amendment plus analysis remediation | Adds sixteen completion/evidence tasks including T604 and T605 plus T603; requires pre-validator A/P0 gates, validator-only V/B, post-validator B/P gates, the sole editor checkbox transition and progress receipt; assigns downstream contract reconciliation to T595/T599/T220; freezes F at T220; closes T600/T601 evidence to eight identifiers; blocks T219 on that exact candidate; and does not change the 545-item manifest. |
 
 A reviewer checking upstream fidelity should expect these rows to have no one-to-one
 counterpart in `docs/specs/`. That is intended, not a coverage gap. FR-073 is not in this

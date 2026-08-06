@@ -89,8 +89,12 @@ The Zone desired-spec artifact
 `docs/reference/schemas/v3/core.d2bus.org_Zone.schema.json` remains unchanged and T605 must
 prove generator output is byte-identical rather than hand-editing it. C1 is resolved in these
 feature artifacts but is not implemented. The plan is eligible for read-only cross-artifact
-analysis and, if that has no HIGH or CRITICAL finding, a unanimous plan panel. Implementation
-remains gated on that analysis, the panel, and T603 progress reconciliation.
+analysis at clean pre-validator base A and feature snapshot P0 and, if that has no HIGH or
+CRITICAL finding, a unanimous plan panel bound to A/P0. Those gates authorize only T603's
+validator implementation. T603 then lands validator-only commit V, freezes resume base B
+exactly at V, and MUST rerun analysis and the plan panel at B/P before it may create the
+reconciliation receipt or authorize any checkbox edit. T589 remains gated on those
+post-validator receipts and T603 progress reconciliation.
 
 ## Clarifications
 
@@ -441,12 +445,33 @@ artifacts, complete Story 1, and exercise each desktop companion against it.
   cleanup while unrelated resources remain ready and intact. Actionable refusals are separate
   negative cases and cannot satisfy this positive story. Direct `WatchService` calls, fixed
   or fake endpoints, test-only subject injection, stale evidence from an older tree, and
-  historical proof artifacts are not evidence for this gate. Before T589 may resume, T603
-  MUST write the closed immutable external authorization receipt at
+  historical proof artifacts are not evidence for this gate. T220 MUST converge all slice and
+  integrator-owned generated-artifact changes, including T605/T595/T599 reconciliation and
+  the full drift gate, before freezing final candidate F. Exact-candidate evidence MUST use
+  this closed feature-local `EvidenceRecord.validation` set:
+  `production-session-watch`, `effect-replay-cleanup`, `audit-drain-replay`,
+  `system-core-handler-contract`, `operator-nix-activation-cleanup`,
+  `resource-plane-rss-owner-fanin`, `wave5-removal-proofs`, and
+  `cli-reference-conformance`. T600 exclusively owns the first five; T601 exclusively owns
+  the final three. T602 MUST reject an unknown, duplicate, missing, extra, wrong-lane, or
+  conflated identifier and MUST require all eight records to bind F and F's tree. T219 alone
+  runs the one binding panel, seal, and merge after T602; no content, evidence identity, or
+  candidate change and no second binding panel is permitted after its panel request. Before
+  T603 implementation, clean base A and feature snapshot P0 MUST pass current cross-artifact
+  analysis with no unresolved HIGH or CRITICAL finding and a unanimous plan panel that
+  authorizes only `packages/xtask/src/delivery/{mod.rs,resume.rs}`. T603 MUST land one
+  validator-only commit V with sole parent A and freeze resume base B exactly at V; feature
+  snapshot P MUST be byte-identical to P0. Analysis over A..B plus the full feature artifacts
+  and a plan panel bound to B/P MUST both rerun after V. Any finding or validator-code change
+  invalidates B and both post-validator receipts. A source-only fix MUST create a new V/B and
+  rerun both post-validator gates; a required feature-artifact edit MUST return to a fresh
+  `/d2b-spec-edit` batch, establish a new A/P0, and rerun the complete two-pass sequence. Only
+  then may T603 write the closed
+  immutable external authorization receipt at
   `.scratch/autopilot/adr046w5/reconciliation.json`, account for exactly every T073-T218
   obligation against clean resume base B and delivery records, bind repository identity plus
-  a repository-relative feature path, and bind both current cross-artifact analysis and
-  unanimous plan-panel receipts to B and pre-edit snapshot P. The validator MUST derive the
+  a repository-relative feature path, and bind both post-validator cross-artifact analysis
+  and unanimous plan-panel receipts to B and pre-edit snapshot P. The validator MUST derive the
   sole authorized post-edit snapshot Q for the 147 checkbox changes. T605 appears only as
   future work after resume, never as a 147th obligation row or 148th checkbox transition. If
   any row is open, T603 remains unchecked and no checkbox changes. Only 146 satisfied rows,
@@ -455,9 +480,10 @@ artifacts, complete Story 1, and exercise each desktop companion against it.
   commit C, whose sole parent MUST be B and whose only diff MUST be P-to-Q. The prepare,
   apply, and finalize protocol MUST resume safely from exact B/P, B/Q, or C/Q and refuse every other
   state. T589 MUST require the finalized progress receipt, clean HEAD C, and those checked
-  boxes. T602 later validates B/P, C/Q, exact `C^ = B`, C as an ancestor of final candidate F,
-  separate T600/T601 evidence bound to F and F's tree, HEAD exactly F, and no staged,
-  unstaged, or non-ignored untracked state. An absent, stale, ambiguous, structurally open,
+  boxes. T602 later validates B/P, C/Q, exact `C^ = B`, C as an ancestor of final candidate F
+  frozen by T220, the exact eight-record T600/T601 closed set bound to F and F's tree, HEAD
+  exactly F, and no staged, unstaged, or non-ignored untracked state. An absent, stale,
+  ambiguous, structurally open,
   path-raced, or identity-mismatched receipt, any unaccounted prior obligation, or any
   unauthorized checkbox edit MUST block resume.
 - **FR-073**: D106 remains binding in the completed production path.
@@ -1019,22 +1045,31 @@ Delegation is not omission. Every delegated obligation is enumerated in
   handlers; a boolean substitute fails the test. In the multi-Zone startup and shutdown
   matrix, every unrelated Zone is visited and remains operable, and every affected Zone
   reports a specific actionable refusal.
-- **SC-034**: T603's immutable external authorization contains exactly the closed task-ID set
-  T073-T218 with one `satisfied|open` row each, repository identity, relative feature path,
-  resume base B/tree, pre-edit snapshot P, and validator-derived post-edit snapshot Q. Any
-  open row leaves T603 unchecked and changes no checkbox. Only 146 satisfied rows, analysis
-  with no unresolved HIGH or CRITICAL finding, and a current unanimous plan panel at B/P
-  authorize the sole `/d2b-spec-edit` progress batch. Dedicated checkbox commit C has exact
-  parent B and exact P-to-Q diff; prepare/apply/finalize tests converge after a crash from
-  B/P, B/Q, or C/Q. T589 refuses until the finalized editor receipt exists, HEAD is clean C,
-  and T073-T218 plus T603 are checked. T605 remains future work and does not alter the 146
-  receipt rows or 147 checkbox transitions. T219 refuses unless C is an ancestor of final
-  candidate F, all FR-072 evidence records name F and F's tree, HEAD equals F with no staged,
-  unstaged, or non-ignored untracked state, T600 and T601 both reference T604's all-positive
-  public-switch activation/effect/cleanup result and T605's normative contract/drift result,
-  the production RSS is at or below 24,576 KiB with no baseline subtraction, owner fan-in is
-  singular, current removal proofs pass, and checked reference behavior matches the
-  candidate's emitted CLI and wire output.
+- **SC-034**: Clean pre-validator A/P0 analysis and plan-panel receipts authorize only T603's
+  two validator source paths. Dedicated validator commit V has sole parent A and no other
+  repository changes; resume base B equals V and feature snapshot P equals P0. Analysis over
+  A..B plus the full feature artifacts and the plan panel are rerun and bound to B/P before
+  T603 creates any authorization. A finding or later validator change invalidates B and both
+  post-validator receipts. T603's immutable external authorization contains exactly the
+  closed task-ID set T073-T218 with one `satisfied|open` row each, repository identity,
+  relative feature path, B/tree, P, and validator-derived post-edit snapshot Q. Any open row
+  leaves T603 unchecked and changes no checkbox. Only 146 satisfied rows, post-validator
+  analysis with no unresolved HIGH or CRITICAL finding, and the post-validator unanimous
+  plan panel at B/P authorize the sole `/d2b-spec-edit` progress batch. Dedicated checkbox
+  commit C has exact parent B and exact P-to-Q diff; prepare/apply/finalize tests converge
+  after a crash from B/P, B/Q, or C/Q. T589 refuses until the finalized editor receipt
+  exists, HEAD is clean C, and T073-T218 plus T603 are checked. T605 remains future work and
+  does not alter the 146 receipt rows or 147 checkbox transitions. T219 refuses unless C is
+  an ancestor of final candidate F frozen after T220 convergence; the exact eight closed
+  FR-072 evidence identifiers occur once each at their assigned T600/T601 owner and lane; all
+  records name F and F's tree; HEAD equals F with no staged, unstaged, or non-ignored
+  untracked state; `operator-nix-activation-cleanup` alone carries T604's all-positive
+  public-switch activation/effect/cleanup result; `system-core-handler-contract` alone
+  carries the coordinated T605 contract, T595 emitter, and T599 consumer result; production
+  RSS is at or below 24,576 KiB with no baseline subtraction; owner fan-in is singular;
+  current removal proofs pass; and checked reference behavior matches emitted CLI and wire
+  output. T219 then runs exactly one binding panel and seal; no post-request content change
+  or second binding panel is permitted, and the merge preserves F's tree.
 
 #### Scale and footprint
 

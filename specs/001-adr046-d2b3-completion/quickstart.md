@@ -34,38 +34,45 @@ eval that follows the same path. A forgotten `git add` on a new module is the mo
 
 ### 1. Confirm entry criteria
 
-```bash
-# Every prior wave's work items must be Merged. 14 of 545 today.
-jq '[.workItems[] | select(.implementationState=="Merged")] | length' \
-  docs/specs/ADR-046-work-items.json
-```
-
-Entry also requires: no unresolved contention flag on this wave's destination paths, the stack
-proposed against the exact parent commit rather than a stale `v3`, a free heavy-gate semaphore,
-and a green fast hermetic suite.
+Entry requires Gate 0 passed, no unresolved contention flag on this wave's destination paths,
+the stack proposed against the exact named parent commit rather than a stale `v3`, a free
+heavy-gate semaphore, and a green fast hermetic suite. If the predecessor is not yet merged,
+implementation may start only after at least 5 of its 10 reviews return and integration is
+green on its converged tree. Prior-wave `Merged` state is not entry evidence. It is checked at
+the successor's panel request, seal, and merge-eligibility boundary, after the successor
+rebases onto the merged predecessor.
 
 ### 1b. Reconcile `adr046w5` progress before implementation
 
 T603 never infers task completion from code presence and never edits a feature artifact
-directly. Its fd-anchored validator first writes immutable authorization R at
+directly. First freeze clean pre-validator base A and feature snapshot P0, run
+`/speckit-analyze`, and obtain unanimous plan signoff at A/P0. That pair authorizes only
+`packages/xtask/src/delivery/{mod.rs,resume.rs}`. Land validator-only commit V with sole
+parent A, freeze B exactly at V, require P to remain byte-identical to P0, rerun analysis over
+A..B plus the feature artifacts, and rerun the plan panel at B/P. Any finding or later
+validator change invalidates B and requires both post-validator gates again.
+
+Only the post-validator receipts permit the fd-anchored validator to write immutable
+authorization R at
 `.scratch/autopilot/adr046w5/reconciliation.json`, bound to repository identity, the
 repository-relative feature path, clean resume base B and tree, exact 28-file pre-edit
-snapshot P, validator-derived post-edit snapshot Q, analysis receipt, ten-record plan panel,
-and one row for each T073-T218 obligation.
+snapshot P, validator-derived post-edit snapshot Q, post-validator analysis receipt,
+ten-record post-validator plan panel, and one row for each T073-T218 obligation.
 
 If any row is `open`, leave T603 and T073-T218 unchecked and stop. If all 146 rows are
-`satisfied`, analysis has no unresolved HIGH or CRITICAL finding, and current unanimous plan
-signoff names B/P, route one explicit `/d2b-spec-edit` progress batch. The editor recomputes
-R before making its only permitted feature changes: checking T073-T218 and T603. The Wave 5
+`satisfied`, the post-validator analysis has no unresolved HIGH or CRITICAL finding, and the
+post-validator unanimous plan signoff names B/P, route one explicit `/d2b-spec-edit` progress
+batch. The editor recomputes R before making its only permitted feature changes: checking
+T073-T218 and T603. The Wave 5
 integrator stages only that diff and owns dedicated commit C with exact parent B. The
 validator then finalizes `.scratch/autopilot/adr046w5/progress-editor-receipt.json`, binding
 B, C, P, and Q. A retry converges only from exact B/P, B/Q, or C/Q. T589 refuses unless HEAD
 is clean C, the finalized receipt validates, and all 147 checkboxes are checked. T602 later
 validates C as an ancestor of separate final candidate F rather than requiring R to match F.
 
-C1 is approved and fully assigned under Constitution 2.2.0. Run read-only
-`/speckit-analyze`, then request the unanimous plan panel if analysis is clean. Implementation
-remains pending: T603 must still reconcile exactly T073-T218 before T589, and T605 is future
+C1 is approved and fully assigned under Constitution 2.2.0. Run the pre-T603 analysis and
+plan panel first. Implementation remains pending: after validator V, the post-T603 analysis
+and plan panel must rerun before T603 may reconcile exactly T073-T218; T605 remains future
 work after resume rather than a 147th receipt row.
 
 ### 2. Launch every ready, file-disjoint slice together
@@ -81,9 +88,12 @@ git worktree add -b adr046-w2-routing    ../d2b-w2-routing    adr046-w2-integrat
 
 A ready slice left unlaunched without a recorded blocker fails wave entry.
 
-For `adr046w5`, the exact implementation chain is
-`T589 -> {T590,T591,T592,T593,T594,T605} -> T595`. T595 may not start until all six slices
-converge and consumes T605's `SystemCoreHost` and `SystemCoreUser` variants.
+For `adr046w5`, the exact implementation and close chain is
+`T589 -> {T590,T591,T592,T593,T594,T605} -> T595 ->
+{T596,T597,T598,T599,T604} -> T220 -> F -> {T600,T601} -> T602 -> T219`.
+T595 may not start until all six slices converge and consumes T605's
+`SystemCoreHost` and `SystemCoreUser` variants. T220 reconciles generated manifests and every
+remaining content change before F; T219 alone runs the binding panel, seal, and merge.
 
 ### 3. Inner loop while implementing
 
@@ -104,14 +114,15 @@ pin target. Its focused loop is:
 make api-surface-pin
 make test-rust-api-surface
 D2B_ENABLE_FIXTURE_BUILD=1 make test-fixture-contracts
-make test-drift
 ```
 
 The result must prove `SystemCoreHost`/`SystemCoreUser` kebab-case round-trip, exactly one
 `Zone.status.handlers[]` record named `system-core-host` and one named `system-core-user`
 with `phase` and `lastReconciledAt`, duplicate/missing/wrong-name rejection,
 `ProviderLifecycle` non-substitution, current API snapshots, paired runtime reference text,
-and byte-identical generated Zone desired schema.
+and byte-identical generated Zone desired schema. T605 does not wait for T595/T599 and does
+not run the full drift gate. T595 owns the emitter, T599 owns downstream consumers, and T220
+reconciles integrator-owned generated spec manifests and runs `make test-drift` before F.
 
 ### 4. Heavy lanes, through the semaphore only
 
@@ -143,9 +154,9 @@ and require read-only findings. Then run the actual Copilot panel skill,
 `gpt-5.6-sol` at reasoning effort `xhigh` and context tier `default`.
 There is no separate dotted verification or review command.
 
-Clear every verification HIGH and CRITICAL, including constitution conflicts, before the panel.
-A defect that reaches panel forces a content change, which invalidates the snapshot and
-every record bound to it.
+Clear every verification HIGH and CRITICAL, including constitution conflicts, before the
+binding panel request. For `adr046w5`, a defect found here returns to T220 and reruns
+T600-T602 against a new F before the binding panel is invoked.
 
 ### 5. Snapshot, validate, panel, seal
 
@@ -170,8 +181,9 @@ together in one message. They take no heavy-gate slot, so all 10 run
 concurrently. They must not run tests or builds unless you explicitly ask a
 specific lane to.
 
-Three lanes run **concurrently** against the snapshot and never gate each other: required CI,
-local/host validators, and the panel.
+For ordinary waves, required CI, local/host validators, and panel lanes may run concurrently
+against the snapshot. For `adr046w5`, T600/T601 evidence and T602's closed-set check complete
+before T219 issues the single binding panel request.
 
 ### 6. Merge, rebase, and clean up
 
@@ -179,7 +191,7 @@ Merge the wave integration branch to `v3` only after `merge-eligibility` reports
 eligible. Never a local octopus merge, never a direct push (FR-044).
 
 ```bash
-make changelog-fold              # integrator folds changelog.d/ fragments at wave close
+make changelog-fold              # before snapshot/panel; T220 owns this for adr046w5
 git -C ../d2b-w<N+1> rebase v3   # re-point the stacked next wave onto the updated v3
 
 # Cleanup, in this order - target dir first or removal reclaims nothing
@@ -196,10 +208,12 @@ proof passes, and required CI reruns regardless.
 
 ### If content changes after snapshotting
 
-Any content change invalidates **both** the validation and panel evidence. Re-snapshot and
-rerun. A history-only rebase may reuse the *panel* record only if the canonical proof shows
-byte-identical content, generated artifacts, dependency diff, and repository set - and CI still
-reruns regardless.
+Any content change before the binding panel request invalidates validation evidence: converge,
+re-snapshot, and rerun before requesting the panel. For `adr046w5`, no content or evidence
+identity may change after T219's binding request and no second binding panel may run; such a
+state fails closed for integrator escalation rather than silently re-attesting changed
+content. The eligible integration-lineage merge may change history only while preserving F's
+tree.
 
 ---
 

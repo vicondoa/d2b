@@ -49,9 +49,9 @@ Making this reachable is the core of User Story 1 and the precondition for SC-02
 | RA-11 | Commit an immutable authoritative audit journal row transactionally with each mutation, export by fixed digest plus ordinal with separate completion/retention health, represent export-pending `CommittedPendingAudit` on every mutation response including delete, and require exact replay-binding before same-ID observation/resumption | FR-070, SC-032 | W5 |
 | RA-12 | Reopen advanced mutable revisions from durable metadata and isolate per-Zone startup/close failures without dropping later Zones | FR-071, SC-033 | W5 |
 | RA-13 | Keep all RBAC DTO deserialization, compilation, and ownership outside both store crates | FR-073, D106 | W5 |
-| RA-14 | Bind amended-plan resume to T603's immutable B/P authorization, exact B-to-C editor transition, and finalized progress receipt; bind W5 acceptance separately to clean exact candidate F and production-boundary, public-switch activation/all-representative-effect/cleanup, RSS, fan-in, restart, audit, removal, and reference evidence | FR-072, SC-034 | W5 |
+| RA-14 | Bind amended-plan resume to pre-validator A/P0 analysis/panel, validator-only V/B, rerun B/P analysis/panel, T603's immutable B/P authorization, exact B-to-C editor transition, and finalized progress receipt; after T220 freezes F, require the exact eight closed evidence identifiers before T219's one binding panel and tree-preserving merge | FR-072, SC-034 | W5 |
 | RA-15 | Make the readiness Provider member exactly the `d2b-core-controller`-owned `Provider/system-core` registration plus exactly one `Zone.status.handlers[]` record named `system-core-host` and one named `system-core-user`, each carrying phase/timestamp from the active, initialized, current `HostReconciler` or `UserReconciler`; reject duplicates, missing/wrong names, and `ProviderLifecycle` substitution; do not wait for other W6 dossiers | FR-069, SC-033 | W5 |
-| RA-16 | Under Constitution 2.2.0, add the two omitted closed-enum values with exact kebab-case Zone wire names, retain underscore spellings only for internal telemetry labels, and move both governing normative specs/version metadata, Rust round-trip/list tests, compiler-derived public/private API snapshots, paired runtime reference, unchanged desired-Zone-schema proof, consumers/emitters, and exact-candidate evidence in the same Wave 5 PR | FR-072, SC-033, SC-034 | W5 |
+| RA-16 | Under Constitution 2.2.0, add the two omitted closed-enum values with exact kebab-case Zone wire names, retain underscore spellings only for internal telemetry labels, complete T605 on its owned normative/test/API/reference artifacts, reconcile the T595 emitter and T599 consumers, then reconcile generated manifests/full drift at T220 so all coordinated artifacts and exact-candidate evidence land in the same Wave 5 PR | FR-072, SC-033, SC-034 | W5 |
 
 ## Invariants that must not regress
 
@@ -149,13 +149,17 @@ Making this reachable is the core of User Story 1 and the precondition for SC-02
   dependency-safe removal without affecting ready unrelated resources. Refusals are separate
   negative cases. Direct `WatchService`, `ProductionWatchHarness`, a fake endpoint, a fixed
   subject, or an older result artifact is ineligible.
-- Before T589, T603 writes the closed external receipt, accounts for all T073-T218
-  obligations, and binds repository identity, relative feature path, current analysis, and a
-  unanimous plan receipt at `adr046w5-r<n>` to resume base B and pre-edit snapshot P. Only
-  the validator-derived P-to-Q `/d2b-spec-edit` batch may check T073-T218 and T603; dedicated
-  commit C has exact parent B. T589 requires the finalized editor receipt, clean HEAD C, and
-  those checkboxes. Before T219, no reconciled obligation remains open, C is an ancestor of
-  clean exact candidate F, and both F/tree-bound evidence manifests contain T604's
-  exact-candidate result plus T605's normative-spec/version, wire/list,
-  targeted-contract-test, current API-snapshot, paired-reference, and unchanged
-  desired-schema results.
+- Before T589, pre-validator analysis and plan panel at A/P0 authorize only T603's two
+  validator source paths. Validator-only commit V becomes B, P remains byte-identical to P0,
+  and analysis plus the plan panel rerun at B/P. T603 then writes the closed external
+  receipt, accounts for all T073-T218 obligations, and binds repository identity, relative
+  feature path, post-validator analysis, and the unanimous post-validator plan receipt at
+  `adr046w5-r<n>` to B/P. Only the validator-derived P-to-Q `/d2b-spec-edit` batch may check
+  T073-T218 and T603; dedicated commit C has exact parent B. T589 requires the finalized
+  editor receipt, clean HEAD C, and those checkboxes. Before T219, no reconciled obligation
+  remains open, T220 has converged and frozen clean exact F, C is an ancestor of F, and the
+  F/tree-bound evidence union contains exactly the eight closed validation identifiers.
+  T604's result appears only as `operator-nix-activation-cleanup`; the coordinated T605
+  contract, T595 emitter, and T599 consumers appear only as
+  `system-core-handler-contract`. T219 runs the one binding panel and permits no
+  post-request content change or second binding panel.
