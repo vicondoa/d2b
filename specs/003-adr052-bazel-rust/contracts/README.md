@@ -24,7 +24,7 @@ Contracts:
   versioned diagnostic transition, and retirement command surface.
 - `runner-environment.md` - test topology, provider, environment, and
   sanitized bounded per-case evidence contract, compile-sealed verified
-  executable, immutable forbid-unsafe execveat helper, safe command-fd
+  executable, immutable static C execution supervisor, safe Rust command-fd
   mapping, typed ownership/error transport, retention classes, and canonical
   closed complete/degraded evidence.
 - `execution-manifest-binding.md` - Bazel carrier results bound to existing

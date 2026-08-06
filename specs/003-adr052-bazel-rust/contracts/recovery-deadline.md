@@ -61,10 +61,13 @@ degraded status that completion and qualification reject.
 All slice reruns use the versioned closed diagnostic command enum in
 `make-target-compatibility.md`. Before alias removal every message names an
 existing shadow target. Alias removal atomically updates provider,
-sandbox-policy, evidence, cleanup, and recovery renderers plus every byte-exact
-expectation to the enduring promoted aggregate/slice targets and records the
-transition in its semantic changelog. A diagnostic naming an absent target is
-a policy failure.
+sandbox-policy, qualification threshold/table, evidence/publication, cleanup,
+and recovery renderers, both module roots, every byte-exact expectation, all
+governed docs, the evidence record, and the semantic fragment to the enduring
+promoted aggregate/slice targets. A diagnostic, task-state label, or evidence
+variant naming a target absent from that state is a policy failure. Version 1
+is retained only in the closed pre-change fixture where every shadow rule
+exists.
 
 The exact-message harness covers every sandbox-policy stage and slice, every
 qualification query/refusal/publication class, and every release

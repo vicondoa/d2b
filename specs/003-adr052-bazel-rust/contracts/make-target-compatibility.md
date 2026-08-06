@@ -174,14 +174,18 @@ versions:
 | `bazel-diagnostic-v2` | Alias removal and later | `make test-rust` | `make test-rust-slice-main` | `make test-rust-slice-api` | `make test-rust-slice-broker` | `make test-rust-slice-aux` |
 
 Before promotion and while aliases exist, every provider, sandbox-policy,
-publication, cleanup, and recovery diagnostic and its byte-exact test use
-version 1, so every named target exists. The alias-removal change owns one
-atomic transition: remove aliases, select version 2 in every renderer, update
-every complete-message expectation, update the governed docs, and record the
-transition in `changelog.d/adr052-bazel-alias-removal.md`. The policy test
-enumerates every diagnostic command and Make rule and rejects a removed,
-unknown, or nonexistent target. No intermediate or merged state may mix
-versions.
+qualification threshold/table, evidence/publication, cleanup, and recovery
+renderer and its byte-exact test use version 1, so every named target exists.
+The alias-removal change owns one atomic transition: remove aliases, select
+version 2 in every production renderer and both module roots, update every
+complete-message expectation and policy fixture, update all five governed
+docs and the post-promotion evidence fields, and record the transition in
+`changelog.d/adr052-bazel-alias-removal.md`. The policy test enumerates every
+renderer, threshold row, evidence variant, test, document, task-state label,
+diagnostic command, and Make rule and rejects missing, extra, duplicate,
+mixed-version, removed, unknown, or nonexistent targets. Version 1 remains
+only in a pre-change fixture whose shadow Makefile defines all five commands.
+No intermediate or merged state may mix versions.
 
 ## Removal
 
@@ -230,8 +234,10 @@ spec003w6 first updates
 `packages/d2b-bazel-runner/tests/make_interface.rs` to expect removal and
 observes that test fail, then removes the aliases and makes it pass. The same
 change performs the `bazel-diagnostic-v1` to `bazel-diagnostic-v2` transition
-above; removal is incomplete if any diagnostic or exact-message fixture still
-names a shadow target.
+above across every production renderer, module root, qualification table,
+evidence/publication path, exact-message test, governed doc, evidence record,
+and semantic fragment; removal is incomplete if any post-change member names
+a shadow target or any phase/state selects a target absent from that state.
 
 Cargo implementations for the eighteen migrated surfaces may be removed only
 after ten distinct ordered green promoted `v3` run units, where a unit is one

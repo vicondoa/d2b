@@ -72,7 +72,7 @@ change that cache's fetched-byte identity and need not invalidate it.
 | Bazel 8.6.0 upstream source digest | A | R |
 | Linux sandbox seccomp patch digest | A | R |
 | patched Bazel output NAR, executable, and capability-ABI digests | A | R |
-| immutable execveat-helper source, selected dependency, output NAR, and executable digests | A | R |
+| immutable static execution-supervisor source, derivation dependency closure, protocol, output NAR, and executable digests | A | R |
 | stable/nightly action-kind and sandbox-strategy coverage digest | A | - |
 | generated BUILD digest | A | - |
 | configured native-target digest | A | - |

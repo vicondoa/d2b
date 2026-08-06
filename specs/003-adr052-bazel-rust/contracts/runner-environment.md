@@ -48,9 +48,10 @@ The shared filesystem boundary:
 7. brackets the digest read with matching descriptor metadata;
 8. returns an unforgeable verified handle; and
 9. consumes the handle into the reviewed safe command-fd mapping, which gives
-   the immutable helper a private descriptor sharing the verified descriptor's
-   original open file description; the helper sets CLOEXEC and executes it
-   with `execveat` and `AT_EMPTY_PATH`.
+   the immutable static C supervisor a private descriptor sharing the verified
+   descriptor's original open file description while preserving declared
+   stdio; the supervisor forks once and the child executes it with `execveat`
+   and `AT_EMPTY_PATH`.
 
 No provider path is returned. No `Command` by path, `fexecve`, or
 `/proc/self/fd` fallback is permitted.
@@ -80,30 +81,65 @@ There are no Cargo-shelling compile fixtures.
 
 `VerifiedExecutable` and its only consuming public API are co-located in one
 dependency-leaf crate. No other crate can name a consuming trait or method.
-The API consumes the handle by value and invokes `d2b-bazel-execveat` only
-from the exact immutable Nix store path supplied by the pinned toolchain
-artifact. It accepts no helper path parameter and reads no environment
-override. The committed helper identity binds output NAR and executable
-hashes, helper source and product-lock hashes, and the exact selected
-`command-fds` and safe fd/CLOEXEC/execveat dependency identities.
+The safe Rust API consumes the handle by value and invokes
+`d2b-bazel-exec-supervisor` only from the exact immutable Nix store path
+supplied by the pinned toolchain artifact. It accepts no helper path parameter
+and reads no environment override. A closed source census permits exactly this
+one Rust invocation site.
 
-The parent validates declared stdin, stdout, and stderr, creates a bounded
-typed status pipe, and uses the exact pinned reviewed safe `command-fds` API to
-map the consumed verified open file description and status writer to fixed
-private fds outside 0, 1, and 2. Spawn mechanics remain owned by
-`std::process::Command` and `command-fds`; first-party code defines no raw
-fork, `pre_exec`, or signal callback. The mapping preserves declared
-stdin/stdout/stderr byte-for-byte.
+The helper is not a Rust crate. One tiny reviewed C source under
+`tests/tools/d2b-bazel-exec-supervisor/` is built by the dedicated
+`pkgs/d2b-bazel-exec-supervisor` static Nix derivation. It is build/test
+tooling and is absent from the product workspace and product Bazel hub. The
+committed identity binds the exact C source digest, derivation dependency
+closure hashes, output NAR hash, executable hash, protocol version, and
+native-system identity. The exact store path is embedded from that toolchain
+artifact; the record persists no complete store path.
 
-`d2b-bazel-execveat` is a normal workspace binary inheriting
-`unsafe_code = "forbid"`. Using only pinned safe APIs, it verifies that both
-private fds exist and that the executable fd has the expected verified
-identity, sets CLOEXEC on both, constructs argv/environment in its normal
-single-threaded process, and calls
+The Rust parent validates declared stdin, stdout, and stderr and creates the
+fixed supervisor status channel. The exact pinned reviewed safe
+`command-fds` API maps the consumed verified open file description to its
+fixed private fd outside 0, 1, and 2. `std::process::Command` preserves the
+three declared stdio streams and spawns the exact helper path. Every new Rust
+crate retains `unsafe_code = "forbid"`; first-party Rust defines no raw fork,
+`pre_exec`, signal callback, or unsafe helper exception.
+
+The helper starts and remains single-threaded. It validates private-fd
+presence and identity, snapshots the declared stdio ownership, normalizes the
+supervisor signal mask and dispositions, and creates exactly one
+`O_CLOEXEC|O_NONBLOCK` child exec-error pipe. It then forks exactly once. The
+child establishes the target process group, restores an empty signal mask and
+default dispositions for every catchable signal, installs the declared
+stdin/stdout/stderr at 0/1/2, sets the executable fd `FD_CLOEXEC`, closes every
+supervisor-only and non-surviving descriptor, and calls
 `execveat(private_fd, "", argv, envp, AT_EMPTY_PATH)`. There is no target path,
-reopen, `fexecve`, `/proc/self/fd`, or fallback. On helper failure before exec,
-it writes exactly one fixed-size typed stage record to the private status fd.
-On successful exec, CLOEXEC closes both private fds before the target starts.
+reopen, `fexecve`, `/proc/self/fd`, or fallback. A child setup or exec failure
+writes exactly one fixed-size exec-error record with bounded
+`EINTR`/`EAGAIN`/short-write handling under the absolute monotonic deadline,
+then calls `_exit`.
+
+The supervisor closes its exec-error writer after fork and emits exactly one
+fixed `READY` status to the Rust parent. It reads the exec-error pipe to either
+empty close-on-exec EOF or one complete fixed failure record. Every read and
+status write uses bounded `EINTR`/`EAGAIN`/short-I/O loops under the same
+absolute deadline. Empty EOF is the only exec success and causes exactly one
+`EXECUTED` status. Partial, overlong, duplicate, malformed, unknown,
+held-open-writer, timeout, or I/O failure is a typed helper failure.
+
+The supervisor remains alive after `EXECUTED`. It forwards only `SIGHUP`,
+`SIGINT`, `SIGTERM`, and `SIGQUIT` to the target process group, preserves the
+existing absolute-deadline SIGTERM/full-grace/unconditional-SIGKILL sequence,
+waits and reaps the direct child, emits one fixed terminal status, and mirrors
+the exact target result: the same normal exit code or the same terminating
+signal. Inherited blocked or ignored termination state cannot reach the
+target because child signal state was normalized. A signal, wait, reap,
+terminal-write, or exact-status-mirroring failure is a typed helper failure.
+
+Rust accepts no inferred exec result. Helper crash, helper exit, or status
+channel EOF before `EXECUTED` is always a typed helper failure, regardless of
+the helper process status. A target that execs and immediately exits with the
+same status as a planted helper crash is accepted only when `READY`,
+`EXECUTED`, the terminal record, and the mirrored status all agree.
 
 No runfiles, worktree, copied, symlinked, caller-supplied, or fd-0 helper
 transport is permitted. A closed invocation-site policy derives the complete
@@ -114,43 +150,61 @@ direct invocation elsewhere remains a policy failure.
 Tests prove the API consumes the handle and exposes no descriptor; the mapped
 private fd refers to the original verified open file description; a marker on
 declared stdin reaches the target unchanged; stdout and stderr retain their
-declared destinations; and provider, private executable, status, and auxiliary
-descriptors are absent after exec. The host conformance test rebinds and
-mutates the provider path after verification and proves execution still uses
-the verified open file description while no path appears in argv, environment,
-evidence, or diagnostics. Mutations cover missing/wrong helper output, copied
-or rebound helper, runfiles/worktree path, direct invocation outside the
-consumer, fd-0 transport, absent/wrong private fd, reopen, `/proc`, path
-fallback, non-CLOEXEC private descriptors, leaked provider fd, replaced stdin,
-helper error, partial/malformed status transport, and any first-party unsafe
-allowance.
+declared destinations; and provider, private executable, exec-error, status,
+and auxiliary descriptors are absent from the target. The host conformance
+test rebinds and mutates the provider path after verification and proves
+execution still uses the verified open file description while no path appears
+in argv, environment, evidence, or diagnostics. Mutations cover missing/wrong
+helper output, copied or rebound helper, runfiles/worktree path, any second
+Rust invocation site, fd-0 transport, absent/wrong private fd, reopen, `/proc`,
+path fallback, non-CLOEXEC private and auxiliary descriptors, leaked provider
+fd, replaced stdin, held-open exec-error writer, partial/overlong/malformed
+exec-error and supervisor transport, helper EOF/crash before `EXECUTED`, fast
+same-exit-status target versus helper crash, inherited blocked and ignored
+`SIGTERM`, disallowed or lost signal forwarding, target-status mismatch, and
+any first-party Rust unsafe allowance.
 
-### Launch stage and resource contract
+### Rust parent stage, owner, and closure contract
 
-| Stage | Ownership and success transition | Injected failure cleanup |
+| Stage | Owned resources and success transition | Injected failure cleanup |
 | --- | --- | --- |
-| `Verified` | Consumed handle exclusively owns the provider `OwnedFd`. | Identity or argument failure drops the provider once; no pipe or child exists. |
-| `HelperIdentity` | Exact immutable helper output and every committed source/dependency/output digest match. | Missing, wrong, copied, symlinked, runfiles, worktree, or rebound output drops the provider; no spawn. |
-| `Prepared` | Parent owns provider fd, status reader, status writer, and mapping configuration; declared stdio remains independently owned. | Pipe, mapping, fd-collision, or command construction failure closes provider and both pipe ends without changing stdio ownership. |
-| `Spawned` | `std::process::Child` becomes the sole child owner. Parent immediately closes its provider and status-writer copies and retains status reader plus child. | Spawn failure creates no child and closes all prepared fds. A post-spawn parent-close failure is recorded but does not abandon the child. |
-| `Adopted` | Helper validates private-fd identity and presence and sets CLOEXEC on executable and status fds. | Helper writes one complete fixed stage record when possible and exits; parent retains child ownership and reaps. |
-| `Execed` | Helper calls execveat; CLOEXEC closes private fds and only declared stdio/survivors remain. | ENOSYS and typed exec errors use the helper-error record; no path fallback. |
-| `Transported` | Parent accepts EOF as exec success or one complete fixed-size known error record. | Empty-on-error, short, partial, overlong, malformed, duplicate, or unknown records are transport failures; the original helper stage is preserved when complete. |
-| `Waited` | Parent waits through `Child` and records the terminal target/helper status. | Wait failure retains child ownership for cleanup and blocks publication. |
-| `Cleaned` | Status reader closes once and every existing child is reaped. | Injected close, wait, existing deadline-policy kill, and reap failures preserve the first operation failure plus a typed cleanup stage; raw OS text is never rendered. |
+| `Verified` | Consumed handle exclusively owns the provider `OwnedFd`. | Identity or argument failure drops the provider once; no channel or child exists. |
+| `HelperIdentity` | Exact immutable store path and every C source/derivation-dependency/output/protocol digest match. | Missing, wrong, copied, symlinked, runfiles, worktree, or rebound output drops the provider; no spawn. |
+| `Prepared` | Rust owns provider fd, status reader/writer, mapping configuration, and declared stdio. | Channel, mapping, fd-collision, or command construction failure closes provider and both channel ends without changing stdio ownership. |
+| `Spawned` | `std::process::Child` becomes the sole supervisor owner. Rust immediately closes its mapped provider and helper-side status copies and retains only the reader plus `Child`. | Spawn failure creates no child and closes all prepared fds. A post-spawn close failure is recorded but cleanup still drives the supervisor to reap. |
+| `Ready` | Rust consumes one complete `READY`; supervisor remains owned through `Child`. | EOF, exit, timeout, partial, overlong, duplicate, malformed, or unknown status is typed helper failure; Rust terminates and reaps the supervisor. |
+| `Executed` | Rust consumes one complete `EXECUTED` after `READY`; no target status is inferred from helper wait status. | EOF, exit, timeout, or any other record before `EXECUTED` is typed helper failure and drives cleanup. |
+| `Terminal` | Rust consumes one fixed terminal target record, then waits for the supervisor and verifies exact normal/signaled status equality. | Missing/malformed terminal data, wait failure, or status mismatch blocks publication and retains child ownership until cleanup. |
+| `Cleaned` | Status reader closes once and the supervisor is reaped. | Injected close, signal, wait, deadline, kill, and reap failures preserve the first operation failure plus a distinct typed cleanup stage; raw OS text is never rendered. |
 
-No stage reports success while owning an unclosed parent-only fd or an
-unreaped child. Existing process-group deadline policy may terminate a stuck
-spawned target, but this contract does not invent raw fork signal handling.
+### C supervisor stage, error, owner, and closure contract
+
+| Stage | Owned resources and success transition | Typed failure and mandatory cleanup |
+| --- | --- | --- |
+| `Adopted` | Supervisor owns mapped executable fd, status writer, argv/environment, and declared stdio. | `HELPER_ADOPT` for absent/colliding/wrong descriptors; close all owned fds; no fork. |
+| `Normalized` | Supervisor blocks the fixed forwarding set, installs fixed dispositions, and records the child default state. | `HELPER_SIGNAL_NORMALIZE`; close all owned fds; no fork. |
+| `ExecPipe` | Supervisor creates and owns exactly one `O_CLOEXEC|O_NONBLOCK` reader/writer pair. | `HELPER_EXEC_PIPE`; close both ends and prior resources; no fork. |
+| `Forked` | Exactly one target child exists. Supervisor owns child pid, exec-error reader, and Rust status writer; child owns writer, executable fd, and stdio copies. | `HELPER_FORK` before child creation, or a later typed failure followed by target-group kill, direct-child reap, and closure of every supervisor fd. |
+| `ChildSetup` | Child establishes target group, resets mask/dispositions, installs 0/1/2, marks executable fd CLOEXEC, and closes supervisor-only fds. | Fixed `CHILD_GROUP`, `CHILD_SIGNAL`, `CHILD_STDIO`, `CHILD_CLOEXEC`, or `CHILD_CLOSE` exec-error record; bounded exact write; `_exit`. |
+| `Execveat` | Child calls `execveat` on the same open file description. Successful exec closes the error writer and executable fd. | Fixed `CHILD_EXECVEAT` record, including typed `ENOSYS`; bounded exact write; `_exit`; no fallback. |
+| `ExecResult` | Supervisor emits `READY`, then accepts only empty EOF or one complete child failure record under the absolute deadline. Empty EOF emits `EXECUTED`. | `HELPER_EXEC_TIMEOUT`, `HELPER_EXEC_PARTIAL`, `HELPER_EXEC_OVERLONG`, `HELPER_EXEC_UNKNOWN`, or `HELPER_EXEC_IO`; kill and reap target; close reader/status. |
+| `Supervising` | Supervisor owns live target group and status writer, forwards only the four allowed termination signals, and applies the existing deadline escalation. | `HELPER_SIGNAL_FORWARD` or `HELPER_DEADLINE`; unconditional target-group kill when required, direct-child reap, typed failure. |
+| `Reaped` | Supervisor has exact terminal wait status and no live child; it writes the fixed terminal record and mirrors that status. | `HELPER_WAIT`, `HELPER_REAP`, `HELPER_TERMINAL_WRITE`, or `HELPER_STATUS_MIRROR`; retain the first cause and close every remaining fd. |
+| `Closed` | No provider/private/pipe/status descriptor and no unreaped child remains. | `HELPER_CLEANUP` is attached to the first failure; cleanup is attempted on every reachable path. |
+
+No successful stage owns an unclosed parent-only fd or an unreaped child.
+No child path returns through C after fork: it either execs or calls `_exit`.
 
 All absent, non-regular, non-executable, stale, wrong-digest, rebound-path,
-short-read, metadata-change, and exec-stage cases are injected. The one
-host-backed conformance test may exercise kernel `fork` plus
-`execveat(AT_EMPTY_PATH)` behavior against a declared first-party probe. It
-asserts same-open-file-description behavior, unchanged declared stdin,
-separate stdout and stderr, absence of every provider/private/status-pipe
-descriptor, and presence only of a planted descriptor explicitly declared to
-survive.
+short-read, metadata-change, and exec-stage cases are injected. Host-backed
+conformance exercises the exact static supervisor against a declared
+first-party probe. It covers a held-open exec-error writer; each partial,
+overlong, and malformed transport boundary; a target that execs and exits
+immediately with the planted helper-crash status; inherited blocked and
+ignored `SIGTERM`; exact signal forwarding and target status; unchanged
+declared stdin; separate stdout and stderr; absence of every provider,
+private, exec-error, and status descriptor; and presence only of a planted
+descriptor explicitly declared to survive.
 
 Every auxiliary descriptor is close-on-exec: the runfiles anchor, provider,
 freshness-input handles, per-case directory, stdio setup copies not intended

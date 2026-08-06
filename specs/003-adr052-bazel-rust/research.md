@@ -517,30 +517,42 @@ both rejected. The first permits rebind and previously overloaded stdin. The
 second would be a new ADR 0009 exception without the required follow-up ADR.
 
 Instead, one dependency-leaf crate owns `VerifiedExecutable` and its only
-consuming public API. That API consumes the capability by value and invokes
-`d2b-bazel-execveat` only through the exact immutable Nix store path installed
-as its toolchain artifact. The helper's Nix output NAR and executable hashes,
-source digest, product-lock digest, and exact safe dependency identities are
-committed. Missing, wrong-output, copied, symlinked, runfiles, and worktree
-paths refuse.
+consuming public API. That safe Rust API consumes the capability by value and
+invokes `d2b-bazel-exec-supervisor` only through the exact immutable Nix store
+path installed as its toolchain artifact. The pinned reviewed `command-fds`
+API maps the consumed verified description onto a private fd while preserving
+declared stdin/stdout/stderr. Exactly one Rust invocation site is permitted,
+and every Rust crate retains `unsafe_code = "forbid"`.
 
-The parent preserves declared stdin/stdout/stderr and uses the exact pinned,
-reviewed safe `command-fds` API to map the consumed verified description and a
-bounded typed status writer onto private child fds. The helper is a normal
-workspace binary under `unsafe_code = "forbid"`. Using pinned safe APIs, it
-validates the private-fd identity, sets CLOEXEC on both private fds, and calls
-`execveat(private_fd, "", argv, envp, AT_EMPTY_PATH)`. There is no target path,
-reopen, `/proc/self/fd`, `fexecve`, or fallback.
+The helper is one tiny single-threaded C source, statically built as a
+dedicated build/test-tooling Nix derivation and excluded from the product Rust
+workspace. The committed identity binds exact source, derivation dependency
+closure, protocol, output NAR, executable, static ELF, and native-system
+hashes. Missing, wrong-output, copied, symlinked, dynamic, runfiles, and
+worktree paths refuse.
 
-The contract has typed prepare, identity, spawn, helper-adoption, CLOEXEC,
-execveat, status-transport, wait, cleanup, and reap stages. RAII ownership and
-closure are explicit for the consumed provider fd, mapped child fd, status
-ends, and `std::process::Child`. Spawn mechanics remain inside `std::process`
-and `command-fds`; no first-party raw fork or signal-handler design exists.
-Tests cover private-fd identity, descriptor absence, stdin, CLOEXEC, helper
-error, partial/malformed transport, and every parent ownership, closure,
-cleanup, wait, and reap failure. An enforcing closed invocation-site census
-rejects direct helper invocation outside the typed consumer.
+The supervisor normalizes signal masks and dispositions, creates one
+nonblocking close-on-exec child exec-error pipe, and forks exactly once. The
+child establishes the target group, resets signal state, installs declared
+stdio, sets the executable fd CLOEXEC, closes supervisor-only descriptors, and
+calls `execveat(private_fd, "", argv, envp, AT_EMPTY_PATH)`. Failure writes one
+fixed record with bounded `EINTR`/`EAGAIN`/short-write handling under the
+absolute deadline, then `_exit`s. There is no target path, reopen,
+`/proc/self/fd`, `fexecve`, or fallback.
+
+The supervisor emits `READY`, interprets only empty close-on-exec EOF as exec
+success, emits `EXECUTED`, remains alive, forwards the fixed termination-signal
+allowlist, waits and reaps, emits terminal status, and mirrors the exact target
+status. Every pipe and status operation has bounded
+`EINTR`/`EAGAIN`/short-I/O handling under the absolute deadline. Complete
+Rust-parent and C-supervisor stage-error and owner/closure tables cover every
+path. Tests distinguish fast same-status target exit from helper crash or EOF
+before `EXECUTED` and cover held-open writers, partial and malformed
+transport, inherited blocked/ignored SIGTERM, private-fd identity, descriptor
+absence, stdio, CLOEXEC, signal forwarding, exact status, and every cleanup,
+wait, and reap failure. The closed invocation-site census rejects every
+runfiles, worktree, Rust, Bazel, Make, or workflow invocation except the one
+typed consumer.
 
 On expiry, the independently timed full grace contains repeated non-consuming
 nonblocking `waitid(EXITED|NOWAIT|NOHANG)` observations. They are
@@ -574,12 +586,17 @@ topology, manifest, deadline, process, cleanup, and recovery tests remain in
 their actual spec003w1 or spec003w2 owner rather than landing red behind inert
 seams.
 
-Nix changes add a case to the Nix-unit inventory, so spec003w0 regenerates the
-three files under `tests/unit/nix/pinned/` with `make nix-unit-pin` and runs
-`make test-nix-unit`. New fixture-independent contract policy binaries are
-added to `D2B_FIXTURE_INDEPENDENT_POLICY_BINARIES` in `tests/lib.sh`;
-`tests/unit/meta/ci-runner-regression.py` proves `make test-policy` runs each
-one and the fixture-contract selector excludes each one.
+The sequential toolchain task adds a Nix-unit case, regenerates all three
+presence pins under `tests/unit/nix/pinned/`, proves a second
+`make nix-unit-pin` is clean, and runs `make test-nix-unit` before the Bazel
+generator opens. The later Nix-policy task may regenerate those same pins
+after its later cases land and reruns the test. Exactly
+`policy_bazel_toolchain`, `policy_bazel_nix`, and
+`policy_bazel_supply_chain` are added once each to the fail-closed
+`D2B_FIXTURE_INDEPENDENT_POLICY_BINARIES` inventory in `tests/lib.sh`;
+`tests/unit/meta/ci-runner-regression.py` proves missing, extra, and duplicate
+membership fails, `make test-policy` runs each one, and the fixture-contract
+selector excludes each one.
 
 The spec003w1 no-bash slice owns
 `tests/tools/no-bash-ast-walker/src/main.rs`, including its inline tests.
@@ -925,11 +942,16 @@ Its self-test corpus has one positive and forty-four isolated negative
 fixtures, including whole-task omission, empty input, every noncanonical list
 class, and every remaining validation branch. Every negative compares the
 complete rendered stderr byte-for-byte with an independent literal. A
-diagnostic contains only fixed code, fixed repository-relative source, fixed
-class reason, fixed remedy, and the exact rerun command. It never contains a
-task or dependency ID, owned path, count, operator-derived value, or raw OS
-text. This remains a planning tool under the specification directory and is
-not a repository gate.
+diagnostic contains only fixed code, fixed repository-relative source, a
+bounded 1-based numeric record ordinal, a bounded fixed 1-based numeric line
+number, fixed class reason, fixed remedy, and the exact rerun command. Those
+two numeric locators are the only dynamic values authorized. It never contains
+a task or dependency ID, owned path, contents, count, operator-derived value,
+or raw OS text. Every code has one exact remedy and rerun. The injectable
+entrypoint supplies every fixture's complete byte comparison and separately
+proves unreadable-source status 1 and unsupported-argument status 2 with
+byte-exact stderr. This remains a planning tool under the specification
+directory and is not a repository gate.
 
 ## Decision 23: Disclose retained hybrid execution
 
@@ -992,10 +1014,12 @@ for:
   a newer failure.
 - advisory arm, Rust slice, or rollup classification;
 - unknown, caller-supplied, ambiguous, or mixed-page cache prefix;
-- forged `VerifiedExecutable` API, wrong/rebound immutable helper output,
-  direct invocation outside the typed consumer, runfiles/worktree helper,
-  fd-0/reopen execution regression, first-party unsafe exception, stdin,
-  private-fd identity, CLOEXEC, typed-transport, ownership/cleanup/wait/reap
+- forged `VerifiedExecutable` API, wrong/rebound immutable static supervisor
+  output, second Rust invocation, runfiles/worktree helper, fd-0/reopen
+  execution regression, first-party Rust unsafe exception, stdin,
+  private-fd identity, CLOEXEC, held-open/partial typed transport,
+  helper crash/EOF before `EXECUTED`, fast same-status target,
+  blocked/ignored SIGTERM, signal/status, ownership/cleanup/wait/reap
   regression, patched-Bazel identity/capability or setup-before-payload gap,
   inherited ring/SQPOLL/fixed-socket gap, strategy/stage fallback, unsealed
   promotion SHA, sink value leak, duplicate sink classification, sink bound or

@@ -357,11 +357,14 @@ Acceptance:
    diagnostics are sanitized and bounded before publication. Degraded evidence
    preserves the underlying test verdict and is rejected separately.
 9. Same-descriptor execution is owned by one dependency-leaf crate that
-   defines `VerifiedExecutable` and its only consuming public API. That API
-   invokes `d2b-bazel-execveat` only from its exact immutable Nix store output,
-   maps the consumed descriptor and typed status channel with the pinned
-   reviewed safe `command-fds` API, preserves declared stdio, and leaves every
-   first-party crate at `unsafe_code = "forbid"`.
+   defines `VerifiedExecutable` and its only consuming public API. That safe
+   API invokes the dedicated static C `d2b-bazel-exec-supervisor` only from its
+   exact immutable Nix store output, maps the consumed descriptor with the
+   pinned reviewed safe `command-fds` API, preserves declared stdio, and
+   leaves every first-party crate at `unsafe_code = "forbid"`. The
+   single-threaded supervisor performs the sole fork, proves exec with its
+   close-on-exec error pipe and explicit `READY` then `EXECUTED` records,
+   remains alive to forward signals, and reaps and mirrors the target status.
 10. JUnit, `test.log`, unsealed evidence, and exporter diagnostics use closed
     age/count retention classes whose expiry is enforced before publication.
 
@@ -470,30 +473,51 @@ Acceptance:
   `compile_fail` examples MUST prove downstream capability absence; no
   Cargo-shelling fixture may be added.
   `VerifiedExecutable` and the only public API that consumes it MUST be
-  co-located in one dependency-leaf crate. The API MUST consume the handle by
-  value and invoke `d2b-bazel-execveat` only from the exact immutable Nix store
-  path supplied by its pinned toolchain artifact, never from runfiles or the
-  worktree. The helper derivation and committed identity record MUST bind its
-  output NAR and executable hashes, helper source hash, product lock hash, and
-  exact `command-fds` and safe syscall dependency identities.
-  The parent MUST use the pinned reviewed safe `command-fds` mapping API to
-  pass the verified open file description on a private descriptor, never
-  stdin, while preserving declared stdin/stdout/stderr. The helper and leaf
-  crate MUST inherit workspace `unsafe_code = "forbid"` with no first-party
-  exception. Using only pinned safe APIs, the helper MUST set close-on-exec on
-  the private executable descriptor and typed status descriptor, then call
-  `execveat(private_fd, "", argv, envp, AT_EMPTY_PATH)` with no target path,
-  reopen, `/proc`, `fexecve`, or fallback.
-  A typed stage and ownership table MUST cover identity verification,
-  command-fd preparation, spawn, helper adoption, close-on-exec, execveat,
-  bounded status transport, wait, cleanup, and child reap. Spawn mechanics
-  remain owned by `std::process` and `command-fds`; no first-party raw fork or
-  signal-handler design is permitted. Missing or wrong helper output, rebind
-  attempts, private-fd identity, descriptor absence, close-on-exec, stdin,
-  helper errors, partial/malformed status transport, and every parent
-  ownership, closure, wait, cleanup, and reap failure MUST be injected.
-  An enforcing closed invocation-site policy MUST reject every direct helper
-  invocation outside the typed consumer.
+  co-located in one dependency-leaf crate. The safe Rust API MUST consume the
+  handle by value and invoke `d2b-bazel-exec-supervisor` only from the exact
+  immutable Nix store path supplied by its pinned toolchain artifact, never
+  from runfiles or the worktree. Exactly one Rust invocation site is
+  permitted. The pinned reviewed safe `command-fds` mapper MUST pass the
+  verified open file description on a fixed private descriptor while
+  preserving declared stdin/stdout/stderr. Every new Rust crate MUST retain
+  `unsafe_code = "forbid"` with no exception.
+  The supervisor MUST be a dedicated static Nix derivation built from one
+  reviewed tiny single-threaded C source. It is build/test tooling, not a
+  product Rust crate or product workspace member. Its committed identity MUST
+  bind the exact source, derivation dependency closure, output NAR,
+  executable, protocol, and native-system hashes.
+  After adopting the mapped executable descriptor and declared stdio, the
+  supervisor MUST normalize its signal mask and dispositions, create one
+  nonblocking close-on-exec child exec-error pipe, and fork exactly once while
+  single-threaded. The child MUST establish its target process group, restore
+  the fixed default signal mask and dispositions, install declared
+  stdin/stdout/stderr, set the executable descriptor close-on-exec, close
+  every supervisor-only descriptor, and call
+  `execveat(private_fd, "", argv, envp, AT_EMPTY_PATH)`. On failure it MUST
+  write one fixed exec-error record with bounded
+  `EINTR`/`EAGAIN`/short-write handling under the absolute deadline and call
+  `_exit`; there is no target path, reopen, `/proc`, `fexecve`, or fallback.
+  The supervisor MUST emit `READY` after successful fork, consume exactly
+  empty EOF or one complete exec-error record with bounded
+  `EINTR`/`EAGAIN`/short-I/O handling under the same deadline, emit
+  `EXECUTED` only for empty close-on-exec EOF, and otherwise emit one typed
+  failure. It MUST remain alive after `EXECUTED`, forward only
+  `SIGHUP`/`SIGINT`/`SIGTERM`/`SIGQUIT` to the target process group, preserve
+  the existing deadline escalation, wait and reap the target, emit the fixed
+  terminal record, and mirror the exact normal or signaled target status.
+  Helper crash, status-channel EOF, or malformed/partial transport before
+  `EXECUTED` is always a typed helper failure and MUST NOT be inferred from
+  the helper process status, so a fast target exit cannot be confused with a
+  supervisor crash carrying the same status.
+  Complete Rust-parent and C-supervisor stage-error and owner/closure tables
+  MUST cover every descriptor and child on every path. Tests MUST cover a
+  held-open exec-error writer, partial and overlong transport, fast
+  same-status target exit versus helper crash, inherited blocked and ignored
+  `SIGTERM`, private-fd identity, descriptor absence, executable and auxiliary
+  close-on-exec, unchanged stdin and split stdout/stderr, signal forwarding,
+  exact target status, and every cleanup/wait/reap failure. An enforcing
+  closed invocation-site policy MUST reject every direct helper invocation
+  outside the one typed Rust consumer.
 - **FR-019**: `crate_universe` MUST declare exactly `product` from
   `packages/{Cargo.toml,Cargo.lock}` and `walker` from the no-bash walker
   manifest and lock. Product first-party crates MUST be native Bazel targets.
@@ -633,9 +657,12 @@ Acceptance:
   MUST NOT be called by workflows after promotion. Diagnostics use a
   versioned closed command enum: before alias removal every Bazel diagnostic
   names the existing shadow target; the alias-removal change atomically moves
-  every diagnostic and byte-exact message test to the enduring promoted
-  aggregate or slice target. The alias-removal semantic changelog MUST record
-  the transition. No released state may name a target absent in that state.
+  every production renderer, both module roots, qualification threshold/table,
+  evidence/publication path, byte-exact test, governed doc, evidence field, and
+  semantic fragment to the enduring promoted aggregate or slice target.
+  Version 1 remains only in a closed pre-change fixture whose shadow rules all
+  exist. No released task/state label, renderer, diagnostic, or document may
+  name a target absent in that state.
 - **FR-051**: Alias removal MUST wait for a release containing promotion and
   MUST be a separate change. The release MUST be neither draft nor prerelease.
 - **FR-052**: Cargo implementation retirement MUST wait for ten consecutive
@@ -723,10 +750,16 @@ Acceptance:
   independently timed full grace, treat them as informational only, send
   unconditional group SIGKILL, then reap the direct child. Blocking-wait and
   early-reap mutations MUST fail.
-- **FR-063**: The spec003w0 implementation MUST own Nix-unit pin regeneration,
-  run `make test-nix-unit`, add new fixture-independent policy binaries to the
-  shared `tests/lib.sh` list, prove `make test-policy` runs them, and prove the
-  fixture-contract lane excludes them.
+- **FR-063**: Before the Bazel generator opens, the sequential toolchain task
+  MUST regenerate all three Nix-unit presence pins, prove a second
+  regeneration is clean, and run `make test-nix-unit`. The later Nix-policy
+  task MAY regenerate the same pins after later cases land and MUST rerun the
+  test. Exactly the three new fixture-independent
+  `policy_bazel_toolchain`, `policy_bazel_nix`, and
+  `policy_bazel_supply_chain` binaries MUST appear once each in the shared
+  fail-closed `tests/lib.sh` `test-policy` inventory; missing, extra, and
+  duplicate membership MUST fail; `make test-policy` MUST run them; and the
+  fixture-contract lane MUST exclude them.
 - **FR-064**: Final validation MUST run clean-diff assertions before and after
   every generate, repin, refresh, or product-lock regeneration command and
   fail if the committed candidate mutates.
@@ -982,10 +1015,17 @@ Acceptance:
   repeated-metadata, task-after-graph, dependency-failure,
   pure-adjacency-mismatch, cycle, concurrent-conflict, and dynamic-ownership
   negatives. Every failure MUST render an exact fixed code,
-  repository-relative source, class-specific remedy, and exact
-  self-test-plus-plan rerun command without `$!`, absolute path, or raw OS
-  text. It MUST run without production-code changes, be required before every
-  plan panel, and remain a planning tool rather than a repository gate.
+  repository-relative source, bounded 1-based numeric record ordinal, bounded
+  fixed 1-based numeric line number, class-specific remedy, and exact
+  self-test-plus-plan rerun command. Those two numeric locators are the only
+  dynamic diagnostic values allowed. Task/dependency IDs, owned paths,
+  contents, counts, operator values, `$!`, absolute paths, and raw OS text MUST
+  never render. Every code MUST have one exact remedy and rerun. Every fixture
+  MUST byte-match complete stderr through the injectable entrypoint.
+  Unreadable-source and unsupported-argument cases MUST use that entrypoint and
+  assert status 1 and 2 respectively plus byte-exact stderr. It MUST run
+  without production-code changes, be required before every plan panel, and
+  remain a planning tool rather than a repository gate.
 
 ## Key Entities
 
@@ -1011,9 +1051,11 @@ Acceptance:
 - **Verified Executable Handle**: One `O_RDONLY|O_CLOEXEC` provider descriptor
   opened with `RESOLVE_NO_MAGICLINKS` only, owned with its sole consuming API
   by one dependency-leaf crate and passed through reviewed safe command-fd
-  mapping to the exact immutable Nix-built `d2b-bazel-execveat` helper for
-  same-open-file-description `execveat(AT_EMPTY_PATH)`; declared stdio
-  survives and no first-party unsafe exception exists.
+  mapping to the exact immutable Nix-built static C
+  `d2b-bazel-exec-supervisor`. Its sole fork and close-on-exec error pipe prove
+  same-open-file-description `execveat(AT_EMPTY_PATH)` before it supervises,
+  forwards signals, reaps, and mirrors target status; declared stdio survives
+  and no first-party Rust unsafe exception exists.
 - **Action Seccomp Provider**: The Nix-pinned patched Bazel 8.6.0 Linux
   sandbox, whose child loads the fixed filter before the action command and
   whose exact source/patch/policy/output identity, startup probe, configured
@@ -1116,12 +1158,16 @@ Acceptance:
 - **SC-020**: Provider route, descriptor inheritance, `ENOSYS`, API-census,
   rustdoc capability, same-open-file-description, declared stdin/stdout/stderr,
   private-fd identity, CLOEXEC and rebind-absence positives pass. The exact
-  immutable Nix helper output, helper source/dependency hashes, and reviewed
-  safe command-fd mapping are bound. Missing/wrong/rebound helper output,
+  immutable static C supervisor Nix output, source/output/dependency hashes,
+  fixed protocol, and reviewed safe command-fd mapping are bound. One Rust
+  invocation site is enforced. Missing/wrong/rebound helper output,
   runfiles/worktree helper path, direct invocation outside the typed consumer,
-  fd-0 transport, absent/misidentified descriptor, replaced stdin, helper
-  error, partial/malformed status transport, every parent ownership/closure/
-  cleanup/wait/reap failure, reopen, `/proc`, fallback, any first-party unsafe
+  fd-0 transport, absent/misidentified descriptor, replaced stdin,
+  held-open exec-error writer, helper crash or EOF before `EXECUTED`,
+  partial/malformed/overlong transport, fast same-status target exit,
+  blocked/ignored inherited `SIGTERM`, wrong signal forwarding or target
+  status, every Rust-parent and C-supervisor ownership/closure/cleanup/wait/
+  reap failure, reopen, `/proc`, fallback, any first-party Rust unsafe
   exception, blocking-wait, early-reap, shortened-grace, and conditional
   SIGKILL mutations all fail.
 - **SC-021**: Every qualifying record carries `bazelRestoreCount`,
@@ -1215,9 +1261,12 @@ Acceptance:
   adjacency equal, an acyclic graph, and no ownership conflict among
   incomparable scopes. Whole-task omission, empty, ordered-list, blockquote,
   indentation, and every isolated validation branch have independent
-  fixtures. Every negative compares complete stderr byte-for-byte with an
-  independent literal containing only fixed code, fixed repository-relative
-  source, fixed class reason, fixed remedy, and the exact rerun command.
+  fixtures. Every negative compares complete stderr byte-for-byte through the
+  injectable entrypoint with an independent literal containing only fixed
+  code, fixed repository-relative source, bounded 1-based numeric record and
+  fixed line locators, fixed class reason, fixed remedy, and the exact rerun
+  command. Unreadable source and unsupported arguments produce exact status 1
+  and 2. No task/dependency ID, owned path, contents, or count is rendered.
 - **SC-041**: `promotion-record.json` validates against the actual sealed
   `spec003w5` protected-`v3` merge; old-SHA, candidate-SHA, wrong-seal, and
   unsealed-merge plants fail before either post-promotion eligibility check.

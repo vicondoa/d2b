@@ -171,7 +171,7 @@ to the same file are explicitly sequential.
   packages/d2b-bazel-exec/tests/provider_handle.rs,
   packages/d2b-bazel-exec/tests/verified_executable_api.rs,
   packages/d2b-bazel-exec/tests/execute.rs,
-  packages/d2b-bazel-execveat/tests/helper.rs,
+  packages/d2b-bazel-exec/tests/supervisor_protocol.rs,
   packages/d2b-bazel-support/tests/startup.rs,
   packages/xtask/tests/policy_workspace.rs] [depends: T004] Add failing prep
   tests for the unified workspace and for the complete provider, runfiles,
@@ -185,26 +185,28 @@ to the same file are explicitly sequential.
   Deref/Borrow/fd traits, Debug/Display, serialization, conversion,
   duplication/default, and minting. Add no Cargo-shelling compile fixture.
   Co-locate `VerifiedExecutable` and the only public consuming API in one
-  dependency-leaf crate. Add tests that the API consumes by value, resolves
-  `d2b-bazel-execveat` only from the exact immutable Nix toolchain output, and
-  uses the pinned reviewed safe `command-fds` dependency to map the verified
-  descriptor plus typed status writer to private fds while preserving
-  stdin/stdout/stderr. The helper is an `unsafe_code = "forbid"` binary using
-  pinned safe APIs to validate/adopt the private fds, set CLOEXEC, and call
-  same-open-file-description `execveat(AT_EMPTY_PATH)` with no target path,
-  reopen, `/proc`, `fexecve`, or fallback. Add a typed stage and ownership/
-  closure table and injected missing/wrong helper output, output rebind,
-  helper source/dependency/output identity, private-fd identity, descriptor
-  absence, CLOEXEC, stdin, helper error, partial/malformed status transport,
-  spawn, close, cleanup, wait, and reap failures. Use `std::process` and
-  `command-fds` spawn mechanics; add no raw fork or signal handling. Add an
-  enforcing closed invocation-site test that permits the exact typed consumer
-  only and rejects helper invocation through runfiles, worktree paths, other
-  Rust sources, Bazel rules, Make, or workflows. Reject fd-0 executable
-  transport, first-party unsafe, `pre_exec`, and broad lint overrides. These
-  prep tests use injected identity/spawn/fd backends and helper protocol unit
-  entry points; they never execute a Cargo, runfiles, or worktree helper. The
-  Nix-policy scope owns real-output conformance. Add a
+  dependency-leaf crate. Add tests that the safe API consumes by value,
+  resolves `d2b-bazel-exec-supervisor` only from the exact immutable Nix
+  toolchain output, and uses the pinned reviewed safe `command-fds` dependency
+  to map the verified descriptor to a private fd while preserving
+  stdin/stdout/stderr. Add complete Rust-parent and C-supervisor stage-error
+  and owner/closure tables. Inject missing/wrong/rebound helper identity,
+  private-fd identity, descriptor absence, CLOEXEC, stdin, held-open child
+  exec-error writer, bounded `EINTR`/`EAGAIN`/short/partial/overlong/malformed
+  status transport, helper crash/EOF before `EXECUTED`, fast target exit with
+  the same status as the crash, blocked/ignored inherited SIGTERM,
+  signal-forwarding/status mismatch, spawn, close, cleanup, wait, and reap
+  failures. The fixed protocol requires `READY`, then `EXECUTED`, then terminal
+  target status; no process status is inferred before `EXECUTED`. Use
+  `std::process` and `command-fds` only for safe Rust supervisor spawn. Add no
+  Rust raw fork, `pre_exec`, signal handler, or unsafe exception. Add an
+  enforcing closed invocation-site test that permits exactly one Rust typed
+  consumer and rejects helper invocation through runfiles, worktree paths,
+  other Rust sources, Bazel rules, Make, or workflows. Reject fd-0 executable
+  transport, first-party Rust unsafe, and broad lint overrides. These prep
+  tests use injected identity/spawn/fd/protocol backends and do not execute a
+  Cargo, runfiles, or worktree helper. The sequential toolchain scope owns the
+  static C source and host-backed real-output conformance. Add a
   mutation that rejects reintroducing
   `RESOLVE_BENEATH` on
   provider opens and retain all three strict resolve flags in result/cleanup
@@ -225,8 +227,6 @@ to the same file are explicitly sequential.
   packages/d2b-bazel-exec/src/lib.rs,
   packages/d2b-bazel-exec/src/provider.rs,
   packages/d2b-bazel-exec/src/execute.rs,
-  packages/d2b-bazel-execveat/Cargo.toml,
-  packages/d2b-bazel-execveat/src/main.rs,
   packages/d2b-bazel-runner/Cargo.toml,
   packages/d2b-bazel-runner/src/lib.rs,
   packages/d2b-test-locator/Cargo.toml,
@@ -239,9 +239,10 @@ to the same file are explicitly sequential.
   complete future dependencies and stable spec003w0 crate roots before their first
   tests, declare the complete spec003w0 xtask dependency set, retain a green xtask
   root without declaring not-yet-present modules, implement the
-  dependency-leaf owner, safe command-fd mapping, typed transport, and
-  forbid-unsafe helper behavior required for every T005 test to pass. No runner
-  `sys.rs`, raw-fork implementation, or first-party unsafe allowance exists.
+  dependency-leaf owner, safe command-fd mapping, typed supervisor protocol,
+  and cleanup behavior required for every T005 test to pass. No Rust helper
+  crate, runner `sys.rs`, raw-fork implementation, `pre_exec`, or first-party
+  Rust unsafe allowance exists.
 - [ ] T007 [owner: spec003w0-prep] [files: none] [depends: T006] Commit and
   validate prep with locked offline metadata and all T005 tests; open only the
   toolchain scope from this exact green tip.
@@ -249,23 +250,37 @@ to the same file are explicitly sequential.
   pkgs/bazel-8.6.0-seccomp/default.nix,
   pkgs/bazel-8.6.0-seccomp/linux-sandbox-seccomp.patch,
   pkgs/bazel-8.6.0-seccomp/seccomp-policy.json,
-  pkgs/d2b-bazel-execveat/default.nix,
+  tests/tools/d2b-bazel-exec-supervisor/supervisor.c,
+  pkgs/d2b-bazel-exec-supervisor/default.nix,
   tests/golden/bazel-toolchain.json,
-  tests/golden/bazel-execveat-helper.json,
+  tests/golden/bazel-exec-supervisor.json,
   tests/unit/nix/cases/bazel-toolchain.nix,
+  tests/unit/nix/pinned/common.txt,
+  tests/unit/nix/pinned/x86_64-linux.txt,
+  tests/unit/nix/pinned/aarch64-linux.txt,
   packages/d2b-contract-tests/tests/policy_bazel_toolchain.rs] [depends: T007]
   In one sequential toolchain scope, add and observe the exact Nix/package tests
   fail, then package Bazel 8.6.0 with the reviewed Linux sandbox patch and
-  fixed policy, make that package the only Bazel in the dev shell, and package
-  `d2b-bazel-execveat` as the exact immutable toolchain artifact. Commit exact
+  fixed policy, make that package the only Bazel in the dev shell, and build
+  the tiny single-threaded C `d2b-bazel-exec-supervisor` as a dedicated static
+  immutable build/test-tooling derivation outside the product Rust workspace.
+  Commit exact
   Bazel source/patch/policy/capability hashes plus per-native-system output-NAR
-  and executable hashes, and exact helper source/product-lock/selected-
-  dependency hashes plus per-native-system output-NAR/executable hashes, never
-  full store paths. The Bazel startup probe, wrong-system, patch-removal,
-  wrong-output, policy/filter-load, and strategy-fallback tests and the helper
-  missing/wrong/rebound-output tests must pass. Prove the helper derivation
-  executes only the workspace `unsafe_code = "forbid"` binary. Commit this
-  stable toolchain base before the Bazel generator runs.
+  and executable hashes, and exact C source/Nix expression/protocol/static
+  compiler/libc/header/dependency-closure hashes plus per-native-system
+  derivation/output-NAR/executable/static-ELF hashes, never full store paths.
+  Test exact `READY`/`EXECUTED`/failure/terminal records, the close-on-exec
+  exec-error pipe, sole fork, signal normalization and forwarding, target
+  wait/reap and exact status mirroring, held-open writer, partial I/O,
+  fast-same-status target versus helper crash, blocked/ignored SIGTERM,
+  descriptor absence/private identity/CLOEXEC/stdin, and cleanup on every path.
+  The Bazel startup probe, wrong-system, patch-removal, wrong-output,
+  policy/filter-load, strategy-fallback, and supervisor
+  missing/wrong/rebound/dynamic-output tests must pass. Prove no Rust helper
+  crate or Rust unsafe exception exists. Regenerate and commit all three
+  Nix-unit presence pins, prove a second `make nix-unit-pin` is a clean no-op,
+  and run `make test-nix-unit`. Commit this stable toolchain and pin base before
+  T008 opens.
 
 ### spec003w0 Bazel generator scope
 
@@ -429,11 +444,14 @@ to the same file are explicitly sequential.
   guest-shell-runner static dependency policy, and that the aggregate
   `packages/Cargo.lock` and `packages/Cargo.guest.lock` deny and audit
   checks remain independent and enforcing. Bind the prep-owned Bazel and
-  helper identity records into the integrated Nix/package-policy tests without
-  changing them. Run the host-backed real helper output to prove provider-path
-  rebind resistance, same-open-file-description execution, private-fd
-  identity, declared stdin and split stdout/stderr, target descriptor absence,
-  helper error transport, and terminal child reap.
+  static-supervisor identity records into the integrated Nix/package-policy
+  tests without changing them. Run the host-backed real supervisor output to
+  prove provider-path rebind resistance, same-open-file-description execution,
+  private-fd identity, declared stdin and split stdout/stderr, target
+  descriptor absence, exact `READY`/`EXECUTED`/terminal transport, held-open
+  writer refusal, fast-same-status target/helper discrimination,
+  blocked/ignored SIGTERM normalization, allowed-signal forwarding, exact
+  target status, and terminal child reap.
 - [ ] T019 [owner: spec003w0-nix-policy] [files:
   nixos-modules/host-broker.nix, flake.nix,
   packages/d2b-guest-shell-runner/deny.toml] [depends: T018] Implement the
@@ -444,8 +462,8 @@ to the same file are explicitly sequential.
   `guest-real-libshpool/production/{closure.json,Cargo.lock}` while reserving
   `policy/{metadata.json,Cargo.lock}` for deny and audit, keep the aggregate
   root and `Cargo.guest.lock` checks independent, preserve the prep-owned
-  patched Bazel and immutable helper outputs as the only governed toolchain,
-  and make the T018 tests pass without changing their identity pins.
+  patched Bazel and immutable static supervisor outputs as the only governed
+  toolchain, and make the T018 tests pass without changing their identity pins.
   Add `broker-host-artifact-contract`; extend `guest-static-elf` to realize the
   actual guest derivation and enforce the exact artifact-baseline row and
   closed size-growth authorization. Do not persist a store path or invent a
@@ -454,14 +472,17 @@ to the same file are explicitly sequential.
   tests/unit/nix/pinned/common.txt,
   tests/unit/nix/pinned/x86_64-linux.txt,
   tests/unit/nix/pinned/aarch64-linux.txt] [depends: T019] Run
-  `make nix-unit-pin`, commit only the three pins, rerun it under clean-diff
-  assertions, and run `make test-nix-unit`.
+  `make nix-unit-pin` after the later T018/T019 cases, commit only any resulting
+  changes to the same three presence pins first generated by T120, rerun it
+  under clean-diff assertions, and run `make test-nix-unit`. A no-change result
+  is valid; this task does not weaken T120's pre-T008 pin and test requirement.
 - [ ] T021 [owner: spec003w0-policy-ci] [files:
   tests/unit/meta/ci-runner-regression.py,
   tests/unit/gates/flake-check-matrix-sync.sh,
   tests/unit/gates/ci-rust-cache-sync.sh] [depends: T019] Add failing
-  regressions proving the new fixture-independent binaries are absent from the
-  shared list, and proving the native arm renderer lacks the six realizations,
+  regressions proving each of the three new fixture-independent policy binaries
+  is absent from the shared list, plus extra and duplicate membership
+  fixtures, and proving the native arm renderer lacks the six realizations,
   `make test-rust-supply-chain`, and stable-head binding. Update the two
   existing fail-closed gates with failing predicates for the unified release
   root manifest, collapsed cache workspace, explicit gate directories, and
@@ -470,10 +491,13 @@ to the same file are explicitly sequential.
 - [ ] T022 [owner: spec003w0-policy-ci] [files: tests/lib.sh,
   packages/xtask/tests/policy_ci.rs,
   packages/d2b-contract-tests/tests/policy_docs.rs,
-  tests/unit/meta/w0-dep-direction.sh] [depends: T021] Add the two new policy
-  binaries to the shared list and satisfy fixture exclusion,
+  tests/unit/meta/w0-dep-direction.sh] [depends: T021] Add exactly the three
+  new fixture-independent `policy_bazel_toolchain`, `policy_bazel_nix`, and
+  `policy_bazel_supply_chain` binaries once each to the fail-closed
+  `test-policy` inventory in `tests/lib.sh`; satisfy fixture exclusion,
   contributor-mutation reachability, exact dependency-direction,
-  repository-command, and no-process-marker policy tests.
+  repository-command, and no-process-marker policy tests; and make isolated
+  missing, extra, and duplicate inventory fixtures fail.
 - [ ] T023 [owner: spec003w0-policy-ci] [files:
   tests/layer1-jobs.json, tests/tools/layer1-jobs.py,
   tests/ci/layer1-workflow.template.yml,
@@ -689,12 +713,15 @@ to the same file are explicitly sequential.
   complete evidence,
   no-shell, `D2B_RUST_BUDGET` validation/propagation/combined-limit,
   same-open-file-description safe-by-value typed-consumer execution through
-  the exact immutable helper and reviewed command-fd mapping,
+  the exact immutable static C supervisor and reviewed command-fd mapping,
   `RESOLVE_NO_MAGICLINKS`-only provider,
   provider-`RESOLVE_BENEATH` rejection, permissive fallback leaf,
   declared-stdin preservation, auxiliary-CLOEXEC, no-provider-fd leak, no
-  direct helper invocation outside the consumer, no runfiles/worktree helper,
-  no target path/fd-0 transport, and no-fallback mutations.
+  second Rust helper invocation, no runfiles/worktree helper, no target
+  path/fd-0 transport, exact `READY`/`EXECUTED`/terminal protocol,
+  held-open/partial transport, helper crash versus fast same-status target,
+  signal normalization/forwarding, target-status mirroring, and no-fallback
+  mutations.
   Each test loads its scope-owned not-yet-wired implementation modules through
   test-local paths.
 - [ ] T047 [owner: spec003w1-runner] [files:
@@ -1286,31 +1313,57 @@ to the same file are explicitly sequential.
   candidate/tag/object/commit/run identifiers, absolute/store/socket paths, OS
   text, raw cursors/handles/output, free-form commands, and borrowed remedies.
 - [ ] T108 [owner: spec003w6-alias-removal] [files: Makefile,
+  packages/d2b-bazel-exec/src/provider.rs,
+  packages/d2b-bazel-exec/src/execute.rs,
+  packages/d2b-bazel-exec/tests/execute.rs,
+  packages/d2b-bazel-runner/src/lib.rs,
+  packages/d2b-bazel-runner/src/coverage.rs,
   packages/d2b-bazel-runner/src/diagnostic.rs,
+  packages/d2b-bazel-runner/src/junit.rs,
+  packages/d2b-bazel-runner/src/manifest.rs,
+  packages/d2b-bazel-runner/src/recovery.rs,
   packages/d2b-bazel-runner/tests/diagnostic.rs,
+  packages/d2b-bazel-runner/tests/provider_execution.rs,
+  packages/d2b-bazel-runner/tests/recovery.rs,
+  packages/d2b-bazel-runner/tests/result_publication.rs,
+  packages/xtask/src/main.rs,
+  packages/xtask/src/bazel_evidence.rs,
+  packages/xtask/src/bazel_qualification.rs,
   packages/xtask/src/hermeticity.rs,
   packages/xtask/tests/bazel_action_network.rs,
-  packages/xtask/tests/policy_ci.rs] [depends: T107]
-  Remove only Bazel-specific aliases and their approved-target entries. In the
-  same atomic change, replace diagnostic command version 1's shadow aggregate/
-  slice targets with version 2's enduring `test-rust` and
-  `test-rust-slice-{main,api,broker,aux}` targets in every provider,
-  sandbox-policy, publication, cleanup, and recovery diagnostic and every
-  byte-exact message test. Add a closed-census policy assertion that no
-  diagnostic names a removed or nonexistent target. Change no refusal class or
-  recovery operation.
-- [ ] T109 [owner: spec003w6-alias-removal] [files: AGENTS.md,
-  tests/AGENTS.md, tests/README.md,
+  packages/xtask/tests/bazel_evidence.rs,
+  packages/xtask/tests/bazel_qualification.rs,
+  packages/xtask/tests/policy_ci.rs,
+  AGENTS.md,
+  tests/AGENTS.md,
+  tests/README.md,
   docs/contributing/gates-and-lints.md,
   docs/reference/test-execution-manifest.md,
   changelog.d/adr052-bazel-alias-removal.md,
-  specs/003-adr052-bazel-rust/evidence/post-promotion.json] [depends: T108]
-  Update semantic docs, fragment, and alias evidence fields while repeating
-  the exact permanently hybrid surface and retained Cargo socket-case
-  inventory and separate authorization requirement. Record the versioned
-  diagnostic target transition and its enduring exact commands; require the enforcing
-  type-5 policy's exact nonempty census comparison to pass for every governed
-  doc and the alias-removal fragment.
+  specs/003-adr052-bazel-rust/evidence/post-promotion.json] [depends: T107]
+  Remove only Bazel-specific aliases and their approved-target entries. In the
+  same atomic change, replace diagnostic command version 1's shadow aggregate/
+  slice targets with version 2's enduring `test-rust` and
+  `test-rust-slice-{main,api,broker,aux}` targets in every production provider,
+  sandbox-policy, qualification threshold/table, evidence/publication,
+  cleanup, and recovery renderer; both module-wiring roots; every byte-exact
+  unit/integration/policy test; the qualification evidence fields; all five
+  governed semantic docs; and the semantic alias-removal fragment. Repeat the
+  exact permanently hybrid surface and retained Cargo socket-case inventory
+  and separate authorization requirement. Add a closed-census policy assertion
+  that no diagnostic, qualification threshold, evidence variant, doc, fragment,
+  task-state label, or renderer names a removed or nonexistent target. The
+  pre-change test fixture may select version 1 only while all shadow rules
+  exist; the changed candidate selects version 2 only after all five enduring
+  aggregate/slice rules exist. Change no refusal class or recovery operation.
+- [ ] T109 [owner: spec003w6-alias-removal] [files: none] [depends: T108]
+  Audit the atomic T108 census: require every production renderer, both module
+  roots, threshold row, evidence/publication path, exact-message test,
+  governed doc, semantic fragment, and alias evidence record to select version
+  2; require version 1 to remain only in its pre-change fixture; and run the
+  enforcing type-5 exact nonempty hybrid disclosure comparison. Refuse any
+  missing, extra, duplicate, mixed-version, removed-target, or nonexistent-
+  target member.
 - [ ] T110 [owner: spec003w6-alias-removal] [files: none] [depends: T109]
   Validate every public Rust leaf, policy, tier0, drift, and fixture target;
   run the integrated-diff panel; seal `spec003w6`; then merge and collect

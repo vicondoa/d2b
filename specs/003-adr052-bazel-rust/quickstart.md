@@ -35,7 +35,7 @@ perl specs/003-adr052-bazel-rust/tools/validate-plan-structure.pl
 Expected:
 
 ```text
-PASS: 47 validator self-tests; positive fixture accepted; 44 independent negative fixtures cover noncanonical unchecked-list forms, census declarations, task parsing, ownership, dependency, adjacency, section, cycle, and conflict fixtures rejected; byte-exact fixed diagnostics and unsupported-argument rendering verified
+PASS: 47 validator self-tests; positive fixture accepted; 44 independent negative fixtures cover noncanonical unchecked-list forms, census declarations, task parsing, ownership, dependency, adjacency, section, cycle, and conflict fixtures rejected; full stderr byte-matched against independent literals; bounded record/line locators, unreadable-source status 1, and unsupported-argument status 2 verified
 PASS: 120 unique tasks with exact canonical headers and owned paths; dependencies exist and precede consumers; adjacency matches; graph is acyclic; concurrently ready ownership is disjoint
 ```
 
@@ -43,8 +43,13 @@ The self-tests include unordered, ordered-dot, ordered-paren, indented,
 blockquoted, nested-blockquoted, zero-task, whole-task-omission, malformed
 census, and every isolated validation branch. The main check compares parsed
 IDs with the independent exact census in `tasks.md`. Every negative expectation
-is an independent literal for complete stderr; no diagnostic may contain a
-task ID, dependency ID, owned path, count, or operator-derived value.
+is an independent literal for complete stderr and runs through the injectable
+entrypoint. Unreadable source and unsupported arguments assert status 1 and 2.
+The only actionable location is the fixed repository-relative source plus a
+bounded 1-based numeric record ordinal and fixed line number. Those numeric
+locators are the only dynamic values authorized; no diagnostic may contain a
+task ID, dependency ID, owned path, contents, count, or operator-derived value.
+Every code has one exact remedy and rerun command.
 
 Do not use parked historical `spec003-w0-*` or `spec003-w0` branches as
 implementation input. Before spec003w0:
@@ -264,6 +269,29 @@ guest: the feature appears in a whole-workspace union and must remain absent
 from the `{f}` column of both selected traversals. The tests also prove
 generic Cargo and Nix build/test and Clippy contexts exclude both packages
 while dedicated contexts retain exact selection.
+
+## spec003w0 sequential toolchain gate
+
+Before any Bazel generator command, finish the dedicated patched-Bazel and
+static execution-supervisor Nix scope, regenerate all three Nix-unit presence
+pins, and run the evaluator:
+
+```bash
+set -euo pipefail
+make nix-unit-pin
+git diff --exit-code -- tests/unit/nix/pinned/common.txt \
+  tests/unit/nix/pinned/x86_64-linux.txt \
+  tests/unit/nix/pinned/aarch64-linux.txt
+git diff --cached --exit-code -- tests/unit/nix/pinned/common.txt \
+  tests/unit/nix/pinned/x86_64-linux.txt \
+  tests/unit/nix/pinned/aarch64-linux.txt
+make test-nix-unit
+```
+
+The first pin command commits any toolchain-presence changes; the displayed
+block is the required clean second run. T020 may later regenerate the same
+three files after later Nix-policy cases land. Do not start the generator until
+this early `make test-nix-unit` passes.
 
 ## spec003w0 hubs and generation
 
@@ -1077,19 +1105,29 @@ Run targeted tests for:
   construction, descriptor extraction/access, Deref/Borrow/fd traits,
   formatting/serialization, conversion, duplication/default, and minting;
 - co-location of `VerifiedExecutable` and its only consuming public API in one
-  dependency-leaf crate; exact immutable Nix helper output plus helper source,
-  product-lock, selected dependency, output NAR, and executable hashes;
-  reviewed safe `command-fds` mapping of the consumed verified description and
-  typed status writer on private fds; preserved stdin/stdout/stderr; safe
-  helper CLOEXEC and same-open-file-description
-  `execveat(AT_EMPTY_PATH)`; and no runfiles/worktree/copied helper path,
-  direct invocation outside the typed consumer, fd-0 executable transport,
-  `pre_exec`, raw fork, reopen, `/proc/self/fd`, `fexecve`, path fallback,
-  provider-fd leak, or first-party unsafe allowance;
-- typed prepare, identity, map, spawn, adopt, CLOEXEC, execveat, status,
-  wait, cleanup, and reap stages, with a complete ownership/closure table and
-  injected descriptor-absence, private-fd-identity, helper-error,
-  partial/malformed transport, and every parent cleanup/wait/reap failure.
+  dependency-leaf crate; reviewed safe `command-fds` mapping of the consumed
+  verified description to a private fd; preserved stdin/stdout/stderr; and
+  exactly one Rust invocation site for the exact immutable Nix store path;
+- the dedicated tiny single-threaded C supervisor, statically built outside
+  the product Rust workspace, with exact source, derivation-dependency,
+  protocol, output NAR, executable, static ELF, and native-system hashes;
+- the supervisor's close-on-exec nonblocking child exec-error pipe, sole fork,
+  normalized masks/dispositions, child stdio installation, executable-fd
+  CLOEXEC, same-open-file-description `execveat(AT_EMPTY_PATH)`, explicit
+  `READY` then `EXECUTED`, continued supervision, fixed signal allowlist,
+  terminal record, direct-child reap, and exact normal/signaled target status;
+- no runfiles/worktree/copied helper path, second Rust invocation, fd-0
+  executable transport, Rust `pre_exec`, Rust raw fork, reopen,
+  `/proc/self/fd`, `fexecve`, path fallback, provider-fd leak, or first-party
+  Rust unsafe allowance;
+- complete Rust-parent and C-supervisor prepare, identity, map, adopt,
+  normalize, pipe, fork, child-setup, execveat, exec-result, supervise, wait,
+  terminal, cleanup, and reap tables, with injected held-open writer,
+  `EINTR`/`EAGAIN`/short/partial/overlong transport, descriptor absence,
+  private-fd identity, helper crash/EOF before `EXECUTED`, fast target exit
+  with the same status as the crash, inherited blocked/ignored SIGTERM,
+  signal forwarding, target-status mismatch, and every cleanup/wait/reap
+  failure.
 
 No test should fill a disk, require a privileged mount, sleep to reach expiry,
 or write a stale executable into `packages/target/`.
@@ -1508,12 +1546,33 @@ In the alias-removal candidate, verify the diagnostic transition atomically:
 
 ```bash
 set -euo pipefail
-! grep -R 'make test-bazel-rust' \
-  packages/d2b-bazel-runner packages/xtask \
+if grep -R 'make test-bazel-rust' \
+  packages/d2b-bazel-exec/src/provider.rs \
+  packages/d2b-bazel-exec/src/execute.rs \
+  packages/d2b-bazel-runner/src/lib.rs \
+  packages/d2b-bazel-runner/src/coverage.rs \
+  packages/d2b-bazel-runner/src/diagnostic.rs \
+  packages/d2b-bazel-runner/src/junit.rs \
+  packages/d2b-bazel-runner/src/manifest.rs \
+  packages/d2b-bazel-runner/src/recovery.rs \
+  packages/xtask/src/main.rs \
+  packages/xtask/src/bazel_evidence.rs \
+  packages/xtask/src/bazel_qualification.rs \
+  packages/xtask/src/hermeticity.rs \
   AGENTS.md tests/AGENTS.md tests/README.md \
   docs/contributing/gates-and-lints.md \
   docs/reference/test-execution-manifest.md \
-  changelog.d/adr052-bazel-alias-removal.md
+  changelog.d/adr052-bazel-alias-removal.md \
+  specs/003-adr052-bazel-rust/evidence/post-promotion.json
+then
+  printf '%s\n' 'stale shadow target in promoted diagnostic surface' >&2
+  exit 1
+else
+  grep_status=$?
+  if [ "$grep_status" -ne 1 ]; then
+    exit "$grep_status"
+  fi
+fi
 make test-rust
 make test-rust-slice-main
 make test-rust-slice-api
@@ -1522,10 +1581,12 @@ make test-rust-slice-aux
 ```
 
 The exact-message tests must prove every provider, sandbox-policy,
-publication, cleanup, and recovery diagnostic now uses command version 2 and
-that the semantic changelog records the transition. Before alias removal the
-same check is inverted: version 1 may name only shadow targets that still
-exist.
+qualification threshold/table, evidence/publication, cleanup, and recovery
+renderer, both module roots, every governed doc, the evidence record, and the
+semantic changelog now use command version 2. The pre-change fixture is the
+only version-1 record and may name only shadow targets that all exist in its
+fixture Makefile. The grep accepts only status 1 as absence; status 2 or any
+other error propagates and fails the check.
 
 Cargo implementation retirement:
 

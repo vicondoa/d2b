@@ -106,7 +106,7 @@ Layer-1 surfaces. No new top-level shell gate or Layer-1 job.
 | The post-promotion children were both concurrently ready while owning the same binding docs and evidence file. | Eligibility clocks are independent, but concurrently ready scopes must be file-disjoint. | Permit spec003w7 qualification and code preparation in parallel, then make its shared documentation/evidence task and merge depend on merged spec003w6, followed by revalidation and a new panel. |
 | The amended cache record retained only a zero-write summary. | ADR 0052 requires explicit restore, save, publication, duration, key, prefix, and retention semantics. | Restore fields and their fixtures in spec003w3 through spec003w5. |
 | Provider and expiry summaries omitted load-bearing kernel detail. | Same-descriptor `execveat`, close-on-exec behavior, and non-consuming grace observations are binding. | Restore exact flags, fallback semantics, mutations, and host conformance. |
-| Provider behavior tests alone proved the verified-handle seal. | Runtime behavior cannot prove an API is absent, and execution must preserve the same verified open file description without exposing it. | Use the compiler-derived closed API/trait census plus focused rustdoc compile-fail examples; co-locate the handle and sole consuming API in one dependency-leaf crate; pass it through pinned safe command-fd mapping to an exact immutable Nix-built execveat helper. |
+| Provider behavior tests alone proved the verified-handle seal. | Runtime behavior cannot prove an API is absent, and execution must preserve the same verified open file description without exposing it. | Use the compiler-derived closed API/trait census plus focused rustdoc compile-fail examples; co-locate the handle and sole consuming API in one dependency-leaf crate; pass it through pinned safe command-fd mapping to an exact immutable statically built C execution supervisor. |
 | Provider opens reused strict result-path resolution. | Bazel runfiles leaf symlinks may leave the anchor. Provider opens therefore use `O_RDONLY|O_CLOEXEC` with `RESOLVE_NO_MAGICLINKS` only; forced walks use `O_NOFOLLOW` only on intermediates. Strict result and cleanup paths retain all three strict resolve flags. | Remove `RESOLVE_BENEATH` and `RESOLVE_NO_SYMLINKS` from provider opens, retain them on result/cleanup paths, and add a mutation rejecting provider `RESOLVE_BENEATH`. |
 | Guest static ELF evidence accepted `ET_EXEC` and did not bind machine identity. | ADR 0054 keeps static PIE, and the native system decides the expected `e_machine`. | Require `ET_DYN`, expected native `e_machine`, no `PT_INTERP`, and no `DT_NEEDED`; add non-PIE and wrong-machine plants. |
 | spec003w0 foundation tasks proposed failing future-behavior tests behind inert seams. | A merged wave must be green. | Implement spec003w0 behavior tested there; defer spec003w1/spec003w2 tests with their implementations. |
@@ -134,9 +134,10 @@ Layer-1 surfaces. No new top-level shell gate or Layer-1 job.
 | Artifact requirements named size and closure checks without realizations, baselines, or exact broker linkage. | ADR 0054 preserves dedicated derivations and their security checks. | Realize four broker/guest-by-system artifacts, commit exactly four measured zero-delta baseline rows with transient closure validation, mutation-test them, and bind them into qualification. |
 | A promotion record could name any containing commit. | Post-promotion eligibility must bind the actual sealed merge. | Add a typed validator tying the record to the protected-`v3` PR merge and the exact `spec003w5` seal before either child enters. |
 | Network namespaces were described as action-wide no-socket enforcement, then an action wrapper was claimed to cover only payload descendants. | A namespace does not deny socket creation, socketpair, or io_uring networking, and a payload wrapper cannot cover Bazel's `test-setup.sh`. | Patch the Nix-pinned Bazel 8.6.0 Linux sandbox so its child preflights inherited authority and loads the fixed filter before exec of the complete action command. Bind configured action and strategy inventories, setup-before-payload and patch-removal plants, and no process/local/standalone/worker/remote fallback. |
-| The runner planned a repository-authored post-fork raw-syscall child under a workspace that forbids unsafe code, then treated a runner-local unsafe quarantine as pre-authorized. | ADR 0009 permits no new first-party unsafe exception without another ADR, and this amendment is an engineering plan, not that ADR. | Keep every new crate at `unsafe_code = "forbid"`. Put `VerifiedExecutable` and its sole consuming API in one dependency-leaf crate; invoke `d2b-bazel-execveat` from its exact immutable Nix output; map the consumed fd and status channel with a pinned reviewed safe dependency; use safe pinned helper APIs for CLOEXEC and execveat; close direct invocation by policy. |
+| The runner planned a repository-authored post-fork raw-syscall child under a workspace that forbids unsafe code, then treated a runner-local unsafe quarantine as pre-authorized. | ADR 0009 permits no new first-party Rust unsafe exception without another ADR, and safe Rust helper wrappers cannot make post-fork supervision unambiguous. | Keep every new crate at `unsafe_code = "forbid"`. Put `VerifiedExecutable` and its sole consuming API in one dependency-leaf crate; use pinned safe command-fd mapping; invoke one exact immutable statically linked single-threaded C supervisor built as dedicated Nix tooling outside the Rust workspace; bind its complete protocol and identity; close every other invocation by policy. |
+| The exec helper treated close-on-exec EOF as success after replacing itself with the target, so a fast target exit and a helper failure could carry the same status with no surviving authority to distinguish them. | Exec success needs an observer that remains alive after the target image starts and owns signal forwarding, wait, and reap. | Make the static C helper a supervisor: it creates the child exec-error pipe, forks once, emits `READY` and `EXECUTED`, remains alive, forwards the fixed termination-signal set, reaps, and mirrors exact target status. EOF or crash before `EXECUTED` is always typed helper failure. |
 | Ad hoc Cargo-shelling compile fixtures were the VerifiedExecutable API proof. | `tests/AGENTS.md` makes the compiler-derived API census primary and reserves rustdoc compile-fail for downstream type properties. | Make VerifiedExecutable a capability root with empty public-inherent and locally-authored explicit-trait allowlists, pin compiler auto/blanket impls, and use focused rustdoc compile-fail examples only. |
-| The plan validator truncated aggregate ownership prose after `and every`, and its first census saw only unordered unquoted checkboxes. | An ordered, indented, blockquoted, omitted, or zero-task plan can evade canonical parsing; dynamic values in diagnostics can also leak plan content. | Census every Markdown unchecked task-list form before parsing; reject all noncanonical forms and zero tasks; compare parsed IDs with an independent exact census in `tasks.md`; isolate every branch in fixtures; compare complete negative stderr to independent literals containing only fixed code/source/class/remedy/rerun. |
+| The plan validator truncated aggregate ownership prose after `and every`, and its first census saw only unordered unquoted checkboxes. | An ordered, indented, blockquoted, omitted, or zero-task plan can evade canonical parsing; dynamic values in diagnostics can also leak plan content. | Census every Markdown unchecked task-list form before parsing; reject all noncanonical forms and zero tasks; compare parsed IDs with an independent exact census in `tasks.md`; isolate every branch; byte-match complete stderr through an injectable entrypoint; authorize only bounded numeric record/line locators; and exercise unreadable source and unsupported arguments with exact status. |
 | Native inventory prose alternated between five checks, two artifact rows, and six checks. | There are exactly six native checks per system and exactly four artifact baseline rows. | Normalize every inventory, task, evidence threshold, quickstart check, and checklist item to those cardinalities. |
 | Size growth relied on prose review without a typed authorization. | A changed baseline must bind its exact candidate and review. | Add closed positive/negative size-growth authorization fixtures and require all four row digests plus every nonzero authorization digest in qualification. |
 | Artifact baselines persisted exact Nix closure paths and post-promotion checkpoints persisted a cursor. | Exact store paths and pagination tokens are transient validation data. | Persist only closed states, counts, and SHA-256 digests; make fixed-code diagnostics repository-relative and digest-only. |
@@ -147,7 +148,7 @@ Layer-1 surfaces. No new top-level shell gate or Layer-1 job.
 | Provider, publication, qualification, and release refusal prose used generic rerun placeholders. | Operator refusal UX must render exact commands without leaking identifiers. | Add closed reason-by-slice and qualification/release command tables with fixed-code, repository-relative, digest-only diagnostics. |
 | Promotion docs named aliases but not retained Cargo coverage. | Socket-using compatibility cases survive Cargo retirement. | Require promotion and retirement docs and semantic changelog fragments to list exact hybrid surfaces and state separate authorization is required for retirement. |
 | Hybrid disclosure depended on prose review. | A retained Cargo case can disappear from one binding doc while execution remains hybrid, and a surface-only set collapses distinct cases. | Add an enforcing type-5 policy lint that derives the exact nonempty full carrier census from the coverage map, retaining surface, selector, test identity, and socket class, and compares it bidirectionally with every governed hybrid doc and present semantic fragment. Isolate empty census, missing, extra, malformed/duplicate block, malformed/duplicate identity, stale attribution, and governed-document mismatch fixtures. |
-| Recovery diagnostics kept naming shadow aliases after the aliases were removed. | A fixed remedy that invokes a nonexistent target is not actionable and violates the fail-closed contract. | Version the closed diagnostic command enum. Use shadow targets before alias removal, then let the alias-removal change atomically update every diagnostic and byte-exact message test to enduring promoted aggregate/slice targets and record the transition in its semantic changelog. |
+| Recovery diagnostics kept naming shadow aliases after the aliases were removed. | A fixed remedy, threshold, evidence variant, state label, or doc that invokes a nonexistent target is not actionable and violates the fail-closed contract. | Version the closed diagnostic command enum. Use shadow targets only in a pre-change fixture where they exist, then make T108 atomically own every production renderer, both module roots, qualification table, evidence/publication path, exact-message test, governed doc, evidence field, and semantic fragment while switching to enduring promoted aggregate/slice targets. |
 | Release queries suppressed `git` and `gh` errors while trying the next tag. | An unavailable query backend is degraded evidence, not proof that a release object is absent. | Use closed typed complete/degraded/refused outcomes, distinct query codes, no persisted or printed candidate/tag identifier, no raw output, and exact remedies. |
 | Artifact rows carried a size allowance beside the authorization, and evidence variants repeated sink classification. | Duplicated authorities admit contradictory records, and unrelated old/new arithmetic can authorize a real artifact. | Derive positive size delta only from `sizeGrowthAuthorization`, require its prior/new bytes to equal the baseline row and realized artifact, keep sink kind and retention once in the common evidence record, and reject duplicate authority fields. |
 
@@ -189,7 +190,11 @@ Layer-1 surfaces. No new top-level shell gate or Layer-1 job.
     `RESOLVE_NO_MAGICLINKS` only, uses no `RESOLVE_BENEATH` or
     `RESOLVE_NO_SYMLINKS`, executes the same verified open file description
     through a private descriptor mapped to the exact immutable Nix-built
-    `d2b-bazel-execveat` helper, which sets CLOEXEC and calls
+    static C `d2b-bazel-exec-supervisor`. The single-threaded supervisor
+    normalizes signal state, creates a close-on-exec exec-error pipe, forks
+    once, emits `READY` then `EXECUTED`, remains alive, forwards the fixed
+    signal allowlist, reaps, and mirrors exact target status. The child
+    installs stdio, sets the executable fd CLOEXEC, and calls
     `execveat(AT_EMPTY_PATH)` with no path fallback. Forced walk applies
     `O_NOFOLLOW` only to intermediates. Strict result and cleanup paths keep
     all three resolve flags. Expiry observes without consuming until
@@ -197,8 +202,10 @@ Layer-1 surfaces. No new top-level shell gate or Layer-1 job.
 18. Every mutating validation command leaves the committed candidate clean.
 19. Native guest ELF evidence requires expected `e_machine`, `ET_DYN`, no
     `PT_INTERP`, and no `DT_NEEDED`.
-20. Generated locks, pins, BUILD files, and coverage/query goldens are
-    integrator-owned.
+20. Generated locks, BUILD files, and coverage/query goldens are
+    integrator-owned. The three Nix-unit presence pins have two ordered owners:
+    T120 generates the initial toolchain pins before T008, and integrator T020
+    may regenerate them after later Nix cases.
 21. Cargo/decomposed-Bazel supply-chain exit status and normalized findings
     must match for main, broker, and guest.
 22. Lock refresh follows the authority that changed, always commits
@@ -222,11 +229,13 @@ Layer-1 surfaces. No new top-level shell gate or Layer-1 job.
     never adds a position.
 28. `VerifiedExecutable` has compiler-derived closed public/trait allowlists
     and is co-located with its sole consuming API in one dependency-leaf crate.
-    That API preserves stdio, uses pinned safe command-fd mapping, and invokes
-    only the exact immutable Nix-built helper. The helper uses safe pinned
-    CLOEXEC and execveat APIs; every first-party crate remains
-    `unsafe_code = "forbid"`, and direct helper invocation outside the typed
-    consumer is an enforcing policy failure.
+    That safe Rust API preserves stdio, uses pinned safe command-fd mapping,
+    and is the one permitted Rust invocation of the exact immutable Nix-built
+    static C supervisor. Every first-party Rust crate remains
+    `unsafe_code = "forbid"`. The supervisor source, derivation dependencies,
+    protocol, output, signal, transport, owner/closure, and exact-status
+    behavior are pinned, and every other invocation is an enforcing policy
+    failure.
 29. Every evidence sink is sanitized and bounded before writing. Exporter
     degradation preserves the underlying test verdict and blocks qualification
     separately.
@@ -281,7 +290,6 @@ packages/
   policy-inputs/
   d2b-bazel-support/
   d2b-bazel-exec/
-  d2b-bazel-execveat/
   d2b-bazel-runner/
   d2b-test-locator/
   d2b-contract-tests/tests/{policy_bazel_hybrid_docs.rs,policy_bazel_toolchain.rs}
@@ -297,12 +305,13 @@ tests/
   golden/bazel-rust-artifact-baselines.json
   golden/bazel-rust-query.json
   golden/bazel-toolchain.json
-  golden/bazel-execveat-helper.json
+  golden/bazel-exec-supervisor.json
   golden/flake-check-matrix/
   golden/pinned/{kernel-canaries,usbip-firewall-skeleton,host-prepare-network,broker-socket-acl,broker-export-audit}.txt
   layer1-jobs.json
   test-rust.sh
   tools/assert-pinned-tests.sh
+  tools/d2b-bazel-exec-supervisor/supervisor.c
   tools/no-bash-ast-walker/src/main.rs
   tools/flake-check-classes.sh
   unit/nix/pinned/{common,x86_64-linux,aarch64-linux}.txt
@@ -311,7 +320,7 @@ tests/
 .github/workflows/pr-l1-static-fast.yml
 nixos-modules/host-broker.nix
 pkgs/bazel-8.6.0-seccomp/{default.nix,linux-sandbox-seccomp.patch,seccomp-policy.json}
-pkgs/d2b-bazel-execveat/default.nix
+pkgs/d2b-bazel-exec-supervisor/default.nix
 flake.nix
 AGENTS.md
 tests/AGENTS.md
@@ -322,9 +331,11 @@ specs/003-adr052-bazel-rust/tools/validator-fixtures/
 ```
 
 The generated output set above is closed and exact. Generated outputs are
-integrator-owned. A parallel slice may generate a scratch preview but never
-commits a shared generated output. No task may replace this list with a
-manifest expansion or other dynamic ownership expression.
+integrator-owned except the three Nix-unit presence pins explicitly owned by
+sequential T120 before T008 and later integrator T020. A parallel slice may
+generate a scratch preview but never commits any other shared generated
+output. No task may replace this list with a manifest expansion or other
+dynamic ownership expression.
 
 ## Wave Graph
 
@@ -361,7 +372,9 @@ own the same file.
 - Each scope writes only its ownership list.
 - Each scope commits before integration validation.
 - The integrator alone updates shared manifests, generated outputs, and
-  generated workflows after merging scope commits.
+  generated workflows after merging scope commits, except that sequential
+  T120 owns the initial three Nix-unit presence pins before T008; later T020
+  may regenerate only those same pins.
 - Any content change invalidates the integrated-diff panel.
 - Required CI and native architecture jobs must pass on the stable PR head
   before seal and merge.
@@ -387,10 +400,15 @@ own the same file.
   isolated negative fixtures cover whole-task omission, empty input,
   unordered/ordered/indented/blockquoted forms, and every remaining branch.
   Every negative compares complete stderr byte-for-byte with an independent
-  literal. A diagnostic contains only its fixed code, fixed
-  repository-relative source, fixed class reason, fixed remedy, and exact
-  self-test-plus-plan rerun; it emits no task/dependency ID, owned path, count,
-  operator value, raw OS text, or absolute path. A nonzero result blocks
+  literal through the injectable entrypoint, including exact exit status.
+  Unreadable-source status 1 and unsupported-argument status 2 are exercised
+  through that entrypoint with byte-exact stderr. A diagnostic contains only
+  its fixed code, fixed repository-relative source, bounded 1-based numeric
+  record ordinal, bounded fixed 1-based numeric line number, fixed class
+  reason, fixed remedy, and exact self-test-plus-plan rerun. Those two numeric
+  locators are the only dynamic values authorized. It emits no task/dependency
+  ID, owned path, content, count, operator value, raw OS text, or absolute path.
+  Every code has one exact remedy and rerun command. A nonzero result blocks
   dispatch. It remains a planning tool under this directory and is not added
   to a repository gate.
 
@@ -449,9 +467,7 @@ packages/d2b-bazel-exec/src/provider.rs
 packages/d2b-bazel-exec/src/execute.rs
 packages/d2b-bazel-exec/tests/verified_executable_api.rs
 packages/d2b-bazel-exec/tests/execute.rs
-packages/d2b-bazel-execveat/Cargo.toml
-packages/d2b-bazel-execveat/src/main.rs
-packages/d2b-bazel-execveat/tests/helper.rs
+packages/d2b-bazel-exec/tests/supervisor_protocol.rs
 packages/d2b-bazel-runner/Cargo.toml
 packages/d2b-bazel-runner/src/lib.rs
 packages/d2b-test-locator/Cargo.toml
@@ -476,14 +492,17 @@ The prep commit:
 - creates one dependency-leaf execution crate that owns
   `VerifiedExecutable` and the only public API that consumes it. The API uses
   the exact pinned reviewed safe `command-fds` dependency to map the verified
-  descriptor and typed status channel while preserving declared stdio;
-- creates `d2b-bazel-execveat` as a normal `unsafe_code = "forbid"` workspace
-  binary. It uses pinned safe APIs to adopt the fixed private descriptors, set
-  CLOEXEC, and call same-open-file-description
-  `execveat(AT_EMPTY_PATH)`. Its typed stage/resource tests cover partial and
-  malformed status transport, ownership, closure, wait, cleanup, and reap.
-  No runner `sys.rs`, first-party raw fork, runfiles/worktree helper path,
-  target reopen, or unsafe exception exists;
+  descriptor to the fixed private fd while preserving declared stdio. The
+  safe Rust consumer has the only helper invocation site and models the fixed
+  `READY`, `EXECUTED`, failure, and terminal protocol;
+- adds no Rust helper crate. Injected prep tests cover the Rust-parent
+  stage-error and owner/closure table, one-site invocation policy, private-fd
+  mapping, protocol discrimination, held-open/partial transport, and a fast
+  target status equal to a planted helper crash. The dedicated static C
+  supervisor source and real-output conformance land in the sequential
+  toolchain scope. No runner `sys.rs`, Rust raw fork, `pre_exec`, Rust signal
+  handler, runfiles/worktree helper path, target reopen, or unsafe exception
+  exists;
 - creates and registers green runner and locator crate skeletons before any
   runner or locator test, with their complete future dependency sets and
   stable crate-root contract seams. Scope tests load their not-yet-wired
@@ -505,15 +524,20 @@ additional prep commit lands before scopes resume.
 
 Before the Bazel generator opens, `spec003w0-toolchain` exclusively owns
 `flake.nix`, `pkgs/bazel-8.6.0-seccomp/{default.nix,linux-sandbox-seccomp.patch,seccomp-policy.json}`,
-`pkgs/d2b-bazel-execveat/default.nix`,
-`tests/golden/{bazel-toolchain.json,bazel-execveat-helper.json}`,
-`tests/unit/nix/cases/bazel-toolchain.nix`, and
+`tests/tools/d2b-bazel-exec-supervisor/supervisor.c`,
+`pkgs/d2b-bazel-exec-supervisor/default.nix`,
+`tests/golden/{bazel-toolchain.json,bazel-exec-supervisor.json}`,
+`tests/unit/nix/cases/bazel-toolchain.nix`,
+`tests/unit/nix/pinned/{common,x86_64-linux,aarch64-linux}.txt`, and
 `packages/d2b-contract-tests/tests/policy_bazel_toolchain.rs`. It lands the
 green Nix packages, exact identity pins, startup capability, patch-removal,
-filter-load, helper-output, and no-first-party-unsafe tests. Only then may the
-generator use Bazel. The later Nix-policy scope is a dependency descendant and
-may extend `flake.nix`; it must preserve these identity pins byte-for-byte.
-No concurrent scope overlaps this ownership.
+filter-load, static-supervisor source/dependency/output/protocol, and
+no-first-party-Rust-unsafe tests. It regenerates all three Nix-unit presence
+pins, proves a second regeneration is a clean no-op, and runs
+`make test-nix-unit` before the generator may open. The later Nix-policy scope
+is a dependency descendant and may extend `flake.nix`; it must preserve these
+identity pins byte-for-byte. T020 may regenerate the same three pins after its
+later Nix cases land. No concurrent scope overlaps this ownership.
 
 ### Parallel slice ownership
 
@@ -534,8 +558,10 @@ locks with that patched Bazel, and refreshes the module lock. The remaining inde
 scopes open from that green generator-checkpoint tip, so no Cargo process
 observes routing or lock mutation in flight.
 `spec003w0-nix-policy` begins only after the generator's policy schema is
-integrated. `spec003w0-policy-ci` begins only after the new fixture-independent policy
-binaries exist. `spec003w0-binding-docs` begins
+integrated. `spec003w0-policy-ci` begins only after all three new
+fixture-independent policy binaries exist; T022 then adds each exactly once
+to the fail-closed `test-policy` inventory and tests missing, extra, and
+duplicate membership. `spec003w0-binding-docs` begins
 after the integrated command and gate shapes are stable.
 The release-workflow substep of `spec003w0-policy-ci` begins after the root
 workspace and gate target directories are stable. These are real dependencies,
@@ -683,18 +709,27 @@ All must be true:
   formatting/serialization, duplication/conversion, and minting are absent;
   no Cargo-shelling compile fixture exists;
 - one dependency-leaf crate owns both `VerifiedExecutable` and its only
-  consuming public API; that API consumes the handle by value, maps it and a
-  typed status channel with the exact reviewed `command-fds` pin, preserves
-  stdin/stdout/stderr, and invokes only the exact immutable Nix store path of
-  `d2b-bazel-execveat`;
-- the helper source, selected dependency set, product lock, output NAR, and
-  executable digests match `tests/golden/bazel-execveat-helper.json`; the
-  helper remains `unsafe_code = "forbid"`, sets CLOEXEC on both private fds
-  through safe pinned APIs, and performs same-open-file-description
-  `execveat(AT_EMPTY_PATH)` with no reopen or fallback. Missing/wrong output,
-  rebind, private-fd identity, descriptor absence, CLOEXEC, stdin, helper
-  error, partial/malformed transport, and every parent ownership/closure/
-  cleanup/wait/reap failure tests pass; direct invocation outside the typed
+  consuming public API; that safe Rust API consumes the handle by value, maps
+  it with the exact reviewed `command-fds` pin, preserves stdin/stdout/stderr,
+  and is the one Rust site that invokes the exact immutable Nix store path of
+  `d2b-bazel-exec-supervisor`;
+- the C source, Nix expression, derivation dependency closure, static ELF,
+  protocol, output NAR, native system, and executable digests match
+  `tests/golden/bazel-exec-supervisor.json`; the helper is a dedicated static
+  build/test-tooling derivation and no Rust workspace crate or unsafe exception
+  implements it. It stays single-threaded, normalizes signal state, creates
+  one close-on-exec nonblocking child exec-error pipe, forks once, installs
+  child stdio and executable-fd CLOEXEC, and performs
+  same-open-file-description `execveat(AT_EMPTY_PATH)` with no reopen or
+  fallback. The supervisor emits exact `READY`/`EXECUTED`/failure/terminal
+  records with bounded `EINTR`/`EAGAIN`/short-I/O handling under the absolute
+  deadline, remains alive, forwards the fixed termination signals, reaps, and
+  mirrors exact target status. Missing/wrong output, rebind, private-fd
+  identity, descriptor absence, CLOEXEC, stdin, held-open writer,
+  partial/overlong/malformed transport, helper crash/EOF before `EXECUTED`,
+  fast same-status target exit, blocked/ignored SIGTERM, signal/status
+  mismatch, and every Rust-parent and C-supervisor ownership/closure/cleanup/
+  wait/reap failure test passes; every invocation outside the one typed Rust
   consumer fails the closed policy;
 - the actual Bazel executable matches `tests/golden/bazel-toolchain.json` and
   its exact Bazel 8.6.0 source, Linux sandbox patch, fixed policy, output NAR,
@@ -752,10 +787,14 @@ All must be true:
   cache mapping is `packages -> target` plus the explicit gate directories;
 - both existing fail-closed gate scripts are updated for that shape and remain
   present;
-- `make nix-unit-pin` is a no-op and `make test-nix-unit` passes;
-- new fixture-independent policy binaries appear exactly once in
-  `tests/lib.sh`, run under `make test-policy`, and are excluded from fixture
-  contracts by the regression test;
+- the sequential toolchain task regenerated all three Nix-unit presence pin
+  files and passed `make test-nix-unit` before the Bazel generator opened;
+  after later Nix cases, T020 may regenerate the same pins, then
+  `make nix-unit-pin` is a no-op and `make test-nix-unit` passes;
+- all three new fixture-independent policy binaries appear exactly once in the
+  fail-closed `test-policy` inventory in `tests/lib.sh`, run under
+  `make test-policy`, and are excluded from fixture contracts; missing, extra,
+  and duplicate membership regressions pass;
 - the six guest license exceptions are exact and different-package plants fail;
 - the six-check x86 inventory and six-check arm inventory pass and the arm
   stable head also passes
@@ -1327,29 +1366,54 @@ Green-run count is irrelevant.
 
 One `spec003w6-alias-removal` slice owns `Makefile`,
 `packages/d2b-bazel-runner/tests/make_interface.rs`,
+`packages/d2b-bazel-exec/src/provider.rs`,
+`packages/d2b-bazel-exec/src/execute.rs`,
+`packages/d2b-bazel-exec/tests/execute.rs`,
+`packages/d2b-bazel-runner/src/lib.rs`,
+`packages/d2b-bazel-runner/src/coverage.rs`,
 `packages/d2b-bazel-runner/src/diagnostic.rs`,
+`packages/d2b-bazel-runner/src/junit.rs`,
+`packages/d2b-bazel-runner/src/manifest.rs`,
+`packages/d2b-bazel-runner/src/recovery.rs`,
 `packages/d2b-bazel-runner/tests/diagnostic.rs`,
+`packages/d2b-bazel-runner/tests/provider_execution.rs`,
+`packages/d2b-bazel-runner/tests/recovery.rs`,
+`packages/d2b-bazel-runner/tests/result_publication.rs`,
+`packages/xtask/src/main.rs`,
+`packages/xtask/src/bazel_evidence.rs`,
+`packages/xtask/src/bazel_qualification.rs`,
 `packages/xtask/src/hermeticity.rs`,
 `packages/xtask/tests/bazel_action_network.rs`,
-`packages/xtask/tests/policy_ci.rs`, `AGENTS.md`, `tests/AGENTS.md`,
-`tests/README.md`, `docs/contributing/gates-and-lints.md`,
+`packages/xtask/tests/bazel_evidence.rs`,
+`packages/xtask/tests/bazel_qualification.rs`,
+`packages/xtask/tests/policy_ci.rs`,
+`AGENTS.md`, `tests/AGENTS.md`, `tests/README.md`,
+`docs/contributing/gates-and-lints.md`,
 `docs/reference/test-execution-manifest.md`,
 `changelog.d/adr052-bazel-alias-removal.md`, and the alias fields in
-`specs/003-adr052-bazel-rust/evidence/post-promotion.json`. It does not edit
-Cargo implementation files.
+`specs/003-adr052-bazel-rust/evidence/post-promotion.json`. This exact,
+non-dynamic ownership covers every production provider, sandbox-policy,
+qualification-threshold, evidence/publication, cleanup, and recovery renderer;
+both module-wiring roots; every exact-message test; every governed semantic
+doc; and the semantic changelog. T108 changes them atomically. T109 owns no
+file and audits the closed census. The slice does not remove Cargo
+implementation files.
 
 ### Mechanical done condition
 
 The interface test is updated and observed failing before alias removal, then
-passes after the Make edit. Only Bazel-specific aliases are removed;
+passes after the atomic T108 change. Only Bazel-specific aliases are removed;
 `make bazel-shutdown`,
 `make test-rust`, and all eight public leaf names remain; no workflow names a
 removed alias. In the same atomic change, diagnostic command version 1 is
-retired and version 2 makes every provider, sandbox-policy, publication,
-cleanup, and recovery message plus every byte-exact message fixture name only
-`make test-rust` or the enduring `make test-rust-slice-{main,api,broker,aux}`
-target. The alias-removal semantic changelog records this transition, and a
-policy test proves no diagnostic names a removed or nonexistent target. The
+retired and version 2 makes every provider, sandbox-policy, qualification
+threshold/table, evidence/publication, cleanup, and recovery renderer, both
+module roots, every exact-message fixture, all five governed docs, the
+post-promotion alias fields, and the semantic fragment name only
+`make test-rust` or the enduring
+`make test-rust-slice-{main,api,broker,aux}` target. Version 1 remains only as
+the pre-change fixture whose shadow rules all exist. A closed policy test
+proves no renderer or state label names a removed or nonexistent target. The
 type-5 hybrid disclosure census matches every governed doc and the
 alias-removal fragment; validation and fixture contracts pass; panel, seal
 `spec003w6`, and merge complete.
@@ -1444,7 +1508,7 @@ old-rerun-after-failure fixtures prove both rules.
 | A rerun of an old run inflates the streak or reorders behind newer failures. | Streak positions are distinct push-created (run ID, head SHA) units ordered by `createdAt` then run ID, with repeated-attempt and old-rerun-after-failure fixtures. |
 | The pre-merge rollback rehearsal reads a promotion record that does not exist yet and silently rehearses nothing. | Rehearsal resolves the candidate from verified candidate HEAD and the recorded spec003w5 parent; promotion-record reads are post-merge only. |
 | A verified executable becomes forgeable or descriptor-revealing through a harmless-looking trait, formatter, serializer, constructor, or accessor. | Compiler-derived closed public/hidden/inherent/explicit/auto/blanket API snapshots plus focused rustdoc compile-fail examples. |
-| The immutable helper is rebound, fd 0 stops being stdin, a mapped descriptor is wrong, or spawn cleanup leaks a child. | The dependency-leaf typed consumer uses the exact Nix output and reviewed safe command-fd mapping; the forbid-unsafe helper sets CLOEXEC and execveats only the mapped verified description; closed invocation policy plus identity, stdio, transport, ownership, cleanup, wait, and reap plants cover every stage. |
+| The immutable helper is rebound, fd 0 stops being stdin, a mapped descriptor is wrong, or a fast target exit is mistaken for a helper crash with the same status. | The dependency-leaf safe Rust consumer uses the exact static C Nix output and reviewed safe command-fd mapping at its one invocation site. The single-threaded supervisor emits `READY` then `EXECUTED`, remains alive, forwards signals, reaps, and mirrors exact target status; source/dependency/output identity plus stdio, CLOEXEC, held-open/partial transport, crash/EOF, signal normalization, ownership, cleanup, wait, and reap plants cover every stage. |
 | A cache API page interleaves a foreign prefix and maintenance adopts it. | Closed typed prefix enum, mixed-page fixtures, preservation checks, and zero delete calls on every authorization refusal. |
 | Tests pass while forbidden values persist in `test.log` or exporter output. | Pre-sink streaming sanitization, committed measured bounds, planted-value absence across every sink, and typed degraded evidence rejected by qualification. |
 | Old or excessive diagnostics accumulate after passing sanitizer bounds. | Four closed age/count retention classes, descriptor-relative expiry before publication, and injected boundary/failure tests. |
@@ -1504,12 +1568,14 @@ After the desired waves:
     identity in both directions; empty, missing, extra, malformed/duplicate
     block, malformed/duplicate identity, stale-attribution, and
     governed-document mismatch negatives fail.
-18. the dependency-leaf type and consuming API, exact immutable Nix helper
-    identity, safe command-fd mapping, forbid-unsafe helper, closed direct-
-    invocation policy, same-open-file-description, stdio, CLOEXEC, typed
-    transport, ownership, cleanup, wait, and reap coverage all pass; no runner
-    `sys.rs`, target path/reopen/fallback, fd-0 transport, or first-party unsafe
-    exception remains.
+18. the dependency-leaf type and safe consuming API, exact immutable static C
+    supervisor identity, safe command-fd mapping, one-site invocation policy,
+    same-open-file-description, stdio, CLOEXEC, `READY`/`EXECUTED`/terminal
+    transport, held-open writer, partial I/O, fast-same-status discrimination,
+    signal normalization/forwarding, target-status mirroring, ownership,
+    cleanup, wait, and reap coverage all pass; no Rust helper crate, runner
+    `sys.rs`, target path/reopen/fallback, fd-0 transport, or first-party Rust
+    unsafe exception remains.
 19. the exact Nix-patched Bazel 8.6.0 identity and startup capability pass;
     its sandbox child loads the fixed filter before compile/build/test-setup/
     test action-command exec; configured action and strategy inventories,

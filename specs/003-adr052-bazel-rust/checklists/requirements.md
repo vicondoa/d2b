@@ -246,14 +246,18 @@
   fixture.
 - [x] Same-descriptor execution consumes `VerifiedExecutable` by value into
   the only public consumer in the same dependency-leaf crate. That consumer
-  invokes only the exact immutable Nix-built `d2b-bazel-execveat` output and
-  maps private fds with the pinned safe `command-fds` API. The helper remains
-  `unsafe_code = "forbid"`, sets CLOEXEC and calls execveat through safe pinned
-  APIs, and preserves stdio. Exact source/dependency/output identity,
-  invocation-site policy, private-fd identity, descriptor absence, helper
-  error, partial transport, and every ownership/closure/cleanup/wait/reap
-  failure are covered; no runner `sys.rs` or first-party unsafe exception
-  remains.
+  invokes only the exact immutable Nix-built static C
+  `d2b-bazel-exec-supervisor` output and maps the private executable fd with
+  the pinned safe `command-fds` API while preserving stdio. The single-threaded
+  helper creates the close-on-exec child error pipe, normalizes signals, forks
+  once, emits `READY` then `EXECUTED`, remains alive, forwards allowed
+  termination signals, and reaps and mirrors exact target status. Exact
+  source/derivation-dependency/output/protocol identity, one Rust invocation
+  site, private-fd identity, descriptor absence, held-open and partial
+  transport, fast-same-status crash discrimination, blocked/ignored SIGTERM,
+  and every Rust-parent and C-supervisor ownership/closure/cleanup/wait/reap
+  failure are covered; no Rust helper crate, runner `sys.rs`, or first-party
+  Rust unsafe exception remains.
 - [x] Cache deletion uses a closed typed prefix enum and mixed pagination
   negatives preserve unauthorized entries.
 - [x] The promotion record is typed and bound to the actual sealed merge before
@@ -274,15 +278,20 @@
 - [x] Every spec003w0 slice has disjoint file ownership and no slice edits a
   prep-owned file.
 - [x] Shared generated output is integrator-owned.
-- [x] Module/hub locks, Nix pins, BUILD files, and coverage/query goldens are
-  integrator-generated only, and each refresh recipe follows the changed
-  authority with the module lock committed last.
+- [x] Module/hub locks, BUILD files, and coverage/query goldens are
+  integrator-generated only. T120 owns the initial three Nix-unit presence
+  pins before T008, and T020 may regenerate the same pins after later Nix
+  cases. Each lock refresh follows the changed authority with the module lock
+  committed last.
 - [x] Every wave has commands and a mechanically checkable done condition.
 - [x] Every task names an owned file set or exact evidence artifact.
 - [x] Tests precede matching implementation tasks.
 - [x] Native aarch64 required CI is a spec003w0 done condition.
-- [x] spec003w0 owns Nix-unit pin regeneration, `make test-nix-unit`, and
-  `tests/lib.sh` policy-binary wiring with run/exclusion regression coverage.
+- [x] T120 regenerates all three Nix-unit presence pins and runs
+  `make test-nix-unit` before T008; T020 may regenerate those pins after later
+  Nix cases. T022 wires exactly three fixture-independent policy binaries into
+  the fail-closed `test-policy` inventory with missing, extra, duplicate,
+  execution, and fixture-exclusion regression coverage.
 - [x] spec003w1 owns the no-bash walker implementation and fail-closed
   walk/read/parse census tests.
 - [x] Schema, stub, inventory, and no-bash spec003w1 carriers are file-disjoint and
@@ -319,7 +328,11 @@
   conflicts. One positive plus forty-four isolated negative fixtures cover
   whole-task omission, empty input, every list class, and every branch.
   Complete negative stderr is compared byte-exactly with independent literals
-  containing only fixed code/source/class/remedy/rerun.
+  through the injectable entrypoint; unreadable source and unsupported
+  argument cases assert exact status 1 and 2. Diagnostics authorize only the
+  fixed repository-relative source plus bounded 1-based numeric record and
+  fixed line locators, never task/dependency IDs, owned paths, contents, or
+  counts, and every code has one exact remedy and rerun command.
 
 ## Documentation Hygiene
 

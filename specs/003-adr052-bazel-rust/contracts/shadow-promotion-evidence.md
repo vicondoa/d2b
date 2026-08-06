@@ -292,10 +292,13 @@ It also proves:
     setup-before-payload results; inherited socket/ring/SQPOLL/fixed-socket
     preflight; every closed stage diagnostic; all eight pre-action plants; and
     no process/local/standalone/worker/remote fallback.
-23. exact immutable `d2b-bazel-execveat` output NAR/executable and
-    source/dependency hashes, closed invocation-site policy, private-fd
-    identity, descriptor-absence, CLOEXEC, stdin, typed transport, and every
-    parent ownership/closure/cleanup/wait/reap result.
+23. exact immutable static C `d2b-bazel-exec-supervisor` derivation,
+    dependency-closure, output NAR/executable, source, and protocol hashes;
+    one-site Rust invocation policy; private-fd identity; descriptor absence;
+    CLOEXEC and stdin results; `READY`/`EXECUTED`/terminal transport;
+    held-open-writer, partial-I/O, fast-same-status, signal-normalization and
+    forwarding results; and every Rust-parent and C-supervisor
+    ownership/closure/cleanup/wait/reap result.
 
 Candidate-specific evidence binds one integrated commit. A content change
 invalidates affected evidence. The qualified record merges before promotion

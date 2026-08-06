@@ -364,33 +364,43 @@ offline repository-fetch inventory, and the complete Cargo compatibility census.
 affected surfaces as hybrid. The Cargo compatibility carriers cannot be
 retired until a separate authorized design changes the no-network invariant.
 
-## Immutable execveat helper pin
+## Immutable execution supervisor pin
 
-`pkgs/d2b-bazel-execveat/default.nix` builds the helper from the product
-workspace and installs exactly one `d2b-bazel-execveat` executable.
-`tests/golden/bazel-execveat-helper.json` records:
+`pkgs/d2b-bazel-exec-supervisor/default.nix` statically builds the one reviewed
+`tests/tools/d2b-bazel-exec-supervisor/supervisor.c` source and installs
+exactly one `d2b-bazel-exec-supervisor` executable. This is a dedicated
+build/test-tooling derivation. It is not a Rust crate, is absent from
+`packages/Cargo.toml`, and cannot enter the product dependency hub.
+`tests/golden/bazel-exec-supervisor.json` records:
 
-- helper source-tree SHA-256;
-- `packages/Cargo.lock` SHA-256;
-- exact selected package/version/source/checksum identities for
-  `command-fds` and the safe fd/CLOEXEC/execveat API dependency;
-- separate `x86_64-linux` and `aarch64-linux` derivation output NAR SHA-256;
-- separate matching native executable SHA-256; and
-- the fixed private executable-fd, status-fd, and helper protocol version.
+- the exact C source SHA-256;
+- the Nix expression and fixed protocol-schema SHA-256;
+- the exact native compiler, static libc, headers, and every other derivation
+  dependency identity and hash;
+- separate `x86_64-linux` and `aarch64-linux` derivation and dependency-closure
+  hashes;
+- separate output NAR and matching native executable SHA-256 values;
+- static ELF evidence with no interpreter or dynamic `NEEDED` entry; and
+- the fixed private executable fd, supervisor status fd, exec-error record
+  shape, `READY`/`EXECUTED`/terminal shapes, signal allowlist, and protocol
+  version.
 
-The typed consumer embeds the exact helper path from that Nix toolchain
-artifact and accepts no path parameter or environment override. It verifies
-the output identity before spawn. Missing output, wrong output, copied binary,
-symlink rebind, runfiles path, worktree path, altered source/dependency pin, or
-digest mismatch refuses before the verified descriptor is mapped. Committed
-records persist no complete Nix store path.
+The safe typed Rust consumer embeds the exact helper store path from that Nix
+toolchain artifact and accepts no path parameter or environment override. It
+verifies output identity before spawn. Missing output, wrong output, copied
+binary, symlink rebind, runfiles path, worktree path, altered source or
+derivation dependency, dynamic output, or digest mismatch refuses before the
+verified descriptor is mapped. Committed records persist no complete Nix store
+path.
 
-The leaf consumer and helper both inherit `unsafe_code = "forbid"`. Parent
-spawn and fd mapping use the reviewed safe `command-fds` API. The helper uses
-the pinned safe API dependency for fixed-fd validation, CLOEXEC, status writes,
-and `execveat(AT_EMPTY_PATH)`. A closed invocation-site policy permits only the
-typed consumer to spawn this exact output; the helper's unprivileged status
-does not create an exception.
+Rust parent spawn and descriptor mapping use the exact reviewed safe
+`command-fds` pin from `packages/Cargo.lock`. The C supervisor is the only
+fork owner. It is single-threaded, creates the close-on-exec child exec-error
+pipe, normalizes signal state, and uses the fixed protocol described in
+`runner-environment.md`. No Rust unsafe exception, Rust helper crate,
+runfiles/worktree helper, or fallback exists. A closed invocation-site policy
+permits exactly one Rust source location to spawn this exact output and rejects
+every other Rust, Bazel, Make, workflow, or documentation command site.
 
 ## Package policy generation
 

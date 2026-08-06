@@ -425,15 +425,15 @@ count of twenty consecutive executions for its own context.
 | `descriptor` | One `O_RDONLY|O_CLOEXEC` open using `RESOLVE_NO_MAGICLINKS` only, deliberately without `RESOLVE_BENEATH` or `RESOLVE_NO_SYMLINKS`. |
 | `fallback` | Forced component walk: intermediate `O_DIRECTORY|O_NOFOLLOW|O_CLOEXEC`; declared leaf symlink permitted; leaf opened `O_RDONLY|O_CLOEXEC` without `O_NOFOLLOW`. |
 | `identity` | Kind, executable mode, freshness, byte digest, and matching pre/post descriptor metadata. |
-| `execution` | The sole consuming API maps the verified open file description to a private helper fd; immutable `d2b-bazel-execveat` sets CLOEXEC and calls `execveat(private_fd, "", argv, envp, AT_EMPTY_PATH)`. |
+| `execution` | The sole safe Rust consuming API maps the verified open file description to a private fd; immutable static C `d2b-bazel-exec-supervisor` forks once, proves exec through a close-on-exec error pipe, remains alive, and supervises `execveat(private_fd, "", argv, envp, AT_EMPTY_PATH)`. |
 | `enosys` | Named refusal requiring a kernel with `execveat`; no fallback. |
 | `auxiliary_descriptors` | All close-on-exec and proven by child descriptor-table behavior. |
 | `api_seal` | Private fields and minting trait; empty public inherent API and empty locally-authored explicit trait-impl allowlists; exact compiler-derived public, hidden, auto, and blanket API snapshots; no descriptor/path accessor or extraction, `Deref`, descriptor `Borrow`, `AsFd`, raw-fd trait, formatting, serialization, conversion, default, or duplication API. |
 | `owner` | One dependency-leaf crate owns the type and the only public API that consumes it. |
-| `execution_transfer` | The public API consumes the handle by value and uses the exact pinned reviewed safe `command-fds` mapping dependency to install the verified description and typed status writer at fixed private fds while leaving declared stdin/stdout/stderr unchanged. |
-| `helper_identity` | Exact immutable Nix store toolchain artifact, bound by derivation output NAR hash, executable hash, helper source digest, product-lock digest, and selected safe-dependency identities; runfiles, worktree, copied, symlinked, missing, and wrong outputs refuse. |
-| `helper` | Normal workspace binary with `unsafe_code = "forbid"`; pinned safe APIs set CLOEXEC on both private fds and call `execveat` with an empty path and `AT_EMPTY_PATH`. |
-| `spawn_owner` | `std::process` and `command-fds` own spawn mechanics. No first-party raw fork, `pre_exec`, or signal-handler path exists. |
+| `execution_transfer` | The public API consumes the handle by value and uses the exact pinned reviewed safe `command-fds` mapping dependency to install the verified description at a fixed private fd while leaving declared stdin/stdout/stderr unchanged. |
+| `helper_identity` | Exact immutable dedicated Nix store artifact, bound by C source, derivation dependency closure, output NAR, executable, protocol, and native-system hashes; runfiles, worktree, copied, symlinked, missing, and wrong outputs refuse. |
+| `helper` | One tiny statically linked single-threaded C supervisor built outside the product Rust workspace. It creates the close-on-exec exec-error pipe, forks exactly once, and owns target supervision; no Rust unsafe exception exists. |
+| `spawn_owner` | Safe Rust `std::process` and `command-fds` spawn the supervisor. The C supervisor owns the only fork, signal normalization/forwarding, target wait, and reap. No Rust `pre_exec`, raw fork, or signal-handler path exists. |
 | `invocation_policy` | Closed source/call-site census permits only the typed consumer to invoke the exact helper and rejects every other Rust, Bazel, Make, workflow, runfiles, or worktree invocation. |
 
 There is no path accessor or public unchecked constructor. No
@@ -443,19 +443,30 @@ typed consumer, fd-0 executable transport, target path, `fexecve`,
 preserves declared stdio and leaks no provider, private executable,
 status-pipe, or auxiliary descriptor.
 
-## Immutable Helper Launch
+## Immutable Supervisor Launch
 
-| Stage | Parent ownership, transition, and failure |
+| Stage | Rust parent ownership, transition, and failure |
 | --- | --- |
 | `Verified` | Consumed `VerifiedExecutable` exclusively owns the provider `OwnedFd`; failure drops it once. |
-| `HelperIdentity` | Exact Nix output, executable, source, lock, and dependency digests validate before spawn; missing/wrong/rebound output closes the provider and creates no child. |
-| `Mapped` | Parent owns the provider fd, status reader, status writer, and mapping configuration. Mapping uses fixed private fds outside 0/1/2; any collision or preparation failure closes both pipe ends and the provider. |
-| `Spawned` | `std::process::Child` becomes the sole child owner. Parent immediately closes its provider and status-writer copies; spawn failure creates no child and RAII closes every fd. |
-| `Adopted` | Helper validates the private-fd identity and descriptor presence, sets CLOEXEC on executable and status fds, and writes only a fixed typed stage record on failure. |
-| `Execed` | Successful exec closes both private fds and preserves only declared stdio and explicitly declared survivors. |
-| `Transported` | Parent accepts only EOF-on-success or one complete fixed-size closed stage record; empty-on-error, short, partial, overlong, malformed, and unknown records are typed transport failures. |
-| `Waited` | Parent always waits through the `Child` owner. Wait failure retains ownership for cleanup; no success is published before a terminal status. |
-| `Cleaned` | Every exit path closes remaining fds once and reaps the child where one exists. Injected close, read, wait, kill-if-required-by-existing-deadline-policy, and reap failures preserve the first typed cause plus cleanup stage without raw OS text. |
+| `HelperIdentity` | Exact immutable Nix path plus C source, derivation dependency, output NAR, executable, protocol, and native-system hashes validate before spawn; missing/wrong/rebound output closes the provider and creates no child. |
+| `Mapped` | Parent owns the provider fd, protocol reader/writer ends, declared stdio, and mapping configuration. The pinned safe mapper uses fixed private fds outside 0/1/2; collision or preparation failure closes every private end and the provider without changing stdio. |
+| `Spawned` | `std::process::Child` becomes the sole supervisor owner. Parent immediately closes its mapped provider and supervisor-side protocol copies; spawn failure creates no child and RAII closes every fd. |
+| `Ready` | Parent accepts exactly one complete `READY` record. EOF, helper exit, timeout, short, overlong, malformed, duplicate, or unknown status is a typed helper failure, independent of process exit status. |
+| `Executed` | Parent accepts exactly one complete `EXECUTED` after `READY`. A fast target exit remains distinguishable because the supervisor stays alive and reports terminal state; helper crash or EOF before this record is never target status. |
+| `Terminal` | Parent accepts one fixed reaped-target record, then waits for the supervisor and requires its normal or signaled status to match the record exactly. |
+| `Cleaned` | Every exit path closes remaining protocol fds once and reaps the supervisor. Injected close, read, wait, deadline, kill, and reap failures preserve the first typed cause plus cleanup stage without raw OS text. |
+
+| Stage | C supervisor ownership, transition, and failure |
+| --- | --- |
+| `Adopted` | Supervisor exclusively owns the mapped executable fd, declared stdio, and Rust status writer; wrong identity or absent descriptor emits a typed failure and closes all owned fds. |
+| `Normalized` | The single thread installs the fixed blocked supervisor mask and dispositions. The future child mask and every catchable disposition are fixed to defaults; normalization failure emits a typed failure before fork. |
+| `ExecPipe` | Supervisor creates exactly one `O_CLOEXEC|O_NONBLOCK` exec-error pipe and owns both ends; pipe failure emits a typed failure and forks no child. |
+| `Forked` | Exactly one fork creates the target child. Supervisor closes the writer, owns the reader and child pid, emits `READY`, and must kill and reap on every later failure. |
+| `ChildSetup` | Child establishes the target group, resets mask/dispositions, installs 0/1/2, sets the executable fd CLOEXEC, and closes supervisor-only fds. A stage failure writes one fixed exec-error record under the absolute deadline and `_exit`s. |
+| `ExecResult` | Supervisor reads exact empty EOF as exec success or one complete fixed error record using bounded `EINTR`/`EAGAIN`/short-I/O loops under the absolute deadline. Partial, overlong, held-open-writer, timeout, or unknown data is typed failure; only empty EOF emits `EXECUTED`. |
+| `Supervising` | After `EXECUTED`, supervisor remains alive, forwards only `SIGHUP`, `SIGINT`, `SIGTERM`, and `SIGQUIT` to the target group, and preserves the existing absolute-deadline grace and unconditional kill policy. |
+| `Reaped` | Supervisor waits and reaps the direct target, emits the fixed terminal record, closes the Rust status writer, and mirrors the exact target normal exit or terminating signal. A mirror, signal, wait, or reap failure is typed and cannot be reported as target status. |
+| `Closed` | Every non-exec and post-exec path closes each owned fd once and reaps every created child. The first operation failure and any cleanup failure retain distinct fixed stages. |
 
 The public API census is primary. Focused rustdoc `compile_fail` examples prove
 downstream construction, descriptor access/extraction, trait coercion,
@@ -732,10 +743,13 @@ bounded and complete-stream verdicts equal.
 | `bazel-diagnostic-v1` | Shadow through promoted aliases | `make test-bazel-rust`, `make test-bazel-rust-main`, `make test-bazel-rust-api`, `make test-bazel-rust-broker`, `make test-bazel-rust-aux` |
 | `bazel-diagnostic-v2` | Alias removal and later | `make test-rust`, `make test-rust-slice-main`, `make test-rust-slice-api`, `make test-rust-slice-broker`, `make test-rust-slice-aux` |
 
-Alias removal owns the only transition. It updates all diagnostic renderers,
-byte-exact expectations, governed docs, and the semantic changelog in one
-change. A state is invalid if any diagnostic command names a target absent
-from that state.
+Alias removal owns the only transition. It updates every production provider,
+sandbox-policy, qualification-threshold, evidence/publication, cleanup, and
+recovery renderer; both module-wiring roots; every byte-exact test; all
+governed docs; the evidence record; and the semantic changelog in one change.
+Version 1 survives only in the pre-change fixture with all shadow rules. A
+state is invalid if any diagnostic, threshold, evidence variant, task-state
+label, or document names a target absent from that state.
 
 ## Evidence Sink Result
 
