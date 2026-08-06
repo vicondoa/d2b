@@ -337,9 +337,10 @@ sub self_test_cleanup_stderr {
             %args
         ) = @_;
         my @descriptors = ($stdin_fh, $stdout_fh, $stderr_fh);
-        my @descriptor_identities = map {
-            Scalar::Util::openhandle($_) ? fileno($_) : undef
-        } @descriptors;
+        my @descriptor_identities =
+            ref($args{descriptor_birth_identities}) eq 'ARRAY'
+            ? @{$args{descriptor_birth_identities}}
+            : ();
         return bless {
             actual_pid            => $actual_pid,
             supplied_pid          => exists($args{supplied_pid})
@@ -508,11 +509,16 @@ sub default_self_test_operations {
                 $stderr_fh,
                 @command
             );
+            my @descriptor_birth_identities = map {
+                Scalar::Util::openhandle($_) ? fileno($_) : undef
+            } ($stdin_fh, $stdout_fh, $stderr_fh);
             return D2B::Spec003::OwnedProcessCapture->new(
                 $pid,
                 $stdin_fh,
                 $stdout_fh,
-                $stderr_fh
+                $stderr_fh,
+                descriptor_birth_identities =>
+                    \@descriptor_birth_identities
             );
         },
         subprocess => sub {
@@ -2058,13 +2064,18 @@ RERUN D2B-SPEC003-PLAN-PARSE perl specs/003-adr052-bazel-rust/tools/validate-pla
                             $stderr_fh,
                             @command
                         );
+                        my @descriptor_birth_identities = map {
+                            fileno($_)
+                        } ($stdin_fh, $stdout_fh, $stderr_fh);
                         $resource_capture =
                             D2B::Spec003::OwnedProcessCapture->new(
                                 $actual_pid,
                                 $stdin_fh,
                                 $stdout_fh,
                                 $stderr_fh,
-                                supplied_pid => $actual_pid + 1000000
+                                supplied_pid => $actual_pid + 1000000,
+                                descriptor_birth_identities =>
+                                    \@descriptor_birth_identities
                             );
                         return $resource_capture;
                     };
@@ -2182,6 +2193,115 @@ RERUN D2B-SPEC003-PLAN-PARSE perl specs/003-adr052-bazel-rust/tools/validate-pla
                     return 1;
                 }
             }
+        }
+    }
+
+    for my $mismatch_position (0 .. 2) {
+        my $resource_capture;
+        my @raw_birth_identities;
+        my @resource_close_attempts;
+        my @resource_wait_attempts;
+        my @resource_cleanup_events;
+        my $resource_reaped_pid;
+        my %overrides = (
+            open3 => sub {
+                my (@command) = @_;
+                my $stderr_fh = gensym;
+                my ($stdin_fh, $stdout_fh);
+                my $actual_pid = IPC::Open3::open3(
+                    $stdin_fh,
+                    $stdout_fh,
+                    $stderr_fh,
+                    @command
+                );
+                @raw_birth_identities = map {
+                    fileno($_)
+                } ($stdin_fh, $stdout_fh, $stderr_fh);
+                my @supplied_birth_identities = @raw_birth_identities;
+                $supplied_birth_identities[$mismatch_position] += 1000000;
+                $resource_capture =
+                    D2B::Spec003::OwnedProcessCapture->new(
+                        $actual_pid,
+                        $stdin_fh,
+                        $stdout_fh,
+                        $stderr_fh,
+                        descriptor_birth_identities =>
+                            \@supplied_birth_identities
+                    );
+                return $resource_capture;
+            },
+            cleanup_close => sub {
+                my ($fh, $identity, $position) = @_;
+                push @resource_close_attempts,
+                    [$position, $identity, fileno($fh)];
+                push @resource_cleanup_events, "close:$position";
+                return close $fh;
+            },
+            cleanup_wait => sub {
+                my ($pid) = @_;
+                push @resource_wait_attempts, $pid;
+                push @resource_cleanup_events, 'wait';
+                local $! = 0;
+                my $waited = waitpid($pid, 0);
+                $resource_reaped_pid = $waited if $waited == $pid;
+                return [$waited, 0 + $!];
+            },
+        );
+        my ($failure_stdout, $failure_stderr) = ('', '');
+        my $failure_status = run_cli_entrypoint(
+            argv => ['--self-test'],
+            self_test_runner => sub {
+                my ($runner_stdout, $runner_stderr) = @_;
+                $$runner_stdout .=
+                    "sentinel descriptor mismatch stdout /tmp/d2b-sensitive-self-test-path\n";
+                $$runner_stderr .=
+                    "sentinel descriptor mismatch stderr /tmp/d2b-sensitive-self-test-path\n";
+                return run_self_tests(
+                    $runner_stdout,
+                    $runner_stderr,
+                    self_test_ops => \%overrides,
+                );
+            },
+            stdout => \$failure_stdout,
+            stderr => \$failure_stderr,
+        );
+        my $resource_observation_ok =
+            $failure_status == 1
+            && $failure_stdout eq ''
+            && $failure_stderr eq
+                $setup_failure_expected{'self-test-setup-open3'}
+            && defined($resource_capture)
+            && @raw_birth_identities == 3
+            && @resource_close_attempts == 3
+            && @resource_wait_attempts == 1
+            && join(',', @resource_cleanup_events)
+                eq 'close:0,close:1,close:2,wait'
+            && $resource_wait_attempts[0]
+                == $resource_capture->actual_pid()
+            && defined($resource_reaped_pid)
+            && $resource_reaped_pid
+                == $resource_capture->actual_pid()
+            && $resource_capture->consuming_reap_recorded()
+            && $resource_capture->reaped_pid()
+                == $resource_capture->actual_pid()
+            && $resource_capture->all_descriptors_attempted_once()
+            && $resource_capture->all_descriptors_closed();
+        for my $position (0 .. 2) {
+            my $expected_supplied_identity =
+                $position == $mismatch_position
+                ? $raw_birth_identities[$position] + 1000000
+                : $raw_birth_identities[$position];
+            $resource_observation_ok = 0
+                if !defined($resource_close_attempts[$position])
+                || $resource_close_attempts[$position]->[0] != $position
+                || $resource_close_attempts[$position]->[1]
+                    != $expected_supplied_identity
+                || $resource_close_attempts[$position]->[2]
+                    != $raw_birth_identities[$position];
+        }
+        if (!$resource_observation_ok) {
+            $$self_stderr .= self_test_contract_stderr();
+            return 1;
         }
     }
 
@@ -2340,6 +2460,138 @@ RERUN D2B-SPEC003-PLAN-CLEANUP perl specs/003-adr052-bazel-rust/tools/validate-p
         }
     }
 
+    my @prefix_progress_cases = (
+        ['prefix-0-success', 0, 'success'],
+        ['prefix-0-failure', 0, 'failure'],
+        ['prefix-0-1-success', 1, 'success'],
+        ['prefix-0-1-failure', 1, 'failure'],
+    );
+    for my $prefix_case (@prefix_progress_cases) {
+        my ($name, $last_prefix_position, $prefix_mode) = @$prefix_case;
+        my $owned_process;
+        my @raw_birth_identities;
+        my @close_attempts;
+        my @wait_attempts;
+        my @cleanup_events;
+        my $actual_reaped_pid;
+        my %overrides = (
+            subprocess => sub {
+                ($owned_process) = @_;
+                @raw_birth_identities = map {
+                    fileno($owned_process->descriptor_handle($_))
+                } 0 .. 2;
+                for my $position (0 .. $last_prefix_position) {
+                    my $close_result =
+                        $owned_process->attempt_descriptor_close(
+                            $position,
+                            sub {
+                                my ($fh, $identity, $attempted_position) = @_;
+                                push @close_attempts,
+                                    [
+                                        'prefix',
+                                        $attempted_position,
+                                        $identity,
+                                        fileno($fh)
+                                    ];
+                                push @cleanup_events,
+                                    "prefix-close:$attempted_position";
+                                my $closed = close $fh;
+                                return $prefix_mode eq 'success'
+                                    ? $closed
+                                    : 0;
+                            }
+                        );
+                    die "prefix result mismatch"
+                        if $close_result
+                            != ($prefix_mode eq 'success' ? 1 : 0);
+                }
+                die
+                    "raw $name primary failure at /tmp/d2b-sensitive-self-test-path\n";
+            },
+            cleanup_close => sub {
+                my ($fh, $identity, $position) = @_;
+                push @close_attempts,
+                    ['cleanup', $position, $identity, fileno($fh)];
+                push @cleanup_events, "cleanup-close:$position";
+                return close $fh;
+            },
+            cleanup_wait => sub {
+                my ($pid) = @_;
+                push @wait_attempts, $pid;
+                push @cleanup_events, 'wait';
+                local $! = 0;
+                my $waited = waitpid($pid, 0);
+                $actual_reaped_pid = $waited if $waited == $pid;
+                return [$waited, 0 + $!];
+            },
+        );
+        my ($failure_stdout, $failure_stderr) = ('', '');
+        my $failure_status = run_cli_entrypoint(
+            argv => ['--self-test'],
+            self_test_runner => sub {
+                my ($runner_stdout, $runner_stderr) = @_;
+                $$runner_stdout .=
+                    "sentinel $name stdout /tmp/d2b-sensitive-self-test-path\n";
+                $$runner_stderr .=
+                    "sentinel $name stderr /tmp/d2b-sensitive-self-test-path\n";
+                return run_self_tests(
+                    $runner_stdout,
+                    $runner_stderr,
+                    self_test_ops => \%overrides,
+                );
+            },
+            stdout => \$failure_stdout,
+            stderr => \$failure_stderr,
+        );
+        my @expected_events;
+        push @expected_events,
+            map { "prefix-close:$_" } 0 .. $last_prefix_position;
+        push @expected_events,
+            map { "cleanup-close:$_" }
+                $last_prefix_position + 1 .. 2;
+        push @expected_events, 'wait';
+        my $prefix_observation_ok =
+            $failure_status == 1
+            && $failure_stdout eq ''
+            && $failure_stderr eq
+                $setup_failure_expected{'self-test-setup-subprocess'}
+            && defined($owned_process)
+            && @raw_birth_identities == 3
+            && @close_attempts == 3
+            && @wait_attempts == 1
+            && join(',', @cleanup_events)
+                eq join(',', @expected_events)
+            && $wait_attempts[0] == $owned_process->actual_pid()
+            && defined($actual_reaped_pid)
+            && $actual_reaped_pid == $owned_process->actual_pid()
+            && $owned_process->consuming_reap_recorded()
+            && $owned_process->reaped_pid()
+                == $owned_process->actual_pid()
+            && $owned_process->all_descriptors_attempted_once()
+            && $owned_process->all_descriptors_closed();
+        my %attempt_count_by_position;
+        for my $attempt (@close_attempts) {
+            my ($owner, $position, $identity, $raw_identity) = @$attempt;
+            $attempt_count_by_position{$position}++;
+            my $expected_owner =
+                $position <= $last_prefix_position
+                ? 'prefix'
+                : 'cleanup';
+            $prefix_observation_ok = 0
+                if $owner ne $expected_owner
+                || $identity != $raw_birth_identities[$position]
+                || $raw_identity != $raw_birth_identities[$position];
+        }
+        for my $position (0 .. 2) {
+            $prefix_observation_ok = 0
+                if ($attempt_count_by_position{$position} // 0) != 1;
+        }
+        if (!$prefix_observation_ok) {
+            $$self_stderr .= self_test_contract_stderr();
+            return 1;
+        }
+    }
+
     my $self_test_contract_expected = self_test_contract_stderr();
     my ($contract_stdout, $contract_stderr) = ('', '');
     my $contract_status = run_cli_entrypoint(
@@ -2421,7 +2673,7 @@ RERUN D2B-SPEC003-PLAN-TASK-ID perl specs/003-adr052-bazel-rust/tools/validate-p
     }
 
     $$self_stdout .=
-        'PASS: 102 validator self-tests; positive fixture accepted; '
+        'PASS: 109 validator self-tests; positive fixture accepted; '
         . '47 independent negative fixtures cover noncanonical unchecked-list forms, census declarations, '
         . 'task parsing, ownership, dependency, adjacency, section, cycle, '
         . 'and conflict fixtures rejected; full stderr byte-matched against '
@@ -2430,8 +2682,9 @@ RERUN D2B-SPEC003-PLAN-TASK-ID perl specs/003-adr052-bazel-rust/tools/validate-p
         . 'temp-dir, path-resolution, make-path, copy, mkdir, open3, and subprocess '
         . 'exceptions, warnings, false, undefined, malformed, and missing-side-effect results '
         . 'emit only their seam-specific fixed setup diagnostics after sentinel output is discarded; '
-        . 'failed-subprocess owned-child, three-descriptor identity/close-once, ECHILD refusal, '
-        . 'and literal-eight bounded consume-reap results preserve the primary failure and add only '
+        . 'failed-subprocess owned-child, independently snapshotted three-descriptor birth identity, '
+        . 'per-position rebound refusal, prefix-progress close-once, ECHILD refusal, and literal-eight '
+        . 'bounded consume-reap results preserve the primary failure and add only '
         . 'the fixed cleanup code when cleanup fails; actual unreadable-source '
         . 'status 1 and unsupported-argument '
         . 'status 2 subprocesses verified; self-test-contract is reserved for '

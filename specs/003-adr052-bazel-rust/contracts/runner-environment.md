@@ -193,10 +193,12 @@ pipe before forking exactly once. There is no group-confirmation pipe: the
 kernel ptrace stop is the sole child-release barrier. The child calls
 `setpgid(0, 0)`, installs declared stdin/stdout/stderr at 0/1/2, marks the
 private executable fd `FD_CLOEXEC`, closes every supervisor-only and
-non-surviving descriptor, calls `ptrace(PTRACE_TRACEME, 0, 0, 0)`, restores the empty
-signal mask and default dispositions for every catchable signal, and raises
-the initial `SIGSTOP`. At that stop every fallible pre-exec setup operation is
-complete; after release the next operation is
+non-surviving descriptor, calls
+`ptrace(PTRACE_TRACEME, 0, (void *)0, (void *)0)`, restores the empty signal
+mask and default dispositions for every catchable signal, and only then raises
+the initial `SIGSTOP`. This descriptor setup, `PTRACE_TRACEME`, final signal
+restoration, and `SIGSTOP` order is mandatory. At that stop every fallible
+pre-exec setup operation is complete; after release the next operation is
 `execveat(private_fd, "", argv, envp, AT_EMPTY_PATH)`. A child setup,
 `PTRACE_TRACEME`, initial-stop, or exec failure writes exactly one fixed-size
 `CHILD_*` exec-error record with bounded `EINTR`/`EAGAIN`/short-write handling
@@ -212,8 +214,8 @@ deadline:
 2. one initial ptrace wait state with `WIFSTOPPED`, `WSTOPSIG == SIGSTOP`, and
    ptrace event value zero;
 3. successful
-   `ptrace(PTRACE_SETOPTIONS, child, 0, PTRACE_O_TRACEEXEC)` while that child
-   remains stopped; and
+   `ptrace(PTRACE_SETOPTIONS, child, (void *)0, (void *)(uintptr_t)PTRACE_O_TRACEEXEC)`
+   while that child remains stopped; and
 4. no child error record, managed termination request, early exit, fault,
    other signal stop, or deadline expiry.
 
@@ -230,8 +232,9 @@ closed helper failure status.
 
 Only after all four confirmations may the supervisor emit exactly one framed
 `READY`. A completed `READY` write precedes
-`ptrace(PTRACE_CONT, child, 0, 0)`, whose fourth argument is the zero signal
-and which releases the child from the kernel stop. From release through
+`ptrace(PTRACE_CONT, child, (void *)0, (void *)0)`, whose fourth argument is
+the explicitly pointer-typed zero signal and which releases the child from the
+kernel stop. From release through
 accepted exec, the single-threaded supervisor runs one deadline-bounded loop
 over its synchronous managed-signal source, nonblocking exec-error reader,
 and `waitpid` trace states. Each
@@ -273,8 +276,9 @@ The event is the kernel's successful exec transition for that exact
   finishes that record.
 
 At the valid exec-event stop the target has not run user code. The supervisor
-calls `ptrace(PTRACE_DETACH, child, 0, 0)` exactly once. Its third argument is
-the required zero address and its fourth argument is the zero signal. A
+calls `ptrace(PTRACE_DETACH, child, (void *)0, (void *)0)` exactly once. Its
+third argument is the explicitly pointer-typed zero address and its fourth
+argument is the explicitly pointer-typed zero signal. A
 detach failure is typed `HELPER_PTRACE_DETACH`; it emits no `EXECUTED`, kills
 and consume-reaps the owned group, and leaves incomplete containment to the
 sandbox. A successful detach injects no signal, removes tracing, and resumes
@@ -341,18 +345,24 @@ same status as a planted helper crash is accepted only when `READY`,
 
 ### Ptrace admission, call shape, and recovery ownership contract
 
-Every C call supplies all four libc ptrace arguments in their ABI positions:
+Every C call supplies all four libc ptrace arguments in their ABI positions,
+with explicit pointer-width casts for both pointer-valued varargs:
 
-1. child admission is `ptrace(PTRACE_TRACEME, 0, 0, 0)`;
+1. child admission is
+   `ptrace(PTRACE_TRACEME, 0, (void *)0, (void *)0)`;
 2. option installation is
-   `ptrace(PTRACE_SETOPTIONS, child, 0, PTRACE_O_TRACEEXEC)`;
-3. release is `ptrace(PTRACE_CONT, child, 0, 0)`; and
-4. detach is `ptrace(PTRACE_DETACH, child, 0, 0)`.
+   `ptrace(PTRACE_SETOPTIONS, child, (void *)0, (void *)(uintptr_t)PTRACE_O_TRACEEXEC)`;
+3. release is
+   `ptrace(PTRACE_CONT, child, (void *)0, (void *)0)`; and
+4. detach is
+   `ptrace(PTRACE_DETACH, child, (void *)0, (void *)0)`.
 
-No variadic argument may be omitted. Tests byte-match each complete call and
-its request, pid, address, and data positions. Independent mutations omit
-each of the four positions where C would still compile, exchange address and
-data, replace the `TRACEME` zero pid, place options in the address argument,
+No variadic argument may be omitted or supplied as an uncast integer in a
+pointer-valued position. Tests bind each complete call's exact request and pid
+values and its address/data positions and pointer types. Independent mutations
+omit each position where C would still compile, replace a pointer cast with an
+integer literal, exchange address and data, replace the `TRACEME` zero pid or
+the owned child pid, name a nonchild, place options in the address argument,
 or put a nonzero signal in `CONT` or `DETACH`; every mutation must fail.
 
 This protocol is supported only on native `x86_64-linux` and
@@ -376,17 +386,33 @@ The design relies only on the natural parent-child `PTRACE_TRACEME`
 relationship, grants no `CAP_SYS_PTRACE`, and does not attach to a sibling or
 host process.
 
-The action seccomp filter retains every network denial. Its ptrace rule allows
-only `PTRACE_TRACEME`, `PTRACE_SETOPTIONS`, `PTRACE_CONT`, and
-`PTRACE_DETACH`; every attach, seize, memory/register access, syscall tracing,
-or other ptrace request is denied. Existing `execveat`, `wait4`/`waitid`,
-`setpgid`/`getpgid`, signal, polling, and descriptor syscalls remain allowed.
-No socket, socketcall, io_uring, `pidfd_getfd`, capability, namespace, or
-network exception is added. The source, protocol identity, seccomp-policy
-identity, kernel minimum, four-request ptrace set, Yama assumption, both
-native-system startup results, host conformance result, every negative and
-mutation result, and every recovery-code byte test are bound into execution
-evidence and are mandatory qualification inputs.
+The action seccomp filter retains every network denial. Its static ptrace rule
+allows only these request and enforceable constant-argument combinations:
+
+- `PTRACE_TRACEME` with pid zero, address `(void *)0`, and data `(void *)0`;
+- `PTRACE_SETOPTIONS` with address `(void *)0` and data
+  `(void *)(uintptr_t)PTRACE_O_TRACEEXEC`;
+- `PTRACE_CONT` with address `(void *)0` and data `(void *)0`; and
+- `PTRACE_DETACH` with address `(void *)0` and data `(void *)0`.
+
+The filter does not compare the dynamic pid for `SETOPTIONS`, `CONT`, or
+`DETACH`; classic seccomp cannot derive the future fork result or a
+parent-child relationship. Dynamic identity is instead enforced by the
+supervisor's owned fork result, `getpgid(child) == child`, the direct-parent
+relationship, the traced initial stop, sole wait ownership, and the exact
+`PTRACE_EVENT_EXEC` event for that wait-owned child. Native host-conformance
+and mutations substitute a wrong pid and a nonchild and require refusal; they
+must not claim that static seccomp matched the child pid.
+
+Every attach, seize, memory/register access, syscall tracing, or other ptrace
+request is denied. Existing `execveat`, `wait4`/`waitid`, `setpgid`/`getpgid`,
+signal, polling, and descriptor syscalls remain allowed. No socket, socketcall,
+io_uring, `pidfd_getfd`, capability, namespace, or network exception is added.
+The source, protocol identity, seccomp-policy identity, kernel minimum,
+four-request plus constant-argument ptrace rule, dynamic-child relation, Yama
+assumption, both native-system startup results, host conformance result, every
+negative and mutation result, and every recovery-code byte test are bound into
+execution evidence and are mandatory qualification inputs.
 
 No runfiles, worktree, copied, symlinked, caller-supplied, or fd-0 helper
 transport is permitted. A closed invocation-site policy derives the complete
@@ -452,10 +478,10 @@ than a Cargo mock.
 | `Normalized` | While the managed set remains blocked, the supervisor installs default dispositions, ignored `SIGPIPE`, waitable default `SIGCHLD`, and the synchronous consumer, then establishes the final mask. | `HELPER_SIGNAL_NORMALIZE`; close all owned fds; no fork. |
 | `ExecPipe` | Supervisor creates and owns exactly one `O_CLOEXEC|O_NONBLOCK` exec-error reader/writer pair. The kernel trace stop replaces the former confirmation pipe. | `HELPER_EXEC_PIPE`; close the pair and prior resources; no fork. |
 | `Forked` | Exactly one target child exists. Supervisor owns child pid, exec-error reader, and Rust status writer; child owns the error writer, executable fd, and stdio copies. | `HELPER_FORK` before child creation, or a later typed failure followed by direct-child consume-reap and closure of every supervisor fd. |
-| `ChildSetup` | Child calls `setpgid`, installs 0/1/2, marks the executable fd CLOEXEC, closes supervisor-only fds, calls `ptrace(PTRACE_TRACEME, 0, 0, 0)`, restores final signal state, and raises `SIGSTOP`. After the stop, its next operation is the sole `execveat`. | Fixed `CHILD_GROUP`, `CHILD_SIGNAL`, `CHILD_STDIO`, `CHILD_CLOEXEC`, `CHILD_CLOSE`, `CHILD_PTRACE`, or `CHILD_STOP` exec-error record; bounded exact write; `_exit`. |
-| `TraceReady` | Supervisor confirms the exact group, consumes only the expected initial `SIGSTOP` with event zero, calls `ptrace(PTRACE_SETOPTIONS, child, 0, PTRACE_O_TRACEEXEC)`, emits framed `READY`, then releases with `ptrace(PTRACE_CONT, child, 0, 0)`. | `HELPER_GROUP_ESRCH`, `HELPER_GROUP_EPERM`, `HELPER_GROUP_ERROR`, `HELPER_GROUP_EARLY_EXIT`, `HELPER_PTRACE_STOP`, `HELPER_PTRACE_OPTIONS`, or `HELPER_PTRACE_CONT`; emit no `READY` unless group and tracing state are confirmed, and kill/consume-reap after any post-fork failure. |
+| `ChildSetup` | Child calls `setpgid`, installs 0/1/2, marks the executable fd CLOEXEC, closes supervisor-only fds, calls `ptrace(PTRACE_TRACEME, 0, (void *)0, (void *)0)`, restores final signal state, and only then raises `SIGSTOP`. After the stop, its next operation is the sole `execveat`. | Fixed `CHILD_GROUP`, `CHILD_SIGNAL`, `CHILD_STDIO`, `CHILD_CLOEXEC`, `CHILD_CLOSE`, `CHILD_PTRACE`, or `CHILD_STOP` exec-error record; bounded exact write; `_exit`. |
+| `TraceReady` | Supervisor confirms the exact group and direct-parent/wait-owned child, consumes only the expected initial `SIGSTOP` with event zero, calls `ptrace(PTRACE_SETOPTIONS, child, (void *)0, (void *)(uintptr_t)PTRACE_O_TRACEEXEC)`, emits framed `READY`, then releases with `ptrace(PTRACE_CONT, child, (void *)0, (void *)0)`. | `HELPER_GROUP_ESRCH`, `HELPER_GROUP_EPERM`, `HELPER_GROUP_ERROR`, `HELPER_GROUP_EARLY_EXIT`, `HELPER_PTRACE_STOP`, `HELPER_PTRACE_OPTIONS`, or `HELPER_PTRACE_CONT`; emit no `READY` unless group, parent, wait ownership, and tracing state are confirmed, and kill/consume-reap after any post-fork failure. |
 | `Execveat` | Released child immediately calls `execveat` on the same verified open file description. Successful exec closes the error writer and produces the kernel `PTRACE_EVENT_EXEC` stop before target user code runs. | Fixed `CHILD_EXECVEAT` record, including typed `ENOSYS`; bounded exact write; `_exit`; no fallback. |
-| `ExecEvent` | The deadline-bounded loop drains managed signals first, treats error-pipe EOF only as writer closure, and accepts only `WIFSTOPPED`, `SIGTRAP`, and exact `PTRACE_EVENT_EXEC`. It then calls `ptrace(PTRACE_DETACH, child, 0, 0)` once; only successful detach permits framed `EXECUTED`. | `HELPER_PRE_EXEC_TERMINATION`, `HELPER_PRE_EXEC_DEATH`, `HELPER_PTRACE_EVENT`, or `HELPER_PTRACE_DETACH`; suppress `EXECUTED` and terminal/audit publication, kill and consume-reap the group, and preserve the first cause. Transport failures remain `HELPER_EXEC_TIMEOUT`, `HELPER_EXEC_PARTIAL`, `HELPER_EXEC_OVERLONG`, `HELPER_EXEC_UNKNOWN`, `HELPER_EXEC_EPIPE`, or `HELPER_EXEC_IO`. Empty EOF, wrong/missing event, pre-exec death, or detach failure can never transition. |
+| `ExecEvent` | The deadline-bounded loop drains managed signals first, treats error-pipe EOF only as writer closure, and accepts only the wait-owned direct child's `WIFSTOPPED`, `SIGTRAP`, and exact `PTRACE_EVENT_EXEC`. It then calls `ptrace(PTRACE_DETACH, child, (void *)0, (void *)0)` once; only successful detach permits framed `EXECUTED`. | `HELPER_PRE_EXEC_TERMINATION`, `HELPER_PRE_EXEC_DEATH`, `HELPER_PTRACE_EVENT`, or `HELPER_PTRACE_DETACH`; suppress `EXECUTED` and terminal/audit publication, kill and consume-reap the group, and preserve the first cause. Transport failures remain `HELPER_EXEC_TIMEOUT`, `HELPER_EXEC_PARTIAL`, `HELPER_EXEC_OVERLONG`, `HELPER_EXEC_UNKNOWN`, `HELPER_EXEC_EPIPE`, or `HELPER_EXEC_IO`. Empty EOF, wrong/missing event, pre-exec death, or detach failure can never transition. |
 | `Supervising` | Supervisor owns the live target group and status writer, forwards only the four allowed termination signals, and applies the fixed escalation on case expiry or external `SIGTERM`, including when no case deadline exists. | `HELPER_SIGNAL_FORWARD` or `HELPER_DEADLINE`; full grace and unconditional target-group kill when required, direct-child reap, typed failure. |
 | `Reaped` | Supervisor has exact terminal wait status and no live child; it writes the framed `EXITED` or `SIGNALED` terminal, closes the status writer, and mirrors that status. | `HELPER_WAIT`, `HELPER_REAP`, `HELPER_TERMINAL_WRITE`, or `HELPER_STATUS_MIRROR`; retain the first cause and close every remaining fd. |
 | `Closed` | No provider/private/pipe/status descriptor, trace relationship, or unreaped child remains. | `HELPER_CLEANUP` is attached to the first failure; cleanup, detach where legal, and consume-reap are attempted on every reachable path without replacing the first cause. |
@@ -467,7 +493,7 @@ No child path returns through C after fork: it either execs or calls `_exit`.
 
 | Stage | Owned resources and success transition | Typed failure and mandatory cleanup |
 | --- | --- | --- |
-| `PtracePolicyVerified` | Before helper spawn, outer `linux-sandbox` verifies the pinned seccomp-policy identity and exact request/pid/address/data tuples while retaining every no-network denial. | `SANDBOX_PTRACE_POLICY`; emit no helper spawn, restore the pinned patch and policy, then run the phase-valid recovery sequence. |
+| `PtracePolicyVerified` | Before helper spawn, outer `linux-sandbox` verifies the pinned seccomp-policy identity, the four request values, and only the statically enforceable constant pid/address/data constraints while retaining every no-network denial. It makes no future-child-pid claim. | `SANDBOX_PTRACE_POLICY`; emit no helper spawn. Restore the pinned patch and policy so seccomp admits only the four request values with the enforceable constant arguments and retains every no-network denial; run `make test-flake`; then run the phase-valid closed slice command selected verbatim from the command-version table. |
 | `NamespaceCreated` | Outer `linux-sandbox` owns exactly one fresh `CLONE_NEWPID` child and the PID-1 synchronization pipes. | `SANDBOX_NAMESPACE`; no action exec and reap any created monitor. |
 | `MonitorReady` | Namespace PID 1 owns the action command and is the adoption point for every orphan; outer sandbox wait-owns PID 1. | `SANDBOX_MONITOR`; close synchronization fds, force namespace-init exit, and outer-reap. |
 | `ActionRunning` | PID 1 waits and reaps descendants while the action command runs; normal target escalation remains supervisor-owned. | Abnormal setup/action exit, including parent or supervisor crash, transitions once to `Aborting`. |
@@ -522,7 +548,9 @@ closed-reader `EPIPE`; inherited ignored and `SA_NOCLDWAIT` `SIGCHLD`;
 inherited blocked `SIGTERM`; a target that ignores TERM with no case deadline;
 parent-first and child-first setpgid races; typed `ESRCH`, `EPERM`, other-error,
 mismatched-group, and early-child-exit cleanup; a pending
-signal before group/trace confirmation; the exact initial `SIGSTOP`, successful
+signal before group/trace confirmation; exact descriptor setup,
+`PTRACE_TRACEME`, final child signal restoration, and initial `SIGSTOP` order;
+successful
 `PTRACE_O_TRACEEXEC`, `READY`-before-`PTRACE_CONT`, exact kernel
 `PTRACE_EVENT_EXEC`, zero-signal detach, and detach-before-`EXECUTED` order;
 every managed signal while held at the deterministic initial stop, with one
@@ -539,14 +567,17 @@ unchanged declared stdin;
 separate stdout and stderr; absence of every provider, private, exec-error,
 and status descriptor; and presence only of a planted descriptor explicitly
 declared to survive. Native x86_64 and aarch64 cases bind Linux >= 3.19, the parent-child Yama
-modes, exact four-request ptrace seccomp allowance, unchanged network denial,
-and rejection of Yama 2/3 and every other ptrace request. They separately
+modes, the static four-request plus enforceable constant-argument ptrace
+seccomp allowance, supervisor-owned dynamic child identity, wrong-pid and
+nonchild refusal, unchanged network denial, and rejection of Yama 2/3 and
+every other ptrace request. They separately
 exercise unsupported system, old kernel, Yama refusal, startup-probe failure,
 and patched-sandbox ptrace-policy drift before helper spawn, then the helper
 initial-stop, options, continuation, event, and detach failures after spawn.
 Every case byte-matches its own code, fixed causing input, correction, and
 phase-valid rerun, rejects every other row's remedy, and is qualification
-bound. Exact call-position tests and every omit, exchange, wrong-pid,
+bound. Exact call-position and pointer-type tests and every omit,
+integer-in-pointer-position, exchange, wrong-pid, nonchild,
 options-in-address, and nonzero-signal mutation are qualification bound too.
 
 The host-backed supervisor cases do not claim crash containment. A separate

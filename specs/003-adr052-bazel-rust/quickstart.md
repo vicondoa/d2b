@@ -35,7 +35,7 @@ perl specs/003-adr052-bazel-rust/tools/validate-plan-structure.pl
 Expected:
 
 ```text
-PASS: 102 validator self-tests; positive fixture accepted; 47 independent negative fixtures cover noncanonical unchecked-list forms, census declarations, task parsing, ownership, dependency, adjacency, section, cycle, and conflict fixtures rejected; full stderr byte-matched against independent literals; physical census/mismatch and adjacency rows and bounded numeric, none, and overflow locators verified; actual temp-dir, path-resolution, make-path, copy, mkdir, open3, and subprocess exceptions, warnings, false, undefined, malformed, and missing-side-effect results emit only their seam-specific fixed setup diagnostics after sentinel output is discarded; failed-subprocess owned-child, three-descriptor identity/close-once, ECHILD refusal, and literal-eight bounded consume-reap results preserve the primary failure and add only the fixed cleanup code when cleanup fails; actual unreadable-source status 1 and unsupported-argument status 2 subprocesses verified; self-test-contract is reserved for validator contract failures
+PASS: 109 validator self-tests; positive fixture accepted; 47 independent negative fixtures cover noncanonical unchecked-list forms, census declarations, task parsing, ownership, dependency, adjacency, section, cycle, and conflict fixtures rejected; full stderr byte-matched against independent literals; physical census/mismatch and adjacency rows and bounded numeric, none, and overflow locators verified; actual temp-dir, path-resolution, make-path, copy, mkdir, open3, and subprocess exceptions, warnings, false, undefined, malformed, and missing-side-effect results emit only their seam-specific fixed setup diagnostics after sentinel output is discarded; failed-subprocess owned-child, independently snapshotted three-descriptor birth identity, per-position rebound refusal, prefix-progress close-once, ECHILD refusal, and literal-eight bounded consume-reap results preserve the primary failure and add only the fixed cleanup code when cleanup fails; actual unreadable-source status 1 and unsupported-argument status 2 subprocesses verified; self-test-contract is reserved for validator contract failures
 PASS: 120 unique tasks with exact canonical headers and owned paths; dependencies exist and precede consumers; adjacency matches; graph is acyclic; concurrently ready ownership is disjoint
 ```
 
@@ -55,14 +55,18 @@ operation seams and call `run_cli_entrypoint --self-test` after the runner
 writes sentinel stdout/stderr. No case passes an expected reason to a generic
 setup wrapper. Each asserts status 1, empty stdout, and exact seam-specific
 fixed setup-class stderr and remedy. Failed-subprocess capture returns an
-owned object that retains the actual child and all three descriptor birth
-identities. Cleanup attempts each descriptor exactly once despite failures,
-then consume-reaps only that child in at most eight wait attempts. `ECHILD`
-cannot succeed without an already recorded consuming reap. Tests use an
-independent literal `8`, assert no ninth wait, inject every descriptor
-position, wrong supplied pid/resource-bearing malformed result, `ECHILD`,
-retry success, and retry exhaustion, and prove the actual child reaped while
-preserving the primary failure and appending only fixed
+owned object that retains the actual child and independently snapshotted raw
+birth identities for all three descriptors. Tests inject a rebound mismatch at
+each position and prove refusal closes only the owned handles and reaps the
+actual child. Position-0 and positions-0-1 prefix-progress cases cover
+successful and failed prior attempts, forbid double-close, and close each
+remaining descriptor exactly once. Cleanup otherwise attempts each descriptor
+exactly once despite failures, then consume-reaps only that child in at most
+eight wait attempts. `ECHILD` cannot succeed without an already recorded
+consuming reap. Tests use an independent literal `8`, assert no ninth wait,
+inject every descriptor position, wrong supplied pid/resource-bearing
+malformed result, `ECHILD`, retry success, and retry exhaustion, and prove the
+actual child reaped while preserving the primary failure and appending only fixed
 `D2B-SPEC003-PLAN-CLEANUP` on cleanup failure.
 Sentinel, raw warning/error/path, and task-rewrite content are absent. The
 exact `self-test-contract` case is limited to an invalid validator self-test
@@ -1144,13 +1148,16 @@ Run targeted tests for:
   ignored `SIGPIPE` with typed `EPIPE`, waitable default `SIGCHLD`, normalized
   masks/dispositions only after first-operation refusal of any inherited
   managed `SIG_IGN`, no confirmation pipe, child and supervisor `setpgid`
-  calls, child-complete setup followed by
-  `ptrace(PTRACE_TRACEME, 0, 0, 0)` and initial `SIGSTOP`, exact live-group
+  calls, child-complete descriptor setup followed by
+  `ptrace(PTRACE_TRACEME, 0, (void *)0, (void *)0)`, final child signal
+  restoration, and initial `SIGSTOP`, exact live-group
   and tracing confirmation before `READY`,
-  `ptrace(PTRACE_SETOPTIONS, child, 0, PTRACE_O_TRACEEXEC)`,
-  `ptrace(PTRACE_CONT, child, 0, 0)`, exact kernel `PTRACE_EVENT_EXEC`, and
-  `ptrace(PTRACE_DETACH, child, 0, 0)` before `EXECUTED`; byte-exact
-  request/pid/address/data positions and all argument mutations;
+  `ptrace(PTRACE_SETOPTIONS, child, (void *)0, (void *)(uintptr_t)PTRACE_O_TRACEEXEC)`,
+  `ptrace(PTRACE_CONT, child, (void *)0, (void *)0)`, exact kernel
+  `PTRACE_EVENT_EXEC`, and
+  `ptrace(PTRACE_DETACH, child, (void *)0, (void *)0)` before `EXECUTED`;
+  exact request/pid values and pointer positions/types plus all argument
+  mutations;
   handoff-window/normalization-time/pre-confirmation `SIGTERM`, typed
   `ESRCH`/`EPERM`/early-exit cleanup, pre-`READY` termination ownership,
   same-open-file-description `execveat(AT_EMPTY_PATH)`, deterministic
@@ -1162,8 +1169,10 @@ Run targeted tests for:
   pre-helper Nix/toolchain/sandbox codes, fixed inputs, repairs, phase-valid
   reruns, byte-exact and wrong-remedy results for unsupported system, old
   kernel, Yama, startup probe, and ptrace policy; distinct post-spawn helper
-  stop/options/continue/event/detach codes; exact four-request ptrace seccomp
-  allowance with unchanged action no-network, continued
+  stop/options/continue/event/detach codes; static four-request plus
+  enforceable constant-argument ptrace seccomp allowance, supervisor-owned
+  dynamic child relation, wrong-pid/nonchild host refusal, unchanged action
+  no-network, continued
   supervision, fixed post-`EXECUTED` signal allowlist,
   external-TERM escalation without a case deadline, terminal record,
   direct-child reap, and exact normal/signaled target status;

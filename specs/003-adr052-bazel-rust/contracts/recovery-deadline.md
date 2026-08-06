@@ -112,7 +112,7 @@ request-argument drift. Sequential T120 owns their renderers, byte-exact
 tests, fixed-locator resolution, and missing or borrowed remedy mutations
 across all four slices and both command versions. Each test asserts no helper
 was spawned. Qualification requires every positive, refusal, wrong-remedy,
-and call-position mutation result.
+call-position/type mutation, and wrong-pid/nonchild host-refusal result.
 
 Every parent code names the fixed input
 `specs/003-adr052-bazel-rust/contracts/runner-environment.md#rust-parent-stage-owner-and-closure-contract`.
@@ -146,7 +146,7 @@ Every helper code names the fixed input
 | `HELPER_GROUP_EPERM` | `D2B-BZLEXEC-HELPER-GROUP-EPERM` | Correct the parent-and-child `setpgid` handshake without changing session or group authority; `EPERM` must fail before `READY` with direct-child cleanup. |
 | `HELPER_GROUP_ERROR` | `D2B-BZLEXEC-HELPER-GROUP-ERROR` | Correct the parent-and-child `setpgid` handshake; any other setpgid error or confirmed-group mismatch must fail before `READY` with direct-child cleanup and no raw errno text. |
 | `HELPER_GROUP_EARLY_EXIT` | `D2B-BZLEXEC-HELPER-GROUP-EARLY-EXIT` | Reject child exit before the expected initial trace stop and `READY`; consume-reap it and close every owned descriptor. |
-| `HELPER_PTRACE_STOP` | `D2B-BZLEXEC-HELPER-PTRACE-STOP` | Correct the child `PTRACE_TRACEME` plus initial `SIGSTOP` barrier and accept no other initial wait state before `READY`. |
+| `HELPER_PTRACE_STOP` | `D2B-BZLEXEC-HELPER-PTRACE-STOP` | Correct the owned direct child's descriptor setup, `PTRACE_TRACEME`, final signal restoration, and initial `SIGSTOP` order; accept no other child identity or initial wait state before `READY`. |
 | `HELPER_PTRACE_OPTIONS` | `D2B-BZLEXEC-HELPER-PTRACE-OPTIONS` | Install exactly `PTRACE_O_TRACEEXEC` on the stopped direct child before emitting `READY`; do not infer tracing state from the stop alone. |
 | `HELPER_PTRACE_CONT` | `D2B-BZLEXEC-HELPER-PTRACE-CONT` | Release the confirmed initial stop exactly once with zero-signal `PTRACE_CONT` after the complete `READY` write. |
 | `HELPER_PRE_EXEC_TERMINATION` | `D2B-BZLEXEC-HELPER-PRE-EXEC-TERMINATION` | Before the kernel exec event, coalesce any managed signal into one pre-exec setup termination, suppress `EXECUTED` and target terminal/audit publication even on empty exec-pipe EOF, immediately kill and consume-reap the confirmed child group without forwarding or grace, and let sandbox containment backstop incomplete cleanup. |
@@ -173,12 +173,12 @@ Every child code names the same fixed supervisor source and the contract row
 | Internal stage | Public code | Exact correction |
 | --- | --- | --- |
 | `CHILD_GROUP` | `D2B-BZLEXEC-CHILD-GROUP` | Correct the child's `setpgid(0, 0)` half of the target-group handshake before the initial trace stop. |
-| `CHILD_SIGNAL` | `D2B-BZLEXEC-CHILD-SIGNAL` | Restore the empty child mask and default disposition for every catchable signal before raising the initial trace stop. |
+| `CHILD_SIGNAL` | `D2B-BZLEXEC-CHILD-SIGNAL` | After descriptor setup and successful `PTRACE_TRACEME`, restore the empty child mask and default disposition for every catchable signal before raising the initial trace stop. |
 | `CHILD_STDIO` | `D2B-BZLEXEC-CHILD-STDIO` | Correct exact installation of declared stdin, stdout, and stderr at fds 0, 1, and 2. |
 | `CHILD_CLOEXEC` | `D2B-BZLEXEC-CHILD-CLOEXEC` | Set close-on-exec on the private executable fd and every non-surviving descriptor. |
 | `CHILD_CLOSE` | `D2B-BZLEXEC-CHILD-CLOSE` | Correct closure of every supervisor-only and non-surviving child descriptor. |
-| `CHILD_PTRACE` | `D2B-BZLEXEC-CHILD-PTRACE` | Correct unprivileged parent-child `PTRACE_TRACEME`; do not add attach, capability, or sibling tracing. |
-| `CHILD_STOP` | `D2B-BZLEXEC-CHILD-STOP` | Raise exactly one initial `SIGSTOP` after all fallible child setup and before the sole `execveat`. |
+| `CHILD_PTRACE` | `D2B-BZLEXEC-CHILD-PTRACE` | After stdio/CLOEXEC/descriptor closure setup and before final child signal restoration, correct unprivileged parent-child `PTRACE_TRACEME`; do not add attach, capability, or sibling tracing. |
+| `CHILD_STOP` | `D2B-BZLEXEC-CHILD-STOP` | Raise exactly one initial `SIGSTOP` only after descriptor setup, `PTRACE_TRACEME`, and final child signal restoration, and before the sole `execveat`. |
 | `CHILD_EXECVEAT` | `D2B-BZLEXEC-CHILD-EXECVEAT` | Correct same-open-file-description `execveat(AT_EMPTY_PATH)`; do not add a reopen or path fallback. |
 
 Every sandbox code names the fixed inputs
@@ -187,12 +187,14 @@ Every sandbox code names the fixed inputs
 `SANDBOX_PTRACE_POLICY` additionally names the closed causing-input label
 `pinned-ptrace-seccomp-policy` and
 `pkgs/bazel-8.6.0-seccomp/seccomp-policy.json`; it renders no observed policy
-bytes.
+bytes. Its correction is the same ordered command set in this table,
+`coverage-map.md`, and the patched-sandbox stage contract; no renderer may
+omit or reorder `make test-flake` and the phase-valid literal slice command.
 
 | Internal stage | Public code | Exact correction |
 | --- | --- | --- |
 | `SANDBOX_NAMESPACE` | `D2B-BZLEXEC-SANDBOX-NAMESPACE` | Restore one fresh `CLONE_NEWPID` namespace for every governed action and refuse every fallback strategy. |
-| `SANDBOX_PTRACE_POLICY` | `D2B-BZLEXEC-SANDBOX-PTRACE-POLICY` | Restore the pinned patch and policy so only `TRACEME(0,0,0)`, `SETOPTIONS(child,0,PTRACE_O_TRACEEXEC)`, `CONT(child,0,0)`, and `DETACH(child,0,0)` are admitted in their exact request, pid, address, and data positions; retain every no-network denial. |
+| `SANDBOX_PTRACE_POLICY` | `D2B-BZLEXEC-SANDBOX-PTRACE-POLICY` | Restore the pinned patch and policy so seccomp admits only the four request values with the enforceable constant arguments and retains every no-network denial; run `make test-flake`; then run the phase-valid closed slice command selected verbatim from the command-version table. |
 | `SANDBOX_MONITOR` | `D2B-BZLEXEC-SANDBOX-MONITOR` | Restore namespace PID 1 as the action's adoption, abnormal-teardown, and reap owner. |
 | `SANDBOX_KILL` | `D2B-BZLEXEC-SANDBOX-KILL` | Correct namespace-local kill of every member other than PID 1; do not signal a host PID or PGID. |
 | `SANDBOX_REAP` | `D2B-BZLEXEC-SANDBOX-REAP` | Correct nonblocking adopted-child reap progress and require a consuming wait before recording any PID-1 reap. |

@@ -215,12 +215,15 @@ to the same file are explicitly sequential.
   Rust-to-helper-handoff-window, normalization-time, and blocked `SIGTERM`,
   parent-first/child-first setpgid and initial-trace-stop races; typed
   `ESRCH`/`EPERM`/other-error/group-mismatch/early-child-exit cleanup; exact
-  four-argument `ptrace(PTRACE_TRACEME, 0, 0, 0)`, initial `SIGSTOP`,
-  `ptrace(PTRACE_SETOPTIONS, child, 0, PTRACE_O_TRACEEXEC)`,
-  `READY` before `ptrace(PTRACE_CONT, child, 0, 0)`, exact kernel
+  descriptor setup, four-argument
+  `ptrace(PTRACE_TRACEME, 0, (void *)0, (void *)0)`, final child signal
+  restoration, initial `SIGSTOP`,
+  `ptrace(PTRACE_SETOPTIONS, child, (void *)0, (void *)(uintptr_t)PTRACE_O_TRACEEXEC)`,
+  `READY` before `ptrace(PTRACE_CONT, child, (void *)0, (void *)0)`, exact kernel
   `PTRACE_EVENT_EXEC`, and
-  `ptrace(PTRACE_DETACH, child, 0, 0)` before `EXECUTED`; byte-match request,
-  pid, address, and data positions and add omission, exchange, wrong-pid,
+  `ptrace(PTRACE_DETACH, child, (void *)0, (void *)0)` before `EXECUTED`;
+  bind request and pid values plus pointer positions/types and add omission,
+  integer-in-pointer-position, exchange, wrong-pid, nonchild,
   options-in-address, and nonzero-continue/detach-signal mutations; a
   pending managed signal before group/trace confirmation; pre-`READY`
   termination ownership; and a deterministic initial-stop hold after `READY`
@@ -238,8 +241,11 @@ to the same file are explicitly sequential.
   ptrace seccomp-policy drift; distinct post-spawn helper initial-stop,
   options, continuation, event, and detach codes; exact fixed inputs, repairs,
   phase-valid reruns, wrong-remedy tests, the exact
-  `TRACEME`/`SETOPTIONS`/`CONT`/`DETACH` seccomp request and argument
-  allowance, forbidden ptrace requests, and unchanged action no-network,
+  `TRACEME`/`SETOPTIONS`/`CONT`/`DETACH` seccomp request allowance with only
+  enforceable constant pid/address/data constraints, no static future-child
+  pid claim, supervisor-owned dynamic child identity, wrong-pid/nonchild
+  host-conformance refusal, forbidden ptrace requests, and unchanged action
+  no-network,
   target-ignore-TERM escalation with no case deadline,
   signal-forwarding/status mismatch, spawn, close, cleanup, wait, and reap
   failures. The fixed protocol requires `READY`, then `EXECUTED`, then terminal
@@ -346,9 +352,11 @@ to the same file are explicitly sequential.
   and executable hashes, and exact C source/Nix expression/protocol/static
   compiler/libc/header/dependency-closure hashes plus per-native-system
   derivation/output-NAR/executable/static-ELF hashes, protocol version, Linux
-  minimum, supported systems, Yama assumption, and exact ptrace request set,
-  never full store paths. Bind both native startup-probe and host-conformance
-  results, every exact ptrace argument-position test and mutation, every
+  minimum, supported systems, Yama assumption, and exact static ptrace request
+  plus enforceable constant-argument set, never full store paths. Bind both
+  native startup-probe and host-conformance results, dynamic child identity,
+  wrong-pid/nonchild refusal, every exact ptrace value/position/type test and
+  mutation, every
   exec-event negative/mutation, unchanged no-network result, all pre-helper
   Nix/toolchain/sandbox diagnostic bytes and wrong-remedy results, and all new
   helper/child recovery-code bytes into execution evidence and the
@@ -363,18 +371,22 @@ to the same file are explicitly sequential.
   fork without reset-and-continue, disposition and synchronous-consumer
   installation only after verification, and final-mask establishment. Create
   no confirmation pipe. Make child and supervisor both call `setpgid`; have
-  the child finish stdio/CLOEXEC/close/signal setup, call
-  `ptrace(PTRACE_TRACEME, 0, 0, 0)`, and raise the initial `SIGSTOP`
-  immediately before its sole `execveat`. Have the supervisor consume exactly
+  the child finish stdio/CLOEXEC/descriptor closure setup, call
+  `ptrace(PTRACE_TRACEME, 0, (void *)0, (void *)0)`, restore its final signal
+  mask and dispositions, and only then raise the initial `SIGSTOP` immediately
+  before its sole `execveat`. Have the supervisor consume exactly
   that stop, confirm the exact group, install options with
-  `ptrace(PTRACE_SETOPTIONS, child, 0, PTRACE_O_TRACEEXEC)`, complete `READY`,
-  and release with `ptrace(PTRACE_CONT, child, 0, 0)`. Under the original
+  `ptrace(PTRACE_SETOPTIONS, child, (void *)0, (void *)(uintptr_t)PTRACE_O_TRACEEXEC)`,
+  complete `READY`, and release with
+  `ptrace(PTRACE_CONT, child, (void *)0, (void *)0)`. Under the original
   absolute deadline, accept
   execution only from exact `WIFSTOPPED`/`SIGTRAP`/`PTRACE_EVENT_EXEC`, then
-  detach exactly once with `ptrace(PTRACE_DETACH, child, 0, 0)` and emit
-  `EXECUTED` only after detach succeeds. Byte-match all four argument
-  positions and fail omission, exchange, wrong-pid, options-in-address, and
-  nonzero-signal mutations. Empty exec-pipe EOF is closure only. Test pending,
+  detach exactly once with
+  `ptrace(PTRACE_DETACH, child, (void *)0, (void *)0)` and emit
+  `EXECUTED` only after detach succeeds. Bind request and pid values plus
+  pointer positions/types and fail omission, integer-in-pointer-position,
+  exchange, wrong-pid, nonchild, options-in-address, and nonzero-signal
+  mutations. Empty exec-pipe EOF is closure only. Test pending,
   handoff-window,
   normalization-time, and pre-trace-confirmation `SIGTERM`, pre-`READY`
   termination ownership, every managed signal at the deterministic
@@ -391,9 +403,14 @@ to the same file are explicitly sequential.
   2/3 refusal; distinct Nix evaluation, toolchain startup, and patched-sandbox
   owners/codes for unsupported system, old kernel, Yama, failed real startup
   probe, and ptrace policy drift before helper spawn; no `CAP_SYS_PTRACE`; an
-  action seccomp allowance for exactly
-  `PTRACE_TRACEME`, `PTRACE_SETOPTIONS`, `PTRACE_CONT`, and `PTRACE_DETACH`;
-  denial of every other ptrace request; unchanged socket/socketcall/io_uring/
+  static action seccomp allowance for exactly
+  `PTRACE_TRACEME`, `PTRACE_SETOPTIONS`, `PTRACE_CONT`, and `PTRACE_DETACH`
+  plus only enforceable constant arguments; no static match of the future
+  child pid for `SETOPTIONS`, `CONT`, or `DETACH`; supervisor enforcement from
+  its owned fork result, confirmed process group/direct-parent relation,
+  traced initial stop, wait ownership, and exact event; native wrong-pid and
+  nonchild refusal tests; denial of every other ptrace request; unchanged
+  socket/socketcall/io_uring/
   `pidfd_getfd` denial and every existing no-network plant; signal forwarding,
   external-SIGTERM escalation with no case deadline, target wait/reap and exact
   status mirroring, held-open writer, exact single-record exec-error
@@ -407,7 +424,12 @@ to the same file are explicitly sequential.
   `SANDBOX_*` recovery row; keep runner recovery free of all five pre-helper
   rows. Assert each refuses before helper spawn. Byte-test every fixed causing
   input, exact correction, phase-valid rerun, and wrong-remedy mutation across
-  all four slices and both diagnostic command versions. Resolve the patch
+  all four slices and both diagnostic command versions. For
+  `SANDBOX_PTRACE_POLICY`, the only accepted ordered remedy is: restore the
+  pinned patch and policy so seccomp admits only the four request values with
+  the enforceable constant arguments and retains every no-network denial; run
+  `make test-flake`; then run the phase-valid closed slice command selected
+  verbatim from the command-version table. Resolve the patch
   path, the full repository-relative runner-contract anchor, and the exact
   contributing runbook file/anchor from the repository root. Byte-test the
   pending diagnostic, runbook link, and consuming-reap release record; reject
@@ -906,7 +928,9 @@ to the same file are explicitly sequential.
   termination ownership, deterministic post-`READY` pre-exec signal queuing,
   pre-exec death/fault/OOM-like kill, empty EOF without event, missing/wrong
   event, detach failure, fast first-instruction exit, native/kernel/Yama gates,
-  exact ptrace request allowance with unchanged no-network, helper kill/reap,
+  exact static ptrace request/constant-argument allowance, supervisor-owned
+  dynamic child identity, wrong-pid/nonchild refusal, unchanged no-network,
+  helper kill/reap,
   no false
   `EXECUTED`/target terminal/audit event, full post-`EXECUTED` signal forwarding,
   no-deadline external-TERM escalation,
@@ -1224,10 +1248,12 @@ to the same file are explicitly sequential.
   forbidden-field validator mutations. Add a closed exec-event qualification
   input binding both native startup and host-conformance results, exact
   source/protocol/seccomp identities, Linux minimum, supported systems, Yama
-  assumption, four-request ptrace allowance, all four exact libc argument
-  tuples, unchanged no-network result, exact event/detach positive,
-  fast-exit positive, every call-position and
-  death/fault/EOF/wrong-event/detach negative and mutation, every distinct
+  assumption, static four-request plus enforceable constant-argument ptrace
+  allowance, supervisor-owned dynamic child identity, all four exact libc
+  argument values and pointer types, unchanged no-network result, exact
+  event/detach positive, fast-exit positive, every call-position/type,
+  wrong-pid/nonchild host refusal, and death/fault/EOF/wrong-event/detach
+  negative and mutation, every distinct
   pre-helper Nix/toolchain/sandbox code plus wrong-remedy result, and every
   parent/helper/child recovery-code byte result. Missing, duplicate,
   wrong-system, wrong-policy, swapped/omitted/nonzero ptrace argument,

@@ -546,12 +546,15 @@ dispositions and the complete inherited mask does it install defaults,
 ignored `SIGPIPE`, waitable `SIGCHLD`, synchronous consumption, and the final
 mask. It creates one nonblocking close-on-exec child exec-error pipe and forks
 exactly once. There is no confirmation pipe. Child and supervisor both call
-`setpgid`. The child installs declared stdio and descriptor state, calls
-`ptrace(PTRACE_TRACEME, 0, 0, 0)`, restores final signal state, and raises one initial
-`SIGSTOP`; at that stop all fallible setup is complete. The supervisor
+`setpgid`. In order, the child installs declared stdio and completes CLOEXEC
+and descriptor closure setup, calls
+`ptrace(PTRACE_TRACEME, 0, (void *)0, (void *)0)`, restores final signal mask
+and dispositions, and only then raises one initial `SIGSTOP`; at that stop all
+fallible setup is complete. The supervisor
 confirms the exact group and initial stop, calls
-`ptrace(PTRACE_SETOPTIONS, child, 0, PTRACE_O_TRACEEXEC)`, emits framed
-`READY`, and releases the child with `ptrace(PTRACE_CONT, child, 0, 0)`. The
+`ptrace(PTRACE_SETOPTIONS, child, (void *)0, (void *)(uintptr_t)PTRACE_O_TRACEEXEC)`,
+emits framed `READY`, and releases the child with
+`ptrace(PTRACE_CONT, child, (void *)0, (void *)0)`. The
 child's next operation is
 `execveat(private_fd, "", argv, envp, AT_EMPTY_PATH)`. Failure writes one fixed
 record with bounded `EINTR`/`EAGAIN`/short-write handling under the absolute
@@ -564,7 +567,8 @@ consume-reaps the confirmed group before typed
 `HELPER_PRE_EXEC_TERMINATION`; the sandbox backstops incomplete cleanup.
 Exec-error EOF is only writer closure. Execution requires the exact stopped
 `SIGTRAP` with `PTRACE_EVENT_EXEC`, followed by successful zero-signal
-`ptrace(PTRACE_DETACH, child, 0, 0)`; only then does the supervisor emit
+`ptrace(PTRACE_DETACH, child, (void *)0, (void *)0)`; only then does the
+supervisor emit
 framed `EXECUTED`. A
 pre-exec `SIGKILL`, `SIGSYS`, fault, normal exit, OOM-like kill, EOF without
 the event, plain or wrong event, or detach failure suppresses `EXECUTED`,
@@ -604,17 +608,24 @@ workflow invocation except the one typed consumer.
 The decision is gated to native x86_64/aarch64 Linux >= 3.19 and an actual
 passing parent-child exec-event startup probe. Yama, when present, must permit
 the natural unprivileged parent-child relationship in mode 0 or 1; no
-`CAP_SYS_PTRACE` is granted. Action seccomp admits only `PTRACE_TRACEME`,
-`PTRACE_SETOPTIONS`, `PTRACE_CONT`, and `PTRACE_DETACH`, denying all other
-ptrace requests while preserving every no-network denial. Unsupported system,
-old kernel, Yama refusal, startup-probe failure, and seccomp-policy drift have
-distinct pre-helper Nix/toolchain/sandbox codes and remedies; initial stop,
-options, continuation, event, and detach retain distinct post-spawn helper
-codes. Exact four-argument call positions and omission/exchange/wrong-pid/
-options-in-address/nonzero-signal mutations, fixed inputs, byte-exact
-diagnostics, wrong-remedy results, source, protocol, seccomp,
-platform/kernel/Yama, both native probe/conformance, and recovery results are
-evidence and qualification inputs rather than prose claims.
+`CAP_SYS_PTRACE` is granted. Static action seccomp admits only
+`PTRACE_TRACEME`, `PTRACE_SETOPTIONS`, `PTRACE_CONT`, and `PTRACE_DETACH` with
+the enforceable constant pid/address/data arguments. It does not match the
+future child pid for the three parent-issued requests. The supervisor enforces
+that dynamic identity from its owned fork result, confirmed process
+group/direct-parent relation, traced initial stop, wait ownership, and exact
+event. Every other ptrace request remains denied and every no-network denial
+is preserved. Unsupported system, old kernel, Yama refusal, startup-probe
+failure, and seccomp-policy drift have distinct pre-helper
+Nix/toolchain/sandbox codes and remedies; initial stop, options, continuation,
+event, and detach retain distinct post-spawn helper codes. Exact
+four-argument value, position, and pointer-type tests plus
+omission/integer-in-pointer-position/exchange/wrong-pid/nonchild/
+options-in-address/nonzero-signal mutations, native wrong-pid/nonchild
+refusal, fixed inputs, byte-exact diagnostics, wrong-remedy results, source,
+protocol, seccomp, platform/kernel/Yama, both native probe/conformance, and
+recovery results are evidence and qualification inputs rather than prose
+claims.
 
 The supervisor is the normal teardown owner, not the final crash boundary.
 Every governed action already passes through the exact patched Bazel Linux
@@ -1064,14 +1075,19 @@ returns are injected at their actual operation seams and run through
 `run_cli_entrypoint --self-test` after writing sentinel stdout/stderr. No case
 passes an expected reason to a generic wrapper. Each returns status 1 and
 emits only its seam-specific fixed setup class and remedy. Failed-subprocess
-capture returns an owned object retaining the actual child and all three
-descriptor birth identities. Cleanup attempts each descriptor exactly once
-despite earlier failures, then consume-reaps only that child in at most eight
-wait attempts. `ECHILD` succeeds only after the object recorded a consuming
-reap. Tests use an independent literal `8`, forbid a ninth wait, inject every
-descriptor position, wrong supplied pid/resource-bearing malformed result,
-`ECHILD`, retry success, and exhaustion, and prove the actual child reaped.
-They preserve the primary typed failure and append only fixed
+capture returns an owned object retaining the actual child and three
+independently snapshotted raw descriptor birth identities. A rebound mismatch
+at each position refuses while cleanup closes only the owned handles and
+consume-reaps the actual child. Position-0 and positions-0-1 prefix-progress
+cases cover successful and failed prior attempts, forbid double-close, and
+close each remaining descriptor exactly once. Cleanup otherwise attempts each
+descriptor exactly once despite earlier failures, then consume-reaps only that
+child in at most eight wait attempts. `ECHILD` succeeds only after the object
+recorded a consuming reap. Tests use an independent literal `8`, forbid a
+ninth wait, inject every descriptor position, wrong supplied
+pid/resource-bearing malformed result, `ECHILD`, retry success, and
+exhaustion, and prove the actual child reaped. They preserve the primary typed
+failure and append only fixed
 `D2B-SPEC003-PLAN-CLEANUP` on cleanup failure. All sentinel and raw
 warning/error/path content is discarded and no task-rewrite remedy appears.
 `self-test-contract` is reserved for the exact invalid validator self-test

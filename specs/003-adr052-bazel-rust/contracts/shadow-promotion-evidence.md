@@ -22,8 +22,10 @@ contains:
   mutation result set;
 - one closed exec-event qualification result binding both native
   startup/conformance proofs, protocol/seccomp identities, platform,
-  minimum-kernel and Yama gates, the exact four request/pid/address/data ptrace
-  tuples, exact four-request allowance, unchanged no-network result,
+  minimum-kernel and Yama gates, all four exact ptrace request/pid values and
+  pointer positions/types, static four-request plus enforceable
+  constant-argument allowance, supervisor-owned dynamic child relation,
+  wrong-pid/nonchild refusal, unchanged no-network result,
   event/detach positives, every call-position and event mutation, distinct
   pre-helper Nix/toolchain/sandbox code and wrong-remedy result, and every
   post-spawn helper recovery-code result;
@@ -340,9 +342,10 @@ It also proves:
     one-guard and restore-before-unlock mutations, inherited managed `SIG_IGN`
     refusal, handoff-window/normalization-time `SIGTERM`, child/supervisor
     setpgid and initial-stop races, typed
-    `ESRCH`/`EPERM`/early-child-exit cleanup, exact four-argument
-    `TRACEME`/initial-stop/`SETOPTIONS`/`CONT`/event/`DETACH` order,
-    request/pid/address/data position tests and omission/exchange/wrong-pid/
+    `ESRCH`/`EPERM`/early-child-exit cleanup, descriptor setup/`TRACEME`/
+    final signal restoration/initial-stop/`SETOPTIONS`/`CONT`/event/`DETACH`
+    order, exact request/pid values and pointer-position/type tests and
+    omission/integer-in-pointer-position/exchange/wrong-pid/nonchild/
     options-in-address/nonzero-signal mutations, pending signal before
     group/trace confirmation,
     pre-`READY` termination ownership, deterministic post-`READY` pre-exec
@@ -351,8 +354,10 @@ It also proves:
     exit, helper group kill/reap, distinct pre-helper Nix/toolchain/sandbox
     system/kernel/Yama/probe/policy codes, fixed inputs, byte-exact remedies,
     phase-valid reruns and wrong-remedy results, distinct helper
-    stop/options/continue/event/detach codes, exact four-request ptrace seccomp
-    allowance with unchanged no-network,
+    stop/options/continue/event/detach codes, static four-request plus
+    enforceable constant-argument ptrace seccomp allowance, supervisor-owned
+    dynamic child relation and native wrong-pid/nonchild refusal with unchanged
+    no-network,
     no pre-exec forwarding/grace/`EXECUTED`/target terminal/audit, and post-exec
     forwarding, no-deadline external-TERM escalation, target-ignore-TERM, absence of
     numeric Rust signaling; and every Rust-parent and C-supervisor

@@ -538,9 +538,10 @@ Acceptance:
   It MUST create one nonblocking close-on-exec child exec-error pipe and fork
   exactly once while single-threaded. No group-confirmation pipe exists; the
   kernel ptrace stop is the only child-release barrier. Child and supervisor
-  MUST both perform `setpgid`. The child MUST install stdio and descriptor
-  state, call `PTRACE_TRACEME`, restore its final signal state, and raise one
-  initial `SIGSTOP`. At that stop every fallible pre-exec setup operation MUST
+  MUST both perform `setpgid`. In this order, the child MUST finish stdio,
+  CLOEXEC, and descriptor closure setup, call `PTRACE_TRACEME`, restore its
+  final signal mask and dispositions, and raise one initial `SIGSTOP`. At that
+  stop every fallible pre-exec setup operation MUST
   be complete and its next operation after release MUST be the sole
   `execveat(private_fd, "", argv, envp, AT_EMPTY_PATH)`. Setup,
   `PTRACE_TRACEME`, stop, or `execveat` failure MUST write one fixed
@@ -551,12 +552,13 @@ Acceptance:
   zero, and successfully install exactly `PTRACE_O_TRACEEXEC`. `ESRCH`,
   `EPERM`, other group failure, early child death, missing/wrong initial stop,
   and ptrace option failure MUST be typed and directly consume-reaped.
-  Every C ptrace call MUST carry all four libc arguments in exact positions:
-  `ptrace(PTRACE_TRACEME, 0, 0, 0)`,
-  `ptrace(PTRACE_SETOPTIONS, child, 0, PTRACE_O_TRACEEXEC)`,
-  `ptrace(PTRACE_CONT, child, 0, 0)`, and
-  `ptrace(PTRACE_DETACH, child, 0, 0)`. The complete framed `READY` write MUST
-  precede the exact zero-signal continuation call.
+  Every C ptrace call MUST carry all four libc arguments with explicit
+  pointer-width casts in exact positions:
+  `ptrace(PTRACE_TRACEME, 0, (void *)0, (void *)0)`,
+  `ptrace(PTRACE_SETOPTIONS, child, (void *)0, (void *)(uintptr_t)PTRACE_O_TRACEEXEC)`,
+  `ptrace(PTRACE_CONT, child, (void *)0, (void *)0)`, and
+  `ptrace(PTRACE_DETACH, child, (void *)0, (void *)0)`. The complete framed
+  `READY` write MUST precede the exact zero-signal continuation call.
   From release until exec-event acceptance, one original absolute deadline
   MUST cover synchronous managed-signal consumption, trace waits, the
   nonblocking exec-error reader, and status writes. Each loop iteration MUST
@@ -573,7 +575,8 @@ Acceptance:
   `SIGSYS`, fault, other signal stop, plain `SIGTRAP`, missing/wrong ptrace
   event, or EOF without that event MUST fail closed and MUST NOT emit
   `EXECUTED`. At the valid event stop, before target user code runs, the
-  supervisor MUST call `ptrace(PTRACE_DETACH, child, 0, 0)` exactly once.
+  supervisor MUST call
+  `ptrace(PTRACE_DETACH, child, (void *)0, (void *)0)` exactly once.
   Detach failure MUST emit typed `HELPER_PTRACE_DETACH`, kill and consume-reap
   the group, leave incomplete cleanup to sandbox containment, and publish no
   execution. Only successful detach MAY emit framed `EXECUTED`. The detach
@@ -589,16 +592,27 @@ Acceptance:
   MUST refuse before helper start. After spawn, helper initial-stop, options,
   continuation, event, and detach failures MUST retain distinct helper codes.
   It MUST grant no `CAP_SYS_PTRACE`. The
-  action seccomp policy MUST allow only `PTRACE_TRACEME`,
-  `PTRACE_SETOPTIONS`, `PTRACE_CONT`, and `PTRACE_DETACH`, deny every other
+  static action seccomp policy MUST allow only `PTRACE_TRACEME`,
+  `PTRACE_SETOPTIONS`, `PTRACE_CONT`, and `PTRACE_DETACH`. It MUST enforce
+  pid/address/data constants only where they are static: all-zero non-request
+  arguments for `TRACEME`, zero address plus
+  `(void *)(uintptr_t)PTRACE_O_TRACEEXEC` data for `SETOPTIONS`, and zero
+  address/data for `CONT` and `DETACH`. It MUST NOT claim to compare the
+  future child pid for the latter three requests. The supervisor MUST instead
+  enforce dynamic child identity from its owned fork result, confirmed
+  `getpgid(child) == child` and direct-parent relation, traced initial stop,
+  sole wait ownership, and exact exec event. The filter MUST deny every other
   ptrace request, preserve every socket/socketcall/io_uring/`pidfd_getfd`
   denial, and add no network exception.
   Source, protocol, seccomp, platform, kernel, Yama, both native startup and
-  host-conformance, exec-event/detach, exact request/pid/address/data call
-  positions, omission/exchange/wrong-pid/options-in-address/nonzero-signal
-  mutations, every distinct pre-helper and post-spawn code, byte-exact
-  diagnostic, wrong-remedy result, negative/mutation, and fixed recovery
-  evidence MUST be qualification-bound. Only after `EXECUTED` may forwarding
+  host-conformance, exec-event/detach, exact request/pid values and
+  address/data positions and pointer types,
+  omission/integer-in-pointer-position/exchange/wrong-pid/nonchild/
+  options-in-address/nonzero-signal mutations, host-conformance refusal of
+  wrong-pid and nonchild attempts, every distinct pre-helper and post-spawn
+  code, byte-exact diagnostic, wrong-remedy result, negative/mutation, and
+  fixed recovery evidence MUST be qualification-bound. Only after `EXECUTED`
+  may forwarding
   or grace begin. It MUST remain alive after
   `EXECUTED`, forward only
   `SIGHUP`/`SIGINT`/`SIGTERM`/`SIGQUIT` to the target process group, preserve
@@ -637,8 +651,11 @@ Acceptance:
   detach failure, and a target that exits on its first instruction after
   event/detach. Mutations that accept EOF, any stop, a wrong event, or detach
   failure MUST fail. Exact call tests MUST pin request, pid, address, and data
-  positions and fail omitted, exchanged, wrong-pid, options-in-address, and
-  nonzero-signal mutations. Unsupported system, minimum-kernel, Yama 2/3,
+  positions and pointer types and fail omitted, integer-in-pointer-position,
+  exchanged, wrong-pid, nonchild, options-in-address, and nonzero-signal
+  mutations. Host conformance MUST prove that wrong-pid and nonchild attempts
+  refuse through the dynamic supervisor/kernel relation rather than a static
+  child-pid filter. Unsupported system, minimum-kernel, Yama 2/3,
   startup-probe failure, and patched-sandbox policy drift MUST each refuse
   before helper spawn under its distinct owner/code; fixed-input, exact
   repair, phase-valid rerun, byte-exact, and wrong-remedy tests MUST pass.
@@ -1482,14 +1499,20 @@ Acceptance:
   case supplies an expected reason to a generic setup wrapper. Each produces
   empty stdout, exact status 1, and only its seam-specific fixed setup
   diagnostic and remedy. Failed subprocess capture MUST return an owned object
-  retaining the actual child identity and all three descriptor birth
-  identities. Cleanup MUST attempt each descriptor exactly once despite any
-  prior close failure, then consume-reap only that child in at most eight wait
-  attempts. `ECHILD` MUST NOT be success unless the object already recorded a
-  consuming reap. Tests MUST use a literal `8` independent of the production
-  bound, assert no ninth wait, inject every descriptor position, a wrong
-  supplied pid/resource-bearing malformed result, wait `ECHILD`, retry
-  success, and retry exhaustion, and prove the actual child reaped. Every case
+  retaining the actual child identity and three independently snapshotted raw
+  descriptor birth identities. Tests MUST inject a rebound mismatch at each
+  descriptor position, refuse that identity while closing only the three
+  owned handles and consume-reaping the actual child. Cleanup MUST attempt
+  each descriptor exactly once despite any prior close failure, then
+  consume-reap only that child in at most eight wait attempts. Prefix-progress
+  tests MUST cover position 0 and positions 0-1 already attempted with both
+  successful and failed close results, assert no double-close, and attempt
+  every remaining descriptor exactly once. `ECHILD` MUST NOT be success unless
+  the object already recorded a consuming reap. Tests MUST use a literal `8`
+  independent of the production bound, assert no ninth wait, inject every
+  descriptor position, a wrong supplied pid/resource-bearing malformed
+  result, wait `ECHILD`, retry success, and retry exhaustion, and prove the
+  actual child reaped. Every case
   preserves the primary typed setup failure and appends only fixed
   `D2B-SPEC003-PLAN-CLEANUP` when cleanup fails. Raw warnings, errors, paths,
   sentinel content, and task-rewrite remedies are absent. `self-test-contract`

@@ -388,13 +388,16 @@ build/test-tooling derivation. It is not a Rust crate, is absent from
   `READY`/`EXECUTED`/`EXITED`/`SIGNALED` header/version/type/length shapes,
   27-byte retained decoder bound, signal allowlist, block-first initialization,
   ignored `SIGPIPE`, waitable default `SIGCHLD`, pre-`READY` termination
-  ownership, child-complete setup followed by `PTRACE_TRACEME` initial stop,
+  ownership, child-complete descriptor setup followed by `PTRACE_TRACEME`,
+  final child signal restoration, and the initial stop in that order,
   exact `PTRACE_O_TRACEEXEC`/zero-signal-cont/kernel-event/zero-signal-detach
   order, empty EOF as failure-channel closure only, pre-exec
   signal/death/fault/wrong-event/detach refusal with no false execution/audit
   publication, fast first-instruction exit ordering, native Linux minimum and
-  Yama parent-child assumption, exact four-request ptrace seccomp allowance
-  with unchanged no-network denial, fixed post-exec external-TERM escalation,
+  Yama parent-child assumption, static four-request plus enforceable
+  constant-argument ptrace seccomp allowance, supervisor-owned dynamic child
+  identity with wrong-pid/nonchild host refusal, unchanged no-network denial,
+  fixed post-exec external-TERM escalation,
   absolute-deadline transport, and protocol version.
 
 The safe typed Rust consumer embeds the exact helper store path from that Nix
