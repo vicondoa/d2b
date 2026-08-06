@@ -88,7 +88,7 @@ without it."
 ## VM lifecycle (daemon-supervised)
 
 `d2bd` is the sole supervisor for every per-VM lifecycle DAG.
-There are no framework-declared per-VM systemd units: child
+No framework-declared per-VM systemd units: child
 processes (cloud-hypervisor, virtiofsd, swtpm, vhost-user-sound,
 USBIP attach) are spawned by the broker via `SpawnRunner`, handed
 back to `d2bd` over `SCM_RIGHTS` as pidfds, and reconciled

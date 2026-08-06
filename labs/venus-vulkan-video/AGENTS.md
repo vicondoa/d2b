@@ -1,7 +1,7 @@
 # AGENTS.md - `labs/venus-vulkan-video/` isolation contract
 
 This lab is an **experimental prototype**, not part of the d2b framework. It is
-governed by this file *in addition to* the repo-root `AGENTS.md`. Where the two
+governed by this file *plus* the repo-root `AGENTS.md`. Where the two
 conflict for files under `labs/venus-vulkan-video/`, this file wins.
 
 Read this before changing anything in this directory.

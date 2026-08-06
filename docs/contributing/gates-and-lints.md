@@ -75,6 +75,13 @@ make check-static
 make test
 ```
 
+The tier-0 dash scan admits only the three pinned Caveman provenance blobs
+under `third_party/caveman/v1.10.0/`, and only by exact path plus SHA-256 from
+`UPSTREAM.json`. It does not admit an upstream runtime or relax the repository
+rule for any other path. `node scripts/copilot/check-bindings.mjs` checks the
+closed vendor allowlist and the communication, feature-editor, panel, and
+prompt-corpus contracts.
+
 `tests/layer1-jobs.json` is authoritative for both the job list and its
 classification. A job is enforcing unless it carries `"enforcement":
 "advisory"`; an advisory entry pairs that field with `advisoryReason` explaining
@@ -268,7 +275,7 @@ guard.
 The slot namespace is fixed at `/run/d2b-heavy-gates/uid-<uid>/`. The root
 and per-uid directory are root-owned and non-writable by unprivileged users;
 the two `slot-*` files are pre-created for the target uid at mode `0600`.
-There is no runtime-directory or temporary-directory fallback. The NixOS
+No runtime-directory or temporary-directory fallback. The NixOS
 module provisions the root with systemd-tmpfiles, then activation provisions
 directories and slots for configured lifecycle users that NSS can resolve.
 An unavailable network-backed user is deferred rather than failing

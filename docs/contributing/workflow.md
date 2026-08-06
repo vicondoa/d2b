@@ -267,7 +267,7 @@ fields that request panel, agent, or model metadata.
 - **Never clear `RUSTC_WRAPPER` to make a command work.** Every
   `rustc-wrapper` line points at a repo-local `.cargo/rustc-wrapper.sh`
   that uses sccache when it is on PATH and plain rustc when it is not, so
-  no environment needs the variable cleared in order to build. Naming
+  no environment needs the variable cleared to build. Naming
   `sccache` directly used to make it a hard requirement, and the resulting
   `RUSTC_WRAPPER=""` workaround spread into environments that *did* have
   sccache and silently disabled the compiler cache. Clearing it is reserved

@@ -89,6 +89,13 @@ not touch. Those reviewers still re-report, but their prompt should scope
 them to the delta and permit a short confirmation that their area is
 unaffected.
 
+Selected panel lanes may use optional full transient communication through the
+`d2b-caveman` contract. An explicit `normal` or `off` request wins. This is a
+communication choice only: reviewers remain read-only, the shared finding bar
+stays byte-identical, verdict JSON stays exact, `signoff` still means
+`recommendations` is empty, and optional communication never waives or changes
+the normal panel gate.
+
 Each engineer returns a JSON sign-off record shaped like:
 
 ```json
@@ -269,7 +276,7 @@ ranked. Read this ordering before wiring any harness.
    reasoning effort pinned to `github-copilot` /
    `gpt-5.6-sol` / `xhigh`. The panel model is deliberately
    not the coding model, so a lane cannot both author a change and
-   attest to it. There is no override, no force flag, and no partial
+   attest to it. No override, no force flag, and no partial
    pass. Historical `gemini-3.1-pro-preview` / `high` request-record
    sets remain accepted only as an exact compatibility pair.
    See [`docs/specs/ADR-046-validation-and-delivery.md`](../specs/ADR-046-validation-and-delivery.md)

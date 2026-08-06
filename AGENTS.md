@@ -12,7 +12,7 @@ d2b is an opinionated NixOS desktop microVM framework that
 owns its microVM substrate end-to-end. The control plane is
 **daemon-only**: `d2bd` supervises every per-VM DAG and
 `d2b-priv-broker` dispatches every audited host mutation.
-There are no per-VM systemd templates, no host-singleton framework
+No per-VM systemd templates, no host-singleton framework
 services, and no legacy bash CLI; see
 [ADR 0015](./docs/adr/0015-daemon-only-clean-break.md) for the
 binding architectural decision.
@@ -43,6 +43,7 @@ about to do, read that doc, then come back.
 | Add a per-VM feature, a unit, or a broker op | [architecture.md](./docs/contributing/architecture.md) and [ADR 0015](./docs/adr/0015-daemon-only-clean-break.md) |
 | Do anything security-relevant | "Don'ts" below - that section is exhaustive and binding |
 | Run an ADR, a panel round, or an autopilot wave | [copilot-agents.md](./docs/contributing/copilot-agents.md) - agents, skills, model binding, wave ids |
+| Change a feature artifact after its first write | `d2b-spec-edit` owns the batch; read [copilot-agents.md](./docs/contributing/copilot-agents.md) |
 
 Two rules that override everything else:
 
@@ -174,6 +175,15 @@ They are documented in the same file. The short version: the spec-literal
 lints honour **no** author-suppression marker, and D116 honours exactly one,
 in one pinned file, exactly once.
 
+Prompt and communication policy is also checked locally. The Caveman sources
+are inert provenance under `third_party/caveman/v1.10.0/`, pinned to tag
+`v1.10.0` at commit `fcf7663366c217dc8f334a11028de52ed950ceab`;
+`UPSTREAM.json` carries the three SHA-256 values. Selected delivery and review
+lanes may use optional full transient communication. An explicit `normal` or
+`off` request wins. The mode never changes persisted prose, panel verdict JSON,
+finding bars, or panel requirements, except for the intentionally compressed
+prompt corpus checked by `scripts/copilot/prompt-corpus.mjs`.
+
 ## Development workflow
 
 Detail in [workflow.md](./docs/contributing/workflow.md). The binding rules:
@@ -195,6 +205,16 @@ Detail in [workflow.md](./docs/contributing/workflow.md). The binding rules:
   scratch into the worktree. Stage the specific paths you touched.
 - **Put throwaway artifacts in the gitignored `.scratch/`**, never beside
   production code or tests.
+- **Route existing feature-artifact writes through `d2b-spec-edit`.** A
+  `speckit-*` command may create only its designated absent artifact:
+  `specify` may create the feature directory, initial `spec.md`, and first
+  requirements checklist; `plan` may create absent plan, research, data-model,
+  contracts, or quickstart artifacts; `tasks` may create absent `tasks.md`;
+  `checklist` may create an absent checklist. `clarify` batches answers,
+  `analyze` stays read-only, `implement` reports checkbox changes,
+  `converge` prepares an append, and `autopilot` and memory fold route all
+  feature-directory writes through the editor. Once a file exists, the editor
+  owns every later write inside that feature directory and refuses root escape.
 - **Test eval expressions must resolve the flake via `git+file://$ROOT`**
   (the `d2b_flake_ref` helper), never a bare path. A bare path makes Nix copy
   the entire working tree into the store, including multi-GiB cargo artifacts:
@@ -238,7 +258,7 @@ time-critical hotfixes, which still require a post-fix panel.
 The once-per-wave binding panel is enforced in code by
 `packages/xtask/src/delivery/panel.rs`: ten records, one per role, unanimous,
 all bound to the same snapshot, with provider, model, and reasoning effort
-pinned. There is no override and no partial pass.
+pinned. No override and no partial pass.
 
 ## Changelog and commits
 
@@ -430,6 +450,15 @@ is a warning, not the contract.
   cell for `ADR046-network-005` in
   `docs/specs/ADR-046-resources-network.md` for the shape that survives
   normalization.
+- The dash scanner has one exact admission for inert Caveman provenance:
+  `third_party/caveman/v1.10.0/LICENSE`,
+  `third_party/caveman/v1.10.0/skills/caveman/SKILL.md`, and
+  `third_party/caveman/v1.10.0/skills/caveman-compress/SKILL.md`, only while
+  each blob matches the SHA-256 in
+  `third_party/caveman/v1.10.0/UPSTREAM.json`. A changed blob or extra vendor
+  file loses admission; every other path remains covered by the general rule.
+  No upstream runtime, script, external install, network access, or content
+  upload is permitted.
 - **Don't let a host process hold realm credentials, or treat relay
   identity as local auth (ADR 0032).** Realm relay/session/provider
   credentials, remote node registries, and realm audit belong inside
@@ -484,18 +513,18 @@ The framework declares **exactly three** root-visible units:
 is recorded in
 [ADR 0015](./docs/adr/0015-daemon-only-clean-break.md).
 
-Agents working on the framework MUST treat the following as the
+Agents working on the framework MUST treat these as the
 contract:
 
-- The CLI is the Rust `d2b` binary, full stop. There is no bash
+- The CLI is the Rust `d2b` binary, full stop. No bash
   fallback bridge; `D2B_LEGACY_BASH_OPT_IN`, `D2B_LEGACY_CLI`,
   and `D2B_NATIVE_ONLY` are no-ops.
-- There are no framework-declared per-VM systemd units. The per-VM
+- No framework-declared per-VM systemd units. The per-VM
   lifecycle DAG runs inside `d2bd`; spawned runners
   (cloud-hypervisor, virtiofsd, swtpm, vhost-user-sound, USBIP
   attach) are launched by the broker's `SpawnRunner` op and handed
   back to `d2bd` as pidfds via `OpenPidfd` / `SCM_RIGHTS`.
-- There are no host-singleton framework services
+- No host-singleton framework services
   (`d2b-ch-exporter`, `d2b-otel-host-bridge`,
   `d2b-net-route-preflight`, `d2b-audit-check[.timer]`,
   `microvms.target`). Their work either moved into `d2bd` or

@@ -11,7 +11,7 @@ rule below. The human-facing structure + run instructions live in
 
 **New coverage MUST land as a Layer-1 test (types 1-6 below) unless it
 *provably* requires a real container, a booted VM, a live host, or physical
-hardware.** There is no "type 7/8" escape hatch: the drift gates and meta gates
+hardware.** No "type 7/8" escape hatch: the drift gates and meta gates
 are a **closed set** - do not add a new `tests/*.sh`. If you think you need a
 shell gate, you almost certainly want a nix-unit case (type 1) or a Rust test
 (types 2-5) instead.

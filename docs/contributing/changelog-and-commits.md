@@ -100,7 +100,7 @@ organised **by version**, never by development phase.
   version**:
   - Collapse any per-wave/per-phase substructure into the standard
     Keep-a-Changelog groups (`Added`, `Changed`, `Fixed`,
-    `Deprecated`, `Removed`, `Security`). There are no
+    `Deprecated`, `Removed`, `Security`). No
     `### Added (W6)`-style subsection headers in a released section.
   - Strip every internal process marker - wave/phase/revision/
     follow-up/panel/round/finding tags such as `W3`, `W4-fu`,
@@ -127,7 +127,7 @@ shipping. Do **not** introduce these markers into:
   text, error/observed-state messages, JSON envelope fields);
 - CI workflow names, job names, step names, and test output that a
   contributor sees in GitHub Actions logs. CI labels should describe
-  the behavior being validated (for example, "ADR index coverage
+  the behavior being validated (e.g. "ADR index coverage
   guard" or "host validate dry-run"), not historical phase/process
   codes;
 - every CHANGELOG section, including `[Unreleased]`.
