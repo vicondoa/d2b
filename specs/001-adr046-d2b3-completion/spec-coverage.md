@@ -900,7 +900,7 @@ weakening durability, authorization, or audit, and never by adding a sleep, a ti
 | p95 crash-safe single-resource mutation | <= 10 ms |
 | p95 durable commit to controller handler start | <= 5 ms |
 | p95 ready Process commit to launch-attempt start | <= 20 ms |
-| Whole-process RSS, no baseline subtraction | <= 24,576 KiB (**currently 25,216 - the one failure**) |
+| Whole-process RSS, no baseline subtraction | <= 24,576 KiB (**historical corrected proof and production fixtures passed at their recorded tips; T601 owns the current completed-publication-path measurement on F**) |
 | Aggregate idle RSS | <= 64 MiB |
 | `Provider/system-core` / `Provider/system-minijail` | 22 MiB / 12 MiB |
 | Per-Provider-crate hermetic suite, aggregate process CPU p95 | <= 3 s |
@@ -1014,7 +1014,7 @@ jq -r --arg p routing '.items[] | select(.workItemId | startswith("ADR046-\($p)-
 | FR-037 - FR-038 | Deliver W2-W8; satisfy the six-condition release gate | `validation-and-delivery` §15 | `delivery` |
 | FR-039 - FR-040 | Companion compatibility as a release blocker | **Locally added** - no ADR-046 owner | none |
 | FR-041 - FR-042 | Parity where a successor was promised; explicit retirement otherwise | `current-code-migration-map` | `streamline`, `reuse` |
-| FR-043 | Recovery-point attestation before the irreversible phase | **Locally added** - extends `reset-and-cutover` | `reset` (extends) |
+| FR-043 | Recovery-point attestation before the irreversible phase and before W7 close | **Locally added** - extends `reset-and-cutover` | `reset` (extends) plus T580/T555/T556 |
 | FR-044 - FR-045 | Gated pull-request landing; no intermediate release | `validation-and-delivery` §13 | `delivery` |
 | FR-046 | Generated manifests authoritative over prose | **Locally added** - applies the repository's existing-code-is-canon rule | none |
 | FR-047 | Conformance to the 129 frozen decisions | `decision-register` | `decisions` |
@@ -1035,7 +1035,7 @@ content. The original clarification family and the later approved additions are:
 | Requirement | Origin | Consequence |
 | --- | --- | --- |
 | FR-039, FR-040 | Clarification: companions block the release | Adds a release-gate condition the ADR-046 set does not contain. If it is ever dropped, it must be dropped here, not looked for upstream. |
-| FR-043 | Clarification: recovery-point attestation required | Tightens `reset-and-cutover`. The owning spec permits proceeding past the rollback boundary without attestation; this program does not. |
+| FR-043 | Clarification: recovery-point attestation required | Tightens `reset-and-cutover`. The owning spec permits proceeding past the rollback boundary without attestation; this program does not. T580 owns the candidate-bound primary recovery guard, and T555/T556 refuse panel, seal, or merge when its exact evidence is absent, failed, or stale. |
 | FR-046 | Applies the repository's existing-code-is-canon rule to spec-versus-manifest drift | Governs the recorded W2 destination drift. |
 | FR-061 - FR-065 | Companion contract/artifact, classification, membership, and verification clarifications | Makes the locally added companion release blocker mechanically decidable. |
 | FR-066 - FR-072, FR-074 | Operator-approved Wave 5 production-completion amendment plus analysis remediation | Adds sixteen completion/evidence tasks including T604 and T605 plus T603; requires pre-validator A/P0 gates, validator-only V/B, post-validator B/P gates, the sole editor checkbox transition and progress receipt; assigns downstream contract reconciliation to T595/T599/T220; freezes F at T220; closes T600/T601 evidence to eight identifiers; blocks T219 on that exact candidate; and does not change the 545-item manifest. |
@@ -1054,6 +1054,6 @@ table because it preserves upstream D106 rather than adding a new boundary.
 | SC-014 - SC-018 | FR-020 - FR-024, FR-041, FR-042; `reset-and-cutover` and `streamline` |
 | SC-019 - SC-023, SC-026 | FR-025 - FR-038, FR-044, FR-045; `validation-and-delivery` §4 and §15 |
 | SC-024 | FR-039, FR-040 - locally added |
-| SC-025 | FR-043 - locally added |
+| SC-025 | FR-043 - locally added; candidate-bound enforcement through T580/T555/T556 |
 | SC-027 - SC-029 | FR-025 - FR-029, FR-049, FR-051 - FR-055 |
 | SC-030 - SC-034 | FR-066 - FR-074; T603 receipt/editor-mediated amended-plan resume and T590-T602 plus T604-T605 exact-candidate acceptance |

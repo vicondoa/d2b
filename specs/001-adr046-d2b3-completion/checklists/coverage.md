@@ -168,7 +168,7 @@ side effect:
 
 | Item | Resolution |
 | --- | --- |
-| CHK015 | SC-012 now names the exact budget: whole-process resident memory at or below 24,576 KiB with no baseline subtraction, against the 25,216 KiB current measurement. |
+| CHK015 | SC-012 names the exact budget: whole-process resident memory at or below 24,576 KiB with no baseline subtraction. The corrected proof and production-fixture measurements passed at their recorded tips; T601 owns the current completed-publication-path measurement on F. |
 | CHK016 | FR-030 now enumerates all ten hard targets in a table inside spec.md, rather than leaving them only in plan.md and spec-coverage.md. |
 | CHK020 | FR-017 now defines "actionable next step" as naming at least one concrete operator action - a command, a configuration change, or a named artifact to inspect - and explicitly rejects a bare failure notice or generic retry. |
 
@@ -179,7 +179,7 @@ a number, which is a product decision rather than a defect with an obvious corre
 
 | Decision | Outcome |
 | --- | --- |
-| FR-043 governance | **Program-local**, outside the work-item manifest. Accepted consequence: the W7 seal does not enforce it. Recorded as a tracked deviation in plan.md Complexity Tracking. |
+| FR-043 governance | **Program-local**, outside the work-item manifest. T580 owns the candidate-bound primary recovery guard; T555/T556 make missing, failed, or stale evidence refuse W7 panel, seal, or merge. |
 | CHK014 - SC-002 scale | **Resolved**: a single-Zone declaration of 10 to 20 resources. |
 | Panel model | **`gemini-3.1-pro-preview`**, run as 10 read-only subagent lanes. Requires a spec amendment plus a code change (T581-T584) before any wave can seal. |
 

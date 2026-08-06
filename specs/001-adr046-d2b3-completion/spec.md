@@ -548,7 +548,9 @@ artifacts, complete Story 1, and exercise each desktop companion against it.
   recovery point exists before executing any step past the rollback boundary, MUST refuse
   to proceed past that boundary without the attestation, and MUST record the attestation.
   The preview MUST state the rollback boundary and this obligation before the operator
-  commits to anything.
+  commits to anything. The W7 close path MUST require T580 to be complete and its passing,
+  candidate-bound primary recovery-guard evidence to be current before panel request, seal,
+  or merge, and MUST refuse each boundary when that evidence is absent, failed, or stale.
 - **FR-023**: Each superseded path scheduled for removal MUST be removed only after its
   replacement is integrated and covered by tests, MUST pass an explicit removal proof, and
   MUST be removed in its own change separate from the change that introduced the
@@ -1076,8 +1078,10 @@ Delegation is not omission. Every delegated obligation is enumerated in
 - **SC-011**: The resource plane sustains a 10,000-resource working set and 100 concurrent
   watchers while continuing to meet its readiness, latency, and footprint targets.
 - **SC-012**: The Zone runtime whole-process resident memory stays at or below 24,576 KiB with
-  no baseline subtraction - the target that currently measures 25,216 KiB - met by design
-  change rather than by relaxing durability, authorization, or audit (FR-030).
+  no baseline subtraction, met by design change rather than by relaxing durability,
+  authorization, or audit (FR-030). Corrected disposable-proof and production-fixture
+  measurements passed at their recorded tips; the completed production publication path has
+  no current measurement until T601 measures final candidate F.
 - **SC-013**: A Zone with an empty store becomes ready to serve within half a second.
 
 #### Migration and release
@@ -1092,7 +1096,9 @@ Delegation is not omission. Every delegated obligation is enumerated in
   to a working prior control plane in 100 percent of tested interruption points.
 - **SC-025**: In 100 percent of tested attempts, the cutover refuses to execute any step
   past its rollback boundary until the operator has attested that a host recovery point
-  exists, and every such attestation is recorded.
+  exists, and every such attestation is recorded. The candidate-bound primary recovery guard
+  passes and T580 is complete before W7 panel request, seal, or merge; missing, failed, or
+  stale evidence rejects each boundary.
 - **SC-017**: Zero superseded control-plane units, command surfaces, or configuration
   namespaces scheduled for removal remain in the released tree, verified by their removal
   proofs.

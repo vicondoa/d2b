@@ -79,8 +79,8 @@ start <=5 ms; p95 ready Process commit to launch-attempt start <=20 ms
 
 **Constraints**: Whole-process RSS <=24,576 KiB with **no baseline subtraction** - historical
 production fixtures passed at their recorded tips, but the completed production publication
-path remains unmeasured until the amended `adr046w5` candidate is frozen; aggregate idle RSS
-<=64 MiB; per-component budgets 22 MiB for `Provider/system-core` and 12 MiB for
+path remains unmeasured until T601 measures final candidate F frozen by T220; aggregate idle
+RSS <=64 MiB; per-component budgets 22 MiB for `Provider/system-core` and 12 MiB for
 `Provider/system-minijail`; per-Provider-crate hermetic suite aggregate process-CPU p95 <=3 s
 
 **Scale/Scope**: 531 remaining work items across 53 specs and 7 waves; 27 Provider crates;
@@ -271,10 +271,10 @@ applies without modification.
 | --- | --- | --- | --- | --- |
 | W2 | 2 | 19 | 2, file-disjoint, zero overlap edges | Ready to launch now |
 | W3 | 1 | 4 | 1, strictly serial | Every Provider dossier depends on it |
-| W4 | 5 | 32 | 5 parallel | |
+| W4 | 5 | 32 | 6 parallel | |
 | W5 (`adr046w5` delivery address) | 7 | 146 + 17 local completion/resume tasks | 12 manifest groups + the serialized completion graph below | Store exists; production publication and exact-tip evidence remain; pre-T603 A/P0 gates and post-T603 B/P gates precede resume |
 | W6 | 27 | 257 | 5 file-disjoint families | Largest wave; hermetic suites are independent |
-| W7 | 5 | 73 | 1 closing group | Destructive cutover |
+| W7 | 5 | 73 | 5 parallel | Destructive cutover |
 | W8 | 0 | TBD | friction closure | Terminal; release gate evaluated here |
 
 ### Approved `adr046w5` production-completion graph
@@ -380,7 +380,7 @@ route, watch, audit export, controller, or the exact system-core Provider owners
 | File-disjoint implementation | T590-T594, T605 | Six slices start together from T589. T590-T594 own policy, D106, store/audit persistence, pidfd-bound authenticated routing, and controller ledger files. T591 owns `transaction.rs` after T589 freezes its audit hook; T592 owns the extracted audit journal/export contract, so those parallel slices share no file. Read-only inspection found no competing feature-task owner for `packages/d2b-contract-tests/tests/policy_contracts.rs`. T605 alone owns that guard, `packages/d2b-contracts/src/v3/zone.rs`, both governing normative specifications, `docs/reference/resource-plane-runtime.md`, and compiler-regenerated public/private outputs under `tests/golden/api-surface/`; snapshots are regenerated only by `make api-surface-pin`. It treats the Zone desired schema, its generator, T595/T599 downstream files, and generated spec manifests as read-only. T605 proves only its owned pre-consumer contract; it neither waits for downstream emitters/consumers nor runs the full drift gate. No slice edits `d2bd/src/resource_runtime.rs` or `d2bd/src/lib.rs`. |
 | Serial daemon composition | T595 | Sole writer for `d2bd/src/resource_runtime.rs`, `d2bd/src/lib.rs`, `d2bd/Cargo.toml`, and `nixos-modules/{bundle-zones,host-daemon}.nix`; begins only after all six slices converge. It owns startup ingestion and the bundle-generation change trigger on the existing `d2bd.service`; it adds no unit. |
 | File-disjoint acceptance and docs | T596-T599, T604 | T599 additionally owns the resource mutation/operation-inspection CLI implementation files needed for exact same-ID recovery and reconciles its downstream status consumers with T595's emitter and T605's contract. T604 owns new `packages/d2b-contract-tests/tests/resource_operator_activation.rs`, `packages/d2bd/tests/resource_operator_activation.rs`, and `tests/host-integration/resource-operator-activation.nix`; the other tasks retain their named files. All five tasks may proceed together after T595 and share no file. |
-| Integrator convergence and freeze | T220 | Merges every slice, reconciles T605's version changes into integrator-owned generated spec manifests, checks the T595 emitter and T599 consumers, folds changelog fragments, rebases after the predecessor merge, runs integration, CI, and the full drift gate, opens or updates the PR, and freezes clean final candidate F. It runs no panel or seal operation. Any later content or history change invalidates F and restarts T220 plus T600-T602. |
+| Integrator convergence and freeze | T220 | Merges every slice, reconciles T605's version changes into integrator-owned generated spec manifests, checks the T595 emitter and T599 consumers, folds changelog fragments, and, after W4 seals and merges, rebases onto the updated `v3` and records that exact base for panel-base eligibility. It then runs integration, CI, and the full drift gate, opens or updates the PR, and freezes clean final candidate F. It runs no panel or seal operation. Any later content or history change invalidates F and restarts T220 plus T600-T602. |
 | Frozen-candidate evidence | T600-T601 | Read-only evidence lanes run against F. They write delivery evidence only, not repository files, and emit the exact closed validation identifiers assigned below. They may run together subject to the heavy-gate limit. |
 | Mechanical evidence convergence | T602 | Verifies dependency closure, resume identities, clean F, and the exact evidence-identifier multiset. T219 is blocked until it passes. |
 | Single binding close and merge | T219 | Runs pre-panel read-only checks against F, then the wave's one binding panel, seal, and merge. From panel request through merge, no repository content, candidate, generated output, or evidence identity may change; the merge commit must preserve F's tree. |
@@ -760,7 +760,7 @@ figure was superseded first by the corrected disposable proof and then by produc
 measurements. This approved amendment updates the line without rewriting either historical
 result: the unchanged constraint is `<=24,576 KiB` with no baseline subtraction, the prior
 results remain bound to their recorded commits, and the completed publication path is
-unmeasured until T600 runs against the frozen amended candidate.
+unmeasured until T601 runs against final candidate F frozen by T220.
 
 Eleven W5 work items and two already-`Merged` items name destination crates that do not
 exist, where a committed crate covers the same obligation under a different name. The full
@@ -822,7 +822,7 @@ Those results corrected the claim that production RSS had never been measured. T
 historical because the approved publication path changes the measured owner graph. They do not
 discharge the broader authenticated publication, restart, audit, disconnect, fan-in, and
 compaction matrices. All four items therefore stay `Planned` in the manifest until their complete
-validation obligations are met; T600 must measure the amended candidate and T602 rejects either
+validation obligations are met; T601 must measure the amended candidate and T602 rejects either
 2026-08-03 artifact as current evidence.
 
 The backend commit predates the amendment base, so it is outside this focused Gate 0 review and
@@ -848,5 +848,5 @@ These rows are not Constitution Principle VI deviations.
 
 | Risk | Why Tracked | Guard and Rejected Alternative |
 | --- | --- | --- |
-| FR-043 (recovery-point attestation) is tracked program-local, outside the work-item manifest, so the W7 seal does not enforce it | FR-043 is locally added and **stricter** than `ADR-046-reset-and-cutover`, which permits proceeding past the rollback boundary without attestation. Creating a manifest work item would require amending that member spec, which re-opens its validation and panel evidence and re-triggers Gate 0. | Amending the spec was considered and rejected for cost. The accepted consequence is explicit: **a green W7 seal is not evidence that FR-043 shipped.** T580 and the W7 merge review are the only enforcement. This is the highest-consequence program-local safety gap because FR-043 is the primary control for the accepted daily-driver validation risk; if it slips, it slips silently. |
+| FR-043 (recovery-point attestation) is tracked program-local, outside the work-item manifest, so the manifest census alone cannot enforce it | FR-043 is locally added and **stricter** than `ADR-046-reset-and-cutover`, which permits proceeding past the rollback boundary without attestation. Creating a manifest work item would require amending that member spec, which re-opens its validation and panel evidence and re-triggers Gate 0. | Keep it program-local, but close the safety gap at the W7 exit boundary: T580 emits the exact candidate-bound `recovery-point-attestation` primary recovery-guard record only after the refusal/recording matrix passes; T555 refuses panel request, seal, and merge eligibility if T580 or that record is absent, failed, or stale; T556 repeats the check before PR merge. A manifest-only green result therefore cannot authorize W7 close. |
 | Pipelined dispatch can create successor rework when a predecessor panel finding invalidates in-flight work | Constitution 2.1.0 expressly authorizes implementation of wave N+1 to begin at 5 of 10 wave-N panel returns plus green integration. It is therefore current policy, not a constitution deviation. | Unanimity, roster, seal ordering, and merge ordering remain unchanged. The successor rebases onto the merged predecessor before its own panel, so no panel reviews a tree built on unreviewed contracts. Strict serialization was rejected because it adds idle time without strengthening the exit gate. FR-050 forbids citing rework as grounds to shorten a panel. |
