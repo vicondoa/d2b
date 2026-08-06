@@ -7,6 +7,7 @@
 //! `O_CLOEXEC`, locked with an OFD lock, verified by `F_GETFD`, and is the
 //! single descriptor returned to the Zone runtime.
 
+use std::collections::BTreeMap;
 use std::fs::File;
 use std::io::{Read as _, Write as _};
 use std::os::fd::{AsRawFd, OwnedFd};
@@ -45,6 +46,8 @@ const MARKER_MODE: u32 = 0o640;
 pub enum ZoneStoreError {
     SignedRowMissing,
     SignedRowMismatch,
+    SignedRowUnauthenticated,
+    SignedRowHashMismatch,
     InvalidStorageRow(&'static str),
     PathSafetyViolation(&'static str),
     DatabaseMissing,
@@ -64,6 +67,8 @@ impl std::fmt::Display for ZoneStoreError {
         let reason = match self {
             Self::SignedRowMissing => "signed-storage-row-missing",
             Self::SignedRowMismatch => "signed-storage-row-mismatch",
+            Self::SignedRowUnauthenticated => "signed-storage-row-unauthenticated",
+            Self::SignedRowHashMismatch => "signed-storage-row-hash-mismatch",
             Self::InvalidStorageRow(reason) => reason,
             Self::PathSafetyViolation(reason) => reason,
             Self::DatabaseMissing => "database-missing-after-provision",
@@ -156,6 +161,7 @@ fn resolve_signed_row(
 
     let row_path = bundle_root.join("zones").join(zone).join("storage.json");
     let bytes = read_anchored_file(&row_path)?;
+    verify_signed_row_hash(resolver.bundle.artifact_hashes.as_ref(), zone, &bytes)?;
     let row: ZoneStoreStorageRow =
         serde_json::from_slice(&bytes).map_err(|_| ZoneStoreError::SignedRowMismatch)?;
     if row.zone_store_id.as_str() != requested_id.as_str() {
@@ -240,6 +246,39 @@ fn validate_row_binding(row: &ZoneStoreStorageRow, zone: &str) -> Result<(), Zon
         ));
     }
     Ok(())
+}
+
+fn verify_signed_row_hash(
+    artifact_hashes: Option<&BTreeMap<String, String>>,
+    zone: &str,
+    bytes: &[u8],
+) -> Result<(), ZoneStoreError> {
+    let Some(artifact_hashes) = artifact_hashes else {
+        return Err(ZoneStoreError::SignedRowUnauthenticated);
+    };
+    let key = zone_storage_artifact_hash_key(zone);
+    let Some(expected) = artifact_hashes.get(&key) else {
+        return Err(ZoneStoreError::SignedRowUnauthenticated);
+    };
+    if sha256_hex(bytes) != *expected {
+        return Err(ZoneStoreError::SignedRowHashMismatch);
+    }
+    Ok(())
+}
+
+fn zone_storage_artifact_hash_key(zone: &str) -> String {
+    format!("zones/{zone}/storage.json")
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    let digest: [u8; 32] = Sha256::digest(bytes).into();
+    format!(
+        "sha256:{}",
+        digest
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>()
+    )
 }
 
 fn open_resolved_row(row: &ResolvedZoneStoreRow) -> Result<ZoneStoreOutcome, ZoneStoreError> {
@@ -841,6 +880,42 @@ mod tests {
         assert_eq!(
             validate_row_binding(&row, "local-root"),
             Err(ZoneStoreError::SignedRowMismatch)
+        );
+    }
+
+    #[test]
+    fn signed_row_requires_authenticated_hash_entry() {
+        let bytes = serde_json::to_vec(&signed_row()).expect("signed row bytes");
+        assert_eq!(
+            verify_signed_row_hash(None, "local-root", &bytes),
+            Err(ZoneStoreError::SignedRowUnauthenticated)
+        );
+        let empty = BTreeMap::new();
+        assert_eq!(
+            verify_signed_row_hash(Some(&empty), "local-root", &bytes),
+            Err(ZoneStoreError::SignedRowUnauthenticated)
+        );
+    }
+
+    #[test]
+    fn signed_row_hash_mismatch_is_rejected() {
+        let bytes = serde_json::to_vec(&signed_row()).expect("signed row bytes");
+        let mut hashes = BTreeMap::new();
+        hashes.insert(
+            zone_storage_artifact_hash_key("local-root"),
+            "sha256:0000000000000000000000000000000000000000000000000000000000000000".to_owned(),
+        );
+        assert_eq!(
+            verify_signed_row_hash(Some(&hashes), "local-root", &bytes),
+            Err(ZoneStoreError::SignedRowHashMismatch)
+        );
+        hashes.insert(
+            zone_storage_artifact_hash_key("local-root"),
+            sha256_hex(&bytes),
+        );
+        assert_eq!(
+            verify_signed_row_hash(Some(&hashes), "local-root", &bytes),
+            Ok(())
         );
     }
 

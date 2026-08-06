@@ -373,6 +373,13 @@ pub struct DaemonConfig {
     pub server_version: String,
     #[serde(default = "default_accepted_version_range")]
     pub accepted_client_version_range: String,
+    /// Whether this daemon instance may publish the v3 Zone resource plane.
+    ///
+    /// The host-primary daemon owns the resource plane. Per-realm auxiliary
+    /// daemons keep their legacy lifecycle socket surface but must not open
+    /// every Zone store from the shared host bundle.
+    #[serde(default = "default_enable_resource_plane")]
+    pub enable_resource_plane: bool,
     #[serde(default)]
     pub artifacts: ArtifactPaths,
     #[serde(default = "default_gateway_config_path")]
@@ -406,6 +413,10 @@ fn default_live_activation_timeout_seconds() -> u64 {
     GUEST_SYSTEM_ACTIVATION_TIMEOUT.as_secs()
 }
 
+fn default_enable_resource_plane() -> bool {
+    true
+}
+
 fn default_gateway_config_path() -> PathBuf {
     PathBuf::from(DEFAULT_GATEWAY_CONFIG_PATH)
 }
@@ -435,6 +446,7 @@ impl Default for DaemonConfig {
             admin_users: Vec::new(),
             server_version: default_server_version(),
             accepted_client_version_range: default_accepted_version_range(),
+            enable_resource_plane: default_enable_resource_plane(),
             artifacts: ArtifactPaths::default(),
             gateway_config_path: default_gateway_config_path(),
             realm_controllers_config_path: default_realm_controllers_config_path(),
@@ -1184,6 +1196,7 @@ mod config_loading_tests {
             config.realm_identity_config_path,
             PathBuf::from(DEFAULT_REALM_IDENTITY_CONFIG_PATH)
         );
+        assert!(config.enable_resource_plane);
     }
 
     #[test]
@@ -1200,6 +1213,7 @@ mod config_loading_tests {
               "daemonUser": "d2bd",
               "daemonGroup": "d2bd",
               "publicSocketGroup": "d2b",
+              "enableResourcePlane": false,
               "realmControllersConfigPath": "/etc/d2b/custom-realm-controllers.json",
               "realmIdentityConfigPath": "/etc/d2b/custom-realm-identity.json"
             }"#,
@@ -1214,6 +1228,7 @@ mod config_loading_tests {
             config.realm_identity_config_path,
             PathBuf::from("/etc/d2b/custom-realm-identity.json")
         );
+        assert!(!config.enable_resource_plane);
 
         fs::write(
             &config_path,
@@ -1690,6 +1705,10 @@ pub async fn serve(options: ServeOptions) -> Result<(), TypedError> {
                 tracing::error!(
                     error,
                     "trusted bundle did not populate the Zone authority index; Zone coordination will fail closed",
+                );
+            } else if !state.config.enable_resource_plane {
+                tracing::info!(
+                    "resource plane disabled by daemon config; skipping Zone runtime publication",
                 );
             } else {
                 restore_configuration_staging_on_startup(&state);

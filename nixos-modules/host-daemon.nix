@@ -216,6 +216,7 @@ EOF
     adminUsers = cfg.site.adminUsers;
     serverVersion = "0.4.0";
     acceptedClientVersionRange = ">=0.4.0, <0.5.0";
+    enableResourcePlane = true;
     gatewayConfigPath = "/etc/d2b/gateway.json";
     realmControllersConfigPath = "/etc/d2b/realm-controllers.json";
     realmIdentityConfigPath = "/etc/d2b/realm-identity.json";
@@ -245,6 +246,7 @@ EOF
     adminUsers = cfg.site.adminUsers;
     serverVersion = "0.4.0";
     acceptedClientVersionRange = ">=0.4.0, <0.5.0";
+    enableResourcePlane = false;
     gatewayConfigPath = "/etc/d2b/gateway.json";
     realmControllersConfigPath = "/etc/d2b/realm-controllers.json";
     realmIdentityConfigPath = "/etc/d2b/realm-identity.json";
