@@ -223,11 +223,22 @@
           pkgs.pkgsStatic.rustPlatform.buildRustPackage {
             pname = "d2b-guest-shell-runner-static";
             version = "0.0.0-bootstrap";
-            src = ./packages/d2b-guest-shell-runner;
+            src = rustPackagesSrc;
+            sourceRoot = "d2b-rust-src/packages";
             cargoLock = {
-              lockFile = ./packages/d2b-guest-shell-runner/Cargo.lock;
+              lockFile = ./packages/Cargo.lock;
+              outputHashes."wl-proxy-0.1.2" =
+                "sha256-1yO1zgzSyzQ2DnDMpVxcnI5BsTNvXfzIUS+RNlPj4A8=";
             };
-            cargoBuildFlags = [ "--features" "real-libshpool" ];
+            cargoBuildFlags = [
+              "--package"
+              "d2b-guest-shell-runner"
+              "--bin"
+              "d2b-guest-shell-runner"
+              "--no-default-features"
+              "--features"
+              "real-libshpool"
+            ];
             doCheck = false;
             RUSTC_WRAPPER = "";
             SCCACHE_DIR = "";
