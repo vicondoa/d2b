@@ -762,33 +762,33 @@ fn parse_list_request(request: &Value) -> Result<ParsedListRequest, ResourceRunt
             );
         }
     }
-    if let Some(selector) = request.get("labelSelector") {
-        if !selector.is_null() {
-            let selector = selector
-                .as_str()
+    if let Some(selector) = request.get("labelSelector")
+        && !selector.is_null()
+    {
+        let selector = selector
+            .as_str()
+            .ok_or(ResourceRuntimeError::RequestInvalid)?;
+        if !selector.is_empty() {
+            let (field, value) = selector
+                .split_once('=')
                 .ok_or(ResourceRuntimeError::RequestInvalid)?;
-            if !selector.is_empty() {
-                let (field, value) = selector
-                    .split_once('=')
-                    .ok_or(ResourceRuntimeError::RequestInvalid)?;
-                if filters.len() >= MAX_LIST_FILTERS {
-                    return Err(ResourceRuntimeError::RequestInvalid);
-                }
-                let filter = typed_filter(field, vec![value.to_owned()])?;
-                if field == "metadata.name" {
-                    resource_names.extend(
-                        filter
-                            .values
-                            .iter()
-                            .map(|value| {
-                                ResourceName::parse(value)
-                                    .map_err(|_| ResourceRuntimeError::RequestInvalid)
-                            })
-                            .collect::<Result<Vec<_>, _>>()?,
-                    );
-                }
-                filters.push(filter);
+            if filters.len() >= MAX_LIST_FILTERS {
+                return Err(ResourceRuntimeError::RequestInvalid);
             }
+            let filter = typed_filter(field, vec![value.to_owned()])?;
+            if field == "metadata.name" {
+                resource_names.extend(
+                    filter
+                        .values
+                        .iter()
+                        .map(|value| {
+                            ResourceName::parse(value)
+                                .map_err(|_| ResourceRuntimeError::RequestInvalid)
+                        })
+                        .collect::<Result<Vec<_>, _>>()?,
+                );
+            }
+            filters.push(filter);
         }
     }
     if let Some(domain) = request.get("domain").and_then(Value::as_str)
@@ -797,29 +797,30 @@ fn parse_list_request(request: &Value) -> Result<ParsedListRequest, ResourceRunt
     {
         return Err(ResourceRuntimeError::RequestInvalid);
     }
-    if let Some(execution_ref) = request.get("executionRef") {
-        if !execution_ref.is_null() {
-            let execution_ref = execution_ref
-                .as_str()
-                .ok_or(ResourceRuntimeError::RequestInvalid)?;
-            if !execution_ref.is_empty() {
-                ResourceRef::parse(execution_ref)
-                    .map_err(|_| ResourceRuntimeError::RequestInvalid)?;
-                return Err(ResourceRuntimeError::CapabilityUnavailable);
-            }
+    if let Some(execution_ref) = request.get("executionRef")
+        && !execution_ref.is_null()
+    {
+        let execution_ref = execution_ref
+            .as_str()
+            .ok_or(ResourceRuntimeError::RequestInvalid)?;
+        if !execution_ref.is_empty() {
+            ResourceRef::parse(execution_ref).map_err(|_| ResourceRuntimeError::RequestInvalid)?;
+            return Err(ResourceRuntimeError::CapabilityUnavailable);
         }
     }
     optional_capability_string(request, "domain", 16)?;
     optional_capability_string(request, "phase", 128)?;
-    if let Some(schema_version) = request.get("schemaVersion") {
-        if !schema_version.is_null() && schema_version.as_u64() != Some(1) {
-            return Err(ResourceRuntimeError::RequestInvalid);
-        }
+    if let Some(schema_version) = request.get("schemaVersion")
+        && !schema_version.is_null()
+        && schema_version.as_u64() != Some(1)
+    {
+        return Err(ResourceRuntimeError::RequestInvalid);
     }
-    if let Some(session_verb) = request.get("sessionVerb") {
-        if !session_verb.is_null() && session_verb.as_str() != Some("Invoke") {
-            return Err(ResourceRuntimeError::CapabilityUnavailable);
-        }
+    if let Some(session_verb) = request.get("sessionVerb")
+        && !session_verb.is_null()
+        && session_verb.as_str() != Some("Invoke")
+    {
+        return Err(ResourceRuntimeError::CapabilityUnavailable);
     }
     if request.get("updates").is_some_and(|value| !value.is_null()) {
         let updates = request
