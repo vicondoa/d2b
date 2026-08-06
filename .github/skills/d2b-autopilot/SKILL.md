@@ -23,15 +23,21 @@ Every dispatch sets all four columns explicitly. An omitted `reasoning_effort`
 silently runs the lane at the model default, because a subagent does **not**
 inherit the session's effort.
 
-| Role | `agent_type` | `model` | `reasoning_effort` | `context_tier` |
-|---|---|---|---|---|
-| architect | `d2b-architect` | `gpt-5.6-sol` | `xhigh` | `long_context` |
-| implementer | `d2b-implementer` | `gpt-5.6-luna` | `max` | `long_context` |
-| integrator | `d2b-integrator` | `gpt-5.6-luna` | `max` | `long_context` |
+| Role | `agent_type` | `model` | `reasoning_effort` | `context_tier` | `communication` |
+|---|---|---|---|---|---|
+| architect | `d2b-architect` | `gpt-5.6-sol` | `xhigh` | `long_context` | `normal` |
+| implementer | `d2b-implementer` | `gpt-5.6-luna` | `max` | `long_context` | `caveman-full-optional` |
+| integrator | `d2b-integrator` | `gpt-5.6-luna` | `max` | `long_context` | `caveman-full-optional` |
 
 The ten panel seats have their own table in `.github/skills/d2b-panel-round/SKILL.md`.
 `scripts/copilot/check-bindings.mjs` validates both against the agent files
 and against the xtask policy constants.
+
+<!-- D2B-CAVEMAN-DISPATCH: caveman-full-optional -->
+The `communication` value is a dispatch parameter, not a style requirement.
+Pass an operator's explicit `normal` or `off` request unchanged; either
+overrides the optional `caveman-full-optional` default. Do not score output
+for brevity and do not claim a lane used compressed wording.
 
 ## Preconditions
 

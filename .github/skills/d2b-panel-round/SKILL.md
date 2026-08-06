@@ -23,18 +23,18 @@ Usage:
 explicitly. It is committed here so it is diffable and so a reader can check
 it against the policy constants in `packages/xtask/src/delivery/model.rs`.
 
-| Seat | `agent_type` | `model` | `reasoning_effort` | `context_tier` |
-|---|---|---|---|---|
-| software | `panel-software` | `gpt-5.6-sol` | `xhigh` | `default` |
-| test | `panel-test` | `gpt-5.6-sol` | `xhigh` | `default` |
-| nixos | `panel-nixos` | `gpt-5.6-sol` | `xhigh` | `default` |
-| networking | `panel-networking` | `gpt-5.6-sol` | `xhigh` | `default` |
-| security | `panel-security` | `gpt-5.6-sol` | `xhigh` | `default` |
-| rust | `panel-rust` | `gpt-5.6-sol` | `xhigh` | `default` |
-| product | `panel-product` | `gpt-5.6-sol` | `xhigh` | `default` |
-| docs | `panel-docs` | `gpt-5.6-sol` | `xhigh` | `default` |
-| observability | `panel-observability` | `gpt-5.6-sol` | `xhigh` | `default` |
-| kernel | `panel-kernel` | `gpt-5.6-sol` | `xhigh` | `default` |
+| Seat | `agent_type` | `model` | `reasoning_effort` | `context_tier` | `communication` |
+|---|---|---|---|---|---|
+| software | `panel-software` | `gpt-5.6-sol` | `xhigh` | `default` | `caveman-full-optional` |
+| test | `panel-test` | `gpt-5.6-sol` | `xhigh` | `default` | `caveman-full-optional` |
+| nixos | `panel-nixos` | `gpt-5.6-sol` | `xhigh` | `default` | `caveman-full-optional` |
+| networking | `panel-networking` | `gpt-5.6-sol` | `xhigh` | `default` | `caveman-full-optional` |
+| security | `panel-security` | `gpt-5.6-sol` | `xhigh` | `default` | `caveman-full-optional` |
+| rust | `panel-rust` | `gpt-5.6-sol` | `xhigh` | `default` | `caveman-full-optional` |
+| product | `panel-product` | `gpt-5.6-sol` | `xhigh` | `default` | `caveman-full-optional` |
+| docs | `panel-docs` | `gpt-5.6-sol` | `xhigh` | `default` | `caveman-full-optional` |
+| observability | `panel-observability` | `gpt-5.6-sol` | `xhigh` | `default` | `caveman-full-optional` |
+| kernel | `panel-kernel` | `gpt-5.6-sol` | `xhigh` | `default` | `caveman-full-optional` |
 
 **Never omit a parameter.** A subagent does not inherit the session's
 reasoning effort. An omitted `reasoning_effort` silently runs the lane at the
@@ -49,6 +49,12 @@ never mix one member of the legacy pair with the current binding.
 
 `scripts/copilot/check-bindings.mjs` validates this table against the agent
 files and against the xtask policy constants. Run it after editing either.
+
+<!-- D2B-CAVEMAN-DISPATCH: caveman-full-optional -->
+Resolve the caller's communication request before dispatch. Pass explicit
+`normal` or `off` unchanged; either overrides the optional
+`caveman-full-optional` default. Do not score brevity, and do not add a claim
+that a reviewer used compressed wording to a verdict or report.
 
 ## Procedure
 

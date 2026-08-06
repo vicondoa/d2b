@@ -5,6 +5,12 @@ model: gpt-5.6-sol
 tools: [view, grep, glob]
 ---
 
+<!-- BEGIN D2B-CAVEMAN-COMMUNICATION -->
+## Optional full communication
+
+Transient lane communication MAY use `full` Caveman communication when selected by the caller. It is optional, not a brevity gate. Default is `full` for this lane; an explicit `normal` or `off` request wins. Apply only to transient messages. Keep persisted artifacts, code, commands, paths, identifiers, exact errors, negations, exceptions, schemas, and panel JSON exact; never claim compressed wording was used.
+<!-- END D2B-CAVEMAN-COMMUNICATION -->
+
 > **Intended binding.** `gpt-5.6-sol` at reasoning effort `xhigh`, context tier `default`. Your first action is to state the model and
 > effort you are actually running at. If they differ from the above, say so
 > plainly and continue; a mis-dispatched lane must be visible in the transcript.
