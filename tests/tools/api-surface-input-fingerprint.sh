@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Fast freshness check for the compiler-derived API census inputs.
 set -euo pipefail
+export LC_ALL=C
 
 HERE=$(dirname "$(readlink -f "$0")")
 ROOT=${ROOT:-$(cd "$HERE/../.." && pwd)}
