@@ -531,10 +531,12 @@ closure, protocol, output NAR, executable, static ELF, and native-system
 hashes. Missing, wrong-output, copied, symlinked, dynamic, runfiles, and
 worktree paths refuse.
 
-The supervisor clears inherited signal masks and dispositions, ignores
-`SIGPIPE` so a closed status reader becomes typed `EPIPE`, restores `SIGCHLD`
-to waitable `SIG_DFL` without `SA_NOCLDWAIT`, creates one nonblocking
-close-on-exec child exec-error pipe, and forks exactly once. The
+The supervisor first blocks the complete managed signal set. While it remains
+blocked, the helper installs default dispositions, ignored `SIGPIPE`, waitable
+`SIGCHLD`, and synchronous consumption; only then does it establish the final
+mask. Pending-at-entry and normalization-time `SIGTERM` are consumed into the
+supervisor-owned pre-`READY` termination path. It creates one nonblocking
+close-on-exec child exec-error pipe and forks exactly once. The
 child establishes the target group, resets signal state, installs declared
 stdio, sets the executable fd CLOEXEC, closes supervisor-only descriptors, and
 calls `execveat(private_fd, "", argv, envp, AT_EMPTY_PATH)`. Failure writes one
@@ -542,13 +544,17 @@ fixed record with bounded `EINTR`/`EAGAIN`/short-write handling under the
 absolute deadline, then `_exit`s. There is no target path, reopen,
 `/proc/self/fd`, `fexecve`, or fallback.
 
-The supervisor emits `READY`, interprets only empty close-on-exec EOF as exec
-success, emits `EXECUTED`, remains alive, forwards the fixed termination-signal
-allowlist, waits and reaps, emits terminal status, and mirrors the exact target
-status. Case expiry and external `SIGTERM`, including with no case deadline,
-both run the complete fixed TERM/grace/unconditional-KILL sequence. Every
-exec-error and status operation has exact bounded
-`EINTR`/`EAGAIN`/short/partial/overlong/held-writer behavior under one original
+The supervisor emits framed `READY`, interprets only empty close-on-exec EOF
+as exec success, emits framed `EXECUTED`, remains alive, forwards the fixed
+termination-signal allowlist, waits and reaps, emits framed terminal status,
+and mirrors the exact target status. Case expiry and external `SIGTERM`,
+including with no case deadline, both run the complete fixed
+TERM/grace/unconditional-KILL sequence. Exec-error stays a single-record
+EOF/record/one-overlong-byte protocol. Status uses fixed magic, version, type,
+and length with a bounded stateful decoder that retains fragmented and
+coalesced frames and rejects malformed, duplicate, or out-of-order input
+without a one-byte probe. Every operation has exact bounded
+`EINTR`/`EAGAIN`/short/partial/held-writer behavior under its original
 absolute deadline. Complete
 Rust-parent and C-supervisor stage-error and owner/closure tables cover every
 path. Tests distinguish fast same-status target exit from helper crash or EOF
@@ -565,17 +571,24 @@ Every governed action already passes through the exact patched Bazel Linux
 sandbox, which creates a fresh PID namespace and a PID-1 monitor outside the
 action command tree. The patch makes that monitor the abnormal-teardown owner:
 on setup/action exit, including Rust-parent or supervisor crash, it
-namespace-kills every other member, reaps adopted children through `ECHILD`
-under one fixed 10,000 ms monotonic ceiling, then exits so the kernel destroys
-any remainder and outer `linux-sandbox` reaps it. Rust closes and fails the
-action; it never signals a numeric PID or PGID.
+namespace-kills every other member and makes nonblocking reap progress. One
+fixed 10,000 ms ceiling bounds only userspace escalation and the
+close-or-quarantine decision. If PID 1 is not observably reaped, outer
+`linux-sandbox` remains the wait owner and enters typed
+`pending-kernel-cleanup`; sandbox and outputs cannot succeed or be reused.
+Eventual consuming reap releases quarantine but never makes the action
+successful. Rust closes and fails the action; it never signals a numeric PID
+or PGID.
 
 Cargo tests inject transport, process, and containment mocks. They do not
 prove the kernel boundary. A real patched-sandbox integration crashes the
 helper before `READY`, after `READY`, after `EXECUTED`, during grace, and with
-direct and double-forked long-lived descendants. PID-namespace removal,
-teardown-patch removal, ceiling change, and strategy fallback are separate
-failing mutations.
+direct and double-forked long-lived descendants. A deterministic
+beyond-ceiling plant proves pending cleanup, owned quarantine, no false reap,
+no success/reuse, and eventual consuming reap. PID-namespace removal,
+teardown-patch removal, ceiling/quarantine changes, false reap,
+success-after-quarantine, reuse, and strategy fallback are separate failing
+mutations.
 
 On expiry, the independently timed full grace contains repeated non-consuming
 nonblocking `waitid(EXITED|NOWAIT|NOHANG)` observations. They are
@@ -953,6 +966,14 @@ artifact and validator failures name repository-relative policy rows and
 digests only. They never emit `$!`, absolute or Nix store paths, raw cursors,
 descriptors, workflow attempt handles, or opaque API handles.
 
+Containment qualification uses exactly seven closed stage results. Each binds
+closed supervisor recovery, userspace escalation, cleanup, and quarantine
+values plus sandbox patch, canonical monitor identity, pending-observation,
+and result SHA-256 digests. Raw PIDs, descriptors, paths, process output, and
+opaque identities are prohibited. The typed validator requires every result
+and every omission, duplicate, class, digest, quarantine, false-reap,
+success/reuse, and forbidden-field mutation result.
+
 The Spec 003 validator first censuses every Markdown unchecked task-list form,
 including unordered, ordered-dot, ordered-paren, indented, and blockquoted
 variants. Only the exact unindented `- [ ] TNNN` form enters canonical
@@ -961,9 +982,12 @@ with the independent exact census stored in `tasks.md`. It then accepts only
 literal normalized repository-relative ownership and validates record shape,
 dependency order, adjacency, cycles, and concurrent ownership.
 
-Its self-test corpus has one positive and forty-four isolated negative
-fixtures, including whole-task omission, empty input, every noncanonical list
-class, and every remaining validation branch. Every negative compares the
+Its self-test corpus has one positive and forty-seven isolated negative
+fixtures, preserving the prior forty-four and adding
+actual-task-omitted-from-census plus malformed and unbalanced census-marker
+cases. They include
+whole-task omission, empty input, every noncanonical list class, and every
+remaining validation branch. Every negative compares the
 complete rendered stderr byte-for-byte with an independent literal. A
 diagnostic contains only fixed code, fixed repository-relative source, a
 bounded 1-based numeric record/line locator or closed `none`/`overflow`
@@ -975,7 +999,9 @@ dependency ID, owned path, contents, count, operator-derived value, or raw OS
 text. Every code has one exact remedy and rerun. The injectable entrypoint
 supplies every fixture's complete byte comparison. Separate actual
 subprocesses prove unreadable-source status 1 and unsupported-argument status
-2 with empty stdout and byte-exact stderr. This remains a planning tool under
+2 with empty stdout and byte-exact stderr. Actual temp-dir, path, open3, and
+subprocess setup failures run through the guard and emit only the fixed
+self-test-contract diagnostic. This remains a planning tool under
 the specification directory and is not a repository gate.
 
 ## Decision 23: Disclose retained hybrid execution

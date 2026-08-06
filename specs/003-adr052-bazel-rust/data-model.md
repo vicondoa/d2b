@@ -451,21 +451,21 @@ status-pipe, or auxiliary descriptor.
 | `HelperIdentity` | Exact immutable Nix path plus C source, derivation dependency, output NAR, executable, protocol, and native-system hashes validate before spawn; missing/wrong/rebound output closes the provider and creates no child. |
 | `Mapped` | Parent owns the provider fd, protocol reader/writer ends, declared stdio, and mapping configuration. The pinned safe mapper uses fixed private fds outside 0/1/2; collision or preparation failure closes every private end and the provider without changing stdio. |
 | `Spawned` | `std::process::Child` becomes the sole supervisor wait owner. Parent immediately closes its mapped provider and supervisor-side protocol copies; spawn failure creates no child and RAII closes every fd. |
-| `Ready` | Parent accepts exactly one complete `READY` record. EOF, helper exit, timeout, short, overlong, malformed, duplicate, or unknown status is a typed helper failure, independent of process exit status. |
-| `Executed` | Parent accepts exactly one complete `EXECUTED` after `READY`. A fast target exit remains distinguishable because the supervisor stays alive and reports terminal state; helper crash or EOF before this record is never target status. |
-| `Terminal` | Parent accepts one fixed reaped-target record, then waits for the supervisor and requires its normal or signaled status to match the record exactly. |
+| `Ready` | Parent's stateful framed decoder accepts exactly `D2BS`, version 1, type `READY`, and zero payload. Fragmented input is retained; coalesced later frames remain buffered. EOF, helper exit, timeout, malformed header, wrong length, overflow, duplicate, or out-of-order status is typed failure independent of process status. |
+| `Executed` | The same decoder accepts version-1 zero-length `EXECUTED` only after `READY`. A fast target exit remains distinguishable because a coalesced terminal stays buffered; helper crash or EOF before this frame is never target status. |
+| `Terminal` | Decoder accepts one version-1 `EXITED` or `SIGNALED` frame with its exact one-byte bounded payload, rejects any retained or later trailing frame or byte, drains to EOF, then waits for the supervisor and requires exact status equality. No status-stream one-byte overlong probe exists. |
 | `Cleaned` | The successful path closes remaining protocol fds once and reaps the supervisor. A post-spawn failure closes owned fds and returns the Bazel action nonzero without signaling a numeric PID/PGID; the sandbox owns survivors. Injected close/read/wait failures preserve the first typed cause plus cleanup stage without raw OS text. |
 
 | Stage | C supervisor ownership, transition, and failure |
 | --- | --- |
 | `Adopted` | Supervisor exclusively owns the mapped executable fd, declared stdio, and Rust status writer; wrong identity or absent descriptor emits a typed failure and closes all owned fds. |
-| `Normalized` | The single thread clears inherited masks/dispositions, ignores `SIGPIPE`, restores waitable default `SIGCHLD` without `SA_NOCLDWAIT`, installs only fixed handlers, and blocks only the synchronously consumed set. The child restores an empty mask and every catchable disposition to default; normalization failure emits a typed failure before fork. |
+| `Normalized` | The single thread first blocks the complete managed set. While blocked it installs default dispositions, ignored `SIGPIPE`, waitable default `SIGCHLD`, and fixed synchronous consumption, then establishes the final mask. Pending or normalization-time `SIGTERM` is consumed into the supervisor-owned pre-`READY` termination path. The child restores an empty mask and every catchable disposition to default; normalization failure emits a typed failure before fork. |
 | `ExecPipe` | Supervisor creates exactly one `O_CLOEXEC|O_NONBLOCK` exec-error pipe and owns both ends; pipe failure emits a typed failure and forks no child. |
 | `Forked` | Exactly one fork creates the target child. Supervisor closes the writer, owns the reader and child pid, emits `READY`, and must kill and reap on every later failure. |
 | `ChildSetup` | Child establishes the target group, resets mask/dispositions, installs 0/1/2, sets the executable fd CLOEXEC, and closes supervisor-only fds. A stage failure writes one fixed exec-error record under the absolute deadline and `_exit`s. |
-| `ExecResult` | Supervisor reads exact empty EOF as exec success or one complete fixed error record using exact `EINTR`/`EAGAIN`/short/partial/overlong loops under one original absolute deadline. A status writer maps closed-reader `EPIPE`; held-open-writer, timeout, or unknown data is typed failure; only empty exec-error EOF emits `EXECUTED`. |
+| `ExecResult` | Supervisor reads exact empty EOF as exec success or one complete fixed error record using exact `EINTR`/`EAGAIN`/short/partial/overlong loops under one original absolute deadline. The single-record exec-error reader alone uses one additional overlong byte. Status uses the separate framed stream and fixed bounded writer. Closed-reader `EPIPE`, held-open writer, timeout, or unknown data is typed failure; only empty exec-error EOF emits framed `EXECUTED`. |
 | `Supervising` | After `EXECUTED`, supervisor remains alive, forwards only `SIGHUP`, `SIGINT`, `SIGTERM`, and `SIGQUIT` to the target group, and applies the complete fixed TERM/grace/unconditional-KILL policy on case expiry or external `SIGTERM`, including with no case deadline. |
-| `Reaped` | Supervisor waits and reaps the direct target, emits the fixed terminal record, closes the Rust status writer, and mirrors the exact target normal exit or terminating signal. A mirror, signal, wait, or reap failure is typed and cannot be reported as target status. |
+| `Reaped` | Supervisor waits and reaps the direct target, emits framed `EXITED` or `SIGNALED`, closes the Rust status writer, and mirrors the exact target normal exit or terminating signal. A mirror, signal, wait, or reap failure is typed and cannot be reported as target status. |
 | `Closed` | Every non-exec and post-exec path closes each owned fd once and reaps every created child. The first operation failure and any cleanup failure retain distinct fixed stages. |
 
 | Stage | Patched sandbox ownership, transition, and failure |
@@ -473,8 +473,9 @@ status-pipe, or auxiliary descriptor.
 | `NamespaceCreated` | Outer `linux-sandbox` owns one fresh `CLONE_NEWPID` monitor and synchronization pipes; failure reaps any created monitor and execs no action. |
 | `MonitorReady` | Namespace PID 1 remains outside the action command tree, adopts every orphan, owns abnormal namespace kill/reap, and is wait-owned by outer `linux-sandbox`. |
 | `ActionRunning` | The supervisor owns normal target TERM/grace/KILL/reap. Abnormal setup/action exit, including parent or supervisor crash, transitions once to `Aborting`. |
-| `Aborting` | PID 1 namespace-kills every other member and reaps through `ECHILD` under one fixed 10,000 ms monotonic ceiling. Kill, reap, and ceiling failures are distinct typed stages. |
-| `Closed` | PID 1 exits so the kernel destroys any remainder; outer `linux-sandbox` reaps it. No host PID, PID file, cgroup, or host process group is a fallback. |
+| `Aborting` | PID 1 namespace-kills every other member and makes nonblocking reap progress. One fixed 10,000 ms ceiling bounds userspace TERM/KILL/monitor escalation and the close-or-quarantine decision only. Kill, reap, and ceiling failures are distinct typed stages. |
+| `PendingKernelCleanup` | If a consuming wait has not proved namespace members and PID 1 reaped at the userspace ceiling, outer `linux-sandbox` remains the wait owner and records `pending-kernel-cleanup`. Sandbox and outputs are quarantined; success and reuse are prohibited while nonblocking observation continues. |
+| `Closed` | A consuming wait proved PID 1 reaped. Cleanup is `complete` or `complete-after-quarantine`; a quarantined action remains failed. No host PID, PID file, cgroup, or host process group is a fallback. |
 
 The public API census is primary. Focused rustdoc `compile_fail` examples prove
 downstream construction, descriptor access/extraction, trait coercion,
@@ -485,6 +486,53 @@ Strict result, execution-manifest, JUnit-parent, and cleanup entities are a
 different path variant and retain
 `RESOLVE_BENEATH|RESOLVE_NO_SYMLINKS|RESOLVE_NO_MAGICLINKS`. Reintroducing
 `RESOLVE_BENEATH` on a provider open is a required invalid mutation.
+
+## PID-Namespace Containment Qualification Result
+
+Qualification carries exactly one bounded result for each closed stage:
+
+1. `crash-before-ready`;
+2. `crash-after-ready`;
+3. `crash-after-executed`;
+4. `crash-during-grace`;
+5. `direct-long-lived-descendant`;
+6. `double-forked-long-lived-descendant`;
+7. `beyond-ceiling-pending-cleanup`.
+
+| Field | Rule |
+| --- | --- |
+| `stage` | One value from the seven-entry closed census above, occurring exactly once. |
+| `supervisorRecoveryClass` | Closed `not-yet-ready`, `ready-not-executed`, `executed`, `grace-active`, `descendant-only`, or `pending-kernel-cleanup`; each stage has one permitted class. |
+| `userspaceEscalationResult` | Closed `kill-monitor-complete` or `ceiling-entered-quarantine`. The fixed ceiling says nothing about kernel task exit. |
+| `cleanupResult` | Closed `complete` or `complete-after-quarantine`; neither may be recorded until a consuming wait proves PID 1 reaped. |
+| `quarantineResult` | Closed `not-entered` or `entered-and-released-after-consuming-reap`. The beyond-ceiling stage must use the latter and bind its prior pending observation. |
+| `sandboxPatchSha256` | Exactly 64 lowercase hexadecimal characters matching the reviewed patch identity. |
+| `sandboxMonitorIdentitySha256` | Exactly 64 lowercase hexadecimal characters over the canonical monitor source, executable, protocol-version, and patch-digest tuple; no free-form or opaque monitor identity exists. |
+| `pendingObservationSha256` | `none` for ordinary stages; otherwise exactly 64 lowercase hexadecimal characters binding the typed pending transition, owned wait state, quarantine entry, no-success/no-reuse results, and absence of a reaped claim. |
+| `resultSha256` | Exactly 64 lowercase hexadecimal characters over the closed fields and referenced plant verdict. |
+
+The permitted tuples are exact:
+
+| Stage | `supervisorRecoveryClass` | `userspaceEscalationResult` | `cleanupResult` | `quarantineResult` |
+| --- | --- | --- | --- | --- |
+| `crash-before-ready` | `not-yet-ready` | `kill-monitor-complete` | `complete` | `not-entered` |
+| `crash-after-ready` | `ready-not-executed` | `kill-monitor-complete` | `complete` | `not-entered` |
+| `crash-after-executed` | `executed` | `kill-monitor-complete` | `complete` | `not-entered` |
+| `crash-during-grace` | `grace-active` | `kill-monitor-complete` | `complete` | `not-entered` |
+| `direct-long-lived-descendant` | `descendant-only` | `kill-monitor-complete` | `complete` | `not-entered` |
+| `double-forked-long-lived-descendant` | `descendant-only` | `kill-monitor-complete` | `complete` | `not-entered` |
+| `beyond-ceiling-pending-cleanup` | `pending-kernel-cleanup` | `ceiling-entered-quarantine` | `complete-after-quarantine` | `entered-and-released-after-consuming-reap` |
+
+Containment evidence contains no raw PID, process-group ID, descriptor, path,
+process output, kernel text, command line, environment value, handle, or
+opaque identity. The record carries only the closed fields above and digests.
+The containment validator requires all seven results and passing results for
+each mutation class: omitted stage, duplicate stage, unknown stage, wrong
+supervisor recovery class, malformed digest, patch digest mismatch, monitor
+digest mismatch, illegal cleanup/quarantine combination, false PID-1 reaped
+claim, success after quarantine, resource reuse while quarantined, and every
+forbidden raw or opaque field. Qualification cannot omit or summarize these
+mutation results.
 
 ## Process Escalation
 
@@ -561,6 +609,7 @@ qualification, and promotion.
 | `live_index_plant` | The offline yanked validator receives a live-index source and refuses before resolution or socket use. |
 | `repository_fetch_inventory` | Exact fetch sites outside governed actions, offline during gates, each pinned by lock checksum or git revision plus archive sha256. |
 | `cargo_compatibility_carriers` | Exact generated test identities, Cargo selectors, existing surface IDs, same-commit verdicts, and non-advisory classification for mandatory socket users. |
+| `containmentQualification` | Exact seven-stage bounded containment result set with closed recovery/escalation/cleanup/quarantine values, patch/monitor/pending/result digests, forbidden-field absence, and every validator mutation result. |
 | `qualification_result` | Identity, startup, strategy, inherited-capability, setup-before-payload, all eight socket/io_uring, external-egress, and live-index plants fail at their own predicates; every sandbox-policy stage has its fixed redacted code/remedy; inventories are complete; and every compatibility carrier passes on the same head. |
 
 There is no endpoint declaration field. A network namespace cannot enforce
@@ -619,6 +668,10 @@ Qualification additionally binds:
   setup-before-payload/inherited-capability/fallback results, eight pre-action
   socket/io_uring plants, external-egress and live-index plants, and exact
   Cargo compatibility census;
+- all seven PID-namespace containment results, the exact sandbox patch and
+  canonical monitor identity digests, closed supervisor recovery classes,
+  cleanup/quarantine results, pending observation, and every
+  containment-validator mutation result;
 - product-only yanked authority and exact broker/guest projections;
 - all three Supply Chain Equivalence Results;
 - native arm `make test-rust-supply-chain` and stable-head renderer evidence.
@@ -719,6 +772,7 @@ bounded and complete-stream verdicts equal.
 | `outcomes` | Closed complete, typed degraded query/publication failure, or semantic refusal; query failure is never an empty inventory. |
 | `refusals` | Inventory, omitted, forged or ill-formed, duplicate, inconsistent, wrong-candidate, and degraded-evidence classes. |
 | `booleans` | Informational mirrors only; a mirror disagreeing with the derived result is a refusal. |
+| `containment` | Derives the seven-stage census, stage-to-recovery-class mapping, patch/monitor digest equality, cleanup/quarantine legality, pending observation, no-success/no-reuse results, forbidden-field absence, and every required mutation result. |
 | `callers` | Evidence curation, promotion validation, and contributor validation before any informational inspection. |
 
 ## No-Shell Spawn Inventory
@@ -765,8 +819,9 @@ one fixed repository-relative input, and one literal correction. The closed
 slice plus the diagnostic version selects exactly one phase-valid command from
 the table above. Missing, wrong-version, absent-in-phase, wrong-slice,
 borrowed-remedy, free-form, numeric-PID/PGID, and unredacted variants are
-invalid. T067 owns byte-exact tests of the cross-product; T068 owns the
-mapping.
+invalid. T067 and T068 own only the runner parent/helper/child tests and
+mapping. The patched sandbox and sequential T120 own sandbox mapping,
+rendering, and live byte-exact tests.
 
 ## Evidence Sink Result
 
@@ -858,6 +913,7 @@ Qualification Evidence 1 -- 3 Supply Chain Equivalence Results
 Qualification Evidence 1 -- 2 native architecture realization sets
 Qualification Evidence 1 -- 1 Typed Qualification Validator verdict
 Qualification Evidence 1 -- 1 No-Shell Spawn Inventory digest
+Qualification Evidence 1 -- 7 PID-Namespace Containment Qualification Results
 Qualification Evidence 1 -- 1 Promotion Record
 Coverage Map 1 -- 1 Hybrid Disclosure Census
 Hybrid Disclosure Census 1 -- many governed documents

@@ -138,19 +138,25 @@ digest, preflight, `no_new_privs`, filter-load, or action-exec fallback.
 The same pinned Linux sandbox patch also binds crash containment. Every
 governed action has a fresh `CLONE_NEWPID` namespace. Namespace PID 1 remains
 outside the action command tree and owns abnormal teardown: namespace-local
-SIGKILL, adopted-child reap through `ECHILD`, one fixed 10,000 ms monotonic
-ceiling, PID-1 exit for kernel destruction of any remainder, and outer-sandbox
-reap. The supervisor retains normal TERM/grace/KILL/reap. Rust never signals a
+SIGKILL and nonblocking adopted-child reap progress. One fixed 10,000 ms
+monotonic ceiling bounds userspace TERM/KILL/monitor escalation and the
+close-or-quarantine decision only, never kernel cleanup. A PID 1 not proved
+reaped by a consuming wait enters outer-owned `pending-kernel-cleanup`;
+sandbox and outputs cannot succeed or be reused until eventual consuming reap.
+The supervisor retains normal TERM/grace/KILL/reap. Rust never signals a
 numeric PID or PGID.
 
 A real patched-sandbox integration plants supervisor crash before `READY`,
 after `READY`, after `EXECUTED`, during grace, and with direct and
-double-forked long-lived descendants. Liveness-fd EOF plus outer-sandbox
-completion proves teardown; Cargo mocks are not evidence. Separate mutations
-remove `CLONE_NEWPID`, remove the teardown patch, change the fixed ceiling,
-and select every forbidden strategy fallback. The execution-containment
-codes, corrections, and phase-valid reruns are the closed table in
-`recovery-deadline.md`.
+double-forked long-lived descendants. Ordinary cases require liveness-fd EOF
+plus consuming outer-sandbox reap; Cargo mocks are not evidence. A
+deterministic beyond-ceiling plant proves pending cleanup, owned quarantine,
+no reaped claim, no success/reuse, and eventual consuming reap while the
+action stays failed. Separate mutations remove `CLONE_NEWPID`, the teardown
+patch, fixed ceiling, pending state, no-success/no-reuse rule, or select every
+forbidden strategy fallback. The patched sandbox owns the
+execution-containment codes, corrections, renderer, and live byte-exact cases; T067/T068
+own no `SANDBOX_*` row. The closed table is in `recovery-deadline.md`.
 
 Runtime failures use this closed stage table:
 

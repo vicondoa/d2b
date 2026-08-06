@@ -490,15 +490,24 @@ Acceptance:
   sandbox's fresh PID namespace. Namespace PID 1 MUST remain outside the
   action command tree as the crash-surviving abnormal-teardown owner. On
   abnormal setup/action exit, including Rust-parent or supervisor crash, it
-  MUST namespace-kill every other member, reap through `ECHILD` under one
-  fixed 10,000 ms monotonic ceiling, then exit so the kernel destroys any
-  remainder and outer `linux-sandbox` reaps PID 1. The supervisor retains
-  normal TERM/grace/KILL/reap ownership. Rust MUST close and fail the action
-  and MUST NOT signal a numeric PID or PGID.
+  MUST namespace-kill every other member and make nonblocking reap progress.
+  One fixed 10,000 ms monotonic ceiling MUST bound only userspace
+  TERM/KILL/monitor escalation and the close-or-quarantine decision. It MUST
+  NOT bound kernel task exit, namespace destruction, or reap. If a consuming
+  wait has not proved PID 1 reaped, outer `linux-sandbox` MUST remain the wait
+  owner, enter typed `pending-kernel-cleanup`, quarantine the sandbox and
+  outputs, and prohibit success and reuse until eventual consuming reap.
+  Entry through quarantine MUST leave the action failed. The supervisor
+  retains normal TERM/grace/KILL/reap ownership. Rust MUST close and fail the
+  action and MUST NOT signal a numeric PID or PGID.
   After adopting the mapped executable descriptor and declared stdio, the
-  supervisor MUST clear inherited masks/dispositions, ignore `SIGPIPE` so a
-  closed reader becomes typed `EPIPE`, restore `SIGCHLD` to waitable
-  `SIG_DFL` without `SA_NOCLDWAIT`, install only fixed handlers, and create one
+  supervisor MUST first block the complete managed signal set. While it stays
+  blocked, the helper MUST install default dispositions, ignore `SIGPIPE` so
+  a closed reader becomes typed `EPIPE`, restore `SIGCHLD` to waitable
+  `SIG_DFL` without `SA_NOCLDWAIT`, and install fixed synchronous consumption;
+  only then may it establish the final mask. Pending-at-entry and
+  normalization-time `SIGTERM` MUST be consumed into supervisor-owned
+  pre-`READY` termination, never delivered through the setup window. It MUST create one
   nonblocking close-on-exec child exec-error pipe, and fork exactly once while
   single-threaded. The child MUST establish its target process group, restore
   the fixed default signal mask and dispositions, install declared
@@ -508,17 +517,22 @@ Acceptance:
   write one fixed exec-error record with bounded
   `EINTR`/`EAGAIN`/short-write handling under the absolute deadline and call
   `_exit`; there is no target path, reopen, `/proc`, `fexecve`, or fallback.
-  The supervisor MUST emit `READY` after successful fork, consume exactly
-  empty EOF or one complete exec-error record with exact bounded
+  The supervisor MUST emit framed `READY` after successful fork, consume
+  exactly empty EOF or one complete exec-error record with exact bounded
   `EINTR`/`EAGAIN`/short/partial/overlong/held-writer handling under the same
   original absolute deadline, emit
-  `EXECUTED` only for empty close-on-exec EOF, and otherwise emit one typed
+  framed `EXECUTED` only for empty close-on-exec EOF, and otherwise emit one typed
   failure. It MUST remain alive after `EXECUTED`, forward only
   `SIGHUP`/`SIGINT`/`SIGTERM`/`SIGQUIT` to the target process group, preserve
   the existing deadline escalation, and run that full fixed
   TERM/grace/unconditional-KILL sequence on external `SIGTERM` even without a
   case deadline. It MUST wait and reap the target, emit the fixed
-  terminal record, and mirror the exact normal or signaled target status.
+  framed terminal record, and mirror the exact normal or signaled target
+  status. Exec-error MUST remain single-record EOF/record/one-overlong-byte
+  protocol. Status MUST instead use fixed `D2BS` magic, version, type, and
+  length, a bounded stateful retained buffer, fragmented and coalesced frame
+  decoding, and `READY -> EXECUTED -> terminal -> EOF` ordering. It MUST NOT
+  use a one-byte overlong probe between status frames.
   Helper crash, status-channel EOF, or malformed/partial transport before
   `EXECUTED` is always a typed helper failure and MUST NOT be inferred from
   the helper process status, so a fast target exit cannot be confused with a
@@ -526,15 +540,21 @@ Acceptance:
   Complete Rust-parent and C-supervisor stage-error and owner/closure tables
   MUST cover every descriptor and child on every path. Tests MUST cover a
   held-open exec-error writer, exact `EINTR`/`EAGAIN`/short/partial/overlong
-  transport, closed-reader `EPIPE`, fast same-status target exit versus helper
+  exec-error transport, fragmented/coalesced status transport,
+  malformed/duplicate/order status frames, closed-reader `EPIPE`, fast same-status target exit versus helper
   crash, inherited ignored/`SA_NOCLDWAIT` `SIGCHLD`, inherited blocked and
-  ignored `SIGTERM`, target-ignore-TERM without a case deadline, private-fd
+  ignored `SIGTERM`, pending-at-entry and normalization-time `SIGTERM`,
+  pre-`READY` termination, target-ignore-TERM without a case deadline, private-fd
   identity, descriptor absence, executable and auxiliary close-on-exec,
   unchanged stdin and split stdout/stderr, signal forwarding, exact target
   status, and every cleanup/wait/reap failure. Real patched-sandbox integration
   MUST plant helper crash before `READY`, after `READY`, after `EXECUTED`,
   during grace, and with long-lived descendants. PID-namespace removal,
-  teardown-patch removal, ceiling, and strategy-fallback mutations MUST fail.
+  teardown-patch removal, ceiling, quarantine, false-reap,
+  success-after-quarantine, reuse-while-quarantined, and strategy-fallback
+  mutations MUST fail. One deterministic beyond-ceiling plant MUST prove
+  `pending-kernel-cleanup`, owned quarantine, no success/reuse/reaped claim,
+  and eventual consuming reap while the action remains failed.
   Cargo unit tests MUST use mocks and MUST NOT count as the live containment
   proof. An enforcing
   closed invocation-site policy MUST reject every direct helper invocation
@@ -757,9 +777,16 @@ Acceptance:
   refusal class. Every Rust-parent, C-helper, child-setup, and patched-sandbox
   cleanup failure MUST map to one stable public code, fixed safe
   repository-relative input, literal correction, and closed versioned
-  phase-valid slice rerun. T067 MUST byte-test every code across all slices and
-  command versions, including missing/wrong/borrowed remedies and wrong-phase
-  commands; T068 MUST own the mapping implementation.
+  phase-valid slice rerun. T067 MUST byte-test every runner-owned
+  parent/helper/child code across all slices and command versions, including
+  missing/wrong/borrowed remedies and wrong-phase commands; T068 MUST own only
+  that mapping implementation. The patched sandbox MUST own `SANDBOX_*`
+  mapping/rendering and its live byte-exact tests in sequential T120 because
+  it exists before setup and remains through quarantine/reap. Both harnesses
+  MUST resolve every governed fixed artifact locator from repository root;
+  Markdown locators MUST use the full
+  `specs/003-adr052-bazel-rust/contracts/runner-environment.md#...` spelling
+  and resolve to exactly one heading.
 - **FR-060**: Release containment and green-run qualification remain
   independent inputs. `spec003w7` qualification and code preparation MAY run
   before `spec003w6`, but its shared documentation/evidence task and merge MUST
@@ -978,7 +1005,18 @@ Acceptance:
   cold records from the complete stream.
   `qualification.json` MUST NOT qualify through trusted booleans; boolean
   fields are informational mirrors only, and a mirror that disagrees with the
-  derived result is a refusal. Evidence curation and promotion validation MUST
+  derived result is a refusal. It MUST require exactly one bounded result for
+  each closed PID-namespace crash/descendant/pending-cleanup stage, derive the
+  permitted supervisor recovery, userspace escalation, cleanup, and
+  quarantine values, and verify exact sandbox patch, canonical monitor
+  identity, pending-observation, and result SHA-256 digests. Containment
+  evidence MUST contain no raw PID, process-group ID, descriptor, path,
+  process output, kernel text, command line, environment, handle, or opaque
+  identity. Omitted/duplicate/unknown-stage, wrong-recovery-class,
+  malformed-digest, patch/monitor-mismatch, illegal-cleanup/quarantine,
+  false-reaped, success-after-quarantine, quarantined-reuse, and
+  forbidden-field mutation results MUST all be present and pass; no count
+  summary substitutes. Evidence curation and promotion validation MUST
   run the validator, and contributor validation MUST run it before any
   informational inspection. The paired no-argument contributor-only
   `cargo xtask bazel-evidence refresh-qualification` command MUST atomically
@@ -1177,8 +1215,12 @@ Acceptance:
   observe the policy errno; every stage has exact redacted diagnostics;
   the fresh PID-namespace monitor abnormal-teardown patch passes real helper
   crash-before-`READY`, crash-after-`READY`, crash-after-`EXECUTED`,
-  crash-during-grace, and long-lived-descendant plants within its fixed
-  ceiling; PID-namespace, teardown-patch, ceiling, and fallback mutations fail;
+  crash-during-grace, and direct/double-forked long-lived-descendant plants.
+  A beyond-ceiling plant enters typed `pending-kernel-cleanup`, retains owned
+  no-success/no-reuse quarantine without claiming PID 1 reaped, and later
+  proves consuming reap while the action remains failed. PID-namespace,
+  teardown-patch, ceiling, quarantine, false-reap, success/reuse, and fallback
+  mutations fail;
   external-egress and live-index plants fail; every
   mandatory socket-using test passes through its exact same-commit
   non-advisory Cargo compatibility carrier; and the fetch inventory contains
@@ -1198,9 +1240,12 @@ Acceptance:
   runfiles/worktree helper path, direct invocation outside the typed consumer,
   fd-0 transport, absent/misidentified descriptor, replaced stdin,
   held-open exec-error writer, closed-reader `EPIPE`, helper crash or EOF
-  before `EXECUTED`, exact `EINTR`/`EAGAIN`/short/partial/malformed/overlong
-  transport, fast same-status target exit, ignored/`SA_NOCLDWAIT` inherited
-  `SIGCHLD`, blocked/ignored inherited `SIGTERM`, target-ignore-TERM with no
+  before `EXECUTED`, exact single-record exec-error
+  `EINTR`/`EAGAIN`/short/partial/malformed/overlong transport, fragmented and
+  coalesced framed status, malformed/duplicate/order status frames, fast
+  same-status target exit, ignored/`SA_NOCLDWAIT` inherited `SIGCHLD`,
+  pending-at-entry/normalization-time/blocked/ignored inherited `SIGTERM`,
+  wrong pre-`READY` ownership, target-ignore-TERM with no
   case deadline, wrong signal forwarding or target status, every Rust-parent
   and C-supervisor ownership/closure/cleanup/wait/reap failure, ambiguous
   numeric Rust signaling, reopen, `/proc`, fallback, any first-party Rust unsafe
@@ -1295,15 +1340,18 @@ Acceptance:
   independent exact census in `tasks.md`; reports every owned path literal,
   normalized, unique, and exact, every dependency present and earlier,
   adjacency equal, an acyclic graph, and no ownership conflict among
-  incomparable scopes. Whole-task omission, empty, ordered-list, blockquote,
+  incomparable scopes. Whole-task omission, actual task omitted from census,
+  malformed and unbalanced census markers, empty, ordered-list, blockquote,
   indentation, and every isolated validation branch have independent
-  fixtures. Every negative compares complete stderr byte-for-byte through the
+  fixtures, preserving every prior case. Every negative compares complete stderr byte-for-byte through the
   injectable entrypoint with an independent literal containing only fixed
   code, fixed repository-relative source, actual bounded numeric or closed
   `none`/`overflow` record and line locators, fixed class reason, fixed remedy,
   and the exact rerun command. Adjacency rows are independently checked
   against physical lines; census/section/mismatch locations are actual;
-  oversized inputs assert both bounds. Actual unreadable-source and
+  oversized inputs assert both bounds. Temp-dir, path, open3, and subprocess
+  setup failures produce empty stdout, exact status 1, and only the fixed
+  self-test-contract diagnostic. Actual unreadable-source and
   unsupported-argument subprocesses produce empty stdout and exact status 1
   and 2. No task/dependency ID, owned path, contents, or count is rendered.
 - **SC-041**: `promotion-record.json` validates against the actual sealed
@@ -1322,6 +1370,12 @@ Acceptance:
   same-surface cases remain distinct. Empty census, missing, extra,
   malformed/duplicate block, malformed/duplicate identity, stale attribution,
   and governed-document mismatch fixtures each fail closed.
+- **SC-044**: Qualification derives exactly seven containment results with
+  closed supervisor recovery, userspace escalation, cleanup, and quarantine
+  values and matching patch/monitor/pending/result digests. It rejects every
+  omitted, duplicate, malformed, mismatched, false-reaped,
+  success-after-quarantine, quarantined-reuse, raw-process-data, and
+  opaque-identity mutation, and no named mutation result is missing.
 
 ## Assumptions and Dependencies
 

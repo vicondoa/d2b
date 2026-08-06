@@ -383,10 +383,13 @@ build/test-tooling derivation. It is not a Rust crate, is absent from
   hashes;
 - separate output NAR and matching native executable SHA-256 values;
 - static ELF evidence with no interpreter or dynamic `NEEDED` entry; and
-- the fixed private executable fd, supervisor status fd, exec-error record
-  shape, `READY`/`EXECUTED`/terminal shapes, signal allowlist, ignored
-  `SIGPIPE`, waitable default `SIGCHLD`, fixed external-TERM escalation,
-  absolute-deadline transport, and protocol version.
+- the fixed private executable fd, supervisor status fd, single-record
+  exec-error shape and overlong rule, framed `D2BS`
+  `READY`/`EXECUTED`/`EXITED`/`SIGNALED` header/version/type/length shapes,
+  27-byte retained decoder bound, signal allowlist, block-first initialization,
+  ignored `SIGPIPE`, waitable default `SIGCHLD`, pre-`READY` termination
+  ownership, fixed external-TERM escalation, absolute-deadline transport, and
+  protocol version.
 
 The safe typed Rust consumer embeds the exact helper store path from that Nix
 toolchain artifact and accepts no path parameter or environment override. It
@@ -399,12 +402,17 @@ path.
 Rust parent spawn and descriptor mapping use the exact reviewed safe
 `command-fds` pin from `packages/Cargo.lock`. The C supervisor is the only
 fork owner. It is single-threaded, creates the close-on-exec child exec-error
-pipe, normalizes signal state, and uses the fixed protocol described in
+pipe, blocks managed signals before installing normalization and synchronous
+consumption, establishes the final mask afterward, and uses the fixed
+protocol described in
 `runner-environment.md`. No Rust unsafe exception, Rust helper crate,
 runfiles/worktree helper, numeric Rust PID/PGID signal, or fallback exists.
 The patched Bazel PID-namespace monitor, not Rust, is the abnormal-teardown
-owner; its patch/ceiling and real crash plants are bound by
-`tests/golden/bazel-toolchain.json`. A closed invocation-site policy
+owner. Its patch, userspace ceiling, `pending-kernel-cleanup` quarantine,
+no-success/no-reuse rules, canonical monitor identity digest, and ordinary
+plus beyond-ceiling crash plants are bound by
+`tests/golden/bazel-toolchain.json`. The patched sandbox owns every
+`SANDBOX_*` renderer and live exact test. A closed invocation-site policy
 permits exactly one Rust source location to spawn this exact output and rejects
 every other Rust, Bazel, Make, workflow, or documentation command site.
 

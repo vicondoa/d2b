@@ -152,9 +152,12 @@ my @fixture_names = qw(
     task-after-graph.md
     empty.md
     whole-task-omission.md
+    actual-task-omitted-from-census.md
     census-missing.md
     census-duplicate.md
     census-malformed.md
+    census-malformed-marker.md
+    census-unbalanced-marker.md
     census-duplicate-id.md
     task-duplicate.md
     dependency-failure.md
@@ -206,6 +209,16 @@ sub run_subprocess {
         ? 255
         : $wait_status >> 8;
     return ($status, $stdout, $stderr);
+}
+
+sub resolve_self_test_path {
+    my ($path) = @_;
+    die "invalid self-test path"
+        if !defined($path) || $path eq '';
+    my $resolved = File::Spec->rel2abs($path);
+    die "unresolved self-test path"
+        if !defined($resolved) || $resolved eq '';
+    return $resolved;
 }
 
 sub physical_line_of {
@@ -291,6 +304,13 @@ sub render_error {
         . " record=$error->{record} line=$error->{line} reason=$reason\n"
         . "REMEDY $error_code $correction\n"
         . "RERUN $error_code $rerun\n";
+}
+
+sub self_test_contract_stderr {
+    return render_error(
+        error_record('parse', 'self-test-contract'),
+        'tasks'
+    );
 }
 
 sub parse_owned_path {
@@ -1001,6 +1021,10 @@ RERUN D2B-SPEC003-PLAN-PARSE perl specs/003-adr052-bazel-rust/tools/validate-pla
 REMEDY D2B-SPEC003-PLAN-CENSUS Declare one independent task-ID census with exactly the canonical task IDs.
 RERUN D2B-SPEC003-PLAN-CENSUS perl specs/003-adr052-bazel-rust/tools/validate-plan-structure.pl --self-test && perl specs/003-adr052-bazel-rust/tools/validate-plan-structure.pl
 |,
+    'actual-task-omitted-from-census.md' => q|FAIL D2B-SPEC003-PLAN-CENSUS source=specs/003-adr052-bazel-rust/tools/validator-fixtures/actual-task-omitted-from-census.md record=2 line=8 reason=mismatch
+REMEDY D2B-SPEC003-PLAN-CENSUS Declare one independent task-ID census with exactly the canonical task IDs.
+RERUN D2B-SPEC003-PLAN-CENSUS perl specs/003-adr052-bazel-rust/tools/validate-plan-structure.pl --self-test && perl specs/003-adr052-bazel-rust/tools/validate-plan-structure.pl
+|,
     'census-missing.md' => q|FAIL D2B-SPEC003-PLAN-CENSUS source=specs/003-adr052-bazel-rust/tools/validator-fixtures/census-missing.md record=none line=none reason=missing-declaration
 REMEDY D2B-SPEC003-PLAN-CENSUS Declare one independent task-ID census with exactly the canonical task IDs.
 RERUN D2B-SPEC003-PLAN-CENSUS perl specs/003-adr052-bazel-rust/tools/validate-plan-structure.pl --self-test && perl specs/003-adr052-bazel-rust/tools/validate-plan-structure.pl
@@ -1010,6 +1034,14 @@ REMEDY D2B-SPEC003-PLAN-CENSUS Declare one independent task-ID census with exact
 RERUN D2B-SPEC003-PLAN-CENSUS perl specs/003-adr052-bazel-rust/tools/validate-plan-structure.pl --self-test && perl specs/003-adr052-bazel-rust/tools/validate-plan-structure.pl
 |,
     'census-malformed.md' => q|FAIL D2B-SPEC003-PLAN-CENSUS source=specs/003-adr052-bazel-rust/tools/validator-fixtures/census-malformed.md record=1 line=4 reason=malformed-declaration
+REMEDY D2B-SPEC003-PLAN-CENSUS Declare one independent task-ID census with exactly the canonical task IDs.
+RERUN D2B-SPEC003-PLAN-CENSUS perl specs/003-adr052-bazel-rust/tools/validate-plan-structure.pl --self-test && perl specs/003-adr052-bazel-rust/tools/validate-plan-structure.pl
+|,
+    'census-malformed-marker.md' => q|FAIL D2B-SPEC003-PLAN-CENSUS source=specs/003-adr052-bazel-rust/tools/validator-fixtures/census-malformed-marker.md record=1 line=3 reason=malformed-declaration
+REMEDY D2B-SPEC003-PLAN-CENSUS Declare one independent task-ID census with exactly the canonical task IDs.
+RERUN D2B-SPEC003-PLAN-CENSUS perl specs/003-adr052-bazel-rust/tools/validate-plan-structure.pl --self-test && perl specs/003-adr052-bazel-rust/tools/validate-plan-structure.pl
+|,
+    'census-unbalanced-marker.md' => q|FAIL D2B-SPEC003-PLAN-CENSUS source=specs/003-adr052-bazel-rust/tools/validator-fixtures/census-unbalanced-marker.md record=1 line=3 reason=malformed-declaration
 REMEDY D2B-SPEC003-PLAN-CENSUS Declare one independent task-ID census with exactly the canonical task IDs.
 RERUN D2B-SPEC003-PLAN-CENSUS perl specs/003-adr052-bazel-rust/tools/validate-plan-structure.pl --self-test && perl specs/003-adr052-bazel-rust/tools/validate-plan-structure.pl
 |,
@@ -1111,6 +1143,28 @@ sub run_plan_entrypoint {
     return 0;
 }
 
+sub run_self_test_entrypoint {
+    my (%args) = @_;
+    my ($captured_stdout, $captured_stderr) = ('', '');
+    my $status;
+    my $completed = eval {
+        local $SIG{__WARN__} = sub { die $_[0]; };
+        $status =
+            $args{runner}->(\$captured_stdout, \$captured_stderr);
+        die "invalid self-test status"
+            if !defined($status) || $status !~ /\A[0-9]+\z/;
+        1;
+    };
+    if (!$completed) {
+        ${$args{stdout}} = '';
+        ${$args{stderr}} = self_test_contract_stderr();
+        return 1;
+    }
+    ${$args{stdout}} .= $captured_stdout;
+    ${$args{stderr}} .= $captured_stderr;
+    return $status;
+}
+
 sub run_cli_entrypoint {
     my (%args) = @_;
     my $argv = $args{argv};
@@ -1119,7 +1173,11 @@ sub run_cli_entrypoint {
 
     if (@$argv) {
         if (@$argv == 1 && $argv->[0] eq '--self-test') {
-            return $args{self_test_runner}->($stdout, $stderr);
+            return run_self_test_entrypoint(
+                runner => $args{self_test_runner},
+                stdout => $stdout,
+                stderr => $stderr,
+            );
         }
         $$stderr .= render_error(
             error_record('parse', 'unsupported-arguments'),
@@ -1201,9 +1259,12 @@ sub run_self_tests {
         ['task-after-graph',             'parse',      'checkbox-outside-task-section'],
         ['empty',                        'parse',      'no-tasks'],
         ['whole-task-omission',          'census',     'mismatch'],
+        ['actual-task-omitted-from-census', 'census',  'mismatch'],
         ['census-missing',               'census',     'missing-declaration'],
         ['census-duplicate',             'census',     'duplicate-declaration'],
         ['census-malformed',             'census',     'malformed-declaration'],
+        ['census-malformed-marker',      'census',     'malformed-declaration'],
+        ['census-unbalanced-marker',     'census',     'malformed-declaration'],
         ['census-duplicate-id',          'census',     'malformed-declaration'],
         ['task-duplicate',               'task_id',    'duplicate-task'],
         ['dependency-failure',           'dependency', 'missing'],
@@ -1234,6 +1295,23 @@ sub run_self_tests {
             ['T002 <- T001, T001', 1, 'T002'],
         'adjacency-mismatch' =>
             ['T002 <- none', 1, 'T002'],
+    );
+    my %census_physical_locator = (
+        'actual-task-omitted-from-census' => [
+            '- [ ] T002 [owner: beta] [files: beta/two.rs] [depends: T001] Omitted from census.',
+            1,
+            2,
+        ],
+        'census-malformed-marker' => [
+            '<!-- D2B-SPEC003-PLAN-TASK-CENSUS:BEGIN -- >',
+            1,
+            1,
+        ],
+        'census-unbalanced-marker' => [
+            '<!-- D2B-SPEC003-PLAN-TASK-CENSUS:BEGIN -->',
+            1,
+            1,
+        ],
     );
 
     for my $case (@cases) {
@@ -1303,13 +1381,32 @@ sub run_self_tests {
             return 1;
         }
     }
+    if (exists $census_physical_locator{$stem}) {
+        my ($needle, $occurrence, $expected_record) =
+            @{$census_physical_locator{$stem}};
+        my $physical_line =
+            physical_line_of($text, $needle, $occurrence);
+        my ($reported_record, $reported_line) =
+            $case_stderr =~
+            /\brecord=([^ ]+) line=([^ ]+) reason=/;
+        if (
+            !defined($physical_line)
+            || !defined($reported_record)
+            || !defined($reported_line)
+            || $reported_record ne "$expected_record"
+            || $reported_line ne "$physical_line"
+        ) {
+            $$self_stderr .= self_test_contract_stderr();
+            return 1;
+        }
+    }
     }
 
     my $unsupported_expected = q|FAIL D2B-SPEC003-PLAN-PARSE source=specs/003-adr052-bazel-rust/tasks.md record=none line=none reason=unsupported-arguments
 REMEDY D2B-SPEC003-PLAN-PARSE Invoke the validator with no argument or with only --self-test.
 RERUN D2B-SPEC003-PLAN-PARSE perl specs/003-adr052-bazel-rust/tools/validate-plan-structure.pl --self-test && perl specs/003-adr052-bazel-rust/tools/validate-plan-structure.pl
 |;
-    my $script_path = File::Spec->rel2abs($0);
+    my $script_path = resolve_self_test_path($0);
     my ($unsupported_status, $unsupported_stdout, $unsupported_stderr) =
     run_subprocess(
         $^X,
@@ -1339,19 +1436,13 @@ RERUN D2B-SPEC003-PLAN-READ perl specs/003-adr052-bazel-rust/tools/validate-plan
     my $unreadable_script =
         File::Spec->catfile($unreadable_tools, 'validate-plan-structure.pl');
     if (!copy($script_path, $unreadable_script)) {
-        $$self_stderr .= render_error(
-            error_record('parse', 'self-test-contract', 1, 1),
-            'tasks'
-        );
+        $$self_stderr .= self_test_contract_stderr();
         return 1;
     }
     my $unreadable_source =
         File::Spec->catdir($unreadable_root, 'tasks.md');
     if (!mkdir($unreadable_source)) {
-        $$self_stderr .= render_error(
-            error_record('parse', 'self-test-contract', 1, 1),
-            'tasks'
-        );
+        $$self_stderr .= self_test_contract_stderr();
         return 1;
     }
     my ($read_status, $read_stdout, $read_stderr) =
@@ -1366,6 +1457,64 @@ RERUN D2B-SPEC003-PLAN-READ perl specs/003-adr052-bazel-rust/tools/validate-plan
             'tasks'
         );
         return 1;
+    }
+
+    my $self_test_contract_expected = self_test_contract_stderr();
+    my @setup_failure_cases = (
+        [
+            'temp-dir',
+            sub {
+                tempdir(
+                    DIR => File::Spec->catfile(
+                        $fixture_dir,
+                        'positive.md'
+                    )
+                );
+            },
+        ],
+        [
+            'path',
+            sub {
+                resolve_self_test_path(undef);
+            },
+        ],
+        [
+            'open3',
+            sub {
+                run_subprocess(
+                    File::Spec->catfile(
+                        $fixture_dir,
+                        'missing-self-test-executable'
+                    )
+                );
+            },
+        ],
+        [
+            'subprocess',
+            sub {
+                run_subprocess();
+            },
+        ],
+    );
+    for my $setup_case (@setup_failure_cases) {
+        my ($name, $failure) = @$setup_case;
+        my ($failure_stdout, $failure_stderr) = ('', '');
+        my $failure_status = run_self_test_entrypoint(
+            runner => sub {
+                $failure->();
+                return 0;
+            },
+            stdout => \$failure_stdout,
+            stderr => \$failure_stderr,
+        );
+        if (
+            $failure_status != 1
+            || $failure_stdout ne ''
+            || $failure_stderr ne $self_test_contract_expected
+        ) {
+            $$self_stderr .= self_test_contract_stderr();
+            return 1;
+        }
     }
 
     my $oversized_record_text =
@@ -1425,13 +1574,16 @@ RERUN D2B-SPEC003-PLAN-TASK-ID perl specs/003-adr052-bazel-rust/tools/validate-p
     }
 
     $$self_stdout .=
-        'PASS: 49 validator self-tests; positive fixture accepted; '
-        . '44 independent negative fixtures cover noncanonical unchecked-list forms, census declarations, '
+        'PASS: 56 validator self-tests; positive fixture accepted; '
+        . '47 independent negative fixtures cover noncanonical unchecked-list forms, census declarations, '
         . 'task parsing, ownership, dependency, adjacency, section, cycle, '
         . 'and conflict fixtures rejected; full stderr byte-matched against '
-        . 'independent literals; physical adjacency rows and bounded numeric, '
-        . 'none, and overflow locators verified; actual unreadable-source '
-        . "status 1 and unsupported-argument status 2 subprocesses verified\n";
+        . 'independent literals; physical census/mismatch and adjacency rows '
+        . 'and bounded numeric, none, and overflow locators verified; actual '
+        . 'temp-dir, path, open3, '
+        . 'and subprocess setup failures emit only the fixed self-test-contract '
+        . 'diagnostic; actual unreadable-source status 1 and unsupported-argument '
+        . "status 2 subprocesses verified\n";
     return 0;
 }
 

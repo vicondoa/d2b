@@ -220,6 +220,11 @@
   references and rejects page gaps, missing attempts, omitted pushes, omitted,
   forged, duplicate, inconsistent, and wrong-candidate references; no trusted
   boolean can qualify a record.
+- [x] Qualification requires exactly seven bounded PID-namespace containment
+  results with closed supervisor recovery, userspace escalation, cleanup, and
+  quarantine values; patch, canonical-monitor, pending-observation, and result
+  digests; every named validator mutation result; and no raw PID, descriptor,
+  path, process output, or opaque identity.
 - [x] The qualification task and the promotion validation both run the
   validator, and quickstart invokes it before any informational `jq`.
 - [x] No-shell is bound to exact equal nonempty governed/declared sets, one
@@ -249,20 +254,25 @@
   invokes only the exact immutable Nix-built static C
   `d2b-bazel-exec-supervisor` output and maps the private executable fd with
   the pinned safe `command-fds` API while preserving stdio. The single-threaded
-  helper creates the close-on-exec child error pipe, normalizes signals, forks
-  once, emits `READY` then `EXECUTED`, remains alive, forwards allowed
+  helper blocks managed signals before installing dispositions and synchronous
+  consumption, establishes the final mask afterward, creates the close-on-exec
+  child error pipe, forks once, emits framed `READY` then `EXECUTED`, remains alive, forwards allowed
   termination signals, and reaps and mirrors exact target status. Exact
   source/derivation-dependency/output/protocol identity, one Rust invocation
   site, private-fd identity, descriptor absence, exact
-  `EINTR`/`EAGAIN`/short/partial/overlong/held-writer transport,
+  single-record exec-error `EINTR`/`EAGAIN`/short/partial/overlong and
+  fragmented/coalesced framed status with malformed/duplicate/order coverage,
   closed-reader `EPIPE`, waitable default `SIGCHLD`, fast-same-status crash
-  discrimination, blocked/ignored SIGTERM, no-deadline external-TERM
+  discrimination, pending/normalization-time/blocked/ignored SIGTERM,
+  pre-`READY` ownership, no-deadline external-TERM
   escalation, target-ignore-TERM, and every Rust-parent and C-supervisor
   ownership/closure/cleanup/wait/reap failure are covered. The patched
   sandbox's fresh PID-namespace monitor owns abnormal teardown under one fixed
-  ceiling; real crash-before-`READY`, crash-after-`READY`,
+  userspace ceiling and an owned `pending-kernel-cleanup` quarantine; real
+  crash-before-`READY`, crash-after-`READY`,
   crash-after-`EXECUTED`, crash-during-grace, and long-lived-descendant plants
-  plus namespace/patch/ceiling/fallback mutations prove it. Cargo tests use
+  plus a beyond-ceiling case and namespace/patch/ceiling/quarantine/false-reap/
+  success/reuse/fallback mutations prove it. Cargo tests use
   mocks and Rust never signals a numeric PID/PGID; no Rust helper crate, runner
   `sys.rs`, or first-party Rust unsafe exception remains.
 - [x] Cache deletion uses a closed typed prefix enum and mixed pagination
@@ -332,14 +342,17 @@
   every noncanonical form and zero tasks, and binds parsed IDs to the
   independent exact census in `tasks.md`. It checks complete parsing, exact
   paths, dependencies, adjacency, acyclicity, and concurrent ownership
-  conflicts. One positive plus forty-four isolated negative fixtures cover
-  whole-task omission, empty input, every list class, and every branch.
+  conflicts. One positive plus forty-seven isolated negative fixtures preserve
+  the prior forty-four and add actual task omitted from census plus malformed
+  and unbalanced marker coverage. They cover whole-task omission, empty input,
+  every list class, and every branch.
   Complete negative stderr is compared byte-exactly with independent literals
   through the injectable entrypoint. Adjacency rows are independently checked
   against physical lines; census/section/mismatch positions are actual;
-  oversized record/line inputs assert closed bounds. Actual unreadable-source
-  and unsupported-argument subprocesses assert empty stdout and exact status 1
-  and 2. Diagnostics authorize only the fixed repository-relative source plus
+  oversized record/line inputs assert closed bounds. Actual temp-dir, path,
+  open3, and subprocess setup failures emit only the fixed self-test-contract
+  diagnostic. Actual unreadable-source and unsupported-argument subprocesses
+  assert empty stdout and exact status 1 and 2. Diagnostics authorize only the fixed repository-relative source plus
   bounded numeric or closed `none`/`overflow` locators, never task/dependency
   IDs, owned paths, contents, or counts, and every code has one exact remedy
   and rerun command.

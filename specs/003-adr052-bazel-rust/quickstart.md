@@ -35,7 +35,7 @@ perl specs/003-adr052-bazel-rust/tools/validate-plan-structure.pl
 Expected:
 
 ```text
-PASS: 49 validator self-tests; positive fixture accepted; 44 independent negative fixtures cover noncanonical unchecked-list forms, census declarations, task parsing, ownership, dependency, adjacency, section, cycle, and conflict fixtures rejected; full stderr byte-matched against independent literals; physical adjacency rows and bounded numeric, none, and overflow locators verified; actual unreadable-source status 1 and unsupported-argument status 2 subprocesses verified
+PASS: 56 validator self-tests; positive fixture accepted; 47 independent negative fixtures cover noncanonical unchecked-list forms, census declarations, task parsing, ownership, dependency, adjacency, section, cycle, and conflict fixtures rejected; full stderr byte-matched against independent literals; physical census/mismatch and adjacency rows and bounded numeric, none, and overflow locators verified; actual temp-dir, path, open3, and subprocess setup failures emit only the fixed self-test-contract diagnostic; actual unreadable-source status 1 and unsupported-argument status 2 subprocesses verified
 PASS: 120 unique tasks with exact canonical headers and owned paths; dependencies exist and precede consumers; adjacency matches; graph is acyclic; concurrently ready ownership is disjoint
 ```
 
@@ -46,8 +46,12 @@ IDs with the independent exact census in `tasks.md`. Every negative expectation
 is an independent literal for complete stderr and runs through the injectable
 entrypoint. Adjacency cases independently scan the physical fixture row;
 census, section, and mismatch locations use actual offsets and ordinals.
-Oversized inputs assert the closed `overflow` bound. Actual unreadable-source
-and unsupported-argument subprocesses assert empty stdout plus status 1 and 2.
+Oversized inputs assert the closed `overflow` bound. Actual task omitted from
+census and malformed/unbalanced census markers have isolated exact fixtures.
+Temp-dir, path, open3, and subprocess setup failures assert status 1, empty
+stdout, and only the fixed self-test-contract diagnostic. Actual
+unreadable-source and unsupported-argument subprocesses assert empty stdout
+plus status 1 and 2.
 The only actionable location is the fixed repository-relative source plus a
 bounded 1-based numeric record/line locator or closed `none`/`overflow`
 sentinel. No diagnostic may contain a
@@ -1116,17 +1120,25 @@ Run targeted tests for:
   protocol, output NAR, executable, static ELF, and native-system hashes;
 - the supervisor's close-on-exec nonblocking child exec-error pipe, sole fork,
   ignored `SIGPIPE` with typed `EPIPE`, waitable default `SIGCHLD`, normalized
-  masks/dispositions, child stdio installation, executable-fd
-  CLOEXEC, same-open-file-description `execveat(AT_EMPTY_PATH)`, explicit
-  `READY` then `EXECUTED`, continued supervision, fixed signal allowlist,
+  masks/dispositions with the managed set blocked before installation and the
+  final mask established afterward, pending-at-entry and normalization-time
+  `SIGTERM`, pre-`READY` termination ownership, child stdio installation,
+  executable-fd CLOEXEC, same-open-file-description
+  `execveat(AT_EMPTY_PATH)`, explicit framed `READY` then `EXECUTED`,
+  continued supervision, fixed signal allowlist,
   external-TERM escalation without a case deadline, terminal record,
   direct-child reap, and exact normal/signaled target status;
 - the patched Linux sandbox's fresh PID-namespace monitor as the sole abnormal
-  teardown owner, with namespace kill/reap, one fixed 10,000 ms ceiling,
-  outer-monitor reap, and real helper-crash-before-`READY`,
+  teardown owner, with namespace kill/reap, one fixed 10,000 ms userspace
+  escalation and close-or-quarantine ceiling, consuming outer-monitor reap,
+  and real helper-crash-before-`READY`,
   crash-after-`READY`, crash-after-`EXECUTED`, crash-during-grace, and
-  long-lived-descendant plants. Namespace, teardown-patch, ceiling, and
-  fallback mutations fail; Cargo tests use containment mocks only;
+  direct/double-forked long-lived-descendant plants. A beyond-ceiling plant
+  proves typed `pending-kernel-cleanup`, owned quarantine, no reaped claim,
+  no success/reuse, and eventual consuming reap while the action remains
+  failed. Namespace, teardown-patch, ceiling, quarantine, false-reap,
+  success/reuse, and fallback mutations fail; Cargo tests use containment
+  mocks only;
 - no runfiles/worktree/copied helper path, second Rust invocation, fd-0
   executable transport, Rust `pre_exec`, Rust raw fork, reopen,
   `/proc/self/fd`, `fexecve`, path fallback, provider-fd leak, or first-party
@@ -1135,10 +1147,13 @@ Run targeted tests for:
   normalize, pipe, fork, child-setup, execveat, exec-result, supervise, wait,
   terminal, cleanup, and reap tables, with injected held-open writer,
   closed-reader `EPIPE`, exact
-  `EINTR`/`EAGAIN`/short/partial/overlong transport, descriptor absence,
+  single-record exec-error `EINTR`/`EAGAIN`/short/partial/overlong transport,
+  fragmented/coalesced framed status and malformed/duplicate/order negatives,
+  descriptor absence,
   private-fd identity, helper crash/EOF before `EXECUTED`, fast target exit
   with the same status as the crash, inherited ignored/`SA_NOCLDWAIT`
-  `SIGCHLD`, inherited blocked/ignored SIGTERM, target-ignore-TERM, signal
+  `SIGCHLD`, inherited pending/normalization-time/blocked/ignored SIGTERM,
+  target-ignore-TERM, signal
   forwarding, target-status mismatch, and every cleanup/wait/reap failure.
 
 No test should fill a disk, require a privileged mount, sleep to reach expiry,
@@ -1263,7 +1278,11 @@ It reads the fixed repository-relative record path, derives every threshold
 from the record's immutable evidence references, and refuses omitted, forged,
 duplicate, inconsistent, and wrong-candidate references. A record cannot
 qualify through a trusted boolean: any boolean that disagrees with the derived
-verdict is a refusal.
+verdict is a refusal. It also requires every one of the seven closed
+PID-namespace containment stages, every validator mutation result, matching
+sandbox patch and canonical monitor identity digests, legal cleanup/quarantine
+states, and the pending-cleanup no-success/no-reuse proof. Raw PIDs,
+descriptors, paths, process output, and opaque identities refuse.
 
 ```bash
 set -euo pipefail
@@ -1296,6 +1315,14 @@ jq -e '
   .action_network.live_index_plant_refused and
   .action_network.cargo_compatibility_census_exact and
   .action_network.compatibility_verdicts_same_head_non_advisory and
+  (.containment.results | length) == 7 and
+  .containment.stage_census_exact and
+  .containment.recovery_classes_exact and
+  .containment.patch_monitor_digests_exact and
+  .containment.cleanup_quarantine_results_legal and
+  .containment.pending_cleanup_no_success_no_reuse and
+  .containment.all_validator_mutations_passed and
+  .containment.forbidden_field_count == 0 and
   .supply_chain.all_three_contexts_equal and
   .architecture.all_guest_elf_et_dyn and
   .architecture.all_guest_elf_machine_matches and
@@ -1357,7 +1384,8 @@ fi
 Also require ten consecutive matching qualification records, five topology
 proofs, twenty consecutive executions per broker context, complete locator
 evidence, three valid performance sets, the committed no-shell inventory digest
-with all six plant results and equal raw/unique/governed scan counts, and all
+with all six plant results and equal raw/unique/governed scan counts, all seven
+containment results and every containment-validator mutation result, and all
 planted guard results.
 
 ## spec003w5 promotion and rollback

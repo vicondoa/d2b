@@ -92,34 +92,34 @@ alias-removal commit changes the selected version and byte-exact expectations
 atomically; it does not change a code, input, or correction.
 
 Every parent code names the fixed input
-`contracts/runner-environment.md#rust-parent-stage-owner-and-closure-contract`.
+`specs/003-adr052-bazel-rust/contracts/runner-environment.md#rust-parent-stage-owner-and-closure-contract`.
 
 | Internal stage | Public code | Exact correction |
 | --- | --- | --- |
 | `PARENT_PREPARE` | `D2B-BZLEXEC-PARENT-PREPARE` | Correct status-channel construction and private-fd mapping in `packages/d2b-bazel-exec/src/execute.rs`. |
 | `PARENT_SPAWN` | `D2B-BZLEXEC-PARENT-SPAWN` | Correct the exact immutable-helper spawn in `packages/d2b-bazel-exec/src/execute.rs`; do not add a path fallback. |
 | `PARENT_CLOSE` | `D2B-BZLEXEC-PARENT-CLOSE` | Correct single-owner post-spawn descriptor closure in `packages/d2b-bazel-exec/src/execute.rs`. |
-| `PARENT_READY` | `D2B-BZLEXEC-PARENT-READY` | Correct the bounded exact `READY` decoder in `packages/d2b-bazel-exec/src/execute.rs`. |
-| `PARENT_EXECUTED` | `D2B-BZLEXEC-PARENT-EXECUTED` | Correct the bounded exact `EXECUTED` decoder without inferring exec from process status. |
-| `PARENT_TERMINAL` | `D2B-BZLEXEC-PARENT-TERMINAL` | Correct the bounded exact terminal-record decoder in `packages/d2b-bazel-exec/src/execute.rs`. |
+| `PARENT_READY` | `D2B-BZLEXEC-PARENT-READY` | Correct the bounded stateful framed `READY` decoder in `packages/d2b-bazel-exec/src/execute.rs`. |
+| `PARENT_EXECUTED` | `D2B-BZLEXEC-PARENT-EXECUTED` | Correct retained framed `EXECUTED` decoding after `READY` without inferring exec from process status. |
+| `PARENT_TERMINAL` | `D2B-BZLEXEC-PARENT-TERMINAL` | Correct framed terminal decoding, trailing-byte refusal, and EOF drain in `packages/d2b-bazel-exec/src/execute.rs`. |
 | `PARENT_WAIT` | `D2B-BZLEXEC-PARENT-WAIT` | Correct supervisor wait ownership and return the Bazel action nonzero on failure; do not signal a numeric PID or PGID. |
 | `PARENT_STATUS` | `D2B-BZLEXEC-PARENT-STATUS` | Correct terminal-record and supervisor-status equality checking. |
 | `PARENT_CLEANUP` | `D2B-BZLEXEC-PARENT-CLEANUP` | Correct idempotent owned-fd closure and preserve the first parent failure. |
 
 Every helper code names the fixed input
 `tests/tools/d2b-bazel-exec-supervisor/supervisor.c` and the contract row
-`contracts/runner-environment.md#c-supervisor-stage-error-owner-and-closure-contract`.
+`specs/003-adr052-bazel-rust/contracts/runner-environment.md#c-supervisor-stage-error-owner-and-closure-contract`.
 
 | Internal stage | Public code | Exact correction |
 | --- | --- | --- |
 | `HELPER_ADOPT` | `D2B-BZLEXEC-HELPER-ADOPT` | Correct private-fd, status-fd, argv, environment, and stdio adoption before fork. |
-| `HELPER_SIGNAL_NORMALIZE` | `D2B-BZLEXEC-HELPER-SIGNAL-NORMALIZE` | Clear inherited masks/dispositions, ignore `SIGPIPE`, and restore waitable default `SIGCHLD` without `SA_NOCLDWAIT`. |
+| `HELPER_SIGNAL_NORMALIZE` | `D2B-BZLEXEC-HELPER-SIGNAL-NORMALIZE` | Block managed signals first, install dispositions and synchronous consumption while blocked, establish the final mask, preserve pending termination, ignore `SIGPIPE`, and restore waitable default `SIGCHLD` without `SA_NOCLDWAIT`. |
 | `HELPER_EXEC_PIPE` | `D2B-BZLEXEC-HELPER-EXEC-PIPE` | Correct creation and ownership of the single nonblocking close-on-exec exec-error pipe. |
 | `HELPER_FORK` | `D2B-BZLEXEC-HELPER-FORK` | Correct the sole supervisor fork and leave no child on a reported fork failure. |
 | `HELPER_EXEC_TIMEOUT` | `D2B-BZLEXEC-HELPER-EXEC-TIMEOUT` | Correct absolute-deadline accounting without resetting time after retry or short I/O. |
 | `HELPER_EXEC_PARTIAL` | `D2B-BZLEXEC-HELPER-EXEC-PARTIAL` | Correct exact record cursors so EOF after any byte is partial. |
 | `HELPER_EXEC_OVERLONG` | `D2B-BZLEXEC-HELPER-EXEC-OVERLONG` | Correct the one-record-plus-one-byte overlong check. |
-| `HELPER_EXEC_UNKNOWN` | `D2B-BZLEXEC-HELPER-EXEC-UNKNOWN` | Correct the closed exec-error and status-record decoder. |
+| `HELPER_EXEC_UNKNOWN` | `D2B-BZLEXEC-HELPER-EXEC-UNKNOWN` | Correct the closed single-record exec-error decoder and distinct framed status decoder. |
 | `HELPER_EXEC_EPIPE` | `D2B-BZLEXEC-HELPER-EXEC-EPIPE` | Keep `SIGPIPE` ignored and map a closed status reader to typed `EPIPE`. |
 | `HELPER_EXEC_IO` | `D2B-BZLEXEC-HELPER-EXEC-IO` | Correct bounded `EINTR`, `EAGAIN`, short-read, and short-write handling without rendering OS text. |
 | `HELPER_SIGNAL_FORWARD` | `D2B-BZLEXEC-HELPER-SIGNAL-FORWARD` | Correct the four-signal allowlist and target-group forwarding in the supervisor. |
@@ -131,7 +131,7 @@ Every helper code names the fixed input
 | `HELPER_CLEANUP` | `D2B-BZLEXEC-HELPER-CLEANUP` | Correct idempotent target-group, child, and descriptor cleanup while preserving the first helper failure. |
 
 Every child code names the same fixed supervisor source and the contract row
-`contracts/runner-environment.md#c-supervisor-stage-error-owner-and-closure-contract`.
+`specs/003-adr052-bazel-rust/contracts/runner-environment.md#c-supervisor-stage-error-owner-and-closure-contract`.
 
 | Internal stage | Public code | Exact correction |
 | --- | --- | --- |
@@ -144,29 +144,45 @@ Every child code names the same fixed supervisor source and the contract row
 
 Every sandbox code names the fixed inputs
 `pkgs/bazel-8.6.0-seccomp/linux-sandbox-seccomp.patch` and
-`contracts/runner-environment.md#patched-sandbox-stage-error-owner-and-closure-contract`.
+`specs/003-adr052-bazel-rust/contracts/runner-environment.md#patched-sandbox-stage-error-owner-and-closure-contract`.
 
 | Internal stage | Public code | Exact correction |
 | --- | --- | --- |
 | `SANDBOX_NAMESPACE` | `D2B-BZLEXEC-SANDBOX-NAMESPACE` | Restore one fresh `CLONE_NEWPID` namespace for every governed action and refuse every fallback strategy. |
 | `SANDBOX_MONITOR` | `D2B-BZLEXEC-SANDBOX-MONITOR` | Restore namespace PID 1 as the action's adoption, abnormal-teardown, and reap owner. |
 | `SANDBOX_KILL` | `D2B-BZLEXEC-SANDBOX-KILL` | Correct namespace-local kill of every member other than PID 1; do not signal a host PID or PGID. |
-| `SANDBOX_REAP` | `D2B-BZLEXEC-SANDBOX-REAP` | Correct PID-1 adopted-child reap through `ECHILD` and outer-monitor reap. |
-| `SANDBOX_CEILING` | `D2B-BZLEXEC-SANDBOX-CEILING` | Restore the single fixed 10,000 ms monotonic abnormal-teardown ceiling. |
-| `SANDBOX_CLEANUP` | `D2B-BZLEXEC-SANDBOX-CLEANUP` | Correct final namespace-init exit, kernel namespace destruction, and outer reap while preserving the first sandbox failure. |
+| `SANDBOX_REAP` | `D2B-BZLEXEC-SANDBOX-REAP` | Correct nonblocking adopted-child reap progress and require a consuming wait before recording any PID-1 reap. |
+| `SANDBOX_CEILING` | `D2B-BZLEXEC-SANDBOX-CEILING` | Restore the single fixed 10,000 ms userspace TERM/KILL/monitor escalation and close-or-quarantine ceiling; do not use it as a kernel cleanup bound. |
+| `SANDBOX_PENDING_KERNEL_CLEANUP` | `D2B-BZLEXEC-SANDBOX-PENDING-KERNEL-CLEANUP` | Keep the action failed and the sandbox and outputs quarantined under the outer wait owner; remove the worker from admission, correct the uninterruptible `D`-state kernel, filesystem, or device stall or reboot it, and retry only after consuming reap releases quarantine. |
+| `SANDBOX_CLEANUP` | `D2B-BZLEXEC-SANDBOX-CLEANUP` | Correct consuming PID-1 reap and owned quarantine release while preserving the first sandbox failure; never convert a quarantined action to success. |
 
-T067 owns the table-driven byte-exact tests for every public code crossed with
-all four slices and both closed command versions. Each case asserts nonzero
-status, empty stdout, the fixed safe input, exact correction, exact
-phase-valid rerun command, and absence of forbidden values. Isolated plants
-cover omitted input, omitted correction, omitted rerun, wrong command version,
-command absent in phase, wrong slice, borrowed parent/helper/child/sandbox
-remedy, wrong code, numeric PID/PGID, descriptor, absolute/runfiles/store
-path, errno/OS text, raw protocol bytes, argv/environment, and dynamic
-identifier. T068 implements only this closed mapping and makes T067 pass.
+T067 owns table-driven byte-exact tests for every parent, helper, and child
+public code crossed with all four slices and both closed command versions.
+T068 implements only that runner-owned closed mapping and makes T067 pass.
+Each case asserts nonzero status, empty stdout, fixed safe input, exact
+correction, exact phase-valid rerun command, and absence of forbidden values.
+T067 also resolves every governed fixed artifact locator from the repository
+root: a path must name a regular governed file, and a Markdown locator must
+name that file plus a heading whose normalized anchor exists exactly once.
+Isolated plants cover omitted input, omitted correction, omitted rerun, wrong
+command version, command absent in phase, wrong slice, borrowed
+parent/helper/child remedy, wrong code, unresolved path, missing/duplicate
+anchor, numeric PID/PGID, descriptor, absolute/runfiles/store path, errno/OS
+text, raw protocol bytes, argv/environment, and dynamic identifier.
 
-The exact-message harness covers every execution parent/helper/child/sandbox
-code, sandbox-policy stage and slice, qualification
+The patched `linux-sandbox` owns `SANDBOX_*` mapping and rendering because it
+exists before action setup and remains the wait owner through normal cleanup
+or `pending-kernel-cleanup`. Sequential T120 owns the byte-exact sandbox
+cross-product tests in its exact toolchain files. Those tests apply the same
+repository-root path and unique-anchor resolver to both fixed sandbox inputs,
+cover every sandbox code across all slices and both command versions, and
+plant omitted/wrong/borrowed remedies, unresolved locators, pending-state
+removal, false-reaped reporting, success-after-quarantine, and reuse while
+quarantined. No runner recovery file renders a sandbox code.
+
+Together the T067 runner harness and T120 live sandbox harness cover every
+execution parent/helper/child/sandbox code, sandbox-policy stage and slice,
+qualification
 query/refusal/publication class, and release query/refusal class. It rejects
 missing or wrong remedies and command versions, descriptor numbers, absolute,
 runfiles, socket, and Nix store paths, OS/errno text, raw

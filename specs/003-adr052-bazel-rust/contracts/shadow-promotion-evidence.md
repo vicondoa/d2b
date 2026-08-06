@@ -17,6 +17,9 @@ contains:
 - manifest references;
 - explicit `bazelRestoreCount`, `bazelSaveCount`, and
   `bazelPublicationCount`;
+- a closed seven-entry PID-namespace containment result set, canonical sandbox
+  patch and monitor identity digests, and the complete containment-validator
+  mutation result set;
 - effective permissions.
 
 The canonical cache field spellings are exactly `bazelRestoreCount`,
@@ -75,6 +78,21 @@ generated-artifact reference (generated path plus digest). The validator:
   disagree on head SHA, commit, digest, or count;
 - refuses a wrong-candidate reference, where evidence that must bind the
   candidate commit binds a different commit.
+- requires exactly one result for each of `crash-before-ready`,
+  `crash-after-ready`, `crash-after-executed`, `crash-during-grace`,
+  `direct-long-lived-descendant`, `double-forked-long-lived-descendant`, and
+  `beyond-ceiling-pending-cleanup`; derives each closed
+  `supervisorRecoveryClass`, `userspaceEscalationResult`, `cleanupResult`, and
+  `quarantineResult`; and verifies exact lowercase SHA-256 patch, canonical
+  monitor identity, pending-observation, and result digests;
+- refuses any containment value carrying a raw PID, process-group ID,
+  descriptor, path, process output, kernel text, command line, environment,
+  handle, or opaque identity;
+- requires passing omitted/duplicate/unknown-stage, wrong-recovery-class,
+  malformed-digest, patch/monitor-mismatch, illegal-cleanup/quarantine,
+  false-reaped, success-after-quarantine, quarantined-reuse, and
+  forbidden-field mutation results. No summary count substitutes for those
+  results.
 
 `qualification.json` cannot qualify through a trusted boolean. Boolean and
 count fields such as `qualified`, `eligible`, or any summary total are
@@ -293,20 +311,32 @@ It also proves:
     preflight; every closed stage diagnostic; all eight pre-action plants; and
     no process/local/standalone/worker/remote fallback; fresh PID-namespace
     monitor identity; crash-before-`READY`, crash-after-`READY`,
-    crash-after-`EXECUTED`, crash-during-grace, and long-lived-descendant
-    results; fixed containment ceiling; and namespace/teardown-patch/ceiling/
-    fallback mutation results.
+    crash-after-`EXECUTED`, crash-during-grace, direct and double-forked
+    long-lived-descendant results; fixed userspace containment ceiling; one
+    beyond-ceiling `pending-kernel-cleanup` plant with owned quarantine,
+    no-success/no-reuse, no false-reaped claim, and eventual consuming reap;
+    and namespace/teardown-patch/ceiling/quarantine/fallback mutation results.
 23. exact immutable static C `d2b-bazel-exec-supervisor` derivation,
     dependency-closure, output NAR/executable, source, and protocol hashes;
     one-site Rust invocation policy; private-fd identity; descriptor absence;
-    CLOEXEC and stdin results; `READY`/`EXECUTED`/terminal transport;
-    held-open-writer, closed-reader `EPIPE`, exact partial-I/O,
-    fast-same-status, waitable `SIGCHLD`, signal-normalization and forwarding,
+    CLOEXEC and stdin results; single-record exec-error plus stateful framed
+    `READY`/`EXECUTED`/terminal transport; fragmented/coalesced and
+    malformed/duplicate/order results; held-open-writer, closed-reader `EPIPE`,
+    exact partial-I/O, fast-same-status, waitable `SIGCHLD`, block-first signal
+    initialization, pending/normalization-time `SIGTERM`, pre-`READY`
+    termination ownership, and forwarding,
     no-deadline external-TERM escalation, target-ignore-TERM, absence of
     numeric Rust signaling; and every Rust-parent and C-supervisor
-    ownership/closure/cleanup/wait/reap result; plus every parent/helper/child/
+    ownership/closure/cleanup/wait/reap result; plus every parent/helper/child
+    runner recovery-code byte-exact result and every patched-sandbox-owned
     sandbox recovery-code byte-exact result for the phase-valid diagnostic
     command version.
+24. exactly seven bounded PID-namespace containment result rows with closed
+    supervisor recovery, userspace escalation, cleanup, and quarantine
+    values; matching sandbox patch and canonical monitor identity digests;
+    the pending-observation digest where required; no raw PID, descriptor,
+    path, process output, or opaque identity; and every required containment
+    validator mutation result.
 
 Candidate-specific evidence binds one integrated commit. A content change
 invalidates affected evidence. The qualified record merges before promotion
