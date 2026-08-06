@@ -16,7 +16,7 @@ artifact and requires a clean `git diff`, fail-closed.
 | `docs/reference/schemas/v3/core.d2bus.org_<Type>.schema.json` | `xtask gen-zone-schemas` | Nix eval, contract tests, companions | NEW; `v2/` remains until its paths retire |
 | `nixos-modules/generated/resource-types.nix` | `xtask gen-zone-nix-options` | Nix option surface | NEW in W2 |
 | `nixos-modules/generated/options-zones-<Type>.nix` | `xtask gen-zone-nix-options` | Nix option surface | NEW in W2, one per ResourceType |
-| per-Zone `resource-bundle.json` | `zone-resources-json.nix` + `bundle-artifacts.nix` + `d2b-resource-compiler` | Zone runtime, core controllers | W5 emits only `schemaVersion: 4` / `bundleVersion: 2`; the required top-level compiler-only `audit` object is outside `resources`, and `contentHash` covers canonical `{audit,resources}` |
+| per-Zone `resource-bundle.json` | active chain: `bundle-zones.nix` + `d2b-resource-compiler` + `bundle-artifacts.nix`; compatibility-only legacy input: `zone-resources-json.nix` | Zone runtime, core controllers | W5 emits only `schemaVersion: 4` / `bundleVersion: 2`; the required top-level compiler-only `audit` object is outside `resources`, and `contentHash` covers canonical `{audit,resources}`. `zone-resources-json.nix` cannot emit, version, hash, or publish the active bundle |
 | `docs/reference/schemas/v3/resource-bundle.json` | `xtask gen-zone-schemas` from the active crate-root `ZoneBundle` | compiler, Nix and daemon contract tests, companions | Generated with the 4/2 change; no duplicate full-envelope DTO may generate a competing schema |
 | `docs/specs/ADR-046-spec-set.json` | `xtask spec-registry` | Gate 0, drift gate | Integrator-only; last commit of each wave |
 | `docs/specs/ADR-046-work-items.json` | `xtask spec-registry` | Wave entry/seal checks | Same |
@@ -43,16 +43,22 @@ artifact and requires a clean `git diff`, fail-closed.
   tests, and changelog move atomically with the 4/2 version pair. No consumer may accept 3/1
   or future pairs 5/2, 4/3, or 5/3, and no consumer may synthesize a missing v4 `audit`
   object from defaults.
+- `bundle-zones.nix`, `d2b-resource-compiler`, and `bundle-artifacts.nix` are the only active
+  emission/publication chain. `zone-resources-json.nix` is compatibility-only and cannot be
+  an independent envelope, version, hash, or publication authority.
 - An installed-host migration builds the complete 4/2 set before the NixOS generation switch.
   Failed build/install leaves the old generation active. Rollback restores the matching 3/1
   module, compiler, daemon, and artifacts together; it never presents 3/1 to 4/2 code.
-- Version refusal is actionable: regenerate with
-  `sudo nixos-rebuild switch --flake <host-flake>#<host>` and never hand-edit a generated or
-  installed bundle.
+- Runtime version refusal is identifier-free and carries only closed action
+  `rebuild-host-generation`; it contains no command or argv. Reference documentation alone
+  says to run `sudo nixos-rebuild switch --flake <host-flake>#<host>` and never hand-edit a
+  generated or installed bundle.
 
 ## Acceptance
 
 `make test-drift` is clean; no artifact is hand-edited; no delivery record appears in
 `git status`; 4/2 passes while 3/1, mixed, 5/2, 4/3, and 5/3 fail at Rust, Nix, and daemon
 boundaries; installed-host upgrade, failed activation, and whole-generation rollback tests
-pass.
+pass. The nonempty structural/API guard and poison fixture reject a second bundle envelope or
+alias, version authority, hash implementation/entry point, or re-export through the existing
+policy and fixture-contract gates.

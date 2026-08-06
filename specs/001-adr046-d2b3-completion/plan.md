@@ -97,7 +97,7 @@ RSS <=64 MiB; per-component budgets 22 MiB for `Provider/system-core` and 12 MiB
 | **III. Reasonable Isolation Over Convenience** | FR-009 default-denies cross-Zone reference; FR-014 fails closed on missing identity state rather than reinitializing; FR-066 requires authoritative registrar-derived subjects; FR-069 forbids partial publication; FR-071 isolates a failed Zone without making it ready. virtiofsd zero-capability and per-VM store-farm invariants are untouched. | PASS |
 | **IV. Contract-Driven Compatibility** | 3.0 is a deliberate major-version clean break with v3 schemas, versioned artifacts, and fail-closed drift gates (FR-031). Constitution 2.2.0 authorizes this coordinated correction of an approved contract defect before the first d2b 3.0/v3 release. T605 owns the two omitted `ZoneHandlerName` values plus its normative, test, API-snapshot, guard, and reference artifacts; T595 owns emission, T599 owns downstream consumers, and T220 owns generated-manifest reconciliation and the full drift gate. Those stages land together in one Wave 5 PR. The Zone desired-state schema is unchanged. | PASS - C1 resolved in artifacts, implementation pending |
 | **V. Test-Layer Discipline** | FR-032 pins coverage to the lowest hermetic layer and forbids a new top-level shell gate; FR-029 routes every heavy lane through the single semaphore; FR-033 retires superseded suites. | PASS |
-| **VI. Panel-Gated Multi-Phase Work** | Every immutable candidate receives at most one unanimous binding ten-role panel with zero recommendations. Panels run as 10 read-only subagent lanes on `gpt-5.6-sol` at `xhigh`. A nonunanimous candidate remains immutable and failed; scoped fixes, delta/full-context follow-up panels iterated to unanimous closure, convergence, and validation produce a distinct successor with its own one request. Constitution 2.1.0 authorizes pipelined implementation start at 5 of 10 predecessor reviews while panel, seal, and merge stay strictly ordered. The external ADR/tooling still says once per wave, so candidate recovery is an explicit scope escalation that must land outside this feature batch before T589 implements it. W0/W1 delivered without panel/seal remains the existing tracked exception. | PASS for this plan; external recovery alignment blocks T589 |
+| **VI. Panel-Gated Multi-Phase Work** | Every immutable candidate receives at most one unanimous binding ten-role panel with zero recommendations. Panels run as 10 read-only subagent lanes on `gpt-5.6-sol` at `xhigh`. A nonunanimous candidate remains immutable and failed; scoped fixes, delta/full-context follow-up panels iterated to unanimous closure, convergence, and validation produce a distinct successor with its own one request. Constitution 2.1.0 authorizes pipelined implementation start at 5 of 10 predecessor reviews while panel, seal, and merge stay strictly ordered. The external ADR/tooling still says once per wave, so versioned feature-local prerequisite `adr046-candidate-recovery-prerequisite/v1` assigns T008 the pre-W2 refusal until the external ADR/spec/tooling/docs alignment is accepted and merged. W0/W1 delivered without panel/seal remains the existing tracked exception. | PASS for the design; T008 blocks execution until candidate-recovery v1 is externally accepted |
 | **VII. Traceable, Marker-Free Shipped Artifacts** | Wave tags stay in commits and planning artifacts; SC-018 requires the release notes carry zero process markers; FR-019 lands docs with their behavior. ASCII-hyphen rule observed throughout. | PASS |
 
 **Gate result**: **PASS for pre-T603 read-only analysis**. The one tracked Principle VI
@@ -269,7 +269,7 @@ applies without modification.
 
 | Wave | Specs | Items | Parallel groups | Gate note |
 | --- | --- | --- | --- | --- |
-| W2 | 2 | 19 | 2, file-disjoint, zero overlap edges | Ready to launch now |
+| W2 | 2 | 19 | 2, file-disjoint, zero overlap edges | Blocked until T008 validates `adr046-candidate-recovery-prerequisite/v1` |
 | W3 | 1 | 4 | 1, strictly serial | Every Provider dossier depends on it |
 | W4 | 5 | 32 | 6 parallel | |
 | W5 (`adr046w5` delivery address) | 7 | 146 + 17 local completion/resume tasks | 12 manifest groups + the serialized completion graph below | Store exists; production publication and exact-tip evidence remain; pre-T603 A/P0 gates and post-T603 B/P gates precede resume |
@@ -321,10 +321,11 @@ checkpoint, and commit-tag instruction for this graph uses qualified lowercase `
    identity accessor, and one registrar-private issuer consumes the complete pidfd evidence.
    The session adapter, descriptor, bus Unix transport, and session seam consume that same
    accepted-socket evidence and expose no caller-supplied verifier or credential constructor.
-   Peer-pidfd acquisition uses either a patched safe dependency that checks exact returned
-   `optlen` or one narrow audited syscall wrapper that closes any fd returned with a
-   short/malformed result before returning a typed error; no short-result path asserts,
-   panics, or leaks.
+   Peer-pidfd acquisition uses only a pinned, reviewed safe dependency implementation. It
+   checks exact kernel-returned `optlen`, returns only `OwnedFd`, closes any fd returned on a
+   short/malformed or later failure, and reports a typed error without assert, panic, or leak.
+   Workspace `unsafe_code = "forbid"` rules out a local syscall fallback in
+   `d2b-session-unix`; absence of a qualifying dependency blocks the slice.
 4. The admitted ResourceService watch opens through that registered route, replays from the
    durable checkpoint without a replay/live gap, and feeds the registered controller fan-in.
    Before any EffectPort call, the core controller records an outstanding effect in the
@@ -384,11 +385,13 @@ checkpoint, and commit-tag instruction for this graph uses qualified lowercase `
    change cannot reuse a generation identity. Missing, old/mixed, malformed, misplaced, or
    unenforceable policy and any journal or segment prune failure produce typed degraded Zone
    health and block publication.
-   Every sensitive audit or broker DTO and owner uses fixed redacted `Debug`, including the
-   drain request, `SegmentWriter`, sink, exporter, root directory owner, and opaque storage
-   handle owner. Present trace context becomes only its typed domain-separated digest, absence
-   stays absent, and malformed input is denied before mutation; another digest class is never
-   fabricated or relabelled as trace correlation.
+   Every sensitive audit or broker DTO and owner uses fixed redacted `Debug`, including
+   `StoreSyncRequest`, `StoreSyncResponse`, the drain request, dispatcher errors,
+   `SegmentWriter`, sink, exporter, root directory owner, and opaque storage handle owner.
+   StoreSync wire fields, producers, consumers, schemas, and snapshots use only sealed typed
+   digests or opaque handles. Present trace context becomes only its typed domain-separated
+   digest, absence stays absent, and malformed input is denied before mutation; another
+   digest class is never fabricated or relabelled as trace correlation.
 6. One readiness projection is computed from store recovery, policy match, authenticated
    session/router admission, controller registration, watch admission, audit catch-up,
    mandatory controller health, and the `d2b-core-controller`-owned
@@ -402,6 +405,15 @@ checkpoint, and commit-tag instruction for this graph uses qualified lowercase `
    component publishes itself. Startup and close collect per-Zone outcomes and visit every
    Zone; a missing or unhealthy system-core registration/handler degrades only that Zone and
    never aborts or silently drops later owners.
+7. Installed-host migration publishes one durable, replayable handoff binding the previous and
+   target system, daemon, bundle-pointer, and complete bundle-set generations. Pointer
+   publication is file- and directory-durable before the existing `d2bd.service`
+   continuation. Crash replays publication, restart, or readiness acknowledgement
+   idempotently; restart/readiness failure durably rolls the complete matching generation
+   back. An identical switch or replayed acknowledgement causes no second ingestion or
+   effect. Runtime version refusal is identifier-free, has fixed redacted `Debug`, and carries
+   only closed action `rebuild-host-generation`; the exact rebuild command exists in reference
+   documentation only.
 
 The concrete failures this permits are a committed generation whose process dies after its
 effect intent becomes durable but before the effect completes, and an audit segment export
@@ -418,11 +430,11 @@ route, watch, audit export, controller, or the exact system-core Provider owners
 | Stage | Task(s) | Ownership and concurrency |
 | --- | --- | --- |
 | Resume reconciliation | T603 | Pre-T603 analysis and plan panel at A/P0 authorize only `packages/xtask/src/delivery/{mod.rs,resume.rs}`. T603 lands dedicated validator commit V with sole parent A and no other repository change, freezes B exactly at V and P byte-identical to P0, reruns analysis and the plan panel at B/P, then and only then writes the immutable authorization receipt at `.scratch/autopilot/adr046w5/reconciliation.json` and routes the sole receipt-bound checkbox transition through `/d2b-spec-edit`. It writes no feature prose; the Wave 5 integrator alone owns dedicated checkbox commit C. |
-| Integrator prep | T589 | Its sole direct prerequisite is T603. It remains blocked until the finalized editor progress receipt exists, T073-T218 and T603 are checked, HEAD is the clean dedicated checkbox commit, and the separately scoped external ADR/tooling recovery alignment is merged. It lands the shared sealed capability, transactional audit-journal, mutation-response wire, typed `InspectOperation` store/API/protobuf contract, and typed broker audit-drain op. It also owns the `adr046w5` closed-evidence profile and candidate-scoped strict state in `packages/xtask/src/delivery/{evidence,panel,seal,eligibility,history_proof,storage}.rs`: one fd-anchored, file-and-directory-durable, no-replace active reservation per program/wave; one request per immutable candidate; synchronized cross-candidate first-request exclusion; crash recovery exposing zero or one reservation; permanent failed-candidate closure; and successor admission only with scoped recovery evidence. Post-request history/evidence moves and same-candidate retries fail independently at panel, seal, and eligibility. No implementation slice branches before this commit. |
-| Serialized implementation | T590-T594, T605 | T590, T591, and T594 start together from T589. T592 starts only after T591 because both own `transaction.rs`; T593 starts after T592 because both own `packages/Cargo.lock`; T605 starts after T593 and regenerates the shared API snapshots. T592 owns `d2b-audit`; every raw audit producer including StoreSync audit/request/export; the broker drain; `packages/d2b-contracts/src/generation_bundle.rs` as the authoritative `ZoneBundle`; retirement of the duplicate full envelope in `v3/resource_bundle.rs`; `d2b-resource-compiler/src/main.rs` and CLI tests; `zone_schema.rs` plus generated resource-bundle schema; the 4/2 canonical `{audit,resources}` hash; and old/mixed/future-version tests. T593 owns the session adapter, descriptor, socket, bus Unix transport, session seam and existing tests, all consuming one accepted-socket evidence object. It uses a patched safe exact-optlen API or one narrow checked syscall wrapper and proves short-result fd closure. T605 owns its Zone enum, governing specs, paired reference, and final API snapshots; generated manifests remain T220-only. No slice edits `d2bd/src/resource_runtime.rs` or `d2bd/src/lib.rs`. |
-| Serial daemon composition | T595 | Sole writer for `d2bd/src/resource_runtime.rs`, `d2bd/src/lib.rs`, `d2bd/Cargo.toml`, and `nixos-modules/{bundle-zones,host-daemon}.nix`; begins only after T590, T592, T594, and T605 converge. It owns startup ingestion, the daemon/client `InspectOperation` path, the existing-service bundle trigger, exact 4/2 carrier consumption, future-version refusals, and the atomic installed-host 3/1-to-4/2 Nix rebuild plus whole-generation rollback and actionable regeneration command. It adds no unit. |
-| File-disjoint acceptance and docs | T596-T599, T604 | T599 owns the ResourceService-backed operation-inspection CLI, retained `--deadline`/`--no-deadline` controls, safe static human guidance, version-2 DTO/schema and contract tests, the coordinated `ADR-046-cli-and-operations` version amendment and migration guidance, and downstream status reconciliation with T595/T605. T604 owns new `packages/d2b-contract-tests/tests/resource_operator_activation.rs`, `packages/d2bd/tests/resource_operator_activation.rs`, and `tests/host-integration/resource-operator-activation.nix`, including the v4/v2 carrier and audit-only generation proof; the other tasks retain their named files. All five tasks may proceed together after T595 and share no file. |
-| Integrator convergence and freeze | T220 | Merges every slice; reconciles generated manifests; verifies coordinated normative/reference/test/schema/changelog treatment, including the authoritative 4/2 bundle contract/compiler/schema, canonical digest, old/mixed/future refusals, installed-host migration/rollback, and actionable regeneration command; folds fragments; rebases after W4; and records the panel base. It runs the closed-evidence profile plus concurrent reservation, crash durability, same-candidate retry, active-alternate-candidate, successor recovery, and post-request movement tests at panel, seal, and eligibility. It then runs integration, CI, and full drift, opens or updates the PR, and freezes F. Any later content/history change invalidates F and restarts T220 plus T600-T602. |
+| Integrator prep | T589 | Its sole direct prerequisite is T603; the candidate-recovery v1 external alignment was already a hard T008 pre-W2 gate. T589 remains blocked until the finalized editor progress receipt exists, T073-T218 and T603 are checked, and HEAD is the clean dedicated checkbox commit. It lands the shared sealed capability, transactional audit-journal, mutation-response wire, typed `InspectOperation` store/API/protobuf contract, typed broker audit-drain op, and typed/redacted `StoreSyncRequest`/`StoreSyncResponse` wire definitions plus schemas and snapshots. It also owns the `adr046w5` closed-evidence profile and candidate-scoped strict state in `packages/xtask/src/delivery/{evidence,panel,seal,eligibility,history_proof,storage}.rs`: one fd-anchored, file-and-directory-durable, no-replace active reservation per program/wave; fixed redacted state/errors; fd-relative durable orphan cleanup; one request per immutable candidate; synchronized cross-candidate exclusion; the point-specific zero/zero-or-one/exactly-one crash oracle; durable failed closure before active-slot release; and successor admission only with complete predecessor/program-wave/recommendations/successor-commit-tree/convergence/validation identities. Crash injection covers panel-request publication, closure, release, and successor admission. Post-request moves and retries fail at panel, seal, and eligibility. No implementation slice branches before this commit. |
+| Serialized implementation | T590-T594, T605 | T590, T591, and T594 start together from T589. T592 starts only after T591 because both own `transaction.rs`; T593 starts after T592 because both own `packages/Cargo.lock`; T605 starts after T593 and regenerates the shared API snapshots. T592 owns `d2b-audit`; every StoreSync producer/consumer of T589's typed wire DTOs; the broker drain; `packages/d2b-contracts/src/generation_bundle.rs` as authoritative `ZoneBundle`; retirement of the duplicate full envelope; and a nonempty structural/API poison guard rejecting any second envelope or alias, version authority, hash implementation/entry point, or re-export. T593 owns the session adapter, descriptor, socket, bus Unix transport, session seam and tests, all consuming one accepted-socket evidence object through a reviewed safe exact-optlen dependency returning `OwnedFd`; a local unsafe/syscall fallback is forbidden. T605 owns its Zone enum, governing specs, paired reference, and final API snapshots; generated manifests remain T220-only. No slice edits `d2bd/src/resource_runtime.rs` or `d2bd/src/lib.rs`. |
+| Serial daemon composition | T595 | Sole writer for `d2bd/src/resource_runtime.rs`, `d2bd/src/lib.rs`, `d2bd/Cargo.toml`, and `nixos-modules/{bundle-zones,host-daemon}.nix`; begins only after T590, T592, T594, and T605 converge. It owns startup ingestion, the daemon/client `InspectOperation` path, the existing-service bundle trigger, exact 4/2 carrier consumption, and the atomic installed-host 3/1-to-4/2 Nix rebuild with durable replayable handoff, restart-failure rollback, matching-generation checks, and identical-switch idempotency. Runtime version refusal has fixed redacted `Debug` and only closed action `rebuild-host-generation`; the exact command is documentation-only. It adds no unit. |
+| File-disjoint acceptance and docs | T596-T599, T604 | T599 owns the ResourceService-backed operation-inspection CLI, retained `--deadline`/`--no-deadline` controls, safe static human guidance, version-2 DTO/schema and contract tests, the coordinated `ADR-046-cli-and-operations` version amendment and migration guidance, and downstream status reconciliation with T595/T605. T604 owns new `packages/d2b-contract-tests/tests/resource_operator_activation.rs`, `packages/d2bd/tests/resource_operator_activation.rs`, `tests/host-integration/resource-operator-activation.nix`, and only the host-integration discovery/build recipe in `Makefile`. Its evidence must enumerate and build `vmChecks.x86_64-linux.resource-operator-activation`; skip or empty discovery is ineligible. The other tasks retain their named files. All five tasks may proceed together after T595 and share no file. |
+| Integrator convergence and freeze | T220 | Merges every slice; reconciles generated manifests; verifies coordinated normative/reference/test/schema/changelog treatment, including the authoritative single-owner 4/2 bundle contract/compiler/schema, poison guard, canonical digest, old/mixed/future refusals, replayable installed-host migration/rollback, closed runtime action, and command-only docs; folds fragments; rebases after W4; and records the panel base. It runs the closed-evidence profile plus the point-specific reservation oracle, durable orphan cleanup, concurrent reservation, panel-request/closure/release/successor crash transitions, same-candidate retry, active-alternate-candidate, malformed/stale/cross-candidate/cross-wave recovery-evidence matrix, and post-request movement tests at panel, seal, and eligibility. It then runs integration, CI, and full drift, opens or updates the PR, and freezes F. Any later content/history change invalidates F and restarts T220 plus T600-T602. |
 | Frozen-candidate evidence | T600-T601 | Read-only evidence lanes run against F. They write delivery evidence only, not repository files, and emit the exact closed validation identifiers assigned below. They may run together subject to the heavy-gate limit. |
 | Mechanical evidence convergence | T602 | Verifies dependency closure, resume identities, clean F, and the exact evidence-identifier multiset. T219 is blocked until it passes. |
 | Single binding close and merge | T219 | Runs pre-panel checks, then F's one binding panel, seal, and merge. F stays immutable. Nonunanimity fails F, routes scoped fixes back through T220 and T600-T602, and requires a delta/full-context follow-up panel before a distinct successor's one request. External policy/tooling refusal escalates; it never waives findings. |
@@ -430,6 +442,8 @@ route, watch, audit export, controller, or the exact system-core Provider owners
 The implementation and close dependency chain is exactly:
 
 ```text
+candidate-recovery prerequisite v1 external acceptance -> T008 -> W2 -> W3 -> W4
+W4 close -> pre-T603 analysis + plan panel at A/P0
 pre-T603 analysis + plan panel at A/P0 -> T603 validator commit V
 V = B -> post-T603 analysis + plan panel at B/P -> receipt/editor transition C
 C -> T589 -> {T590,T591,T594}
@@ -629,10 +643,12 @@ Type-10 destination is `tests/host-integration/resource-operator-activation.nix`
 the public heavy-gated `make test-host-integration` target. It declares the representative
 Guest, Volume, Network, and Device through Nix, switches through the public NixOS activation
 path without a manual daemon restart or private reload, and requires every one of those four
-supported resources to reach its real owned effect and readiness. Typed refusal cases are
-separate negative tests and cannot satisfy the positive story. The test removes the Guest,
-switches again, and observes dependency-safe cleanup while the unrelated resources remain
-ready and intact. A direct
+supported resources to reach its real owned effect and readiness. The target must discover a
+nonempty `vmChecks` set, enumerate and successfully build
+`vmChecks.x86_64-linux.resource-operator-activation`, and report no skip; skipped or empty
+output is ineligible evidence. Typed refusal cases are separate negative tests and cannot
+satisfy the positive story. The test removes the Guest, switches again, and observes
+dependency-safe cleanup while the unrelated resources remain ready and intact. A direct
 ResourceService or `WatchService` call, `ProductionWatchHarness`, fixed subject, fake
 endpoint, or manually set readiness field may remain useful unit coverage but is explicitly
 ineligible as T219 evidence.
@@ -650,11 +666,11 @@ second validator.
 
 | Closed `validation` identifier | Owner | Delivery lane | Required content |
 | --- | --- | --- | --- |
-| `production-session-watch` | T600 | `github-ci` | Same-Zone request/watch through the production session/router plus cross-Zone and self-named subject denial; one accepted-socket evidence object shared by adapter, descriptor, bus Unix transport, and session seam; checked `SO_PEERPIDFD` exact-optlen handling into CLOEXEC `OwnedFd`; injected short-result fd-count, unsupported/malformed/missing-CLOEXEC/leak/dead/numeric-only/reuse/credential/generation/cgroup/ambiguity refusals; no caller-supplied verifier/credential constructor or re-export; private registrar issuance; and a fresh restart peer pidfd |
+| `production-session-watch` | T600 | `github-ci` | Same-Zone request/watch through the production session/router plus cross-Zone and self-named subject denial; one accepted-socket evidence object shared by adapter, descriptor, bus Unix transport, and session seam; reviewed safe dependency `SO_PEERPIDFD` implementation with exact-optlen validation, CLOEXEC `OwnedFd`, and returned-fd failure closure; injected short-result fd-count, unsupported/malformed/missing-CLOEXEC/leak/dead/numeric-only/reuse/credential/generation/cgroup/ambiguity refusals; workspace unsafe-forbid and no local syscall/raw-fd fallback; no caller-supplied verifier/credential constructor or re-export; private registrar issuance; and a fresh restart peer pidfd |
 | `effect-replay-cleanup` | T600 | `github-ci` | Every generation/effect-ledger crash window, replay/adoption, and stale/zero/wrong-UID/ambiguous cleanup refusal |
-| `audit-drain-replay` | T600 | `github-ci` | Transactional authoritative rows; fd-anchored file/directory-durable export and restart replay; digest-plus-ordinal deduplication; durable operation inspection; replay-binding denials; fixed-digest/record limits; valid-present/absent/malformed trace behavior with typed correlation and no fabrication/relabel; fixed redacted `Debug` for every migrated producer including StoreSync request/audit/export, broker-drain DTO, SegmentWriter/sink/export/directory/opaque-handle owner; post-export journal retention and prune health; and raw identifier/trace/path/handle-canary absence |
+| `audit-drain-replay` | T600 | `github-ci` | Transactional authoritative rows; fd-anchored file/directory-durable export and restart replay; digest-plus-ordinal deduplication; durable operation inspection; replay-binding denials; fixed-digest/record limits; valid-present/absent/malformed trace behavior with typed correlation and no fabrication/relabel; typed `StoreSyncRequest`/`StoreSyncResponse` producers, consumers, schema and snapshots; fixed redacted `Debug` for every migrated producer, both StoreSync wire DTOs, broker-drain DTO, SegmentWriter/sink/export/directory/opaque-handle owner; post-export journal retention and prune health; and raw identifier/trace/path/handle-canary absence |
 | `system-core-handler-contract` | T600 | `github-ci` | T605 enum/list/API/reference/schema proof, T595 emission, T599 consumer agreement, exact live handler readiness, non-substitution, and multi-Zone isolation |
-| `operator-nix-activation-cleanup` | T600 | `local-host` | T604 exact 4/2 top-level audit carrier, audit-only generation identity change, empty ZoneSpec/no emitted Zone resource, 3/1/mixed/future 5/2, 4/3, and 5/3 plus missing/misplaced refusals, atomic installed-host rebuild from 3/1 to 4/2, failed pre-activation preservation, whole-generation rollback, actionable regeneration command, initial and declaration/removal public switches, four representative owned effects/readiness, idempotency, dependency-safe cleanup, and ready unrelated resources |
+| `operator-nix-activation-cleanup` | T600 | `local-host` | T604 exact 4/2 top-level audit carrier, audit-only generation identity change, empty ZoneSpec/no emitted Zone resource, 3/1/mixed/future 5/2, 4/3, and 5/3 plus missing/misplaced refusals; durable replayable installed-host handoff from 3/1 to 4/2; pointer/restart/readiness crash and restart-failure rollback matrix with matching generations and no duplicate effect; closed identifier-free `rebuild-host-generation` runtime action with command-only docs; initial, identical, declaration, and removal public switches; four representative owned effects/readiness; dependency-safe cleanup; ready unrelated resources; and nonempty host output enumerating and building `vmChecks.x86_64-linux.resource-operator-activation` without skip |
 | `resource-plane-rss-owner-fanin` | T601 | `local-host` | Whole-process RSS at 10,000 resources/100 authenticated watches with no baseline subtraction and store, policy, ResourceService, controller endpoint/fan-in, and audit journal/export owner counts exactly one; the system-core registration/list belongs only to `system-core-handler-contract` |
 | `wave5-removal-proofs` | T601 | `github-ci` | Every manifest-label W5 removal predicate rerun against F |
 | `cli-reference-conformance` | T601 | `github-ci` | Emitted CLI/help/JSON/wire behavior; accepted Version 2 amendment and Version 1 migration guidance; exact ID, exits, mandatory envelope fields, DTO/schema, retained `op inspect --deadline`/`--no-deadline` plus mutual-exclusion/cancellation coverage, identifier-free static human guidance, closed JSON remediation actions, and all T599 reference comparisons |
@@ -703,12 +719,19 @@ T600/T601 record union names F and F's tree produced by T220 and its `(lane, val
 multiset passes T589's checked-in eight-row closed-profile validator exactly; T220 has proved
 the same validator is wired to panel-request, seal, and merge-eligibility, and its missing,
 extra, duplicate, unknown, wrong-lane, and conflated negative tests are green. T589's strict-binding suite also proves synchronized cross-candidate first requests yield
-exactly one success and one durable fd-anchored reservation; crashes around file sync,
-no-replace publication, and directory sync expose zero or one reservation; same-candidate
-retry, alternate candidate while active, failed-candidate retry, post-request byte-identical
-history rebase, and evidence refresh are rejected at panel, seal, and merge-eligibility; a
-distinct successor is admitted only after durable failed-candidate closure and complete
-scoped recovery evidence; and generic history-only reuse remains green before a candidate's
+exactly one success and one durable fd-anchored reservation. Before no-replace publication the
+recovery oracle is zero reservations; after publication but before wave-directory `fsync` it
+is zero or one; after directory `fsync` it is exactly one and every retry refuses.
+Fd-relative orphan cleanup leaves no temporary residue and durably syncs deletion. Injected
+crashes around panel-request publication, failed closure, active-slot release, and successor
+admission prove idempotent ordering, zero or one active slot, retained failed/request records,
+and no failed retry or duplicate request. Same-candidate retry, alternate candidate while
+active, post-request byte-identical history rebase, and evidence refresh are rejected at
+panel, seal, and merge-eligibility. Table-driven malformed, stale, cross-candidate, and
+cross-wave recovery evidence independently covers predecessor candidate, program/wave,
+recommendations digest, successor commit/tree, convergence identity, and validation identity.
+A distinct successor is admitted only after durable failed-candidate closure and complete
+scoped recovery evidence; generic history-only reuse remains green before a candidate's
 request or outside the strict profile. T604's
 exact-candidate activation result
 appears only in `operator-nix-activation-cleanup`; the coordinated T605 contract, T595 emitter,
@@ -754,12 +777,15 @@ that spec's evidence, so it is raised to the integrator rather than fixed mid-wa
 wave, while the repository panel recovery contract requires scoped fix and follow-up rounds
 after recommendations. The current delivery tooling also has no candidate-scoped strict
 reservation/recovery profile; T589 is future work and cannot govern W2-W4 retroactively.
-This feature batch therefore preserves one binding request per immutable candidate and
-records an explicit scope escalation: before T589, the integrator must land a separate
-accepted external ADR/tooling change that defines durable failed-candidate closure and
-successor admission. Until then, W2-W4 use committed tooling and stop on any policy conflict;
-they do not claim T589's future enforcement. This batch does not edit the external ADR,
-delivery source, contributor guidance, or panel tooling.
+The versioned feature-local
+`contracts/README.md#candidate-recovery-prerequisite-v1` therefore makes T008 the owner and
+places the external alignment before W2, not merely before T589. T008 stays open until a
+separate accepted ADR plus index, validation/delivery spec and generated manifests, delivery
+tooling, and contributor guidance all merge and its nonempty candidate-recovery tests pass.
+Only then may W2-W4 use successor recovery. T589 consumes that accepted v1 contract and adds
+the stricter `adr046w5` storage profile. This batch records the external scope escalation in
+`friction-log.md` but does not edit the external ADR, ADR index, normative specification,
+delivery source, `AGENTS.md`, contributor guidance, or panel tooling.
 
 `ADR-046-telemetry-audit-and-support` work item `ADR046-reuse-005` required the
 `observability-otel` Provider to emit authoritative `SessionConnect` records "via `d2b-audit`".

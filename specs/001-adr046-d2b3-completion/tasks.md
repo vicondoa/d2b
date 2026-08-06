@@ -69,17 +69,22 @@ convergence task, and freeze a successor candidate. Rerun candidate-bound valida
 iterate scoped delta/full-context follow-up panels to unanimous closure before giving that
 successor its one binding request.
 Missing recovery evidence, an attempt to reuse the failed candidate, or two active candidates
-for one program/wave fails closed with an actionable error naming the convergence and
-validation tasks to rerun. A policy or tooling refusal that prevents this recovery is an
-integrator escalation, never grounds to discard findings or re-attest changed bytes.
+for one program/wave fails closed with an identifier-free typed error and a closed
+`rerun-convergence` or `regather-candidate-validation` remediation action. It renders no
+program, wave, candidate, commit, tree, request, round, path, command, or argv. A policy or
+tooling refusal that prevents this recovery is an integrator escalation, never grounds to
+discard findings or re-attest changed bytes.
 
 T589 owns the candidate-scoped fail-closed implementation and table-driven coverage in
 `packages/xtask/src/delivery/{panel.rs,seal.rs,eligibility.rs,history_proof.rs,storage.rs}` for
-`adr046w5` and later users. W2-W4 cannot depend on code delivered in W5: their gate tasks use
-the committed delivery tooling and the recovery contract above, and escalate any external
-policy/tooling conflict rather than claiming T589's future strict profile. The generic
-history-proof reuse path remains available only before a candidate's binding request or for
-delivery programs that do not select the strict profile.
+`adr046w5` and later users. W2-W4 cannot depend on code delivered in W5. T008 therefore owns
+the pre-W2 gate for versioned feature-local contract
+`adr046-candidate-recovery-prerequisite/v1` in `contracts/README.md`: the coordinated external
+ADR/index, validation/delivery spec and generated manifests, delivery tooling, `AGENTS.md`,
+and contributor guidance must merge before W2. W2-W4 use that accepted external v1 behavior;
+they never claim T589's later strict storage profile. The generic history-proof reuse path
+remains available only before a candidate's binding request or for delivery programs that do
+not select the strict profile.
 
 ---
 
@@ -123,14 +128,15 @@ remain ordered behind predecessor merge and the successor's mandatory rebase.
 - [X] T587 Record the accepted rework cost (FR-050) in the delivery contract so a future integrator cannot cite pipeline rework as grounds to shorten a panel
 - [X] T588 Configure or document review scoping for the `v3` lineage. `detect-changed-files.sh` resolves the default branch to `main` via `origin/HEAD`, but ADR-046 integrates on `v3`, which never merges to `main`. Every wave review MUST pass an explicit diff scope (wave integration branch against its real base) or it will treat the whole v3 divergence as the wave changes
 
-**Checkpoint**: W2 entry criteria may now be declared met.
+**Checkpoint**: process hygiene is complete, but W2 entry cannot be declared met until T008
+validates `adr046-candidate-recovery-prerequisite/v1` and the accepted external scope.
 
 ---
 ## Wave W2: Primitive resource composition and Zone routing
 
 **Requirements**: see spec-coverage.md traceability tables | **Story**: US1 | **Work items**: 19 | **Parallel groups**: 2
 
-- [ ] T008 [US1] W2 ENTRY - confirm destinations uncontended, stack proposed against the exact parent commit, heavy-gate free, fast hermetic suite green. Note: under FR-057 and delivery contract §4, "every prior-wave work item is Merged" is **not** an entry criterion; it binds at the exit boundary - panel request, seal, and merge eligibility (T029)
+- [ ] T008 [US1] W2 ENTRY - own and validate feature-local prerequisite `adr046-candidate-recovery-prerequisite/v1` before any W2 implementation dispatch. Require the separately accepted external ADR and ADR-index commit, validation/delivery-spec plus generated-manifest commit, delivery-tooling commit, and `AGENTS.md`/contributor-guidance commit to be ancestors of the exact W2 base. Run the contract's nonempty `candidate_recovery_v1` discovery and test commands plus `make test-adr-index-coverage` and `make test-lint`; a skip, zero discovered tests, unmerged scope, or remaining once-per-wave conflict refuses entry. Then confirm destinations uncontended, stack proposed against that exact parent commit, heavy-gate free, and fast hermetic suite green. Under FR-057 and delivery contract §4, "every prior-wave work item is Merged" is **not** an entry criterion; it binds at the exit boundary - panel request, seal, and merge eligibility (T029)
 
 ### Group `wi:ADR-046-primitive-resource-composition` (3 items)
 
@@ -478,10 +484,17 @@ signoff, and T603 progress reconciliation.
   shared dispatcher contract in `packages/d2b-priv-broker/src/ops/mod.rs`. Freeze one typed
   Zone-audit drain op whose request contains only bounded fixed-digest records, ordinal,
   closed rotation policy, and opaque Zone storage identity, and whose response attests file
-  and directory durability. The op accepts no raw subject, Zone, resource, operation,
-  correlation, trace, or host path; it adds no service or unit.
-  Its request, response, dispatcher wrapper, and typed errors use fixed redacted `Debug`;
-  focused canaries prove opaque storage identity and any path-shaped value cannot render.
+  and directory durability. In the same owner, migrate the existing `StoreSyncRequest` and
+  `StoreSyncResponse` wire DTO definitions away from derived field formatting: every
+  identifier field becomes its sealed domain-specific fixed digest or opaque typed handle,
+  and both DTOs, their dispatcher wrapper, and all wire errors receive fixed redacted
+  `Debug`. Update the broker-wire schema/fingerprint, serialization snapshots, and focused
+  round-trip and redaction canaries in the owned files. The op and StoreSync DTOs accept no
+  raw subject, Zone, resource, operation, correlation, trace, host path, or stringly digest;
+  they add no service or unit. T592 serially migrates every producer and consumer of these
+  frozen wire types, and T598 exercises the end-to-end canaries. Focused canaries prove raw
+  identifiers, opaque storage identity, and path-shaped values cannot render in `Debug`,
+  errors, wire snapshots, or dispatcher diagnostics.
   **Additional T589 strict-binding ownership:** `packages/xtask/src/delivery/{history_proof.rs,storage.rs}`
   joins T589's existing delivery file set. Add the candidate-scoped ADR046 strict profile
   described under "Wave gate tasks". A wave-scoped canonical reservation record, reached
@@ -489,29 +502,56 @@ signoff, and T603 progress reconciliation.
   active candidate while pinning exact commit, tree, candidate, request digest, and round
   address. Publish it with create-exclusive temporary state, file `fsync`,
   `renameat2(RENAME_NOREPLACE)`, and wave-directory `fsync`; no overwrite or check-then-create
-  path is permitted. The same candidate can never reserve or request twice. A nonunanimous
-  result durably closes that immutable candidate as failed, retains its records, and permits
-  a successor candidate only after scoped fix-round, convergence, and candidate-bound
-  validation evidence is present. An alternate candidate while a reservation is active,
-  missing recovery evidence, or a post-request commit/history/evidence move is refused at
-  panel, seal, and eligibility. The existing generic history-only-rebase proof remains usable
-  only before that candidate's reservation or outside this strict profile.
+  path is permitted. Reservation, failed-candidate, recovery-evidence, directory-owner, and
+  transition objects and their errors use fixed redacted `Debug`. Operator-visible
+  diagnostics are identifier-free typed errors with closed remediation actions; they never
+  render program, wave, candidate, commit, tree, request digest, round address, path, or argv.
+  Canary tests place distinct values in every field and prove none reaches `Debug`, error,
+  log, or serialized diagnostic text.
+
+  The same candidate can never reserve or request twice. Ordering is durable and replayable:
+  the active reservation is durable before panel-request publication; a nonunanimous result
+  durably closes that immutable candidate as failed and retains its request and records before
+  the active slot is released; release is an fd-relative `unlinkat` plus wave-directory
+  `fsync`; only then may a successor be admitted. Crash recovery replays each transition
+  idempotently and exposes at most one active reservation. A failed record is never removed
+  or made retryable. A successor requires recovery evidence bound to all of:
+  predecessor candidate, exact program/wave, recommendations digest, successor commit and
+  tree, convergence identity, and candidate-bound validation identity. Table-driven
+  malformed, missing, stale, cross-candidate, and cross-wave negatives vary each identity
+  independently and are rejected at panel, seal, and eligibility. An alternate candidate
+  while a reservation is active, missing recovery evidence, or a post-request
+  commit/history/evidence move is refused at all three stages. The existing generic
+  history-only-rebase proof remains usable only before that candidate's reservation or
+  outside this strict profile.
+
+  Recovery owns orphan cleanup through the already held wave directory fd. It enumerates only
+  the reserved create-exclusive temporary namespace, rejects symlinks and unexpected
+  type/owner/mode/link-count/inode changes, removes a verified orphan with `unlinkat`, and
+  `fsync`s the wave directory before retry. No joined path, candidate-relative cleanup, broad
+  sweep, or cleanup outside that namespace is permitted.
 
   Table-driven and injected-filesystem tests in the owned modules must issue synchronized
   first requests for the same program/wave from different candidate directories and observe
   exactly one success, one durable canonical reservation, and typed refusals for every loser.
-  Inject crashes before temporary-file sync, between sync and no-replace publication, and
-  after publication before directory sync; recovery must expose either no committed
-  reservation or exactly one durable reservation, never two successes or an overwrite.
-  Independently reject same-candidate second request, alternate candidate while active,
-  post-request byte-identical rebase, and evidence refresh at panel, seal, and eligibility;
-  prove a durably failed nonunanimous candidate cannot retry, while a distinct successor with
-  complete recovery evidence can make its own one request.
-  This candidate-recovery state machine is blocked until the integrator lands a separate
-  accepted change that reconciles `docs/specs/ADR-046-validation-and-delivery.md` and the
-  delivery tooling with the repository panel recovery contract. Those paths are outside this
-  feature-edit batch. T589 must consume that merged contract; it may not silently reinterpret
-  the current external once-per-wave wording.
+  The point-specific reservation oracle is: every crash before no-replace publication
+  recovers zero committed reservations; a crash after no-replace publication but before the
+  wave-directory `fsync` may recover zero or one; after that directory `fsync`, recovery must
+  expose exactly one and every same-candidate or alternate-candidate request is refused.
+  Every recovery/retry case leaves exactly one canonical reservation or none as allowed by
+  that oracle, and zero temporary-file residue after durable cleanup.
+
+  Inject crashes around temporary-file sync, no-replace publication, directory sync,
+  candidate panel-request publication, durable failed closure, active-slot release, and
+  successor admission. At every restart prove idempotent transition ordering, zero or one
+  active reservation, retained failed/request records, no failed-candidate retry, no duplicate
+  request, and exactly one successor request only after complete recovery evidence. Also
+  reject same-candidate second request, alternate candidate while active, post-request
+  byte-identical rebase, and evidence refresh at panel, seal, and eligibility.
+  T589 consumes the accepted pre-W2
+  `adr046-candidate-recovery-prerequisite/v1` contract verified by T008. The external ADR,
+  index, validation/delivery spec and manifests, delivery tooling, `AGENTS.md`, and contributor
+  guidance remain outside this feature-edit batch; T589 may not reinterpret or weaken them.
   Because T592 and T593 serialize `packages/Cargo.lock`, T589's earlier branch-cut done clause
   applies to T590, T591, and T594; T593 cuts from completed T592 rather than directly from
   T589.
@@ -529,6 +569,8 @@ signoff, and T603 progress reconciliation.
   `nixos-modules/{options-zones.nix,zone-resources.nix,zone-resources-json.nix}`,
   `packages/d2b-contracts/src/{generation_bundle.rs,v3/resource_bundle.rs}`,
   `packages/d2b-contracts/tests/generation_bundle.rs`,
+  `packages/d2b-contract-tests/tests/policy_resource_bundle.rs` and its new poison fixture
+  under `packages/d2b-contract-tests/tests/fixtures/resource_bundle_duplicate/`,
   `packages/d2b-resource-compiler/src/main.rs`,
   `packages/d2b-resource-compiler/tests/cli.rs`,
   `packages/xtask/src/zone_schema.rs`,
@@ -552,14 +594,22 @@ signoff, and T603 progress reconciliation.
   envelope. Retire the duplicate full-envelope/version/hash implementation in
   `v3/resource_bundle.rs`; that module may retain only non-duplicated resource-item helpers
   needed by the authoritative contract. No alias may preserve two independently validated
-  bundle envelopes. The existing `gen-zone-schemas` command in `zone_schema.rs` generates the
-  committed schema from that authoritative type, and the schema, compiler CLI tests,
-  contract tests, and inline contract tests pin the
+  bundle envelopes. Add a nonempty structural and public-API guard that rejects a second
+  bundle-envelope type or type alias, a second schema/bundle version authority, a second
+  content-hash implementation or entry point, and any re-export that makes such a duplicate
+  reachable. The poison fixture independently injects each forbidden class and must fail for
+  the intended single-owner reason through the existing `make test-policy` and
+  `make test-fixture-contracts` lanes; zero discovered source/API entries is failure. The
+  existing `gen-zone-schemas` command in `zone_schema.rs` generates the committed schema from
+  that authoritative type, and the schema, compiler CLI tests, contract tests, and inline
+  contract tests pin the
   required `audit`, 4/2 versions, audit-only hash change, exact canonical preimage, and all
   old/mixed/future refusals. Preserve byte-identical empty `Zone.spec` and emit no Zone
   resource. T595 owns final `bundle-zones.nix` and daemon wiring; T220 owns generated output
   reconciliation, the coordinated reference/schema/contract-test set, fragment fold, and
-  changelog verification.
+  changelog verification. `docs/reference/resource-compiler.md` carries the exact
+  `sudo nixos-rebuild switch --flake <host-flake>#<host>` command as documentation; no
+  runtime DTO, wire response, error, or remediation argv carries it.
   **Additional T592 serialized audit migration ownership:** include
   `packages/d2b-session/src/audit.rs`, `packages/d2b-bus/src/audit.rs`,
   `packages/d2b-core-controller/src/authz_audit.rs`, `packages/d2b/src/zone_audit.rs`,
@@ -571,8 +621,12 @@ signoff, and T603 progress reconciliation.
   `packages/{d2b-audit,d2b-session,d2b-bus,d2b-core-controller,d2b-resource-store-redb,d2b-priv-broker,d2b}/Cargo.toml`
   plus `packages/Cargo.lock`. Migrate every raw constructor, producer, exporter, CLI validator,
   and test to sealed domain-specific digest types; no raw identifier overload or conversion
-  remains. Every sensitive journal/replay/audit/broker-drain DTO, error, and owning object,
-  including the request frozen by T589, all StoreSync audit producers and exporters,
+  remains. Consume T589's exact typed `StoreSyncRequest` and `StoreSyncResponse` definitions
+  in every StoreSync producer, broker dispatcher/handler, completion path, exporter, and
+  schema/snapshot consumer; no producer may retain a parallel raw or derived-`Debug` DTO.
+  Every sensitive journal/replay/audit/broker-drain DTO, error, and owning object,
+  including the request frozen by T589, both StoreSync wire DTOs, all StoreSync audit
+  producers and exporters,
   `SegmentWriter`, sink, exporter, held directory owner, and opaque storage handle owner, has
   a fixed redacted `Debug` implementation rather than derived field formatting. StoreSync
   request, completion, and export events accept only their own typed domain-separated fixed
@@ -582,19 +636,22 @@ signoff, and T603 progress reconciliation.
   mutation; no path may fabricate a digest for absence or relabel operation/correlation data
   as trace correlation. Focused and T598 end-to-end canaries must include raw identifiers,
   trace text, root path state, and opaque handle values across every StoreSync producer,
-  record, segment, export, error, log, metric, span, CLI output, and `Debug`.
+  wire schema/snapshot, record, segment, export, error, log, metric, span, CLI output, and
+  `Debug`.
 
 - [ ] T593 [US1] **Publish the authenticated Resource API and watch route.** Depends on T592. Owned files: `packages/d2b-bus/src/{router.rs,registry.rs,authorization.rs,operations.rs,streams.rs,session_seam_tests.rs,transport/unix.rs}`, `packages/d2b-resource-api/src/{adapter.rs,watch.rs}`, `packages/d2b-contracts/src/v3/services.rs`, `packages/d2b-session-unix/src/{lib.rs,adapter.rs,descriptor.rs,pidfd.rs,socket.rs,error.rs,subject.rs,zone_admission.rs}`, `packages/d2b-session-unix/tests/{subject_mapping.rs,unix_session.rs}` plus new compile-fail fixtures in that directory, `packages/d2b-session-unix/Cargo.toml`, the subsequent `packages/Cargo.lock` update, `packages/d2b-bus/tests/{production_resource_route.rs,public_mint_surface.rs}`, and accepted normative specification `docs/specs/ADR-046-componentsession-and-bus.md`. Replace the unregistered production seam with a route whose registration consumes the authenticated ComponentSession admission. At Unix accept, obtain the process descriptor directly from the accepted socket with `getsockopt(SO_PEERPIDFD)`; `pidfd_open(SO_PEERCRED.pid)` is forbidden. The session adapter, descriptor, bus Unix transport, and session seam must all consume the same accepted-socket evidence object; none may reacquire credentials, accept a caller-supplied verifier, or construct evidence from a credential tuple or numeric PID. Treat `SO_PEERPIDFD` support as part of the kernel floor and fail closed with an actionable unsupported-kernel error when unavailable. Require `FD_CLOEXEC`, verify the `SO_PEERCRED` tuple, expected process generation/start identity, expected cgroup, and liveness against that exact fd, and consume all evidence into one private registrar issuer. Reject a dead fd, credential/generation/cgroup mismatch, ambiguous evidence, or any numeric-PID-only path. Remove the public `ZoneBootstrapIdentity::verify` path, its `Clone` implementation and identity/evidence accessors, the `VerifiedUnixPeer::credentials` accessor, caller-supplied verifier and credential constructors, and every direct or transitive re-export that permits external issuance; neither type may expose construction fields, `Clone`, `Copy`, `Default`, conversions, raw credentials, pidfd, generation, or cgroup evidence. `ZoneRegistrar` exclusively derives and propagates the subject from its private mapping; requests and stream frames carry no subject claim. Register exact-Zone ResourceService and controller routes; add T589's `InspectOperation` to the closed service/method catalogue, authorization map, and router; admit watch replay/live delivery through ZoneBus; and expose one registration/readiness observation from actual owned handles. Bump accepted `ADR-046-componentsession-and-bus` from Version 1 to Version 2 and normatively pin direct peer-pidfd acquisition, private registrar issuance, consumed evidence, and the sealed public surface; T593 updates source-level mint, compile-fail, adapter, transport, and session-seam seals, T605 serialized after T593 regenerates the shared API snapshots, and T220 coordinates generated manifests, references, tests, and changelog treatment. **Done when** same-Zone authenticated Get/List/Watch/InspectOperation reaches the real service; cross-Zone, self-named, unregistered, reused-admission, direct-WatchService, numeric-PID-only, post-credential PID reuse, dead-pidfd, credential/generation/cgroup mismatch, unsupported `SO_PEERPIDFD`, and ambiguity paths are denied; existing adapter, descriptor, Unix transport, subject-mapping, Unix-session, and session-seam tests use accepted-socket evidence and reject all caller-supplied verifier/credential paths; external compile-fail/API-surface checks prove no public verifier, constructor, clone, credential/evidence accessor, conversion, re-export, or alternate issuer survives; and neither `UnregisteredBusAdapter` nor a fixed endpoint can satisfy production publication.
   **T593 checked syscall boundary:** T592's serialized audit manifest and
-  `packages/Cargo.lock` update lands first. Prefer a patched safe `nix` `PeerPidfd` API only if
-  it returns an owned descriptor after checking the kernel-reported `optlen` and represents a
-  short result as a typed error without assert, panic, or leak. Otherwise use one private,
-  narrowly audited `getsockopt(SO_PEERPIDFD)` wrapper in `socket.rs`; this is the sole allowed
-  local syscall/`unsafe` boundary. It initializes the result fd to an invalid sentinel,
-  supplies the exact `c_int` length, accepts only a successful call with exact returned
-  `optlen` and a nonnegative fd, closes any returned fd on every malformed-length or later
-  validation branch, and constructs `OwnedFd` only after those checks. It returns no raw fd
-  and exposes no `FromRawFd` surface.
+  `packages/Cargo.lock` update lands first. The workspace `unsafe_code = "forbid"` policy
+  admits no local syscall fallback in `d2b-session-unix`, including a private wrapper.
+  T593 must consume a pinned, reviewed safe dependency API for `SO_PEERPIDFD`. The reviewed
+  dependency implementation must initialize the output fd to an invalid sentinel, pass the
+  exact `c_int` length, validate the kernel-returned `optlen` is exact, reject a negative fd,
+  close any fd returned on a short, oversized, malformed, or later validation failure, and
+  return only `OwnedFd` on success. Short results are typed errors, never assertions or
+  panics. The dependency review and its exact-length, returned-fd-on-error, and ownership tests
+  are recorded with the T593 evidence. If no such dependency implementation is available,
+  T593 remains blocked; it may not add local `unsafe`, `FromRawFd`, a raw-fd return, or a
+  numeric-PID fallback.
 
   `socket.rs` keeps the operation private to accepted sockets, verifies `FD_CLOEXEC`, and
   returns typed actionable errors; every unsupported, short/oversized-result,
@@ -622,23 +679,41 @@ signoff, and T603 progress reconciliation.
   compile every declared Zone to 4/2 into the immutable new Nix system closure, stage the
   complete bundle set behind one generation pointer, atomically publish that pointer with
   the system-profile switch, and only then trigger the existing `d2bd.service` continuation.
-  A failed compile, staging step, or publication leaves the old pointer, generation, and
-  daemon running; the 4/2 daemon never observes a partially installed or mixed set. Rollback
-  uses the normal NixOS generation rollback to restore the complete 3/1
-  module, compiler, daemon, and bundle set together; feeding a retained 3/1 bundle to the 4/2
-  daemon is always refused. The actionable version-refusal message names
-  `sudo nixos-rebuild switch --flake <host-flake>#<host>` as the regeneration command and
-  says not to hand-edit the installed JSON.
-- [ ] T604 [P] [US1] **Prove exact-candidate operator activation through effect and cleanup.** Depends on T595 and is file-disjoint with T596-T599. Sole owned files: new `packages/d2b-contract-tests/tests/resource_operator_activation.rs`, new `packages/d2bd/tests/resource_operator_activation.rs`, and new `tests/host-integration/resource-operator-activation.nix`. The fixture-backed contract test proves that an operator declaration emits the exact pinned `zones/<zone>/resource-bundle.json` generation and that removing one declaration emits the corresponding generation delta; run it through `D2B_ENABLE_FIXTURE_BUILD=1 make test-fixture-contracts`. The Type-3 d2bd test is the lowest feasible production-boundary test: consume those exact generation bytes through the daemon startup/change-ingestion entry and production store/controller path, never through a direct ResourceService/WatchService call, and run it through `make test-rust`. The Type-10 test is additionally required because NixOS activation, systemd, broker mutation, and real owned host effects cannot be proved below `runNixOSTest`; run it only through the public heavy-gated `make test-host-integration` target. In the positive host test, declare one Zone with every supported representative Guest, Volume, Network, and Device resource in Nix, switch through the public NixOS activation path, and require each of the four to reach its real broker/controller-owned effect and readiness. A status-only path or actionable refusal is ineligible for the positive story; refusal cases run separately as negative tests. Repeat an identical switch and prove no duplicate ingestion or effect. Remove the declared Guest, switch the next emitted generation without a manual `systemctl restart`, `reload`, private RPC, or test-only hook, observe dependency-safe cleanup of its owned effect, and prove the Volume, Network, Device, and unrelated resources remain ready, intact, and unrecreated. Bind all test records and both bundle content hashes to the same exact candidate. **Done when** declaration and removal generations are pinned; startup and both public switches automatically reach production daemon ingestion; all four representative resources have positive owned-effect/readiness evidence; the identical switch is idempotent; removed-resource cleanup completes in dependency-safe order; unrelated resources and durable identities are unchanged; no extra unit exists; and all three public gates pass on the same candidate.
+  The handoff durably binds the previous and target system generations, bundle-pointer
+  generations, and expected daemon generation before publication; pointer publication is
+  file- and directory-durable. It is replayable after a crash and is acknowledged only after
+  the matching daemon has restarted, ingested the matching complete bundle set, and become
+  ready. Replay of an already acknowledged handoff and an identical system switch produce no
+  second restart, ingestion, or resource effect.
+
+  A failed compile or staging step leaves no handoff. A crash before durable pointer
+  publication replays from the old generation; a crash after durable publication replays the
+  pending restart/acknowledgement. Daemon restart or readiness failure runs the durable
+  rollback leg, restoring the previous system profile, module, compiler, daemon, pointer, and
+  complete bundle set together before acknowledgement; rollback itself is replayable after
+  crash. At every transition the daemon generation and bundle-pointer generation must match,
+  and the 4/2 daemon never observes a partial, mixed, or retained 3/1 set.
+
+  Version refusal is an identifier-free typed error with fixed redacted `Debug` and the one
+  closed remediation action `rebuild-host-generation`. Runtime human/JSON/wire output carries
+  no command, argv, shell fragment, host/Zone identifier, or path. The exact
+  `sudo nixos-rebuild switch --flake <host-flake>#<host>` command and the warning not to edit
+  installed JSON appear only in the T592-owned reference documentation.
+- [ ] T604 [P] [US1] **Prove exact-candidate operator activation through effect and cleanup.** Depends on T595 and is file-disjoint with T596-T599. Sole owned files: new `packages/d2b-contract-tests/tests/resource_operator_activation.rs`, new `packages/d2bd/tests/resource_operator_activation.rs`, new `tests/host-integration/resource-operator-activation.nix`, and only the host-integration discovery/build recipe in `Makefile`. The fixture-backed contract test proves that an operator declaration emits the exact pinned `zones/<zone>/resource-bundle.json` generation and that removing one declaration emits the corresponding generation delta; run it through `D2B_ENABLE_FIXTURE_BUILD=1 make test-fixture-contracts`. The Type-3 d2bd test is the lowest feasible production-boundary test: consume those exact generation bytes through the daemon startup/change-ingestion entry and production store/controller path, never through a direct ResourceService/WatchService call, and run it through `make test-rust`. The Type-10 test is additionally required because NixOS activation, systemd, broker mutation, and real owned host effects cannot be proved below `runNixOSTest`; run it only through the public heavy-gated `make test-host-integration` target. Preserve that existing target rather than adding a top-level gate, but make empty `vmChecks` discovery fail and emit the enumerated and built attr names. T604 evidence is ineligible if the target skips, discovers an empty set, omits, or does not build `vmChecks.x86_64-linux.resource-operator-activation`; a non-x86 skip is never passing evidence. In the positive host test, declare one Zone with every supported representative Guest, Volume, Network, and Device resource in Nix, switch through the public NixOS activation path, and require each of the four to reach its real broker/controller-owned effect and readiness. A status-only path or actionable refusal is ineligible for the positive story; refusal cases run separately as negative tests. Repeat an identical switch and prove no duplicate ingestion or effect. Remove the declared Guest, switch the next emitted generation without a manual `systemctl restart`, `reload`, private RPC, or test-only hook, observe dependency-safe cleanup of its owned effect, and prove the Volume, Network, Device, and unrelated resources remain ready, intact, and unrecreated. Bind all test records and both bundle content hashes to the same exact candidate. **Done when** declaration and removal generations are pinned; startup and both public switches automatically reach production daemon ingestion; all four representative resources have positive owned-effect/readiness evidence; the identical switch is idempotent; removed-resource cleanup completes in dependency-safe order; unrelated resources and durable identities are unchanged; no extra unit exists; all three public gates pass on the same candidate; and host evidence records exact enumeration and a successful build of `vmChecks.x86_64-linux.resource-operator-activation` with no skip.
   T604's fixture and production-boundary legs also pin the exact v4/v2 top-level `audit`
   object, prove that changing only one audit option changes `contentHash` and reaches the
   daemon, and reject 3/1, every mixed version, future 5/2, 4/3, and 5/3, missing/unknown audit
   fields, a Zone resource carrying audit, and any nonempty `Zone.spec`. The host leg starts
   from an installed 3/1 generation, proves the atomic rebuild to 4/2 has no mixed or partial
-  observation, injects compile, stage, and no-publish failures and proves the old generation
-  pointer and system remain active, then rolls the complete NixOS generation back to the
-  matching 3/1 module/daemon/bundle set. A 4/2 daemon presented with 3/1 must fail with the exact
-  regeneration command rather than silently migrating it.
+  observation, and injects crashes before and after durable handoff intent, pointer
+  publication, directory sync, restart request, readiness acknowledgement, and handoff
+  completion. Inject compile, stage, publication, daemon-restart, and readiness failures and
+  prove replay or rollback always leaves matching system/module/compiler/daemon/pointer/bundle
+  generations. Replay an identical switch and every crash-recovery leg and prove exactly one
+  logical ingestion/effect and no residue. A 4/2 daemon presented with 3/1 must return the
+  identifier-free typed refusal and closed `rebuild-host-generation` action rather than
+  silently migrating it; contract coverage separately pins the exact command only in
+  reference documentation and proves no runtime command or argv field exists.
 - [ ] T596 [P] [US1] **Add authenticated publication, watch, readiness, and Zone-isolation acceptance coverage.** Depends on T595. Sole owned file: new `packages/d2bd/tests/resource_plane_authenticated.rs`. Enter through the production daemon Unix session boundary, registrar, ZoneBus route, ResourceService, store, and controller endpoint. Consume T605's contract evidence and cover authoritative same-Zone Get/List/Watch, cross-Zone denial and audit, caller-supplied subject rejection, consumed-admission reuse, partial-readiness non-publication, exact `Provider/system-core` registration ownership, and an actual `Zone.status.handlers[]` list containing exactly one `system-core-host` and one `system-core-user` record with `phase` and `lastReconciledAt`, backed by active, initialized, current handlers. Prove ComponentSession admission is bound to the accepted peer's live pidfd and expected generation/cgroup evidence; after daemon restart require a newly opened pidfd for the rediscovered peer. Reject numeric-PID-only admission, stale evidence after numeric PID reuse, start-time/generation/cgroup mismatch, dead peer/`ESRCH`, and multiple plausible peers. Reject duplicate, missing, underscore/wrong-name required records and `provider-lifecycle` substitution. Run the three-Zone open/close matrix with failures in the first and middle positions; remove the Provider registration and each required list record in turn and prove only that Zone degrades. No Wave 6 dossier is required. The test must assert every Zone was visited and later healthy Zones remain operable. Direct service calls, `ProductionWatchHarness`, fake endpoints, status-only Provider substitutes, and readiness mutation helpers are forbidden in this file. **Done when** all cases pass against production owners, fresh-pidfd and every PID-reuse/mismatch/`ESRCH`/ambiguity negative pass, the emitted list shape matches T605, and removing or corrupting any required readiness owner makes the affected Zone return its specific actionable refusal.
 - [ ] T597 [P] [US1] **Add restart effect-replay and cleanup-revision acceptance coverage.** Depends on T595. Sole owned files: new `packages/d2bd/tests/resource_plane_restart.rs` and new `packages/d2b-core-controller/tests/effect_replay.rs`. Crash after generation commit, after ledger durability, after effect dispatch, after adoption, and before completion; reopen through the broker-owned store path and assert each outstanding effect is replayed or adopted exactly once. Exercise pending cleanup across restart and reject zero, stale, wrong-UID, wrong-controller-generation, and ambiguous completion without changing durable state. **Done when** the matrix observes zero lost intents, zero duplicate logical effects, and adopt-before-cleanup ordering in every case.
 - [ ] T598 [P] [US1] **Add authoritative audit, pending-result, replay-binding, retention, and redaction acceptance coverage.** Depends on T595. Sole owned file: new `packages/d2bd/tests/resource_plane_audit.rs`. Mutate through the authenticated production Resource API, including a multi-mutation batch; crash at every mutation/journal commit, segment append, file sync, directory sync, export-completion, rotation, journal-prune, and segment-prune boundary; reopen; and compare immutable authoritative journal rows with exported logical records by fixed operation digest plus mutation ordinal. Include sink unavailable, disabled callback, incomplete export, hash-chain mismatch, duplicate replay, record oversize, invalid/default/boundary audit configuration, post-export journal retention, early-journal-prune refusal, and prune/sync-failure typed-health negatives. Prove the journal row commits transactionally with the privileged mutation before any effect is success-shaped; segment export and its completion cursor are separate and cannot rewrite or delete an unexported row; an exported row becomes deletion-eligible only after durable completion plus `audit.retentionDays`. After committed export-pending state, require `CommittedPendingAudit` through T589's `PendingAuditStatus` protobuf field, including `DeleteResponse` and batch ordinals, with the exact canonical `ResourceStatus` composite and no ordinary success or rollback claim. Inspect the same operation through T589's typed ResourceService method and T592 durable backend before and after restart only with an exact replay-binding match to the original registrar-derived subject, Zone, canonical semantic request, target, verb, expected revision, and idempotency data; prove cross-subject, cross-Zone, altered-request/target/verb/revision/idempotency, and restart mismatches are denied and audited without observation or reapplication. Retry a different ID and prove normal revision/conflict behavior. Inject distinct raw operation, correlation, subject, Zone, resource, and trace canaries; require only typed domain-separated fixed digests in journal rows, audit segments, and exports, and require no raw canary in errors, logs, metrics, spans, or redacted `Debug`. **Done when** every committed privileged mutation has an immutable authoritative row at commit, ordinary success waits for segment file and directory durability plus completion durability, multi-mutation restart yields exactly one export per ordinal, same-ID apply count is one, all replay-binding mismatches deny, the exact composite round-trips through every mutation response and `InspectOperation`, all raw canaries remain absent, fixed-digest constructor and record-size limits hold, configured segment and journal retention limits prune correctly, every prune/sync failure degrades health, status observability is stable across restart, and every audit/export failure leaves the affected Zone unpublished with an actionable typed refusal.
@@ -662,17 +737,23 @@ signoff, and T603 progress reconciliation.
   consumer, required top-level audit schema, canonical `{audit,resources}` digest reference,
   generated `resource-bundle.json` schema, old/mixed/future 5/2, 4/3, and 5/3 plus
   missing-placement negatives, audit-only generation test, atomic installed-host 3/1-to-4/2
-  Nix rebuild and whole-generation rollback evidence, actionable regeneration command,
-  Nix/daemon wiring, and changelog fragment. It also runs T589's strict binding positive,
-  synchronized cross-candidate reservation, crash-durability, same-candidate
+  Nix rebuild, replayable handoff, restart-failure and whole-generation rollback evidence,
+  closed identifier-free `rebuild-host-generation` runtime action, exact command in
+  documentation only, Nix/daemon wiring, and changelog fragment. It also runs T589's strict
+  binding positive, point-specific reservation durability oracle, fd-relative orphan cleanup,
+  synchronized cross-candidate reservation, crash transitions through panel-request
+  publication/failed closure/active-slot release/successor admission, same-candidate
   second-request, active-alternate-candidate, and post-request history-only-rebase negatives
-  at panel, seal, and merge-eligibility; generic pre-request history-proof tests remain
-  green, and a failed candidate with complete scoped recovery evidence admits exactly one
-  distinct successor.
-- [ ] T600 [US1] **Capture exact-candidate production-boundary evidence.** Depends on T220 and runs read-only after F is frozen. Owns no repository files; import delivery evidence records only. T600 exclusively owns these five closed `EvidenceRecord.validation` identifiers: `production-session-watch`, `effect-replay-cleanup`, `audit-drain-replay`, `system-core-handler-contract`, and `operator-nix-activation-cleanup`. Run the authenticated same-Zone/cross-Zone watch matrix with direct `SO_PEERPIDFD` admission, one private registrar issuer, a fresh restart peer pidfd, and unsupported/dead/numeric-only/reuse/credential/generation/cgroup/ambiguity refusals; import T605's final API-surface and compile-fail seals proving public bootstrap/peer issuance and evidence access are absent. Run restart crash-window/effect replay and cleanup stale/zero/wrong-UID negatives. Run the authoritative journal/export matrix at every commit, append, file-sync, directory-sync, completion, rotation, journal-prune, and segment-prune boundary, including multi-mutation ordinals; typed durable `InspectOperation`; replay-binding cross-subject/Zone/request/restart denials; fixed-digest constructor and record-size limits; post-export journal and segment retention; prune/sync health; raw identifier/trace canaries; the exact protobuf-represented `ResourceStatus` pending composite; and same-ID/different-ID behavior. Also run the exact `Provider/system-core` registration/handler-health matrix, three-Zone startup/close isolation, and T604's public-switch activation-to-effect-and-cleanup result. Import T605's exact wire round-trip, underscore and duplicate/missing/wrong-name rejection, `ProviderLifecycle` non-substitution, current API snapshot, paired normative/reference/version result, targeted contract test, and unchanged desired-schema drift evidence. Every record must name F, F's tree, and the production entry point. Reject direct ResourceService/WatchService calls, `ProductionWatchHarness`, fixed/fake endpoints, constructed subjects, numeric-PID-only identity, status-only Provider/readiness substitutes, manually set readiness, evidence from an earlier commit, an unknown identifier, or a duplicate identifier. **Done when** T600 emits exactly its five assigned identifiers once each for F; the operator record identifies emitted bundles and all four representative owned effects; the handler-contract record is candidate-bound and complete; same-ID audit retry applies once and replay-binding mismatches deny; durable operation inspection survives restart; no raw identifier or trace canary escapes; every direct-pidfd and API-seal negative passes; file/directory durability and retention/prune health hold; malformed status fields cannot round-trip; and every command passed.
+  at panel, seal, and merge-eligibility. The malformed, stale, cross-candidate, and cross-wave
+  recovery-evidence matrix varies predecessor, program/wave, recommendations, successor
+  commit/tree, convergence, and validation identities independently. Generic pre-request
+  history-proof tests remain green, and a failed candidate with complete scoped recovery
+  evidence admits exactly one distinct successor.
+- [ ] T600 [US1] **Capture exact-candidate production-boundary evidence.** Depends on T220 and runs read-only after F is frozen. Owns no repository files; import delivery evidence records only. T600 exclusively owns these five closed `EvidenceRecord.validation` identifiers: `production-session-watch`, `effect-replay-cleanup`, `audit-drain-replay`, `system-core-handler-contract`, and `operator-nix-activation-cleanup`. Run the authenticated same-Zone/cross-Zone watch matrix with direct `SO_PEERPIDFD` admission through T593's reviewed safe dependency, one private registrar issuer, a fresh restart peer pidfd, and unsupported/dead/numeric-only/reuse/credential/generation/cgroup/ambiguity refusals; import T605's final API-surface and compile-fail seals proving public bootstrap/peer issuance and evidence access are absent. Run restart crash-window/effect replay and cleanup stale/zero/wrong-UID negatives. Run the authoritative journal/export matrix at every commit, append, file-sync, directory-sync, completion, rotation, journal-prune, and segment-prune boundary, including multi-mutation ordinals; typed durable `InspectOperation`; replay-binding cross-subject/Zone/request/restart denials; fixed-digest constructor and record-size limits; post-export journal and segment retention; prune/sync health; raw identifier/trace canaries; the exact protobuf-represented `ResourceStatus` pending composite; and same-ID/different-ID behavior. Also run the exact `Provider/system-core` registration/handler-health matrix, three-Zone startup/close isolation, and T604's public-switch activation-to-effect-and-cleanup result. The operator evidence must show that `make test-host-integration` neither skipped nor discovered an empty set, enumerated `vmChecks.x86_64-linux.resource-operator-activation`, and successfully built that exact attr. It also binds T595's crash-replayable generation handoff, daemon-restart failure rollback, matching daemon/pointer generations, and identical-switch no-duplicate result. Import T605's exact wire round-trip, underscore and duplicate/missing/wrong-name rejection, `ProviderLifecycle` non-substitution, current API snapshot, paired normative/reference/version result, targeted contract test, and unchanged desired-schema drift evidence. Every record must name F, F's tree, and the production entry point. Reject direct ResourceService/WatchService calls, `ProductionWatchHarness`, fixed/fake endpoints, constructed subjects, numeric-PID-only identity, status-only Provider/readiness substitutes, manually set readiness, skipped or empty-discovery host output, evidence from an earlier commit, an unknown identifier, or a duplicate identifier. **Done when** T600 emits exactly its five assigned identifiers once each for F; the operator record identifies emitted bundles, all four representative owned effects, and the exact enumerated/built VM attr; the handler-contract record is candidate-bound and complete; same-ID audit retry applies once and replay-binding mismatches deny; durable operation inspection survives restart; no raw identifier or trace canary escapes; every direct-pidfd and API-seal negative passes; file/directory durability and retention/prune health hold; malformed status fields cannot round-trip; and every command passed.
   `audit-drain-replay` also binds the valid-present/absent/malformed trace-context matrix, typed
-  trace-digest/no-fabrication result, every migrated producer, fixed redacted broker/audit
-  owner `Debug`, and raw path plus opaque-handle canary absence. The operator record pins the
+  trace-digest/no-fabrication result, every migrated producer and StoreSync request/response
+  wire snapshot, fixed redacted broker/audit owner `Debug`, and raw identifier, path, plus
+  opaque-handle canary absence. The operator record pins the
   top-level audit carrier, exact 4/2 pair, audit-only generation change, empty `Zone.spec`, and
   rejection of old/mixed/missing or ResourceSpec-carried policy.
 - [ ] T601 [US1] **Capture exact-candidate RSS, owner fan-in, removal, and reference evidence.** Depends on T220 and runs read-only in parallel with T600 subject to the heavy-gate limit. Owns no repository files; import delivery evidence records only. T601 exclusively owns these three closed `EvidenceRecord.validation` identifiers: `resource-plane-rss-owner-fanin`, `wave5-removal-proofs`, and `cli-reference-conformance`. Measure the full daemon-owned publication path at 10,000 resources and 100 authenticated watches with no baseline subtraction; prove one store owner, one policy owner, one ResourceService route, one controller endpoint/fan-in, and one authoritative audit journal/export owner per Zone. The `Provider/system-core` registration and handler records belong only to T600's `system-core-handler-contract`. Re-run every manifest-label W5 removal proof at F instead of citing `removal-proof-w5.md`'s historical `a7f4a6a4` snapshot. Compare emitted CLI/help/JSON/wire behavior with all T599 pages, including the accepted Version 2 amendment and migration guidance, exact 16-byte/lowercase-32-hex IDs, same-ID retry and typed durable status command, exits, mandatory `zoneRef`/`schemaVersion: 2`, DTO/schema, human/JSON forms, closed remediation actions, Version 1 non-migration, and absence of any Zone/ID-bearing argv or executable remediation. Do not re-emit T600's operator-activation or handler-contract kinds. **Done when** T601 emits exactly its three assigned identifiers once each for F; RSS is <=24,576 KiB, owner counts are exactly one, all current removal-proof predicates are true, Version 2 docs/DTO/schema/migration/release treatment match emitted behavior, and every record names F and F's tree.
@@ -683,11 +764,19 @@ signoff, and T603 progress reconciliation.
 - [ ] T602 [US1] **`adr046w5` PRODUCTION COMPLETION CONVERGENCE - mechanically unblock T219.** Depends on T600 and T601. Owns no implementation files and cannot substitute prose inspection for T589's checked-in validator. Verify T603, every T589-T599 task, T604, T605, and T220 are complete and `tasks.md` shows T073-T218 and T603 checked. Validate immutable authorization receipt R against opaque project sentinel `7f6d0beab0ce4c13a89f6865d5ac42e2`, Git-discovered root, relative feature path, resume base B, tree B, and pre-edit snapshot P; validate progress receipt E against R's digest, authorized post-edit snapshot Q, dedicated checkbox commit C, exact parent `C^ = B`, and exact 147-token `B..C` diff; require C to be an ancestor of final candidate F. Do not compare R or E to final HEAD as though either were final-candidate evidence. Invoke T589's `adr046w5` closed-evidence profile over the imported records and require its multiset of `(lane, validation)` pairs to equal the `plan.md` table byte-for-byte: exactly the five T600 identifiers and three T601 identifiers, each at its assigned lane and exactly once. Require T220's hermetic evidence that the same validator guards panel-request, seal, and merge-eligibility and that missing, extra, duplicate, unknown, wrong-lane, and conflated negative fixtures each fail for the intended reason. Require all eight records to bind F and F's tree after T220, with T604's public-switch/all-representative-effect/cleanup result present only under `operator-nix-activation-cleanup`, T605/T595/T599 coordinated contract evidence present only under `system-core-handler-contract`, and no ineligible direct/fake boundary. Require HEAD exactly equals F, `git diff --cached --exit-code` is empty, `git diff --exit-code` is empty, and `git status --porcelain=v1 --untracked-files=all` reports no staged, unstaged, or non-ignored untracked path; ignored external receipts under `.scratch/` are not candidate content. RSS; owner counts; direct `SO_PEERPIDFD` admission and unsupported/dead/reuse/credential/generation/cgroup/ambiguity negatives; sealed registrar API; the exact `Provider/system-core` registration; unique `system-core-host`/`system-core-user` records; underscore and `ProviderLifecycle` non-substitution; transactional authoritative audit rows; fd-anchored segment/export file-and-directory durability; bounded post-export journal retention and prune health; raw identifier and trace canaries; fixed-digest/redacted-`Debug` seals; protobuf-represented pending status; durable ResourceService `InspectOperation`; same-ID no-reapply/final-result plus replay-binding mismatch denial; all four representative owned effects; current removal predicates; dependency-safe cleanup; ready unrelated resources; coordinated normative version/reference/schema/changelog treatment; targeted contract/API/drift gates; and exact Version 2 CLI recovery/docs comparison must all pass. Any false conjunct blocks T219 and names the failed remediation. Historical validation remains historical and is not reclassified.
   T602 additionally requires T589's strict-binding suite to prove synchronized first requests
   across candidate directories yield exactly one success and one durable fd-anchored
-  reservation; crash points around file sync, no-replace publication, and directory sync
-  yield zero or one committed reservation and never two successes; same-candidate second
-  request, alternate candidate while active, a failed candidate's retry, and post-request
-  byte-identical history rebase/evidence refresh each fail at panel, seal, and eligibility;
-  and a distinct successor is admitted only after the failed candidate is durably closed and
+  reservation. The point oracle is zero before no-replace publication, zero or one after
+  publication but before wave-directory `fsync`, and exactly one after directory `fsync`,
+  followed by refusal of every same-candidate or alternate-candidate request. Fd-relative
+  orphan cleanup must leave zero temporary residue and durably sync the directory.
+  Crash/restart injection around panel-request publication, failed closure, active-slot
+  release, and successor admission must preserve idempotent ordering, zero or one active
+  reservation, retained failed/request records, no failed retry, and no duplicate request.
+  Table-driven malformed, stale, cross-candidate, and cross-wave evidence negatives must vary
+  predecessor candidate, exact program/wave, recommendations digest, successor commit/tree,
+  convergence identity, and validation identity independently at panel, seal, and
+  eligibility. Same-candidate second request, alternate candidate while active, and
+  post-request byte-identical history rebase/evidence refresh each fail at all three stages;
+  a distinct successor is admitted only after the failed candidate is durably closed and
   complete scoped recovery evidence is present. The generic pre-request rebase proof still
   passes.
 
@@ -1541,8 +1630,10 @@ Dispatch 27 Provider subagents freely, but serialize their `make test-integratio
    `destination`, `removalProof` are the task
 2. Its exact destination paths, with an instruction to write nowhere else
 3. Its worktree path and branch
-4. The reminder that contended files are integrator-owned and that `CHANGELOG.md` is never
-   edited by a slice - each writes one `changelog.d/<branch>.md` fragment instead
+4. The reminder that unordered contended files are integrator-owned. A shared file may instead
+   have explicitly ordered serial slice owners only when this plan names each owner and the
+   dependency edge. `CHANGELOG.md` is never edited by a slice - each writes one
+   `changelog.d/<branch>.md` fragment instead
 5. The qualified commit-tag form: `( adr046w<n> )`, or
    `( adr046w<n>fu<m> <S><n> )` for a finding fix. Current Wave 5 work uses
    `( adr046w5 )`; legacy `ADR046-W<n>` evidence identifiers are not rewritten
@@ -1591,7 +1682,14 @@ These are the only edges that constrain shared files. Honor them as strict order
 - W6: `ADR046-gpu-007` -> `ADR046-transport-unix-009` -> `ADR046-qemu-media-017` -> `ADR046-usbip-008`
 - `ADR046-core-001` precedes `ADR046-device-007`, `-exec-013`, `-exec-015`, `-network-008`, `-telem-011`, `-zone-control-016`, `-zone-control-021`
 
-### Contended files - integrator only
+### Unordered contended files - integrator only
+
+The integrator-only rule applies when no explicit serial edge assigns every writer. A
+contended file with named, non-overlapping-in-time owners is permitted: the plan must identify
+all writers, state their order, and block the later branch until the earlier owner merges.
+`transaction.rs` (`T591 -> T592`) and `packages/Cargo.lock` (`T592 -> T593`) are the two
+representative slice-to-slice examples; prep-to-slice ownership transfers are named in
+T589's file map and dependency chain. None is parallel ownership.
 
 `packages/d2b-contracts/src/v3/volume.rs`; the `packages/Cargo.toml` member list; the
 `flake.nix` output list; `nixos-modules/index.nix` and `default.nix`;

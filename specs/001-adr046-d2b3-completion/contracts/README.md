@@ -20,6 +20,53 @@ third source of truth that the drift gates do not check.
 | [nix-configuration.md](./nix-configuration.md) | `d2b.zones.<zone>.resources.*` option schema | Host configurations | W2, W5 |
 | [generated-artifacts.md](./generated-artifacts.md) | Schemas, per-Zone bundles, UI colors, delivery artifacts | Broker, daemon, companions, drift gates | W2-W7 |
 | [companion-contracts.md](./companion-contracts.md) | What the five desktop companions consume | Sibling repositories | W5 publish, W8 verify |
+| [Candidate recovery prerequisite v1](#candidate-recovery-prerequisite-v1) | Immutable-candidate failure closure and successor admission | Plan integrator, delivery tooling, panel process | Before W2 |
+
+## Candidate recovery prerequisite v1
+
+**Contract id**: `adr046-candidate-recovery-prerequisite/v1`
+
+**Owner**: T008 and the ADR046 plan integrator
+
+**Status**: blocking before W2
+
+The feature-local sequencing contract is:
+
+1. one immutable candidate receives at most one binding request;
+2. a nonunanimous candidate is durably closed as failed and retains its request and records;
+3. the active candidate slot is not released until that closure is durable;
+4. only a distinct successor with the failed predecessor's complete recommendation,
+   convergence, and candidate-bound validation identities may be admitted; and
+5. same-candidate retry, two active candidates, stale or cross-wave recovery evidence, and
+   any post-request content, history, or evidence move fail closed.
+
+This contract does not amend the external ADR or tooling by assertion. Before T008 may
+complete, the ADR046 plan integrator owns a separate external scope escalation that must
+merge all of the following as one accepted policy generation:
+
+- a new or superseding ADR plus its `docs/adr/README.md` index row;
+- the coordinated `docs/specs/ADR-046-validation-and-delivery.md` and generated spec-manifest
+  amendment;
+- delivery implementation and tests under `packages/xtask/src/delivery/`; and
+- matching `AGENTS.md` and `docs/contributing/` panel/delivery guidance.
+
+T008's evidence record must name accepted commit locators for all four scopes (locators may
+coincide when one commit owns multiple scopes) and prove each is an ancestor of its W2 base.
+It must also record successful, nonempty execution of:
+
+```bash
+test "$(cargo test --manifest-path packages/Cargo.toml -p xtask \
+  candidate_recovery_v1 -- --list |
+  grep -c 'candidate_recovery_v1.*: test')" -ge 1
+cargo test --manifest-path packages/Cargo.toml -p xtask candidate_recovery_v1
+make test-adr-index-coverage
+make test-lint
+```
+
+A skipped test, zero discovered `candidate_recovery_v1` tests, an unmerged scope, or wording
+that still permits only one request for the whole wave leaves T008 open. T589 later hardens
+this accepted v1 contract with the `adr046w5` strict storage profile; it does not retroactively
+make W2-W4 safe.
 
 ## Rules that apply to every surface
 

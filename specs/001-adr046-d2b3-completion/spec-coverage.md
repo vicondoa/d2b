@@ -965,7 +965,9 @@ Run this against `tasks.md` before implementation starts.
       T219's binding close. T591 and T592 deliberately overlap
       `packages/d2b-resource-store-redb/src/transaction.rs`, so T592 starts only after T591.
       T592 and T593 deliberately serialize `packages/Cargo.lock`, so T593 starts only after
-      T592. The six implementation tasks are not all file-disjoint.
+      T592. The six implementation tasks are not all file-disjoint. This is permitted because
+      every shared writer and strict dependency edge is explicit; no two owners write a
+      contended file concurrently.
 - [x] T603 is the sole direct prerequisite of T589; pre-T603 A/P0 analysis and panel authorize
       only validator implementation, validator-only V becomes B, post-T603 analysis and panel
       rerun at B/P, and only those post-validator receipts authorize immutable
@@ -982,7 +984,9 @@ Run this against `tasks.md` before implementation starts.
       set, and T602 compares the exact lane/identifier multiset before T219
 - [ ] No task contradicts a decision in the register (checked per task at implementation time,
       per FR-047)
-- [x] Contended files are integrator-prep, not slice-owned
+- [x] Unordered contended files are integrator-prep and integrator-owned. A contended file may
+      instead have explicitly ordered serial slice owners only when the plan names every
+      writer and the dependency edge, as for `transaction.rs` and `packages/Cargo.lock`
 ---
 
 ## Requirement traceability (FR/SC to ADR-046 owners)
@@ -1026,7 +1030,7 @@ jq -r --arg p routing '.items[] | select(.workItemId | startswith("ADR046-\($p)-
 | FR-047 | Conformance to the 129 frozen decisions | `decision-register` | `decisions` |
 | FR-048 - FR-050 | Pipelined implementation start with strict ordered exit | `validation-and-delivery` section 4 | `delivery` |
 | FR-051 - FR-055 | Panel deferral registers and pre-panel review gates | `validation-and-delivery` plus program process | `delivery` |
-| FR-056 - FR-059 | Standing Gate 0, entry/exit distinction, waiver scope, contended-file prep | `validation-and-delivery` plus program process | `delivery` |
+| FR-056 - FR-059 | Standing Gate 0, entry/exit distinction, waiver scope, unordered contended-file prep or explicitly ordered serial ownership | `validation-and-delivery` plus program process | `delivery` |
 | FR-060 | Removal proof follows the wave that removes the path | `current-code-migration-map`, `validation-and-delivery` | `reuse`, `streamline`, `delivery` |
 | FR-061 - FR-065 | Contract publication versus artifact release; companion classification, membership, and verification | **Locally added** - companion clarification family | none |
 | FR-066 - FR-072 | Authenticated production publication, one-shot policy bootstrap then authenticated policy access, controller ledger, exact system-core Provider readiness, committed-pending-audit `ResourceStatus` composite, restart/Zone isolation, operator Nix activation/effect/cleanup, exact evidence, and receipt/editor-mediated amended-plan resume | **Locally added Wave 5 completion assignment**, constrained by `componentsession-and-bus`, `resource-api-and-authorization`, `resource-store-redb`, `resource-reconciliation`, `core-controllers`, `provider-system-core`, `telemetry-audit-and-support`, ADR 0034 | `session`, `bus`, `api`, `store`, `reconcile`, `core`, `system-core`, `audit` plus T589-T605 |

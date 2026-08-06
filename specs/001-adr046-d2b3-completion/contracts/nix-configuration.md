@@ -28,7 +28,7 @@ controller-owned effect, and declared-resource removal cleanup.
 | NIX-5 | Extend the `eval-*` flake checks with Zone and resource examples | FR-032 | W5 |
 | NIX-6 | Prove the exact-candidate positive operator path from a Nix declaration of every supported representative Guest, Volume, Network, and Device through the emitted bundle and automatic startup/declaration/removal ingestion to durable reconciliation and each resource's real owned effect/readiness, then dependency-safe removal cleanup with unrelated resources still ready; refusal cases are separate | FR-001, FR-005, FR-072, SC-034 | W5 |
 | NIX-7 | The one carrier is compiler-only `d2b.zones.<zone>.audit`, emitted as the required top-level `audit` object in that Zone's `resource-bundle.json`, outside every ResourceSpec and the runtime-created empty `Zone.spec`. It carries exactly `retentionDays` (default 30, range 1-3650), `maxRecordsPerSegment` (default 65536, range 1-1000000), and `maxSegmentBytes` (default 67108864, range 1048576-1073741824). This breaking bundle-header change moves the accepted pair from `schemaVersion: 3` / `bundleVersion: 1` to `schemaVersion: 4` / `bundleVersion: 2`; v4 `contentHash` covers the canonical `{audit,resources}` object so an audit-only change creates a new generation identity. T592 owns the typed option, active crate-root `ZoneBundle`, retirement of the duplicate full envelope, compiler entry point and CLI tests, schema generator/output, digest reference, and focused tests; T595 wires the emitter and daemon; T220 coordinates generated artifacts, references, contract tests, and changelog treatment | FR-070, SC-032 | W5 |
-| NIX-8 | Upgrade an installed 3/1 host by building every Zone's complete 4/2 bundle set into the immutable new NixOS closure, staging that set behind one generation pointer, atomically publishing the pointer with the system-profile switch, then using only the existing `d2bd.service` continuation. Compile, stage, or publish failure leaves the complete old generation/pointer active. Rollback restores the matching 3/1 module, compiler, daemon, pointer, and bundle set as one NixOS generation; a 4/2 daemon never consumes a retained 3/1 or mixed bundle. Version refusal names `sudo nixos-rebuild switch --flake <host-flake>#<host>` and says not to edit installed JSON | FR-070, SC-032 | W5 |
+| NIX-8 | Upgrade an installed 3/1 host by building every Zone's complete 4/2 bundle set into the immutable new NixOS closure, staging that set behind one generation pointer, and durably recording a replayable handoff that binds previous/target system, daemon, pointer, and bundle generations. Atomically publish with the system-profile switch, then use only the existing `d2bd.service` continuation. Crash replays the pending publication/restart/acknowledgement; daemon restart or readiness failure durably rolls back the complete matching prior generation. Identical switch and handoff replay produce no duplicate ingestion or effect. Runtime version refusal is identifier-free with fixed redacted `Debug` and closed action `rebuild-host-generation`; only reference documentation carries the exact `sudo nixos-rebuild switch --flake <host-flake>#<host>` command and warning not to edit installed JSON | FR-070, SC-032 | W5 |
 
 ## Invariants
 
@@ -46,6 +46,11 @@ controller-owned effect, and declared-resource removal cleanup.
   publication.
 - Installed-host migration is whole-generation only. No activation may expose a 4/2 daemon
   to a partial or mixed bundle set, and no rollback may feed a 3/1 artifact to 4/2 code.
+  Handoff intent, pointer publication, daemon restart/readiness acknowledgement, and rollback
+  are durable replay points. Every observed daemon and bundle-pointer generation matches.
+- Runtime refusal errors, JSON, wire output, logs, and `Debug` contain no host, Zone,
+  generation, path, command, argv, or shell fragment. They carry only the closed
+  `rebuild-host-generation` action. The exact operator command is documentation-only.
 
 ## Acceptance
 
@@ -58,7 +63,9 @@ controller-owned effect, and declared-resource removal cleanup.
   `tests/host-integration/resource-operator-activation.nix` through the public
   `make test-host-integration` target. Every supported representative resource must reach its
   owned effect and readiness in the positive leg. Direct ResourceService calls, status-only
-  effects, and actionable refusals are ineligible for that positive proof.
+  effects, actionable refusals, a skipped lane, or empty check discovery are ineligible for
+  that positive proof. Evidence must enumerate and successfully build the exact
+  `vmChecks.x86_64-linux.resource-operator-activation` attr.
 - `make test-drift` is clean after regeneration.
 - Nix-unit and bundle tests pin every audit default, lower/upper bound, unknown field, and
   out-of-range refusal; pin exact bundle versions 4/2 and an audit-only generation change;
@@ -66,7 +73,10 @@ controller-owned effect, and declared-resource removal cleanup.
   ResourceSpec/ZoneSpec placement, and consumer-side silent defaulting. Production tests pin
   post-export-only journal retention and degraded health on prune or file/directory-sync
   failure.
-- Host activation coverage starts from an installed 3/1 generation, proves an atomic rebuild
-  to 4/2, proves failed pre-activation compilation/install leaves 3/1 active, and rolls back
-  the complete matching generation. The 4/2 refusal text includes the exact regeneration
-  command.
+- Host activation coverage starts from an installed 3/1 generation and injects crashes before
+  and after durable handoff intent, pointer publication, directory sync, restart request,
+  readiness acknowledgement, and completion. It proves failed compile/stage/publication and
+  daemon restart/readiness paths replay or roll back to matching complete generations, and
+  identical-switch replay causes no duplicate ingestion or effect. The 4/2 runtime refusal
+  carries only `rebuild-host-generation`; a separate documentation assertion pins the exact
+  regeneration command.
