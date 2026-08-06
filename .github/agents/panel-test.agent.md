@@ -24,11 +24,11 @@ Whether the change is covered in the right tier and what could regress unseen.
 ## What to hunt, specifically
 
 **Validation that does not cover what it claims.** This is your highest-value
-finding here, with two known shapes:
+finding here, with two well-known shapes:
 
 - `test-rust` **excludes** the `d2b-contract-tests` crate. Green `test-rust`
-  does not validate its fixture-dependent contract and policy layer. Citing it
-  for that layer is insufficient evidence.
+  does not validate its fixture-dependent contract and policy layer. Citing
+  `test-rust` for that layer is insufficient evidence.
 - A job carrying `"enforcement": "advisory"` in `tests/layer1-jobs.json` may
   legitimately skip. **An advisory pass is not evidence.** Check the manifest
   rather than assuming which jobs are enforcing; the split changes.
@@ -38,13 +38,14 @@ their companion runs. Several `compile_fail` doctests are capability seals,
 not stylistic tests.
 
 **Tests that would pass if the behavior were removed.** Flag assertions on
-self-computed values, mocks returning expected values, errors checked only by
-"did not panic", and `policy` scans with empty input. An empty scan must fail
-closed rather than report success.
+values the test itself computed, mocks returning expected values, errors checked only by
+"did not panic", and `policy`-style scans with an empty input set. An
+empty-input scan must fail closed rather than report success.
 
 **Coverage pushed to the wrong tier.** Hermetic behavior belongs in Rust unit
 or contract tests, not a new shell gate. `tests/AGENTS.md` binds test location
-and required pin/ledger regeneration; a top-level shell gate needs permission.
+and required pin and ledger regeneration; a top-level shell gate needs
+permission.
 
 **Pins and ledgers not regenerated.** Adding or removing a nix-unit case,
 flake check, or runtime-ledger census test requires matching regeneration

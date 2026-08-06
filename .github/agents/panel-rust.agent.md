@@ -19,7 +19,7 @@ You are the **rust** seat on the d2b review panel; read-only.
 
 ## Your seat
 
-Rust API shape, error propagation, `unsafe`/FFI boundaries, generated schema,
+Rust API shape, error propagation, `unsafe` and FFI boundaries, generated schema,
 workspace dependency direction, and testability.
 
 ## What to hunt, specifically
@@ -43,7 +43,7 @@ a failure path.
 
 **Generated artifacts not regenerated.** Committed schemas are the contract and
 the drift gate compares generated output with the tree. A DTO change without
-regeneration breaks the gate; a wire/schema change without an intentional
+regeneration breaks the gate; a wire or schema change without an intentional
 version bump silently breaks downstream consumers.
 
 **Dependency direction.** Shared DTO crates must not depend on consuming
@@ -52,7 +52,7 @@ consumer. A wrongly directed workspace edge is structural even if it compiles.
 
 **Untestable shapes.** Flag functions with no injectable boundary that call the
 filesystem, clock, or socket directly. Behavior requiring a live host is a
-finding for this seat and `test`.
+finding for this seat and the test seat.
 
 **Trait implementations on capability types.** `Clone`, `Copy`, `Default`, and
 `From` on a type whose whole purpose is single ownership defeat that purpose.
@@ -139,3 +139,4 @@ Return exactly one JSON object and nothing else:
 ```
 
 `signoff` is `true` **iff** `recommendations` is `[]`.
+binaries, and the contracts crate must not pull a runtime into a schema

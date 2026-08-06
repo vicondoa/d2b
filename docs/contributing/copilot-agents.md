@@ -2,7 +2,7 @@
 
 Canonical definition surface for the repository's ADR, panel, and delivery
 process. Everything is committed, so fresh clones behave identically without
-operator-local settings.
+local operator settings.
 
 Copilot is the sole supported agent surface. The legacy integration was retired
 with its tracked files removed; no second command path remains.
@@ -114,7 +114,7 @@ The checked-in manifest is an exact membership list for 32 files: three
 `AGENTS.md` files, all eight `docs/contributing/*.md` files, all thirteen
 `.github/agents/*.agent.md` files, and all eight `.github/skills/d2b-*/SKILL.md`
 files. `prompt-corpus.mjs` verifies frontmatter, headings, fenced blocks, inline code,
-links and URLs, list hierarchy/count, table shape, literals, normative
+links and URLs, list hierarchy and count, table shape, literals, normative
 operators and negations, and exact JSON or output examples. It does not grade
 style or token reduction. Imported `speckit-*` prose stays uncompressed except
 for routing edits.

@@ -24,10 +24,10 @@ repeat runs, and error handling in exporters and helpers.
 
 ## What to hunt, specifically
 
-**Non-idempotent activation and sidecars.** Activation reruns on every host
-switch and reconciliation on every daemon restart. A step that appends, creates
-without checking, or assumes a clean slate is a defect. Ask what happens on the
-second run and after a halfway crash.
+**Non-idempotent activation and sidecars.** This framework re-runs activation
+on every host switch and re-enters reconciliation on every daemon restart. A
+step that appends, creates without checking, or assumes a clean slate is a
+defect. Ask what happens on the second run and after a halfway crash.
 
 **Error paths that swallow.** Flag `|| true`, ignored statuses, match arms
 that log and continue, or fallbacks that silently substitute defaults. This
@@ -40,9 +40,9 @@ ordering that relies on declaration order rather than a declared edge.
 **Resource lifetime.** Flag fds without `O_CLOEXEC`, unsupervised processes,
 and temporary state that outlives the failure that created it.
 
-**Shell correctness** in gate scripts: unquoted expansions, unset variables,
-`set -e` interactions with functions/pipelines, and loops whose failing body
-does not fail the script.
+**Shell correctness** in gate scripts: unquoted expansions, unset-variable
+handling, `set -e` interactions with functions and pipelines, and loops whose
+failing body does not fail the script.
 
 ## What is not your seat
 

@@ -27,7 +27,7 @@ virtiofsd-ro-store's `--shared-dir` points at that farm (the
 store). Requires `/var/lib/d2b` and `/nix/store` on the **same filesystem** -
 hardlinks cannot cross FS boundaries; if split, `d2b vm switch` refuses with a
 fatal error. The broker builds the farm inside a private mount namespace where
-`/nix/store` is lazily detached (NixOS bind-mounts it on itself, so a
+`/nix/store` is lazily detached (NixOS bind-mounts `/nix/store` on itself, so a
 same-`st_dev` cross-vfsmount `link(2)` returns `EXDEV` - recoverable, distinct
 from fatal different-filesystem `EXDEV`); a `link(2)` `EMLINK` on a
 `--optimise`d store's saturated empty-file inode falls back to a byte copy. The

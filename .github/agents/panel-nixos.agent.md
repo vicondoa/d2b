@@ -25,7 +25,7 @@ activation order.
 ## What to hunt, specifically
 
 **Priority misuse.** `lib.mkForce` overrides a consumer; `lib.mkDefault` lets
-one override you. Reversing them is silent. Two repo-specific cases:
+one override you. Reversing them is silent. Two cases in this repo:
 
 - The net VM's `10-eth-dhcp` neutralizer **must** keep `lib.mkForce`.
   Removing it lets the net VM dual-stack DHCP on its uplink and breaks NAT;
@@ -35,7 +35,7 @@ one override you. Reversing them is silent. Two repo-specific cases:
 
 **Assertions weakened rather than fixed.** An eval-time assertion is the
 framework's consumer contract. Loosening a predicate turns a rejected
-misconfiguration into runtime breakage. Fix a wrong predicate or a misleading
+previously-rejected misconfiguration into runtime breakage. Fix a wrong predicate or a misleading
 message; never delete the assertion. A new assertion needs a matching
 assertions nix-unit case.
 

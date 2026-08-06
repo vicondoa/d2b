@@ -16,8 +16,9 @@ Use top-level `Makefile` targets. Shell scripts under `tests/` are
 implementation details unless a target or `tests/AGENTS.md` says to run one.
 
 `nix develop` provides the pinned Rust release plus sccache, cargo-nextest,
-cargo-deny, cargo-audit, shellcheck, and jq. Gate scripts bootstrap a private
-toolchain when missing, so a dev shell skips that setup. Normal dev/test
+cargo-deny, cargo-audit, shellcheck, and jq. Gate scripts re-enter a nix shell
+and bootstrap a private toolchain when missing, so a dev shell skips that setup.
+Normal dev/test
 profiles retain panic line tables but omit dependency DWARF; use
 `cargo build --profile debugging` or `cargo test --profile debugging` for full
 debugger symbols.

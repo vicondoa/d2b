@@ -61,7 +61,7 @@ Autopilot refuses to start unless all of these checked conditions hold.
 
 The track is recorded in the plan, not decided here.
 
-**Track A** changes an architectural contract: a new broker op, wire/schema
+**Track A** changes an architectural contract: a new broker op, wire or schema
 change, trust-boundary move, persistent root surface, or critical-subsystems
 index entry. It closes each wave through delivery tooling.
 
@@ -85,11 +85,11 @@ rewrite an existing legacy address.
 
 Track A runs all steps. Track B runs steps 1 through 6 once, then 7 and 8.
 
-**1. Plan the slices.** Read the wave tasks and plan ownership map. Give every
+**1. Plan the slices.** Read the wave tasks and plan's file-ownership map. Give every
 slice disjoint files; serialize slices that would write the same file.
 
 **2. Dispatch implementer lanes.** Send one `d2b-implementer` per slice in one
-batch. Each prompt carries the task, ownership list, and acceptance criteria.
+batch. Each prompt carries the task, file-ownership list, and acceptance criteria.
 **Commit each slice as it lands**, staging only its paths. Do not accumulate
 slices or run `git add -A` while a gate writes scratch.
 
@@ -132,7 +132,7 @@ issues.
 
 ## One PR per wave, and why
 
-Delivery tooling requires every current-wave item to merge before seal and
+Delivery tooling requires every item in the current wave to merge before seal and
 every prior wave to merge before the next can open a panel request. Thus wave
 N+1 cannot start until wave N merges; one PR at the end fails at the first
 seal. The tooling forces this order.

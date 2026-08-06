@@ -1,7 +1,8 @@
 # Development workflow
 
-How work is organized, validated, and landed: parallel worktrees, stacked PRs
-for large waves, commit-then-validate, and disk hygiene for concurrent trees.
+How work is organized, validated, and landed: parallel worktrees, the
+stacked-PR shape for large waves, commit-then-validate, and disk hygiene for
+concurrent trees.
 
 The binding one-line rules are in [`../../AGENTS.md`](../../AGENTS.md) under
 "Development workflow". This file carries the detail and the rationale.
@@ -32,9 +33,9 @@ resolution - octopus requires cleanly disjoint scopes.
 ## Finish-of-work invariant: merge back into the primary clone
 
 A worktree is a workspace, not a destination. When an agent's scope is done -
-implementation/tests green and panel signed off - it merges the branch into
+implementation and tests green and panel signed off - it merges the branch into
 `main` in the **primary clone (`projects/d2b`)** before declaring completion.
-Finished side-branch work still "awaits integration", which the agent owns.
+Finished side branch work still "awaits integration", which the agent owns.
 
 Concretely, the agent that owns a worktree:
 

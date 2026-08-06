@@ -24,13 +24,14 @@ not a general document compressor.
 
 Compress natural-language prose in place while preserving meaning. Preserve
 frontmatter, headings, fenced blocks and contents, inline code, links, URLs,
-list hierarchy/count, table shape, numbers, versions, paths, flags, environment
-variables, identifier-like tokens, normative operators, negations, exceptions,
-commands, exact errors, and JSON/output-schema examples.
+list hierarchy and count, table shape, numbers, versions, paths, flags,
+environment variables, identifier-like tokens, normative operators, negations,
+exceptions, commands, exact errors, and exact JSON or output-schema examples.
 
 Do not merge or remove requirements. Keep causal order, refusal behavior,
 initial-creation exceptions, ownership boundaries, validation commands, and
-normal-prose boundaries. Do not require token reduction or grade style/brevity.
+normal-prose boundaries. Do not require a token reduction and do not grade
+style or brevity.
 
 ## Acceptance
 
@@ -38,4 +39,4 @@ Run `node scripts/copilot/prompt-corpus.mjs` after each rewrite. Review the
 uncompressed snapshot beside the result and record the semantic audit in
 transient `.scratch/` notes. Reject any protected fingerprint change or
 unresolved semantic difference. The check proves structure and protected
-literals, not semantic equivalence; side by side human review remains required.
+literals, not semantic equivalence; human side-by-side review remains required.

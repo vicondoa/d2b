@@ -68,9 +68,9 @@ reviewable and mergeable, sequenced by real dependency rather than convenience:
 delivery tooling requires every item in a wave to merge before the next can
 open a panel request.
 
-For each wave state the deliverable, scopes and owned files, proof-producing
-validation, and a mechanically checkable done condition. A machine-unevaluable
-stopping condition is no stopping condition.
+For each wave state the deliverable, scopes and owned files, validation that
+proves it, and a mechanically checkable done condition. A stopping condition a
+machine cannot evaluate is no stopping condition.
 
 When scopes are not naturally file-disjoint, precede the wave with an
 integrator prep commit containing every shared contract the parallel scopes

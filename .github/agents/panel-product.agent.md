@@ -34,11 +34,11 @@ problem and, where knowable, the exact fixing command. A message without the
 causing input or with an unmappable internal identifier is a finding.
 
 **Exit codes and output contract drift.** The CLI contract pins exit codes and
-the JSON/human split. A new code, changed meaning, or unversioned JSON field is
+the JSON versus human split. A new code, changed meaning, or unversioned JSON field is
 a contract change to record, not absorb.
 
-**Naming that will not age.** Flag implementation-named options, reserved
-prefix collisions, and author-only abbreviations. Check that each new name
+**Naming that will not age.** Flag options named for implementation, reserved
+prefix collisions, and abbreviations meaningful only to the author. Check that each new name
 matches in the option, CLI, docs, and error text; three spellings cost users.
 
 **Deprecation without a path.** Removing or renaming an operator setting must

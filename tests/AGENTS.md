@@ -3,7 +3,7 @@
 This file defines **where new tests go and how they run**. It prevents the
 failure mode behind the test rearchitecture: agents adding ad-hoc
 `tests/*.sh`, making the suite slow and unmaintainable. For coverage changes,
-follow the decision rule below. Human-facing structure and run instructions
+follow the decision rule below. human-facing structure and run instructions
 live in
 [`README.md`](./README.md).
 
@@ -15,7 +15,7 @@ live in
 a new `tests/*.sh`. A needed shell gate almost certainly belongs as a nix-unit
 case (type 1) or Rust test (types 2-5).
 
-That closed set covers *gates*. `tests/tools/` is the open home for gate/CI
+That closed set covers *gates*. `tests/tools/` is the open home for gate and CI
 plumbing - enumerators, partitioners, generators, and runners - when it is not
 a test case. A gate asserts an invariant and belongs to the closed set; a tool
 produces data for another gate to assert. The migration ledger inventories
@@ -83,7 +83,7 @@ through the gate exactly once when `D2B_HEAVY_GATE` is unset, so shared Nix
 store, cargo target, and KVM are not oversubscribed. **Any new live, hardware,
 or performance entrypoint must carry that same self-guard block**, or the
 fail-closed inventory guard (`every_live_and_heavy_entrypoint_routes_through_the_gate`)
-fails while walking scripts and the Makefile.
+fails while walking on-disk scripts and the Makefile.
 
 ## How to add a test (decision rule)
 

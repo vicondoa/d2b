@@ -1,7 +1,7 @@
 # Architecture conventions
 
-Eval-time naming rules, sibling-flake boundaries, and the daemon-supervised VM
-lifecycle.
+Naming rules the framework enforces at eval time, what belongs in this repo
+versus a sibling flake, and how the daemon-supervised VM lifecycle is shaped.
 
 The binding summary is in [`../../AGENTS.md`](../../AGENTS.md). The daemon-only
 end-state is recorded in
@@ -86,7 +86,7 @@ it."
 
 `d2bd` solely supervises every per-VM lifecycle DAG. No framework-declared
 per-VM systemd units: child processes (cloud-hypervisor, virtiofsd, swtpm,
-vhost-user-sound, USBIP attach) are broker-spawned via `SpawnRunner`, handed
+vhost-user-sound, USBIP attach) are spawned by the broker via `SpawnRunner`, handed
 back to `d2bd` over `SCM_RIGHTS` as pidfds, and reconciled against persisted
 DAG state under `/var/lib/d2b/supervisor/state.json`.
 

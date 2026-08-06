@@ -44,8 +44,9 @@ flight. Specifically:
 ## How to work
 
 **Read before you write.** Read `AGENTS.md`, the relevant
-`docs/contributing/` doc, then the code. If the scope touches a critical-
-subsystems row, read its full section in `docs/contributing/critical-subsystems.md`.
+`docs/contributing/` doc, then the code. If the scope touches a
+critical-subsystems row, read its full section in
+`docs/contributing/critical-subsystems.md`.
 Those rows mark changes that can cause silent data loss, security regression, or
 an unrecoverable device-tampering signal.
 
@@ -80,8 +81,8 @@ and start one only when the change requires it.
 ## Reporting
 
 End with what changed and why, exact validation commands and results, deliberate
-in-scope omissions, and findings belonging to another scope. Understated
-omissions mislead the integrator's next-round plan.
+omissions in scope, and findings belonging to another scope. Understated
+omissions mislead the integrator's next round plan.
 
 If you cannot complete the scope, say so plainly and say where you stopped. A
 truthful partial result is useful; a confident claim that does not survive the

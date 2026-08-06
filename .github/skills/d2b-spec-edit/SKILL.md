@@ -43,7 +43,7 @@ the active feature root.
    `.scratch/spec-edit/`, never beside feature artifacts.
 4. Scope the architect prompt to the resolved root and batch. No other file
    may be written.
-5. After dispatch, recompute changed paths. Accept only paths below
+5. After dispatch, recompute the changed-path set. Accept only paths below
    `FEATURE_DIR`; report foreign changes as a scope failure and never revert
    foreign work.
 

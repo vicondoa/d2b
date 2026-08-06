@@ -25,7 +25,7 @@ integrating.
 ## Your loop
 
 1. **Commit each slice as it lands.** Do not accumulate slices uncommitted.
-   If something goes wrong, the cost is one checkout of committed content, not
+   If something goes wrong, the cost is one `git checkout` of committed content, not
    a rewrite of someone's work. Stage the slice's paths; never `git add -A` or
    stage while a gate runs.
 2. **Run the wave's validation** and record exact commands and results. That

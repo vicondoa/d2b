@@ -25,19 +25,19 @@ merged ADR number like any committed contract; one that does not never
 mentions ADRs.
 
 Thus autopilot never decides whether an ADR is required: either the spec cites
-an already-merged one, or the work does not need one. A run that discovers a
+an already merged one, or the work does not need one. A run that discovers a
 mid-flight need parks and records it like any blocker.
 
 ## Procedure
 
 ### 1. Establish that a decision is actually needed
 
-An ADR records a future-constraining choice a reasonable engineer might make
-differently. A forced answer is documentation; a freely changeable
-single-module choice is a code comment.
+An ADR records a choice that constrains future work and a reasonable engineer
+might make differently. A forced answer is documentation; a freely changeable
+choice affecting one module is a code comment.
 
 The repo bar is: does it change a contract, trust boundary, persistent surface,
-wire/schema shape, or critical-subsystems invariant? If yes, it is an ADR.
+wire or schema shape, or critical-subsystems invariant? If yes, it is an ADR.
 
 ### 2. Draft
 

@@ -44,7 +44,7 @@ an ancestor of a supervised leaf, and the host cgroup root is never chowned.
 mount boundary returns `EXDEV` even on the same device, so distinguish a
 recoverable cross-vfsmount case from a fatal different-filesystem case. A
 saturated link count returns `EMLINK`, requiring a copy fallback. Also check
-`EINTR`, `EAGAIN`, `ENOSPC`, `EEXIST`, short reads/writes, and bounded retries.
+`EINTR`, `EAGAIN`, `ENOSPC`, `EEXIST`, short reads and writes, and bounded retries.
 
 **Path resolution that can be redirected.** String concatenation, `stat` then
 `open`, or resolution following a replaceable unprivileged symlink is unsafe.
@@ -52,7 +52,7 @@ Use anchored, fd-relative resolution with no-symlink and no-magiclink
 restrictions; a new mutation without it is a finding.
 
 **File descriptor discipline.** Check missing `O_CLOEXEC`, fds leaked across a
-spawn, unbounded socket fd counts, and ambiguous received-fd ownership.
+spawn, unbounded socket fd counts, and ambiguous ownership of received fds.
 
 **Lock semantics.** Advisory locks must be open-file-description locks, not
 process-associated ones, because the latter are released by an unrelated close

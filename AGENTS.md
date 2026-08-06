@@ -164,7 +164,7 @@ every new live/hardware/perf entrypoint carries a self-guard block:
 [gates-and-lints.md](./docs/contributing/gates-and-lints.md).
 
 Runtime ledger, spec-literal lint allowlist, and D116 envelope negative-example
-marker have easy-to-misread exemptions. They are documented in that file.
+marker have exemptions that are easy to misread. They are documented in that file.
 Short version: spec-literal
 lints honour **no** author-suppression marker, and D116 honours exactly one,
 in one pinned file, exactly once.
@@ -188,7 +188,7 @@ Detail in [workflow.md](./docs/contributing/workflow.md). Binding rules:
   their own commit.
 - **Use worktrees for parallel scopes**, one per agent or concurrent scope.
   When done and green, merge the branch back to the primary clone yourself;
-  finished side-branch work still awaits integration.
+  finished side branch work still awaits integration.
 - **Concurrent slices share one worktree, so destructive git is banned.**
   Never run `git checkout --` or `git restore` on an unowned path:
   uncommitted work has no reflog, so this unrecoverably deletes sibling work.

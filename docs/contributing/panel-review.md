@@ -1,6 +1,6 @@
 # Panel review
 
-Panel sign-off contract: phase gate, fix-round scope, default ten-role roster
+Panel sign-off contract: phase gate, fix round scope, default ten-role roster
 and focus, and harness notes for swarm or unattended runs.
 
 Binding rules are in [`../../AGENTS.md`](../../AGENTS.md) under "Panel review":

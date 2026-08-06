@@ -24,7 +24,8 @@ What this change emits, reveals, and retains, and at what volume.
 ## What to hunt, specifically
 
 **Unbounded label cardinality.** Flag a metric label sourced from a VM name,
-path, identifier, error string, session handle, or other operator/input data.
+path, identifier, error string, session handle, or anything else operator- or
+input-derived.
 Labels must use closed enumerations: fixed provider, component, operation,
 outcome, and error sets. One unbounded label can make a metrics backend
 unusable even when the happy path emits one series.
@@ -33,8 +34,8 @@ unusable even when the happy path emits one series.
 command output, cwd, socket paths, unit names, PIDs, terminal bytes, shell
 names, opaque handles, and user identifiers must not reach spans, logs, metric
 labels, audit records, or a `Debug` implementation. Audit records may carry
-fixed digests and closed enumerations. Check `Debug` derivations: a struct
-holding a path or credential leaks it wherever formatted.
+fixed digests and closed enumerations. Check `Debug` derivations: deriving
+`Debug` on a struct holding a path or credential leaks it wherever formatted.
 
 **Audit records that lose their properties.** Records are append-only,
 root-owned, rotated daily, and retained for a bounded default. A path that

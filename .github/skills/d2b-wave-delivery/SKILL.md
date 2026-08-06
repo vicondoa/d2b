@@ -37,9 +37,9 @@ commit subjects, panel records, or checkpoints.
 **The legacy form keeps working, indefinitely.** `--program ADR046 --wave W1`
 is valid, not deprecated or warned on, and has no timer. A bare `W0` through
 `W8` still means program `ADR046` and writes to its existing state directory.
-Existing snapshots, seals, records, and history proofs never move or
-re-address, because that would invalidate their candidate digests. Only **new**
-programs use the qualified form.
+Existing snapshots, seals, records, and history proofs are never moved or
+re-addressed, because re-addressing a wave would invalidate their candidate
+digests. Only **new** programs use the qualified form.
 
 A qualified token whose embedded program disagrees with explicit `--program` is
 rejected as inconsistent.

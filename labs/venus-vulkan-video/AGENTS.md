@@ -22,7 +22,7 @@ The work spans three upstream projects, forked under `vicondoa/`:
 
 ## Hard rules
 
-### 1. This lab is NOT production and must never become production by accident
+### 1. This lab is NOT production, and must never become production by accident
 
 The code paths deserialize a **guest-controlled** Vulkan Video command stream in
 a host process holding an open GPU fd. Until hardening completes and explicit

@@ -1,16 +1,17 @@
 # Changelog, versioning, and commit conventions
 
-Every code-changing PR ships release notes. This file details concurrent-branch
-fragments, auto-release, version cuts, the process-marker ratchet, and commit
-trailing-tag grammar.
+Every PR that changes code ships release notes. This file carries the detail:
+the fragment workflow for concurrent branches, the auto-release path, the
+changelog lifecycle at a version cut, the process-marker ban and its ratchet,
+and the full commit trailing-tag grammar.
 
 The binding rules are in [`../../AGENTS.md`](../../AGENTS.md) under "Changelog
 and commits".
 
 ## Changelog & Releases
 
-Every code-changing PR **must** ship release notes. The CI gate accepts either
-an entry in `CHANGELOG.md` or a fragment under `changelog.d/`.
+Every PR that changes code **must** ship release notes. The CI gate accepts
+either an entry in `CHANGELOG.md` or a fragment under `changelog.d/`.
 
 ## Format
 
@@ -46,7 +47,8 @@ the release path cuts from `v3`, not `main` (see
 [`docs/specs/ADR-046-validation-and-delivery.md`](../specs/ADR-046-validation-and-delivery.md)
 "Only after all six hold").
 
-Consumers can fetch release binaries instead of building from source.
+Consumers can fetch pre-built binaries from the release instead of building
+from source.
 
 ## Versioning
 

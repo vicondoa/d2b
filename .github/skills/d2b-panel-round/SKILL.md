@@ -38,7 +38,8 @@ explicitly. It is committed here for review against
 
 **Never omit a parameter.** A subagent does not inherit session effort. An
 omitted `reasoning_effort` silently uses the model default, `medium`, while the
-record attests `high`: a plausible false attestation rather than an error.
+record attests `high`: a plausible-looking false attestation rather than an
+error.
 
 Legacy records from `gemini-3.1-pro-preview` at `high` remain readable as an
 exact compatibility pair. Never dispatch a new lane on it or mix one member

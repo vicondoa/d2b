@@ -15,9 +15,9 @@ restores normal professional communication.
 
 - Compress only free-form transient communication: status, handoff, review
   discussion, and other messages that are not persisted.
-- Keep persisted code, comments, release notes, commits, PR/issue text, memory
-  files, contributor docs, ADRs, feature artifacts, and consumer docs in normal
-  professional prose.
+- Keep persisted code, comments, release notes, commits, pull request text,
+  issue text, memory files, contributor docs, ADRs, feature artifacts, and
+  consumer docs in normal professional prose.
 - The one persisted exception is the governed prompt corpus admitted by
   `scripts/copilot/prompt-corpus-manifest.json` and checked by
   `scripts/copilot/prompt-corpus.mjs`.

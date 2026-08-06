@@ -31,22 +31,22 @@ headings, empty sections, or content outside a section fail the fold.
 **Process markers in shipped artifacts.** Wave, phase, revision, follow-up,
 round, and finding tags belong in plans, ADRs, specs, contributor docs, and
 feature-branch commits. They must not appear in shipped source comments, docs
-prose, CLI help or errors, workflow/job names, or any changelog section,
+prose, CLI help or errors, workflow and job names, or any changelog section,
 including unreleased. Two deliberate functional exceptions treat a token as an
 identifier; a new one needs explicit justification.
 
 **Non-ASCII dashes.** Only the ASCII hyphen may spell a dash anywhere:
-source, comments, literals, help, docs, ADRs, specs, changelog, commits, or PRs.
+source, comments, literals, help, docs, ADRs, specs, changelog, commits, PR bodies.
 Nine codepoints are banned. A test needing one must use an escape; the scanner
 makes a violation a build break.
 
 **Placement.** Consumer docs follow Diataxis under reference, how-to, and
 explanation. Contributor process detail belongs in contributing; `AGENTS.md`
-is a byte-budgeted router, so put new narrative in a contributing doc and add
+is a router with a byte budget, so put new narrative in a contributing doc and add
 only a router line. Links from `AGENTS.md` must resolve.
 
 **Prose that disagrees with committed, passing code.** Code wins. Document the
-drift rather than re-aligning prose, and check that it was recorded.
+drift rather than re-align prose, and check that it was recorded.
 
 **Schema and prose drift.** Adding, removing, or renaming a manifest or bundle
 field requires the JSON schema, prose reference, emitter, version bump, and
@@ -55,7 +55,7 @@ changelog to move together. A partial update is a finding even before its gate.
 **ADR hygiene.** A new ADR needs its guarded index row and updates to any ADR it
 supersedes. A cited ADR must say what the change claims.
 
-**Binding docs not updated.** If a change alters behavior described in
+**Binding docs not updated.** If a change alters load-bearing behavior described in
 `AGENTS.md`, `tests/AGENTS.md`, or a contributing doc, update that doc too.
 
 ## What is not your seat
