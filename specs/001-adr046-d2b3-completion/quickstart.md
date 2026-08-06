@@ -248,10 +248,13 @@ of the four supported representative resources. Refusals are separate negative c
 then removes the Guest, switches the next generation without a manual daemon restart,
 verifies dependency-safe cleanup, and proves the unrelated resources remain ready and intact.
 Direct ResourceService calls, private reloads, and status-only effects do not satisfy T604.
+The host configuration must set `d2b.site.hostGenerationRebuildRef` to its complete flake
+output reference. Activation validates it and emits the root-owned stable reference used by
+the pasteable recovery command below; the command contains no operator-edited placeholder.
 
 ```bash
 # 1. Declare a Zone with a small resource set in the host config, then:
-sudo nixos-rebuild switch --flake .#<host>
+sudo nixos-rebuild switch --flake "$(sudo cat /etc/d2b/host-generation-rebuild-ref)"
 
 # 2. Every supported representative resource must reach its owned effect and ready state
 d2b resource list
@@ -265,7 +268,7 @@ Actionable refusal coverage runs separately and cannot satisfy this positive pro
 
 ```bash
 # Remove one resource from config, reactivate
-sudo nixos-rebuild switch --flake .#<host>
+sudo nixos-rebuild switch --flake "$(sudo cat /etc/d2b/host-generation-rebuild-ref)"
 d2b resource list          # retired in dependency-safe order, cleanup visible, others intact
 
 sudo reboot

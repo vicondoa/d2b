@@ -56,19 +56,27 @@ coincide when one commit owns multiple scopes) and prove each is an ancestor of 
 It must also record successful, nonempty execution of:
 
 ```bash
-test "$(cargo test --manifest-path packages/Cargo.toml -p xtask \
-  candidate_recovery_v1 -- --list |
-  grep -c 'candidate_recovery_v1.*: test')" -ge 1
+set -euo pipefail
+listed="$(cargo test --manifest-path packages/Cargo.toml -p xtask \
+  candidate_recovery_v1 -- --list)"
+ignored="$(cargo test --manifest-path packages/Cargo.toml -p xtask \
+  candidate_recovery_v1 -- --list --ignored)"
+test "$(printf '%s\n' "$listed" |
+  awk '/candidate_recovery_v1.*: test$/ { n += 1 } END { print n + 0 }')" -ge 1
+test "$(printf '%s\n' "$ignored" |
+  awk '/candidate_recovery_v1.*: test$/ { n += 1 } END { print n + 0 }')" -eq 0
 cargo test --manifest-path packages/Cargo.toml -p xtask candidate_recovery_v1
 make test-adr-index-coverage
 make test-lint
 ```
 
-A skipped test, zero discovered `candidate_recovery_v1` tests, an unmerged scope, or wording
-that still permits only one request for the whole wave leaves T008 open. Downstream W2 work
-now exists while T008 remains unchecked, so a successful current rerun cannot be presented as
-historical entry evidence. T008 may close only from a retained receipt bound to the actual W2
-entry base and first dispatch.
+`set -e` makes either Cargo listing failure fatal before a count is evaluated; no `grep -c`
+pipeline may turn a failed listing into a numeric result. An ignored or skipped test, zero
+discovered `candidate_recovery_v1` tests, an unmerged scope, or wording that still permits
+only one request for the whole wave leaves T008 open. Downstream W2 work now exists while T008
+remains unchecked, so a successful current rerun cannot be presented as historical entry
+evidence. T008 may close only from a retained receipt bound to the actual W2 entry base and
+first dispatch.
 
 If that receipt does not exist, T008 remains unchecked. Exact frozen F2 must instead carry one
 passing `EvidenceRecord` with validation `historical-entry-remediation-t008`; its external
@@ -81,7 +89,44 @@ either record is duplicated, malformed, failed, or bound to another commit or tr
 requalification does not assert that original W2 entry complied.
 
 T589 later hardens accepted v1 with the `adr046w5` strict storage profile. It must see accepted
-v1 on its own actual base, but it does not retroactively complete T008 or T037.
+v1 on its own actual base, but it does not retroactively complete T008, T030, or T037.
+
+## Recovery-point attestation validator v1
+
+**Contract id**: `d2b-recovery-point-attestation/v1`
+
+**Owner**: T548; consumers T580, T555, and T556
+
+One hermetic validator owns canonical JSON shape, every FR-043 field and delivery binding,
+bounded integer timestamps, checked expiration arithmetic, external locator resolution, and
+candidate/commit/tree/preview/host/operator/restore-instruction matching. T580 uses it for
+import; T555 and T556 invoke the same implementation at every close boundary. A stage-local
+predicate copy is ineligible.
+
+The table-driven negative suite begins with one valid record and varies exactly one field or
+binding at a time. It covers every required top-level field and qualification member,
+including wrong `operatorSubjectSha256` and `restoreInstructionsSha256`, as well as missing,
+duplicate, extra, malformed, wrong-type, per-timestamp negative/fractional/out-of-range,
+future-event, checked-add-overflow, stale, expired, and unresolvable cases. The prerequisite
+is:
+
+```bash
+set -euo pipefail
+listed="$(cargo test --manifest-path packages/Cargo.toml -p xtask \
+  recovery_point_attestation_v1 -- --list)"
+ignored="$(cargo test --manifest-path packages/Cargo.toml -p xtask \
+  recovery_point_attestation_v1 -- --list --ignored)"
+test "$(printf '%s\n' "$listed" |
+  awk '/recovery_point_attestation_v1.*: test$/ { n += 1 } END { print n + 0 }')" -ge 1
+test "$(printf '%s\n' "$ignored" |
+  awk '/recovery_point_attestation_v1.*: test$/ { n += 1 } END { print n + 0 }')" -eq 0
+cargo test --manifest-path packages/Cargo.toml -p xtask \
+  recovery_point_attestation_v1
+```
+
+Cargo listing failure, zero discovery, any ignored matching test, any skip, or a failing
+per-field case blocks import, pre-panel dispatch, panel request, panel-attest, seal,
+merge-target registration, merge eligibility, and merge.
 
 ## Rules that apply to every surface
 

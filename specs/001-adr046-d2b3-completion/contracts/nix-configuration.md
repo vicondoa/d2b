@@ -28,7 +28,8 @@ controller-owned effect, and declared-resource removal cleanup.
 | NIX-5 | Extend the `eval-*` flake checks with Zone and resource examples | FR-032 | W5 |
 | NIX-6 | Prove the exact-candidate positive operator path from a Nix declaration of every supported representative Guest, Volume, Network, and Device through the emitted bundle and automatic startup/declaration/removal ingestion to durable reconciliation and each resource's real owned effect/readiness, then dependency-safe removal cleanup with unrelated resources still ready; refusal cases are separate | FR-001, FR-005, FR-072, SC-034 | W5 |
 | NIX-7 | The one carrier is compiler-only `d2b.zones.<zone>.audit`, emitted as the required top-level `audit` object in that Zone's `resource-bundle.json`, outside every ResourceSpec and the runtime-created empty `Zone.spec`. It carries exactly `retentionDays` (default 30, range 1-3650), `maxRecordsPerSegment` (default 65536, range 1-1000000), and `maxSegmentBytes` (default 67108864, range 1048576-1073741824). This breaking bundle-header change moves the accepted pair from `schemaVersion: 3` / `bundleVersion: 1` to `schemaVersion: 4` / `bundleVersion: 2`; v4 `contentHash` covers the canonical `{audit,resources}` object so an audit-only change creates a new generation identity. T592 owns the typed option, active crate-root `ZoneBundle`, retirement of the duplicate full envelope, compiler entry point and CLI tests, schema generator/output, digest reference, and focused tests; T595 wires the emitter and daemon; T220 coordinates generated artifacts, references, contract tests, and changelog treatment | FR-070, SC-032 | W5 |
-| NIX-8 | Upgrade an installed 3/1 host by building every Zone's complete 4/2 bundle set into the immutable new NixOS closure, staging that set behind one generation pointer, and durably recording a replayable handoff that binds previous/target system, daemon, pointer, and bundle generations. Atomically publish with the system-profile switch, then use only the existing `d2bd.service` continuation. Crash replays the pending publication/restart/acknowledgement; daemon restart or readiness failure durably rolls back the complete matching prior generation. Identical switch and handoff replay produce no duplicate ingestion or effect. Runtime version refusal is identifier-free with fixed redacted `Debug` and closed action `rebuild-host-generation`; only reference documentation carries the exact `sudo nixos-rebuild switch --flake <host-flake>#<host>` command and warning not to edit installed JSON | FR-070, SC-032 | W5 |
+| NIX-8 | Upgrade an installed 3/1 host by building every Zone's complete 4/2 bundle set into the immutable new NixOS closure, staging that set behind one generation pointer, and durably recording a replayable handoff that binds previous/target system, daemon, pointer, and bundle generations. `d2bd` submits only an opaque handoff identity to the typed broker operation; the privileged broker atomically publishes the pointer with the system-profile switch, restarts only the existing `d2bd.service`, and rolls back the complete matching prior generation on restart/readiness failure. Every publish, restart, rollback, replay, and refusal is audited; direct daemon or Nix-activation mutation is rejected. Identical switch and handoff replay produce no duplicate ingestion or effect. Runtime version refusal is identifier-free with fixed redacted `Debug` and closed action `rebuild-host-generation`. Reference documentation maps that action to the exact pasteable command `sudo nixos-rebuild switch --flake "$(sudo cat /etc/d2b/host-generation-rebuild-ref)"`; the root-owned file contains the configured complete flake output reference, so no unresolved placeholder is shipped | FR-070, SC-032 | W5 |
+| NIX-9 | Require `d2b.site.hostGenerationRebuildRef` as one bounded, nonempty, single-line flake reference including its `nixosConfigurations` selector. Emit the exact value at `/etc/d2b/host-generation-rebuild-ref` as `root:d2bd` mode `0640`. Missing, multiline, control-character-bearing, or selector-free values fail evaluation. Runtime code treats the value as opaque, binds only its digest into handoff state, and never includes the value or file path in an error, log, audit record, metric, span, JSON, or `Debug` | FR-070, SC-032 | W5 |
 
 ## Invariants
 
@@ -46,11 +47,15 @@ controller-owned effect, and declared-resource removal cleanup.
   publication.
 - Installed-host migration is whole-generation only. No activation may expose a 4/2 daemon
   to a partial or mixed bundle set, and no rollback may feed a 3/1 artifact to 4/2 code.
-  Handoff intent, pointer publication, daemon restart/readiness acknowledgement, and rollback
-  are durable replay points. Every observed daemon and bundle-pointer generation matches.
+  Handoff intent, broker-owned pointer/profile publication, broker-owned
+  `d2bd.service` restart/readiness acknowledgement, and broker-owned rollback are durable
+  replay points. Every observed daemon and bundle-pointer generation matches. `d2bd` and Nix
+  activation have no direct profile, pointer, unit-control, or rollback mutation path.
 - Runtime refusal errors, JSON, wire output, logs, and `Debug` contain no host, Zone,
   generation, path, command, argv, or shell fragment. They carry only the closed
-  `rebuild-host-generation` action. The exact operator command is documentation-only.
+  `rebuild-host-generation` action. The exact operator command is documentation-only and
+  discovers its complete flake output reference by reading the root-owned stable reference;
+  it contains no unresolved replacement token.
 
 ## Acceptance
 
@@ -79,4 +84,7 @@ controller-owned effect, and declared-resource removal cleanup.
   daemon restart/readiness paths replay or roll back to matching complete generations, and
   identical-switch replay causes no duplicate ingestion or effect. The 4/2 runtime refusal
   carries only `rebuild-host-generation`; a separate documentation assertion pins the exact
-  regeneration command.
+  regeneration command. The same host test executes the documented stable-reference
+  discovery command, observes one broker audit row per privileged transition, rejects direct
+  daemon/Nix mutation, and proves malformed or absent reference values fail without rendering
+  their contents.

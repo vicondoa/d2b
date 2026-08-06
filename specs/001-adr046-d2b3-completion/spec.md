@@ -614,8 +614,9 @@ artifacts, complete Story 1, and exercise each desktop companion against it.
   set to `true`. Canonical record bytes MUST be UTF-8 JSON serialized with the RFC 8785 JSON
   Canonicalization Scheme and no trailing bytes.
 
-  `candidateId`, full `commitOid`, and full `treeOid` MUST equal frozen F7. `previewSha256`
-  MUST digest the exact canonical preview bytes used for that run.
+  `candidateId`, full `commitOid`, and full `treeOid` MUST equal the current frozen W7
+  candidate (initially F7 and later only a distinct successor after durable failure).
+  `previewSha256` MUST digest the exact canonical preview bytes used for that run.
   `hostIdentitySha256` MUST be the lowercase SHA-256 of the UTF-8 domain
   `d2b:recovery-host:v1`, one zero byte, and the lowercase contents of `/etc/machine-id` from
   the daily-driver host; the raw machine id MUST NOT enter the record.
@@ -626,19 +627,44 @@ artifacts, complete Story 1, and exercise each desktop companion against it.
   zero byte, and the exact external restore-instruction bytes. Each stores only the lowercase
   SHA-256, not a raw locator, recovery payload, restore text, username, or uid.
 
-  Freshness is exact:
-  `previewedAtUnix <= capturedAtUnix <= verifiedAtUnix <= attestedAtUnix`;
-  capture and verification MUST each be no more than 86,400 seconds old at attestation;
-  and `expiresAtUnix` MUST equal the minimum of `capturedAtUnix + 86,400`,
-  `verifiedAtUnix + 86,400`, and `retentionUntilUnix`. Import and every post-rollback
-  boundary step, T555 check, panel request, seal, and merge eligibility check MUST occur
-  strictly before `expiresAtUnix`. Candidate, commit, tree, preview, host identity, record
-  bytes, or clock-order change invalidates the record. Expiration after a binding panel
-  request fails that immutable candidate; evidence is not refreshed in place.
+  Freshness is exact and bounded. Every timestamp field MUST decode directly from a JSON
+  integer into one `RecoveryUnixSeconds` newtype whose closed range is 0 through
+  253402300799. Negative, fractional, string, out-of-range, and non-canonical numeric forms
+  MUST be refused. The validator MUST sample its current clock once per validation call into
+  the same bounded type and require
+  `previewedAtUnix <= capturedAtUnix <= verifiedAtUnix <= attestedAtUnix <= verifierNowUnix < expiresAtUnix`.
+  It MUST compute `capturedAtUnix + 86,400` and `verifiedAtUnix + 86,400` with checked
+  arithmetic that also remains within the newtype bound; overflow or an out-of-range result
+  refuses the record. `expiresAtUnix` MUST equal the minimum of those two checked results and
+  `retentionUntilUnix`. Import and every post-rollback boundary step, pre-panel dispatch,
+  panel request, panel-attest, seal, merge-target registration, merge eligibility, and final
+  merge check MUST invoke the same validator and occur strictly before `expiresAtUnix`.
+  Candidate, commit, tree, preview, host or operator identity, restore-instruction binding,
+  record bytes, future event time, clock order, or checked-expiration change invalidates the
+  record.
+
+  The validator MUST have one hermetic table-driven suite whose positive control is a valid
+  canonical record and whose negative cases independently omit, duplicate, type-change, or
+  alter every required top-level field, every qualification member, and every delivery
+  binding. The matrix MUST include wrong `operatorSubjectSha256` and
+  `restoreInstructionsSha256`, plus negative, fractional, future, out-of-range, and
+  checked-add-overflow timestamp cases. Test listing MUST succeed, discover at least one
+  matching non-ignored test, discover zero ignored matching tests, and execution MUST report
+  no skip. Empty discovery is failure. A close stage MUST call this validator rather than
+  copy a subset of its predicates.
+
+  Expiration after a binding panel request durably fails that immutable candidate; evidence
+  is not refreshed in place. Failure closure retains the request, panel, seal, and
+  eligibility records and releases the candidate slot only after the closure is durable.
+  The integrator then creates a distinct successor candidate, obtains a fresh canonical
+  attestation bound to it, reruns complete candidate validation, and may issue that
+  successor's single binding panel request. No predecessor attestation, panel, seal, or
+  eligibility result transfers, even when commit and tree bytes are unchanged.
 
   T580 MUST import exactly one existing delivery `EvidenceRecord` with
   `validation = "recovery-point-attestation"` and `result = "passed"`, bound through its
-  `candidate_id`, `content_id`, and `snapshot_sha256` to F7. Its `output.sha256` and
+  `candidate_id`, `content_id`, and `snapshot_sha256` to the current frozen W7 candidate.
+  Its `output.sha256` and
   `output.bytes` MUST identify the exact canonical external attestation record, its
   `command` MUST name the verifier command without output, and its opaque `locator` MUST
   resolve the external record without embedding a raw host or recovery-point identifier.
