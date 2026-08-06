@@ -41,6 +41,26 @@ The feature-local sequencing contract is:
 5. same-candidate retry, two active candidates, stale or cross-wave recovery evidence, and
    any post-request content, history, or evidence move fail closed.
 
+One canonical hermetic `candidate_recovery_v1` validator owns those five invariants and both
+entry-disposition receipt shapes. Historical receipts contain exactly `historicalTask`,
+`entryBaseCommit`, `entryBaseTree`, `firstDispatchCommit`, `recordedAtUnix`, the closed
+prerequisite-locator set, and the closed original-check result set. Remedial receipts contain
+exactly `historicalTask`, `historicalEntry: "unproven"`, `candidateId`, `candidateCommit`,
+`candidateTree`, `recordedAtUnix`, the closed prerequisite-locator set, and the closed current
+requalification-check result set. The validator rejects an unknown task, unknown or duplicate
+field, duplicate receipt, both receipt variants, neither receipt variant, a missing or failed
+check, a non-ancestor prerequisite or implementation head, a wrong entry/candidate
+commit/tree, and a historical label attached to current evidence.
+
+Its table-driven suite starts with one valid state and one valid receipt variant, then changes
+exactly one field, binding, or transition at a time. The case inventory is itself asserted and
+must cover every required and forbidden field in both receipt variants; candidate, program,
+wave, request, round, commit, tree, recommendations, convergence, and validation bindings;
+same-candidate second request; alternate candidate while active; release before durable
+failure closure; successor admission before durable release; missing or stale recovery
+evidence; cross-candidate and cross-wave evidence; and post-request content, history, or
+evidence movement. A prose assertion or one happy-path test is not this matrix.
+
 This contract does not amend the external ADR or tooling by assertion. Before T008 may
 complete, the ADR046 plan integrator owns a separate external scope escalation that must
 merge all of the following as one accepted policy generation:
@@ -90,6 +110,10 @@ requalification does not assert that original W2 entry complied.
 
 T589 later hardens accepted v1 with the `adr046w5` strict storage profile. It must see accepted
 v1 on its own actual base, but it does not retroactively complete T008, T030, or T037.
+T029, T036, and T071 invoke this same validator, not local predicates, before pre-panel
+dispatch, panel request, panel-attest, seal, merge-target registration, merge eligibility,
+and merge. Any matrix case that would pass at one of those boundaries leaves the
+corresponding wave open.
 
 ## Recovery-point attestation validator v1
 

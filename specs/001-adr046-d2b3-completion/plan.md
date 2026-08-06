@@ -460,19 +460,26 @@ checkpoint, and commit-tag instruction for this graph uses qualified lowercase `
    component publishes itself. Startup and close collect per-Zone outcomes and visit every
    Zone; a missing or unhealthy system-core registration/handler degrades only that Zone and
    never aborts or silently drops later owners.
-7. Installed-host migration publishes one durable, replayable handoff binding the previous and
-   target system, daemon, bundle-pointer, and complete bundle-set generations. `d2bd` carries
-   only an opaque handoff identity. T592's typed privileged broker operation exclusively owns
-   system-profile and pointer publication, the exact existing `d2bd.service` restart, and
-   rollback; every phase is immutable-audited, and daemon/Nix direct mutation is denied.
-   Pointer publication is file- and directory-durable before the typed restart phase. Crash
-   replays publication, restart, or readiness acknowledgement idempotently;
-   restart/readiness failure durably rolls the complete matching generation back. An
-   identical switch or replayed acknowledgement causes no second ingestion or effect.
-   Runtime version refusal is identifier-free, has fixed redacted `Debug`, and carries only
-   closed action `rebuild-host-generation`. Reference documentation maps that action to a
-   pasteable command which reads the complete flake output reference from the root-owned
-   stable reference file; runtime output contains neither the command nor the reference.
+7. Installed-host migration begins with the target closure's
+   `system.build.d2bHostGenerationDeploy` entrypoint and one durable, replayable handoff
+   binding source/target system, broker, daemon, protocol, catalogue, bundle-pointer,
+   complete bundle-set, stable-reference, and deployment-intent digests. The first 3/1-to-4/2
+   migration obtains that entrypoint from an explicit target installable and never reads a
+   target-generated stable file. It probes the installed broker and selects the closed
+   source-v4 bootstrap when protocol 5 and the handoff capability are absent.
+   System-profile publication, NixOS activation, and stock rollback belong only to this
+   entrypoint; this deliberately narrows the prior broker-exclusivity claim so an installed
+   broker cannot be required to execute an operation it does not have. T592's typed broker
+   operation remains the sole publisher and repair owner for the d2b bundle pointer and
+   `/etc/d2b/host-generation-rebuild-ref`. Target broker activation precedes target daemon
+   activation, and the daemon stays unready until a fresh Hello negotiates the exact target
+   protocol/generations/catalogue and the broker durably publishes matching d2b state.
+   Rollback restores prior pointer/reference bytes or verified absence before the entrypoint
+   restores the prior stock system generation. Every profile/service mutation has a durable
+   pre-mutation transition record and broker adoption/outcome audit; daemon/Nix direct d2b
+   artifact mutation is denied. Runtime refusal carries only `rebuild-host-generation`.
+   Documentation gives an explicit first-bootstrap command and a stable-reference command
+   only after publication; runtime output contains neither command nor reference.
 
 The concrete failures this permits are a committed generation whose process dies after its
 effect intent becomes durable but before the effect completes, and an audit segment export
@@ -490,9 +497,9 @@ route, watch, audit export, controller, or the exact system-core Provider owners
 | --- | --- | --- |
 | Resume reconciliation | T603 | Exactly one valid T072 disposition is required first: exact historical attestation, or unchecked T072 plus one current `historical-entry-remediation-t072` record bound to A/P0 that claims no implementation completion. Pre-T603 analysis and plan panel at A/P0 then authorize only `packages/xtask/src/delivery/{mod.rs,resume.rs}`. T603 lands dedicated validator commit V with sole parent A and no other repository change, freezes B exactly at V and P byte-identical to P0, revalidates the T072 disposition, reruns analysis and the plan panel at B/P, then and only then writes the immutable authorization receipt at `.scratch/autopilot/adr046w5/reconciliation.json` and routes the sole receipt-bound checkbox transition through `/d2b-spec-edit`. It writes no feature prose; the Wave 5 integrator alone owns dedicated checkbox commit C. |
 | Integrator prep | T589 | Its sole direct prerequisite is T603. Candidate-recovery v1 must be accepted on T589's actual base, but T008 is a separate historical W2 attestation and is not retroactively completed by T589. T589 remains blocked until the finalized editor progress receipt exists, T073-T218 and T603 are checked, and HEAD is the clean dedicated checkbox commit. It lands the shared sealed capability, transactional audit-journal hook, mutation-response wire, and typed `InspectOperation` store/API/protobuf contract. It does not edit broker wire, StoreSync DTOs, their callers, broker protocol metadata, schemas, fingerprints, or snapshots. It also owns the `adr046w5` closed-evidence profile and candidate-scoped strict state in `packages/xtask/src/delivery/{evidence,panel,seal,eligibility,history_proof,storage}.rs`: one fd-anchored, file-and-directory-durable, no-replace active reservation per program/wave; fixed redacted state/errors; fd-relative durable orphan cleanup; one request per immutable candidate; synchronized cross-candidate exclusion; the point-specific zero/zero-or-one/exactly-one crash oracle; durable failed closure before active-slot release; and successor admission only with complete predecessor/program-wave/recommendations/successor-commit-tree/convergence/validation identities. Crash injection covers panel-request publication, closure, release, and successor admission. Post-request moves and retries fail at panel, seal, and eligibility. No implementation slice branches before this commit. |
-| Serialized implementation | T590-T594, T605 | T590, T591, and T594 start together from T589. T592 starts only after T591 because both own `transaction.rs`; T593 starts after T592 because both own `packages/Cargo.lock`; T605 starts after T593 and regenerates the shared API snapshots. T592 is the sole atomic broker-wire owner: it changes both StoreSync DTOs with every producer/consumer, the typed broker drain, and the typed broker-mediated host-generation publish/restart/rollback op; bumps `PROTOCOL_VERSION` 4 to 5; updates v4/v5 compatibility tests; and regenerates every affected schema, capability fingerprint, reference table, and serialization snapshot in that same commit. T592 also owns `d2b-audit`; `packages/d2b-contracts/src/generation_bundle.rs` as authoritative `ZoneBundle`; retirement of the duplicate full envelope; and a nonempty structural/API poison guard rejecting any second envelope or alias, version authority, hash implementation/entry point, or re-export. T593 owns the session adapter, descriptor, socket, bus Unix transport, session seam and tests, all consuming one accepted-socket evidence object through a reviewed safe exact-optlen dependency returning `OwnedFd`; a local unsafe/syscall fallback is forbidden. T605 owns its Zone enum, governing specs, paired reference, and final API snapshots; generated manifests remain T220-only. T592's serialized commit may edit `d2bd/src/lib.rs`; after it lands, ownership transfers to T595. No other slice edits `d2bd/src/resource_runtime.rs` or `d2bd/src/lib.rs`. |
-| Serial daemon composition | T595 | Sole writer after T592 for `d2bd/src/resource_runtime.rs`, `d2bd/src/lib.rs`, `d2bd/Cargo.toml`, and `nixos-modules/{bundle-zones,host-daemon,options-site}.nix`; begins only after T590, T592, T594, and T605 converge. It owns startup ingestion, the daemon/client `InspectOperation` path, exact 4/2 carrier consumption, and the unprivileged handoff state machine. All profile/pointer publication, exact existing-service restart, and rollback effects go through T592's typed audited broker op; direct daemon/Nix mutation is a test failure. It emits the required root-owned stable host rebuild reference, keeps its value out of diagnostics, and adds no unit. Runtime version refusal has fixed redacted `Debug` and only closed action `rebuild-host-generation`; the exact placeholder-free command is documentation-only. |
-| File-disjoint acceptance and docs | T596-T599, T604 | T599 owns the ResourceService-backed operation-inspection CLI, retained `--deadline`/`--no-deadline` controls, safe static human guidance, version-2 DTO/schema and contract tests, the coordinated `ADR-046-cli-and-operations` version amendment and migration guidance, and downstream status reconciliation with T595/T605. T604 owns new `packages/d2b-contract-tests/tests/resource_operator_activation.rs`, `packages/d2bd/tests/resource_operator_activation.rs`, `tests/host-integration/resource-operator-activation.nix`, and only the host-integration discovery/build recipe in `Makefile`. Its evidence must enumerate and build `vmChecks.x86_64-linux.resource-operator-activation`; skip or empty discovery is ineligible. The other tasks retain their named files. All five tasks may proceed together after T595 and share no file. |
+| Serialized implementation | T590-T594, T605 | T590, T591, and T594 start together from T589. T592 starts only after T591 because both own `transaction.rs`; T593 starts after T592 because both own `packages/Cargo.lock`; T605 starts after T593 and regenerates the shared API snapshots. T592 is the sole atomic broker-wire and privilege-contract owner: it changes both StoreSync DTOs with every producer/consumer; defines the audit drain and d2b-state handoff op; binds source/target broker/daemon generations and protocol/catalogue digests; makes exact Hello mandatory; adds the broker-verified daemon principal and denies every caller-claimed/admin/launcher/root/HostShutdown/remote path; bumps `PROTOCOL_VERSION` 4 to 5; and updates `d2b-contracts`, `d2b-core` privilege sources, broker protocol/runtime sources, `d2bd` Hello/version sources, `nixos-modules/privileges-json.nix`, `xtask` generators, Rust/Nix parity and policy tests, `wire-protocol.json`, `privileges.json`, daemon/privilege catalogues, fingerprints, snapshots, workspace lockfile, and standalone broker lockfile in one commit. T592 also owns `d2b-audit`; the authoritative `ZoneBundle`; duplicate-envelope retirement; and its nonempty poison guard. T593 owns the accepted-socket evidence path and subsequent workspace lockfile. T605 owns its Zone enum, governing specs, paired reference, and final API snapshots. T592's serialized commit may edit `d2bd/src/lib.rs`; after it lands, ownership transfers to T595. |
+| Serial daemon composition | T595 | Sole writer after T592 for `d2bd/src/resource_runtime.rs`, `d2bd/src/lib.rs`, `d2bd/Cargo.toml`, new `d2b/src/bin/d2b-host-generation-deploy.rs`, `d2b/Cargo.toml`, `nixos-modules/{bundle-zones,host-daemon,host-broker,options-site}.nix`, the Type-1 `host-generation-rebuild-ref.nix` case, and Type-10 `host-generation-handoff.nix`; begins only after T590, T592, T594, and T605 converge. It owns startup ingestion, exact 4/2 consumption, the target-closure deployment entrypoint, stock profile/activation/rollback initiation, source-v4 bootstrap, broker-before-daemon unit ordering, and the unprivileged opaque handoff client. The broker alone publishes/repairs the d2b pointer and stable reference from immutable input. The option is required `lib.types.strMatching` with exact `<flake-ref>#<configuration-name>` grammar, 2048-byte total limit, and 64-byte selector limit. `make nix-unit-pin` and Type-1 positive/boundary/missing/malformed/selector cases are required in addition to the VM crash/rollback matrix. No new unit is added. |
+| File-disjoint acceptance and docs | T596-T599, T604 | T599 retains its named CLI/reference ownership. T604 owns new `packages/d2b-contract-tests/tests/resource_operator_activation.rs`, `packages/d2bd/tests/resource_operator_activation.rs`, `tests/host-integration/resource-operator-activation.nix`, and only the host-integration discovery/build recipe in `Makefile`. Its 3/1 leg must use the explicit target-closure entrypoint, then use the stable-reference entrypoint only after broker publication; it exercises the exact profile/broker/daemon/reference crash and rollback ordering plus the resource effect/cleanup story. Its evidence must enumerate and build `vmChecks.x86_64-linux.resource-operator-activation`; skip or empty discovery is ineligible. The other tasks retain their named files. All five tasks may proceed together after T595 and share no file. |
 | Integrator convergence and freeze | T220 | Merges every slice; reconciles generated manifests; verifies coordinated normative/reference/test/schema/changelog treatment, including the authoritative single-owner 4/2 bundle contract/compiler/schema, poison guard, canonical digest, old/mixed/future refusals, replayable installed-host migration/rollback, closed runtime action, and command-only docs; folds fragments; rebases after W4; and records the panel base. It runs the closed-evidence profile plus the point-specific reservation oracle, durable orphan cleanup, concurrent reservation, panel-request/closure/release/successor crash transitions, same-candidate retry, active-alternate-candidate, malformed/stale/cross-candidate/cross-wave recovery-evidence matrix, and post-request movement tests at panel, seal, and eligibility. It then runs integration, CI, and full drift, opens or updates the PR, and freezes F. Any later content/history change invalidates F and restarts T220 plus T600-T602. |
 | Frozen-candidate evidence | T600-T601 | Read-only evidence lanes run against F. They write delivery evidence only, not repository files, and emit the exact closed validation identifiers assigned below. They may run together subject to the heavy-gate limit. |
 | Mechanical evidence convergence | T602 | Revalidates exactly one T072 historical/current remedial disposition without requiring or changing T072's checkbox, then verifies dependency closure, resume identities, clean F, and the exact evidence-identifier multiset. T219 is blocked until it passes. |
@@ -515,6 +522,36 @@ T592 -> T593 -> T605
 T595 -> {T596,T597,T598,T599,T604} -> T220 -> freeze F
 F -> {T600,T601} -> T602 T072-disposition revalidation -> T219 T072-disposition revalidation + work close
 ```
+
+The host-generation sub-DAG inside `T592 -> T595 -> T604` is fixed:
+
+```text
+T592 protocol-5 Hello + generation identity + privilege/output parity
+  -> T595 build target closure and immutable reference input
+  -> file-and-directory-durable deployment intent
+  -> successful source-broker Hello
+  -> {protocol-5 prepare | closed protocol-4 source bootstrap}
+  -> deployment-entrypoint stock profile publication/activation
+  -> target broker transition and staged-identity adoption audit
+  -> broker-durable d2b pointer and stable-reference publication
+  -> fresh target-daemon protocol-5 Hello bound to broker/daemon/catalogue generations
+  -> complete 4/2 ingestion and readiness acknowledgement
+  -> T604 declaration/identical/removal deployments
+```
+
+Any failure after stock publication follows one recovery edge only:
+
+```text
+target broker durable rollback preparation
+  -> prior d2b pointer and reference bytes-or-absence restoration
+  -> deployment-entrypoint stock rollback
+  -> source system/broker/daemon/3/1 verification
+```
+
+No readiness, acknowledgement, repair, or rollback edge may skip its predecessor. The
+Type-10 crash table injects immediately before and after every arrow; the done predicate is
+one exact matching source or target tuple and zero mixed/unaudited transition, not merely a
+running daemon.
 
 T603 is the sole direct prerequisite of T589 and never treats code presence as completion.
 Its gate is deliberately two-pass because the validator cannot attest to a base that predates
@@ -691,21 +728,28 @@ test-drift`, because generated spec manifests are integrator-owned. After T595, 
 T604 fan out together. T596-T598 add production-boundary tests that enter through the
 daemon/session boundary and the registered ZoneBus route, T599 reconciles the T595 emitter
 and its downstream reference/status consumers with T605's contract, and T604 adds the missing
-operator boundary. T220 then reconciles the integrator-owned generated spec manifests and
-runs the full drift gate before F is frozen. T604 first verifies the emitted Nix resource
+operator boundary. T220 then reconciles the integrator-owned generated spec manifests,
+requires the generated broker wire/privilege outputs and parity tests plus
+`make nix-unit-pin`, and runs the full drift gate before F is frozen. T604 first verifies the emitted Nix resource
 bundle in
 `packages/d2b-contract-tests/tests/resource_operator_activation.rs`. Its lowest feasible
 production-boundary leg is the Type-3
 `packages/d2bd/tests/resource_operator_activation.rs`, which consumes those exact generation
 bytes through the daemon startup/change-ingestion entry and production store/controller path
-without calling ResourceService directly. Run those legs through
+without calling ResourceService directly. T595 separately owns the Type-1 option case and
+Type-10 handoff test; T604 does not replace either. Run the lower legs through
 `D2B_ENABLE_FIXTURE_BUILD=1 make test-fixture-contracts` and `make test-rust`. Because a real
 owned host effect requires systemd, broker mutation, and a booted NixOS system, the canonical
 Type-10 destination is `tests/host-integration/resource-operator-activation.nix`, run only by
 the public heavy-gated `make test-host-integration` target. It declares the representative
-Guest, Volume, Network, and Device through Nix, switches through the public NixOS activation
-path without a manual daemon restart or private reload, and requires every one of those four
-supported resources to reach its real owned effect and readiness. The target must discover a
+Guest, Volume, Network, and Device through Nix. It starts from an installed protocol-4 3/1
+broker, obtains `d2bHostGenerationDeploy` from the explicit target installable, and reaches
+4/2 through that entrypoint without reading an absent stable reference. The new broker must
+start before the new daemon, publish/repair only broker-owned d2b state, and complete exact
+protocol-5 Hello before the daemon becomes ready. Subsequent declaration/removal deployments
+use the stable-reference entrypoint without a manual daemon restart or private reload and
+require every one of those four supported resources to reach its real owned effect and
+readiness. The target must discover a
 nonempty `vmChecks` set, enumerate and successfully build
 `vmChecks.x86_64-linux.resource-operator-activation`, and report no skip; skipped or empty
 output is ineligible evidence. Typed refusal cases are separate negative tests and cannot
@@ -732,7 +776,7 @@ second validator.
 | `effect-replay-cleanup` | T600 | `github-ci` | Every generation/effect-ledger crash window, replay/adoption, and stale/zero/wrong-UID/ambiguous cleanup refusal |
 | `audit-drain-replay` | T600 | `github-ci` | Transactional authoritative rows; fd-anchored file/directory-durable export and restart replay; digest-plus-ordinal deduplication; durable operation inspection; replay-binding denials; fixed-digest/record limits; valid-present/absent/malformed trace behavior with typed correlation and no fabrication/relabel; typed `StoreSyncRequest`/`StoreSyncResponse` producers, consumers, schema and snapshots; fixed redacted `Debug` for every migrated producer, both StoreSync wire DTOs, broker-drain DTO, SegmentWriter/sink/export/directory/opaque-handle owner; post-export journal retention and prune health; and raw identifier/trace/path/handle-canary absence |
 | `system-core-handler-contract` | T600 | `github-ci` | T605 enum/list/API/reference/schema proof, T595 emission, T599 consumer agreement, exact live handler readiness, non-substitution, and multi-Zone isolation |
-| `operator-nix-activation-cleanup` | T600 | `local-host` | T604 exact 4/2 top-level audit carrier, audit-only generation identity change, empty ZoneSpec/no emitted Zone resource, 3/1/mixed/future 5/2, 4/3, and 5/3 plus missing/misplaced refusals; durable replayable installed-host handoff from 3/1 to 4/2; typed broker-only profile/pointer publication, exact existing-service restart, rollback, and immutable audit rows; direct daemon/Nix mutation refusals; pointer/restart/readiness crash and restart-failure rollback matrix with matching generations and no duplicate effect; closed identifier-free `rebuild-host-generation` runtime action, placeholder-free stable-reference command in docs only, command execution in host recovery coverage, and no reference value in diagnostics; initial, identical, declaration, and removal public switches; four representative owned effects/readiness; dependency-safe cleanup; ready unrelated resources; and nonempty host output enumerating and building `vmChecks.x86_64-linux.resource-operator-activation` without skip |
+| `operator-nix-activation-cleanup` | T600 | `local-host` | T604 exact 4/2 top-level audit carrier, audit-only generation identity change, empty ZoneSpec/no emitted Zone resource, and old/mixed/future refusals; Type-1 required/grammar/2048-byte/selector matrix with current nix-unit pin; explicit target-installable bootstrap from installed protocol-4/no-handoff-op 3/1; sole deployment-entrypoint stock profile/service mutation; target broker-before-daemon activation; exact protocol-5 Hello bound to broker/daemon generations and catalogue; daemon-only broker authorization and all caller denials; broker-only d2b pointer/reference publish/repair with fixed-digest audit and prior bytes-or-absence rollback; generated wire/privilege schemas/catalogues/parity/drift/lockfile proof; every profile, broker, daemon, pointer, reference, and readiness crash boundary; no unaudited or direct bypass mutation; closed identifier-free runtime action; explicit-bootstrap and stable-reference documentation commands; initial, identical, declaration, and removal deployments; four representative owned effects/readiness; dependency-safe cleanup; ready unrelated resources; and nonempty host output enumerating and building `vmChecks.x86_64-linux.resource-operator-activation` without skip |
 | `resource-plane-rss-owner-fanin` | T601 | `local-host` | Whole-process RSS at 10,000 resources/100 authenticated watches with no baseline subtraction and store, policy, ResourceService, controller endpoint/fan-in, and audit journal/export owner counts exactly one; the system-core registration/list belongs only to `system-core-handler-contract` |
 | `wave5-removal-proofs` | T601 | `github-ci` | Every manifest-label W5 removal predicate rerun against F |
 | `cli-reference-conformance` | T601 | `github-ci` | Emitted CLI/help/JSON/wire behavior; accepted Version 2 amendment and Version 1 migration guidance; exact ID, exits, mandatory envelope fields, DTO/schema, retained `op inspect --deadline`/`--no-deadline` plus mutual-exclusion/cancellation coverage, identifier-free static human guidance, closed JSON remediation actions, and all T599 reference comparisons |
@@ -768,7 +812,7 @@ may not use one free-form validation name to satisfy two rows. T600 and T601 the
   mandatory envelope fields, exact ID/exit/DTO schema, and absence of Zone/ID-bearing
   executable remediation; and
 - T604's exact-candidate operator activation-to-effect-and-cleanup result, including the
-  emitted bundle identity, public switch-triggered production daemon entry point, owned
+  emitted bundle identity, deployment-entrypoint-triggered production daemon entry point, owned
   effect/readiness for every representative Guest, Volume, Network, and Device, cleanup of
   the removed resource, and unchanged ready unrelated resources.
 
@@ -850,7 +894,14 @@ requalification record. T030's disposition is required before proposed F3 is dec
 the established F2/F4 remedial paths remain required before their close gates. T029, T036,
 and T071 each require exactly one historical or remedial disposition before panel request,
 seal, or merge; absence or duplication fails closed. A current rerun never masquerades as
-historical compliance. T589 consumes accepted v1 on its own actual base and adds the stricter
+historical compliance. One canonical hermetic `candidate_recovery_v1` implementation owns
+both receipt variants and all five sequencing invariants. Its asserted table-driven inventory
+independently mutates every receipt field and delivery binding; request/candidate/program/wave/
+round/commit/tree/recommendation/convergence/validation identity; exclusivity condition;
+durable close/release edge; successor evidence; and post-request content/history/evidence
+movement. T029, T036, and T071 invoke that exact validator before every close boundary through
+merge. A local predicate, happy-path-only test, missing case, ignored/empty discovery, or
+different acceptance between waves leaves the wave open. T589 consumes accepted v1 on its own actual base and adds the stricter
 `adr046w5` storage profile;
 it does not close T008 retroactively. This batch records the external scope escalation in
 `friction-log.md` but does not edit the external ADR, ADR index, normative specification,

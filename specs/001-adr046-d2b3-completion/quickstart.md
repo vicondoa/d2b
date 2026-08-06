@@ -242,21 +242,43 @@ make test-host-integration
 ```
 
 The host leg declares the representative Guest, Volume, Network, and Device, consumes the
-emitted `zones/<zone>/resource-bundle.json`, activates on startup and public NixOS switches
-through the production daemon, and requires a real owned effect and readiness for every one
-of the four supported representative resources. Refusals are separate negative cases. It
-then removes the Guest, switches the next generation without a manual daemon restart,
+emitted `zones/<zone>/resource-bundle.json`, activates on startup and deployment-entrypoint
+transitions through the production daemon, and requires a real owned effect and readiness for
+every one of the four supported representative resources. Refusals are separate negative
+cases. It then removes the Guest, deploys the next generation without a manual daemon restart,
 verifies dependency-safe cleanup, and proves the unrelated resources remain ready and intact.
 Direct ResourceService calls, private reloads, and status-only effects do not satisfy T604.
-The host configuration must set `d2b.site.hostGenerationRebuildRef` to its complete flake
-output reference. Activation validates it and emits the root-owned stable reference used by
-the pasteable recovery command below; the command contains no operator-edited placeholder.
+The host configuration must set `d2b.site.hostGenerationRebuildRef` to the exact
+`<flake-ref>#<configuration-name>` value. It is required, has no default, and is limited to
+2048 bytes; for example:
+
+```nix
+# Nix configuration
+d2b.site.hostGenerationRebuildRef =
+  "github:example/host-config?ref=v3#workstation";
+```
+
+The first installed 3/1-to-4/2 migration cannot read the stable reference because only the
+target broker can publish it. Build and run the deployment entrypoint from the explicit target
+configuration instead:
 
 ```bash
-# 1. Declare a Zone with a small resource set in the host config, then:
-sudo nixos-rebuild switch --flake "$(sudo cat /etc/d2b/host-generation-rebuild-ref)"
+sudo nix run \
+  'github:example/host-config?ref=v3#nixosConfigurations.workstation.config.system.build.d2bHostGenerationDeploy'
+```
 
-# 2. Every supported representative resource must reach its owned effect and ready state
+That entrypoint stages the complete target closure, handles an installed protocol-4 broker
+that lacks the new handoff operation, and uses the stock NixOS profile/activation path. The
+target broker starts before the target daemon and publishes the d2b generation pointer plus
+`/etc/d2b/host-generation-rebuild-ref`; Nix activation does not create that file.
+
+After the first successful publication, the installed entrypoint may use the stable reference:
+
+```bash
+sudo /run/current-system/sw/bin/d2b-host-generation-deploy \
+  --from-reference /etc/d2b/host-generation-rebuild-ref
+
+# Every supported representative resource must reach its owned effect and ready state
 d2b resource list
 d2b resource inspect <Type>/<name>
 ```
@@ -264,11 +286,16 @@ d2b resource inspect <Type>/<name>
 **Expected**: the Guest, Volume, Network, and Device are each ready through their owned effect.
 Actionable refusal coverage runs separately and cannot satisfy this positive proof.
 
+If migration rolls back to a 3/1 generation that had no stable reference, verified absence is
+the correct restored state. Retry with the explicit target-configuration command above; do
+not create the file or copy the rolled-back target value into place.
+
 ### Story 1 - retire and restart
 
 ```bash
 # Remove one resource from config, reactivate
-sudo nixos-rebuild switch --flake "$(sudo cat /etc/d2b/host-generation-rebuild-ref)"
+sudo /run/current-system/sw/bin/d2b-host-generation-deploy \
+  --from-reference /etc/d2b/host-generation-rebuild-ref
 d2b resource list          # retired in dependency-safe order, cleanup visible, others intact
 
 sudo reboot
