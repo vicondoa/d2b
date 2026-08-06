@@ -479,7 +479,8 @@ pub enum EphemeralCleanupError {
     WrongResourceType,
     /// A status update was attempted for an unknown tracked resource.
     NotTracked,
-    /// A watch event carried a different revision than the Delete request.
+    /// A Deleted watch event did not carry a newer authoritative revision than
+    /// the optimistic Delete precondition.
     RevisionMismatch,
     /// A supplied TTL exceeded the EphemeralProcess contract bound.
     TtlOutOfRange,
@@ -805,6 +806,11 @@ impl EphemeralProcessCleanupController {
     }
 
     /// Consume a matching Deleted watch event and forget the local projection.
+    ///
+    /// The event revision is the authoritative revision allocated by the
+    /// committed deletion transaction. It must therefore be newer than the
+    /// optimistic revision used by Delete, while the key lookup keeps the
+    /// event bound to the tracked resource.
     pub fn observe_deleted(
         &mut self,
         key: &ResourceKey,
@@ -813,7 +819,7 @@ impl EphemeralProcessCleanupController {
         let Some(record) = self.records.get(key) else {
             return Err(EphemeralCleanupError::NotTracked);
         };
-        if record.expected_revision != revision {
+        if revision <= record.expected_revision {
             return Err(EphemeralCleanupError::RevisionMismatch);
         }
         self.records.remove(key);
@@ -1149,7 +1155,7 @@ mod ephemeral_cleanup_tests {
     }
 
     #[test]
-    fn restart_restores_status_projection_and_deleted_watch_removes_it() {
+    fn restart_restores_status_projection_and_deleted_watch_requires_newer_revision() {
         let observation = EphemeralProcessObservation::with_defaults(
             key(),
             EphemeralProcessPhase::Succeeded,
@@ -1167,8 +1173,13 @@ mod ephemeral_cleanup_tests {
             .unwrap();
         let mut restarted = EphemeralProcessCleanupController::restore(controller.snapshot());
         assert!(restarted.record(&key()).is_some());
+        assert_eq!(
+            restarted.observe_deleted(&key(), ZoneRevision::new(4)),
+            Err(EphemeralCleanupError::RevisionMismatch)
+        );
+        assert!(restarted.record(&key()).is_some());
         restarted
-            .observe_deleted(&key(), ZoneRevision::new(4))
+            .observe_deleted(&key(), ZoneRevision::new(5))
             .unwrap();
         assert!(restarted.record(&key()).is_none());
     }
