@@ -697,9 +697,15 @@ artifacts, complete Story 1, and exercise each desktop companion against it.
 #### Delivery and governance
 
 - **FR-025**: Remaining work MUST be delivered wave by wave following the ADR-046 delivery
-  contract. Waves seal and merge in strict order; a wave MUST NOT seal or merge before its
-  predecessor has sealed at full unanimity and merged. This ordering constrains **exit**
-  only. It does not constrain when a wave may begin implementing; see FR-057.
+  contract. Each wave has two distinct panel gates: a unanimous `/d2b-panel-round plan`
+  review bound to the exact implementation base and feature-artifact snapshot before any
+  implementation or fix lane is dispatched, and a unanimous `/d2b-panel-round work` review
+  of the integrated candidate after convergence and before advance. The work review does not
+  substitute for the plan review. Waves seal and merge in strict order; a wave MUST NOT seal
+  or merge before its predecessor has sealed at full unanimity and merged. This ordering
+  constrains **exit** only. Pipelining may relax the predecessor-merge condition for
+  implementation start under FR-048, but never relaxes the successor wave's own plan-review
+  gate; see FR-057.
 - **FR-048**: A wave's implementation MAY begin before its predecessor's panel completes,
   provided at least five of the predecessor's ten roster reviews have returned and the
   predecessor's integration tests pass on its converged tree.
@@ -726,9 +732,11 @@ artifacts, complete Story 1, and exercise each desktop companion against it.
 - **FR-054**: After a wave's slices converge and its integration tests pass, and **before any
   panel lane is dispatched**, the wave MUST pass two read-only gates run in parallel: a
   verification gate against the specification artifacts and the constitution, and a
-  code-review gate across its quality aspects. Every CRITICAL finding from the verification
-  gate, including every constitution conflict, MUST be resolved before the panel is
-  dispatched.
+  code-review gate across its quality aspects. Every actionable content finding from either
+  gate, at any severity, MUST be resolved before the panel is dispatched. A note that does
+  not meet the finding bar is a nonblocking observation and MUST NOT enter the
+  deferred-findings register. The round-nine LOW/MEDIUM deferral in FR-051 applies only to
+  panel rounds, never to these pre-panel gates.
 - **FR-055**: The code-review gate MUST be scoped to the wave's own diff against its actual
   base - the integration lineage, or the predecessor wave branch when stacked - and MUST NOT
   be scoped against the repository default branch, which does not share the integration
@@ -1269,10 +1277,10 @@ Delegation is not omission. Every delegated obligation is enumerated in
 - **SC-027**: Every wave seals at 10/10 unanimity and merges strictly after its predecessor
   did, in 100 percent of waves. Zero waves issue a panel request while their predecessor is
   unsealed, and zero waves panel against a snapshot that predates their post-merge rebase.
-- **SC-028**: Zero CRITICAL or HIGH findings are deferred in any wave. Every deferred
-  LOW or MEDIUM finding appears in the deferred-findings register with a disposition,
-  and zero deferred findings reach the release still marked open without an explicit
-  withdrawal or schedule.
+- **SC-028**: Zero CRITICAL or HIGH findings are deferred in any wave. Every LOW or MEDIUM
+  finding deferred by a round-nine-or-later panel appears in the deferred-findings register
+  with a disposition, and zero deferred findings reach the release still marked open without
+  an explicit withdrawal or schedule. Pre-panel observations never enter this register.
 - **SC-029**: 100 percent of waves pass the pre-panel verification and code-review gates,
   scoped to the wave diff, with zero CRITICAL verification findings outstanding, before
   any panel lane is dispatched.
@@ -1284,11 +1292,16 @@ Delegation is not omission. Every delegated obligation is enumerated in
   specification defect, the correction is made in the specification set through its own
   amendment path, which re-opens the affected validation evidence. The obligation this
   creates is a requirement, not merely an assumption; see FR-056.
-- The ADR-046 delivery contract in `ADR-046-validation-and-delivery` governs how this work
-  is delivered, and supersedes the repository's generic per-round phase gate for ADR-046
-  work. This feature specification does not define a parallel process; the wave lifecycle,
-  the once-per-wave binding ten-role panel, seal, and merge-eligibility rules apply
-  unchanged.
+- The ADR-046 delivery contract in `ADR-046-validation-and-delivery` governs the binding
+  work-panel, seal, and merge-eligibility surfaces; it does not supersede the repository's
+  per-wave phase gate. Every wave retains one unanimous plan review before implementation
+  dispatch and one unanimous work review after convergence. For already-dispatched W2-W4,
+  the feature artifacts currently prove no contemporaneous plan-review receipt: historical
+  compliance remains unproven, a current remedial plan review may guard only future dispatch,
+  and the later work panel cannot repair or substitute for the missed historical gate.
+  Wave 5's T603 plan review is the mandatory gate for resumed implementation after a valid
+  T072 historical or current remedial entry disposition. W6-W8 must pass their prospective
+  plan gates before their first implementation lane.
 - The project constitution applies in full, in particular the audited-privilege boundary,
   the isolation-over-convenience rule, contract versioning, test-layer discipline, and the
   ban on internal process markers in shipped artifacts.
