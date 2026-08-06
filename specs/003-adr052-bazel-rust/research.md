@@ -355,43 +355,41 @@ until a separately authorized design exists.
 
 Every governed Bazel Rust action remains no-network. A network namespace does
 not deny socket creation and is only defense in depth. The enforcing boundary
-is a repository-owned static `d2b-bazel-seccomp-exec`. Generated
-rules/toolchains make it the process executable for stable/nightly Rustc and
-metadata, Clippy, rustdoc, doctest, rustfmt, unpretty, Cargo build-script, and
-generated repository actions. Generated/custom test targets make the wrapper
-itself the payload executable and pass the real test binary as a declared
-input/argument; `--run_under` is not used. `aquery` inventories the executable
-field and rejects a missing or pre-wrapper process. Bazel setup before the
-payload is outside the claim. Every Rust payload descendant starts after load
-and inherits the filter.
+is the repository's Nix-pinned Bazel 8.6.0 package with one reviewed Linux
+sandbox patch. The runner passes the fixed policy to the sandbox child. After
+sandbox construction and before exec of the action command, the child verifies
+the policy identity, rejects inherited network authority, and loads the
+filter. This point is before compile/build commands and before Bazel's
+`test-setup.sh` or equivalent action command, so setup, tests, and all
+descendants inherit the filter. No action-wrapper claim is involved.
 
-The wrapper first rejects inherited socket descriptors and every io_uring ring,
-including SQPOLL and registered/fixed-socket states. It then sets
-`no_new_privs`, builds and loads the filter, and executes the payload with no
-stage or unsandboxed fallback. The filter denies `socket` and `socketpair` for every domain, the complete
+The exact Bazel source, patch, policy, output NAR, executable, and capability
+ABI hashes are committed. A startup probe against that Nix output refuses a
+missing capability before starting the server. Configured-target, `aquery`,
+and strategy inventories cover every stable/nightly action kind and allow only
+the patched Linux `sandboxed` strategy; process, local, standalone, worker,
+remote, and every fallback are forbidden. Patch-removal, wrong-output,
+filter-load, and setup-before-payload plants bind this placement.
+
+The sandbox child first rejects inherited socket descriptors and every
+io_uring ring, including SQPOLL and registered/fixed-socket states. It then
+sets `no_new_privs`, loads the fixed filter, and executes the action command
+with no stage fallback. The filter denies `socket` and `socketpair` for every domain, the complete
 ordinary socket operation set, `pidfd_getfd`, `socketcall` where present, and
 all three io_uring entry points. Linkers, proc macros, build scripts, doctest
 runners, test binaries, and their descendants inherit it. Eight real
 in-action plants cover IPv4, IPv6, netlink, packet, pathname Unix, abstract
 Unix, socketpair, and io_uring. External-egress and live-index plants are
-additional. Pinned repository-rule fetches are the only network-capable fetch
-phase:
-registry archives bind the root lock checksum, and `wl-proxy` binds the
+additional. Repository fetches remain outside governed actions and are offline during
+gates. Registry archives bind the root lock checksum, and `wl-proxy` binds the
 revision and archive sha256. Actions receive all resulting sources, policy
 snapshots, databases, and tools as declared inputs.
 
-Wrapper-removal, pre-wrapper, direct-action, test-executable, forbidden
-`--run_under`, inherited socket, ordinary-ring, SQPOLL-ring, and
-fixed-socket-ring plants bind the design. Every stage has a closed fixed code,
-exact literal remedy/rerun, and leak-rejection tests.
-
-The wrapper is a member of the product workspace and inherits
-`unsafe_code = "forbid"`. It uses the safe pinned `libseccomp` API. The
-separately reviewed unsafe/FFI boundary is the pinned Rust binding and native
-static libseccomp input, with exact source hashes and Nix-built wrapper digest
-in qualification. No product crate weakens or overrides the workspace lint.
-The Cargo compatibility census proves mandatory socket-using coverage was
-preserved rather than silently dropped.
+Inherited socket, ordinary-ring, SQPOLL-ring, fixed-socket-ring, setup,
+compile/build, test, descendant, and eight pre-action plants bind the design.
+Every stage has a closed fixed code, exact literal remedy/rerun, and
+leak-rejection tests. The Cargo compatibility census proves mandatory
+socket-using coverage was preserved rather than silently dropped.
 
 ## Decision 9: Keep deny and audit package-scoped and offline
 
@@ -514,28 +512,35 @@ construction, conversion, duplication, defaulting, or minting. Focused rustdoc
 `compile_fail` examples prove downstream type-system absence; Cargo-shelling
 fixtures are not used.
 
-The path-launched helper design is rejected. It rebounded the helper between
-verification and spawn, overloaded fd 0 even though fd 0 is target stdin, and
-could not both hide the executable descriptor and preserve stdin.
+The runfiles/worktree helper design and the runner-local unsafe quarantine are
+both rejected. The first permits rebind and previously overloaded stdin. The
+second would be a new ADR 0009 exception without the required follow-up ADR.
 
-The multithreaded runner instead follows the existing reviewed broker
-convention. Its crate remains `unsafe_code = "deny"`; exactly one quarantined
-`src/sys.rs` carries narrowly scoped item-level allowances for fork, private
-CLOEXEC dup/fcntl, stdio installation, close, the CLOEXEC error pipe,
-`execveat`, fixed-size error write, and `_exit`. The public safe layer consumes
-`VerifiedExecutable` by value. Before fork it prepares all strings, pointers,
-collision-free descriptors, stdio state, and error records. The child performs
-only async-signal-safe operations, executes a private CLOEXEC duplicate of the
-original verified open file description with an empty path and
-`AT_EMPTY_PATH`, preserves declared stdin/stdout/stderr, and leaks no provider
-or auxiliary descriptor. `ENOSYS` refuses.
+Instead, one dependency-leaf crate owns `VerifiedExecutable` and its only
+consuming public API. That API consumes the capability by value and invokes
+`d2b-bazel-execveat` only through the exact immutable Nix store path installed
+as its toolchain artifact. The helper's Nix output NAR and executable hashes,
+source digest, product-lock digest, and exact safe dependency identities are
+committed. Missing, wrong-output, copied, symlinked, runfiles, and worktree
+paths refuse.
 
-Tests reject a helper binary, helper runfile/path/digest, direct helper
-invocation, fd-0 executable transport, `pre_exec`, target-by-path `Command`,
-`/proc/self/fd`, `fexecve`, reopen, path fallback, child allocation/logging,
-a second unsafe file, file-wide allowance, or a general product-crate
-exemption. API, same-open-file-description, stdin, stdout/stderr, close-on-exec,
-and path-rebind-absence positives bind the intended implementation.
+The parent preserves declared stdin/stdout/stderr and uses the exact pinned,
+reviewed safe `command-fds` API to map the consumed verified description and a
+bounded typed status writer onto private child fds. The helper is a normal
+workspace binary under `unsafe_code = "forbid"`. Using pinned safe APIs, it
+validates the private-fd identity, sets CLOEXEC on both private fds, and calls
+`execveat(private_fd, "", argv, envp, AT_EMPTY_PATH)`. There is no target path,
+reopen, `/proc/self/fd`, `fexecve`, or fallback.
+
+The contract has typed prepare, identity, spawn, helper-adoption, CLOEXEC,
+execveat, status-transport, wait, cleanup, and reap stages. RAII ownership and
+closure are explicit for the consumed provider fd, mapped child fd, status
+ends, and `std::process::Child`. Spawn mechanics remain inside `std::process`
+and `command-fds`; no first-party raw fork or signal-handler design exists.
+Tests cover private-fd identity, descriptor absence, stdin, CLOEXEC, helper
+error, partial/malformed transport, and every parent ownership, closure,
+cleanup, wait, and reap failure. An enforcing closed invocation-site census
+rejects direct helper invocation outside the typed consumer.
 
 On expiry, the independently timed full grace contains repeated non-consuming
 nonblocking `waitid(EXITED|NOWAIT|NOHANG)` observations. They are
@@ -771,6 +776,13 @@ replacement line on stderr and preserves status. Promotion docs and the
 semantic changelog list all replacements. spec003w6 changes the interface test before
 removing aliases.
 
+Retry diagnostics use a versioned closed command enum. Before alias removal,
+version 1 names the existing shadow aggregate and slice targets. The alias-
+removal change removes those targets and atomically changes every diagnostic
+and byte-exact message test to version 2, which names only `test-rust` and the
+enduring `test-rust-slice-{main,api,broker,aux}` targets. Its semantic
+changelog records the transition. No repository state names an absent target.
+
 ## Decision 19: Derive post-promotion eligibility from run units
 
 The collector paginates every promoted protected-`v3` `test-rust` run. The
@@ -901,19 +913,23 @@ artifact and validator failures name repository-relative policy rows and
 digests only. They never emit `$!`, absolute or Nix store paths, raw cursors,
 descriptors, workflow attempt handles, or opaque API handles.
 
-The Spec 003 validator now parses every task record, accepts only literal
-normalized repository-relative owned paths, and rejects aggregate or generated
-ownership prose rather than truncating it. It first censuses every unchecked
-task-like checkbox, requires exact `- [ ] TNNN` headers, and rejects dot and
-dot-dot components, absolute paths, repeated separators, malformed quoting,
-duplicates, and unresolved expressions. Its self-test corpus has one positive
-fixture and independent malformed-header, dot, dot-dot, absolute,
-repeated-separator, malformed-quoting, duplicate, parser-omission, repeated
-metadata, task-after-graph, dependency, pure-adjacency, cycle,
-concurrent-conflict, and dynamic-ownership negatives.
-Every failure renders a fixed code, repository-relative source, exact remedy,
-and exact rerun without raw OS text. This remains a planning tool under the
-specification directory and is not a repository gate.
+The Spec 003 validator first censuses every Markdown unchecked task-list form,
+including unordered, ordered-dot, ordered-paren, indented, and blockquoted
+variants. Only the exact unindented `- [ ] TNNN` form enters canonical
+parsing. The validator rejects zero tasks and compares the parsed main-plan IDs
+with the independent exact census stored in `tasks.md`. It then accepts only
+literal normalized repository-relative ownership and validates record shape,
+dependency order, adjacency, cycles, and concurrent ownership.
+
+Its self-test corpus has one positive and forty-four isolated negative
+fixtures, including whole-task omission, empty input, every noncanonical list
+class, and every remaining validation branch. Every negative compares the
+complete rendered stderr byte-for-byte with an independent literal. A
+diagnostic contains only fixed code, fixed repository-relative source, fixed
+class reason, fixed remedy, and the exact rerun command. It never contains a
+task or dependency ID, owned path, count, operator-derived value, or raw OS
+text. This remains a planning tool under the specification directory and is
+not a repository gate.
 
 ## Decision 23: Disclose retained hybrid execution
 
@@ -931,8 +947,10 @@ map, retaining surface ID, Cargo selector, test identity, and socket class for
 every case, and compares it bidirectionally with all five fixed hybrid docs and
 every present promotion, alias-removal, or Cargo-retirement semantic fragment.
 Distinct cases sharing a surface do not collapse. Missing and extra
-full-identity fixture documents fail independently. The policy runs under the
-existing `make test-policy` surface and adds no gate.
+full-identity fixture documents fail independently. Empty census,
+malformed/duplicate block, malformed/duplicate identity, stale attribution,
+and governed-document mismatch fixtures also fail independently. The policy
+runs under the existing `make test-policy` surface and adds no gate.
 
 Release containment likewise distinguishes knowledge from absence. Local-tag,
 origin-tag, release-metadata, and promotion-record query failures are closed
@@ -974,12 +992,15 @@ for:
   a newer failure.
 - advisory arm, Rust slice, or rollup classification;
 - unknown, caller-supplied, ambiguous, or mixed-page cache prefix;
-- forged `VerifiedExecutable` API, helper/path/fd-0/reopen execution
-  regression, second/broad unsafe boundary, stdin or CLOEXEC regression,
-  seccomp executable-field/pre-wrapper/`--run_under` gap, inherited
-  ring/SQPOLL/fixed-socket gap, stage fallback, unsealed promotion SHA, sink
-  value leak, duplicate sink classification, sink bound or retention overflow,
-  duplicate size allowance, suppressed release query, unchecked hybrid doc, or
+- forged `VerifiedExecutable` API, wrong/rebound immutable helper output,
+  direct invocation outside the typed consumer, runfiles/worktree helper,
+  fd-0/reopen execution regression, first-party unsafe exception, stdin,
+  private-fd identity, CLOEXEC, typed-transport, ownership/cleanup/wait/reap
+  regression, patched-Bazel identity/capability or setup-before-payload gap,
+  inherited ring/SQPOLL/fixed-socket gap, strategy/stage fallback, unsealed
+  promotion SHA, sink value leak, duplicate sink classification, sink bound or
+  retention overflow, duplicate size allowance, suppressed release query,
+  unchecked or malformed hybrid doc, stale shadow-target diagnostic, or
   malformed/success-shaped exporter degradation.
 
 The harness fails if a mutation reaches a later predicate, returns zero, or

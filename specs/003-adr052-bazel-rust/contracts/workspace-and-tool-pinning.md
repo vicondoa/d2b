@@ -298,66 +298,99 @@ actions may open no network or Unix socket, including a loopback listener or
 connection. `CARGO_NET_OFFLINE=1` and a Linux network namespace are defense in
 depth, not proof. A network namespace does not deny socket creation.
 
-The proof is the outermost repository-owned `d2b-bazel-seccomp-exec` action
-wrapper defined in `coverage-map.md`. It preflights inherited descriptors,
-rejecting sockets and every io_uring ring including SQPOLL and
-registered/fixed-socket state, sets `no_new_privs`, loads the fixed seccomp
-filter, and only then executes the declared payload. It has no unsandboxed or
-stage fallback. The pinned `rules_rust` patch makes it the process executable
-for stable and nightly `Rustc`, `RustcMetadata`, Clippy, rustdoc, rustdoc-test
-compile, rustfmt, unpretty, and Cargo build-script actions. The repository
-action factory does the same for every generated Rust-gate action. Each
-generated/custom test target declares the wrapper itself as its executable and
-passes the real test binary as a declared input and argument. `--run_under` is
-forbidden. Bazel server, sandbox, runfiles, and native test-setup work before
-the payload is outside the filter claim; every Rust payload descendant starts
-after load and inherits the filter.
+The proof is the repository-owned Nix package
+`pkgs/bazel-8.6.0-seccomp/default.nix`. It pins Bazel 8.6.0 and applies exactly
+`linux-sandbox-seccomp.patch`. The installed fixed policy and the Bazel
+executable share one immutable output. A committed identity record binds the
+exact upstream source, patch, policy, and capability ABI plus separate
+`x86_64-linux` and `aarch64-linux` output NAR and executable hashes. Gates use
+the matching native Bazel output directly; Bazelisk, foreign-system output,
+and ambient Bazel are not accepted.
+
+The patch carries the fixed policy through the Linux sandbox runner into the
+sandbox child. After sandbox construction and before exec of the action
+command, the child rejects inherited sockets and every io_uring ring including
+SQPOLL and registered/fixed-socket state, sets `no_new_privs`, verifies and
+loads the fixed filter, then execs the complete action command. Compile/build
+commands, Bazel `test-setup.sh` or equivalent setup, tests, and all descendants
+therefore inherit the policy. No action wrapper or `--run_under` is used or
+credited.
 
 The filter denies the complete socket-operation set, all socket domains
 through `socket`, `socketpair`, descriptor import through `pidfd_getfd`, and
 all three io_uring entry points. The exact syscall and eight-plant inventories
-are closed in `coverage-map.md`. Every action receives the wrapper, tools,
-sources, yanked snapshot, and pinned RustSec database as declared inputs.
-Strategy inventory rejects `local`, `standalone`, `no-sandbox`, a
-network-enabling tag, or any fallback from sandboxed execution.
+are closed in `coverage-map.md`. Every action receives tools, sources, yanked snapshot, and the pinned RustSec
+database as declared inputs. Configured-target, `aquery`, and strategy
+inventories cover every stable/nightly action kind. Governed execution accepts
+only the patched Linux `sandboxed` strategy and rejects `process`, `local`,
+`standalone`, `worker`, `remote`, `no-sandbox`, a network-enabling tag, or any
+fallback.
 
-`d2b-bazel-seccomp-exec` is a product-workspace crate and inherits
-`unsafe_code = "forbid"`. It uses no local unsafe code. The exact pinned
-`libseccomp` Rust crate, native static library, source hashes, and Nix-built
-wrapper digest form a separately reviewed FFI dependency boundary. The
-wrapper is materialized transiently under `.scratch/bazel/` and passed as a
-declared external tool; no Nix store path is committed or persisted in
-evidence.
+The startup probe runs against the exact Nix output before a Bazel server
+starts and requires the capability ABI plus a real fixed-denial result.
+Missing/wrong output, patch removal, policy mismatch, failed filter load, and
+any strategy fallback fail closed. Evidence persists hashes and the capability
+version, never a complete Nix store path.
 
-Only repository-rule fetches are permitted, and every such fetch is pinned:
-registry archives use the URL and checksum from `packages/Cargo.lock`;
-`wl-proxy` uses its pinned revision and the committed archive sha256. No action
-may read a live package index, advisory database, external URL, or external
-socket, and no unpinned repository-rule fetch exists.
+Repository fetches remain outside governed Rust actions. Gates operate
+offline; registry archives use the URL and checksum from `packages/Cargo.lock`;
+`wl-proxy` uses its pinned revision and committed archive sha256. No action may
+read a live package index, advisory database, external URL, or external
+socket, and no unpinned repository fetch exists.
 
 Enforcement includes:
 
-- generated rule/toolchain and `aquery` action-graph inventories proving every
-  governed action kind and both Rust toolchains name the wrapper in the
-  executable field, test targets use wrapper-as-payload-executable, no process
-  precedes it, and every fetch site is a pinned repository rule;
-- wrapper-removal, pre-wrapper insertion, direct-action, test-executable
-  substitution, and forbidden-`--run_under` plants;
+- exact Nix output identity, startup capability, configured-target, `aquery`,
+  and strategy inventories proving every governed action kind and both Rust
+  toolchains use the patched Linux sandbox and every fetch stays outside the
+  governed action;
+- patch-removal, wrong-output, policy-mismatch, filter-load, and
+  setup-before-payload plants;
 - inherited socket, ordinary-ring, SQPOLL-ring, and registered-fixed-socket
   ring plants that refuse before filter load;
 - the eight IPv4, IPv6, netlink, packet, pathname Unix, abstract Unix,
-  socketpair, and io_uring plants, each observing the fixed policy errno;
+  socketpair, and io_uring pre-action plants, each observing the fixed policy
+  errno, plus separate compile/build, test, and descendant placement plants;
 - a planted build/test action that attempts external egress and must fail;
 - a live-index plant that refuses before name resolution or socket use; and
 - an exact generated census of committed mandatory socket-using tests that
   remain under their current Cargo compatibility carriers, with same-commit
   non-advisory verdicts attributed to their existing surface IDs.
 
-Qualification contains all eight socket/io_uring plants plus the
-external-egress and live-index results, the exact repository-rule fetch
-inventory, and the complete Cargo compatibility census. Promotion describes
+Qualification contains exact package identity and startup capability,
+patch-removal/filter-load/setup placement, strategy inventory, all eight
+socket/io_uring plants, external-egress and live-index results, the exact
+offline repository-fetch inventory, and the complete Cargo compatibility census. Promotion describes
 affected surfaces as hybrid. The Cargo compatibility carriers cannot be
 retired until a separate authorized design changes the no-network invariant.
+
+## Immutable execveat helper pin
+
+`pkgs/d2b-bazel-execveat/default.nix` builds the helper from the product
+workspace and installs exactly one `d2b-bazel-execveat` executable.
+`tests/golden/bazel-execveat-helper.json` records:
+
+- helper source-tree SHA-256;
+- `packages/Cargo.lock` SHA-256;
+- exact selected package/version/source/checksum identities for
+  `command-fds` and the safe fd/CLOEXEC/execveat API dependency;
+- separate `x86_64-linux` and `aarch64-linux` derivation output NAR SHA-256;
+- separate matching native executable SHA-256; and
+- the fixed private executable-fd, status-fd, and helper protocol version.
+
+The typed consumer embeds the exact helper path from that Nix toolchain
+artifact and accepts no path parameter or environment override. It verifies
+the output identity before spawn. Missing output, wrong output, copied binary,
+symlink rebind, runfiles path, worktree path, altered source/dependency pin, or
+digest mismatch refuses before the verified descriptor is mapped. Committed
+records persist no complete Nix store path.
+
+The leaf consumer and helper both inherit `unsafe_code = "forbid"`. Parent
+spawn and fd mapping use the reviewed safe `command-fds` API. The helper uses
+the pinned safe API dependency for fixed-fd validation, CLOEXEC, status writes,
+and `execveat(AT_EMPTY_PATH)`. A closed invocation-site policy permits only the
+typed consumer to spawn this exact output; the helper's unprivileged status
+does not create an exception.
 
 ## Package policy generation
 

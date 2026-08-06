@@ -47,9 +47,10 @@ The shared filesystem boundary:
 6. checks regular-file kind, executable mode, freshness, and exact digest;
 7. brackets the digest read with matching descriptor metadata;
 8. returns an unforgeable verified handle; and
-9. consumes the handle into a private `F_DUPFD_CLOEXEC` descriptor sharing the
-   verified descriptor's original open file description, then executes that
-   private descriptor with `execveat` and `AT_EMPTY_PATH`.
+9. consumes the handle into the reviewed safe command-fd mapping, which gives
+   the immutable helper a private descriptor sharing the verified descriptor's
+   original open file description; the helper sets CLOEXEC and executes it
+   with `execveat` and `AT_EMPTY_PATH`.
 
 No provider path is returned. No `Command` by path, `fexecve`, or
 `/proc/self/fd` fallback is permitted.
@@ -77,65 +78,77 @@ construct the type, access or extract its descriptor, coerce it through
 unverified path or descriptor into it, or implement the sealed minting trait.
 There are no Cargo-shelling compile fixtures.
 
-The multithreaded runner follows the repository's reviewed broker convention:
-the crate keeps `unsafe_code = "deny"`, all ordinary modules contain no
-unsafe code, and one quarantined `src/sys.rs` owns the low-level boundary.
-Only narrowly scoped functions in that file carry item-level
-`#[allow(unsafe_code)]`. The allowlisted operations are fork, private
-close-on-exec duplication, stdio `dup2`/`fcntl`, close, the close-on-exec
-exec-error pipe, `execveat`, fixed-size error-pipe write, and `_exit`. A
-crate-wide allowance, a second unsafe file, an unsafe callback, or an
-allowance in a general product crate is forbidden. This is the same
-`unsafe_code = "deny"` plus quarantined `sys.rs` shape already reviewed for
-`packages/d2b-priv-broker/src/sys.rs`; it is not a new exemption policy.
+`VerifiedExecutable` and its only consuming public API are co-located in one
+dependency-leaf crate. No other crate can name a consuming trait or method.
+The API consumes the handle by value and invokes `d2b-bazel-execveat` only
+from the exact immutable Nix store path supplied by the pinned toolchain
+artifact. It accepts no helper path parameter and reads no environment
+override. The committed helper identity binds output NAR and executable
+hashes, helper source and product-lock hashes, and the exact selected
+`command-fds` and safe fd/CLOEXEC/execveat dependency identities.
 
-The public safe execution function consumes `VerifiedExecutable` by value.
-Before fork, the parent validates the declared stdin, stdout, and stderr
-configuration; builds every `CString`, argv pointer, environment pointer, and
-fixed error record; duplicates the verified descriptor with
-`F_DUPFD_CLOEXEC` to a private descriptor above the stdio and error-pipe
-ranges; prepares collision-free close-on-exec stdio source descriptors; and
-creates an `O_CLOEXEC` error pipe. The private descriptor is a duplicate of,
-and therefore refers to, the original verified open file description. It is
-never reopened and is never fd 0, 1, or 2.
+The parent validates declared stdin, stdout, and stderr, creates a bounded
+typed status pipe, and uses the exact pinned reviewed safe `command-fds` API to
+map the consumed verified open file description and status writer to fixed
+private fds outside 0, 1, and 2. Spawn mechanics remain owned by
+`std::process::Command` and `command-fds`; first-party code defines no raw
+fork, `pre_exec`, or signal callback. The mapping preserves declared
+stdin/stdout/stderr byte-for-byte.
 
-After fork, the child executes only the parent-prepared, async-signal-safe
-sequence in `sys.rs`: close the parent error-pipe end, install the three
-declared stdio descriptors without changing their semantics, close redundant
-sources, call `execveat(private_fd, "", argv, envp, AT_EMPTY_PATH)`, and on
-failure write one fixed-size binary stage record to the error pipe before
-`_exit`. There is no allocation, formatting, logging, locking, path lookup,
-Rust destructor, `Command`, `pre_exec`, or user callback in the child. On
-successful exec, close-on-exec removes the private executable descriptor,
-error-pipe writer, original provider descriptor, and every auxiliary
-descriptor. Only the declared stdin, stdout, and stderr survive. The parent
-maps the bounded error record to a closed diagnostic and never emits raw OS
-text.
+`d2b-bazel-execveat` is a normal workspace binary inheriting
+`unsafe_code = "forbid"`. Using only pinned safe APIs, it verifies that both
+private fds exist and that the executable fd has the expected verified
+identity, sets CLOEXEC on both, constructs argv/environment in its normal
+single-threaded process, and calls
+`execveat(private_fd, "", argv, envp, AT_EMPTY_PATH)`. There is no target path,
+reopen, `fexecve`, `/proc/self/fd`, or fallback. On helper failure before exec,
+it writes exactly one fixed-size typed stage record to the private status fd.
+On successful exec, CLOEXEC closes both private fds before the target starts.
 
-No exec helper binary, helper runfile, helper path, helper digest, direct
-helper invocation, fd-0 executable transport, target-path invocation,
-`fexecve`, `/proc/self/fd`, reopen, or path fallback exists. `ENOSYS` and every
-other exec failure are typed refusals.
+No runfiles, worktree, copied, symlinked, caller-supplied, or fd-0 helper
+transport is permitted. A closed invocation-site policy derives the complete
+Rust/Bazel/Make/workflow spawn census and permits direct helper invocation only
+at the typed consumer implementation site. The helper is unprivileged, but a
+direct invocation elsewhere remains a policy failure.
 
-Tests prove the safe API consumes the handle and exposes no descriptor; the
-private exec descriptor and the verifier's descriptor share the same open
-file description; a marker supplied on declared stdin reaches the target
-unchanged; stdout and stderr retain their declared destinations; and provider,
-private exec, error-pipe, and auxiliary descriptors are absent after exec.
-The host conformance test rebinds and mutates the provider path after
-verification and proves execution still uses the verified open file
-description while no path appears in argv, environment, evidence, or
-diagnostics. Mutations add a path helper, direct helper invocation, fd-0
-transport, reopen, `/proc` execution, path fallback, non-CLOEXEC private
-descriptor, leaked provider descriptor, replaced stdin, child allocation,
-and a second unsafe surface; each must fail its own guard.
+Tests prove the API consumes the handle and exposes no descriptor; the mapped
+private fd refers to the original verified open file description; a marker on
+declared stdin reaches the target unchanged; stdout and stderr retain their
+declared destinations; and provider, private executable, status, and auxiliary
+descriptors are absent after exec. The host conformance test rebinds and
+mutates the provider path after verification and proves execution still uses
+the verified open file description while no path appears in argv, environment,
+evidence, or diagnostics. Mutations cover missing/wrong helper output, copied
+or rebound helper, runfiles/worktree path, direct invocation outside the
+consumer, fd-0 transport, absent/wrong private fd, reopen, `/proc`, path
+fallback, non-CLOEXEC private descriptors, leaked provider fd, replaced stdin,
+helper error, partial/malformed status transport, and any first-party unsafe
+allowance.
+
+### Launch stage and resource contract
+
+| Stage | Ownership and success transition | Injected failure cleanup |
+| --- | --- | --- |
+| `Verified` | Consumed handle exclusively owns the provider `OwnedFd`. | Identity or argument failure drops the provider once; no pipe or child exists. |
+| `HelperIdentity` | Exact immutable helper output and every committed source/dependency/output digest match. | Missing, wrong, copied, symlinked, runfiles, worktree, or rebound output drops the provider; no spawn. |
+| `Prepared` | Parent owns provider fd, status reader, status writer, and mapping configuration; declared stdio remains independently owned. | Pipe, mapping, fd-collision, or command construction failure closes provider and both pipe ends without changing stdio ownership. |
+| `Spawned` | `std::process::Child` becomes the sole child owner. Parent immediately closes its provider and status-writer copies and retains status reader plus child. | Spawn failure creates no child and closes all prepared fds. A post-spawn parent-close failure is recorded but does not abandon the child. |
+| `Adopted` | Helper validates private-fd identity and presence and sets CLOEXEC on executable and status fds. | Helper writes one complete fixed stage record when possible and exits; parent retains child ownership and reaps. |
+| `Execed` | Helper calls execveat; CLOEXEC closes private fds and only declared stdio/survivors remain. | ENOSYS and typed exec errors use the helper-error record; no path fallback. |
+| `Transported` | Parent accepts EOF as exec success or one complete fixed-size known error record. | Empty-on-error, short, partial, overlong, malformed, duplicate, or unknown records are transport failures; the original helper stage is preserved when complete. |
+| `Waited` | Parent waits through `Child` and records the terminal target/helper status. | Wait failure retains child ownership for cleanup and blocks publication. |
+| `Cleaned` | Status reader closes once and every existing child is reaped. | Injected close, wait, existing deadline-policy kill, and reap failures preserve the first operation failure plus a typed cleanup stage; raw OS text is never rendered. |
+
+No stage reports success while owning an unclosed parent-only fd or an
+unreaped child. Existing process-group deadline policy may terminate a stuck
+spawned target, but this contract does not invent raw fork signal handling.
 
 All absent, non-regular, non-executable, stale, wrong-digest, rebound-path,
 short-read, metadata-change, and exec-stage cases are injected. The one
 host-backed conformance test may exercise kernel `fork` plus
 `execveat(AT_EMPTY_PATH)` behavior against a declared first-party probe. It
 asserts same-open-file-description behavior, unchanged declared stdin,
-separate stdout and stderr, absence of every provider/private/error-pipe
+separate stdout and stderr, absence of every provider/private/status-pipe
 descriptor, and presence only of a planted descriptor explicitly declared to
 survive.
 
@@ -168,8 +181,12 @@ Every provider refusal is nonzero, redacted, and actionable:
 | `execveat` returned `ENOSYS` | Stable kernel requirement | The exact closed slice command on a supported kernel providing `execveat`; no path fallback is available. |
 | Other typed exec errno | Declared runfiles-relative provider key and errno class | The exact closed slice command after rebuilding the named target. |
 
-The renderer accepts only the four literal commands shown in the table; there
-is no free-form command string. The declared runfiles-relative provider key is
+The renderer accepts only the closed versioned slice-command enum; there is no
+free-form command string. Before alias removal, command version 1 renders the
+existing shadow slice target. Alias removal atomically updates every renderer
+and byte-exact test to command version 2's corresponding enduring
+`make test-rust-slice-{main,api,broker,aux}` target. No repository state may
+name a target absent from that state. The declared runfiles-relative provider key is
 repository content and is permitted in the refusal. The runfiles root,
 resolved absolute location, descriptor number, argv, environment value, and
 child output remain forbidden. Exact-message tests cover every reason in every

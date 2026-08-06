@@ -247,12 +247,13 @@ It also proves:
 12. all workflow, cache, deadline, cleanup, repin, and seeded policy
     refusals.
 13. all eight IPv4, IPv6, netlink, packet, pathname Unix, abstract Unix,
-    socketpair, and io_uring Bazel plants denied; inherited socket,
+    socketpair, and io_uring pre-action plants denied; inherited socket,
     ordinary-ring, SQPOLL-ring, and fixed-socket-ring plants refused before
-    load; wrapper-removal, pre-wrapper, direct-action, test-executable, and
-    forbidden-`--run_under` plants refused; external-egress and live-index
-    refused; every generated rule/toolchain and `aquery` action inventory
-    complete; and every permitted fetch a pinned repository rule;
+    load; exact patched-Bazel identity and startup capability, patch-removal,
+    filter-load, setup-before-payload, compile/build, test, descendant, and
+    strategy-fallback plants refused; external-egress and live-index refused;
+    every configured-target, `aquery`, and strategy inventory complete; and
+    every fetch outside governed actions, offline, and pinned;
 14. exact Cargo/decomposed-Bazel supply-chain equivalence for all three
     contexts;
 15. manifest/JUnit/bounded-test.log/emitted-evidence/exporter redaction,
@@ -284,13 +285,17 @@ It also proves:
 21. exactly four artifact-baseline row digests, all four artifact realization
     results, and every nonzero size-growth authorization digest and positive
     and negative authorization fixture;
-22. the seccomp wrapper digest, pinned `libseccomp` Rust/C boundary, generated
-    rule/toolchain plus `aquery` compile/build process-executable and configured
-    test-target-executable coverage, wrapper-as-test-executable result,
-    explicit pre-payload Bazel setup
-    exclusion, no-`--run_under`/pre-wrapper/no-unsandboxed-fallback results,
-    inherited socket/ring/SQPOLL/fixed-socket preflight results, every closed
-    stage diagnostic, and wrapper/filter-load mutation results.
+22. exact Bazel 8.6.0 source, Linux sandbox patch, fixed-policy, output NAR,
+    executable, and capability-ABI hashes; startup capability result;
+    configured-target plus `aquery` stable/nightly action-kind and sandbox
+    strategy inventories; patch-removal, wrong-output, filter-load, and
+    setup-before-payload results; inherited socket/ring/SQPOLL/fixed-socket
+    preflight; every closed stage diagnostic; all eight pre-action plants; and
+    no process/local/standalone/worker/remote fallback.
+23. exact immutable `d2b-bazel-execveat` output NAR/executable and
+    source/dependency hashes, closed invocation-site policy, private-fd
+    identity, descriptor-absence, CLOEXEC, stdin, typed transport, and every
+    parent ownership/closure/cleanup/wait/reap result.
 
 Candidate-specific evidence binds one integrated commit. A content change
 invalidates affected evidence. The qualified record merges before promotion

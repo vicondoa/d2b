@@ -1,4 +1,4 @@
-# Dependency and adjacency mismatch
+# Dependency not earlier
 
 <!-- D2B-SPEC003-PLAN-TASK-CENSUS:BEGIN -->
 T001

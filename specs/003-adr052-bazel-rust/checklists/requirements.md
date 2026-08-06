@@ -105,13 +105,13 @@
   projections.
 - [x] The reviewed networked refresh and offline exact-key check remain
   separate, with live-index and key-set plants.
-- [x] Every governed compile/build action and generated/custom test target
-  names the repository seccomp wrapper as its executable, with no
-  `--run_under` or pre-wrapper process; generated rule/toolchain and `aquery`
-  inventories cover stable/nightly action kinds, inherited
-  socket/ring/SQPOLL/fixed-socket preflight, full socket/io_uring denial, and
-  no stage/unsandboxed fallback; Bazel setup before the Rust payload is outside
-  the filter claim and namespaces are defense in depth only.
+- [x] Every governed action uses the exact Nix-pinned Bazel 8.6.0 package.
+  Exact source/patch/policy/output/executable/capability hashes, startup probe,
+  configured-target/`aquery`/strategy inventories, and patch-removal,
+  wrong-output, and filter-load plants are explicit. The sandbox child loads
+  the fixed filter before compile/build/test-setup/test action-command exec;
+  process/local/standalone/worker/remote fallback is forbidden, and namespaces
+  remain defense in depth only.
 - [x] Mandatory socket-using tests remain on exact same-commit non-advisory
   Cargo compatibility carriers under their existing surface IDs.
 - [x] All eight IPv4/IPv6/netlink/packet/pathname-Unix/abstract-Unix/
@@ -176,9 +176,10 @@
 - [x] Provider `RESOLVE_NO_MAGICLINKS`-only opens, deliberate absence of
   `RESOLVE_BENEATH`/`RESOLVE_NO_SYMLINKS`, permissive fallback leaf,
   strict result/cleanup flags, safe-by-value same-open-file-description
-  `execveat(AT_EMPTY_PATH)`, `ENOSYS` refusal, broker-convention quarantined
-  runner `sys.rs`, declared-stdio preservation, no helper/path/fd-0 transport,
-  and behavioral CLOEXEC coverage are explicit.
+  `execveat(AT_EMPTY_PATH)`, `ENOSYS` refusal, exact immutable Nix helper,
+  reviewed safe command-fd mapping, declared-stdio preservation, no
+  runfiles/worktree/direct/fd-0 transport, and behavioral CLOEXEC coverage are
+  explicit.
 - [x] Repeated non-consuming nonblocking grace observations, unconditional
   group kill, final reap, blocking-wait mutation, and early-reap mutation are
   explicit, with missing-process-group, wrapper-group, group-zero,
@@ -244,13 +245,15 @@
   clone/copy/default, conversion, and minting seals, with no Cargo-shelling
   fixture.
 - [x] Same-descriptor execution consumes `VerifiedExecutable` by value into
-  one `unsafe_code = "deny"` runner `sys.rs` with narrow item allowances,
-  parent-prepared async-signal-safe fork/dup/fcntl/error-pipe/execveat work,
-  private CLOEXEC execution, preserved stdin/stdout/stderr, and API,
-  same-open-file-description, stdin, close-on-exec, rebind-absence, and
-  mutation coverage; no helper binary/runfile/path, direct invocation, fd-0
-  transport, reopen, `/proc`, `fexecve`, path fallback, second unsafe file, or
-  broad lint override remains.
+  the only public consumer in the same dependency-leaf crate. That consumer
+  invokes only the exact immutable Nix-built `d2b-bazel-execveat` output and
+  maps private fds with the pinned safe `command-fds` API. The helper remains
+  `unsafe_code = "forbid"`, sets CLOEXEC and calls execveat through safe pinned
+  APIs, and preserves stdio. Exact source/dependency/output identity,
+  invocation-site policy, private-fd identity, descriptor absence, helper
+  error, partial transport, and every ownership/closure/cleanup/wait/reap
+  failure are covered; no runner `sys.rs` or first-party unsafe exception
+  remains.
 - [x] Cache deletion uses a closed typed prefix enum and mixed pagination
   negatives preserve unauthorized entries.
 - [x] The promotion record is typed and bound to the actual sealed merge before
@@ -308,13 +311,15 @@
   and merge depend on merged spec003w6 and then rebase, revalidate, and
   re-panel.
 - [x] Task IDs, inline dependencies, and the adjacency graph pass the
-  read-only plan-structure validator, which first censuses every unchecked
-  task-like checkbox, requires exact canonical headers, rejects dot/dot-dot,
-  absolute, repeated-separator, malformed-quoting, duplicate/repeated metadata,
-  post-graph tasks, and dynamic ownership, checks complete parsing, exact
-  paths, acyclicity, and concurrent ownership conflicts, and ships one positive
-  plus fifteen independent negative fixtures with fixed-code exact remedies
-  and rerun.
+  read-only plan-structure validator, which first censuses every unordered,
+  ordered, indented, and blockquoted Markdown unchecked task-list form, rejects
+  every noncanonical form and zero tasks, and binds parsed IDs to the
+  independent exact census in `tasks.md`. It checks complete parsing, exact
+  paths, dependencies, adjacency, acyclicity, and concurrent ownership
+  conflicts. One positive plus forty-four isolated negative fixtures cover
+  whole-task omission, empty input, every list class, and every branch.
+  Complete negative stderr is compared byte-exactly with independent literals
+  containing only fixed code/source/class/remedy/rerun.
 
 ## Documentation Hygiene
 
@@ -330,7 +335,8 @@
 - [x] Mutating validation commands have clean-diff assertions before and after
   execution; quickstart does not use printed status as evidence.
 - [x] The only non-Spec artifact modified by this amendment is the required
-  semantic changelog fragment for the planning validator.
+  semantic changelog fragment for the accepted architecture amendment and its
+  enforcing planning contracts.
 - [x] ASCII hyphens are used.
 - [x] No unresolved clarification marker remains.
 - [x] Provider, publication, qualification, release, artifact, and plan
@@ -343,9 +349,14 @@
 - [x] An enforcing fixture-independent type-5 policy task derives the exact
   nonempty full compatibility-carrier census, retaining surface, selector,
   test identity, and socket class, and compares it bidirectionally with every
-  governed hybrid doc and present semantic fragment, with missing and extra
-  full-identity negatives.
-- [x] Every seccomp stage, qualification query/refusal/publication failure,
+  governed hybrid doc and present semantic fragment, with isolated empty,
+  missing, extra, malformed/duplicate block, malformed/duplicate identity,
+  stale-attribution, and governed-document mismatch negatives.
+- [x] Diagnostic command versioning names existing shadow targets before alias
+  removal and enduring promoted aggregate/slice targets afterward; alias
+  removal atomically updates all renderers, byte-exact tests, and its semantic
+  changelog, so no state names a nonexistent target.
+- [x] Every sandbox-policy stage, qualification query/refusal/publication failure,
   release query/refusal, and planning-validator failure has a closed fixed
   code, exact remedy/rerun, and leak-rejection coverage; query errors cannot
   become absence.

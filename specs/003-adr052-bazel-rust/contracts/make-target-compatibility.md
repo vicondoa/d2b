@@ -159,7 +159,29 @@ hub repin, yanked refresh/check, policy generation, or evidence mutation.
   `coverage-map.md` derives that nonempty full carrier census, including each
   surface ID, Cargo selector, test identity, and socket class, and requires
   every governed document and the present fragment to match it exactly, with
-  independent missing and extra full-identity negatives.
+  isolated empty-census, missing, extra, malformed/duplicate block,
+  malformed/duplicate identity, stale-attribution, and governed-document
+  mismatch negatives.
+
+## Versioned diagnostic commands
+
+Diagnostics never carry a free-form Make target. The closed mapping has two
+versions:
+
+| Diagnostic version | Repository state | Aggregate | Main | API | Broker | Aux |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `bazel-diagnostic-v1` | Shadow through promoted aliases | `make test-bazel-rust` | `make test-bazel-rust-main` | `make test-bazel-rust-api` | `make test-bazel-rust-broker` | `make test-bazel-rust-aux` |
+| `bazel-diagnostic-v2` | Alias removal and later | `make test-rust` | `make test-rust-slice-main` | `make test-rust-slice-api` | `make test-rust-slice-broker` | `make test-rust-slice-aux` |
+
+Before promotion and while aliases exist, every provider, sandbox-policy,
+publication, cleanup, and recovery diagnostic and its byte-exact test use
+version 1, so every named target exists. The alias-removal change owns one
+atomic transition: remove aliases, select version 2 in every renderer, update
+every complete-message expectation, update the governed docs, and record the
+transition in `changelog.d/adr052-bazel-alias-removal.md`. The policy test
+enumerates every diagnostic command and Make rule and rejects a removed,
+unknown, or nonexistent target. No intermediate or merged state may mix
+versions.
 
 ## Removal
 
@@ -206,7 +228,10 @@ error mislabeled as semantic absence.
 
 spec003w6 first updates
 `packages/d2b-bazel-runner/tests/make_interface.rs` to expect removal and
-observes that test fail, then removes the aliases and makes it pass.
+observes that test fail, then removes the aliases and makes it pass. The same
+change performs the `bazel-diagnostic-v1` to `bazel-diagnostic-v2` transition
+above; removal is incomplete if any diagnostic or exact-message fixture still
+names a shadow target.
 
 Cargo implementations for the eighteen migrated surfaces may be removed only
 after ten distinct ordered green promoted `v3` run units, where a unit is one

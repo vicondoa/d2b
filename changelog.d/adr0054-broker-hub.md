@@ -1,6 +1,6 @@
 ### Added
 
-- Proposed ADR 0054, selecting one Cargo workspace and dependency hub for d2b
+- Accepted ADR 0054, selecting one Cargo workspace and dependency hub for d2b
   product packages while retaining the no-bash walker as a separate tooling
   workspace. The decision accepts the shared external package and feature
   superset while keeping selected Cargo closure policy authoritative for
@@ -23,3 +23,22 @@
   inventories and independent per-architecture foreign-system and
   remote-builder negatives. Existing contract-crate coverage remains
   enforcing, and the six guest license findings require a narrow update.
+- Required governed Rust actions to use the repository's Nix-pinned,
+  Linux-sandbox-patched Bazel 8.6.0. The sandbox child loads the fixed seccomp
+  policy before the complete action command, covering compiler commands, test
+  setup, tests, and descendants without relying on an action wrapper. Exact
+  source, patch, policy, output, executable, and capability identities,
+  sandboxed-only strategies, inherited-capability checks, and pre-action
+  network plants fail closed.
+- Preserved the workspace-wide unsafe-code prohibition by placing verified
+  executable ownership and its sole consuming API in one dependency-leaf
+  crate. The consumer passes the verified descriptor through reviewed safe
+  command-fd mapping to an identity-bound immutable Nix helper that sets
+  close-on-exec and performs pathless `execveat`; direct invocation outside
+  that API is an enforcing policy failure.
+- Strengthened planning and disclosure checks with a complete Markdown task
+  census, an independent exact task-ID census, byte-exact fixed diagnostics,
+  and isolated hybrid-disclosure mismatch fixtures. Alias removal now owns an
+  atomic diagnostic transition from existing shadow targets to enduring
+  promoted aggregate and slice targets, so recovery text never names a
+  nonexistent command.

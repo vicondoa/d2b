@@ -35,9 +35,16 @@ perl specs/003-adr052-bazel-rust/tools/validate-plan-structure.pl
 Expected:
 
 ```text
-PASS: 16 validator self-tests; positive fixture accepted; malformed header, dot and dot-dot alias, absolute path, repeated separator, malformed quoting, duplicate path, parser omission, repeated metadata, task after graph, dependency failure, pure adjacency mismatch, cycle, concurrent conflict, and dynamic ownership fixtures rejected; fixed-code remedies are repository-relative
-PASS: 119 unique tasks with exact canonical headers and owned paths; dependencies exist and precede consumers; adjacency matches; graph is acyclic; concurrently ready ownership is disjoint
+PASS: 47 validator self-tests; positive fixture accepted; 44 independent negative fixtures cover noncanonical unchecked-list forms, census declarations, task parsing, ownership, dependency, adjacency, section, cycle, and conflict fixtures rejected; byte-exact fixed diagnostics and unsupported-argument rendering verified
+PASS: 120 unique tasks with exact canonical headers and owned paths; dependencies exist and precede consumers; adjacency matches; graph is acyclic; concurrently ready ownership is disjoint
 ```
+
+The self-tests include unordered, ordered-dot, ordered-paren, indented,
+blockquoted, nested-blockquoted, zero-task, whole-task-omission, malformed
+census, and every isolated validation branch. The main check compares parsed
+IDs with the independent exact census in `tasks.md`. Every negative expectation
+is an independent literal for complete stderr; no diagnostic may contain a
+task ID, dependency ID, owned path, count, or operator-derived value.
 
 Do not use parked historical `spec003-w0-*` or `spec003-w0` branches as
 implementation input. Before spec003w0:
@@ -973,30 +980,35 @@ The broker tests must include a tag-removal mutation that overlaps a planted
 ordinary test. Qualification, not this smoke block, runs each context with
 `--runs_per_test=20`.
 
-The action-network test proves generated rule/toolchain and `aquery`
-inventories name `d2b-bazel-seccomp-exec` as the process executable for
-stable/nightly Rustc, metadata, Clippy, rustdoc, doctest compile/run, rustfmt,
-unpretty, Cargo build-script, and repository-generated actions. Each
-generated/custom test target names the wrapper itself as its executable and
-passes the real test binary as a declared input/argument. It rejects
-`--run_under`, wrapper removal, a pre-wrapper process, direct action, test
-executable substitution, local/standalone/no-sandbox, and every stage
-fallback. Bazel setup before the payload is outside the filter claim.
+The action-network test first verifies that the invoked Bazel is the exact
+repository Nix package: Bazel 8.6.0 source, Linux sandbox patch, fixed policy,
+output NAR, executable, and capability-ABI hashes must match
+`tests/golden/bazel-toolchain.json`. The startup probe must pass before the
+Bazel server starts. Patch-removal, wrong-output, and filter-load fixtures must
+refuse before any governed action.
+
+Configured-target, `aquery`, and strategy inventories cover stable/nightly
+Rustc, metadata, Clippy, rustdoc, doctest compile/run, rustfmt, unpretty,
+build-script, repository, setup, and test actions. Every governed action uses
+the patched Linux `sandboxed` strategy. Process, local, standalone, worker,
+remote, and every fallback are rejected. The sandbox child loads the fixed
+filter before exec of the complete action command, so compile/build commands,
+Bazel `test-setup.sh` or equivalent setup, tests, and descendants inherit it.
+Do not credit an action wrapper for setup coverage.
 
 Preflight plants pass inherited sockets, an ordinary ring, an SQPOLL ring, and
-a ring with a registered fixed socket; each must refuse before load. Real
-actions attempt IPv4, IPv6, netlink, packet, pathname Unix, abstract Unix,
-socketpair, and io_uring and must each observe the fixed policy errno.
-External-egress and live-index are additional plants. Inspect every fixed-code
-stage diagnostic and exact slice remedy; leak tests reject descriptor numbers,
-runtime paths, OS text, raw output, and dynamic identifiers. Inspect the
-wrapper digest and pinned
-libseccomp Rust/C source hashes and verify the wrapper inherits workspace
-`unsafe_code = "forbid"`. Mandatory socket-using Rust tests remain on their
+a ring with a registered fixed socket; each must refuse before load. Setup
+before payload, compile/build, test, and descendant plants plus IPv4, IPv6,
+netlink, packet, pathname Unix, abstract Unix, socketpair, and io_uring must
+each observe the fixed policy errno. External-egress and live-index are
+additional plants. Inspect every fixed-code stage diagnostic and exact slice
+remedy; leak tests reject descriptor numbers, runtime paths, OS text, raw
+output, and dynamic identifiers. Mandatory socket-using Rust tests remain on their
 exact same-commit non-advisory Cargo compatibility carriers; inspect the
 generated census and verify no namespace output claims socket creation was
 denied. The committed yanked
-snapshot key set comes only from `packages/Cargo.lock`; main checks the full
+snapshot key set comes only from `packages/Cargo.lock`; all repository fetches
+remain outside governed actions, offline, and checksum/revision pinned. Main checks the full
 set, while broker and guest check exact projections of their selected
 package-policy graphs. The walker and `Cargo.guest.lock` must not contribute
 keys.
@@ -1064,14 +1076,20 @@ Run targeted tests for:
   exact auto/blanket set, plus focused rustdoc compile-fail examples for
   construction, descriptor extraction/access, Deref/Borrow/fd traits,
   formatting/serialization, conversion, duplication/default, and minting;
-- safe-by-value transfer of the consumed verified capability into the one
-  runner-local broker-convention `sys.rs`; parent-prepared async-signal-safe
-  fork/dup/fcntl/error-pipe/execveat operations; private CLOEXEC descriptor
-  naming the original open file description; preserved declared
-  stdin/stdout/stderr; and no helper binary/runfile/path, direct invocation,
-  fd-0 executable transport, `pre_exec`, reopen, `/proc/self/fd`, `fexecve`,
-  path fallback, provider-fd leak, second unsafe file, file-wide allowance, or
-  general-crate exemption.
+- co-location of `VerifiedExecutable` and its only consuming public API in one
+  dependency-leaf crate; exact immutable Nix helper output plus helper source,
+  product-lock, selected dependency, output NAR, and executable hashes;
+  reviewed safe `command-fds` mapping of the consumed verified description and
+  typed status writer on private fds; preserved stdin/stdout/stderr; safe
+  helper CLOEXEC and same-open-file-description
+  `execveat(AT_EMPTY_PATH)`; and no runfiles/worktree/copied helper path,
+  direct invocation outside the typed consumer, fd-0 executable transport,
+  `pre_exec`, raw fork, reopen, `/proc/self/fd`, `fexecve`, path fallback,
+  provider-fd leak, or first-party unsafe allowance;
+- typed prepare, identity, map, spawn, adopt, CLOEXEC, execveat, status,
+  wait, cleanup, and reap stages, with a complete ownership/closure table and
+  injected descriptor-absence, private-fd-identity, helper-error,
+  partial/malformed transport, and every parent cleanup/wait/reap failure.
 
 No test should fill a disk, require a privileged mount, sleep to reach expiry,
 or write a stale executable into `packages/target/`.
@@ -1097,6 +1115,13 @@ Inspect exact recovery bytes:
   `make test-bazel-rust-{main,api,broker,aux}` or fixed qualification command.
   They preserve `testVerdict`, emit the structurally valid degraded variant,
   and contain no planted value.
+
+Before alias removal these byte-exact diagnostics use command version 1 and
+name existing `test-bazel-rust*` targets. The alias-removal change must
+atomically update every renderer and exact-message test to command version 2,
+which names only `make test-rust` or
+`make test-rust-slice-{main,api,broker,aux}`. No intermediate or merged state
+may name a target that does not exist.
 
 Also inspect the provider table in `contracts/runner-environment.md`: every
 provider refusal names the declared repository-relative provider key, its
@@ -1208,12 +1233,14 @@ jq -e '
   .architecture.aarch64_supply_chain_passed_on_same_stable_head and
   .broker.all_contexts_exclusive and
   .broker.all_contexts_twenty_consecutive and
-  .action_network.compile_build_executable_binding_exact and
-  .action_network.test_executable_binding_exact and
-  .action_network.no_run_under_or_pre_wrapper and
+  .action_network.patched_bazel_identity_exact and
+  .action_network.startup_capability_probe_passed and
+  .action_network.sandbox_load_before_action_exec and
   .action_network.inherited_capability_preflight_exact and
   .action_network.stable_nightly_action_inventory_exact and
-  .action_network.no_unsandboxed_or_filter_load_fallback and
+  .action_network.sandbox_strategy_inventory_exact and
+  .action_network.no_process_local_standalone_worker_remote_fallback and
+  .action_network.setup_before_payload_plant_denied and
   .action_network.all_eight_socket_io_uring_plants_denied and
   .action_network.external_egress_plant_refused and
   .action_network.live_index_plant_refused and
@@ -1403,7 +1430,9 @@ make test-policy
 case's surface ID, Cargo selector, test identity, and socket class, and
 requires every governed semantic block and the present fragment to equal all
 entries in both directions. Distinct cases sharing one surface remain
-distinct. Its independent missing and extra full-identity fixtures must fail.
+distinct. Run isolated empty-census, missing, extra, malformed-block,
+duplicate-block, malformed-identity, duplicate-identity, stale-attribution,
+and governed-document-mismatch fixtures; each must fail at its own predicate.
 The same test governs the alias-removal and Cargo-retirement fragments when
 those files are present.
 
@@ -1474,6 +1503,29 @@ interface test carries all five as negatives. Inspect the fixed
 and no candidate/tag/object identifier or raw command output may be
 substituted. Run
 both no-argument validators before this containment check.
+
+In the alias-removal candidate, verify the diagnostic transition atomically:
+
+```bash
+set -euo pipefail
+! grep -R 'make test-bazel-rust' \
+  packages/d2b-bazel-runner packages/xtask \
+  AGENTS.md tests/AGENTS.md tests/README.md \
+  docs/contributing/gates-and-lints.md \
+  docs/reference/test-execution-manifest.md \
+  changelog.d/adr052-bazel-alias-removal.md
+make test-rust
+make test-rust-slice-main
+make test-rust-slice-api
+make test-rust-slice-broker
+make test-rust-slice-aux
+```
+
+The exact-message tests must prove every provider, sandbox-policy,
+publication, cleanup, and recovery diagnostic now uses command version 2 and
+that the semantic changelog records the transition. Before alias removal the
+same check is inverted: version 1 may name only shadow targets that still
+exist.
 
 Cargo implementation retirement:
 

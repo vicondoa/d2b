@@ -51,14 +51,22 @@ The provider matrix renders each reason for each of the four closed slice
 commands; a generic `owning slice` placeholder is not accepted. Qualification
 failures use the fixed-code command table in
 `shadow-promotion-evidence.md`. Release-containment failures use the
-fixed-code command table in `make-target-compatibility.md`. Seccomp binding,
-inherited-capability, `no_new_privs`, filter, and exec stages use the complete
-table in `coverage-map.md`. Query errors are typed degraded outcomes, never
+fixed-code command table in `make-target-compatibility.md`. Patched-Bazel
+identity/capability, strategy, inherited-capability, `no_new_privs`, filter,
+and action-exec stages use the complete table in `coverage-map.md`. Query errors are typed degraded outcomes, never
 absence. All tables emit no planted forbidden value and do not rewrite the
 underlying `testVerdict`; evidence failures produce a structurally valid typed
 degraded status that completion and qualification reject.
 
-The exact-message harness covers every seccomp stage and slice, every
+All slice reruns use the versioned closed diagnostic command enum in
+`make-target-compatibility.md`. Before alias removal every message names an
+existing shadow target. Alias removal atomically updates provider,
+sandbox-policy, evidence, cleanup, and recovery renderers plus every byte-exact
+expectation to the enduring promoted aggregate/slice targets and records the
+transition in its semantic changelog. A diagnostic naming an absent target is
+a policy failure.
+
+The exact-message harness covers every sandbox-policy stage and slice, every
 qualification query/refusal/publication class, and every release
 query/refusal class. It rejects descriptor numbers, absolute, runfiles,
 socket, and Nix store paths, OS/errno text, raw child/tool/API output, argv,

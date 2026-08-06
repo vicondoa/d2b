@@ -69,10 +69,11 @@ change that cache's fetched-byte identity and need not invalidate it.
 | build-script annotations | A | - |
 | action-environment allowlist | A | - |
 | seccomp syscall-policy digest | A | - |
-| seccomp wrapper source and static artifact digest | A | R |
-| pinned libseccomp Rust/C source identities | A | R |
-| rules_rust seccomp-wrapper patch digest | A | R |
-| stable/nightly action-provider coverage digest | A | - |
+| Bazel 8.6.0 upstream source digest | A | R |
+| Linux sandbox seccomp patch digest | A | R |
+| patched Bazel output NAR, executable, and capability-ABI digests | A | R |
+| immutable execveat-helper source, selected dependency, output NAR, and executable digests | A | R |
+| stable/nightly action-kind and sandbox-strategy coverage digest | A | - |
 | generated BUILD digest | A | - |
 | configured native-target digest | A | - |
 | native runner architecture and exact system/target mapping | A | R |

@@ -16,17 +16,17 @@ Contracts:
   repin, module refresh, yanked authority, selected-context oracle,
   local-socket/external-egress boundary, package-policy equivalence,
   source-census, Nix selection, generated ownership, release wiring, and
-  tool-pinning contract, including the action-wide seccomp wrapper and exact
-  four-row artifact baseline.
+  tool-pinning contract, including the Nix-patched Bazel Linux sandbox and
+  exact four-row artifact baseline.
 - `coverage-map.md` - eighteen-surface carrier coverage, native first-party
   targets, selected-context censuses, and guard placement.
 - `make-target-compatibility.md` - shadow, contributor mutation, promotion,
-  and retirement command surface.
+  versioned diagnostic transition, and retirement command surface.
 - `runner-environment.md` - test topology, provider, environment, and
   sanitized bounded per-case evidence contract, compile-sealed verified
-  executable, safe public execution over one quarantined `sys.rs`
-  same-open-file-description boundary, retention classes, and canonical closed
-  complete/degraded evidence.
+  executable, immutable forbid-unsafe execveat helper, safe command-fd
+  mapping, typed ownership/error transport, retention classes, and canonical
+  closed complete/degraded evidence.
 - `execution-manifest-binding.md` - Bazel carrier results bound to existing
   execution-manifest v1.
 - `shadow-promotion-evidence.md` - qualification, the typed qualification

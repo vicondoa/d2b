@@ -12,13 +12,14 @@ data. Execution-manifest v1 remains authoritative for Rust gate evidence.
 - Repository-relative paths are normalized and sorted.
 - An absence predicate is evaluated only after its root and complete nonempty
   census are established.
-- Bazel Rust actions are no-network under an outermost inherited seccomp
-  filter, including IPv4, IPv6, netlink, packet, pathname/abstract Unix,
-  socketpair, and io_uring networking paths. Network namespaces are defense in
-  depth and are not socket-creation proof. Mandatory socket-using tests remain
-  exact non-advisory Cargo compatibility carriers under their existing surface
-  IDs. Fetches exist only in explicitly invoked contributor updaters and
-  pinned repository rules.
+- Bazel Rust actions are no-network under the Nix-pinned patched Bazel Linux
+  sandbox, whose child loads the fixed filter before exec of the full action
+  command. Coverage includes IPv4, IPv6, netlink, packet, pathname/abstract
+  Unix, socketpair, and io_uring paths in setup, compile/build, test, and
+  descendants. Network namespaces are defense in depth and are not
+  socket-creation proof. Mandatory socket-using tests remain exact
+  non-advisory Cargo compatibility carriers under their existing surface IDs.
+  Repository fetches stay outside governed actions, offline, and pinned.
 - Underlying test verdict and evidence status are separate. Degraded evidence
   preserves the verdict and is rejected by surface completion and
   qualification.
@@ -424,20 +425,37 @@ count of twenty consecutive executions for its own context.
 | `descriptor` | One `O_RDONLY|O_CLOEXEC` open using `RESOLVE_NO_MAGICLINKS` only, deliberately without `RESOLVE_BENEATH` or `RESOLVE_NO_SYMLINKS`. |
 | `fallback` | Forced component walk: intermediate `O_DIRECTORY|O_NOFOLLOW|O_CLOEXEC`; declared leaf symlink permitted; leaf opened `O_RDONLY|O_CLOEXEC` without `O_NOFOLLOW`. |
 | `identity` | Kind, executable mode, freshness, byte digest, and matching pre/post descriptor metadata. |
-| `execution` | `execveat(private_descriptor, "", argv, envp, AT_EMPTY_PATH)` on a private `F_DUPFD_CLOEXEC` descriptor that shares the verified descriptor's original open file description. |
+| `execution` | The sole consuming API maps the verified open file description to a private helper fd; immutable `d2b-bazel-execveat` sets CLOEXEC and calls `execveat(private_fd, "", argv, envp, AT_EMPTY_PATH)`. |
 | `enosys` | Named refusal requiring a kernel with `execveat`; no fallback. |
 | `auxiliary_descriptors` | All close-on-exec and proven by child descriptor-table behavior. |
 | `api_seal` | Private fields and minting trait; empty public inherent API and empty locally-authored explicit trait-impl allowlists; exact compiler-derived public, hidden, auto, and blanket API snapshots; no descriptor/path accessor or extraction, `Deref`, descriptor `Borrow`, `AsFd`, raw-fd trait, formatting, serialization, conversion, default, or duplication API. |
-| `execution_transfer` | The public safe runner API consumes the handle by value, duplicates its original open file description to one private `F_DUPFD_CLOEXEC` descriptor above stdio/error-pipe ranges, and passes only parent-prepared state to the fork child. |
-| `low_level_boundary` | Exactly `packages/d2b-bazel-runner/src/sys.rs`, following the existing broker `unsafe_code = "deny"` plus quarantined `sys.rs` convention. Item-level allowances cover only fork, dup/fcntl/close, error-pipe, execveat, fixed write, and `_exit`; no crate-wide or second unsafe surface exists. |
-| `child_sequence` | Async-signal-safe installation of declared stdin/stdout/stderr, redundant-fd close, `execveat(private_fd, "", argv, envp, AT_EMPTY_PATH)`, fixed-size error-pipe write on failure, and `_exit`. |
+| `owner` | One dependency-leaf crate owns the type and the only public API that consumes it. |
+| `execution_transfer` | The public API consumes the handle by value and uses the exact pinned reviewed safe `command-fds` mapping dependency to install the verified description and typed status writer at fixed private fds while leaving declared stdin/stdout/stderr unchanged. |
+| `helper_identity` | Exact immutable Nix store toolchain artifact, bound by derivation output NAR hash, executable hash, helper source digest, product-lock digest, and selected safe-dependency identities; runfiles, worktree, copied, symlinked, missing, and wrong outputs refuse. |
+| `helper` | Normal workspace binary with `unsafe_code = "forbid"`; pinned safe APIs set CLOEXEC on both private fds and call `execveat` with an empty path and `AT_EMPTY_PATH`. |
+| `spawn_owner` | `std::process` and `command-fds` own spawn mechanics. No first-party raw fork, `pre_exec`, or signal-handler path exists. |
+| `invocation_policy` | Closed source/call-site census permits only the typed consumer to invoke the exact helper and rejects every other Rust, Bazel, Make, workflow, runfiles, or worktree invocation. |
 
 There is no path accessor or public unchecked constructor. No
-exec helper binary/runfile/path, direct helper invocation, fd-0 executable
-transport, `std::process::Command` by target path, `fexecve`,
+runfiles/worktree/copied helper path, direct helper invocation outside the
+typed consumer, fd-0 executable transport, target path, `fexecve`,
 `/proc/self/fd`, reopen, or post-`ENOSYS` fallback exists. Successful exec
 preserves declared stdio and leaks no provider, private executable,
-error-pipe, or auxiliary descriptor.
+status-pipe, or auxiliary descriptor.
+
+## Immutable Helper Launch
+
+| Stage | Parent ownership, transition, and failure |
+| --- | --- |
+| `Verified` | Consumed `VerifiedExecutable` exclusively owns the provider `OwnedFd`; failure drops it once. |
+| `HelperIdentity` | Exact Nix output, executable, source, lock, and dependency digests validate before spawn; missing/wrong/rebound output closes the provider and creates no child. |
+| `Mapped` | Parent owns the provider fd, status reader, status writer, and mapping configuration. Mapping uses fixed private fds outside 0/1/2; any collision or preparation failure closes both pipe ends and the provider. |
+| `Spawned` | `std::process::Child` becomes the sole child owner. Parent immediately closes its provider and status-writer copies; spawn failure creates no child and RAII closes every fd. |
+| `Adopted` | Helper validates the private-fd identity and descriptor presence, sets CLOEXEC on executable and status fds, and writes only a fixed typed stage record on failure. |
+| `Execed` | Successful exec closes both private fds and preserves only declared stdio and explicitly declared survivors. |
+| `Transported` | Parent accepts only EOF-on-success or one complete fixed-size closed stage record; empty-on-error, short, partial, overlong, malformed, and unknown records are typed transport failures. |
+| `Waited` | Parent always waits through the `Child` owner. Wait failure retains ownership for cleanup; no success is published before a terminal status. |
+| `Cleaned` | Every exit path closes remaining fds once and reaps the child where one exists. Injected close, read, wait, kill-if-required-by-existing-deadline-policy, and reap failures preserve the first typed cause plus cleanup stage without raw OS text. |
 
 The public API census is primary. Focused rustdoc `compile_fail` examples prove
 downstream construction, descriptor access/extraction, trait coercion,
@@ -512,20 +530,19 @@ qualification, and promotion.
 
 | Field | Rule |
 | --- | --- |
-| `wrapperProvider` | Exact static `d2b-bazel-seccomp-exec` digest and pinned libseccomp Rust/C identities. |
-| `actionKinds` | Exact stable/nightly Rustc, metadata, Clippy, rustdoc, doctest compile/run, rustfmt, unpretty, build-script, repository action-factory, and test coverage from generated rule/toolchain plus `aquery`: compile/build process executable fields and the configured test target executable passed to Bazel-owned setup. |
-| `compileBuildBinding` | Wrapper is the process executable; real compiler/tool is a declared input and argument. |
-| `testBinding` | Wrapper is the generated/custom test target executable; real test binary is a declared input and argument. `--run_under` is absent. |
-| `setupScope` | Bazel server/executor/sandbox/runfiles/test-setup work before the Rust payload is outside the filter claim; the wrapper and every payload descendant are inside. |
+| `sandboxProvider` | Exact Nix-pinned Bazel 8.6.0 upstream source, Linux sandbox patch, fixed-policy, output NAR, executable, and capability-ABI hashes. |
+| `actionKinds` | Exact stable/nightly Rustc, metadata, Clippy, rustdoc, doctest compile/run, rustfmt, unpretty, build-script, repository, setup, and test coverage from configured-target and `aquery` inventories. |
+| `strategyInventory` | Every governed action uses the patched Linux `sandboxed` strategy; process, local, standalone, worker, remote, and every fallback are absent. |
+| `loadPoint` | Sandbox child verifies and loads the fixed filter after sandbox construction and before exec of the full action command, covering compile/build commands, test setup, tests, and descendants. |
+| `startupProbe` | The exact Nix output reports the fixed capability ABI and denies a planted syscall before any server or governed action starts. |
 | `inheritedCapabilities` | Complete pre-filter descriptor census rejects sockets and every io_uring ring, including SQPOLL and registered/fixed-socket states. |
 | `syscalls` | Closed denied socket-operation, `pidfd_getfd`, `socketcall` when present, and three-io_uring-entry-point set. |
-| `plants` | Wrapper-removal, pre-wrapper, direct-action, test-executable, forbidden-`--run_under`, inherited socket/ring/SQPOLL/fixed-socket, and exact eight IPv4, IPv6, netlink, packet, pathname Unix, abstract Unix, socketpair, and io_uring in-action results. |
-| `strategy` | Sandboxed only; no local, standalone, no-sandbox, or unsandboxed fallback. |
+| `plants` | Patch-removal, wrong-output, filter-load, strategy fallback, inherited socket/ring/SQPOLL/fixed-socket, setup-before-payload, compile/build, test, descendant, and exact eight IPv4, IPv6, netlink, packet, pathname Unix, abstract Unix, socketpair, and io_uring pre-action results. |
 | `external_egress_plant` | A build/test action attempts host/external egress and is denied. |
 | `live_index_plant` | The offline yanked validator receives a live-index source and refuses before resolution or socket use. |
-| `repository_fetch_inventory` | Exact fetch sites, each a repository rule pinned by lock checksum or git revision plus archive sha256. |
+| `repository_fetch_inventory` | Exact fetch sites outside governed actions, offline during gates, each pinned by lock checksum or git revision plus archive sha256. |
 | `cargo_compatibility_carriers` | Exact generated test identities, Cargo selectors, existing surface IDs, same-commit verdicts, and non-advisory classification for mandatory socket users. |
-| `qualification_result` | Binding, inherited-capability, all eight socket/io_uring, external-egress, and live-index plants fail at their own predicates; every seccomp stage has its fixed redacted code/remedy; inventories are complete; and every compatibility carrier passes on the same head. |
+| `qualification_result` | Identity, startup, strategy, inherited-capability, setup-before-payload, all eight socket/io_uring, external-egress, and live-index plants fail at their own predicates; every sandbox-policy stage has its fixed redacted code/remedy; inventories are complete; and every compatibility carrier passes on the same head. |
 
 There is no endpoint declaration field. A network namespace cannot enforce
 one, and no such claim is part of qualification.
@@ -577,11 +594,12 @@ Qualification additionally binds:
   derivations;
 - broker `exclusive` tags, no-overlap mutation, and twenty-run result for each
   context;
-- generated rule/toolchain plus `aquery` seccomp executable-field and
-  stable/nightly action-kind inventory, wrapper-as-test-executable,
-  no-`--run_under`/pre-wrapper/inherited-capability/unsandboxed-fallback
-  results, eight socket/io_uring plants,
-  external-egress and live-index plants, and exact Cargo compatibility census;
+- exact patched-Bazel source/patch/policy/output/executable/capability
+  identities, startup probe, configured-target plus `aquery` stable/nightly
+  action-kind inventory, strategy inventory, patch-removal/filter-load/
+  setup-before-payload/inherited-capability/fallback results, eight pre-action
+  socket/io_uring plants, external-egress and live-index plants, and exact
+  Cargo compatibility census;
 - product-only yanked authority and exact broker/guest projections;
 - all three Supply Chain Equivalence Results;
 - native arm `make test-rust-supply-chain` and stable-head renderer evidence.
@@ -705,7 +723,19 @@ bounded and complete-stream verdicts equal.
 | `fixedDocuments` | Exactly `AGENTS.md`, `tests/AGENTS.md`, `docs/contributing/gates-and-lints.md`, `tests/README.md`, and `docs/reference/test-execution-manifest.md`. |
 | `candidateFragments` | The promotion, alias-removal, and Cargo-retirement semantic fragments when present. |
 | `comparison` | Every governed semantic block equals the complete carrier-identity source in both directions, with no duplicate or malformed entry; distinct cases sharing one surface remain distinct. |
-| `enforcement` | Fixture-independent type-5 `policy_bazel_hybrid_docs.rs` under `make test-policy`, with missing and extra negatives. |
+| `enforcement` | Fixture-independent type-5 `policy_bazel_hybrid_docs.rs` under `make test-policy`, with isolated empty-census, missing, extra, malformed/duplicate block, malformed/duplicate identity, stale-attribution, and governed-document mismatch negatives. |
+
+## Diagnostic Command Version
+
+| Version | Valid repository state | Closed commands |
+| --- | --- | --- |
+| `bazel-diagnostic-v1` | Shadow through promoted aliases | `make test-bazel-rust`, `make test-bazel-rust-main`, `make test-bazel-rust-api`, `make test-bazel-rust-broker`, `make test-bazel-rust-aux` |
+| `bazel-diagnostic-v2` | Alias removal and later | `make test-rust`, `make test-rust-slice-main`, `make test-rust-slice-api`, `make test-rust-slice-broker`, `make test-rust-slice-aux` |
+
+Alias removal owns the only transition. It updates all diagnostic renderers,
+byte-exact expectations, governed docs, and the semantic changelog in one
+change. A state is invalid if any diagnostic command names a target absent
+from that state.
 
 ## Evidence Sink Result
 
@@ -800,6 +830,7 @@ Qualification Evidence 1 -- 1 No-Shell Spawn Inventory digest
 Qualification Evidence 1 -- 1 Promotion Record
 Coverage Map 1 -- 1 Hybrid Disclosure Census
 Hybrid Disclosure Census 1 -- many governed documents
+Repository State 1 -- 1 Diagnostic Command Version
 Promotion Record 1 -- many Post-Promotion Run Units
 Post-Promotion Run Unit 1 -- 1..n Run Attempts
 Post-Promotion Run Units many -- 1 Derived Promotion Streak
