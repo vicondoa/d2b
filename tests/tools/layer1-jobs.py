@@ -63,6 +63,13 @@ def load_manifest() -> dict[str, Any]:
             if not isinstance(ci_job_id, str):
                 raise SystemExit(f"{MANIFEST}: ciJobId for {job_id!r} must be a string")
             validate_job_id(ci_job_id, f"jobs.{job_id}.ciJobId")
+        checkout_fetch_depth = job.get("checkoutFetchDepth")
+        if checkout_fetch_depth is not None and (
+            not isinstance(checkout_fetch_depth, int) or checkout_fetch_depth < 0
+        ):
+            raise SystemExit(
+                f"{MANIFEST}: checkoutFetchDepth for {job_id!r} must be a non-negative integer"
+            )
 
     local_job_ids: list[str] = []
     for phase in manifest.get("local", {}).get("phases", []):
@@ -113,6 +120,11 @@ def yaml_list(values: list[str]) -> str:
 def needs_line(job: dict[str, Any]) -> str:
     needs = job.get("needs", [])
     return f"    needs: {yaml_list(needs)}\n" if needs else ""
+
+
+def checkout_fetch_depth_line(job: dict[str, Any]) -> str:
+    depth = job.get("checkoutFetchDepth")
+    return f"\n          fetch-depth: {depth}" if depth is not None else ""
 
 
 def ci_env_block(job: dict[str, Any], spaces: int) -> str:
@@ -228,7 +240,7 @@ def simple_nix_job(job: dict[str, Any]) -> str:
     steps:
       - uses: {CHECKOUT}
         with:
-          persist-credentials: false
+          persist-credentials: false{checkout_fetch_depth_line(job)}
 {nix_setup_step(job)}
       - name: {job["displayName"]}
         run: make {job["makeTarget"]}"""

@@ -45,8 +45,8 @@ When a failure reproduces only inside the gate toolchain, use
 # Focused Layer-1 jobs, in tests/layer1-jobs.json local phase order.
 # Read each job's current enforcement classification from that manifest.
 make check-tier0
-make check-inventory
 make test-lint
+make check-inventory
 make test-changelog
 make test-rust
 make test-proofs
@@ -73,6 +73,15 @@ make check-static
 # host/manual pre-PR targets below before opening an agent-owned PR.
 make test
 ```
+
+Local `make check` runs `test-lint` as a serial fail-fast phase before
+inventory and the long parallel jobs. That lane checks every gated Rust
+workspace with `cargo fmt --check`, runs clippy only for changed main-workspace
+and guest-shell-runner packages, and compares the exact main-workspace API
+census inputs with the fingerprint written by `make api-surface-pin`. The later
+full Rust and API-census leaves remain authoritative. CI omits the changed-scope
+clippy duplicate because its lint job has no shared Cargo cache; the required
+full Rust shard still runs workspace-wide clippy.
 
 The tier-0 dash scan admits only the three pinned Caveman provenance blobs
 under `third_party/caveman/v1.10.0/`, and only by exact path plus SHA-256 from
