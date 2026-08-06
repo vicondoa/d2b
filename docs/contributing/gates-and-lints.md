@@ -1,10 +1,10 @@
 # Gates and lints
 
-Detailed reference for the heavy-lane semaphore and the policy lints whose
-exemption rules are easy to get wrong. The binding summary, the Layer-1 job
-list, and the enforcing/advisory rule live in
+Reference for the heavy-lane semaphore and policy lints whose exemptions are
+easy to get wrong. The binding summary, Layer-1 job list, and
+enforcing/advisory rule live in
 [`../../AGENTS.md`](../../AGENTS.md) under "Build and validate"; read that
-first. This file explains the parts that need more than a rule.
+first. This file covers the parts needing more than a rule.
 
 `tests/layer1-jobs.json` remains authoritative for the job list and its
 enforcement classification. Where this file disagrees with that manifest or
@@ -12,25 +12,23 @@ with the `Makefile`, those win.
 
 ## Build and validate, in detail
 
-Use the top-level `Makefile` targets. The shell scripts under `tests/`
-are implementation details unless a target or `tests/AGENTS.md` tells
-you to run one directly.
+Use top-level `Makefile` targets. Shell scripts under `tests/` are
+implementation details unless a target or `tests/AGENTS.md` says to run one.
 
-`nix develop` gives you the toolchain every gate expects - the pinned Rust
-release, plus sccache, cargo-nextest, cargo-deny, cargo-audit, shellcheck
-and jq. The gate scripts each re-enter a nix shell and bootstrap a private
-toolchain when those are missing, so working inside the dev shell skips
-that setup. Normal dev/test profiles retain line tables for panic locations but
-omit full dependency DWARF; use `cargo build --profile debugging` or
-`cargo test --profile debugging` when a debugger needs full symbols.
+`nix develop` provides the pinned Rust release plus sccache, cargo-nextest,
+cargo-deny, cargo-audit, shellcheck, and jq. Gate scripts bootstrap a private
+toolchain when missing, so a dev shell skips that setup. Normal dev/test
+profiles retain panic line tables but omit dependency DWARF; use
+`cargo build --profile debugging` or `cargo test --profile debugging` for full
+debugger symbols.
 
-Rust tests run under `cargo-nextest`. Two surfaces are not nextest surfaces
-and get explicit companion runs, so do not "simplify" them away: **doctests**
-(several `compile_fail` ones are capability seals) and **`harness = false`
-binaries** (`d2b-core-smoke` carries real fail-closed minijail assertions).
-The harness-free set is derived from `nextest list` rather than pinned. The
-privileged broker workspace deliberately stays on `cargo test`: its tests
-are not process-per-test safe, and it runs 528 tests in about 1.4 s.
+Rust tests run under `cargo-nextest`. Two surfaces need explicit companion
+runs, so do not "simplify" them away: **doctests** (several `compile_fail`
+ones are capability seals) and **`harness = false` binaries**
+(`d2b-core-smoke` carries fail-closed minijail assertions). The harness-free
+set comes from `nextest list`, not a pin. The privileged broker workspace stays
+on `cargo test`: its tests are not process-per-test safe, and it runs 528 tests
+in about 1.4 s.
 
 `make test-runtime-ledger` also stays on `cargo test`, and that is load
 bearing. It enforces an aggregate process-CPU budget, and nextest's
@@ -38,8 +36,8 @@ one-process-per-test model costs about 1.9x the CPU for the same census
 (measured: 1.2 s against 2.3 s). Porting it would mean roughly doubling the
 budget and losing that much sensitivity, for no speedup.
 
-When a failure only reproduces inside the gate's own toolchain environment,
-use `tests/tools/repro-rust-gate-env.sh <command>` rather than re-running
+When a failure reproduces only inside the gate toolchain, use
+`tests/tools/repro-rust-gate-env.sh <command>` instead of re-running
 `make test-rust`.
 
 ```bash

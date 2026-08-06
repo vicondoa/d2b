@@ -1,32 +1,28 @@
 # AGENTS.md - the d2b test model (read before adding a test)
 
-This file is the contract for **where a new test goes and how it runs**. It
-exists to stop the failure mode that motivated the test rearchitecture: agents
-reaching for a new ad-hoc `tests/*.sh` every time, which made the suite slow and
-unmaintainable. If you are adding or changing test coverage, follow the decision
-rule below. The human-facing structure + run instructions live in
+This file defines **where new tests go and how they run**. It prevents the
+failure mode behind the test rearchitecture: agents adding ad-hoc
+`tests/*.sh`, making the suite slow and unmaintainable. For coverage changes,
+follow the decision rule below. Human-facing structure and run instructions
+live in
 [`README.md`](./README.md).
 
 ## The one rule
 
 **New coverage MUST land as a Layer-1 test (types 1-6 below) unless it
-*provably* requires a real container, a booted VM, a live host, or physical
-hardware.** No "type 7/8" escape hatch: the drift gates and meta gates
-are a **closed set** - do not add a new `tests/*.sh`. If you think you need a
-shell gate, you almost certainly want a nix-unit case (type 1) or a Rust test
-(types 2-5) instead.
+*provably* requires a real container, booted VM, live host, or hardware.** No
+"type 7/8" escape hatch: drift and meta gates are a **closed set** - do not add
+a new `tests/*.sh`. A needed shell gate almost certainly belongs as a nix-unit
+case (type 1) or Rust test (types 2-5).
 
-That closed set covers *gates*. `tests/tools/` is the open home for the
-plumbing a gate or a CI job calls - enumerators, partitioners, generators,
-runners - and a new file may land there when it is genuinely plumbing and not a
-test case. The distinction is what fails: a gate asserts an invariant and
-belongs to the closed set; a tool produces or transforms data for something
-else to assert on, and is itself covered by whichever gate consumes it. The
-migration ledger inventories `tests/*.sh` only, so a tool needs no ledger row -
-which is exactly why it must not smuggle in assertions that would then go
-untracked.
+That closed set covers *gates*. `tests/tools/` is the open home for gate/CI
+plumbing - enumerators, partitioners, generators, and runners - when it is not
+a test case. A gate asserts an invariant and belongs to the closed set; a tool
+produces data for another gate to assert. The migration ledger inventories
+`tests/*.sh` only, so tools need no ledger row and must not smuggle in
+untracked assertions.
 
-When in doubt, push the test *down* the tiers (toward type 1), not up.
+When in doubt, push the test *down* toward type 1, not up.
 
 ## Taxonomy - name, definition, home, how it runs
 
@@ -82,13 +78,12 @@ semaphore, never as a raw script. Use the gated public lane target
 ad-hoc live script as `cargo xtask heavy-gate -- env D2B_LIVE=1 bash
 tests/integration/live/<name>.sh`.
 
-Invoking a live script directly no longer bypasses the semaphore: each one
-re-executes itself through the gate exactly once when `D2B_HEAVY_GATE` is
-unset, so the shared Nix store, cargo target directory, and KVM device
-cannot be oversubscribed. **Any new live, hardware, or performance
-entrypoint must carry that same self-guard block**, or the fail-closed
-inventory guard (`every_live_and_heavy_entrypoint_routes_through_the_gate`)
-fails, since it walks the on-disk scripts and the Makefile.
+Invoking a live script directly no longer bypasses the semaphore: it re-executes
+through the gate exactly once when `D2B_HEAVY_GATE` is unset, so shared Nix
+store, cargo target, and KVM are not oversubscribed. **Any new live, hardware,
+or performance entrypoint must carry that same self-guard block**, or the
+fail-closed inventory guard (`every_live_and_heavy_entrypoint_routes_through_the_gate`)
+fails while walking scripts and the Makefile.
 
 ## How to add a test (decision rule)
 

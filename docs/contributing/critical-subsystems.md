@@ -1,25 +1,37 @@
 # Critical subsystems
 
-Full invariants for the subsystems where a careless change causes silent data
-loss, a security regression, or an unrecoverable device-tampering signal to a
-remote identity provider.
+Invariants for subsystems where a careless change can cause silent data loss,
+security regression, or an unrecoverable device-tampering signal to a remote
+identity provider.
 
-[`../../AGENTS.md`](../../AGENTS.md) carries the index: which subsystems are
-critical, where each lives, and the one-line risk. **Read the row there
-first, then the section here for the subsystem you are about to touch.**
-Touch none of these without a clear plan and a corresponding test run.
+[`../../AGENTS.md`](../../AGENTS.md) carries the index: critical subsystem,
+location, and one-line risk. **Read its row first, then this subsystem's
+section.** Touch none without a clear plan and corresponding test run.
 
 ## Net VM networking / firewall
 
-**Where:** `nixos-modules/net.nix` (the `lib.mkForce` neutralization of `base.nix`'s `10-eth-dhcp`, plus the per-env MTU/MSS and east-west wiring)
+**Where:** `nixos-modules/net.nix` (`lib.mkForce` neutralizes `base.nix`'s `10-eth-dhcp`, plus per-env MTU/MSS and east-west wiring)
 
-Net VM dual-stacks DHCP on its uplink, breaks NAT, or weakens same-env isolation unexpectedly. Validate with `tests/unit/nix/cases/net-vm-network.nix`.
+Net VM dual-stacks DHCP on its uplink, breaks NAT, or weakens same-env
+isolation unexpectedly. Validate with `tests/unit/nix/cases/net-vm-network.nix`.
 
 ## Per-VM `/nix/store` hardlink farm
 
 **Where:** `nixos-modules/store.nix`, `/var/lib/d2b/vms/<vm>/store{,-meta}/`, `nixos-modules/processes-json.nix` (`virtiofsdRunner` ro-store `--shared-dir`), daemon `StoreSync` op + broker `store_view_farm`
 
-The guest's `/nix/store` MUST be the per-VM closure-only farm `/var/lib/d2b/vms/<vm>/store`, never the host's full `/nix/store`: virtiofsd-ro-store's `--shared-dir` points at that farm (the `share.source == "/nix/store"` string stays as the eval-time sentinel - do not "simplify" it back to serving `/nix/store`, that re-leaks the whole host store to every guest). Requires `/var/lib/d2b` and `/nix/store` on the **same filesystem** - hardlinks can't cross FS boundaries; if split, `d2b vm switch` refuses with a fatal error. The broker builds the farm inside a private mount namespace where `/nix/store` is lazily detached (NixOS bind-mounts `/nix/store` on itself, so a same-`st_dev` cross-vfsmount `link(2)` returns `EXDEV` - recoverable, distinct from a fatal different-filesystem `EXDEV`); a `link(2)` `EMLINK` on a `--optimise`d store's saturated empty-file inode falls back to a byte copy. The daemon owns the sync; there is no per-VM `store-sync` unit.
+The guest's `/nix/store` MUST be the per-VM closure-only farm
+`/var/lib/d2b/vms/<vm>/store`, never the host's full `/nix/store`:
+virtiofsd-ro-store's `--shared-dir` points at that farm (the
+`share.source == "/nix/store"` string stays as the eval-time sentinel - do not
+"simplify" it back to serving `/nix/store`, which re-leaks the whole host
+store). Requires `/var/lib/d2b` and `/nix/store` on the **same filesystem** -
+hardlinks cannot cross FS boundaries; if split, `d2b vm switch` refuses with a
+fatal error. The broker builds the farm inside a private mount namespace where
+`/nix/store` is lazily detached (NixOS bind-mounts it on itself, so a
+same-`st_dev` cross-vfsmount `link(2)` returns `EXDEV` - recoverable, distinct
+from fatal different-filesystem `EXDEV`); a `link(2)` `EMLINK` on a
+`--optimise`d store's saturated empty-file inode falls back to a byte copy. The
+daemon owns sync; there is no per-VM `store-sync` unit.
 
 ## TPM persistence (per-VM swtpm)
 

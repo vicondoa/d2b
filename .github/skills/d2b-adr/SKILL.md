@@ -10,46 +10,39 @@ user-invocable: true
 /d2b-adr <the decision to record>
 ```
 
-This runs to completion on its own. Its output is a merged ADR number.
+This runs to completion on its own and returns the merged ADR number.
 
 ## Why this is a separate process
 
-An ADR is not a stage inside a feature. An architectural decision usually
-outlives the feature that provoked it and often lands before anyone knows
-which features will consume it, so coupling its lifetime to a feature branch
-is wrong for a document the whole repository reads.
+An ADR is not a feature stage. It usually outlives the feature that provoked
+it and may land before consumers are known, so tying it to a feature branch is
+wrong for a document the whole repository reads.
 
-A spec says *what* and *why* in product terms and should not name an
-implementation. An ADR decides *how*, and is the thing the `nixos`, `rust`,
-`security` and `kernel` seats argue about. So it gets its own run, its own
-panel, and its own PR. A feature that needs one cites a merged ADR number the
-way it cites any other committed contract. A feature that does not need one
-never mentions ADRs at all.
+A spec says *what* and *why* in product terms, not implementation. An ADR
+decides *how* and is where the `nixos`, `rust`, `security` and `kernel` seats
+argue. It gets its own run, panel, and PR. A feature that needs one cites its
+merged ADR number like any committed contract; one that does not never
+mentions ADRs.
 
-The practical consequence is that autopilot never has to decide whether an ADR
-is required. Either the spec cites one, in which case it is already merged and
-readable, or the work does not need one. A run that discovers mid-flight that
-it needs an architectural decision parks and records it, like any other
-blocker.
+Thus autopilot never decides whether an ADR is required: either the spec cites
+an already-merged one, or the work does not need one. A run that discovers a
+mid-flight need parks and records it like any blocker.
 
 ## Procedure
 
 ### 1. Establish that a decision is actually needed
 
-An ADR records a choice that constrains future work and that a reasonable
-engineer might otherwise make differently. If the answer is forced, it is
-documentation, not a decision. If it only affects one module and can be
-changed freely later, it is a code comment.
+An ADR records a future-constraining choice a reasonable engineer might make
+differently. A forced answer is documentation; a freely changeable
+single-module choice is a code comment.
 
-The bar in this repo is roughly: does this change a contract, a trust
-boundary, a persistent surface, a wire or schema shape, or an invariant in the
-critical-subsystems index? If yes, it is an ADR.
+The repo bar is: does it change a contract, trust boundary, persistent surface,
+wire/schema shape, or critical-subsystems invariant? If yes, it is an ADR.
 
 ### 2. Draft
 
 Dispatch `d2b-architect` (`gpt-5.6-sol`, `xhigh`, `long_context` for the 1M
-context tier). Number the
-ADR one above the highest in `docs/adr/`. File name is
+context tier). Number the ADR one above the highest in `docs/adr/`. The file is
 `NNNN-kebab-case-title.md`. Structure follows the existing records:
 
 ```markdown
@@ -82,8 +75,8 @@ needs, because the obvious question about any decision is why not the other
 thing.
 ```
 
-Process markers are permitted here. ADRs are dated historical records and may
-name the wave or phase that produced a decision.
+Process markers are permitted: ADRs are dated historical records and may name
+the producing wave or phase.
 
 ### 3. Index and supersession
 
@@ -101,17 +94,16 @@ An architectural decision earns the full roster. Run
 `/d2b-panel-round adr docs/adr/NNNN-*.md`. Ten lanes, `gpt-5.6-sol` at
 `xhigh`, read-only.
 
-Panel prompts for an ADR review carry the draft, the records it supersedes or
-relates to, and the code the decision constrains. Reviewers judge whether the
-decision is correct and whether the consequences section is honest, not
-whether the prose is elegant.
+ADR review prompts carry the draft, related or superseded records, and the
+constrained code. Reviewers judge the decision and honest consequences, not
+prose elegance.
 
 Iterate until unanimous. `signoff` is `true` iff `recommendations` is `[]`.
 
 ### 5. Land
 
-Set `Status: Accepted` with the date. Add a `changelog.d/<branch>.md`
-fragment. Open a PR to `v3`.
+Set `Status: Accepted` with the date, add a `changelog.d/<branch>.md`
+fragment, and open a PR to `v3`.
 
 Validate before pushing:
 
@@ -120,13 +112,12 @@ make check-tier0
 make test-changelog
 ```
 
-The dash scan is the realistic risk in a prose-heavy change: only the ASCII
-hyphen may spell a dash, and nine codepoints are banned across every tracked
-file.
+The prose-heavy risk is the dash scan: only ASCII hyphen may spell a dash, and
+nine codepoints are banned in tracked files.
 
 ## Feeding an ADR into execution
 
-Once merged:
+Once merged, run:
 
 ```
 /d2b-autopilot docs/adr/NNNN-<slug>.md

@@ -6,8 +6,8 @@ user-invocable: true
 
 # Panel round
 
-One round of the ten-role panel gate. A phase closes only on unanimous
-sign-off: `signoff` is `true` **iff** `recommendations` is `[]`.
+One ten-role panel gate round. A phase closes only on unanimous sign-off:
+`signoff` is `true` **iff** `recommendations` is `[]`.
 
 Usage:
 
@@ -20,8 +20,8 @@ Usage:
 ## The binding table
 
 **This table is the configuration.** Every dispatch sets all four columns
-explicitly. It is committed here so it is diffable and so a reader can check
-it against the policy constants in `packages/xtask/src/delivery/model.rs`.
+explicitly. It is committed here for review against
+`packages/xtask/src/delivery/model.rs`.
 
 | Seat | `agent_type` | `model` | `reasoning_effort` | `context_tier` | `communication` |
 |---|---|---|---|---|---|
@@ -36,33 +36,30 @@ it against the policy constants in `packages/xtask/src/delivery/model.rs`.
 | observability | `panel-observability` | `gpt-5.6-sol` | `xhigh` | `default` | `caveman-full-optional` |
 | kernel | `panel-kernel` | `gpt-5.6-sol` | `xhigh` | `default` | `caveman-full-optional` |
 
-**Never omit a parameter.** A subagent does not inherit the session's
-reasoning effort. An omitted `reasoning_effort` silently runs the lane at the
-model's own default, which is `medium`, while the resulting record would
-attest `high`. That is a false attestation on the binding gate, and it
-produces a plausible-looking record rather than an error, which is why it is
-worth saying twice.
+**Never omit a parameter.** A subagent does not inherit session effort. An
+omitted `reasoning_effort` silently uses the model default, `medium`, while the
+record attests `high`: a plausible false attestation rather than an error.
 
 Legacy records from `gemini-3.1-pro-preview` at `high` remain readable as an
-exact compatibility pair. Never dispatch a new lane on that binding, and
-never mix one member of the legacy pair with the current binding.
+exact compatibility pair. Never dispatch a new lane on it or mix one member
+with the current binding.
 
-`scripts/copilot/check-bindings.mjs` validates this table against the agent
-files and against the xtask policy constants. Run it after editing either.
+`scripts/copilot/check-bindings.mjs` validates this table against agent files
+and xtask policy constants. Run it after editing either.
 
 <!-- D2B-CAVEMAN-DISPATCH: caveman-full-optional -->
 Resolve the caller's communication request before dispatch. Pass explicit
-`normal` or `off` unchanged; either overrides the optional
-`caveman-full-optional` default. Do not score brevity, and do not add a claim
-that a reviewer used compressed wording to a verdict or report.
+`normal` or `off` unchanged; either overrides optional
+`caveman-full-optional`. Do not score brevity or claim compressed wording in a
+verdict or report.
 
 ## Procedure
 
 ### 1. Establish the round address
 
-Every round is addressed by a qualified wave token, lowercase, program and
-wave fused: `adr046w1`, `spec001w1`, `spec001w3fu2`. Legacy bare `W0` through
-`W8` remain valid and continue to mean program `ADR046`; do not rewrite them.
+Every round uses a qualified wave token, lowercase, program and wave fused:
+`adr046w1`, `spec001w1`, `spec001w3fu2`. Legacy bare `W0` through `W8` remain
+valid for program `ADR046`; do not rewrite them.
 
 Set `ROUND` to the qualified token plus the round ordinal, for example
 `spec001w1-r2`.
@@ -73,21 +70,19 @@ Set `ROUND` to the qualified token plus the round ordinal, for example
 bash .github/skills/d2b-panel-round/scripts/stage-diffs.sh <base> <prev-tip> <ROUND>
 ```
 
-`<base>` is the branch base, `<prev-tip>` is the commit the previous round
-reviewed, or the base again for round 1. This writes
-`.scratch/panel/<ROUND>/` containing `delta.diff`, `full.diff`,
-`evidence.md`, `address.json`, `review-request.md`,
-`dispatch-prompt.txt`, and one file per seat under `reviewer-notes/`.
+`<base>` is the branch base; `<prev-tip>` is the previous round's reviewed
+commit, or the base for round 1. This writes `.scratch/panel/<ROUND>/`
+containing `delta.diff`, `full.diff`, `evidence.md`, `address.json`,
+`review-request.md`, `dispatch-prompt.txt`, and one file per seat under
+`reviewer-notes/`.
 
-For a later round, the script fails unless `<prev-tip>` is the tip recorded by
-the immediately previous round and every seat has a prior verdict. That check
-is what makes `delta.diff` incremental evidence rather than a caller-supplied
-claim about the range.
+For later rounds, the script requires `<prev-tip>` to match the immediately
+previous recorded tip and every seat to have a prior verdict. That makes
+`delta.diff` evidence rather than a caller-supplied range claim.
 
-The reviewers have no shell. Staging is what lets ten independent lanes see
-byte-identical evidence, and it is what keeps them off the shared Nix store,
-the cargo target directory, and the heavy-gate semaphore while implementation
-is still running.
+Reviewers have no shell. Staging gives ten lanes byte-identical evidence and
+keeps them off the shared Nix store, cargo target, and heavy-gate semaphore
+while implementation runs.
 
 Write the integrator's validation evidence into `evidence.md` before
 dispatching: the exact commands run and their pass or fail results. State what
@@ -111,13 +106,12 @@ deliverable, the seat-specific notes, the finding bar, the no-rerun rule, and,
 after the first round, the prior verdict each seat must verify. The task prompt
 has one job: direct the reviewer to that complete request.
 
-Do not summarise the change and ask reviewers to trust the summary. A prose
-summary is a statement of intent. A fix that silently touched something the
-summary omitted is exactly what a delta review exists to catch.
+Do not summarise the change and ask reviewers to trust it. A prose summary is
+intent; reading the delta catches silent scope changes.
 
 ### 4. Collect and record
 
-Each lane returns one JSON verdict object. Write each to
+Each lane returns one JSON verdict object. Write it to
 `.scratch/panel/<ROUND>/verdicts/<seat>.json`.
 
 Then write `.scratch/panel/<ROUND>/observed.json`, recording what each lane
@@ -148,33 +142,30 @@ table exists to prevent.
 node .github/skills/d2b-panel-round/scripts/make-records.mjs .scratch/panel/<ROUND>
 ```
 
-That validates every verdict (`signoff` true iff `recommendations` empty,
-seat name in the closed roster, exactly one record per seat, all ten present,
-reviewer text within its length ceilings) and joins it to the candidate
-address to produce attestable records. It takes the **observed** model and
-effort as input and fails closed rather than defaulting to the policy string,
-so a lane that ran at the wrong effort cannot be attested as if it had not.
+That validates every verdict (`signoff` true iff `recommendations` empty, seat
+in the closed roster, one record per seat, all ten present, reviewer text within
+its length ceilings) and joins it to the candidate address. It takes the
+**observed** model and effort and fails closed rather than defaulting to policy,
+so a wrongly bound lane cannot be attested as correct.
 
 ### 5. Report and route
 
-Render the round report: per-seat verdict, the finding list grouped by
-severity, and the tip commit this round reviewed. **Record that tip**, because
-the next round is scoped against it.
+Render the round report with per-seat verdicts, findings by severity, and this
+round's reviewed tip. **Record that tip** for the next delta.
 
 If any seat returned findings, the round did not pass. Land scoped fixes,
 rerun the smallest relevant validation, and run another round.
 
 ## Rules that bind the integrator, not the reviewers
 
-**Any content change invalidates every prior sign-off in the phase**,
-including from seats the change did not touch. Those seats re-report, scoped
-to the delta, and may confirm briefly that their area is unaffected.
+**Any content change invalidates every prior sign-off in the phase**, including
+from untouched seats. They re-report on the delta and may briefly confirm their
+area is unaffected.
 
-**A fix round addresses only the findings raised.** A genuine defect
-discovered while fixing something else is still out of scope for that round;
-record it in the memory register and land it separately. Otherwise every round
-reviews a larger diff, offering more to find, and the gate recedes while the
-deliverable sits finished.
+**A fix round addresses only the findings raised.** A genuine defect found
+while fixing something else is out of scope; record it in the memory register
+and land it separately. Otherwise each round grows the diff and the gate
+recedes while the deliverable sits finished.
 
 **Do not run `git add -A` while a gate is running.** Gates write scratch
 directories into the worktree. Stage the specific paths the fix touched.

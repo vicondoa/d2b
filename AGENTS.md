@@ -1,33 +1,31 @@
 # AGENTS.md
 
 Operating manual for AI coding agents (Copilot CLI, GitHub Copilot,
-Cursor, …) and human contributors working on **`vicondoa/d2b`
-itself**. If you are *consuming* d2b in your own NixOS host
-config, start at [README.md](./README.md) instead.
+Cursor, …) and human contributors to **`vicondoa/d2b` itself**. If you
+*consume* d2b in your NixOS host config, start at [README.md](./README.md).
 
 ## What this is
 
-d2b is opinionated NixOS desktop microVM framework:
-owns its microVM substrate end-to-end. control plane is
-**daemon-only**: `d2bd` supervises every per-VM DAG and
-`d2b-priv-broker` dispatches every audited host mutation.
+d2b is an opinionated NixOS desktop microVM framework that owns its microVM
+substrate end-to-end. Its control plane is **daemon-only**: `d2bd` supervises
+every per-VM DAG and `d2b-priv-broker` dispatches every audited host mutation.
 No per-VM systemd templates, no host-singleton framework
 services, and no legacy bash CLI; see
 [ADR 0015](./docs/adr/0015-daemon-only-clean-break.md) for binding
 decision.
 
-Framework provides: per-env isolated networks with
-auto-declared NAT/DHCP "net VM", per-VM `/nix/store` hardlink farm,
-toggleable per-VM components (graphics, TPM, USBIP, audio), and the
-versioned bundle/manifest contract grounding broker dispatcher.
+Framework provides per-env isolated networks with auto-declared NAT/DHCP "net
+VM", a per-VM `/nix/store` hardlink farm, toggleable per-VM components
+(graphics, TPM, USBIP, audio), and the versioned bundle/manifest contract
+grounding the broker dispatcher.
 See [README.md](./README.md) and
 [`docs/explanation/design.md`](./docs/explanation/design.md) for the
 picture and threat model.
 
 ## Start here
 
-Index: rules; detail: [`docs/contributing/`](./docs/contributing/).
-Find row, read it.
+Index: rules; detail: [`docs/contributing/`](./docs/contributing/). Find the
+row, then read it.
 
 | If you are about to... | Read first |
 | --- | --- |
@@ -43,16 +41,15 @@ Find row, read it.
 | Run ADR, panel round, or autopilot wave | [copilot-agents.md](./docs/contributing/copilot-agents.md) - agents, skills, model binding, wave ids |
 | Change feature artifact after its first write | `d2b-spec-edit` owns batch; read [copilot-agents.md](./docs/contributing/copilot-agents.md) |
 
-Two rules that override everything else:
+Two rules override everything else:
 
 - **Existing code is canon.** When spec, plan, README, or reference doc
-  disagrees with committed, passing code, code wins. Document drift;
-  do not silently re-align code to prose. This applies to this file
-  too: if you change load-bearing behaviour described here, update it in the
-  same commit.
+  disagrees with committed, passing code, code wins. Document drift; do not
+  silently re-align prose. If load-bearing behavior here changes, update this
+  file in the same commit.
 - **Commit before you validate.** Untracked files are invisible to
-  `nix flake check` and every eval that follows same path. Forgetting to
-  `git add` new module is most common "why didn't my change apply?".
+  `nix flake check` and evals using the same path. Forgetting to `git add` a
+  new module is the common "why didn't my change apply?" failure.
 
 ## Repo layout
 
@@ -106,19 +103,18 @@ from `nixos-modules/default.nix`. Don't fatten existing files.
 
 ## Build and validate
 
-Use top-level `Makefile` targets. shell scripts under `tests/` are
-implementation details unless target or `tests/AGENTS.md` says otherwise.
+Use top-level `Makefile` targets. Shell scripts under `tests/` are
+implementation details unless a target or `tests/AGENTS.md` says otherwise.
 
-`nix develop` gives you toolchain every gate expects. gate scripts
-bootstrap private toolchain when it is missing, so working inside dev
-shell skips that setup.
+`nix develop` provides the toolchain every gate expects. Gate scripts bootstrap
+a private toolchain when missing, so a dev shell skips that setup.
 
 CI runs eight independent Rust leaf jobs - API, main workspace, broker, guest
-shell runner, no-bash AST, schema, inventory and supply chain - behind the
-stable required `test-rust` rollup context. Each leaf receives full runner
-budget and does not inherit local-only dependency edges. `make test-rust`
-remains local aggregate; use `make test-rust-<leaf>` target to rerun one
-CI leaf. See [gates and lints](./docs/contributing/gates-and-lints.md).
+shell runner, no-bash AST, schema, inventory, and supply chain - behind the
+required `test-rust` rollup. Each leaf gets full runner budget and no local-only
+dependency edges. `make test-rust` remains the local aggregate; use
+`make test-rust-<leaf>` to rerun one CI leaf. See
+[gates and lints](./docs/contributing/gates-and-lints.md).
 
 ```bash
 make check        # PR-equivalent Layer-1 gate; runs tests/layer1-jobs.json
@@ -126,32 +122,32 @@ make test-unit    # Layer-1 development umbrella (skips the preflight phase)
 make test         # Layer 1 + container integration
 ```
 
-Individual Layer-1 jobs, in `tests/layer1-jobs.json` local phase order:
+Individual Layer-1 jobs, in `tests/layer1-jobs.json` order:
 `check-tier0`, `check-inventory`, `test-lint`, `test-changelog`, `test-rust`,
 `test-proofs`, `test-flake`, `test-nix-unit`, `test-policy`, `test-drift`,
 `test-runtime-ledger`, `test-performance-budgets`, `test-fixture-contracts`.
 
-**`tests/layer1-jobs.json` is authoritative** for both job list and its
-enforcement classification. job is enforcing unless it carries
+**`tests/layer1-jobs.json` is authoritative** for the job list and enforcement
+classification. A job is enforcing unless it carries
 `"enforcement": "advisory"`. Advisory means command still runs and a
 nonzero result still fails, but guarded skip is permitted - so **advisory
 result must never be cited as validation evidence**. Re-read manifest
 rather than assuming split is fixed; today only `test-performance-budgets`
 is advisory.
 
-Two coverage traps worth knowing before you claim change is validated:
+Two coverage traps matter before claiming validation:
 
 - **Layer-1 Rust orchestration excludes `d2b-contract-tests` from its Rust
   shards** by setting `D2B_SKIP_FIXTURE_BUILD=1`, then runs enforcing
-  `test-fixture-contracts` lane separately. direct local `make test-rust`
-  target includes fixture and CLI contract surfaces when Nix is available.
-  Cite `test-fixture-contracts`, not Rust shard, when claiming Layer-1
+  `test-fixture-contracts` separately. Local `make test-rust` includes fixture
+  and CLI contract surfaces when Nix is available. Cite
+  `test-fixture-contracts`, not the Rust shard, for Layer-1
   fixture-dependent coverage.
-- **Doctests and `harness = false` binaries are not nextest surfaces** and get
+- **Doctests and `harness = false` binaries are not nextest surfaces** and need
   explicit companion runs. Several `compile_fail` doctests are capability
-  seals. Do not "simplify" them away.
+  seals; do not "simplify" them away.
 
-Before opening agent-owned PR, run host/manual tiers locally; PR
+Before opening an agent-owned PR, run host/manual tiers locally; the PR
 pipeline does not:
 
 ```bash
@@ -159,48 +155,46 @@ make test-integration       # Layer 2 container tests; needs podman
 make test-host-integration  # runNixOSTest VM checks; NixOS + KVM, x86_64 only
 ```
 
-**Heavy lanes take slot.** Every Layer-2, host-integration, hardware, live,
-and perf-heavy command runs through one semaphore granting two slots per uid.
-Run public targets (`make test-integration`, `make test-host-integration`,
+**Heavy lanes take slot.** Every Layer-2, host-integration, hardware, live, or
+perf-heavy command uses one semaphore granting two slots per uid. Run public
+targets (`make test-integration`, `make test-host-integration`,
 `make test-hardware`, `make perf`), never internal `heavy-lane-*` targets,
-which fail closed outside gate. Details, provisioning, and rule that
-every new live/hardware/perf entrypoint must carry self-guard block:
+which fail closed outside the gate. Details, provisioning, and the rule that
+every new live/hardware/perf entrypoint carries a self-guard block:
 [gates-and-lints.md](./docs/contributing/gates-and-lints.md).
 
-runtime ledger, spec-literal lint allowlist, and D116 envelope
-negative-example marker all have exemption rules that are easy to get wrong.
-They are documented in same file. short version: spec-literal
+Runtime ledger, spec-literal lint allowlist, and D116 envelope negative-example
+marker have easy-to-misread exemptions. They are documented in that file.
+Short version: spec-literal
 lints honour **no** author-suppression marker, and D116 honours exactly one,
 in one pinned file, exactly once.
 
 Prompt policy is checked locally. Caveman provenance is under
 `third_party/caveman/v1.10.0/`, pinned to tag `v1.10.0` at commit
 `fcf7663366c217dc8f334a11028de52ed950ceab`; `UPSTREAM.json` carries three
-SHA-256 values. Selected delivery and review lanes may use optional full
-transient communication. Explicit `normal` or `off` request wins. mode never
-changes persisted prose, panel verdict JSON, finding bars, or panel
-requirements, except compressed prompt corpus checked by
+SHA-256 values. Selected delivery and review lanes may use optional full transient
+communication. Explicit `normal` or `off` wins. Mode never changes persisted
+prose, panel verdict JSON, finding bars, or panel requirements, except the
+compressed prompt corpus checked by
 `scripts/copilot/prompt-corpus.mjs`.
 
 ## Development workflow
 
-Detail in [workflow.md](./docs/contributing/workflow.md). binding rules:
+Detail in [workflow.md](./docs/contributing/workflow.md). Binding rules:
 
 - **`main` and `v3` are protected.** Changes land via PR, never direct push.
   `v3` is clean-break integration lineage and never merges to `main`.
 - **One logical change per commit.** Mechanical reformats or renames go in
   their own commit.
 - **Use worktrees for parallel scopes**, one per agent or concurrent scope.
-  When your scope is done and green, merge it back to primary clone
-  yourself; finished work on side branch is not done, it is awaiting
-  integration, and that is state you own.
+  When done and green, merge the branch back to the primary clone yourself;
+  finished side-branch work still awaits integration.
 - **Concurrent slices share one worktree, so destructive git is banned.**
-  Never run `git checkout --` or `git restore` on path your slice does not
-  own: uncommitted work has no reflog entry, so that is unrecoverable
-  delete of sibling's work. Never run package-wide formatter; format the
-  single file.
+  Never run `git checkout --` or `git restore` on an unowned path:
+  uncommitted work has no reflog, so this unrecoverably deletes sibling work.
+  Never run a package-wide formatter; format one file.
 - **Never `git add -A` while build, test, or gate is running.** Those write
-  scratch into worktree. Stage specific paths you touched.
+  scratch into the worktree. Stage specific paths.
 - **Put throwaway artifacts in gitignored `.scratch/`**, never beside
   production code or tests.
 - **Route existing feature-artifact writes through `d2b-spec-edit`.** A
@@ -209,7 +203,8 @@ Detail in [workflow.md](./docs/contributing/workflow.md). binding rules:
   checklist; `plan` creates absent plan, research, data-model, contracts, or
   quickstart artifacts; `tasks` creates absent `tasks.md`; `checklist` creates
   absent checklist. `clarify` batches answers, `analyze` stays read-only,
-  `implement` reports checkbox changes, `converge` prepares append, and
+  `implement` reports checkbox changes, `converge` prepares exact append
+  content, and
   `autopilot` and memory fold route feature-directory writes through editor.
   Once file exists, editor owns every later write and refuses root escape.
 - **Test eval expressions must resolve flake via `git+file://$ROOT`**

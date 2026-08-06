@@ -1,18 +1,16 @@
 # Changelog, versioning, and commit conventions
 
-Every PR that changes code ships release notes. This file carries the detail:
-the fragment workflow for concurrent branches, the auto-release path, the
-changelog lifecycle at a version cut, the process-marker ban and its ratchet,
-and the full commit trailing-tag grammar.
+Every code-changing PR ships release notes. This file details concurrent-branch
+fragments, auto-release, version cuts, the process-marker ratchet, and commit
+trailing-tag grammar.
 
 The binding rules are in [`../../AGENTS.md`](../../AGENTS.md) under "Changelog
 and commits".
 
 ## Changelog & Releases
 
-Every PR that changes code **must** ship release notes. The CI gate
-enforces this and accepts either form: an entry in `CHANGELOG.md`, or a
-changelog fragment under `changelog.d/`.
+Every code-changing PR **must** ship release notes. The CI gate accepts either
+an entry in `CHANGELOG.md` or a fragment under `changelog.d/`.
 
 ## Format
 
@@ -22,24 +20,22 @@ changelog fragment under `changelog.d/`.
 
 ## Fragments (`changelog.d/`)
 
-When more than one branch is in flight, do **not** edit `CHANGELOG.md` -
-every branch appending to the same `## [Unreleased]` block is a guaranteed
-merge conflict. Write one `changelog.d/<branch-name>.md` fragment instead,
-holding the same `### <Section>` headings and entries you would have added
-to the block. Two branches never write the same file.
+When branches overlap, do **not** edit `CHANGELOG.md` - appending to the shared
+`## [Unreleased]` block guarantees conflict. Write one
+`changelog.d/<branch-name>.md` fragment with the same `### <Section>` headings
+and entries. Two branches never write the same file.
 
-The integrator folds the fragments at merge time with
+The integrator folds fragments at merge with
 `make changelog-fold` (`cargo run --manifest-path packages/Cargo.toml -p
-xtask -- changelog-fold`): entries collate by
-section into `## [Unreleased]` in Keep a Changelog order, released
-versions are untouched, and the consumed fragments are deleted. A
-fragment with an unknown heading, a repeated heading, an empty section, or
-content outside a section fails the fold rather than losing the entry. See
+xtask -- changelog-fold`): entries collate by section into `## [Unreleased]` in Keep a Changelog order,
+released versions stay untouched, and consumed fragments are deleted. Unknown
+or repeated headings, empty sections, or content outside a section fail the
+fold rather than lose the entry. See
 [`changelog.d/README.md`](../../changelog.d/README.md).
 
 ## Auto-release
 
-Merging to `v3` with a new version header in `CHANGELOG.md` triggers:
+Merging to `v3` with a new `CHANGELOG.md` version header triggers:
 1. Auto-creation of git tag `vX.Y.Z`
 2. Build of all host binaries (`d2bd`, `d2b`, `d2b-priv-broker`,
    `d2b-wayland-proxy`, `d2b-activation-helper`)
@@ -50,12 +46,11 @@ the release path cuts from `v3`, not `main` (see
 [`docs/specs/ADR-046-validation-and-delivery.md`](../specs/ADR-046-validation-and-delivery.md)
 "Only after all six hold").
 
-Consumers can fetch pre-built binaries from the release instead of
-building from source.
+Consumers can fetch release binaries instead of building from source.
 
 ## Versioning
 
-Follow semver. The version in `CHANGELOG.md` is the single source of truth.
+Follow semver; the version in `CHANGELOG.md` is the single source of truth.
 
 ## Commit-tag mapping
 
@@ -85,8 +80,8 @@ form (e.g. `... ( W2fu4 H10 )`).
 ## Versioning & changelog
 
 The project follows [Semantic Versioning](https://semver.org/) and
-[Keep a Changelog](https://keepachangelog.com/). The CHANGELOG is
-organised **by version**, never by development phase.
+[Keep a Changelog](https://keepachangelog.com/). CHANGELOG is organized
+**by version**, never development phase.
 
 ## Changelog lifecycle
 
@@ -312,4 +307,3 @@ implementation; suffixed bookkeeping forms remain violations.
 - **Atomicity.** One logical change per commit. Mechanical
   reformat or rename passes go in their own commit so the
   human-reviewable diff stays small.
-

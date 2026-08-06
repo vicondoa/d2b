@@ -1,13 +1,12 @@
 # Panel review
 
-The panel sign-off contract: the phase gate, how fix rounds are scoped, the
-default ten-role roster and each role's focus, and the harness notes for
-running the panel under swarm or unattended.
+Panel sign-off contract: phase gate, fix-round scope, default ten-role roster
+and focus, and harness notes for swarm or unattended runs.
 
-The binding rules are in [`../../AGENTS.md`](../../AGENTS.md) under "Panel
-review": a phase closes only on unanimous sign-off, `signoff` is `true` iff
+Binding rules are in [`../../AGENTS.md`](../../AGENTS.md) under "Panel review":
+a phase closes only on unanimous sign-off, `signoff` is `true` iff
 `recommendations` is `[]`, and green tests never waive the gate. This file
-carries the detail behind those rules.
+provides the detail.
 
 For the once-per-wave binding panel enforced in code, see
 `packages/xtask/src/delivery/panel.rs` and
@@ -16,15 +15,13 @@ section 12.3.
 
 ## Phase gate
 
-Multi-phase plans MUST pass a panel sign-off gate at each phase
-boundary. The integrator MUST NOT begin the next phase until every
-reviewer on the selected roster returns `signoff: true` (N/N for the
-plan's panel size; the default roster below is 10).
+Multi-phase plans MUST pass a panel sign-off gate at each phase boundary. The
+integrator MUST NOT begin the next phase until every selected reviewer returns
+`signoff: true` (N/N for the panel size; the default roster is 10).
 
-For plan-driven work, a "phase" is usually one wave from the plan's
-parallelization graph (`Wave 0`, `Wave 1`, ...). For tiny plans that
-touch fewer than three files, a single phase covering the whole plan is
-acceptable.
+For plan-driven work, a "phase" is usually one wave from the plan's graph
+(`Wave 0`, `Wave 1`, ...). For plans touching fewer than three files, one phase
+covering the whole plan is acceptable.
 
 For each phase:
 

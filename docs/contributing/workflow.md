@@ -1,47 +1,40 @@
 # Development workflow
 
-How work is organised, validated, and landed: worktrees for parallel agents,
-the stacked-PR shape for large waves, the commit-then-validate rule, and the
-disk hygiene contract that keeps concurrent worktrees from filling the host.
+How work is organized, validated, and landed: parallel worktrees, stacked PRs
+for large waves, commit-then-validate, and disk hygiene for concurrent trees.
 
 The binding one-line rules are in [`../../AGENTS.md`](../../AGENTS.md) under
 "Development workflow". This file carries the detail and the rationale.
 
 ## Worktrees for parallel agents
 
-When several agents (or several humans, or a mix) work on disjoint
-scopes concurrently, use git worktrees instead of branching in
-place. One worktree per agent keeps each context isolated and makes
-the final merge trivial.
+When agents or humans work on disjoint scopes concurrently, use git worktrees
+instead of branching in place. One worktree per agent isolates context and
+simplifies the final merge.
 
 ```bash
 # From the primary clone, one worktree per concurrent scope:
 git worktree add -b phase-<name> ../d2b-<name> main
 ```
 
-Each agent commits inside its own worktree on its own
-`phase-<name>` branch. When the scopes are genuinely disjoint
-(different files, or non-overlapping regions of the same file), the
-integrator does an octopus merge back to `main`:
+Each agent commits inside its worktree on its `phase-<name>` branch. When scopes
+are disjoint (different files or non-overlapping regions), the integrator uses
+an octopus merge back to `main`:
 
 ```bash
 git checkout main
 git merge --no-ff phase-a phase-b phase-c
 ```
 
-If two branches touch the same lines, fall back to a normal
-sequential merge with conflict resolution - octopus only works for
-clean disjoint scopes.
+If branches touch the same lines, use a sequential merge with conflict
+resolution - octopus requires cleanly disjoint scopes.
 
 ## Finish-of-work invariant: merge back into the primary clone
 
-A worktree is a workspace, not a destination. When an agent's scope
-is done - implementation green, tests green, panel signed off - the
-agent merges the worktree branch back into `main` in the **primary
-clone (`projects/d2b`)** before declaring the task complete.
-Finished work sitting on a side worktree branch is not done; it is
-"awaiting integration", which is a state the agent owns, not a state
-the agent leaves for the operator.
+A worktree is a workspace, not a destination. When an agent's scope is done -
+implementation/tests green and panel signed off - it merges the branch into
+`main` in the **primary clone (`projects/d2b`)** before declaring completion.
+Finished side-branch work still "awaits integration", which the agent owns.
 
 Concretely, the agent that owns a worktree:
 
@@ -390,4 +383,3 @@ fields that request panel, agent, or model metadata.
   `fetchFromGitHub` pinned to a specific commit; update the rev + hash
   in `flake.nix` periodically to pick up new advisories. Wall-clock
   impact: seconds per check (no compilation, just lockfile analysis).
-
