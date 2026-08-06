@@ -1,10 +1,9 @@
 # ADR 0054: Single product Cargo workspace
 
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-08-05
 - Amends: [ADR 0052](0052-bazel-rust-build-and-test.md), replacing its
-  product-workspace, dependency-hub, and lock inventory if this ADR is
-  accepted.
+  product-workspace, dependency-hub, and lock inventory.
 - Scope: Cargo workspace membership and locks for product packages, Cargo and
   Nix package selection, Bazel dependency hubs and configured first-party
   targets, and package-scoped supply-chain enforcement.
