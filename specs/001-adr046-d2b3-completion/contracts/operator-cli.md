@@ -59,13 +59,17 @@ Changing any binding while reusing the ID exits `76` with a typed
 The sole status command remains the accepted command:
 
 ```text
-d2b op inspect --operation-id <OPAQUE_ID> [--zone <ZONE>] [--watch] [--human | --json]
+d2b op inspect --operation-id <OPAQUE_ID> [--zone <ZONE>] [--watch] [--deadline <DURATION> | --no-deadline] [--human | --json]
 ```
 
 `--watch` waits only for export completion or the request deadline; it never reapplies the
 mutation. It traverses the typed store, ResourceService, method-catalogue/router, daemon/client,
 and CLI path owned by T589, T592, T593, T595, and T599; an in-memory or CLI-synthesized status
-map is forbidden. The Version 2 exit contract for mutation and inspection is closed:
+map is forbidden. The accepted command retains both common Zone-runtime deadline controls:
+`--deadline <DURATION>` supplies the bounded wall deadline and `--no-deadline` suppresses the
+default deadline while preserving signal cancellation. They are mutually exclusive; using
+both is an invalid invocation. The Version 2 exit contract for mutation and inspection is
+closed:
 
 | Exit | Mutation | `op inspect` |
 | --- | --- | --- |
@@ -76,21 +80,23 @@ map is forbidden. The Version 2 exit contract for mutation and inspection is clo
 | `1` | Other typed authorization, transport, or Resource API failure | Other typed authorization, transport, or Resource API failure |
 
 Human pending mutation output is exactly three newline-terminated lines, with no payload,
-sink detail, executable command, argv, Zone value in remediation, or operation ID embedded in
-remediation:
+sink detail, argv, Zone value in guidance, or operation ID embedded in guidance. The final
+line is safe static prose and may name only the literal command noun `d2b op inspect`, never
+flags or substituted values:
 
 ```text
 committed; audit export pending
 operation: <OPAQUE_ID>
-remediation: inspect-operation
+next: run d2b op inspect with the operation ID shown above
 ```
 
-Pending inspection uses the same first two lines and
-`remediation: wait-for-audit-export`. Both a pending mutation and pending inspection emit this
-JSON field shape; only `command` and the closed remediation action differ. `zoneRef` and
-`operationId` are bounded status fields, never executable text. `resourceStatus` is the exact
-bounded CLI recovery projection shown here; the complete canonical `ResourceStatus` remains
-in the protobuf response, and no other status fields are added to this CLI envelope:
+Pending inspection uses the same first two lines and the static final line
+`next: wait for audit export or rerun d2b op inspect`. Both a pending mutation and pending
+inspection emit the JSON field shape below; only `command` and the closed remediation action
+differ. Human guidance is not copied into JSON. `zoneRef` and `operationId` are bounded status
+fields, never executable text. `resourceStatus` is the exact bounded CLI recovery projection
+shown here; the complete canonical `ResourceStatus` remains in the protobuf response, and no
+other status fields are added to this CLI envelope:
 
 ```json
 {
@@ -122,17 +128,18 @@ A mutation replay-binding mismatch exits `76` and uses this exact human form:
 ```text
 operation replay refused
 operation: <OPAQUE_ID>
-remediation: retry-identical-operation
+next: retry the identical mutation or start a new operation
 ```
 
 Its JSON form is
 `{"ok":false,"zoneRef":"Zone/<ZONE>","schemaVersion":2,"kind":"operation-replay-mismatch","operationId":"<OPAQUE_ID>","remediation":{"action":"retry-identical-operation"}}`.
 The `retry-identical-operation` action means retry the same semantic mutation; a caller that
 cannot do so starts a new mutation without reusing the ID. No rendered command is part of the
-machine or human contract.
+machine contract, and human guidance never renders flags, arguments, Zone, operation ID, or
+shell text.
 An inspection under the wrong subject/Zone binding is deliberately indistinguishable from an
 unknown ID: both exit `2`, human mode prints `operation not found` followed by
-`remediation: verify-operation-context`, and JSON is exactly
+`next: verify the operation ID, Zone, and authorization context`, and JSON is exactly
 `{"ok":false,"zoneRef":"Zone/<ZONE>","schemaVersion":2,"kind":"operation-not-found","message":"operation not found","remediation":{"action":"verify-operation-context"}}`.
 
 The closed remediation-action set is `inspect-operation`, `wait-for-audit-export`,
@@ -171,9 +178,12 @@ FR-042 explicit retirement list rather than the parity list.
   `zoneRef`/`schemaVersion`, DTO schema, ID format, closed remediation actions, and human/JSON
   forms above. A mutation replay mismatch exits `76`; inspection under the wrong subject/Zone
   binding exits `2` with the same form as an unknown ID. Neither exposes the original
-  operation. Human and machine output never call it success, rollback, or safe to repeat with
-  a new ID, expose no mutation payload or raw sink error, and contain no Zone/ID-bearing argv,
-  command vector, shell fragment, or free-form remediation.
+  operation. `op inspect` accepts and tests `--deadline` and `--no-deadline`, rejects their
+  simultaneous use, and preserves cancellation in no-deadline mode. Human and machine output
+  never call pending state success, rollback, or safe to repeat with a new ID, expose no
+  mutation payload or raw sink error, and contain no Zone/ID-bearing argv, command vector,
+  shell fragment, or free-form JSON remediation. Human output carries only the exact static
+  identifier-free guidance above; JSON retains the closed action enum.
 - T599 bumps the accepted CLI specification to Version 2 and owns migration guidance,
   DTO/schema, contract tests, references, and a changelog fragment. T220 verifies and folds the
   coordinated version/reference/test/schema/release treatment. Missing or Version 1 envelopes

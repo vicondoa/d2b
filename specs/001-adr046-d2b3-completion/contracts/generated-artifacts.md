@@ -16,7 +16,7 @@ artifact and requires a clean `git diff`, fail-closed.
 | `docs/reference/schemas/v3/core.d2bus.org_<Type>.schema.json` | `xtask gen-zone-schemas` | Nix eval, contract tests, companions | NEW; `v2/` remains until its paths retire |
 | `nixos-modules/generated/resource-types.nix` | `xtask gen-zone-nix-options` | Nix option surface | NEW in W2 |
 | `nixos-modules/generated/options-zones-<Type>.nix` | `xtask gen-zone-nix-options` | Nix option surface | NEW in W2, one per ResourceType |
-| per-Zone `resource-bundle.json` | `zone-resources-json.nix` + `bundle-artifacts.nix` | Zone runtime, core controllers | Integrity-pinned |
+| per-Zone `resource-bundle.json` | `zone-resources-json.nix` + `bundle-artifacts.nix` | Zone runtime, core controllers | W5 emits only `schemaVersion: 4` / `bundleVersion: 2`; the required top-level compiler-only `audit` object is outside `resources`, and `contentHash` covers canonical `{audit,resources}` |
 | `docs/specs/ADR-046-spec-set.json` | `xtask spec-registry` | Gate 0, drift gate | Integrator-only; last commit of each wave |
 | `docs/specs/ADR-046-work-items.json` | `xtask spec-registry` | Wave entry/seal checks | Same |
 | `docs/specs/ADR-046-implementation-graph.{json,md}` | `xtask implementation-graph` | Wave planning, seal | Same |
@@ -38,6 +38,9 @@ artifact and requires a clean `git diff`, fail-closed.
   so this is structural rather than a convention.
 - Downstream tools must fail visibly but remain usable when a public artifact is missing or
   malformed, without reading root-owned d2b state directly.
+- Resource-bundle emitters, Rust consumers, JSON schema, digest reference, generated pins,
+  tests, and changelog move atomically with the 4/2 version pair. No consumer may accept 3/1
+  or synthesize a missing v4 `audit` object from defaults.
 
 ## Acceptance
 

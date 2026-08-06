@@ -6,7 +6,8 @@
 
 How an operator declares intent. Nix mirrors the canonical ResourceSpec `spec` shape directly;
 only name, Zone, and `apiVersion` are derived or defaulted, and `status` is controller-owned
-and never authored.
+and never authored. Per-Zone compiler policy is the narrow exception: it is typed outside
+`ResourceSpec` and carried in the versioned bundle header.
 
 ## Current state
 
@@ -26,7 +27,7 @@ controller-owned effect, and declared-resource removal cleanup.
 | NIX-4 | Removing a declared resource activates the new generation immediately and requests async owner- and finalizer-safe deletion with visible cleanup status | FR-005 | W5 |
 | NIX-5 | Extend the `eval-*` flake checks with Zone and resource examples | FR-032 | W5 |
 | NIX-6 | Prove the exact-candidate positive operator path from a Nix declaration of every supported representative Guest, Volume, Network, and Device through the emitted bundle and automatic startup/declaration/removal ingestion to durable reconciliation and each resource's real owned effect/readiness, then dependency-safe removal cleanup with unrelated resources still ready; refusal cases are separate | FR-001, FR-005, FR-072, SC-034 | W5 |
-| NIX-7 | T592 owns the audit option/compiler schema: `audit.retentionDays` defaults to 30 with range 1-3650 and governs exported segments plus export-completed journal rows; `audit.maxRecordsPerSegment` defaults to 65536 with range 1-1000000; `audit.maxSegmentBytes` defaults to 67108864 with range 1048576-1073741824. T595 versions the accepted Nix specification and T220 coordinates generated schemas, tests, references, and changelog treatment | FR-070, SC-032 | W5 |
+| NIX-7 | The one carrier is compiler-only `d2b.zones.<zone>.audit`, emitted as the required top-level `audit` object in that Zone's `resource-bundle.json`, outside every ResourceSpec and the runtime-created empty `Zone.spec`. It carries exactly `retentionDays` (default 30, range 1-3650), `maxRecordsPerSegment` (default 65536, range 1-1000000), and `maxSegmentBytes` (default 67108864, range 1048576-1073741824). This breaking bundle-header change moves the accepted pair from `schemaVersion: 3` / `bundleVersion: 1` to `schemaVersion: 4` / `bundleVersion: 2`; v4 `contentHash` covers the canonical `{audit,resources}` object so an audit-only change creates a new generation identity. T592 owns the typed option, compiler, Rust DTO/consumer, schema, digest reference, and focused tests; T595 wires the emitter and daemon; T220 coordinates generated artifacts, references, contract tests, and changelog treatment | FR-070, SC-032 | W5 |
 
 ## Invariants
 
@@ -37,6 +38,10 @@ controller-owned effect, and declared-resource removal cleanup.
 - Missing, invalid, or unenforceable audit bounds fail closed. A journal row cannot be pruned
   before durable export completion plus `retentionDays`; prune or sync failure degrades and
   blocks publication of only the affected Zone.
+- A Zone self-resource remains controller-created with byte-identical empty `Zone.spec`.
+  Bundle emission must neither synthesize a Zone resource nor copy compiler-only `audit` into
+  any resource. A missing top-level v4 `audit` object, an unknown field, an old/mixed version
+  pair, or a digest that omits `audit` is rejected before publication.
 
 ## Acceptance
 
@@ -52,5 +57,7 @@ controller-owned effect, and declared-resource removal cleanup.
   effects, and actionable refusals are ineligible for that positive proof.
 - `make test-drift` is clean after regeneration.
 - Nix-unit and bundle tests pin every audit default, lower/upper bound, unknown field, and
-  out-of-range refusal; production tests pin post-export-only journal retention and degraded
-  health on prune or file/directory-sync failure.
+  out-of-range refusal; pin exact bundle versions 4/2 and an audit-only generation change;
+  reject versions 3/1, mixed pairs, missing `audit`, ResourceSpec/ZoneSpec placement, and
+  consumer-side silent defaulting. Production tests pin post-export-only journal retention
+  and degraded health on prune or file/directory-sync failure.
