@@ -267,6 +267,7 @@
             doCheck = false;
             RUSTC_WRAPPER = "";
             SCCACHE_DIR = "";
+            RUSTFLAGS = "-C relocation-model=pie";
             nativeBuildInputs = [
               pkgs.pkgsStatic.binutils
               pkgs.pkgsStatic.rustPlatform.bindgenHook
@@ -275,7 +276,9 @@
               readelf=${pkgs.pkgsStatic.binutils.bintools}/bin/readelf
               bin="$out/bin/d2b-guest-shell-runner"
               test -x "$bin"
-              "$readelf" -h "$bin" >/dev/null
+              "$readelf" -h "$bin" > "$TMPDIR/d2b-guest-shell-runner.header"
+              grep -Eq '^[[:space:]]*Type:[[:space:]]+DYN([[:space:]]|$)' \
+                "$TMPDIR/d2b-guest-shell-runner.header"
               "$readelf" -l "$bin" > "$TMPDIR/d2b-guest-shell-runner.program-headers"
               if grep -q 'Requesting program interpreter' "$TMPDIR/d2b-guest-shell-runner.program-headers"; then
                 echo "d2b-guest-shell-runner: unexpected ELF interpreter" >&2
