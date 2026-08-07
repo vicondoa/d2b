@@ -5724,7 +5724,7 @@
       "manifest": "packages/xtask/Cargo.toml",
       "package": "xtask",
       "path": "packages/xtask/src/package_policy.rs",
-      "sha256": "c46bf02ddb4cb56ea14430c96f2f164ce49f0f61c26e4dd5670c0000225d3bd5",
+      "sha256": "d2dadc81ea7bd6b7c06740ba82f9060d9aeadcf3337c3116935cbf3f98634693",
       "targetLabels": [
         "//packages/xtask:xtask"
       ]

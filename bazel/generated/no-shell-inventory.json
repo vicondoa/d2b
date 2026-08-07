@@ -7712,7 +7712,7 @@
       "source": "packages/xtask/src/package_policy.rs",
       "spawnSiteCount": 1,
       "spawnSiteKeys": [
-        "packages/xtask/src/package_policy.rs:48:27:args.first() .ok_or_else(|| PolicyError::Io(\"cargo\".to_owned(), \"empty command\".to_owned()))?,"
+        "packages/xtask/src/package_policy.rs:50:27:args.first() .ok_or_else(|| PolicyError::Io(\"cargo\".to_owned(), \"empty command\".to_owned()))?,"
       ],
       "status": "scanned"
     },
@@ -9021,9 +9021,9 @@
       "source": "packages/xtask/src/package_policy.rs",
       "span": {
         "endColumn": 10,
-        "endLine": 51,
+        "endLine": 53,
         "startColumn": 27,
-        "startLine": 48
+        "startLine": 50
       }
     }
   ]
