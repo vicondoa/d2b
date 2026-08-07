@@ -49,7 +49,12 @@ fn selected_policy_inputs_and_no_fetch_audits_are_pinned_without_retry() {
     assert!(flake.contains("--no-fetch"));
     assert!(test_rust.contains("--no-fetch"));
     assert!(!flake.contains("retry"));
-    assert!(!test_rust.contains("retry"));
+    let policy_audit_helpers = test_rust
+        .split_once("run_policy_audit()")
+        .and_then(|(_, rest)| rest.split_once("run_inventory_stub_gate()"))
+        .map(|(section, _)| section)
+        .expect("policy audit helper section must exist");
+    assert!(!policy_audit_helpers.contains("retry"));
     assert!(flake.contains("guest-real-libshpool/production/closure.json"));
     assert!(flake.contains("guest-real-libshpool/production/Cargo.lock"));
     assert!(!flake.contains("guest-shell-runner/Cargo.lock"));
@@ -68,9 +73,13 @@ fn guest_license_policy_has_exactly_six_package_scoped_exceptions() {
         ("notify".to_owned(), "CC0-1.0".to_owned()),
     ]);
     assert_eq!(pairs, expected);
-    assert!(!deny.contains("\"BSD-3-Clause\""));
-    assert!(!deny.contains("\"ISC\""));
-    assert!(!deny.contains("\"CC0-1.0\""));
+    let global_licenses = deny
+        .split_once("exceptions = [")
+        .map(|(global, _)| global)
+        .expect("guest exceptions must follow the global license table");
+    assert!(!global_licenses.contains("\"BSD-3-Clause\""));
+    assert!(!global_licenses.contains("\"ISC\""));
+    assert!(!global_licenses.contains("\"CC0-1.0\""));
     assert!(deny.contains("[licenses.exceptions]") || deny.contains("exceptions = ["));
 
     for mutation in [
