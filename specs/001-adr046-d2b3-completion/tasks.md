@@ -743,7 +743,13 @@ table before the operation exists.
   must appear exactly where the importer accepts it and remain absent from unrelated
   subcommands. Incident commands use stable lowercase 64-hex incident/disposition IDs and
   closed exits `0|2|3|4`; human output has fixed state/static next-command text, and
-  version-1 JSON has only the closed remediation enum. `sc002-incident-apply` consumes the
+  version-1 JSON has the closed remediation enum and immutable `incidentKind`. T589
+  additionally owns `tests/golden/delivery/sc002-incident-id-v1.json`. It defines exactly
+  one independently recomputed vector for each closed `Sc002IncidentKindV1`:
+  `retirement-id-collision`, `retirement-census-exhausted`,
+  `retirement-census-invalid`, and `identity-ambiguity`. The accepted external Version 2
+  delivery contract must pin this enum, each kind-specific domain-separated preimage, the
+  status field, and all four vectors before T589 dispatch. `sc002-incident-apply` consumes the
   exact `Sc002IncidentDispositionV1` record from `data-model.md`: at most 4,096 canonical
   JSON bytes with the exact 14-field order, exact Version 2 delivery-contract digest,
   pinned authority/key digests, and final Ed25519 signature over the domain-separated
@@ -757,7 +763,8 @@ table before the operation exists.
   parked candidate, never unlinks an incident, and creates no binding request or reservation
   release. For `adr046w5` it admits only T220's nonbinding replacement/evidence path while
   retaining the consumed request byte-for-byte. Focused parser, status/disposition schema,
-  signed canonical golden, signature, human/JSON golden, exit, crash/replay,
+  incident-kind and four incident-id goldens, signed canonical disposition golden,
+  signature, human/JSON golden, exit, crash/replay,
   stale/not-found/conflict, wrong-contract/authority/key/domain, malformed/noncanonical,
   tamper/cross-incident/cross-triplet replay, no-unlink, no-evidence-copy, and
   successor-admission tests stay synchronized with `evidence.rs`; the existing
@@ -801,11 +808,17 @@ table before the operation exists.
   revalidated, and file-and-directory synced. Two identical orphan leaves with distinct
   inodes must retire under distinct ids. A destination `EEXIST` is never success while the
   source still exists: preserve the existing destination and move the source through the
-  incident transition. The retired census permits at most 64 exact regular single-link
+  `retirement-id-collision` incident transition, deriving its id from separately observed
+  source and existing-destination identity digests. The retired census permits at most 64 exact regular single-link
   current-effective-uid `0600` leaves and at most 1,048,576 bytes, with each leaf at most
-  16,384 bytes; overflow, an unknown entry, or path/identity/digest mismatch transitions the
-  source to incident and blocks publication rather than growing, replacing, reusing, or
-  unlinking the set. Valid retired residue is immutable and non-authorizing and does not
+  16,384 bytes; overflow transitions the source to `retirement-census-exhausted` with the
+  source identity, valid pre-add census digest, and current/prospective counts, while an
+  unknown entry or path/identity/digest mismatch transitions it to
+  `retirement-census-invalid` with the source identity and bounded observed-census digest.
+  Neither census kind fabricates a second identity tuple. Each incident persists a status
+  whose immutable `incidentKind` matches its domain-separated id and durable payload or
+  still-ambiguous-name locator, and blocks publication rather than growing, replacing,
+  reusing, or unlinking the set. Valid retired residue is immutable and non-authorizing and does not
   block retry or close. Implement the sole private `CandidateRetentionOwner` in
   `packages/xtask/src/delivery/storage.rs` as a zero-mutation whole-scope retention guard.
   With the same lock held, its full census proves terminal `merged|abandoned-unmerged`
@@ -824,8 +837,9 @@ table before the operation exists.
   temporary namespace or treat a mismatched retired name as verified, and atomically move the currently named
   suspect with `renameat2(RENAME_NOREPLACE)` into durable candidate-relative
   `evidence-sidecars/sc002/incidents/sha256/<incident-digest>.bin`, outside both ephemeral
-  namespaces. Derive that name with a fixed domain-separated digest, expose no raw inode
-  identity, and `fsync` both the incident directory and old leaf parent. If the suspect name
+  namespaces. Derive that name in the `identity-ambiguity` domain from the closed reopen
+  stage and ordered before/after identity digests, expose no raw inode identity, and `fsync`
+  both the incident directory and old leaf parent. If the suspect name
   cannot be moved without ambiguity, leave it in place. Either result blocks
   `EvidenceRecord` publication and every close stage, survives restart, and is never removed
   by automated cleanup. Ordinary winners, race losers, refusals, and restarts leave the two
@@ -882,8 +896,10 @@ table before the operation exists.
   predicates preserve data and refuse; synchronized same-input
   retry, different-byte or wrong-binding races, bounded completion without deadlock, exact
   final census, empty ephemeral namespaces for ordinary terminals, no sidecar-data unlink,
-  and durable incident preservation plus publication and close denial for every
-  identity-ambiguous, collision, or overflow terminal,
+  exact recomputation of all four records in
+  `tests/golden/delivery/sc002-incident-id-v1.json`, status/payload/id kind agreement, and
+  durable incident preservation plus publication and close denial for every
+  identity-ambiguous, collision, exhausted-census, or invalid-census terminal,
   missing/duplicate/mixed/unrelated samples, effect/Ready identity disagreement, misordering
   and arithmetic overflow, stale binding, progress-free or overlong progress, and over-budget
   samples.
@@ -1679,7 +1695,10 @@ prospectively unimplemented. No local matrix, checked status, or Wave 5 acceptan
 unblocks T220. Only then rebase the Wave 5 integration branch onto the updated `v3` and record
 that exact `v3` commit as the panel-base eligibility proof. Run integration tests, full `make test-drift`, and CI on the converged tree, and resolve every content-changing result. Open or update one PR against `v3` and identify a clean provisional candidate. Run the nonbinding `/d2b-panel-round plan` phase surface against its exact commit/tree, implementation base, and feature snapshot. This process review creates no delivery `panel-request.json` and no binding reservation. A finding routes only its scoped fix through T220, reruns validation, and requires a delta/full-context phase-plan round against the replacement provisional candidate; iterate until all ten roles sign off with zero recommendations. Only then freeze that clean HEAD and tree as final F and retain its unanimous phase receipt. T220 MUST NOT invoke a binding `/d2b-panel-round work` request, panel-attest, or seal. After F is frozen, any content change or rebase invalidates F and requires T220, the phase review, and T600-T602 to rerun. Their completion still does not authorize T219; the accepted external disposition of Wave 5's retained binding request remains mandatory.
   The SC-002 suite also proves retained schema-v2 `EvidenceRecord` fixtures decode
-  byte-identically, a failed operator record imports without a receipt but cannot satisfy the
+  byte-identically. It must recompute the exact four kind-specific records in
+  `tests/golden/delivery/sc002-incident-id-v1.json`, reject kind-domain, tuple-order, stage,
+  census-evidence, and status-kind mismatches, and prove each durable payload or
+  still-ambiguous-name locator has exactly one matching status. A failed operator record imports without a receipt but cannot satisfy the
   closed profile or any later stage, and a passed record requires exactly one matching
   receipt at canonical candidate-relative locator
   `evidence-sidecars/sc002/sha256/<digest>.json`. The import suite supplies the external

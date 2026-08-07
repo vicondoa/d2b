@@ -309,10 +309,13 @@ recovered from the retired census; it is never recreated from a missing source n
 `EEXIST` at the retirement destination is not an idempotent-success signal while the source
 name still exists. Cleanup opens and validates the existing destination without following
 links, preserves both names, and moves the source to the incident path below with the fixed
-`sc002-retirement-id-collision` refusal. It never overwrites, reuses, or unlinks either
-leaf. The ordinary two-identical-orphan test must retire both leaves under different ids;
-a forced retirement-id collision must take this incident transition and block publication
-and close.
+`sc002-retirement-id-collision` refusal and
+`Sc002IncidentKindV1 = "retirement-id-collision"`. The incident id binds the separately
+observed source and existing-destination identity digests; it never treats the destination
+as the source's second observation. Cleanup never overwrites, reuses, or unlinks either
+leaf. The ordinary two-identical-orphan test must retire both leaves under different ids; a
+forced retirement-id collision must take this incident transition, persist its typed status,
+and block publication and close.
 
 The retired census is bounded to at most 64 regular single-link current-effective-uid
 `0600` leaves and at most 1,048,576 total encoded bytes beneath `retired/sha256`, with no
@@ -321,8 +324,13 @@ revalidate against both path digests and the candidate binding. Before adding a 
 exceeding the byte bound, or accepting a malformed census, cleanup preserves the current
 source through the incident transition and returns the fixed
 `sc002-retirement-census-exhausted` or `sc002-retirement-census-invalid` refusal. It never
-grows an unbounded retirement set. A valid retired orphan is immutable, non-authorizing
-residue and does not block retry or close.
+grows an unbounded retirement set. Exhaustion persists
+`Sc002IncidentKindV1 = "retirement-census-exhausted"` and binds the verified source
+identity, the valid pre-add census digest, and the current and prospective leaf/byte counts.
+A malformed census persists
+`Sc002IncidentKindV1 = "retirement-census-invalid"` and binds the verified source identity
+and the bounded observed-census digest. Neither path invents a second identity tuple. A valid
+retired orphan is immutable, non-authorizing residue and does not block retry or close.
 
 The sole candidate-retention guard is T589's private
 `packages/xtask/src/delivery/storage.rs::CandidateRetentionOwner`; no importer, restart
@@ -356,7 +364,8 @@ candidate-relative incident namespace
 `evidence-sidecars/sc002/incidents/sha256/<incident-digest>.bin`, outside both ephemeral
 reserved namespaces, then `fsync`s the incident directory and the old leaf parent. The
 incident digest is a fixed domain-separated digest of the candidate binding and both observed
-identity tuples; raw device/inode values never enter an error or observability surface. The
+identity tuples for `Sc002IncidentKindV1 = "identity-ambiguity"`; raw device/inode values
+never enter an error or observability surface. The
 move empties the two ephemeral namespaces but intentionally leaves the durable incident
 entry. That entry is not zero residue: it blocks `EvidenceRecord` publication and every
 close stage, survives restart, and is never removed by automated cleanup. The fixed refusal
@@ -364,18 +373,87 @@ requires an operator incident disposition and a successor candidate. If the susp
 cannot itself be moved without ambiguity, cleanup leaves it in place, records no success,
 and blocks publication and close. No SC-002 cleanup path unlinks a sidecar data leaf.
 
-The incident digest is also the stable `Sc002IncidentIdV1`: exactly 32 bytes rendered as 64
-lowercase hexadecimal characters. It is safe to expose because its fixed
-`d2b:sc002:incident-id:v1` preimage contains only the candidate digest binding and hashed
-identity tuples, never raw device/inode values. `Sc002DispositionIdV1` has the same rendered
-form and is
+`Sc002IncidentKindV1` is the closed enum
+`retirement-id-collision | retirement-census-exhausted |
+retirement-census-invalid | identity-ambiguity`. No other spelling is accepted. Let
+`B = candidate_id[32] || content_id[32] || snapshot_sha256[32] ||
+content_digest[32]`, with each digest decoded from canonical lowercase 64-hex. Let an
+observed identity digest be
+
+```text
+I = SHA-256(
+  "d2b:sc002:observed-identity:v1\0" ||
+  u64be(st_dev) || u64be(st_ino) || u32be(st_uid) ||
+  u32be(st_mode) || u64be(st_nlink) || observed_content_digest[32]
+)
+```
+
+The bounded retired-census digest `C` is
+`SHA-256("d2b:sc002:retired-census:v1\0" || u64be(canonical-census-length) ||
+canonical-census)`. The canonical census is the validator's length-framed bytewise-sorted
+sequence of relative raw-name bytes, closed entry-type tag, identity digest when available,
+and exact encoded-size/content digest when readable. An unavailable member uses the closed
+failure tag selected by the validator rather than free-form text. Observation stops and
+records the fixed over-bound sentinel immediately after the 65th leaf or 1,048,577th encoded
+byte, so deriving an incident id cannot itself require an unbounded read.
+
+The incident digest is the stable `Sc002IncidentIdV1`: exactly 32 bytes rendered as 64
+lowercase hexadecimal characters. It is derived by exactly one kind-specific preimage:
+
+```text
+retirement-id-collision =
+  SHA-256(
+    "d2b:sc002:incident-id:retirement-id-collision:v1\0" ||
+    B || retirement_id[32] || source_I[32] || existing_destination_I[32]
+  )
+
+retirement-census-exhausted =
+  SHA-256(
+    "d2b:sc002:incident-id:retirement-census-exhausted:v1\0" ||
+    B || source_I[32] || C[32] ||
+    u64be(current_leaf_count) || u64be(current_encoded_bytes) ||
+    u64be(prospective_leaf_count) || u64be(prospective_encoded_bytes)
+  )
+
+retirement-census-invalid =
+  SHA-256(
+    "d2b:sc002:incident-id:retirement-census-invalid:v1\0" ||
+    B || source_I[32] || C[32]
+  )
+
+identity-ambiguity =
+  SHA-256(
+    "d2b:sc002:incident-id:identity-ambiguity:v1\0" ||
+    B || u8(observation_stage) || before_I[32] || after_I[32]
+  )
+```
+
+`observation_stage` is closed to `1 = quarantine-reopen` and
+`2 = retirement-reopen`. Source/destination order, before/after order, kind domains, and
+stage codes are not interchangeable. The census paths intentionally have one source
+identity plus census evidence instead of a fabricated second identity. Raw device/inode,
+uid, mode, link-count, name, and census bytes never enter an error or observability surface.
+
+Every incident transition durably persists the incident payload or still-ambiguous-name
+locator and one `Sc002IncidentStatusV1` before returning its typed refusal. Payload/locator,
+status, and incident-id kind must agree one-to-one on every restart and census; a missing,
+unknown, duplicate, cross-kind, or mismatched status blocks publication and close.
+`tests/golden/delivery/sc002-incident-id-v1.json` contains exactly one canonical vector for
+each of the four enum members. Every vector records the decoded input components, identity
+and census sub-digests where applicable, exact length-delimited preimage bytes, and expected
+lowercase incident id. Tests independently recompute every sub-digest and final id and reject
+kind-domain substitution, tuple-order substitution, stage substitution, omitted census
+evidence, and a fabricated second census identity.
+
+`Sc002DispositionIdV1` has the same rendered form and is
 `SHA-256("d2b:sc002:disposition-id:v1\0" || u64be(disposition-length) ||
 canonical-authenticated-disposition)`. One immutable `Sc002IncidentStatusV1`
-records exactly `schemaVersion = 1`, `kind = "sc002-incident-status"`, `incidentId`, the
-parked candidate/content/snapshot triplet, `state`, nullable-but-always-present
+records exactly, in order, `schemaVersion = 1`, `kind = "sc002-incident-status"`,
+`incidentKind` as the exact `Sc002IncidentKindV1` used to derive `incidentId`, `incidentId`,
+the parked candidate/content/snapshot triplet, `state`, nullable-but-always-present
 `dispositionId`, and a nullable-but-always-present successor candidate/content/snapshot
-triplet. Null is the sole absent representation; omission is malformed. Its closed
-transition is:
+triplet. `incidentKind` is immutable across every state transition. Null is the sole absent
+representation; omission is malformed. Its closed transition is:
 
 ```text
 parked -> disposition-validated -> successor-admitted
@@ -461,6 +539,10 @@ records; replay against another incident, candidate, content, snapshot, or contr
 generation; replacement between open/hash/decode/publish/reopen; stale state; conflicting
 same-id bytes; and copied SC-002 evidence in the successor. Every negative refuses before a
 state transition, request, reservation release, incident deletion, or candidate admission.
+The status schema and human/JSON fixtures additionally exercise every
+`Sc002IncidentKindV1`, require status `incidentKind` to match the id domain and durable
+payload/locator, and consume all four vectors from
+`tests/golden/delivery/sc002-incident-id-v1.json`.
 
 T589 owns the planned delivery CLI contract:
 `wave sc002-incident-inspect --snapshot PATH --incident-id ID [--json]`,

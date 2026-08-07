@@ -1454,16 +1454,29 @@ carries the object verbatim rather than copying selected fields into the task ro
   leaves with distinct inodes MUST retire under distinct ids. `EEXIST`, a 65th retired leaf,
   more than 1,048,576 total retired bytes, or any malformed retired census MUST preserve the
   source through the incident transition rather than overwrite, reuse, unlink, or grow the
-  set. A valid census permits at most 64 leaves of at most 16,384 bytes each. An identity
+  set. Each transition MUST persist exactly one closed `Sc002IncidentKindV1`:
+  `retirement-id-collision`, `retirement-census-exhausted`,
+  `retirement-census-invalid`, or `identity-ambiguity`. A collision id binds the separately
+  observed source and existing-destination identities. An exhausted-census id binds the
+  source identity, valid pre-add census digest, and current/prospective counts; an
+  invalid-census id binds the source identity and bounded observed-census digest. Census
+  incidents MUST NOT fabricate a second identity tuple. A valid census permits at most 64
+  leaves of at most 16,384 bytes each. An identity
   mismatch MUST not restore the suspect to the temp namespace. Instead it MUST move the
   currently named suspect with
   `renameat2(RENAME_NOREPLACE)` into the durable candidate-relative incident namespace
   `evidence-sidecars/sc002/incidents/sha256/<incident-digest>.bin`, outside both ephemeral
   reserved namespaces, and `fsync` the incident directory and old leaf parent. The incident
-  digest is fixed and domain-separated; raw inode identity is never rendered. If that move is
-  itself ambiguous, cleanup leaves the suspect name in place. Either mismatch terminal state
-  blocks record publication and every close stage, survives restart, and is never
-  automatically unlinked. Ordinary success/refusal requires both ephemeral namespaces empty.
+  digest uses the `identity-ambiguity` domain and binds the closed reopen stage plus ordered
+  before/after identity digests. All four kind-specific preimages and their bounded identity
+  and census sub-digests are exactly those in `data-model.md`; raw inode identity is never
+  rendered. If that move is itself ambiguous, cleanup leaves the suspect name in place.
+  Every incident durably persists its payload or still-ambiguous-name locator and a status
+  whose immutable `incidentKind` matches the id domain. Missing, unknown, duplicate,
+  cross-kind, or mismatched incident status is malformed and blocks every close stage.
+  Either mismatch terminal state blocks record publication and every close stage, survives
+  restart, and is never automatically unlinked. Ordinary success/refusal requires both
+  ephemeral namespaces empty.
   Identity ambiguity intentionally leaves a durable incident entry or ambiguous name and
   MUST NOT claim zero residue. T589's private `CandidateRetentionOwner` is a zero-mutation
   whole-scope retention guard, not deletion authority. Under the same lock it requires the
@@ -1489,7 +1502,8 @@ carries the object verbatim rather than copying selected fields into the task ro
   replacement before reopen, replacement on either side of retirement, retirement-id
   collision, retirement-census overflow or corruption, two identical orphans failing to
   retain distinct names, unexpected ephemeral residue, unauthorized candidate-retention
-  cleanup, any durable incident entry, or an over-budget sample fails
+  cleanup, unknown or mismatched incident kind/status, a failed kind-specific incident-id
+  golden vector, any durable incident entry, or an over-budget sample fails
   SC-002 and blocks evidence import, panel request, seal, merge eligibility, and merge.
   `sc002-incident-apply` accepts only the closed canonically encoded and Ed25519-authenticated
   `Sc002IncidentDispositionV1` from `data-model.md`. It binds the incident, parked and
@@ -1499,7 +1513,9 @@ carries the object verbatim rather than copying selected fields into the task ro
   replayed, or tampered disposition bytes refuse before any state transition. Before T589
   dispatch, a separate external amendment MUST bump accepted
   `ADR-046-validation-and-delivery` from Version 1 to Version 2, normatively pin the incident
-  commands, disposition/signature/schema/golden/negative contract, retirement identity,
+  commands, closed incident-kind enum, four kind-specific domain-separated incident-id
+  preimages and golden vectors, persisted status kind,
+  disposition/signature/schema/golden/negative contract, retirement identity,
   bounded zero-mutation candidate-retention owner, whole-scope retention guard, and validator
   authority, receive the parent ADR's
   required approvals, regenerate the spec-set/work-item/implementation-graph artifacts, and
