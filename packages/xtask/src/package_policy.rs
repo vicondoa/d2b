@@ -15,6 +15,7 @@ use std::{
     error::Error,
     ffi::OsStr,
     fmt, fs,
+    ops::Range,
     path::{Component, Path, PathBuf},
     process::{Command, Stdio},
 };
@@ -850,26 +851,98 @@ pub struct LockPackage {
 }
 
 pub fn parse_product_lock(lock: &str) -> Result<Vec<LockPackage>, PolicyError> {
-    let mut packages = Vec::new();
-    for block in lock.split("[[package]]").skip(1) {
+    let parsed = parse_lock_records(lock)?;
+    let mut packages = parsed
+        .records
+        .into_iter()
+        .map(|record| record.package)
+        .collect::<Vec<_>>();
+    packages.sort_by(|left, right| left.identity.cmp(&right.identity));
+    Ok(packages)
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct LockRecord {
+    package: LockPackage,
+    block: String,
+    dependency_field: Option<DependencyField>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct DependencyField {
+    range: Range<usize>,
+    tokens: Vec<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct ParsedLock {
+    version: Option<u64>,
+    records: Vec<LockRecord>,
+}
+
+fn parse_lock_records(lock: &str) -> Result<ParsedLock, PolicyError> {
+    let mut sections = lock.split("[[package]]");
+    let preamble = sections.next().unwrap_or_default();
+    let version = parse_lock_version(preamble)?;
+    let mut records = Vec::new();
+    let mut identities = BTreeSet::new();
+    for block in sections {
         let name = toml_value(block, "name")
             .ok_or_else(|| PolicyError::MalformedLock("package has no name".to_owned()))?;
         let version = toml_value(block, "version")
             .ok_or_else(|| PolicyError::MalformedLock(format!("{name} has no version")))?;
         let source = toml_value(block, "source");
         let checksum = toml_value(block, "checksum");
-        let dependencies = toml_array(block, "dependencies");
-        packages.push(LockPackage {
+        let dependency_field = parse_dependency_field(block)?;
+        let dependencies = dependency_field
+            .as_ref()
+            .map(|field| field.tokens.clone())
+            .unwrap_or_default();
+        let package = LockPackage {
             identity: PackageIdentity::new(name, version, source),
             checksum,
             dependencies,
+        };
+        if !identities.insert(package.identity.clone()) {
+            return Err(PolicyError::DuplicateLockPackage(package.identity.key()));
+        }
+        records.push(LockRecord {
+            package,
+            block: block.to_owned(),
+            dependency_field,
         });
     }
-    if packages.is_empty() {
+    if records.is_empty() {
         return Err(PolicyError::EmptyLock);
     }
-    packages.sort_by(|left, right| left.identity.cmp(&right.identity));
-    Ok(packages)
+    Ok(ParsedLock { version, records })
+}
+
+fn parse_lock_version(preamble: &str) -> Result<Option<u64>, PolicyError> {
+    let mut version = None;
+    for line in preamble.lines() {
+        let line = line.trim();
+        let Some(value) = line.strip_prefix("version") else {
+            continue;
+        };
+        if !value.starts_with(char::is_whitespace) && !value.starts_with('=') {
+            continue;
+        }
+        let value = value
+            .trim_start()
+            .strip_prefix('=')
+            .ok_or_else(|| PolicyError::MalformedLock("lock version has no value".to_owned()))?
+            .trim();
+        let parsed = value
+            .parse::<u64>()
+            .map_err(|_| PolicyError::MalformedLock(format!("invalid lock version {value}")))?;
+        if version.replace(parsed).is_some() {
+            return Err(PolicyError::MalformedLock(
+                "lock version appears more than once".to_owned(),
+            ));
+        }
+    }
+    Ok(version)
 }
 
 fn toml_value(block: &str, key: &str) -> Option<String> {
@@ -884,18 +957,195 @@ fn toml_value(block: &str, key: &str) -> Option<String> {
     })
 }
 
-fn toml_array(block: &str, key: &str) -> Vec<String> {
-    let Some(line) = block
-        .lines()
-        .find(|line| line.trim_start().starts_with(key))
-    else {
-        return Vec::new();
-    };
-    line.split('"')
-        .enumerate()
-        .filter(|(index, _)| index % 2 == 1)
-        .map(|(_, value)| value.to_owned())
-        .collect()
+fn parse_dependency_field(block: &str) -> Result<Option<DependencyField>, PolicyError> {
+    let mut field = None;
+    let mut offset = 0;
+    for line in block.split_inclusive('\n') {
+        let line_without_newline = line.strip_suffix('\n').unwrap_or(line);
+        let line_without_newline = line_without_newline
+            .strip_suffix('\r')
+            .unwrap_or(line_without_newline);
+        let trimmed = line_without_newline.trim_start();
+        let Some(after_key) = trimmed.strip_prefix("dependencies") else {
+            offset += line.len();
+            continue;
+        };
+        if !after_key.is_empty()
+            && !after_key.starts_with(char::is_whitespace)
+            && !after_key.starts_with('=')
+        {
+            offset += line.len();
+            continue;
+        }
+        if field.is_some() {
+            return Err(PolicyError::MalformedLock(
+                "dependencies field appears more than once".to_owned(),
+            ));
+        }
+        let key_offset = line_without_newline.len() - trimmed.len();
+        let after_key_offset = key_offset + "dependencies".len();
+        let after_key = &line_without_newline[after_key_offset..];
+        let equals_offset = after_key.find('=').ok_or_else(|| {
+            PolicyError::MalformedLock("dependencies field has no assignment".to_owned())
+        })?;
+        if !after_key[..equals_offset].trim().is_empty() {
+            return Err(PolicyError::MalformedLock(
+                "dependencies field has invalid assignment".to_owned(),
+            ));
+        }
+        let value_offset = after_key_offset + equals_offset + 1;
+        let value = &line_without_newline[value_offset..];
+        let leading = value.len() - value.trim_start().len();
+        let array_start = offset + value_offset + leading;
+        if !block[array_start..].starts_with('[') {
+            return Err(PolicyError::MalformedLock(
+                "dependencies field is not an array".to_owned(),
+            ));
+        }
+        let array_end = find_array_end(block, array_start)?;
+        let tokens = parse_lock_string_array(&block[array_start + 1..array_end])?;
+        field = Some(DependencyField {
+            range: key_offset + offset..array_end + 1,
+            tokens,
+        });
+        offset += line.len();
+    }
+    Ok(field)
+}
+
+fn find_array_end(block: &str, array_start: usize) -> Result<usize, PolicyError> {
+    let bytes = block.as_bytes();
+    let mut in_string = false;
+    let mut escaped = false;
+    let mut in_comment = false;
+    for (index, byte) in bytes.iter().enumerate().skip(array_start + 1) {
+        if in_comment {
+            if *byte == b'\n' {
+                in_comment = false;
+            }
+        } else if in_string {
+            if escaped {
+                escaped = false;
+            } else if *byte == b'\\' {
+                escaped = true;
+            } else if *byte == b'"' {
+                in_string = false;
+            }
+        } else if *byte == b'"' {
+            in_string = true;
+        } else if *byte == b'#' {
+            in_comment = true;
+        } else if *byte == b']' {
+            return Ok(index);
+        }
+    }
+    Err(PolicyError::MalformedLock(
+        "dependencies array has no closing bracket".to_owned(),
+    ))
+}
+
+fn parse_lock_string_array(contents: &str) -> Result<Vec<String>, PolicyError> {
+    let bytes = contents.as_bytes();
+    let mut index = 0;
+    let mut values = Vec::new();
+    while index < bytes.len() {
+        while index < bytes.len() {
+            match bytes[index] {
+                byte if byte.is_ascii_whitespace() || byte == b',' => index += 1,
+                b'#' => {
+                    while index < bytes.len() && bytes[index] != b'\n' {
+                        index += 1;
+                    }
+                }
+                _ => break,
+            }
+        }
+        if index == bytes.len() {
+            break;
+        }
+        if bytes[index] != b'"' {
+            return Err(PolicyError::MalformedLock(
+                "dependencies array contains a non-string value".to_owned(),
+            ));
+        }
+        index += 1;
+        let mut value = String::new();
+        let mut closed = false;
+        while index < bytes.len() {
+            match bytes[index] {
+                b'"' => {
+                    index += 1;
+                    closed = true;
+                    break;
+                }
+                b'\\' => {
+                    index += 1;
+                    let escaped = *bytes.get(index).ok_or_else(|| {
+                        PolicyError::MalformedLock(
+                            "dependencies array has an incomplete string escape".to_owned(),
+                        )
+                    })?;
+                    let character = match escaped {
+                        b'"' => '"',
+                        b'\\' => '\\',
+                        b'n' => '\n',
+                        b'r' => '\r',
+                        b't' => '\t',
+                        _ => {
+                            return Err(PolicyError::MalformedLock(
+                                "dependencies array has an unsupported string escape".to_owned(),
+                            ));
+                        }
+                    };
+                    value.push(character);
+                    index += 1;
+                }
+                _ => {
+                    let character = contents[index..].chars().next().ok_or_else(|| {
+                        PolicyError::MalformedLock(
+                            "dependencies array contains invalid UTF-8".to_owned(),
+                        )
+                    })?;
+                    value.push(character);
+                    index += character.len_utf8();
+                }
+            }
+        }
+        if !closed {
+            return Err(PolicyError::MalformedLock(
+                "dependencies array has an unterminated string".to_owned(),
+            ));
+        }
+        values.push(value);
+        while index < bytes.len() && bytes[index].is_ascii_whitespace() {
+            index += 1;
+        }
+        if index < bytes.len() {
+            if bytes[index] == b',' {
+                index += 1;
+            } else if bytes[index] == b'#' {
+                while index < bytes.len() && bytes[index] != b'\n' {
+                    index += 1;
+                }
+                while index < bytes.len() && bytes[index].is_ascii_whitespace() {
+                    index += 1;
+                }
+                if index < bytes.len() && bytes[index] != b',' {
+                    return Err(PolicyError::MalformedLock(
+                        "dependencies array is missing a comma".to_owned(),
+                    ));
+                }
+                if index < bytes.len() {
+                    index += 1;
+                }
+            } else {
+                return Err(PolicyError::MalformedLock(
+                    "dependencies array is missing a comma".to_owned(),
+                ));
+            }
+        }
+    }
+    Ok(values)
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -1429,7 +1679,7 @@ pub fn package_policy_preview_with_executor(
             &mut outputs,
             &context.preview_dir(),
             "production/Cargo.lock",
-            filtered_lock_text(&lock, &oracle.production.identities),
+            filtered_lock_text(&lock, &oracle.production.identities)?,
         );
         insert_policy_output(
             &mut outputs,
@@ -1441,7 +1691,7 @@ pub fn package_policy_preview_with_executor(
             &mut outputs,
             &context.preview_dir(),
             "policy/Cargo.lock",
-            filtered_lock_text(&lock, &oracle.policy.identities),
+            filtered_lock_text(&lock, &oracle.policy.identities)?,
         );
     }
     Ok(outputs)
@@ -1456,25 +1706,172 @@ fn insert_policy_output(
     outputs.insert(format!("{context_dir}/{suffix}"), contents);
 }
 
-fn filtered_lock_text(lock: &str, identities: &BTreeSet<PackageIdentity>) -> String {
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct LockDependencyToken {
+    name: String,
+    version: Option<String>,
+    source: Option<String>,
+}
+
+pub fn filtered_lock_text(
+    lock: &str,
+    identities: &BTreeSet<PackageIdentity>,
+) -> Result<String, PolicyError> {
+    if identities.is_empty() {
+        return Err(PolicyError::EmptySelectedLock);
+    }
+    let parsed = parse_lock_records(lock)?;
+    let available = parsed
+        .records
+        .iter()
+        .map(|record| record.package.identity.clone())
+        .collect::<BTreeSet<_>>();
+    let missing = identities
+        .difference(&available)
+        .map(PackageIdentity::key)
+        .collect::<Vec<_>>();
+    if !missing.is_empty() {
+        return Err(PolicyError::MetadataLockMismatch(missing.join(", ")));
+    }
+
+    let mut packages_by_name = BTreeMap::<String, Vec<PackageIdentity>>::new();
+    for identity in &available {
+        packages_by_name
+            .entry(identity.name.clone())
+            .or_default()
+            .push(identity.clone());
+    }
+
     let mut output = String::from(
         "# This file is a generated policy-input preview. It is not a Cargo workspace lock authority.\n\n",
     );
-    for block in lock.split("[[package]]").skip(1) {
-        let Some(name) = toml_value(block, "name") else {
-            continue;
-        };
-        let Some(version) = toml_value(block, "version") else {
-            continue;
-        };
-        let identity = PackageIdentity::new(name, version, toml_value(block, "source"));
-        if identities.contains(&identity) {
-            output.push_str("[[package]]");
-            output.push_str(block.trim_end());
-            output.push_str("\n\n");
-        }
+    if let Some(version) = parsed.version {
+        output.push_str(&format!("version = {version}\n\n"));
     }
-    output
+
+    let mut rendered_identities = BTreeSet::new();
+    for record in parsed.records {
+        if !identities.contains(&record.package.identity) {
+            continue;
+        }
+        let mut retained_dependencies = Vec::new();
+        for token in &record.package.dependencies {
+            let target = resolve_lock_dependency(token, &packages_by_name)?;
+            if identities.contains(&target) {
+                retained_dependencies.push(token.clone());
+            }
+        }
+        let block = if let Some(field) = &record.dependency_field {
+            rewrite_dependency_field(&record.block, field, &retained_dependencies)
+        } else {
+            record.block
+        };
+        output.push_str("[[package]]");
+        output.push_str(block.trim_end());
+        output.push_str("\n\n");
+        rendered_identities.insert(record.package.identity);
+    }
+    validate_selected_identity_set(identities, &rendered_identities)?;
+    Ok(output)
+}
+
+fn resolve_lock_dependency(
+    token: &str,
+    packages_by_name: &BTreeMap<String, Vec<PackageIdentity>>,
+) -> Result<PackageIdentity, PolicyError> {
+    let parsed = parse_lock_dependency_token(token)?;
+    let candidates = packages_by_name
+        .get(&parsed.name)
+        .ok_or_else(|| PolicyError::UnresolvableLockDependency(token.to_owned()))?;
+    let matching = candidates
+        .iter()
+        .filter(|identity| {
+            parsed
+                .version
+                .as_deref()
+                .is_none_or(|version| identity.version == version)
+                && parsed
+                    .source
+                    .as_deref()
+                    .is_none_or(|source| identity.source.as_deref() == Some(source))
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    match matching.as_slice() {
+        [identity] => Ok(identity.clone()),
+        [] => Err(PolicyError::UnresolvableLockDependency(token.to_owned())),
+        _ => Err(PolicyError::AmbiguousLockDependency(token.to_owned())),
+    }
+}
+
+fn parse_lock_dependency_token(token: &str) -> Result<LockDependencyToken, PolicyError> {
+    if token.is_empty() || token.trim() != token {
+        return Err(PolicyError::MalformedLockDependency(token.to_owned()));
+    }
+    let (head, source) = if let Some(source_start) = token.rfind(" (") {
+        if !token.ends_with(')')
+            || token[..source_start].contains(['(', ')'])
+            || token[source_start + 2..token.len() - 1].is_empty()
+            || token[source_start + 2..token.len() - 1].contains(['(', ')'])
+        {
+            return Err(PolicyError::MalformedLockDependency(token.to_owned()));
+        }
+        (
+            &token[..source_start],
+            Some(token[source_start + 2..token.len() - 1].to_owned()),
+        )
+    } else {
+        if token.contains(['(', ')']) {
+            return Err(PolicyError::MalformedLockDependency(token.to_owned()));
+        }
+        (token, None)
+    };
+    let parts = head.split_whitespace().collect::<Vec<_>>();
+    if parts.is_empty() || parts.len() > 2 || (source.is_some() && parts.len() != 2) {
+        return Err(PolicyError::MalformedLockDependency(token.to_owned()));
+    }
+    if head != parts.join(" ") {
+        return Err(PolicyError::MalformedLockDependency(token.to_owned()));
+    }
+    Ok(LockDependencyToken {
+        name: parts[0].to_owned(),
+        version: parts.get(1).map(|version| (*version).to_owned()),
+        source,
+    })
+}
+
+fn rewrite_dependency_field(
+    block: &str,
+    field: &DependencyField,
+    retained_dependencies: &[String],
+) -> String {
+    let mut replacement = String::from("dependencies = ");
+    if retained_dependencies.is_empty() {
+        replacement.push_str("[]");
+    } else {
+        replacement.push_str("[\n");
+        for dependency in retained_dependencies {
+            replacement.push_str(" \"");
+            replacement.push_str(&escape_toml_string(dependency));
+            replacement.push_str("\",\n");
+        }
+        replacement.push(']');
+    }
+    format!(
+        "{}{}{}",
+        &block[..field.range.start],
+        replacement,
+        &block[field.range.end..]
+    )
+}
+
+fn escape_toml_string(value: &str) -> String {
+    value
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"")
+        .replace('\n', "\\n")
+        .replace('\r', "\\r")
+        .replace('\t', "\\t")
 }
 
 pub fn gen_package_policy_inputs(args: &[String]) -> Result<Vec<PathBuf>, Box<dyn Error>> {
@@ -1564,6 +1961,7 @@ pub enum PolicyError {
     MalformedMetadata(String),
     MetadataPackagesMissing,
     IdentityMismatch(String),
+    DuplicateLockPackage(String),
     SelectedPackageMissing(String),
     SelectedPackageExtra(String),
     DanglingResolveEdge(String),
@@ -1571,6 +1969,10 @@ pub enum PolicyError {
     UnrecognizedAbsolutePath(String),
     MalformedLock(String),
     EmptyLock,
+    EmptySelectedLock,
+    MalformedLockDependency(String),
+    UnresolvableLockDependency(String),
+    AmbiguousLockDependency(String),
     EmptySourceCensus,
     MetadataLockMismatch(String),
     ExtraSource(String),
@@ -1613,6 +2015,9 @@ impl fmt::Display for PolicyError {
             Self::IdentityMismatch(message) => {
                 write!(formatter, "metadata identity mismatch: {message}")
             }
+            Self::DuplicateLockPackage(identity) => {
+                write!(formatter, "Cargo.lock repeats package identity: {identity}")
+            }
             Self::SelectedPackageMissing(message) => {
                 write!(
                     formatter,
@@ -1645,6 +2050,24 @@ impl fmt::Display for PolicyError {
             }
             Self::MalformedLock(message) => write!(formatter, "malformed Cargo.lock: {message}"),
             Self::EmptyLock => formatter.write_str("Cargo.lock has no package records"),
+            Self::EmptySelectedLock => {
+                formatter.write_str("selected package lock would contain no package records")
+            }
+            Self::MalformedLockDependency(token) => {
+                write!(formatter, "malformed Cargo.lock dependency token: {token}")
+            }
+            Self::UnresolvableLockDependency(token) => {
+                write!(
+                    formatter,
+                    "Cargo.lock dependency has no package target: {token}"
+                )
+            }
+            Self::AmbiguousLockDependency(token) => {
+                write!(
+                    formatter,
+                    "Cargo.lock dependency has multiple package targets: {token}"
+                )
+            }
             Self::EmptySourceCensus => formatter.write_str("selected source census is empty"),
             Self::MetadataLockMismatch(message) => {
                 write!(formatter, "metadata and lock identities differ: {message}")

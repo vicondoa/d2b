@@ -124,12 +124,31 @@ fn policy_preview_uses_locked_offline_commands_and_stays_in_scratch() {
             .collect::<BTreeSet<_>>()
     });
     let outputs = package_policy::package_policy_preview(root).expect("policy preview");
+    let second = package_policy::package_policy_preview(root).expect("second policy preview");
+    assert_eq!(outputs, second);
     assert_eq!(outputs.len(), 16);
     assert!(
         outputs
             .keys()
             .all(|path| path.starts_with("packages/policy-inputs/"))
     );
+    let lock_outputs = outputs
+        .iter()
+        .filter(|(path, _)| path.ends_with("/Cargo.lock"))
+        .collect::<Vec<_>>();
+    assert_eq!(lock_outputs.len(), 8);
+    for (path, contents) in lock_outputs {
+        assert!(
+            contents.contains("\nversion = 4\n"),
+            "{path} has no lock version"
+        );
+        assert!(
+            !package_policy::parse_product_lock(contents)
+                .expect("generated policy lock")
+                .is_empty(),
+            "{path} has no package records"
+        );
+    }
     let after = fs::read_dir(&policy_root).ok().map(|entries| {
         entries
             .filter_map(Result::ok)
@@ -138,6 +157,250 @@ fn policy_preview_uses_locked_offline_commands_and_stays_in_scratch() {
     });
     assert_eq!(before, after);
     let _ = fs::remove_dir_all(root.join(".scratch/bazel/policy-inputs"));
+}
+
+#[test]
+fn all_committed_policy_locks_parse() {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let root = manifest_dir
+        .parent()
+        .and_then(std::path::Path::parent)
+        .expect("repository root");
+    let mut paths = Vec::new();
+    for system in ["x86_64-linux", "aarch64-linux"] {
+        let (gnu, musl) = if system == "x86_64-linux" {
+            ("x86_64-unknown-linux-gnu", "x86_64-unknown-linux-musl")
+        } else {
+            ("aarch64-unknown-linux-gnu", "aarch64-unknown-linux-musl")
+        };
+        for (target, context) in [(gnu, "broker-production"), (musl, "guest-real-libshpool")] {
+            for variant in ["production", "policy"] {
+                paths.push(format!(
+                    "packages/policy-inputs/{system}/{target}/{context}/{variant}/Cargo.lock"
+                ));
+            }
+        }
+    }
+    assert_eq!(paths.len(), 8);
+    for path in paths {
+        let lock = fs::read_to_string(root.join(&path)).expect("committed policy lock");
+        assert!(
+            !package_policy::parse_product_lock(&lock)
+                .expect("committed policy lock parses")
+                .is_empty(),
+            "{path} has no package records"
+        );
+    }
+}
+
+fn synthetic_lock(packages: &str) -> String {
+    format!("version = 4\n\n{packages}")
+}
+
+fn synthetic_package(
+    name: &str,
+    version: &str,
+    source: Option<&str>,
+    dependencies: &[&str],
+) -> String {
+    let mut package = format!("[[package]]\nname = \"{name}\"\nversion = \"{version}\"\n");
+    if let Some(source) = source {
+        package.push_str(&format!("source = \"{source}\"\n"));
+        package.push_str("checksum = \"");
+        package.push_str(&"a".repeat(64));
+        package.push_str("\"\n");
+    }
+    if !dependencies.is_empty() {
+        package.push_str("dependencies = [\n");
+        for dependency in dependencies {
+            package.push_str(&format!(" \"{dependency}\",\n"));
+        }
+        package.push_str("]\n");
+    }
+    package.push('\n');
+    package
+}
+
+#[test]
+fn selected_lock_prunes_removed_edges_and_retains_selected_edges() {
+    let lock = synthetic_lock(&format!(
+        "{}{}{}",
+        synthetic_package("root", "1.0.0", None, &["kept", "removed"]),
+        synthetic_package(
+            "kept",
+            "1.0.0",
+            Some("registry+https://example.invalid/index"),
+            &[],
+        ),
+        synthetic_package(
+            "removed",
+            "1.0.0",
+            Some("registry+https://example.invalid/index"),
+            &[],
+        ),
+    ));
+    let selected = BTreeSet::from([
+        package_policy::PackageIdentity::new("root", "1.0.0", None),
+        package_policy::PackageIdentity::new(
+            "kept",
+            "1.0.0",
+            Some("registry+https://example.invalid/index".to_owned()),
+        ),
+    ]);
+    let rendered =
+        package_policy::filtered_lock_text(&lock, &selected).expect("filtered lock renders");
+    let packages = package_policy::parse_product_lock(&rendered).expect("rendered lock parses");
+    assert_eq!(
+        packages
+            .iter()
+            .map(|package| package.identity.clone())
+            .collect::<BTreeSet<_>>(),
+        selected
+    );
+    assert_eq!(
+        packages
+            .iter()
+            .find(|package| package.identity.name == "kept")
+            .expect("kept package")
+            .dependencies,
+        Vec::<String>::new()
+    );
+    let root = packages
+        .iter()
+        .find(|package| package.identity.name == "root")
+        .expect("root package");
+    assert_eq!(root.dependencies, vec!["kept"]);
+    assert!(!rendered.contains("\"removed\""));
+    assert!(rendered.contains(&format!("checksum = \"{}\"", "a".repeat(64))));
+}
+
+#[test]
+fn selected_lock_resolves_same_name_versions_and_sources() {
+    let lock = synthetic_lock(&format!(
+        "{}{}{}{}",
+        synthetic_package(
+            "root",
+            "1.0.0",
+            None,
+            &[
+                "same 1.0.0 (registry+https://example.invalid/index)",
+                "same 2.0.0",
+                "same 1.0.0 (registry+https://example.invalid/alternate)",
+            ],
+        ),
+        synthetic_package(
+            "same",
+            "1.0.0",
+            Some("registry+https://example.invalid/index"),
+            &[],
+        ),
+        synthetic_package(
+            "same",
+            "1.0.0",
+            Some("registry+https://example.invalid/alternate"),
+            &[],
+        ),
+        synthetic_package(
+            "same",
+            "2.0.0",
+            Some("registry+https://example.invalid/index"),
+            &[],
+        ),
+    ));
+    let selected = BTreeSet::from([
+        package_policy::PackageIdentity::new("root", "1.0.0", None),
+        package_policy::PackageIdentity::new(
+            "same",
+            "1.0.0",
+            Some("registry+https://example.invalid/alternate".to_owned()),
+        ),
+        package_policy::PackageIdentity::new(
+            "same",
+            "2.0.0",
+            Some("registry+https://example.invalid/index".to_owned()),
+        ),
+    ]);
+    let rendered =
+        package_policy::filtered_lock_text(&lock, &selected).expect("filtered lock renders");
+    let packages = package_policy::parse_product_lock(&rendered).expect("rendered lock parses");
+    let root = packages
+        .iter()
+        .find(|package| package.identity.name == "root")
+        .expect("root package");
+    assert_eq!(
+        root.dependencies,
+        vec![
+            "same 2.0.0",
+            "same 1.0.0 (registry+https://example.invalid/alternate)"
+        ]
+    );
+
+    let ambiguous = synthetic_lock(&format!(
+        "{}{}{}",
+        synthetic_package("root", "1.0.0", None, &["same"]),
+        synthetic_package(
+            "same",
+            "1.0.0",
+            Some("registry+https://example.invalid/index"),
+            &[],
+        ),
+        synthetic_package(
+            "same",
+            "2.0.0",
+            Some("registry+https://example.invalid/index"),
+            &[],
+        ),
+    ));
+    assert!(matches!(
+        package_policy::filtered_lock_text(
+            &ambiguous,
+            &BTreeSet::from([
+                package_policy::PackageIdentity::new("root", "1.0.0", None),
+                package_policy::PackageIdentity::new(
+                    "same",
+                    "1.0.0",
+                    Some("registry+https://example.invalid/index".to_owned()),
+                ),
+            ])
+        ),
+        Err(package_policy::PolicyError::AmbiguousLockDependency(_))
+    ));
+}
+
+#[test]
+fn selected_lock_refuses_malformed_dependency_tokens() {
+    let lock = synthetic_lock(&format!(
+        "{}{}",
+        synthetic_package("root", "1.0.0", None, &["kept 1.0.0 extra"]),
+        synthetic_package(
+            "kept",
+            "1.0.0",
+            Some("registry+https://example.invalid/index"),
+            &[],
+        ),
+    ));
+    let selected = BTreeSet::from([
+        package_policy::PackageIdentity::new("root", "1.0.0", None),
+        package_policy::PackageIdentity::new(
+            "kept",
+            "1.0.0",
+            Some("registry+https://example.invalid/index".to_owned()),
+        ),
+    ]);
+    assert!(matches!(
+        package_policy::filtered_lock_text(&lock, &selected),
+        Err(package_policy::PolicyError::MalformedLockDependency(_))
+    ));
+}
+
+#[test]
+fn selected_lock_refuses_dangling_dependency_tokens() {
+    let lock = synthetic_lock(&synthetic_package("root", "1.0.0", None, &["missing"]));
+    let selected = BTreeSet::from([package_policy::PackageIdentity::new("root", "1.0.0", None)]);
+    assert!(matches!(
+        package_policy::filtered_lock_text(&lock, &selected),
+        Err(package_policy::PolicyError::UnresolvableLockDependency(_))
+    ));
 }
 
 fn metadata_fixture(
