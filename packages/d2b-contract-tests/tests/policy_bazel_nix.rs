@@ -113,14 +113,12 @@ fn generic_nix_contexts_exclude_broker_and_guest_exactly() {
         .expect("rust-clippy and guest-static-elf sections must exist");
 
     for section in [build, tests, clippy] {
-        assert_eq!(
+        assert!(
             count(section, "d2b-priv-broker") >= 1,
-            true,
             "generic section must exclude broker"
         );
-        assert_eq!(
+        assert!(
             count(section, "d2b-guest-shell-runner") >= 1,
-            true,
             "generic section must exclude guest"
         );
     }
@@ -243,20 +241,12 @@ fn size_growth_authorization_has_only_the_closed_positive_delta_source() {
         candidate_digest: "candidate-digest",
         review_digest: "review-digest",
     };
+    let approved = AuthorizationSpec::for_row(&baseline);
     assert!(size_authorization_valid(&baseline, 100, None));
     assert!(size_authorization_valid(
         &baseline,
         107,
-        Some(&authorization(
-            "x86_64-linux",
-            "guest-static-elf",
-            100,
-            107,
-            7,
-            "reviews/artifact-growth.md",
-            "candidate-digest",
-            "review-digest",
-        ))
+        Some(&authorization(approved))
     ));
 
     let negative = [
@@ -264,149 +254,77 @@ fn size_growth_authorization_has_only_the_closed_positive_delta_source() {
         size_authorization_valid(
             &baseline,
             107,
-            Some(
-                &authorization(
-                    "x86_64-linux",
-                    "guest-static-elf",
-                    100,
-                    107,
-                    7,
-                    "reviews/artifact-growth.md",
-                    "candidate-digest",
-                    "review-digest",
-                )
-                .with_decision("denied"),
-            ),
+            Some(&authorization(approved).with_decision("denied")),
         ),
         size_authorization_valid(
             &baseline,
             107,
-            Some(&authorization(
-                "x86_64-linux",
-                "guest-static-elf",
-                100,
-                107,
-                7,
-                "reviews/artifact-growth.md",
-                "stale-candidate",
-                "review-digest",
-            )),
+            Some(&authorization(AuthorizationSpec {
+                candidate: "stale-candidate",
+                ..approved
+            })),
         ),
         size_authorization_valid(
             &baseline,
             107,
-            Some(&authorization(
-                "x86_64-linux",
-                "guest-static-elf",
-                100,
-                107,
-                7,
-                "reviews/artifact-growth.md",
-                "candidate-digest",
-                "stale-review",
-            )),
+            Some(&authorization(AuthorizationSpec {
+                review: "stale-review",
+                ..approved
+            })),
         ),
         size_authorization_valid(
             &baseline,
             107,
             Some(
-                &authorization(
-                    "aarch64-linux",
-                    "guest-static-elf",
-                    100,
-                    107,
-                    7,
-                    "reviews/artifact-growth.md",
-                    "candidate-digest",
-                    "review-digest",
-                )
+                &authorization(AuthorizationSpec {
+                    system: "aarch64-linux",
+                    ..approved
+                })
                 .with_extra(),
             ),
         ),
         size_authorization_valid(
             &baseline,
             107,
-            Some(&authorization(
-                "x86_64-linux",
-                "broker-host-artifact-contract",
-                100,
-                107,
-                7,
-                "reviews/artifact-growth.md",
-                "candidate-digest",
-                "review-digest",
-            )),
+            Some(&authorization(AuthorizationSpec {
+                artifact: "broker-host-artifact-contract",
+                ..approved
+            })),
         ),
         size_authorization_valid(
             &baseline,
             107,
-            Some(&authorization(
-                "x86_64-linux",
-                "guest-static-elf",
-                99,
-                107,
-                8,
-                "reviews/artifact-growth.md",
-                "candidate-digest",
-                "review-digest",
-            )),
+            Some(&authorization(AuthorizationSpec {
+                prior: 99,
+                delta: 8,
+                ..approved
+            })),
         ),
         size_authorization_valid(
             &baseline,
             107,
-            Some(&authorization(
-                "x86_64-linux",
-                "guest-static-elf",
-                100,
-                108,
-                7,
-                "reviews/artifact-growth.md",
-                "candidate-digest",
-                "review-digest",
-            )),
+            Some(&authorization(AuthorizationSpec {
+                new: 108,
+                ..approved
+            })),
         ),
         size_authorization_valid(
             &baseline,
             107,
-            Some(&authorization(
-                "x86_64-linux",
-                "guest-static-elf",
-                100,
-                107,
-                8,
-                "reviews/artifact-growth.md",
-                "candidate-digest",
-                "review-digest",
-            )),
+            Some(&authorization(AuthorizationSpec {
+                delta: 8,
+                ..approved
+            })),
         ),
         size_authorization_valid(
             &baseline,
             107,
-            Some(&authorization(
-                "x86_64-linux",
-                "guest-static-elf",
-                100,
-                107,
-                7,
-                "/absolute/review.md",
-                "candidate-digest",
-                "review-digest",
-            )),
+            Some(&authorization(AuthorizationSpec {
+                rationale: "/absolute/review.md",
+                ..approved
+            })),
         ),
-        size_authorization_valid(
-            &baseline,
-            108,
-            Some(&authorization(
-                "x86_64-linux",
-                "guest-static-elf",
-                100,
-                107,
-                7,
-                "reviews/artifact-growth.md",
-                "candidate-digest",
-                "review-digest",
-            )),
-        ),
+        size_authorization_valid(&baseline, 108, Some(&authorization(approved))),
     ];
     assert!(negative.iter().all(|valid| !valid));
 }
@@ -424,6 +342,33 @@ struct Authorization {
     value: Value,
 }
 
+#[derive(Clone, Copy)]
+struct AuthorizationSpec<'a> {
+    system: &'a str,
+    artifact: &'a str,
+    prior: u64,
+    new: u64,
+    delta: u64,
+    rationale: &'a str,
+    candidate: &'a str,
+    review: &'a str,
+}
+
+impl<'a> AuthorizationSpec<'a> {
+    fn for_row(row: &'a SizeRow) -> Self {
+        Self {
+            system: row.system,
+            artifact: row.artifact,
+            prior: row.prior_bytes,
+            new: 107,
+            delta: 7,
+            rationale: "reviews/artifact-growth.md",
+            candidate: row.candidate_digest,
+            review: row.review_digest,
+        }
+    }
+}
+
 impl Authorization {
     fn with_decision(mut self, decision: &str) -> Self {
         self.value["decision"] = Value::String(decision.to_owned());
@@ -436,26 +381,17 @@ impl Authorization {
     }
 }
 
-fn authorization(
-    system: &str,
-    artifact: &str,
-    prior: u64,
-    new: u64,
-    delta: u64,
-    rationale: &str,
-    candidate: &str,
-    review: &str,
-) -> Authorization {
+fn authorization(spec: AuthorizationSpec<'_>) -> Authorization {
     Authorization {
         value: serde_json::json!({
-            "system": system,
-            "artifact": artifact,
-            "priorBinaryBytes": prior,
-            "newBinaryBytes": new,
-            "deltaBytes": delta,
-            "rationalePath": rationale,
-            "candidateContentSha256": candidate,
-            "reviewRecordSha256": review,
+            "system": spec.system,
+            "artifact": spec.artifact,
+            "priorBinaryBytes": spec.prior,
+            "newBinaryBytes": spec.new,
+            "deltaBytes": spec.delta,
+            "rationalePath": spec.rationale,
+            "candidateContentSha256": spec.candidate,
+            "reviewRecordSha256": spec.review,
             "decision": "approved",
         }),
     }
