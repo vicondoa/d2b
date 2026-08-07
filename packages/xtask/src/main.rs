@@ -2338,6 +2338,26 @@ mod fresh_bootstrap_tests {
     }
 
     #[test]
+    fn nonregular_lock_and_guard_contention_refuse_before_child() {
+        let root = bootstrap_fixture();
+        fs::create_dir_all(root.join("bazel/cargo/product.lock")).expect("nonregular lock");
+        let mut executor = FakeFreshExecutor {
+            fail: false,
+            calls: 0,
+        };
+        assert!(fresh_hub_bootstrap(&root, "product", &mut executor).is_err());
+        assert_eq!(executor.calls, 0);
+        fs::remove_dir_all(root.join("bazel/cargo/product.lock")).expect("remove lock directory");
+        fs::create_dir_all(root.join(".scratch/bazel")).expect("scratch");
+        let guard_path = root.join(".scratch/bazel/fresh-bootstrap.guard");
+        let guard = acquire_fresh_bootstrap_guard(&guard_path).expect("guard");
+        assert!(fresh_hub_bootstrap(&root, "product", &mut executor).is_err());
+        assert_eq!(executor.calls, 0);
+        drop(guard);
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
     fn process_executor_pins_the_bzlmod_bootstrap_contract() {
         let workspace = create_exclusive_temp_dir("xtask-fresh-process").expect("workspace");
         fs::create_dir_all(workspace.join("bazel/cargo")).expect("cargo directory");
