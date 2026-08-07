@@ -702,6 +702,7 @@ fn install_fresh_lock(
             let existing = fs::read(&destination)
                 .map_err(|_| fresh_bootstrap_error(hub, "cannot read selected lock"))?;
             if existing == bytes {
+                sync_lock_directory(&destination, hub)?;
                 return Ok(Vec::new());
             }
         }
@@ -734,6 +735,14 @@ fn install_fresh_lock(
         }
         return Err(fresh_bootstrap_error(hub, "cannot install selected lock"));
     }
+    sync_lock_directory(&destination, hub)?;
+    Ok(vec![PathBuf::from(format!("bazel/cargo/{hub}.lock"))])
+}
+
+fn sync_lock_directory(
+    destination: &Path,
+    hub: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
     let directory = OpenOptions::new()
         .read(true)
         .open(destination.parent().expect("lock has a parent"))
@@ -741,7 +750,7 @@ fn install_fresh_lock(
     directory
         .sync_all()
         .map_err(|_| fresh_bootstrap_error(hub, "cannot sync lock directory"))?;
-    Ok(vec![PathBuf::from(format!("bazel/cargo/{hub}.lock"))])
+    Ok(())
 }
 
 fn reclaim_fresh_staging(
@@ -820,7 +829,7 @@ fn fresh_content_snapshot(
     Ok(snapshot)
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Eq, PartialEq)]
 enum FreshEntry {
     File { mode: u32, digest: [u8; 32] },
     Symlink(Vec<u8>),
