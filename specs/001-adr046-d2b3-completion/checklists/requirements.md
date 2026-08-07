@@ -97,8 +97,8 @@ clarifications.
 Ready for `/speckit-plan`.
 
 **Iteration 4 (2026-08-06, current artifact reconciliation)** - all 16 items pass under the
-completion-program scope reflected by the current specification. The current shape is **74
-functional requirements and 34 buildable success criteria**. The earlier 45/26 shape records
+completion-program scope reflected by the current specification. The current shape is **75
+functional requirements and 35 buildable success criteria**. The earlier 45/26 shape records
 the end of Iteration 3; it is not the current census.
 
 This is a technical completion and delivery contract, not a technology-agnostic greenfield
@@ -106,9 +106,9 @@ product brief. Exact APIs, paths, commands, protocol fields, timing bounds, cand
 bindings, and validation procedures are present where removing them would make an
 architecture, security, or fail-closed delivery obligation ambiguous or untestable. The
 content-quality checks above therefore reject accidental or gratuitous implementation detail,
-while accepting the deliberate technical contract detail required by the current 74 FRs and
-34 SCs. This reconciliation changes planning prose only and records no implementation
-completion.
+while accepting the deliberate technical contract detail required by the current 75 FRs and
+35 SCs. This reconciliation changes planning prose only, preserves all 605 task IDs, and
+records no implementation completion.
 
 ## Notes
 

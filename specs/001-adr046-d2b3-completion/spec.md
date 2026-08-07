@@ -1226,7 +1226,14 @@ carries the object verbatim rather than copying selected fields into the task ro
   after start and no later than stop. Every qualifying acceptance sample MUST be at or below
   2,000 ms. This outer budget neither replaces nor sums the tighter FR-030 component budgets:
   every applicable p95 component budget and this end-to-end ceiling MUST pass independently,
-  and passing either one cannot excuse failure of the other.
+  and passing either one cannot excuse failure of the other. T604 owns collection of this
+  measurement without taking implementation ownership: its host-acceptance leg records the
+  monotonic start event, both stop events and the later selected stop, the elapsed sample, and
+  the qualifying production progress event. T600 carries the exact-candidate result only in
+  `operator-nix-activation-cleanup`; T602 and T219 revalidate its candidate/tree binding and
+  every measurement field before close. A missing, malformed, stale, wrong-candidate,
+  progress-free, or over-2,000 ms sample fails SC-002 and blocks evidence import, panel request,
+  seal, merge eligibility, and merge.
 - **SC-003**: Every operator-facing capability whose migration disposition promises a
   successor is obtainable after the program, expressed as declared resources rather than
   framework-internal switches. Zero capabilities disappear silently: any deliberate

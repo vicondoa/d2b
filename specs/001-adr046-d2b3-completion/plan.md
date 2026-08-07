@@ -96,6 +96,19 @@ and watch/read-model projection. Nix evaluation/build and pre-intent profile sta
 outside the clock. Every applicable component p95 and every qualifying SC-002 sample must pass
 independently.
 
+T604 owns SC-002 measurement collection in its Type-10 acceptance leg without claiming
+implementation of the measured production path. Using one monotonic clock, it records the
+durable transition-intent commit as start; the real-owned-effect and production
+watch/read-model `Ready` events as the two stop inputs; the later input as stop; the elapsed
+sample; and at least one production progress event strictly after start and no later than
+stop. T600 imports the exact-F result only in `operator-nix-activation-cleanup`; T602 and T219
+revalidate F/tree binding, all clock/event/sample fields, progress ordering, and the <=2,000
+ms assertion before panel request, seal, merge eligibility, and merge. Missing, malformed,
+stale, wrong-candidate, progress-free, or over-threshold evidence blocks the close. Remediation
+belongs to the existing production-path owner, must obey FR-030, and requires a successor
+candidate plus rerun of T600-T602; T604 may not weaken the threshold, add a sleep/timeout or
+exclusion, or claim the implementation.
+
 **Constraints**: Whole-process RSS <=24,576 KiB with **no baseline subtraction** - historical
 production fixtures passed at their recorded tips, but the completed production publication
 path remains unmeasured until T601 measures final candidate F frozen by T220; aggregate idle
@@ -881,7 +894,7 @@ second validator.
 | `effect-replay-cleanup` | T600 | `github-ci` | Every generation/effect-ledger crash window, replay/adoption, and stale/zero/wrong-UID/ambiguous cleanup refusal |
 | `audit-drain-replay` | T600 | `github-ci` | Transactional authoritative rows; fd-anchored file/directory-durable export and restart replay; digest-plus-ordinal deduplication; durable operation inspection; replay-binding denials; fixed-digest/record limits; valid-present/absent/malformed trace behavior with typed correlation and no fabrication/relabel; typed `StoreSyncRequest`/`StoreSyncResponse` producers, consumers, schema and snapshots; fixed redacted `Debug` for every migrated producer, both StoreSync wire DTOs, broker-drain DTO, SegmentWriter/sink/export/directory/opaque-handle owner; post-export journal retention and prune health; and raw identifier/trace/path/handle-canary absence |
 | `system-core-handler-contract` | T600 | `github-ci` | T605 enum/list/API/reference/schema proof, T595 emission, T599 consumer agreement, exact live handler readiness, non-substitution, and multi-Zone isolation |
-| `operator-nix-activation-cleanup` | T600 | `local-host` | T604 exact 4/2 top-level audit carrier, audit-only generation identity change, empty ZoneSpec/no emitted Zone resource, and old/mixed/future refusals; Type-1 required/grammar/2048-byte/selector matrix with current nix-unit pin; explicit target-installable bootstrap from installed protocol-4/no-handoff-op 3/1; sole deployment-entrypoint stock profile/service mutation; target broker-before-daemon activation; exact protocol-5 Hello bound to broker/daemon generations and catalogue; daemon-only broker authorization and all caller denials; broker-only d2b pointer/reference publish/repair with fixed-digest audit and prior bytes-or-absence rollback; generated wire/privilege schemas/catalogues/parity/drift/lockfile proof; every profile, broker, daemon, pointer, reference, and readiness crash boundary; no unaudited or direct bypass mutation; closed identifier-free runtime action; explicit-bootstrap and stable-reference documentation commands; initial, identical, declaration, and removal deployments; exact Provider installs/configs and positive owned effects/readiness for `Volume/acceptance-state`, `Network/acceptance-net`, and `Device/acceptance-tpm`; exact Device swtpm/flush cleanup, unresolvable Endpoint, finalizer clearance, and same-identity TPM state-Volume preservation; ready, identity-stable, unrecreated acceptance Volume/Network and unrelated resources; explicit Guest deferral to Wave 6 `Provider/runtime-cloud-hypervisor` with no Wave 5 Guest-success claim; candidate-bound FR-075 public lifecycle continuity; and nonempty host output enumerating and building both `vmChecks.x86_64-linux.resource-operator-activation` and `vmChecks.x86_64-linux.daemon-restart-vm-survival` without skip |
+| `operator-nix-activation-cleanup` | T600 | `local-host` | T604 exact 4/2 top-level audit carrier, audit-only generation identity change, empty ZoneSpec/no emitted Zone resource, and old/mixed/future refusals; Type-1 required/grammar/2048-byte/selector matrix with current nix-unit pin; explicit target-installable bootstrap from installed protocol-4/no-handoff-op 3/1; sole deployment-entrypoint stock profile/service mutation; target broker-before-daemon activation; exact protocol-5 Hello bound to broker/daemon generations and catalogue; daemon-only broker authorization and all caller denials; broker-only d2b pointer/reference publish/repair with fixed-digest audit and prior bytes-or-absence rollback; generated wire/privilege schemas/catalogues/parity/drift/lockfile proof; every profile, broker, daemon, pointer, reference, and readiness crash boundary; no unaudited or direct bypass mutation; closed identifier-free runtime action; explicit-bootstrap and stable-reference documentation commands; initial, identical, declaration, and removal deployments; SC-002's monotonic transition-intent start, real-effect and production-projection stop inputs, later selected stop, elapsed sample, strictly ordered production progress event, and <=2,000 ms assertion; exact Provider installs/configs and positive owned effects/readiness for `Volume/acceptance-state`, `Network/acceptance-net`, and `Device/acceptance-tpm`; exact Device swtpm/flush cleanup, unresolvable Endpoint, finalizer clearance, and same-identity TPM state-Volume preservation; ready, identity-stable, unrecreated acceptance Volume/Network and unrelated resources; explicit Guest deferral to Wave 6 `Provider/runtime-cloud-hypervisor` with no Wave 5 Guest-success claim; candidate-bound FR-075 public lifecycle continuity; and nonempty host output enumerating and building both `vmChecks.x86_64-linux.resource-operator-activation` and `vmChecks.x86_64-linux.daemon-restart-vm-survival` without skip |
 | `resource-plane-rss-owner-fanin` | T601 | `local-host` | Whole-process RSS at 10,000 resources/100 authenticated watches with no baseline subtraction and store, policy, ResourceService, controller endpoint/fan-in, and audit journal/export owner counts exactly one; the system-core registration/list belongs only to `system-core-handler-contract` |
 | `wave5-removal-proofs` | T601 | `github-ci` | Every manifest-label W5 removal predicate rerun against F |
 | `cli-reference-conformance` | T601 | `github-ci` | Emitted CLI/help/JSON/wire behavior; accepted Version 2 amendment and Version 1 migration guidance; exact ID, exits, mandatory envelope fields, DTO/schema, retained `op inspect --deadline`/`--no-deadline` plus mutual-exclusion/cancellation coverage, identifier-free static human guidance, closed JSON remediation actions, and all T599 reference comparisons |
@@ -918,6 +931,8 @@ may not use one free-form validation name to satisfy two rows. T600 and T601 the
   executable remediation; and
 - T604's exact-candidate operator activation-to-effect-and-cleanup result, including the
   emitted bundle identity, deployment-entrypoint-triggered production daemon entry point,
+  SC-002 monotonic start, both stop inputs, later selected stop, elapsed sample, qualifying
+  production progress event, and passing <=2,000 ms assertion,
   owned effect/readiness for `Volume/acceptance-state`, `Network/acceptance-net`, and
   `Device/acceptance-tpm`, exact swtpm/flush cleanup, unresolvable Endpoint, and preserved TPM state, and
   unchanged ready, identity-stable acceptance Volume/Network and unrelated resources. Guest
@@ -957,6 +972,12 @@ Same-ID audit retry never reapplies a mutation and replay-binding mismatches den
 state uses the exact `ResourceStatus` composite carried by the additive protobuf field; the
 system-core registration and both required handler records are healthy and unique; current
 removal proofs are true; and the RSS value is at or below 24,576 KiB.
+For SC-002, T602 and T219 must reopen that sole operator record and revalidate F and F's tree,
+the monotonic transition-intent start, both stop inputs, the later selected stop, a nonempty
+elapsed sample at or below 2,000 ms, and at least one production progress event strictly
+after start and no later than stop. A missing or malformed field, wrong ordering, stale or
+wrong-candidate binding, absent progress event, or threshold failure is a false conjunct and
+blocks close rather than becoming advisory evidence.
 
 This amendment changes the reviewed Wave 5 plan boundary. The first eligible action is the
 pre-T603 read-only analysis at A/P0, followed by a unanimous plan panel at A/P0. That pair
