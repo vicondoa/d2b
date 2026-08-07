@@ -52,17 +52,19 @@ artifact and requires a clean `git diff`, fail-closed.
   `d2bHostGenerationDeploy` entrypoint with an explicit
   `<flake-ref>#<configuration-name>`; the first 3/1-to-4/2 migration never reads a file that
   4/2 has not published. The entrypoint builds and verifies the complete target closure,
-  stages one immutable transition identity, and is the sole owner of stock NixOS system
-  profile publication, activation, and rollback. Broker exclusivity is deliberately narrower:
-  the broker alone publishes the d2b bundle-generation pointer and stable rebuild reference,
-  and the daemon and Nix activation code cannot write either.
+  stages one immutable transition identity, and submits only an opaque request. It cannot
+  publish a profile, control a service, mutate 3/1 bootstrap state, or initiate rollback.
+  Authorized typed normal or target-closure bootstrap broker code exclusively owns stock
+  profile publication, broker/daemon service transition, 3/1 bootstrap, d2b pointer/reference
+  publication and repair, stock rollback, and source-service restoration.
 - The stock activation orders the target `d2b-priv-broker.service` before target `d2bd.service`.
-  The broker verifies the staged source/target system, broker, daemon, protocol, bundle,
-  pointer, and reference digests, publishes the pointer and reference with file and directory
-  durability, and audits adoption before the target daemon may become ready. The daemon must
-  complete Hello negotiation for the exact target broker generation and protocol. A failed
-  build leaves 3/1 active; a later failure restores the prior pointer and prior stable-reference
-  bytes or verified absence before the deployment entrypoint performs stock rollback.
+  The broker verifies and audits the staged source/target identity. The target daemon starts
+  and completes Hello for the exact target broker generation and protocol while unready, then
+  its broker-derived principal requests publication. The broker publishes the pointer and
+  reference with file and directory durability before daemon ingestion/readiness. A failed
+  build leaves 3/1 active; a later failure is reopened by existing daemon
+  startup/reconciliation, which requests broker restoration of the prior pointer and stable
+  reference bytes or verified absence before broker-owned stock rollback.
   Rollback therefore cannot leave a 4/2 reference on a restored 3/1 host.
 - Nix activation stages immutable input only. Direct activation or daemon creation, repair,
   replacement, or removal of the stable reference fails policy tests. The broker uses
@@ -70,11 +72,11 @@ artifact and requires a clean `git diff`, fail-closed.
   file and parent-directory sync, fixed-digest audit fields, and the same operation for repair.
 - Runtime version refusal is identifier-free and carries only closed action
   `rebuild-host-generation`; it contains no command or argv. Reference documentation gives
-  two paths: an explicit target-closure bootstrap command for a 3/1 host where the stable
-  reference is absent, and the installed `d2b-host-generation-deploy --from-reference`
-  command only after broker publication. Neither path invokes raw `nixos-rebuild` directly or
-  asks an operator to edit generated state. The value and stable path stay out of runtime
-  diagnostics.
+  parameterized paths: a validated target-closure bootstrap for a 3/1 host where the stable
+  reference is absent, the installed `d2b-host-generation-deploy --from-reference` command
+  only after broker publication, and a validated prior-target rollback. No path contains a
+  fixed illustrative target, invokes raw `nixos-rebuild` directly, or asks an operator to edit
+  generated state. The value and stable path stay out of runtime diagnostics.
 
 ## Acceptance
 
@@ -82,12 +84,15 @@ artifact and requires a clean `git diff`, fail-closed.
 `git status`; 4/2 passes while 3/1, mixed, 5/2, 4/3, and 5/3 fail at Rust, Nix, and daemon
 boundaries. Type-1 Nix evaluation pins the rebuild-reference grammar and bounds. Type-10
 coverage starts with an installed 3/1 broker lacking the v5 handoff operation, executes the
-explicit target-closure entrypoint, proves broker-before-daemon activation and exact Hello
-generation/protocol negotiation, then injects failure and crash points through publication,
-reference repair, readiness, and stock rollback. It proves prior reference bytes or absence,
-3/1 artifacts, and source service generations are restored together. Host recovery coverage
-also executes the post-publication stable-reference command, rejects direct daemon/Nix
-mutation plus missing or malformed values, and proves no sensitive reference value enters
-diagnostics. The nonempty structural/API guard and poison fixture reject a second bundle
+parameterized target-closure entrypoint, proves it only builds/stages/submits, proves
+broker-before-daemon activation, Hello while unready, authenticated publication request, and
+durable publication before ingestion/readiness, then injects failure and crash points through
+profile/service/bootstrap/publication/reference repair/readiness/rollback. It kills the
+entrypoint and proves existing daemon reconciliation autonomously resumes. Prior reference
+bytes or absence, 3/1 artifacts, and source service generations are restored together with
+immutable broker audit. Host recovery also executes the post-publication stable-reference and
+parameterized prior-target rollback commands, rejects direct entrypoint/daemon/Nix mutation
+plus missing or malformed values, and proves no sensitive reference value enters diagnostics.
+The nonempty structural/API guard and poison fixture reject a second bundle
 envelope or alias, version authority, hash implementation/entry point, or re-export through
 the existing policy and fixture-contract gates.

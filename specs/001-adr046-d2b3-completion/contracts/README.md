@@ -204,7 +204,8 @@ merge-target registration, merge eligibility, and merge.
     (FR-070).
 11. **Amended-plan resume is receipt-bound.** T603 is the sole direct prerequisite of T589
     but pre-validator analysis and plan panel at A/P0 authorize only its two validator source
-    paths. Validator-only commit V becomes B, P remains byte-identical to P0, and analysis
+    paths plus `changelog.d/delivery-resume-reconciliation.md`. Validator-and-fragment commit
+    V becomes B, P remains byte-identical to P0, and analysis
     plus the plan panel rerun at B/P before T603 writes immutable authorization R using
     repository identity plus a relative feature path. If all rows and post-validator
     analysis/panel identities pass, only the validator-derived P-to-Q `/d2b-spec-edit` batch
@@ -246,3 +247,13 @@ merge-target registration, merge eligibility, and merge.
     tree-preserving merge. F cannot change or receive a second request. Nonunanimity retains F
     as failed and routes scoped fixes through a fully revalidated successor and
     delta/full-context follow-up panel before that candidate's one request.
+15. **SC-002 evidence is typed and census-closed.** Only
+    `operator-nix-activation-cleanup` carries
+    `EvidencePayload::Sc002ActivationLiveV1`. Its version-1, 16,384-byte-bounded,
+    fixed-redacted payload contains one common monotonic start and exactly one sample for each
+    of `Volume/acceptance-state`, `Network/acceptance-net`, and
+    `Device/acceptance-tpm`. Effect, production Ready, selected-stop, and bounded progress
+    observations repeat the sample identity. T589's one validator runs at import, durable
+    reopen, panel-request, seal, and merge-eligibility and rejects every missing, malformed,
+    misordered, stale, progress-free, over-budget, missing-sample, duplicate-sample,
+    mixed-identity, or unrelated-sample case.

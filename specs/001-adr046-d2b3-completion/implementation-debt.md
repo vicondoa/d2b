@@ -2293,5 +2293,6 @@ and panel evidence.
 
 CHK054 is checked only as a specification-quality resolution. Implementation remains
 unchecked. Pre-validator analysis and plan signoff at A/P0 authorize only T603's validator
-paths. After validator-only V becomes B, analysis and the plan panel rerun at B/P; those
+paths plus `changelog.d/delivery-resume-reconciliation.md`. After validator-and-fragment V
+becomes B, analysis and the plan panel rerun at B/P; those
 post-validator receipts and T603's exact T073-T218 reconciliation still gate resume.

@@ -197,3 +197,48 @@ Owning spec: `ADR-046-validation-and-delivery`.
 | Generated artifact matches source | FR-031 | `make test-drift`, fail-closed |
 | Capability with promised successor reaches parity | FR-041 | per-path removal proof + parity check |
 | Capability without successor is listed and justified | FR-042 | explicit retirement list + release notes |
+
+---
+
+## 9. Typed SC-002 delivery payload
+
+`EvidenceRecord.payload` is a closed enum. Wave 5 adds exactly
+`EvidencePayload::Sc002ActivationLiveV1` for
+`validation = "operator-nix-activation-cleanup"`; that validation requires this payload and
+no other validation may carry it.
+
+The serialized object rejects unknown fields and has this closed shape:
+
+| Field | Type and bound |
+| --- | --- |
+| `schemaVersion` | integer exactly `1` |
+| `kind` | string exactly `sc002-activation-live` |
+| `clock` | string exactly `CLOCK_MONOTONIC` |
+| `startTickNs` | unsigned 64-bit monotonic tick |
+| `samples` | exactly three `Sc002ResourceSampleV1` values in canonical Volume, Network, Device order |
+
+Each sample contains `resourceIdentity`, `effect`, `ready`, `selectedStop`, `elapsedNs`, and
+`progress`. `resourceIdentity` is one closed enum value:
+`Volume/acceptance-state`, `Network/acceptance-net`, or `Device/acceptance-tpm`. `effect`,
+`ready`, and `selectedStop` each repeat that identity and carry an unsigned 64-bit
+`tickNs`; `selectedStop` also carries the closed source enum `effect` or `ready`.
+`progress` contains 1-32 observations, each repeating the sample identity, carrying a
+monotonic tick, and using only the closed kind enum `ingestion`, `commit`, `dispatch`,
+`effect`, `status`, or `projection`.
+
+The encoded payload is at most 16,384 bytes. The validator requires exactly one sample for
+each closed identity, every repeated identity to match its sample key, effect and Ready ticks
+not earlier than start, selected stop to equal the later effect/Ready tick and its source
+(`ready` wins an exact tie), `elapsedNs` to equal the checked stop-minus-start difference,
+elapsed to be at most 2,000,000,000 ns, and every progress tick to fall in `(start, stop]`.
+The outer `EvidenceRecord` supplies candidate, commit, and tree binding; reopening against
+another binding is stale. Payload and validation-error `Debug` output is fixed and redacted:
+it exposes only type/version, sample count, and pass/refuse class, never ticks, identities,
+host data, paths, commands, argv, or free-form text.
+
+T589 owns the type and one validator invoked unchanged at evidence import, durable reopen,
+panel-request, seal, and merge-eligibility. The negative census is closed: missing payload,
+unknown/malformed version, kind, field, enum, or size; missing, duplicate, mixed, or unrelated
+resource samples; effect/Ready/progress identity mismatch; arithmetic overflow or event
+misordering; stale binding; zero progress; more than 32 progress observations; and any
+over-budget sample all refuse.

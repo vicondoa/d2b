@@ -819,8 +819,9 @@ task total is 605.
 The completion boundary is:
 
 - registrar-consumed, pidfd-bound authenticated ComponentSession and authoritative subject,
-  using the locked reviewed vendored `d2b-peer-pidfd` 0.1.0 prerequisite, with fresh restart
-  pidfd and PID-reuse/mismatch/`ESRCH`/ambiguity denials;
+  using T592's typed `OpenPeerPidfdFromAcceptedSocket` broker operation and the approved
+  broker `sys.rs` FFI quarantine, with fresh restart pidfd and
+  PID-reuse/mismatch/`ESRCH`/ambiguity denials;
 - matching nonzero Zone policy revision under `ZoneResourceRuntime`, with initial/restart
   installation through one private-issuer, compiler/API-sealed, non-fabricable one-shot
   `PolicyBootstrapRead` limited to exact-revision policy envelopes and every later policy
@@ -869,7 +870,8 @@ The completion boundary is:
   Guest emission, status, or refusal can satisfy this Wave 5 criterion; refusals remain
   separate negative cases;
 - pre-T603 analysis and unanimous plan panel at clean A/P0 authorizing only T603's two
-  validator source paths; validator-only commit V with sole parent A; B exactly V and P
+  validator source paths plus T603's unique changelog fragment; validator-and-fragment commit
+  V with sole parent A; B exactly V and P
   byte-identical to P0; rerun analysis over A..B plus the feature artifacts and a rerun plan
   panel bound to B/P; then T603's immutable B/P authorization for every T073-T218 obligation,
   repository identity and relative feature path, validator-derived P-to-Q checkbox edit,
@@ -1002,12 +1004,14 @@ Run this against `tasks.md` before implementation starts.
       activation coverage; and T220 convergence/freeze plus exact-candidate evidence before
       T219's binding close. T591 and T592 deliberately overlap
       `packages/d2b-resource-store-redb/src/transaction.rs`, so T592 starts only after T591.
-      T592 and T593 deliberately serialize `packages/Cargo.lock`, so T593 starts only after
-      T592. The six implementation tasks are not all file-disjoint. This is permitted because
+      T593 starts only after T592 because it consumes T592's frozen broker op and approved
+      FFI quarantine; it does not own `packages/Cargo.lock`. The six implementation tasks are
+      not all file-disjoint. This is permitted because
       every shared writer and strict dependency edge is explicit; no two owners write a
       contended file concurrently.
 - [x] T603 is the sole direct prerequisite of T589; pre-T603 A/P0 analysis and panel authorize
-      only validator implementation, validator-only V becomes B, post-T603 analysis and panel
+      only validator implementation plus T603's unique fragment, validator-and-fragment V
+      becomes B, post-T603 analysis and panel
       rerun at B/P, and only those post-validator receipts authorize immutable
       repository-relative B/P reconciliation. T603 accounts for all T073-T218 obligations
       without checking them from code presence, authorizes only the validator-derived P-to-Q
@@ -1071,7 +1075,7 @@ jq -r --arg p routing '.items[] | select(.workItemId | startswith("ADR046-\($p)-
 | FR-056 - FR-059 | Standing Gate 0, entry/exit distinction after the external constitution prerequisite, historical-record scope, unordered contended-file prep or explicitly ordered serial ownership | `validation-and-delivery` plus program process | `delivery` |
 | FR-060 | Removal proof follows the wave that removes the path | `current-code-migration-map`, `validation-and-delivery` | `reuse`, `streamline`, `delivery` |
 | FR-061 - FR-065 | Contract publication versus artifact release; companion classification, membership, and verification | **Locally added** - companion clarification family | none |
-| FR-066 - FR-072 | Authenticated production publication through the locked reviewed `d2b-peer-pidfd` 0.1.0 prerequisite, one-shot policy bootstrap then authenticated policy access, controller ledger, exact system-core Provider readiness, committed-pending-audit `ResourceStatus` composite, restart/Zone isolation, exact Provider/config/effect/readiness and Device cleanup for `Volume/acceptance-state`, `Network/acceptance-net`, and `Device/acceptance-tpm` with Network implementation retained by Wave 4, and Guest deferred specifically to Wave 6 `Provider/runtime-cloud-hypervisor` T384/T479/T480 exact-F6 acceptance | **Locally added Wave 5 partial production-plane checkpoint assignment**, constrained by `componentsession-and-bus`, `resource-api-and-authorization`, `resource-store-redb`, `resource-reconciliation`, `core-controllers`, `resources-volume`, `resources-network`, `resources-device`, `provider-volume-local`, `provider-network-local`, `provider-device-tpm`, `provider-system-core`, `provider-runtime-cloud-hypervisor`, `telemetry-audit-and-support`, ADR 0034 | `session`, `bus`, `api`, `store`, `reconcile`, `core`, `volume`, `network`, `device`, `volume-local`, `network-local`, `device-tpm`, `system-core`, `ch`, `audit` plus T589-T605 and T479-T480 |
+| FR-066 - FR-072 | Authenticated production publication through the typed accepted-socket broker pidfd operation and approved broker FFI quarantine, one-shot policy bootstrap then authenticated policy access, controller ledger, exact system-core Provider readiness, committed-pending-audit `ResourceStatus` composite, broker-only audited host-generation mutation with daemon-owned crash recovery, typed closed-census SC-002 evidence, restart/Zone isolation, exact Provider/config/effect/readiness and Device cleanup for `Volume/acceptance-state`, `Network/acceptance-net`, and `Device/acceptance-tpm` with Network implementation retained by Wave 4, and Guest deferred specifically to Wave 6 `Provider/runtime-cloud-hypervisor` T384/T479/T480 exact-F6 acceptance | **Locally added Wave 5 partial production-plane checkpoint assignment**, constrained by `componentsession-and-bus`, `resource-api-and-authorization`, `resource-store-redb`, `resource-reconciliation`, `core-controllers`, `resources-volume`, `resources-network`, `resources-device`, `provider-volume-local`, `provider-network-local`, `provider-device-tpm`, `provider-system-core`, `provider-runtime-cloud-hypervisor`, `telemetry-audit-and-support`, ADR 0034 | `session`, `bus`, `api`, `store`, `reconcile`, `core`, `volume`, `network`, `device`, `volume-local`, `network-local`, `device-tpm`, `system-core`, `ch`, `audit` plus T589-T605 and T479-T480 |
 | FR-073 | RBAC policy DTOs and interpretation stay outside store/redb | `decision-register` D106, `resource-api-and-authorization`, ADR 0049 | `api`, `store` plus T591 |
 | FR-074 | CLI/reference promises match emitted behavior | `cli-and-operations`, `validation-and-delivery` | `cli`, `delivery` plus T599 |
 | FR-075 | Exact-candidate pre-ADR-046 operator lifecycle continuity through W2-W6 | **Locally promoted from the former assumption**, constrained by ADR 0015, `validation-and-delivery`, and the committed daemon restart survival case | T028/T029, T035/T036, T070/T071, T220/T604/T600/T602/T219, T479/T480 |
@@ -1087,7 +1091,7 @@ content. The original clarification family and the later approved additions are:
 | FR-043 | Clarification: qualified recovery-point attestation required | Tightens `reset-and-cutover`. The owning spec permits proceeding past the rollback boundary without attestation; this program does not. A qualifying point is an externally verified full-host snapshot or backup covering boot/system state, the active generation, the exact preview inventory, and preserved identity state for the same daily-driver host. Its closed version 1 record binds F7 candidate/commit/tree, preview and host digests, exact qualification fields, ordered timestamps, 86,400-second freshness, retention and expiration. T580 owns import through one digest-bound `EvidenceRecord`; T555/T556 refuse every missing, extra, duplicate, malformed, partial, failed, stale, expired, wrong-host, wrong-candidate, wrong-commit, wrong-tree, wrong-preview, or unresolvable record. External snapshot/backup creation and restore remain operator-owned and unimplemented by this feature. |
 | FR-046 | Applies the repository's existing-code-is-canon rule to spec-versus-manifest drift | Governs the recorded W2 destination drift. |
 | FR-061 - FR-065 | Companion contract/artifact, classification, membership, and verification clarifications | Makes the locally added companion release blocker mechanically decidable. |
-| FR-066 - FR-072, FR-074 | Operator-approved Wave 5 production-completion amendment plus analysis remediation | Adds sixteen completion/evidence tasks including T604 and T605 plus T603; requires FR-036's external constitution amendment before any authorization, then pre-validator A/P0 gates, validator-only V/B, post-validator B/P gates, the sole editor checkbox transition and progress receipt; pins T593's reviewed `d2b-peer-pidfd` 0.1.0 prerequisite; narrows T604 positive effects to the exact `Volume/acceptance-state`, `Network/acceptance-net`, and `Device/acceptance-tpm` fixture without moving Network implementation from Wave 4; defers Guest specifically to T384's `Provider/runtime-cloud-hypervisor` family and T479/T480 exact-F6 acceptance; assigns downstream contract reconciliation to T595/T599/T220; freezes F at T220; closes T600/T601 evidence to eight identifiers; blocks T219 on that exact candidate; and does not change the 545-item manifest or 605-task count. |
+| FR-066 - FR-072, FR-074 | Operator-approved Wave 5 production-completion amendment plus analysis remediation | Adds sixteen completion/evidence tasks including T604 and T605 plus T603; requires FR-036's external constitution amendment before any authorization, then pre-validator A/P0 gates, validator-and-fragment V/B, post-validator B/P gates, the sole editor checkbox transition and progress receipt; assigns T592 the typed accepted-socket pidfd broker op and approved FFI quarantine; limits the deployment entrypoint to build/stage/opaque request while broker/bootstrap-broker owns audited mutation and daemon reconciliation owns crash recovery; requires a bounded typed SC-002 payload with the exact three-resource census; narrows T604 positive effects to the exact `Volume/acceptance-state`, `Network/acceptance-net`, and `Device/acceptance-tpm` fixture without moving Network implementation from Wave 4; defers Guest specifically to T384's `Provider/runtime-cloud-hypervisor` family and T479/T480 exact-F6 acceptance; assigns downstream contract reconciliation to T595/T599/T220; freezes F at T220; closes T600/T601 evidence to eight identifiers; blocks T219 on that exact candidate; and does not change the 545-item manifest or 605-task count. |
 | FR-075 | Analysis finding promoted the former W2-W6 host-continuity assumption | Makes the existing daemon restart VM survival check exact-candidate close evidence at W2-W6. It adds no task and no W5 evidence identifier. |
 
 A reviewer checking upstream fidelity should expect these rows to have no one-to-one

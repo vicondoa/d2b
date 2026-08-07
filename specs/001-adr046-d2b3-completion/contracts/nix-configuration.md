@@ -28,8 +28,8 @@ controller-owned effect, and declared-resource removal cleanup.
 | NIX-5 | Extend the `eval-*` flake checks with Zone and resource examples | FR-032 | W5 |
 | NIX-6 | Prove the exact-candidate positive operator path from a Nix declaration of the exact spec-pinned `Volume/acceptance-state`, `Network/acceptance-net`, and `Device/acceptance-tpm` Provider/config fixture through the emitted bundle and automatic startup/declaration/removal ingestion to durable reconciliation and each resource's real owned effect/readiness, then state-preserving Device cleanup with the ready, identity-stable, unrecreated acceptance Volume/Network and unrelated resources intact; refusal cases are separate. The acceptance set does not move Network implementation from Wave 4. Guest runtime-effect acceptance is deferred specifically to Wave 6 `Provider/runtime-cloud-hypervisor` T384/T479/T480, and Guest emission, status, or refusal cannot satisfy this partial US1 production-plane checkpoint | FR-001, FR-005, FR-072, FR-075, SC-034, SC-035 | W5 |
 | NIX-7 | The one carrier is compiler-only `d2b.zones.<zone>.audit`, emitted as the required top-level `audit` object in that Zone's `resource-bundle.json`, outside every ResourceSpec and the runtime-created empty `Zone.spec`. It carries exactly `retentionDays` (default 30, range 1-3650), `maxRecordsPerSegment` (default 65536, range 1-1000000), and `maxSegmentBytes` (default 67108864, range 1048576-1073741824). This breaking bundle-header change moves the accepted pair from `schemaVersion: 3` / `bundleVersion: 1` to `schemaVersion: 4` / `bundleVersion: 2`; v4 `contentHash` covers the canonical `{audit,resources}` object so an audit-only change creates a new generation identity. T592 owns the typed option, active crate-root `ZoneBundle`, retirement of the duplicate full envelope, compiler entry point and CLI tests, schema generator/output, digest reference, and focused tests; T595 wires the emitter and daemon; T220 coordinates generated artifacts, references, contract tests, and changelog treatment | FR-070, SC-032 | W5 |
-| NIX-8 | Upgrade an installed 3/1 host through the target closure's `system.build.d2bHostGenerationDeploy` entrypoint. The first invocation is built from an explicit target installable and does not read `/etc/d2b/host-generation-rebuild-ref`. It builds and verifies the complete 4/2 closure, stages one durable transition identity, probes the source broker, and selects the closed v4-bootstrap path when the installed broker lacks protocol 5 and `ApplyHostGenerationHandoff`. System-profile publication plus NixOS activation/rollback remain owned by this one deployment entrypoint using the stock NixOS machinery; the plan does not claim that the old broker can perform a new operation. Target activation starts the target broker before the target daemon. The broker alone publishes the d2b bundle pointer and stable reference from immutable target inputs, and the daemon becomes ready only after Hello binds the exact target broker/daemon generations, protocol 5, capability digest, pointer, bundle set, and reference digest. On failure, the target broker restores the prior pointer and prior reference bytes or absence before the entrypoint performs stock rollback. Every profile/service transition has a durable pre-mutation transition record and immutable broker adoption/outcome audit; Nix activation and `d2bd` have no direct d2b pointer/reference mutation path. Identical deployment and crash replay produce no duplicate ingestion or effect | FR-070, SC-032 | W5 |
-| NIX-9 | Declare required `d2b.site.hostGenerationRebuildRef` with no default. Its option type is `lib.types.strMatching "^[A-Za-z0-9+._~:/?@%=&,-]+#[A-Za-z0-9][A-Za-z0-9_-]{0,63}$"` plus an assertion that the UTF-8 encoding is at most 2048 bytes. The grammar is exactly `<flake-ref>#<configuration-name>`: one ASCII `#`; a nonempty ASCII flake ref using only the listed characters; and a 1-64 byte configuration name beginning with an alphanumeric and continuing with alphanumerics, `_`, or `-`. The option description states that it is an opaque rebuild locator, the example is `github:example/host-config?ref=v3#workstation`, and missing, empty, 2049-byte, multiline, control-bearing, whitespace-bearing, selector-free, extra-`#`, empty-selector, slash/dot-selector, or overlong-selector values fail evaluation. Nix places the exact validated bytes only in the immutable target closure. The broker publishes `/etc/d2b/host-generation-rebuild-ref` atomically as a regular `root:d2bd` `0640` file, audits only the fixed digest, repairs only through the same typed operation, and restores the prior bytes or absence on rollback. Runtime output never includes the value or stable path | FR-070, SC-032 | W5 |
+| NIX-8 | Upgrade an installed 3/1 host through the target closure's `system.build.d2bHostGenerationDeploy` entrypoint. The first invocation is built from a parameterized, validated target installable and does not read `/etc/d2b/host-generation-rebuild-ref`. The entrypoint may only build and verify the complete 4/2 closure, durably stage immutable transition bytes, probe capability, and submit one opaque intent. It cannot publish a profile, control a service, mutate 3/1 bootstrap state, or initiate rollback. An authorized protocol-5 broker, or the target closure's one-shot typed bootstrap-broker mode when the installed broker lacks the operation, performs every profile, service, bootstrap, publication, repair, and stock rollback mutation with immutable pre-mutation and outcome audit. Target broker activation precedes target daemon activation. The daemon completes exact-generation protocol-5 Hello while unready, its broker-derived principal sends the authenticated opaque publication request, the broker durably publishes matching d2b pointer/reference state, and only then may ingestion/readiness proceed. On failure, the existing daemon startup/reconciliation path autonomously reopens the durable handoff after entrypoint crash and requests broker rollback; prior pointer/reference bytes or absence are restored before typed stock rollback and source-service restoration. Identical deployment and crash replay produce no duplicate ingestion or effect, and no new unit exists | FR-070, SC-032 | W5 |
+| NIX-9 | Declare required `d2b.site.hostGenerationRebuildRef` with no default. Its option type is `lib.types.strMatching "^[A-Za-z0-9+._~:/?@%=&,-]+#[A-Za-z0-9][A-Za-z0-9_-]{0,63}$"` plus an assertion that the UTF-8 encoding is at most 2048 bytes. The grammar is exactly `<flake-ref>#<configuration-name>`: one ASCII `#`; a nonempty ASCII flake ref using only the listed characters; and a 1-64 byte configuration name beginning with an alphanumeric and continuing with alphanumerics, `_`, or `-`. The option description states that it is an opaque rebuild locator, provides no fixed target example, points to the parameterized validated quickstart, and makes missing, empty, 2049-byte, multiline, control-bearing, whitespace-bearing, selector-free, extra-`#`, empty-selector, slash/dot-selector, or overlong-selector values fail evaluation. Nix places the exact validated bytes only in the immutable target closure. The broker publishes `/etc/d2b/host-generation-rebuild-ref` atomically as a regular `root:d2bd` `0640` file, audits only the fixed digest, repairs only through the same typed operation, and restores the prior bytes or absence on rollback. Runtime output never includes the value or stable path | FR-070, SC-032 | W5 |
 
 ## Invariants
 
@@ -47,13 +47,15 @@ controller-owned effect, and declared-resource removal cleanup.
   publication.
 - Installed-host migration is whole-generation only. No activation may expose a 4/2 daemon
   to a partial or mixed bundle set, and no rollback may feed a 3/1 artifact to 4/2 code. The
-  deployment entrypoint is the sole stock NixOS profile/activation/rollback initiator; broker
-  ownership is limited to the d2b pointer, stable reference, their repair, and handoff audit.
-  Target broker activation precedes target daemon activation, and the daemon refuses
-  readiness until mandatory Hello negotiation matches the handoff's source/target broker and
-  daemon generation digests, selected protocol, operation catalogue digest, bundle-pointer
-  generation, and complete bundle set. `d2bd` and Nix activation have no direct d2b
-  pointer/reference mutation or independent unit-control path.
+  deployment entrypoint is build/stage/opaque-request-only. Authorized typed normal or
+  bootstrap broker code exclusively owns stock profile publication, broker/daemon service
+  transition, 3/1 bootstrap, d2b pointer/reference publication/repair, stock rollback, and
+  source-service restoration, with immutable pre-mutation and outcome audit. Target broker
+  activation precedes target daemon activation. The daemon completes mandatory Hello while
+  unready, then requests publication; the broker publishes durably before ingestion and
+  readiness. Existing daemon startup/reconciliation is the durable rollback-resume owner
+  after entrypoint crash. `d2bd` and Nix activation have no direct mutation or independent
+  unit-control path, and no fourth unit is introduced.
 - Runtime refusal errors, JSON, wire output, logs, and `Debug` contain no host, Zone,
   generation, path, command, argv, or shell fragment. They carry only the closed
   `rebuild-host-generation` action. Documentation separately gives the explicit target
@@ -67,12 +69,16 @@ controller-owned effect, and declared-resource removal cleanup.
   eval time when malformed.
 - T604 pins the declaration and removal generations at the fixture-backed contract layer,
   consumes those exact generations through the Type-3 production daemon startup/change
-  ingestion test, and exercises declaration and removal deployments through
+  ingestion test, and exercises declaration and removal deployments for exactly
+  `Volume/acceptance-state`, `Network/acceptance-net`, and `Device/acceptance-tpm` through
   `d2bHostGenerationDeploy`, without a manual daemon restart or private reload, through the
   real activation/effect/cleanup boundary in
   `tests/host-integration/resource-operator-activation.nix` through the public
-  `make test-host-integration` target. Every supported representative resource must reach its
-  owned effect and readiness in the positive leg. Direct ResourceService calls, status-only
+  `make test-host-integration` target. Each exact resource's observed effect and production
+  `Ready` projection must carry that same resource identity. Guest support objects remain
+  prerequisites only: Guest runtime-effect acceptance is deferred specifically to Wave 6
+  `Provider/runtime-cloud-hypervisor` T384/T479/T480 and cannot satisfy Wave 5. Direct
+  ResourceService calls, status-only
   effects, actionable refusals, a skipped lane, or empty check discovery are ineligible for
   that positive proof. Evidence must enumerate and successfully build the exact
   `vmChecks.x86_64-linux.resource-operator-activation` attr.
@@ -89,16 +95,22 @@ controller-owned effect, and declared-resource removal cleanup.
   post-export-only journal retention and degraded health on prune or file/directory-sync
   failure.
 - Host activation coverage starts from an installed 3/1 generation whose broker advertises
-  protocol 4 and lacks `ApplyHostGenerationHandoff`. It executes the documented explicit
-  target-closure entrypoint, verifies the closed bootstrap selection before profile mutation,
-  target broker activation before target daemon activation, mandatory protocol-5 Hello, and
-  atomic broker publication of the pointer and stable reference. It injects crashes before
+  protocol 4 and lacks `ApplyHostGenerationHandoff`. It executes the documented parameterized
+  target-closure entrypoint with validated flake/configuration inputs and rejects malformed,
+  mismatched, or nonexistent inputs before mutation. It verifies the entrypoint is
+  build/stage/request-only, the closed bootstrap-broker selection, broker-only audited
+  profile/service mutation, target broker activation before target daemon activation, daemon
+  Hello while unready, authenticated publication request, and atomic broker publication
+  before ingestion/readiness. It injects crashes before
   and after transition-intent durability, stock profile publication, broker service
   transition, reference temporary-file sync/rename/directory sync, pointer publication,
   daemon Hello/readiness, rollback intent, reference/pointer restoration, and stock rollback.
-  Every recovery path restores matching complete generations and the prior reference bytes or
-  verified absence, with one logical ingestion/effect and no unaudited profile/service or d2b
-  artifact transition. The same Type-10 test then executes the documented
+  Every recovery path, including one where the entrypoint is killed, is resumed by existing
+  daemon startup/reconciliation and restores matching complete generations and the prior
+  reference bytes or verified absence, with one logical ingestion/effect and no unaudited
+  profile/service/bootstrap/rollback or d2b artifact transition. The same Type-10 test then
+  executes the documented
   stable-reference-based entrypoint, rejects raw `nixos-rebuild` as the documented path,
-  rejects direct daemon/Nix reference mutation and caller-claimed handoff authority, and
-  proves malformed or absent values fail without rendering their contents.
+  executes the parameterized prior-target rollback procedure, rejects direct
+  entrypoint/daemon/Nix mutation and caller-claimed handoff authority, and proves malformed or
+  absent values fail without rendering their contents.

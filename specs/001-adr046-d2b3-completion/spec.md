@@ -109,7 +109,8 @@ prove generator output is byte-identical rather than hand-editing it. C1 is reso
 feature artifacts but is not implemented. The plan is eligible for read-only cross-artifact
 analysis at clean pre-validator base A and feature snapshot P0 and, if that has no HIGH or
 CRITICAL finding, a unanimous plan panel bound to A/P0. Those gates authorize only T603's
-validator implementation. T603 then lands validator-only commit V, freezes resume base B
+two validator source paths plus `changelog.d/delivery-resume-reconciliation.md`. T603 then
+lands validator-and-fragment commit V, freezes resume base B
 exactly at V, and MUST rerun analysis and the plan panel at B/P before it may create the
 reconciliation receipt or authorize any checkbox edit. T589 remains gated on those
 post-validator receipts and T603 progress reconciliation.
@@ -399,12 +400,16 @@ artifacts, complete Story 1, and exercise each desktop companion against it.
   private state and propagate that authoritative subject through every Resource API
   operation. Unix peer evidence MUST obtain the process descriptor directly from the accepted
   socket with `SO_PEERPIDFD`; opening a pidfd later from `SO_PEERCRED.pid` is forbidden.
-  Acquisition MUST use the vendored path dependency `d2b-peer-pidfd` version `0.1.0` at
-  `third_party/d2b-peer-pidfd`, whose public API accepts `BorrowedFd` and returns only
-  `OwnedFd`. The `nix` 0.31.3 `PeerPidfd` wrapper is ineligible because its
-  `MaybeUninit`/assert path does not meet the no-panic and returned-fd cleanup contract.
-  Missing, unreviewed, unlocked, or nonconforming dependency bytes MUST block admission
-  implementation; `d2b-session-unix` MUST NOT provide a local syscall fallback.
+  Acquisition MUST use a typed broker operation that receives only the accepted socket over
+  `SCM_RIGHTS` and returns only an `OwnedFd` pidfd with `FD_CLOEXEC` over `SCM_RIGHTS`; no
+  numeric PID, raw descriptor integer, or credential tuple is serializable. The sole raw
+  `getsockopt(SO_PEERPIDFD)` wrapper MUST live in the approved
+  `packages/d2b-priv-broker/src/sys.rs` FFI quarantine with narrow item-level unsafe
+  allowances and a `SAFETY:` justification on every unsafe block. It MUST validate exact
+  `optlen`, take ownership of every nonnegative returned fd before checking syscall outcome
+  or later invariants, and close it on every failure. The `nix` 0.31.3 `PeerPidfd`
+  `MaybeUninit`/assert wrapper, a new repository-authored FFI crate, and a
+  `d2b-session-unix` syscall fallback are ineligible.
   Credential, process-generation, cgroup, and liveness evidence MUST be verified against that
   exact `CLOEXEC` fd and consumed by one registrar-private issuer. Unavailable kernel support,
   numeric-PID reuse, dead-fd or evidence mismatch, or ambiguity denies admission. Public peer
@@ -506,6 +511,21 @@ artifacts, complete Story 1, and exercise each desktop companion against it.
   `ResourceUpdateStatus` does not acquire a phase or status-code member. An unavailable or
   disabled audit owner, missing authoritative row, incomplete export, dropped record, or
   unbound record MUST fail closed.
+  Installed-host generation handoff is subject to the same broker-only, fail-closed audit
+  posture. The target-closure deployment entrypoint MAY only build and verify the complete
+  closure, durably stage immutable transition bytes, and submit one opaque intent. It MUST
+  NOT publish a profile, control a service, perform 3/1 bootstrap mutation, initiate
+  rollback, or select a path, unit, generation, command, or argv. Every system-profile,
+  broker/daemon service, bootstrap, d2b-state publication/repair, stock rollback, and
+  source-service restoration mutation MUST run through the authorized typed normal broker or
+  target-closure one-shot bootstrap broker and MUST have immutable pre-mutation and outcome
+  audit. No bootstrap unit or fourth root-visible service may exist. The target broker starts
+  before the daemon; the daemon completes exact-generation protocol-5 Hello while unready;
+  its broker-derived principal sends the authenticated opaque publication request; the
+  broker durably publishes matching d2b state; then daemon ingestion and readiness may
+  proceed. The existing `d2bd.service` startup/reconciliation path is the durable owner that
+  reopens and resumes an interrupted rollback after entrypoint crash, without a supervising
+  unit.
 - **FR-071**: Persisted store, policy, active-configuration, and controller identities MUST
   reopen after their mutable revisions advance. Immutable store and Zone identity MAY be
   checked at open, but mutable revisions MUST be recovered from durable state rather than
@@ -556,8 +576,9 @@ artifacts, complete Story 1, and exercise each desktop companion against it.
   an integrator scope escalation, never a finding waiver. Before
   T603 implementation, clean base A and feature snapshot P0 MUST pass current cross-artifact
   analysis with no unresolved HIGH or CRITICAL finding and a unanimous plan panel that
-  authorizes only `packages/xtask/src/delivery/{mod.rs,resume.rs}`. T603 MUST land one
-  validator-only commit V with sole parent A and freeze resume base B exactly at V; feature
+  authorizes only `packages/xtask/src/delivery/{mod.rs,resume.rs}` plus
+  `changelog.d/delivery-resume-reconciliation.md`. T603 MUST land one
+  validator-and-fragment commit V with sole parent A and freeze resume base B exactly at V; feature
   snapshot P MUST be byte-identical to P0. Analysis over A..B plus the full feature artifacts
   and a plan panel bound to B/P MUST both rerun after V. Any finding or validator-code change
   invalidates B and both post-validator receipts. A source-only fix MUST create a new V/B and
@@ -612,11 +633,19 @@ artifacts, complete Story 1, and exercise each desktop companion against it.
   the candidate MUST enumerate and successfully build
   `vmChecks.x86_64-linux.daemon-restart-vm-survival` through the existing heavy-gated
   `make test-host-integration` target with no skip. The case MUST use the public `d2b vm`
-  surface to start the configured VM, observe ready status and guest reachability, restart
-  `d2bd.service`, prove the same runner PID/start-time identity was adopted and remained
-  reachable, and stop the VM. It MUST also retain exactly the three root-visible framework
-  units from ADR 0015. Missing, empty, skipped, stale, wrong-candidate, status-only, or
-  private-hook evidence blocks that wave's close. This requirement expires only at W7's
+  surface to start the configured VM, observe the explicit `Ready` state and guest
+  reachability, restart `d2bd.service`, prove the same runner PID/start-time identity was
+  adopted through a newly acquired pidfd and remained reachable, stop the VM, and observe the
+  explicit `Stopped` state. It MUST enumerate exactly `d2bd.service`,
+  `d2b-priv-broker.socket`, and `d2b-priv-broker.service`, with no additional root-visible
+  framework unit. PID reuse, pidfd/start-identity mismatch, and multiple-plausible-runner
+  cases MUST quarantine without adoption, cleanup, or signal. T028 owns the existing host VM
+  case and its sole Makefile recipe before W2 freezes; every later close reuses that
+  candidate-bound predicate. Passing evidence MUST name the enumerated and successfully built
+  attr, command success, and no `SKIP` result. Missing, empty, skipped, stale,
+  wrong-candidate, status-only, private-hook, incomplete unit enumeration, missing
+  Ready/Stopped, or non-fresh-pidfd evidence blocks that wave's close. This requirement
+  expires only at W7's
   explicit cutover; a fail-closed continuity gate is not permission to weaken any W2-W6
   security or delivery gate.
 
@@ -1227,13 +1256,22 @@ carries the object verbatim rather than copying selected fields into the task ro
   2,000 ms. This outer budget neither replaces nor sums the tighter FR-030 component budgets:
   every applicable p95 component budget and this end-to-end ceiling MUST pass independently,
   and passing either one cannot excuse failure of the other. T604 owns collection of this
-  measurement without taking implementation ownership: its host-acceptance leg records the
-  monotonic start event, both stop events and the later selected stop, the elapsed sample, and
-  the qualifying production progress event. T600 carries the exact-candidate result only in
-  `operator-nix-activation-cleanup`; T602 and T219 revalidate its candidate/tree binding and
-  every measurement field before close. A missing, malformed, stale, wrong-candidate,
-  progress-free, or over-2,000 ms sample fails SC-002 and blocks evidence import, panel request,
-  seal, merge eligibility, and merge.
+  measurement without taking implementation ownership. Its host-acceptance leg emits exactly
+  one `EvidencePayload::Sc002ActivationLiveV1` in
+  `operator-nix-activation-cleanup`: schema version 1, kind
+  `sc002-activation-live`, encoded size at most 16,384 bytes, one `CLOCK_MONOTONIC` start
+  tick, and exactly one sample keyed by each of `Volume/acceptance-state`,
+  `Network/acceptance-net`, and `Device/acceptance-tpm`. Every sample repeats that key on its
+  effect, production `Ready`, selected-stop, and 1-32 progress observations; selected stop is
+  the later effect/Ready tick; checked elapsed nanoseconds equal stop minus start and are at
+  most 2,000,000,000; and progress falls strictly after start and no later than stop. The
+  payload and its errors use fixed redacted `Debug` and contain no free-form strings, host
+  identity, path, command, argv, or log text. T589 owns one validator used unchanged at
+  import, durable reopen, panel-request, seal, and merge-eligibility. T600 carries the
+  exact-candidate result; T602 and T219 reopen it. Unknown fields/enums, missing/duplicate/
+  unrelated samples, mixed effect/Ready/progress identities, malformed or misordered ticks,
+  stale/wrong-candidate binding, progress-free evidence, or an over-budget sample fails
+  SC-002 and blocks evidence import, panel request, seal, merge eligibility, and merge.
 - **SC-003**: Every operator-facing capability whose migration disposition promises a
   successor is obtainable after the program, expressed as declared resources rather than
   framework-internal switches. Zero capabilities disappear silently: any deliberate
@@ -1265,10 +1303,10 @@ carries the object verbatim rather than copying selected fields into the task ro
   Unix admission obtains a live pidfd directly with `SO_PEERPIDFD` and verifies credentials,
   generation, cgroup, and liveness against that fd; restart obtains a new fd from the newly
   accepted socket, and unavailable support, numeric-only identity, PID reuse, dead fd,
-  mismatch, and ambiguity are denied. The locked vendored `d2b-peer-pidfd` 0.1.0 dependency
-  passes its exact-optlen, no-panic, returned-fd cleanup, and `OwnedFd` ownership tests; an
-  absent or unreviewed dependency and any local fallback fail the criterion. API-surface and
-  compile-fail seals expose no public
+  mismatch, and ambiguity are denied. The typed broker operation and approved `sys.rs` FFI
+  quarantine pass exact-optlen, no-panic, returned-fd cleanup, `FD_CLOEXEC`, ancillary-fd
+  count, and `OwnedFd` ownership tests. A new project FFI crate, `nix` wrapper, or local
+  session fallback fails the criterion. API-surface and compile-fail seals expose no public
   registrar issuer, peer credential/evidence accessor, or bootstrap-identity mint path.
 - **SC-031**: Crash injection at every boundary from generation commit through effect
   completion leaves zero lost effects and zero lost cleanup intents after restart. Every
@@ -1306,8 +1344,9 @@ carries the object verbatim rather than copying selected fields into the task ro
   matrix, every unrelated Zone is visited and remains operable, and every affected Zone
   reports a specific actionable refusal.
 - **SC-034**: Clean pre-validator A/P0 analysis and plan-panel receipts authorize only T603's
-  two validator source paths. Dedicated validator commit V has sole parent A and no other
-  repository changes; resume base B equals V and feature snapshot P equals P0. Analysis over
+  two validator source paths plus `changelog.d/delivery-resume-reconciliation.md`. Dedicated
+  validator-and-fragment commit V has sole parent A and no other repository changes; resume
+  base B equals V and feature snapshot P equals P0. Analysis over
   A..B plus the full feature artifacts and the plan panel are rerun and bound to B/P before
   T603 creates any authorization. A finding or later validator change invalidates B and both
   post-validator receipts. T603's immutable external authorization contains exactly the

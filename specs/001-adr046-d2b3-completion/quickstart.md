@@ -50,8 +50,9 @@ rebases onto the merged predecessor.
 T603 never infers task completion from code presence and never edits a feature artifact
 directly. First freeze clean pre-validator base A and feature snapshot P0, run
 `/speckit-analyze`, and obtain unanimous plan signoff at A/P0. That pair authorizes only
-`packages/xtask/src/delivery/{mod.rs,resume.rs}`. Land validator-only commit V with sole
-parent A, freeze B exactly at V, require P to remain byte-identical to P0, rerun analysis over
+`packages/xtask/src/delivery/{mod.rs,resume.rs}` plus
+`changelog.d/delivery-resume-reconciliation.md`. Land validator-and-fragment commit V with
+sole parent A, freeze B exactly at V, require P to remain byte-identical to P0, rerun analysis over
 A..B plus the feature artifacts, and rerun the plan panel at B/P. Any finding or later
 validator change invalidates B and requires both post-validator gates again.
 
@@ -269,27 +270,42 @@ skipped, status-only, fake-boundary, other-family, or refusal evidence leaves it
 Direct ResourceService calls, private reloads, and status-only effects do not satisfy T604.
 The host configuration must set `d2b.site.hostGenerationRebuildRef` to the exact
 `<flake-ref>#<configuration-name>` value. It is required, has no default, and is limited to
-2048 bytes; for example:
-
-```nix
-# Nix configuration
-d2b.site.hostGenerationRebuildRef =
-  "github:example/host-config?ref=v3#workstation";
-```
+2048 bytes. Use the real validated flake and configuration values below; this procedure has
+no fixed illustrative target.
 
 The first installed 3/1-to-4/2 migration cannot read the stable reference because only the
 target broker can publish it. Build and run the deployment entrypoint from the explicit target
 configuration instead:
 
 ```bash
-sudo nix run \
-  'github:example/host-config?ref=v3#nixosConfigurations.workstation.config.system.build.d2bHostGenerationDeploy'
+: "${D2B_HOST_FLAKE_REF:?set the target flake ref without a # selector}"
+: "${D2B_HOST_CONFIGURATION:?set the target nixosConfigurations name}"
+
+case "$D2B_HOST_FLAKE_REF" in
+  *'#'*|'') printf '%s\n' 'D2B_HOST_FLAKE_REF must be nonempty and contain no # selector' >&2; exit 2 ;;
+esac
+case "$D2B_HOST_CONFIGURATION" in
+  ''|*[!A-Za-z0-9_-]*|[!A-Za-z0-9]*) printf '%s\n' 'invalid D2B_HOST_CONFIGURATION' >&2; exit 2 ;;
+esac
+test "${#D2B_HOST_CONFIGURATION}" -le 64
+
+D2B_HOST_REBUILD_REF="${D2B_HOST_FLAKE_REF}#${D2B_HOST_CONFIGURATION}"
+D2B_HOST_INSTALLABLE="${D2B_HOST_FLAKE_REF}#nixosConfigurations.${D2B_HOST_CONFIGURATION}.config.system.build.d2bHostGenerationDeploy"
+
+test "$(nix eval --raw "${D2B_HOST_FLAKE_REF}#nixosConfigurations.${D2B_HOST_CONFIGURATION}.config.d2b.site.hostGenerationRebuildRef")" = \
+  "$D2B_HOST_REBUILD_REF"
+nix path-info "$D2B_HOST_INSTALLABLE"
+sudo nix run "$D2B_HOST_INSTALLABLE"
 ```
 
-That entrypoint stages the complete target closure, handles an installed protocol-4 broker
-that lacks the new handoff operation, and uses the stock NixOS profile/activation path. The
-target broker starts before the target daemon and publishes the d2b generation pointer plus
-`/etc/d2b/host-generation-rebuild-ref`; Nix activation does not create that file.
+That entrypoint only builds and verifies the target closure, durably stages immutable state,
+and submits one opaque intent. An authorized typed normal broker, or the target closure's
+one-shot bootstrap-broker mode when the installed protocol-4 broker lacks the operation,
+performs every profile, service, 3/1 bootstrap, publication, and rollback mutation with
+immutable audit. The target broker starts before the target daemon. The daemon completes
+Hello while unready, sends the authenticated publication request, and ingests only after
+broker-durable publication of the d2b generation pointer and
+`/etc/d2b/host-generation-rebuild-ref`.
 
 After the first successful publication, the installed entrypoint may use the stable reference:
 
@@ -313,8 +329,45 @@ remains Wave 4 implementation; Wave 5 accepts it through the production plane wi
 implementation ownership.
 
 If migration rolls back to a 3/1 generation that had no stable reference, verified absence is
-the correct restored state. Retry with the explicit target-configuration command above; do
-not create the file or copy the rolled-back target value into place.
+the correct restored state. The existing daemon startup/reconciliation path resumes rollback
+after an entrypoint crash; no entrypoint process or extra unit must remain alive. Verify the
+source state, then retry with the parameterized target command above; do not create the file
+or copy the rolled-back target value into place:
+
+```bash
+systemctl is-active d2bd.service d2b-priv-broker.socket
+systemctl list-units --all --plain --no-legend \
+  'd2bd.service' 'd2b-priv-broker.socket' 'd2b-priv-broker.service'
+d2b vm status acceptance-vm
+```
+
+To roll a successfully migrated host back to a prior validated configuration, set the prior
+values explicitly and run that target through the same broker-owned path:
+
+```bash
+: "${D2B_ROLLBACK_FLAKE_REF:?set the prior flake ref without a # selector}"
+: "${D2B_ROLLBACK_CONFIGURATION:?set the prior nixosConfigurations name}"
+
+case "$D2B_ROLLBACK_FLAKE_REF" in
+  *'#'*|'') printf '%s\n' 'D2B_ROLLBACK_FLAKE_REF must be nonempty and contain no # selector' >&2; exit 2 ;;
+esac
+case "$D2B_ROLLBACK_CONFIGURATION" in
+  ''|*[!A-Za-z0-9_-]*|[!A-Za-z0-9]*) printf '%s\n' 'invalid D2B_ROLLBACK_CONFIGURATION' >&2; exit 2 ;;
+esac
+test "${#D2B_ROLLBACK_CONFIGURATION}" -le 64
+
+D2B_ROLLBACK_REF="${D2B_ROLLBACK_FLAKE_REF}#${D2B_ROLLBACK_CONFIGURATION}"
+D2B_ROLLBACK_INSTALLABLE="${D2B_ROLLBACK_FLAKE_REF}#nixosConfigurations.${D2B_ROLLBACK_CONFIGURATION}.config.system.build.d2bHostGenerationDeploy"
+test "$(nix eval --raw "${D2B_ROLLBACK_FLAKE_REF}#nixosConfigurations.${D2B_ROLLBACK_CONFIGURATION}.config.d2b.site.hostGenerationRebuildRef")" = \
+  "$D2B_ROLLBACK_REF"
+nix path-info "$D2B_ROLLBACK_INSTALLABLE"
+sudo nix run "$D2B_ROLLBACK_INSTALLABLE"
+```
+
+The host-integration acceptance executes the parameterized migration and rollback procedures,
+rejects empty, malformed, mismatched, and nonexistent flake/configuration inputs before
+mutation, kills the entrypoint at every post-staging crash point, and requires autonomous
+daemon reconciliation to finish or roll back.
 
 ### Story 1 - retire and restart
 

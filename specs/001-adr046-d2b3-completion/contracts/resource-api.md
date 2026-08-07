@@ -42,14 +42,14 @@ Making this reachable is the core of User Story 1 and the precondition for SC-02
 | RA-4 | Deliver replay and live watch with one global bounded admission budget, typed backpressure, and deterministic slow-watcher eviction with cursor resume | FR-002 | W5 |
 | RA-5 | Enforce exact, subject-bound, revision-bound, Zone-checked routing on every operation | FR-009, SC-008 | W2 |
 | RA-6 | Audit every denial | FR-007 | W2-W5 |
-| RA-7 | Publish ResourceService only from a registrar-consumed authenticated ComponentSession, with the peer pidfd obtained directly from the accepted socket by `SO_PEERPIDFD` through the locked reviewed vendored `d2b-peer-pidfd` 0.1.0 prerequisite, credential/generation/cgroup/liveness verified against that fd, one private registrar issuer, no public evidence accessor or bootstrap mint, the registrar's authoritative subject propagated internally, and no request subject field; reject the `nix` 0.31.3 wrapper and any local fallback | FR-066, SC-030 | W5 |
+| RA-7 | Publish ResourceService only from a registrar-consumed authenticated ComponentSession, with the accepted socket transferred over `SCM_RIGHTS` to the typed broker `OpenPeerPidfdFromAcceptedSocket` operation and only an `OwnedFd` pidfd returned; keep raw `SO_PEERPIDFD` solely in the approved broker `sys.rs` FFI quarantine with narrow allowances and per-block `SAFETY:` comments; verify credential/generation/cgroup/liveness against that fd; retain one private registrar issuer, no public evidence accessor or bootstrap mint, authoritative subject propagation, and no request subject field; reject the `nix` wrapper, a new project FFI crate, numeric-PID lookup, and any local session fallback | FR-066, SC-030 | W5 |
 | RA-8 | Install and recover policy under `ZoneResourceRuntime`: consume one private-issuer, compiler/API-sealed, non-fabricable one-shot `PolicyBootstrapRead` for the first exact-revision envelope snapshot, then use authenticated Resource API reads/updates only; keep both stores policy-neutral | FR-067, FR-073 | W5 |
 | RA-9 | Register the production controller endpoint and admit its watch through ResourceService, ZoneBus, the production store, and controller fan-in | FR-068, FR-069 | W5 |
 | RA-10 | Persist every committed effect and cleanup intent before dispatch, replay/adopt it after restart, and complete cleanup only for the same UID and exact nonzero revision | FR-068, SC-031 | W5 |
 | RA-11 | Commit an immutable authoritative audit journal row transactionally with each mutation, export through a root-owned fd-anchored segment owner by typed fixed digest plus ordinal with file/directory durability, prune journal rows only after durable export plus bounded retention, represent export-pending `CommittedPendingAudit` on every mutation response including delete, expose a typed durable `InspectOperation` method, and require exact replay-binding before same-ID observation/resumption | FR-070, SC-032 | W5 |
 | RA-12 | Reopen advanced mutable revisions from durable metadata and isolate per-Zone startup/close failures without dropping later Zones | FR-071, SC-033 | W5 |
 | RA-13 | Keep all RBAC DTO deserialization, compilation, and ownership outside both store crates | FR-073, D106 | W5 |
-| RA-14 | Bind amended-plan resume to pre-validator A/P0 analysis/panel, validator-only V/B, rerun B/P analysis/panel, T603's opaque-sentinel B/P authorization, exact atomic-exchange B-to-C editor transition, and finalized progress receipt; before T220 freezes F, install the hermetic exact-eight evidence validator at panel-request/seal/merge-eligibility with all six negative classes; then require the exact eight closed evidence identifiers before T219's one binding panel and tree-preserving merge | FR-072, SC-034 | W5 |
+| RA-14 | Bind amended-plan resume to pre-validator A/P0 analysis/panel, validator-and-fragment V/B with T603's unique changelog path, rerun B/P analysis/panel, T603's opaque-sentinel B/P authorization, exact atomic-exchange B-to-C editor transition, and finalized progress receipt; before T220 freezes F, install the hermetic exact-eight evidence validator at panel-request/seal/merge-eligibility with all six negative classes; then require the exact eight closed evidence identifiers before T219's one binding panel and tree-preserving merge | FR-072, SC-034 | W5 |
 | RA-15 | Make the readiness Provider member exactly the `d2b-core-controller`-owned `Provider/system-core` registration plus exactly one `Zone.status.handlers[]` record named `system-core-host` and one named `system-core-user`, each carrying phase/timestamp from the active, initialized, current `HostReconciler` or `UserReconciler`; reject duplicates, missing/wrong names, and `ProviderLifecycle` substitution; do not wait for other W6 dossiers | FR-069, SC-033 | W5 |
 | RA-16 | Under Constitution 2.2.0, add the two omitted closed-enum values with exact kebab-case Zone wire names, retain underscore spellings only for internal telemetry labels, complete T605 on its owned normative/test/API/reference artifacts, reconcile the T595 emitter and T599 consumers, then reconcile generated manifests/full drift at T220 so all coordinated artifacts and exact-candidate evidence land in the same Wave 5 PR | FR-072, SC-033, SC-034 | W5 |
 
@@ -69,11 +69,13 @@ Making this reachable is the core of User Story 1 and the precondition for SC-02
   socket with `SO_PEERPIDFD`; `pidfd_open(SO_PEERCRED.pid)` is forbidden. Credentials,
   generation, cgroup, and liveness are verified against and consumed with that exact fd by one
   registrar-private issuer. Unsupported kernels, numeric-PID reuse, dead fd, mismatch, or
-  ambiguity refuse. The only syscall boundary is vendored `d2b-peer-pidfd` 0.1.0, whose
-  `BorrowedFd`-to-`OwnedFd` API, exact `optlen`, no-panic, and returned-fd cleanup contract is
-  locked and reviewed before session-source work; the `nix` 0.31.3 `MaybeUninit`/assert
-  wrapper and any `d2b-session-unix` fallback are ineligible. Public peer evidence accessors
-  and bootstrap-identity mint paths remain sealed.
+  ambiguity refuse. The only syscall boundary is T592's wrapper in the approved broker
+  `sys.rs` FFI quarantine. Its typed operation accepts exactly one accepted-socket ancillary
+  fd and returns only an `OwnedFd` pidfd, validates exact `optlen` and `FD_CLOEXEC`, assumes
+  ownership of any returned fd before later checks, and closes every failure path. The `nix`
+  `MaybeUninit`/assert wrapper, a new project FFI crate, and any `d2b-session-unix` fallback
+  are ineligible. Public peer evidence accessors and bootstrap-identity mint paths remain
+  sealed.
 - **Zone equality is proven before every capability mint.**
 - **Policy has one lifecycle owner.** `ZoneResourceRuntime` owns install/recovery and
   publication; `NativeAuthorizer` interprets an immutable installed set. Initial install and
@@ -132,10 +134,10 @@ Making this reachable is the core of User Story 1 and the precondition for SC-02
 - A component presenting a self-named subject, a reused admission, or only a public daemon
   peer role is refused before ResourceService. Unsupported `SO_PEERPIDFD`, numeric-only
   identity, PID reuse, dead fd, credential/generation/cgroup mismatch, ambiguity, and a stale
-  pre-restart pidfd are also refused. A missing, unlocked, unreviewed, differently sourced, or
-  rejected `d2b-peer-pidfd` 0.1.0 prerequisite blocks T593 before session-source edits.
-  API-surface/compile-fail checks expose no public issuer, verifier, clone, or peer evidence
-  accessor.
+  pre-restart pidfd are also refused. Missing or extra ancillary fds, a raw-fd field, unsafe
+  outside broker `sys.rs`, a missing per-block `SAFETY:` justification, a new project FFI
+  crate, or a local session syscall blocks T593. API-surface/compile-fail checks expose no
+  public issuer, verifier, clone, or peer evidence accessor.
 - Conformance evidence shows a registered backend mutates only through verified admission and
   exposes no independent write path, plus a recorded security review of each registered
   backend. The `adr046w5` seal must not close without both.
