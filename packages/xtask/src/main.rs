@@ -473,15 +473,25 @@ fn main() -> std::process::ExitCode {
 fn bazel_repin_with_executable_target(
     args: &[String],
 ) -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {
+    let mut fresh_executor = ProcessFreshBootstrapExecutor::from_environment();
+    bazel_repin_with_fresh_executor(args, None, &mut fresh_executor)
+}
+
+fn bazel_repin_with_fresh_executor(
+    args: &[String],
+    override_root: Option<PathBuf>,
+    fresh_executor: &mut dyn FreshBootstrapExecutor,
+) -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {
     let hub = bazel::parse_repin(args)?;
-    let root = if let Some(worktree) = env::var_os("D2B_BAZEL_WORKTREE") {
+    let root = if let Some(root) = override_root {
+        root
+    } else if let Some(worktree) = env::var_os("D2B_BAZEL_WORKTREE") {
         fs::canonicalize(worktree)?
     } else {
         fs::canonicalize(repo_root()?)?
     };
     reject_ambient_repin_before_bootstrap()?;
-    let mut fresh_executor = ProcessFreshBootstrapExecutor::from_environment();
-    if let Some(output) = fresh_hub_bootstrap(&root, hub, &mut fresh_executor)? {
+    if let Some(output) = fresh_hub_bootstrap(&root, hub, fresh_executor)? {
         return Ok(output);
     }
     let mut executor = ExecutableBazelExecutor;
@@ -889,6 +899,8 @@ fn collect_fresh_files(
             collect_fresh_files(root, &path, paths)?;
         } else if entry.file_type()?.is_file() || entry.file_type()?.is_symlink() {
             paths.push(path.strip_prefix(root)?.to_path_buf());
+        } else {
+            return Err("unsupported filesystem node in bootstrap audit".into());
         }
     }
     paths.sort();
@@ -2328,13 +2340,23 @@ mod fresh_bootstrap_tests {
             calls: 0,
         };
         assert_eq!(
-            fresh_hub_bootstrap(&root, "product", &mut executor).expect("product"),
+            bazel_repin_with_fresh_executor(
+                &["--hub".into(), "product".into()],
+                Some(root.clone()),
+                &mut executor,
+            )
+            .expect("product"),
             Some(vec![PathBuf::from("bazel/cargo/product.lock")])
         );
         assert!(!root.join("bazel/cargo/walker.lock").exists());
         assert!(!root.join("MODULE.bazel.lock").exists());
         assert_eq!(
-            fresh_hub_bootstrap(&root, "walker", &mut executor).expect("walker"),
+            bazel_repin_with_fresh_executor(
+                &["--hub".into(), "walker".into()],
+                Some(root.clone()),
+                &mut executor,
+            )
+            .expect("walker"),
             Some(vec![PathBuf::from("bazel/cargo/walker.lock")])
         );
         assert!(fresh_hub_bootstrap(&root, "product", &mut executor)
@@ -2389,14 +2411,16 @@ mod fresh_bootstrap_tests {
             &executable,
             r#"#!/bin/sh
 [ "$1" = "--batch" ] || exit 10
-[ "$4" = "--nohome_rc" ] || exit 11
-[ "$5" = "--nosystem_rc" ] || exit 12
-[ "$6" = "mod" ] || exit 13
-[ "$7" = "deps" ] || exit 14
-[ "$8" = "--lockfile_mode=off" ] || exit 15
-[ "$CARGO_BAZEL_REPIN" = "1" ] || exit 18
-[ "$CARGO_BAZEL_REPIN_ONLY" = "product" ] || exit 19
-[ -z "$D2B_TEST_HOSTILE" ] || exit 17
+            [ "${2#--output_user_root=/}" != "$2" ] || exit 11
+            [ "${3#--output_base=/}" != "$3" ] || exit 12
+            [ "$4" = "--nohome_rc" ] || exit 13
+            [ "$5" = "--nosystem_rc" ] || exit 14
+            [ "$6" = "mod" ] || exit 15
+            [ "$7" = "deps" ] || exit 16
+            [ "$8" = "--lockfile_mode=off" ] || exit 17
+            [ "$CARGO_BAZEL_REPIN" = "1" ] || exit 18
+            [ "$CARGO_BAZEL_REPIN_ONLY" = "product" ] || exit 19
+            [ -z "$D2B_TEST_HOSTILE" ] || exit 20
 mkdir -p bazel/cargo
 printf product-lock > bazel/cargo/product.lock
 "#,
