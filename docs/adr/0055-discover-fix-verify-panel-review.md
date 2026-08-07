@@ -20,9 +20,12 @@
   reserve incarnations, disjoint control and integrity reserves, direct
   current-state protected and recovery status with one audit event per
   successful migration-status disclosure,
-  dedicated assignment-revocation audit recovery, counter-independent epoch
-  rekey recovery, durable child-command capacity prepare, protected telemetry
-  recovery, and a durable pre-barrier telemetry failure latch,
+  dedicated assignment-revocation audit recovery plus proof-backed release of
+  unused issuance-time capacity, generated per-counter rekey drain headroom,
+  identity-free initial and alias-only resumed counter-independent epoch
+  rekey recovery, durable immutable child-command capacity prepare, protected
+  recovery from every non-healthy telemetry state, a durable pre-barrier
+  telemetry failure latch, and operator-redacted migration audit events,
   exact redacted refusal products, migration-specific audit repair, and
   idempotent append contract below. It also supersedes
   D21's per-seat `held` and `prior_resolutions` state, rotation, rejection of a
@@ -378,10 +381,36 @@ ImplementationAssignmentState =
       reserved_uses,
       audit: AssignmentRevocationAuditState
     }
+  | RevocationCapacityReleasePending {
+      terminal_intent: AssignmentTerminalIntent,
+      release: AssignmentRevocationCapacityReleaseState
+    }
   | Completed { completion_event_id }
   | Revoked { revocation_event_id, reason_code }
   | Expired { expired_at }
   | Exhausted { activated_uses }
+
+AssignmentTerminalIntent =
+  Complete { completion_event_id }
+  | Expire { expired_at }
+  | Exhaust { activated_uses }
+
+AssignmentRevocationCapacityReleaseState =
+  SinkProofCancellationPending {
+    controller_reservation_alias,
+    sink_reservation_alias,
+    terminal_intent_digest
+  }
+  | ControllerCapacityReleasePending {
+      controller_reservation_alias,
+      sink_cancellation_proof_digest,
+      terminal_intent_digest
+    }
+  | TerminalInstallPending {
+      sink_cancellation_proof_digest,
+      controller_release_proof_digest,
+      terminal_intent_digest
+    }
 
 AssignmentRevocationAuditState =
   RevocationAuditOutboxPending {
@@ -420,6 +449,19 @@ AssignmentRevocationAuditSafeState =
     }
   | AuditAcknowledged { acknowledgement_digest }
 
+AssignmentRevocationAuditWorkSafeState =
+  AuditOutboxPending
+  | SinkAcknowledgementPending { reservation_generation }
+  | OldGenerationInvalidationPending { reservation_generation }
+  | OldGenerationInvalidatedRebindPending {
+      invalidated_reservation_generation,
+      invalidation_proof_digest
+    }
+  | ReplacementBoundAppendPending {
+      replacement_reservation_generation,
+      rebind_proof_digest
+    }
+
 AssignmentRevocationAuditEventId =
   digest(
     "d2b:panel:implementation-assignment-revocation-audit:v1",
@@ -428,12 +470,15 @@ AssignmentRevocationAuditEventId =
   )
 ```
 
-`IssueImplementationAssignment` creates `Active`.
-`CompleteImplementationAssignment` moves `Active` to `Completed` only through
-the assignment-completion endpoint. `RevocationPending` refuses completion
-with its exact pending state and cannot return to `Active`.
-Each assignment issuance seals one dedicated revocation outbox and sink
-reservation at the schema maximum. `RevokeImplementationAssignment` first
+`IssueImplementationAssignment` creates `Active` and atomically seals one
+dedicated controller reservation, revocation outbox, and sink reservation at
+the schema maximum. These issuance-time reservations cannot be borrowed,
+resized, or recreated from ordinary capacity. `RevocationPending` refuses
+completion with its exact pending state and cannot return to `Active`.
+`CompleteImplementationAssignment` freezes a `Complete` terminal intent and
+enters `RevocationCapacityReleasePending`; it reaches `Completed` only after
+the unused dedicated capacity is proof-cancelled and released.
+`RevokeImplementationAssignment` first
 authenticates the protected operator, resolves the exact active assignment,
 strictly validates its closed reason, and verifies that dedicated capacity.
 An authorization, decoding, resolution, state, or capacity preflight failure
@@ -459,17 +504,42 @@ settlement transaction decrements only `reserved_uses`. Audit acknowledgement
 with live uses remains `RevocationAuditAcknowledged`; zero uses before
 acknowledgement remains in its current audit substate. The transaction that
 observes the second condition, durable audit acknowledgement and
-`reserved_uses == 0`, alone enters `Revoked`. Startup scans every pending
+`reserved_uses == 0`, enters `RevocationReadyToFinalize`; only
+`FinalizeAssignmentRevoked` from that exact state enters `Revoked`. Startup scans every pending
 revocation before admitting assignment use or completion, fences a stale
 revocation worker by record digest, adopts the exact outbox or acknowledgement
 state, and resumes only the recorded audit action. A crash before the initial
 transaction leaves `Active`; a crash after it can reveal only
 `RevocationPending`; a crash after sink fsync replays the same append and
 obtains the original acknowledgement; and a crash after acknowledgement but
-before finalization recovers the atomic `Revoked` transition when the use
-count is zero. Completion, expiry, exhaustion, duplicate revocation, use
+before finalization recovers the exact ready state and atomic finalization
+when the use count is zero. Completion, expiry, exhaustion, duplicate revocation, use
 settlement, and restart all compare-and-swap the same assignment record, so
 none can bypass the two-condition finalization or reactivate authority.
+
+`Completed`, `Expired`, and `Exhausted` reached without revocation have a
+separate mandatory capacity-release path. The winning completion, expiry, or
+final-use transaction closes new use and revocation admission, freezes the
+exact `AssignmentTerminalIntent`, and enters
+`RevocationCapacityReleasePending::SinkProofCancellationPending`; it does not
+install the terminal state yet. The sink must durably proof-cancel the sealed
+unused revocation reservation before the controller releases its matching
+reservation. The controller then records the sink cancellation proof and its
+own release proof before `TerminalInstallPending` atomically installs the
+frozen `Completed`, `Expired`, or `Exhausted` state. Time, lease expiry, and an
+assumption that revocation never started are not cancellation proof.
+
+Startup scans this release state before terminal cleanup or successor
+admission. It replays only the exact proof-cancellation, controller-release,
+or terminal-install action owned by the recorded variant. A crash before the
+first transaction leaves `Active`; a crash after it leaves the immutable
+terminal intent and sealed reservations; and a crash after either release
+proof resumes the next state without double release. No terminal cleanup,
+successor eligibility, or reuse of either reservation is visible until the
+terminal install commits. Internal `CandidateChanged`,
+`MappingSuperseded`, and `LifecycleTerminated` invalidations never use this
+cancellation path: they enter the same auditable `RevocationPending` state
+machine as operator revocation and consume the sealed capacity.
 
 Completion requires
 fresh, single-consumption,
@@ -651,6 +721,9 @@ AssignmentStatusUseRecovery =
         caller: OriginalAttemptPeerOrProtectedOperator
       }
     }
+  | RevocationCapacityReleasePending(
+      AssignmentRevocationCapacityReleaseRecovery
+    )
   | Terminal(AssignmentTerminalRecovery)
 
 AssignmentCompletionRecovery =
@@ -686,6 +759,9 @@ AssignmentCompletionRecovery =
         caller: OriginalAttemptPeerOrProtectedOperator
       }
     }
+  | RevocationCapacityReleasePending(
+      AssignmentRevocationCapacityReleaseRecovery
+    )
   | Terminal(AssignmentTerminalRecovery)
 
 AssignmentRevocationRecovery =
@@ -694,18 +770,39 @@ AssignmentRevocationRecovery =
       declared_reason: CapabilityUnavailable | CapabilityAbandoned,
       next: Operator.RevokeImplementationAssignment by ProtectedOperator
     }
-  | RevocationPendingAuditAndSettlement {
+  | RevocationAuditWorkPending {
       presented_assignment_alias,
       reserved_uses,
       reason,
       revocation_identity_alias,
       revocation_event_id,
-      audit_state: AssignmentRevocationAuditSafeState,
+      audit_state: AssignmentRevocationAuditWorkSafeState,
+      next: ResumeAssignmentRevocationAudit
+    }
+  | RevocationAuditAcknowledgedUsesReserved {
+      presented_assignment_alias,
+      reserved_uses: NonZeroBoundedUseCount,
+      reason,
+      revocation_identity_alias,
+      revocation_event_id,
+      acknowledgement_digest,
       next: RecoveryRead.ReadAssignmentRecoveryState {
         context: RevocationRecovery,
         caller: OriginalAttemptPeerOrProtectedOperator
       }
     }
+  | RevocationReadyToFinalize {
+      presented_assignment_alias,
+      reserved_uses: 0,
+      reason,
+      revocation_identity_alias,
+      revocation_event_id,
+      acknowledgement_digest,
+      next: FinalizeAssignmentRevoked
+    }
+  | RevocationCapacityReleasePending(
+      AssignmentRevocationCapacityReleaseRecovery
+    )
   | Terminal(AssignmentTerminalRecovery)
 
 AssignmentIssueViewRecovery =
@@ -737,7 +834,31 @@ AssignmentIssueViewRecovery =
         caller: OriginalAttemptPeerOrProtectedOperator
       }
     }
+  | RevocationCapacityReleasePending(
+      AssignmentRevocationCapacityReleaseRecovery
+    )
   | Terminal(AssignmentTerminalRecovery)
+
+AssignmentRevocationCapacityReleaseRecovery =
+  SinkProofCancellationPending {
+      presented_assignment_alias,
+      terminal_intent: AssignmentTerminalIntent,
+      sink_reservation_alias,
+      next: ProofCancelUnusedAssignmentRevocationSinkCapacity
+    }
+  | ControllerCapacityReleasePending {
+      presented_assignment_alias,
+      terminal_intent: AssignmentTerminalIntent,
+      sink_cancellation_proof_digest,
+      next: ReleaseUnusedAssignmentRevocationControllerCapacity
+    }
+  | TerminalInstallPending {
+      presented_assignment_alias,
+      terminal_intent: AssignmentTerminalIntent,
+      sink_cancellation_proof_digest,
+      controller_release_proof_digest,
+      next: InstallAssignmentTerminalIntent
+    }
 
 AssignmentTerminalRecovery =
   Completed {
@@ -869,7 +990,9 @@ capability; recovery never returns, remints, or substitutes that capability.
 `ActiveUsesTemporarilyReserved` and
 `ActiveIssueViewUseReserved` expose the exact wait-and-reread action while a
 reserved use settles. If another use remains after settlement, the applicable
-active-usable variant returns; if the final use activated,
+active-usable variant returns; if the final use activated, the exact
+`RevocationCapacityReleasePending` variant is returned until the unused
+revocation reservations are proof-cancelled and released, after which
 `Exhausted` returns with its one successor eligibility. A
 `RevocationPending*` variant never returns a use, completion, or new
 revocation action.
@@ -885,13 +1008,21 @@ rejects every new use reservation. Already reserved uses may only settle.
 Their settlement decrements the pending count. Settlement of the last one
 transitions directly to `Revoked` only when
 `RevocationAuditAcknowledged` is also durable; otherwise it remains
-`RevocationPendingAuditAndSettlement`. If acknowledgement arrives last, that
-acknowledgement transaction performs the same final transition even if expiry
-or the use limit was reached meanwhile.
+in its exact `RevocationAuditWorkPending` state. If acknowledgement arrives
+with live uses, it becomes `RevocationAuditAcknowledgedUsesReserved`; if
+acknowledgement arrives last with zero uses, it becomes
+`RevocationReadyToFinalize` and the exact finalization action installs
+`Revoked`. Expiry or the use limit reaching its bound meanwhile cannot bypass
+that acknowledged-zero-use finalization path.
 No recovery, restart, completion, expiry, or use settlement can return
-`RevocationPending` to `Active`. Recovery returns
-`RevocationPendingAuditAndSettlement` until the audit and settlement
-conditions both complete. Only
+`RevocationPending` to `Active`. Recovery returns `RevocationAuditWorkPending` while any append,
+acknowledgement, invalidation, rebind, or replacement-append work remains;
+that variant alone owns `ResumeAssignmentRevocationAudit`.
+`RevocationAuditAcknowledgedUsesReserved` owns only wait and reread.
+`RevocationReadyToFinalize` is constructible only with durable
+acknowledgement and zero reserved uses and alone owns
+`FinalizeAssignmentRevoked`. There is no universal audit-resume action.
+Only
 the resulting durable `Revoked` predecessor exposes
 `AssignmentSuccessorEligibility::Available`. Old issuance evidence, an old
 completion conflict, a tombstone, payload eviction, caller-key change, or a
@@ -900,9 +1031,12 @@ loss declaration is never fresh-assignment eligibility.
 The generated assignment-context-to-action join admits use only from the two
 usable active contexts, completion retry only from
 `ActiveCompletionRetry`, first revocation only from
-`ActiveRevocationRequired`, pending-revocation reread only from a
-`RevocationPending*` context, and the four fresh-flow actions only from their
-matching eligibility states. It checks endpoint, operation, caller,
+`ActiveRevocationRequired`, revocation audit work only from
+`RevocationAuditWorkPending`, wait and reread only from
+`RevocationAuditAcknowledgedUsesReserved`, finalization only from
+`RevocationReadyToFinalize`, release reconciliation only from the exact
+`AssignmentRevocationCapacityReleaseRecovery` variant, and the four
+fresh-flow actions only from their matching eligibility states. It checks endpoint, operation, caller,
 authoritative assignment state, partition, predecessor, request id, and
 fresh-evidence prerequisites. `InitialAssignmentEligibility` and every
 terminal predecessor's `AssignmentSuccessorEligibility` remain exactly one
@@ -931,11 +1065,13 @@ capacity is required before the same revocation can enter pending. An internal
 invalidation never continues to authorize new use merely because its audit
 capacity needs repair.
 Outside `RevocationPending`, settlement of the last live reservation moves the
-assignment to `Exhausted` when the use limit is reached, otherwise to
-`Expired` when the expiry has passed, and otherwise back to unreserved
-`Active`. Inside `RevocationPending`, the last settlement remains pending
-unless audit acknowledgement is durable and otherwise moves directly to
-`Revoked`. These terminal states are append-only and have no outgoing
+assignment to `RevocationCapacityReleasePending` with an `Exhaust`,
+`Expire`, or `Complete` terminal intent when the corresponding terminal
+predicate wins, and otherwise back to unreserved `Active`. Inside
+`RevocationPending`, the last settlement remains pending unless audit
+acknowledgement is durable and otherwise moves directly to `Revoked`. Only
+after proof-backed sink cancellation and controller-capacity release does the
+non-revocation path install an append-only terminal state with no outgoing
 transition. Every transition uses the assignment generation in a
 compare-and-swap, so completion, revocation, expiry, exhaustion, use
 settlement, restart reconciliation, and a concurrent read have one winner and
@@ -1513,22 +1649,41 @@ issues a replacement handle or a new intent. Neither path re-executes. The
 safe and handle-bearing schemas are caller-disjoint and strict; one cannot be
 decoded as the other.
 
-Risk recovery is exactly the section 13 product:
+Risk recovery is caller-disjoint and exactly tagged. The original-peer outer
+type has one wire variant per exact safe state and action:
 
 ```
-ProtectedAttemptRecovery::Success::Operator::
-  RiskOperationIntent<Outcome> {
-    intent_id, candidate_id, intent_event_id,
-    state: RiskAttemptSafeState,
+OriginalPeerRiskRecovery =
+  AcceptanceIntentPending {
+    safe: AcceptanceIntentPendingSafe,
     next: AuthenticateAsProtectedOperatorThenReadRiskRecoveryState
   }
+  | RevocationIntentPending {
+      safe: RevocationIntentPendingSafe,
+      next: AuthenticateAsProtectedOperatorThenReadRiskRecoveryState
+    }
+  | AcceptanceLive {
+      safe: AcceptanceLiveSafe,
+      next: NoFurtherAction
+    }
+  | RevocationEffective {
+      safe: RevocationEffectiveSafe,
+      next: NoFurtherAction
+    }
+  | ClosedMutationPermitted {
+      safe: ClosedMutationPermittedSafe,
+      next: AuthenticateAsProtectedOperatorThenReadRiskRecoveryState
+    }
+  | ClosedMutationForbidden {
+      safe: ClosedMutationForbiddenSafe,
+      next: NoFurtherAction
+    }
 
 ProtectedAttemptRecovery::Success::Operator::
-  NewRiskOperationIntent<Outcome> {
-    intent_id, candidate_id, intent_event_id,
-    state: RiskAttemptSafeState,
-    next: AuthenticateAsProtectedOperatorThenReadRiskRecoveryState
-  }
+  RiskOperationIntent<Outcome, OriginalPeerRiskRecovery>
+
+ProtectedAttemptRecovery::Success::Operator::
+  NewRiskOperationIntent<Outcome, OriginalPeerRiskRecovery>
 
 ProtectedAttemptRecovery::Success::Operator::
   MajorRiskAcceptance<Outcome> {
@@ -1543,12 +1698,21 @@ ProtectedAttemptRecovery::Success::Operator::
   }
 ```
 
+The immediate authenticated success response from
+`IssueRiskOperationIntent` or `RequestNewRiskOperationIntent` is the matching
+pending `ProtectedOperatorRiskRecoveryContext` and contains its
+`RiskOperationHandle`. The `ProtectedAttemptRecovery` variants above are the
+later handle-free generic recovery products; they never substitute for that
+immediate protected response.
+
 `<Outcome>` is expanded by the generator into a distinct operation-and-outcome
 wire tag; it is not a serialized state field. A risk refusal is the
 corresponding
 `ProtectedAttemptRecovery::OriginalRefusal::Operator::<Operation,Refusal>`
 variant with the catalog's exact safe refusal product and a reachable
-`RecoveryRead.ReadOriginalRefusalRecoveryState` next operation. The recovery
+`RecoveryRead.ReadOriginalRefusalRecoveryState` next operation. Its risk
+portion is likewise one exact `OriginalPeerRiskRecovery` outer tag, not a
+`RiskAttemptSafeState` field plus an independently chosen action. The recovery
 projection never substitutes a digest-only state envelope and never carries a
 raw `RiskOperationHandle`.
 
@@ -1595,12 +1759,14 @@ RiskAttemptSafeState =
     }
 ```
 
-`RiskAttemptSafeState` owns safe facts only. It contains no next operation,
+`RiskAttemptSafeState` is the closed union used for exhaustive generation, but
+is never serialized as a broad field beside one fixed action.
+Each named safe variant owns safe facts only and contains no next operation,
 endpoint, caller class, or raw handle. A caller-disjoint outer recovery or
-status variant wraps exactly one safe-state variant and owns exactly one
-action: original-peer pending and closed-permitted variants own
+status tag wraps exactly its corresponding safe variant and owns exactly one
+action: original-peer pending and closed-permitted tags own
 `AuthenticateAsProtectedOperatorThenReadRiskRecoveryState`; original-peer
-live, effective-revocation, and closed-forbidden variants own
+live, effective-revocation, and closed-forbidden tags own
 `NoFurtherAction`. Generic original-peer recovery never owns or serializes a
 `RiskOperationHandle`.
 
@@ -1659,7 +1825,7 @@ ProtectedOperatorRiskRecoveryContext =
     }
 ```
 
-Each outer recovery tag owns its safe state and action, and each protected
+Each outer recovery tag owns its exact safe variant and action, and each protected
 operator context tag owns its fields, handle, and action. State, handle, and
 action are not independently selectable. Only `ClosedMutationPermitted`,
 after the controller
@@ -1685,7 +1851,11 @@ admission therefore cannot create a second live acceptance or a second
 revocation.
 An original peer that invokes the risk read without fresh protected-operator
 authentication receives `risk-recovery-operator-authentication-required` with
-one safe-state-only outer refusal variant owning the reauthentication action.
+the exact safe-state-only `OriginalPeerRiskRecovery` variant. Authentication
+failure therefore returns `NoFurtherAction` for live, effective-revocation,
+and closed-forbidden state rather than manufacturing a reauthentication
+action, and returns reauthentication only for pending or closed-permitted
+state.
 Authentication failure cannot reveal whether a raw handle is currently
 recoverable. Strict generation rejects every cross-action encoding, including
 a mutation action inside `RiskAttemptSafeState`, an original-peer variant with
@@ -1722,7 +1892,7 @@ Risk-operation recovery is fixed at the contract level:
 | `major-risk-expired` | `RequestNewCandidateBoundRiskAcceptance` |
 | `major-risk-revoked` | `ReturnToScopedBatchFix` |
 | `major-risk-ledger-mapping-stale` | `ReverifyCorrectedIssue`, then `RequestNewCandidateBoundRiskAcceptance` |
-| `risk-operation-replay-conflict` | original peer: return the caller-disjoint outer variant containing `RiskAttemptSafeState` and owning `AuthenticateAsProtectedOperatorThenReadRiskRecoveryState`; authenticated protected operator: `RecoveryRead.ReadRiskRecoveryState`, then only the exact handle and action owned by `ProtectedOperatorRiskRecoveryContext`; only `ClosedMutationPermitted` may render `Operator.RequestNewRiskOperationIntent` |
+| `risk-operation-replay-conflict` | original peer: return the exact handle-free `OriginalPeerRiskRecovery` tag and its owned action; authenticated protected operator: `RecoveryRead.ReadRiskRecoveryState`, then only the exact handle and action owned by `ProtectedOperatorRiskRecoveryContext`; only pending or closed-permitted original-peer tags reauthenticate, and only protected `ClosedMutationPermitted` may render `Operator.RequestNewRiskOperationIntent` |
 | `major-risk-duplicate-live` | `Operator.RevokeMajorRiskAcceptance` by `ProtectedOperator` |
 | `blocker-risk-acceptance-forbidden` | `ReturnToScopedBatchFix` |
 | `nonblocking-risk-acceptance-unnecessary` | `ContinueWithDispositionAndVerification` |
@@ -2121,18 +2291,19 @@ controller floor rather than permanent raw response bytes.
 | `AuditConversionTombstone` | Immutable permanent controller audit floor. It binds the attempt identity, old and replacement reservation generations, replacement refusal event id and digest, and the intent, invalidation-proof, and rebind-proof digests. It contains no proof or event bytes. |
 | `MigrationAuditRepairIntent`, migration `AuditSinkInvalidationProof`, and `MigrationAuditSinkRebindProof` | Audit floor and ineligible while migration-specific no-append repair is pending. They preserve the original migration success result, quarantined capacity-switch effect, outbox event id and digest, and `MigrationExecutionReserve` binding. |
 | `MigrationAuditRepairTombstone` | Immutable permanent controller audit floor binding the migration attempt alias, old and replacement reservation generations, unchanged success event alias and digest, and repair intent, invalidation-proof, and rebind-proof digests. It contains no proof, event, result, or authority-effect bytes. |
-| `AssignmentRevocationAuditState`, its dedicated outbox, sink reservation, invalidation proof, and rebind proof | Audit floor and ineligible while the assignment remains `RevocationPending`. Definite-no-append repair retains the unchanged revocation event and can neither restore `Active` nor create a generic refusal. After acknowledgement and zero reserved uses atomically install `Revoked`, proof bytes become ordinary audit-period input while the revocation event projection remains at the audit floor. |
+| `AssignmentRevocationAuditState`, its dedicated outbox, sink reservation, invalidation proof, and rebind proof | Audit floor and ineligible while the assignment remains `RevocationPending`. Definite-no-append repair retains the unchanged revocation event and can neither restore `Active` nor create a generic refusal. After acknowledgement and zero reserved uses reach the exact ready state and atomic finalization installs `Revoked`, proof bytes become ordinary audit-period input while the revocation event projection remains at the audit floor. |
+| `AssignmentRevocationCapacityReleaseState`, unused sink cancellation proof, and controller release proof | Recovery state and audit floor while a non-revocation `Completed`, `Expired`, or `Exhausted` terminal intent is pending. The sink proof-cancels its issuance-time reservation before controller capacity is released. Proof bytes become ordinary audit-period input only after atomic terminal install; no age-only cleanup or successor admission is permitted. |
 | `AuditAppendTombstone` | Permanent append-sink idempotency floor for the sink namespace. It contains only audit event id and digest plus the original acknowledgement and has no event payload bytes. Raw sink event bytes remain under the sink's bounded rotation. |
 | `MigrationPreflightSignal::ReplayConflict` | D17 round input in a stricter diagnostic subclass: exactly 256 reusable detailed slots in the active 15-minute window, forced compaction at rotation or generation cutover, and a hard 30-minute TTL even when compaction fails. It is never an audit floor or migration blocker. |
 | `MigrationPreflightSignal::AggregateOverflow` and `MigrationPreflightSignalWindowSummary` | D17 round input in the same stricter diagnostic subclass: one reusable overflow slot in the active window and a controller-wide ring of exactly 96 compacted summary slots. A summary has a hard 24-hour TTL; rotation and generation cutover reuse slots and never wait for export. |
 | `MigrationControlConflictSignal::Detailed` | D17 diagnostic round input in a separate fixed-cardinality subclass: exactly 64 reusable slots in the active 15-minute window and a hard 30-minute TTL. It is never an audit floor, accepted attempt, mutation-slot record, or migration blocker. |
 | `MigrationControlConflictSignal::AggregateOverflow` and `MigrationControlConflictWindowSummary` | D17 diagnostic round input in that same separate subclass: one reusable overflow slot per active window and a controller-wide ring of exactly 96 summaries. A summary has a hard 24-hour TTL; rotation and control-reserve incarnation change reuse slots and never wait for export. |
-| `MigrationTelemetryHealthMarker`, `MigrationTelemetryFailureLatch`, telemetry recovery slot, and matching normal health | D17 current diagnostic and recovery state, not round history: one integrity-checked current-and-shadow marker, separately reserved core-metadata latch, matching fixed normal-health storage, and separately sealed recovery and audit workspace. Normal closure records proof but only successful `RecoveryBarrier` completion clears the latch. Protected recovery events retain exact marker sequences under the ordinary audit period, but metric labels may not. |
+| `MigrationTelemetryHealthMarker`, `MigrationTelemetryFailureLatch`, current failure-alias record, telemetry recovery slot, and matching normal health | D17 current diagnostic and recovery state, not round history: one integrity-checked current-and-shadow marker, separately reserved core-metadata latch, independently sealed current server-issued failure alias, matching fixed normal-health storage, and separately sealed recovery and audit workspace. Normal closure records proof but only successful `RecoveryBarrier` completion clears the latch. A closed `RecoveryFailed` cycle rotates the alias and permits a fresh recovery cycle. Protected recovery events retain exact marker sequences under the ordinary audit period, but metric labels may not. |
 | `MigrationControlCommandSlot`, integrity-command slot, and their current or last result | Current controller recovery state for the one accepted migration, not round history. Each fixed primary and refusal slot durably enters `PreparingAuditCapacity` before any child-audit reservation. The slots are reused after audited settlement and retain only the current command or last exact safe result plus its audit-event digest. They never create a permanent child-command tombstone. |
-| `MigrationChildAuditOutbox`, `MigrationChildAuditSinkReservation`, and append acknowledgement | Fixed pre-sealed controller and sink workspace. Every reservation binds an existing durable slot prepare. The outbox is ineligible until acknowledgement, and the slots are reusable only after adoption or proof-backed cancellation and settlement. No child command may borrow ordinary accepted-attempt outbox or tombstone capacity. |
-| `MigrationControllerRekeyRecord` | Fixed non-resettable current recovery state. It survives the epoch install it authorizes, retains requested, prepared, audit-pending, acknowledged-install-pending, or installed state under one controller-issued identity and outcome nonce, and is never reconstructed with the six resettable counters. |
-| `MigrationChildCommandAuditEvent`, `MigrationEpochRekeyAuditEvent`, and `MigrationTelemetryHealthRecoveryEvent` | D17 append-only audit evidence under the ordinary bounded audit period. The sink retains canonical event bytes and its bounded idempotency index only for that period; expiry never makes an old epoch, generation, incarnation, sequence, rekey identity, or telemetry failure current again. |
-| `MigrationStatusAccessAuditEvent` | D17 bounded disclosure evidence. Every successful status disclosure has a fresh controller-issued identity and distinct event containing the protected operator alias and current state digest. The fixed integrity-reserve slot serializes one disclosure and retains no per-operator history; bounded sink retention owns history. It is not an accepted attempt or response cache. |
+| `MigrationChildAuditOutbox`, `MigrationChildAuditSinkReservation`, and append acknowledgement | Fixed pre-sealed controller and sink workspace. Every reservation binds one immutable command and fixed-slot prepare identity and excludes mutable worker ownership. The outbox is ineligible until acknowledgement, and the slots are reusable only after proof-backed adoption or cancellation and settlement. No child command may borrow ordinary accepted-attempt outbox or tombstone capacity. |
+| `MigrationControllerRekeyRecord` | Fixed non-resettable current recovery state. It survives the epoch install it authorizes, retains requested, prepared, audit-pending, acknowledged-install-pending, or terminal installed state under one controller-issued identity, the primary outcome nonce, distinct nonces for any other admitted terminal outcomes, and bounded counter-independent continuation records. It is never reconstructed with the six resettable counters. |
+| `MigrationChildCommandAuditEvent`, `MigrationEpochRekeyOutcomeEvent`, and `MigrationTelemetryHealthRecoveryEvent` | D17 append-only audit evidence under the ordinary bounded audit period. The sink retains canonical event bytes and its bounded idempotency index only for that period; expiry never makes an old epoch, generation, incarnation, sequence, rekey identity, or telemetry failure current again. |
+| `MigrationStatusAccessAuditEvent` | D17 bounded disclosure evidence. Every successful status disclosure has a fresh controller-issued identity and distinct event containing the current state digest, never `protected_operator_alias`. The fixed integrity-reserve slot and its disclosure-identity-bound reservations serialize one disclosure and retain no per-operator history; bounded sink retention owns history. A deployment-keyed `ProtectedOperatorAuditDigest` is allowed only inside the attributed audit-event variant. It is not an accepted attempt or response cache. |
 | Source and artifact digests, stable ids, source mapping and crosswalk events, dedup and severity events, closed disposition and judgment projections, roster and dispatch bindings, acceptance and revocation projections, lifecycle receipts, seals, and terminal metric records | Audit floor under D17's ordinary audit period unless another row, such as `AttemptTombstone` or `AuditAppendTombstone`, sets a longer lifetime. |
 
 Attempt identity is controller-derived and mandatory:
@@ -2453,8 +2624,8 @@ migration status generator rejects an action routed through the wrong reserve.
 The immediate caller-disjoint response of operator-authenticated
 `ReadRiskRecoveryState` is `ProtectedOperatorRiskRecoveryContext`, but its own
 generic post-eviction protected-attempt recovery is again
-an original-peer outer variant containing `RiskAttemptSafeState` and owning
-the reauthentication action. Thus no recursive or generic recovery surface
+an exact handle-free `OriginalPeerRiskRecovery` tag owning its state-valid
+action. Thus no recursive or generic recovery surface
 carries the handle.
 `ReadMigrationRecoveryStatus` is generated separately from accepted-attempt
 recovery. Its current-state schema owns its action and reserve route exactly as
@@ -2494,8 +2665,8 @@ that operation.
 | Operator | `CreateReverificationSuccessor` | `ReverificationSuccessor<Outcome> { source_lifecycle_id, successor_lifecycle_id, lifecycle_event_id }` | `RecoveryRead.ReadLifecycleRecoveryState` by `OriginalAttemptPeerOrProtectedOperator` |
 | Operator | `PermanentlyCloseAbandonedLineage` | `PermanentLineageClose<Outcome> { lineage_id, permanent_close_event_id }` | `RecoveryRead.ReadLifecycleRecoveryState` by `OriginalAttemptPeerOrProtectedOperator` |
 | Operator | `ApplyLedgerMappingCorrection` | `LedgerMappingCorrection<Outcome> { lifecycle_id, candidate_id, correction_id, mapping_version, ledger_digest }` | `RecoveryRead.ReadLedgerRecoveryState` by `OriginalAttemptPeerOrProtectedOperator` |
-| Operator | `IssueRiskOperationIntent` | `RiskOperationIntent<Outcome> { intent_id, candidate_id, intent_event_id, state: RiskAttemptSafeState }` | `AuthenticateAsProtectedOperatorThenReadRiskRecoveryState` |
-| Operator | `RequestNewRiskOperationIntent` | `NewRiskOperationIntent<Outcome> { intent_id, candidate_id, intent_event_id, state: RiskAttemptSafeState }` | `AuthenticateAsProtectedOperatorThenReadRiskRecoveryState` |
+| Operator | `IssueRiskOperationIntent` | one exact `RiskOperationIntent<Outcome, OriginalPeerRiskRecovery::<SafeStateTag>>` outer variant | Exact action owned by that outer tag; pending and closed-permitted own `AuthenticateAsProtectedOperatorThenReadRiskRecoveryState`, while live, effective-revocation, and closed-forbidden own `NoFurtherAction` |
+| Operator | `RequestNewRiskOperationIntent` | one exact `NewRiskOperationIntent<Outcome, OriginalPeerRiskRecovery::<SafeStateTag>>` outer variant | Exact action owned by that outer tag under the same rule |
 | Operator | `AcceptMajorRisk` | `MajorRiskAcceptance<Outcome> { acceptance_id, candidate_id, issue_ids, acceptance_event_id }` | `NoFurtherAction` |
 | Operator | `RevokeMajorRiskAcceptance` | `MajorRiskRevocation<Outcome> { acceptance_id, revocation_id, revocation_event_id }` | `NoFurtherAction` |
 | Operator | `ReadLifecycleStatus` | `OperatorLifecycleStatus<Outcome> { lifecycle_id, status_digest }` | `RecoveryRead.ReadLifecycleRecoveryState` by `OriginalAttemptPeerOrProtectedOperator` |
@@ -2507,11 +2678,11 @@ that operation.
 | Issue reader | `ResolveImplementationAssignment` | `ImplementationAssignmentResolved<Outcome> { presented_assignment_alias, assignment_summary_digest }` | `IssueReader.ReadImplementerIssueView` by `OriginalIssueReaderPeer` |
 | Issue reader | `ReadImplementerIssueView` | `ImplementerIssueViewConsumed<Outcome> { presented_assignment_alias, consumed_use_ordinal }` | `RecoveryRead.ReadAssignmentRecoveryState { context: IssueViewRecovery }` by `OriginalAttemptPeerOrProtectedOperator` |
 | Issue reader | `ReadMergeAuthorityMajorIssueView` | `MergeAuthorityMajorIssueView<Outcome> { authority_alias, candidate_id, issue_id, view_digest }` | `IssueReader.ReadMergeAuthorityMajorIssueView` by `OriginalIssueReaderPeer` |
-| Attempt status | `ReadProtectedAttemptStatus` | `ProtectedAttemptStatusRead<Outcome> { target_attempt_identity, status: SafeProtectedAttemptStatus }`; each risk outcome uses a caller-disjoint outer status tag containing only `RiskAttemptSafeState` | Exact action owned by the returned outer status tag; a risk pending or closed-permitted tag owns `AuthenticateAsProtectedOperatorThenReadRiskRecoveryState`, a risk live, effective-revocation, or closed-forbidden tag owns `NoFurtherAction`, and a non-risk tag owns `AttemptStatus.ReadProtectedAttemptStatus` by `OriginalAttemptPeerOrProtectedOperator` only when reread is its state-valid action |
+| Attempt status | `ReadProtectedAttemptStatus` | `ProtectedAttemptStatusRead<Outcome> { target_attempt_identity, status: SafeProtectedAttemptStatus }`; each risk outcome uses one exact caller-disjoint outer status tag containing its corresponding safe variant | Exact action owned by the returned outer status tag; a risk pending or closed-permitted tag owns `AuthenticateAsProtectedOperatorThenReadRiskRecoveryState`, a risk live, effective-revocation, or closed-forbidden tag owns `NoFurtherAction`, and a non-risk tag owns `AttemptStatus.ReadProtectedAttemptStatus` by `OriginalAttemptPeerOrProtectedOperator` only when reread is its state-valid action |
 | Recovery read | `ReadLifecycleRecoveryState` | `LifecycleRecoveryState<Outcome> { target_attempt_identity, lifecycle_id, state_digest }` | `NoFurtherAction` |
 | Recovery read | `ReadLedgerRecoveryState` | `LedgerRecoveryState<Outcome> { target_attempt_identity, mapping_version, ledger_digest }` | `NoFurtherAction` |
 | Recovery read | `ReadAssignmentRecoveryState` | `AssignmentRecoveryState<Outcome> { target_attempt_identity, context: AssignmentRecoveryContext }` | Exact action owned by the returned `AssignmentRecoveryContext` |
-| Recovery read, risk | `ReadRiskRecoveryState` | `RiskRecoveryStateRead<Outcome> { target_attempt_identity, state: RiskAttemptSafeState }` | `AuthenticateAsProtectedOperatorThenReadRiskRecoveryState`; the immediate endpoint response, not this generic recovery variant, is `ProtectedOperatorRiskRecoveryContext` |
+| Recovery read, risk | `ReadRiskRecoveryState` | authenticated protected operator receives exactly one `ProtectedOperatorRiskRecoveryContext` tag; an original peer receives exactly one handle-free `OriginalPeerRiskRecovery` tag | Exact action owned by the returned caller-disjoint tag; no broad safe-state field or fixed universal action exists |
 | Recovery read | `ReadArtifactRecoveryState` | `ArtifactRecoveryState<Outcome> { target_attempt_identity, artifact_ids, artifact_digests }` | `NoFurtherAction` |
 | Recovery read | `ReadRetentionRecoveryState` | `RetentionRecoveryState<Outcome> { target_attempt_identity, capacity_generation, blocker_records, integrity_state, migration_telemetry_health: MigrationTelemetryHealthObservation }` | `NoFurtherAction` |
 | Recovery read | `ReadPublicationRecoveryState` | `PublicationRecoveryState<Outcome> { target_attempt_identity, lifecycle_id, candidate_id, state_digest }` | `NoFurtherAction` |
@@ -2829,8 +3000,9 @@ fixed-cardinality, and item 7 is transient:
    `RekeyMigrationControllerEpoch`, and a complete verified replacement of
    the control reserve. Neither reserve can address or borrow the other. The
    command slots, child-audit workspace, status-audit slot, non-resettable
-   rekey recovery record, rekey workspace, and integrity-repair workspace are
-   fixed capacity, not estimates,
+   rekey recovery record, its generated maximum continuation inventory and
+   outcome-event workspace, and integrity-repair workspace are fixed capacity,
+   not estimates,
    append-only request history, or transient lanes.
 2. `ProtectedStatusReserve` is a separate bounded allocation for
    `ReadLifecycleStatus`, `ReadProtectedAttemptStatus`,
@@ -2862,8 +3034,9 @@ fixed-cardinality, and item 7 is transient:
    migration execution, or the preflight signal reserve.
 6. `MigrationTelemetryHealthMarkerReserve` is a controller-wide, independently
    integrity-checked fixed current-and-shadow marker, separately reserved
-   durable failure latch, and separately sealed telemetry-recovery slot with
-   fixed audit workspace for controller-wide migration telemetry health.
+   durable failure latch, independently sealed current failure-alias record,
+   and separately sealed telemetry-recovery slot with fixed audit workspace
+   for controller-wide migration telemetry health.
    Marker sequence numbers increase monotonically and the same slots are
    reused across every signal window, control-reserve incarnation, rotation,
    and capacity cutover. No signal, aggregate, exporter, status, or migration
@@ -2950,13 +3123,15 @@ MigrationChildCommandAuditEventId =
     child_audit_sequence
   )
 
-MigrationEpochRekeyAuditEventId =
+MigrationChildAuditPrepareIdentity =
   digest(
-    "d2b:panel:migration-controller-epoch-rekey-audit:v1",
+    "d2b:panel:migration-child-audit-prepare:v1",
     MigrationAttemptIdentity,
-    OldMigrationControllerEpoch,
-    RekeyIdentity,
-    RekeyOutcomeNonce
+    MigrationControllerEpoch,
+    MigrationControlReserveIncarnation,
+    FixedCommandSlotRole,
+    MigrationControlCommandId,
+    ControllerIssuedPrepareNonce
   )
 ```
 
@@ -2981,6 +3156,7 @@ MigrationControlCommandSubstate =
   Available
   | PreparingAuditCapacity {
       command_id,
+      prepare_identity,
       controller_epoch,
       reserve_incarnation,
       pre_state_generation,
@@ -3053,7 +3229,7 @@ audit-acknowledged, and last-result fields, including
 audited without overwriting a live primary command. An identical conflict
 coalesces there. A further distinct conflict waits for that fixed subslot or
 is refused before child-command admission as
-`migration-control-child-audit-capacity-unavailable`; it cannot allocate
+`migration-control-child-audit-preprepare-capacity-unavailable`; it cannot allocate
 another slot. Stale and ordinary prerequisite refusals use the primary slot
 when it is available. Caller keys never select a slot, affect identity, or
 survive in authority state.
@@ -3061,30 +3237,94 @@ survive in authority state.
 Before a request becomes a child command, the controller authenticates
 `ProtectedOperator`, strictly decodes the bounded operation, resolves the
 active migration, and validates the slot's required fixed controller and sink
-capacity shape. Failure at any of those steps creates no slot prepare, child
-command, reservation, or privileged effect. It then atomically reserves the
+capacity shape and current availability. Failure at any of those steps creates
+no slot prepare, child command, reservation, or privileged effect. Current
+capacity unavailability returns
+`MigrationChildAuditCapacityRecovery::PrePrepareCapacityUnavailable`, which
+contains no prepare id, alias, or digest and routes through fresh current
+migration status. It then atomically reserves the
 next child and child-audit sequences and compare-and-swaps the owning primary
 or refusal subslot to `PreparingAuditCapacity`, binding the command identity,
-owner epoch, lease, deadline, exact required capacity, canonical request
-digest, and prepare digest before contacting either capacity owner. The
-controller-outbox and sink reservations must both name that slot, command id,
-owner epoch, and prepare digest. No child-audit capacity can exist without
-that durable slot owner.
+immutable `MigrationChildAuditPrepareIdentity`, owner epoch, lease, deadline,
+exact required capacity, canonical request digest, and prepare digest before
+contacting either capacity owner. The controller-outbox and sink reservations
+bind only the immutable command id, fixed primary-or-refusal slot role,
+prepare identity, and prepare digest:
+
+```
+MigrationChildAuditReservationBinding = {
+  command_id,
+  fixed_slot_role,
+  prepare_identity,
+  prepare_digest
+}
+```
+
+Worker epoch, lease, deadline, slot record generation, and every later
+takeover value are excluded from that reservation binding. They govern who
+may execute the prepare, not what capacity belongs to it. No child-audit
+capacity can exist without that durable immutable prepare owner.
 
 After both reservations are verified, one compare-and-swap changes the same
 prepare to `Claimed`. A reservation failure leaves the prepare nonterminal
 until reconciliation either adopts all matching reservations or obtains
 proof-backed cancellation for every reservation that was created and returns
-the slot to `Available`. It then returns
-`migration-control-child-audit-capacity-unavailable`; it never admits the
-child command or privileged effect. Time alone is not cancellation proof.
+the slot to `Available`. While that work remains, recovery returns
+`PrepareReconciliationPending` with only the non-capability prepare alias,
+prepare digest, and exact reservation-state codes. After adoption completes,
+the command continues from the same prepare. After proof-backed cancellation,
+recovery returns `ReconciledAndAvailable` and the slot is available. It never
+admits a privileged effect from a cancelled prepare. Time alone is not
+cancellation proof.
 Startup and lease-expiry recovery scan every primary and refusal prepare,
 query both capacity owners by prepare digest, adopt matching orphan
 reservations, or first mark the prepare non-adoptable and proof-cancel each
-orphan. A stale worker cannot reserve, adopt, cancel, or promote capacity
-after the slot record compare-and-swap changes. Thus a crash before either
-reservation, between reservations, or after both reservations but before
-`Claimed` has one durable owner and one recovery path.
+orphan. Takeover changes only execution ownership. The new worker presents a
+controller proof of the same immutable prepare and adopts the same
+reservations without rebinding them. Reservation creation and adoption also
+require the current execution-ownership proof; capacity created by a stale
+worker after takeover is non-adoptable and must be proof-cancelled. A stale
+worker cannot reserve, adopt, cancel, promote, or make its reservation usable
+after the ownership compare-and-swap. Thus a crash before either reservation,
+between reservations, or after both reservations but before `Claimed` has one
+durable prepare identity and one recovery path.
+
+```
+MigrationChildAuditCapacityRecovery =
+  PrePrepareCapacityUnavailable {
+    migration_attempt_alias,
+    controller_epoch,
+    safe_operation,
+    unavailable_capacity_role,
+    required_capacity,
+    available_capacity,
+    next: Operator.ReadMigrationRecoveryStatus
+  }
+  | PrepareReconciliationPending {
+      migration_attempt_alias,
+      controller_epoch,
+      safe_operation,
+      prepare_alias,
+      prepare_digest,
+      controller_reservation_state,
+      sink_reservation_state,
+      next: ReconcileMigrationChildAuditPrepare
+    }
+  | ReconciledAndAvailable {
+      migration_attempt_alias,
+      controller_epoch,
+      safe_operation,
+      cancelled_prepare_alias,
+      cancellation_proof_digest,
+      next: Operator.ReadMigrationRecoveryStatus
+    }
+```
+
+After either `PrePrepareCapacityUnavailable` or
+`ReconciledAndAvailable`, the caller must use the operation returned by the
+fresh status tag. No generated remedy blindly resubmits the old canonical
+request bytes. Only `PrepareReconciliationPending` can invoke prepare
+adoption or cancellation.
 
 After the `Claimed` boundary, every successful or refused
 privileged command has one distinct canonical append-only
@@ -3093,7 +3333,7 @@ tuple-mismatch, prerequisite, changed-byte, and integrity-repair outcomes. Its
 event id uses the migration attempt, controller epoch, reserve
 incarnation, operation, pre-state generation, and the fixed-slot child and
 child-audit sequences above. Rekey uses only
-`MigrationEpochRekeyAuditEventId` and its dedicated state machine. The
+`MigrationEpochRekeyOutcomeEventId` and its dedicated state machine. The
 controller sends no child success or refusal response
 until the event or its outbox is durable. The sink keeps the event under
 D17's bounded audit retention; the controller keeps no permanent tombstone per
@@ -3155,23 +3395,57 @@ MigrationControlCommandRecovery =
     }
   | SupersededByCurrentState { current_migration_status }
 
-MigrationControlCommandProgressProjection = {
-  state_tag:
-    PreparingAuditCapacity
-    | Claimed
-    | ExternalEffectPending
-    | ExternalEffectObserved
-    | AuditAppendPending
-    | AuditAcknowledged,
-  command_alias,
-  safe_operation,
-  lease_until,
-  deadline,
-  state_generation_direction:
-    AtExpectedGeneration | CurrentGenerationPastCommand | CurrentGenerationFutureCommand,
-  safe_effect_digest: None | Digest,
-  safe_audit_digest: None | Digest
-}
+MigrationControlCommandProgressProjection =
+  Preparing {
+    command_alias,
+    safe_operation,
+    lease_until,
+    deadline,
+    state_generation_relation: MigrationStateGenerationRelation
+  }
+  | Claimed {
+      command_alias,
+      safe_operation,
+      lease_until,
+      deadline,
+      state_generation_relation: MigrationStateGenerationRelation
+    }
+  | ExternalEffectPending {
+      command_alias,
+      safe_operation,
+      lease_until,
+      deadline,
+      state_generation_relation: MigrationStateGenerationRelation
+    }
+  | ExternalEffectObserved {
+      command_alias,
+      safe_operation,
+      lease_until,
+      deadline,
+      state_generation_relation: MigrationStateGenerationRelation,
+      effect_digest
+    }
+  | AuditAppendPending {
+      command_alias,
+      safe_operation,
+      lease_until,
+      deadline,
+      state_generation_relation: MigrationStateGenerationRelation,
+      audit_digest
+    }
+  | AuditAcknowledged {
+      command_alias,
+      safe_operation,
+      lease_until,
+      deadline,
+      state_generation_relation: MigrationStateGenerationRelation,
+      audit_digest
+    }
+
+MigrationStateGenerationRelation =
+  AtExpectedGeneration
+  | CurrentGenerationPastCommand
+  | CurrentGenerationFutureCommand
 ```
 
 It never invokes generic protected-attempt replay, reconstructs a replay
@@ -3182,12 +3456,13 @@ returns the exact current refusal or current state and action.
 action on every call.
 
 `MigrationControlCommandProgressProjection` is the complete public progress
-surface. The effect digest is present only for
-`ExternalEffectObserved`; the audit digest is present only for
-`AuditAppendPending` or `AuditAcknowledged`. Strict construction rejects either
-digest in any other tag. A raw command id, owner epoch, controller or sink
-reservation, external-effect identity, outbox identity or bytes, sink handle,
-fencing generation, slot record generation, and every unlisted field are
+surface. It has no `state_tag` field and no optional digest. The effect digest
+is owned only by `ExternalEffectObserved`; the audit digest is owned only by
+`AuditAppendPending` and `AuditAcknowledged`. Strict construction rejects a
+digest in any other tag, either digest omitted from its owning tag, or any
+cross-variant field substitution. A raw command id, owner epoch, controller or
+sink reservation, external-effect identity, outbox identity or bytes, sink
+handle, fencing value, slot record generation, and every unlisted field are
 absent from callers, logs, status, refusal recovery, and `Debug`.
 
 Every non-available substate carries the original owner epoch, lease, deadline,
@@ -3200,6 +3475,12 @@ next substate. A stale owner cannot write any effect observation, migration
 state, audit row, acknowledgement, or result. A crash after claim therefore
 cannot strand a slot, and a crash at every external-effect, outbox, sink-fsync,
 acknowledgement, or settlement boundary has one compare-and-swap continuation.
+
+The public worker-fenced refusal does not expose either owner epoch, any lease
+token, or `slot_record_generation`. It carries the command alias, the closed
+safe relation `PresentedWorkerSupersededByCurrentOwnership`, and a digest of
+the current continuation. That relation and digest are sufficient to stop the
+stale worker and re-read recovery without publishing a fencing value.
 
 The exact resettable counter set is closed:
 
@@ -3220,7 +3501,7 @@ the generation on every primary and refusal subslot. No seventh resettable
 counter or alternate name is permitted. Their current values are interpreted
 only with `MigrationControllerEpoch`, which is a controller-calculated 256-bit
 chain digest over the migration attempt, previous epoch, successful rekey
-audit event, and prepared outcome nonce. Old-epoch requests are stale even
+audit event, and primary outcome nonce. Old-epoch requests are stale even
 when every reset counter value matches.
 
 Every command, command audit, audit-repair, control-repair, conflict signal,
@@ -3231,33 +3512,144 @@ Generated schemas reject a resettable counter outside that epoch binding.
 digest, status-disclosure identity, and telemetry-recovery identity are not
 derived from, sequenced by, or reset with any of the six.
 
-At `u64::MAX - 1`, ordinary work that would increment any one of the six
-counters atomically creates or joins
-`MigrationControllerRekeyRequired { counter_kinds, controller_epoch }` before
-consuming the last value. The same transaction closes new child prepares,
-semantic migration transitions, and telemetry writes in that old epoch; work
-already durable must settle under the quiescence rules below. A legacy or
-corrupt value already at `u64::MAX`
-produces `MigrationControllerCounterExhausted`; it never increments or wraps.
-Only `RekeyMigrationControllerEpoch` may proceed. It is a dedicated durable
-state machine in the separately sealed, non-resettable
-`MigrationControllerRekeyRecord`, not a child command:
+Counter exhaustion is prevented with generated drain headroom rather than a
+one-increment sentinel. For each exact counter kind `k`, generation computes:
+
+```
+REKEY_DRAIN_HEADROOM[k] =
+  max(
+    required_increments_to_quiesce_or_migrate(configuration, k)
+    for configuration in GeneratedLegalLiveRekeyConfigurations
+  )
+
+REKEY_ADMISSION_THRESHOLD[k] =
+  u64::MAX - REKEY_DRAIN_HEADROOM[k]
+```
+
+`GeneratedLegalLiveRekeyConfigurations` is the exhaustive bounded product of
+all five primary child slots, all five refusal subslots, the reusable
+status-audit slot, every migration-audit-repair and activation state, every
+assignment-revocation audit and capacity-release state, every telemetry
+marker, latch, barrier, and recovery state, and rekey preparation itself.
+Each state graph edge declares its six-component maximum increment vector.
+The generator computes the maximum component-wise cost to settle a legal
+simultaneous live configuration or move each live continuation into the
+rekey record. Rekey preparation is present in the census with a zero vector
+because the dedicated protocol uses no resettable counter. An absent state,
+unknown edge cost, overflow in the calculation, zero headroom for a counter
+whose graph can increment, or hand-written constant fails generation.
+
+The transaction that first makes any counter equal to its
+`REKEY_ADMISSION_THRESHOLD` atomically closes ordinary admission. A request
+that would cross a threshold is refused before its increment and closes the
+same gates. New ordinary child prepares, semantic migration transitions,
+telemetry updates, and migration-status claims are then forbidden. Only an
+already-admitted drain action whose generated counter-budget vector fits the
+remaining reserved headroom, or the counter-independent rekey protocol, may
+run. Each permitted drain transition atomically charges its vector; no drain
+action can consume a component reserved for the worst remaining legal
+configuration. The closed inventory and component-wise budget proof make
+wrapping any one of the exact six counters unreachable.
+
+Legacy or corrupt values above a threshold do not attempt a counter-using
+drain. Their remaining budget for the affected component is zero rather than
+an underflowing subtraction. The controller uses fixed, counter-independent
+`RekeyContinuationRecord` entries inside the non-resettable rekey record:
+
+```
+RekeyContinuationRecord = {
+  continuation_alias: ControllerIssued256BitNonCapability,
+  continuation_kind: CounterIndependentRekeyContinuationKind,
+  canonical_continuation_digest,
+  source_record_digest,
+  migration_proof_digest
+}
+
+CounterIndependentRekeyContinuationKind =
+  ChildOrRefusalSlot
+  | MigrationAuditRepairOrActivation
+  | StatusDisclosure
+  | AssignmentRevocationOrCapacityRelease
+  | TelemetryUpdateOrRecoveryBarrier
+  | SemanticMigrationContinuation
+```
+
+These records contain none of the six resettable counters. A typed
+counter-independent drain action freezes the exact source record, proves that
+the old continuation can no longer write, and atomically installs its
+continuation record. This route is available for every quiescence blocker,
+including migration-audit activation and telemetry barrier migration. A
+continuation is never dropped because its legacy counter is already too high.
+
+The gate state is closed:
+
+```
+MigrationRekeyAdmissionGates =
+  Open
+  | DrainOnly {
+      trigger_counter_kinds,
+      remaining_counter_budget,
+      new_child_prepares: Closed,
+      semantic_transitions: Closed,
+      telemetry_updates: Closed,
+      migration_status_claims: Closed
+    }
+```
+
+Entering `RequestedQuiescencePending` atomically changes `Open` to
+`DrainOnly`, or verifies the threshold transaction already did so. Existing status
+disclosure, command, outbox, audit, revocation, and telemetry work may settle
+within its declared budget or use its typed counter-independent continuation
+migration. No new claim can race into the old epoch. Install is permitted only
+after every blocker is either quiescent or represented by exactly one verified
+continuation record. The gates reopen only in the atomic epoch-install
+transaction.
+
+`RekeyMigrationControllerEpoch` is a dedicated durable protocol in the
+separately sealed, non-resettable `MigrationControllerRekeyRecord`, not a
+child command. Its request is:
+
+```
+RekeyMigrationControllerEpochRequest =
+  Initial {
+    migration_attempt_alias,
+    expected_old_controller_epoch,
+    requested_replacement_digest
+  }
+  | Resume {
+      migration_attempt_alias,
+      rekey_identity_alias
+    }
+```
+
+The initial request carries neither raw `RekeyIdentity` nor an alias. In the
+same transaction that admits it and enters
+`RequestedQuiescencePending`, the controller mints the internal 256-bit
+`RekeyIdentity` and the independent primary `RekeyOutcomeNonce`. Later status
+and resume expose or accept only the server-resolved, non-capability
+`rekey_identity_alias`. Generated commands never accept a raw rekey identity.
+A byte-identical repeated initial request joins the active record. Changed
+initial bytes while that record is active are a dedicated audited refusal and
+cannot replace its immutable fields; a `Resume` alias must resolve to that
+same record and supplies no replacement fields to alter.
 
 ```
 MigrationControllerRekeyState =
   RequestedQuiescencePending {
     old_controller_epoch,
     rekey_identity: ControllerIssued256Bit,
-    outcome_nonce: ControllerIssued256Bit,
+    primary_outcome_nonce: ControllerIssued256Bit,
     exact_counter_kinds,
     exact_counter_values,
+    remaining_counter_budget,
     semantic_state_digest,
-    requested_replacement_digest
+    requested_replacement_digest,
+    continuations: BoundedRekeyContinuationRecords
   }
   | NewEpochPrepared {
       requested_fields,
       new_controller_epoch,
-      quiescence_proof_digest,
+      quiescence_or_continuation_proof_digest,
       replacement_control_digest,
       replacement_integrity_digest,
       replacement_telemetry_digest,
@@ -3278,7 +3670,7 @@ MigrationControllerRekeyState =
       old_controller_epoch,
       new_controller_epoch,
       rekey_identity,
-      outcome_nonce,
+      primary_outcome_nonce,
       success_event_id,
       success_event_digest,
       audit_acknowledgement_digest,
@@ -3290,12 +3682,14 @@ MigrationControllerRekeySafeState =
     rekey_identity_alias,
     exact_counter_kinds,
     exact_counter_values,
-    quiescence_blocker_codes
+    remaining_counter_budget,
+    quiescence_blocker_codes,
+    migrated_continuation_aliases
   }
   | NewEpochPrepared {
       rekey_identity_alias,
       new_controller_epoch_alias,
-      quiescence_proof_digest,
+      quiescence_or_continuation_proof_digest,
       success_event_digest
     }
   | RekeyAuditOutboxPending {
@@ -3309,79 +3703,112 @@ MigrationControllerRekeySafeState =
       success_event_digest,
       audit_acknowledgement_digest
     }
-  | Installed {
-      rekey_identity_alias,
-      new_controller_epoch_alias,
-      success_event_digest,
-      installed_state_digest
-    }
+
+MigrationControllerRekeyTerminalResult =
+  Installed {
+    rekey_identity_alias,
+    new_controller_epoch_alias,
+    success_event_digest,
+    audit_acknowledgement_digest,
+    installed_state_digest
+  }
+
+MigrationControllerRekeyRecovery =
+  InProgress(MigrationControllerRekeySafeState)
+  | Terminal(MigrationControllerRekeyTerminalResult)
 ```
 
-The controller issues the 256-bit `RekeyIdentity` and independent 256-bit
-`RekeyOutcomeNonce` when it first enters
-`RequestedQuiescencePending`. Neither is a digest of a counter, slot,
-generation, sequence, request key, clock, or telemetry marker. A repeated
-request joins that identity. Changed bytes cannot replace its immutable
-requested fields. Construction, verification, allocation, or storage failure
-retains the same nonterminal state, identity, and outcome nonce for retry.
+`Installed` is terminal result, never an in-progress safe state. Construction,
+verification, allocation, storage, fsync, and retryable install failure retain
+the same nonterminal state, identity, and primary outcome nonce. The dedicated
+claim, recovery identity, and audit authorization contain the migration
+identity, old controller epoch, rekey identity, outcome nonce, record digest,
+and closed outcome kind only. They contain no child sequence, child-audit
+sequence, slot record generation, migration-state generation,
+control-reserve incarnation, telemetry-marker sequence, reservation
+generation, or other resettable counter.
 
-Rekey can advance to `NewEpochPrepared` only after a quiescence transaction
-verifies all of the following under one expected old-epoch state digest:
+Every admitted terminal success or refusal of the dedicated protocol receives
+its own freshly minted counter-independent `RekeyOutcomeNonce` and therefore
+its own event id:
 
-- every one of the five child-command primary slots and five refusal subslots
-  is `Available`; each prepare, claim, stale worker, external effect,
-  controller outbox, sink reservation, append, and audit acknowledgement must
-  settle first. A safe last-result digest retained beside an available slot
-  may then be explicitly migrated into the prepared replacement;
-- every migration result outbox and acknowledgement is settled, and
-  `MigrationAuditRepairState` has completed through activation rather than
-  being discarded or reinterpreted;
-- the fixed migration-status audit slot is `Available`, with every prior
-  disclosure event acknowledged or proof-cancelled before disclosure;
-- every migration telemetry write is closed and the marker is a verified
-  `Stable` value with a matching failure-latch closure. A verified degraded
-  `Stable` value blocks prepare until either
-  `RecoverMigrationTelemetryHealth` succeeds or a separate durable
-  `TelemetryStableMigrationProof` explicitly freezes that exact degraded
-  state for the replacement. `UpdatePending`, `RecoveryBarrier`, an armed or
-  unverifiable failure latch, or a corrupt marker has no explicit-migration
-  shortcut and blocks rekey until `RecoverMigrationTelemetryHealth`
-  succeeds; and
-- the semantic migration state and retained success tuple are stable. The
-  rekey record itself is excluded from the reset set and is never treated as a
-  quiescence blocker against itself.
+```
+MigrationEpochRekeyOutcomeEventId =
+  digest(
+    "d2b:panel:migration-controller-epoch-rekey-outcome:v1",
+    MigrationAttemptIdentity,
+    OldMigrationControllerEpoch,
+    RekeyIdentity,
+    RekeyOutcomeNonce,
+    RekeyTerminalOutcomeKind
+  )
+```
 
-The transition to `NewEpochPrepared` verifies that the old-epoch admission
-closure still holds, freezes the replacement bytes and canonical success
-event bytes, and stores their digests. A racing status
-disclosure or late child worker makes that compare-and-swap fail and must
-settle before the same identity retries. No external effect, outbox, audit
-acknowledgement, audit-repair state, status disclosure, or telemetry barrier
-can be silently dropped into the new epoch.
+The primary nonce minted on entry is reserved for the eventual install
+success. A changed-request or other admitted terminal refusal mints a distinct
+nonce and event without changing the primary continuation. Exact retries
+replay the same outcome. Nonterminal failures mint no terminal outcome. The
+event preimage and canonical audit bytes exclude all resettable counters and
+all child, slot, telemetry, and reservation identities.
 
-`MigrationEpochRekeyAuditEventId` uses only the migration identity, old epoch,
-rekey identity, and outcome nonce. `NewEpochPrepared` freezes one canonical
-event byte string for that id. Every later retry must reproduce the stored
-digest byte for byte; a mismatch is an integrity fault and appends nothing.
+Rekey can advance to `NewEpochPrepared` only after one transaction verifies
+the old-epoch gate and all of the following under one expected record digest:
+
+- each live primary or refusal child slot has settled, or its exact immutable
+  continuation has been fenced and moved into a
+  `RekeyContinuationRecord`;
+- every migration result outbox, acknowledgement, audit-repair state, and
+  activation has settled or has an exact counter-independent continuation;
+- an existing migration-status disclosure has been acknowledged and cleared,
+  or its matching disclosure-identity-bound reservations and response have
+  been fenced and migrated; no new disclosure claim is admitted;
+- each assignment revocation and unused-capacity release is settled or
+  represented by its exact continuation; and
+- the semantic migration state and retained success tuple are stable or have
+  exact continuation records. The rekey record is excluded from the reset set
+  and is never its own blocker.
+
+Telemetry does not have to become `Healthy`, or even `Stable`, before rekey.
+A verified degraded marker, `UpdatePending`, `RecoveryBarrier`, corrupt
+marker, armed latch, or live recovery slot is frozen with its exact marker,
+latch, normal-health, and recovery-slot digests into a
+`TelemetryUpdateOrRecoveryBarrier` continuation. The new epoch installs the
+same non-healthy observation and a counter-independent recovery continuation;
+explicit telemetry recovery proceeds afterward. Rekey may not reinterpret it
+as healthy or clear the latch.
+
+The transition to `NewEpochPrepared` freezes the replacement bytes, every
+continuation, and canonical success event bytes. Because all four admission
+gates are already closed, a late child, status, semantic, or telemetry claim
+is refused rather than racing the prepare. No effect, outbox,
+acknowledgement, audit-repair state, revocation, status disclosure, telemetry
+barrier, or corrupt marker can be silently dropped.
+
+`NewEpochPrepared` freezes one canonical success event byte string for the
+primary outcome event id. Every later retry must reproduce the stored digest
+byte for byte; a mismatch is an integrity fault and appends nothing.
 `RekeyAuditOutboxPending` retries only those frozen bytes. The sink must fsync
 and the controller must durably enter `AuditAcknowledgedInstallPending` before
-epoch install. A crash after audit acknowledgement therefore resumes install,
-not audit construction and not a new identity.
+epoch install. A crash after audit acknowledgement resumes install, not event
+construction and not a new identity.
 
-The install transaction compares the complete old semantic and quiescence
-digests, creates the prepared new epoch, reconstructs the five child-command
-slots and their refusal subslots as `Available` with no old last result,
-resets all and only the six counters to zero, preserves the semantic migration
-state and retained success tuple, installs the verified telemetry projection,
-and advances the separate rekey record to `Installed`. It cannot reset,
-delete, or reconstruct its own recovery record. A future rekey may replace
-`Installed` with a new `RequestedQuiescencePending` only after the installed
-epoch is authoritative and with a fresh controller-issued identity and
-outcome nonce. A crash at requested, prepared, outbox-pending,
-acknowledged-install-pending, or installed state resumes that exact state.
-Thus retryable construction, fsync, audit, and install failures remain
-nonterminal under one identity, success audit is durable before install, and
-counter exhaustion cannot force reuse or wrap.
+The install transaction compares the complete old semantic, gate,
+quiescence-or-continuation, and audit-acknowledgement digests; creates the new
+epoch; resets all and only the exact six counters to zero; preserves semantic
+state and the retained success tuple; installs available slots for settled
+work and counter-independent continuation adapters for migrated work; carries
+every non-healthy telemetry marker, latch, and recovery continuation without
+claiming recovery; advances the separate rekey record to terminal
+`Installed`; and reopens all four gates. It cannot reset, delete, or
+reconstruct its own recovery record.
+
+A future rekey replaces the terminal record only after the installed epoch is
+authoritative and mints a fresh rekey identity and fresh primary outcome
+nonce. Thus two consecutive rekeys cannot share identity or outcome events. A
+crash at requested, prepared, outbox-pending,
+acknowledged-install-pending, or terminal install resumes that exact record.
+Success audit is durable before install, and neither threshold exhaustion nor
+legacy corruption can force counter reuse or wrap.
 
 `MigrationRecoveryStatus` is a strict tagged type. `ReadMigrationRecoveryStatus`
 returns the selected variant directly, not a state digest followed by another
@@ -3462,15 +3889,22 @@ MigrationAuditRepairState =
 | `ProcessingFenceEligible` | owner epoch alias, lease expiry, closed fence reason, deadline | `Operator.FenceProtectedAttempt` by `ProtectedOperator`, immediately, through the fence child slot |
 | `PausedSelfClearingWait` | owner epoch alias, exact `MigrationSelfClearingWaitV1`, pause deadline | controller waits for that exact prerequisite and then resumes the same migration; operator observation is `Operator.ReadMigrationRecoveryStatus` |
 | `PausedOperatorRepairRequired` | owner epoch alias, exact `MigrationOperatorRepairPlanV1`, pause deadline | satisfy the carried prerequisite, then `Operator.ResumeProtectedAttempt` through the resume child slot; no audit-sink or control-integrity action is constructible |
-| `PausedResumeEligible` | fenced owner epoch alias, exact cleared wait or completed generic repair plan, pause deadline | `Operator.ResumeProtectedAttempt` by `ProtectedOperator`, immediately, through the resume child slot |
 | `PausedFenceEligible` | owner epoch alias, exact retained wait or generic repair plan, closed fence reason, pause deadline | `Operator.FenceProtectedAttempt` by `ProtectedOperator`, immediately, through the fence child slot |
 | `MigrationAuditRepair` | exact `MigrationAuditRepairState` including repair identity, retained success tuple, generations, proofs, owner where applicable, and deadline | `Operator.RepairMigrationSinkAppend` by `ProtectedOperator`, immediately, through the sink-repair child slot |
 | `MigrationActivationPending` | appendable reservation generation, audit-acknowledgement digest, deadline | `Operator.CompleteMigrationAuditActivation` by `ProtectedOperator`, immediately, through the audit-activation child slot |
 | `ControlReserveIntegrityCorrupt` | underlying migration-state code, quarantined reserve incarnation, epoch-and-incarnation-bound repair identity, corrupt slot field codes, expected reserve digest | `Operator.RepairMigrationControlReserve` by `ProtectedOperator`, immediately, through the integrity repair child slot |
-| `MigrationControllerRekeyRequired` | exact subset of the six `MigrationResettableCounterKind` values at `u64::MAX - 1`, current values, rekey identity alias | `Operator.RekeyMigrationControllerEpoch` by `ProtectedOperator`, immediately, through the separately sealed non-child rekey record |
-| `MigrationControllerCounterExhausted` | exact subset of the six counter kinds at `u64::MAX`, current values, rekey identity alias, integrity reason | `Operator.RekeyMigrationControllerEpoch` by `ProtectedOperator`, immediately, through the separately sealed non-child rekey record |
-| `MigrationControllerRekeyInProgress` | exact nested `MigrationControllerRekeySafeState`, whose tag owns all and only its applicable aliases, blocker codes, proofs, and digests | `Operator.RekeyMigrationControllerEpoch` by `ProtectedOperator` with the same identity, through the separately sealed non-child rekey record |
+| `MigrationControllerRekeyRequired` | exact subset of the six `MigrationResettableCounterKind` values at their generated `REKEY_ADMISSION_THRESHOLD`, current values, thresholds, and remaining drain budgets; no rekey identity or alias | initial `Operator.RekeyMigrationControllerEpoch` by `ProtectedOperator` with no rekey identity or alias, through the separately sealed non-child rekey record |
+| `MigrationControllerCounterExhausted` | exact subset of the six counter kinds above threshold or otherwise legacy/corrupt, current values, thresholds, and integrity reason; no rekey identity or alias | initial `Operator.RekeyMigrationControllerEpoch` by `ProtectedOperator` with no rekey identity or alias, through the separately sealed non-child rekey record |
 | `Completed` | source generation, destination generation, migration event id and tombstone digest | `Operator.ReadMigrationRecoveryStatus` by `ProtectedOperator`, terminal observation with `NoFurtherAction`, through `MigrationIntegrityReserve` |
+
+`MigrationControllerRekeyRecovery` is separate from
+`MigrationRecoveryStatus`. Once `DrainOnly` closes new migration-status
+claims, only `RekeyMigrationControllerEpoch::Resume` with the server-resolved
+alias returns its exact in-progress or terminal rekey recovery tag.
+`MigrationControllerRekeySafeState` cannot contain `Installed`; `Installed`
+is returned only as `MigrationControllerRekeyRecovery::Terminal`. After
+atomic install, ordinary migration status is evaluated in the new epoch under
+the reopened gates.
 
 The versioned closed pause plans are:
 
@@ -3515,7 +3949,8 @@ MigrationOperatorRepairPlanV1 =
 The controller verifies the named prerequisite while executing the resume
 child command. A missing prerequisite is a typed audited child-command refusal
 that returns the same exact plan. A successful generic operator repair
-advances state to `PausedResumeEligible`. Audit-sink failure transitions
+and authenticated `ResumeProtectedAttempt` advances directly out of the pause;
+there is no independently resumable operator-repair state. Audit-sink failure transitions
 directly to `MigrationAuditRepair`; control-reserve corruption transitions
 directly to `ControlReserveIntegrityCorrupt`. Neither condition can be encoded
 inside `PausedOperatorRepairRequired` or `MigrationOperatorRepairPlanV1`.
@@ -3550,11 +3985,12 @@ MigrationStatusAuditSlot =
       disclosure_identity: ControllerIssued256Bit,
       migration_attempt_alias,
       controller_epoch,
-      protected_operator_alias,
       owner_epoch,
       lease_until,
       deadline,
-      required_capacity
+      required_capacity,
+      controller_reservation_alias,
+      sink_reservation_alias
     }
   | AuditOutboxPending {
       claimed_fields,
@@ -3579,19 +4015,62 @@ MigrationStatusAccessAuditEventId =
     MigrationControllerEpoch,
     DisclosureIdentity
   )
+
+MigrationStatusAuditReservationBinding = {
+  disclosure_identity,
+  migration_attempt_alias,
+  controller_epoch
+}
+
+MigrationStatusAccessAuditEvent =
+  Unattributed {
+    event_id,
+    disclosure_identity,
+    migration_attempt_alias,
+    controller_epoch,
+    response_state_digest
+  }
+  | DeploymentAttributed {
+      event_id,
+      disclosure_identity,
+      migration_attempt_alias,
+      controller_epoch,
+      response_state_digest,
+      protected_operator_audit_digest: ProtectedOperatorAuditDigest
+    }
+
+ProtectedOperatorAuditDigest =
+  keyed_digest(
+    DeploymentAuditKey,
+    "d2b:panel:protected-operator-audit:v1",
+    ProtectedOperatorIdentity
+  )
 ```
 
 Every successful disclosure is a distinct serialized operation. After
 authentication, the controller must claim `Available` with a fresh
 controller-issued 256-bit disclosure identity, lease, deadline, and exact
-controller and sink capacity before constructing the response. It then
-evaluates current state, seals the exact response, and appends and fsyncs one
-event containing the protected operator alias and digest of that current
-state. Only after acknowledgement is durable may it return the sealed
-response; it then clears the slot. A second read by the same operator in the
-same epoch gets a fresh identity and event. A different operator or a new
-epoch also gets a distinct event. The fixed slot retains no per-operator
-history; the sink's bounded D17 retention owns event history.
+controller and sink capacity before constructing the response. Both
+reservations bind the immutable disclosure identity, migration alias, and
+controller epoch, never operator history or mutable worker ownership. It then
+evaluates current state, seals the exact response, binds those reservations to
+the one event id and digest, and appends and fsyncs one event containing the
+current state digest. Only after acknowledgement is durable may it return the
+sealed response; it then clears the slot. A second read by the same operator
+in the same epoch gets a fresh identity and event. A different operator or a
+new epoch also serializes through the slot and gets a distinct identity,
+reservations, and event. The fixed slot retains no per-operator history; the
+sink's bounded D17 retention owns event history.
+
+The event omits `protected_operator_alias`. A deployment that requires
+attribution selects the `DeploymentAttributed` event variant and computes the
+fixed deployment-keyed `ProtectedOperatorAuditDigest`; otherwise it selects
+`Unattributed`. The claim transaction places any attributed digest directly
+into the preallocated canonical audit prefix, so crash recovery never needs an
+operator field in the slot. That digest is permitted only inside canonical
+audit event bytes. It is non-reversible outside the deployment and is forbidden from
+logs, errors, status, refusal products, metrics, `Debug`, reservation
+bindings, and every non-audit schema.
 
 A concurrent read waits for the slot or receives
 `migration-status-audit-capacity-unavailable` before any state is constructed
@@ -3601,8 +4080,15 @@ capacity and a durable acknowledgement. Startup adopts the exact outbox or
 acknowledgement of a stale claim. If no response was returned, it clears the
 settled slot and a retry creates a new disclosure identity and event; it never
 replays the old response as a successful new disclosure. A reservation that
-cannot be adopted is proof-cancelled before the slot clears. The status slot
+matches the immutable disclosure binding is adopted even after worker
+takeover. A reservation that does not match or cannot be adopted is
+proof-cancelled before the slot clears; time alone never clears it. The status slot
 cannot consume a child command slot or ordinary status capacity.
+
+While rekey gates are `DrainOnly`, no new status claim is admitted. An
+existing claim must reach acknowledgement and clear, or be fenced and moved
+to the rekey record by the typed disclosure-continuation action. Dedicated
+rekey resume reads its own record and does not claim this slot.
 
 `ResumeProtectedAttempt`, `FenceProtectedAttempt`,
 `RepairMigrationSinkAppend`, and `CompleteMigrationAuditActivation` use only
@@ -3862,57 +4348,114 @@ MigrationTelemetryHealthState =
   | ExporterDegraded
 
 MigrationTelemetryHealthMarker =
-  Stable {
+  StableHealthy {
     controller_epoch,
     marker_sequence,
-    state: MigrationTelemetryHealthState,
     normal_health_digest
   }
+  | StableDetailedDegraded {
+      controller_epoch,
+      marker_sequence,
+      normal_health_digest,
+      telemetry_failure_alias
+    }
+  | StableAggregateDegraded {
+      controller_epoch,
+      marker_sequence,
+      normal_health_digest,
+      telemetry_failure_alias
+    }
+  | StableExporterDegraded {
+      controller_epoch,
+      marker_sequence,
+      normal_health_digest,
+      telemetry_failure_alias
+    }
   | UpdatePending {
       controller_epoch,
       marker_sequence,
       expected_prior_sequence,
       prior_stable_digest,
       telemetry_operation_class,
-      update_plan_digest
+      update_plan_digest,
+      telemetry_failure_alias
     }
   | RecoveryBarrier {
       controller_epoch,
       marker_sequence,
       expected_failed_sequence,
       prior_failure_digest,
-      required_probe_set_digest
+      required_probe_set_digest,
+      telemetry_failure_alias,
+      recovery_identity_alias
     }
 
 MigrationTelemetryHealthObservation =
-  Healthy { marker_sequence }
-  | DetailedDegraded { marker_sequence }
-  | AggregateDegraded { marker_sequence }
-  | ExporterDegraded { marker_sequence }
-  | HealthUnavailable {
-      reason:
-        MarkerIntegrityFailure
-        | MarkerUpdateIncomplete
-        | MarkerSequenceExhausted
-        | NormalHealthDigestMismatch
-        | RecoveryBarrierIncomplete
-        | PreBarrierFailureLatched
-        | FailureLatchIntegrityFailure
-        | TelemetryRecoveryIncomplete
-        | TelemetryFollowupUnavailable
+  Healthy {
+    marker_sequence,
+    next: NoFurtherAction
+  }
+  | DetailedDegraded {
+      marker_sequence,
       telemetry_failure_alias,
-      recovery:
-        Operator.RecoverMigrationTelemetryHealth by ProtectedOperator
-          through MigrationTelemetryHealthRecoverySlot
+      next: Operator.RecoverMigrationTelemetryHealth
+    }
+  | AggregateDegraded {
+      marker_sequence,
+      telemetry_failure_alias,
+      next: Operator.RecoverMigrationTelemetryHealth
+    }
+  | ExporterDegraded {
+      marker_sequence,
+      telemetry_failure_alias,
+      next: Operator.RecoverMigrationTelemetryHealth
+    }
+  | HealthUnavailable {
+      reason: HealthUnavailableReason,
+      telemetry_failure_alias,
+      next: Operator.RecoverMigrationTelemetryHealth
+    }
+  | UpdatePending {
+      marker_sequence,
+      telemetry_operation_class,
+      telemetry_failure_alias,
+      next: Operator.RecoverMigrationTelemetryHealth
+    }
+  | RecoveryBarrier {
+      marker_sequence,
+      recovery_identity_alias,
+      telemetry_failure_alias,
+      next: Operator.RecoverMigrationTelemetryHealth
+    }
+  | CorruptMarker {
+      integrity_reason: MarkerIntegrityReason,
+      telemetry_failure_alias,
+      next: Operator.RecoverMigrationTelemetryHealth
+    }
+  | ArmedFailureLatch {
+      marker_tag,
+      latch_digest,
+      telemetry_failure_alias,
+      next: Operator.RecoverMigrationTelemetryHealth
     }
 
-TelemetryFailureAlias =
-  digest(
-    "d2b:panel:migration-telemetry-failure-alias:v1",
-    MigrationControllerEpoch,
-    CurrentMarkerDigest,
-    CurrentFailureLatchDigest
-  )
+HealthUnavailableReason =
+  MarkerSequenceExhausted
+  | NormalHealthDigestMismatch
+  | TelemetryRecoveryIncomplete
+  | TelemetryFollowupUnavailable
+
+TelemetryFailureAlias = ControllerIssued256BitNonCapability
+
+MigrationTelemetryCurrentFailureAliasRecord =
+  NoneHealthy
+  | Current {
+      telemetry_failure_alias,
+      controller_epoch,
+      source_marker_digest,
+      source_latch_digest,
+      source_state_tag
+    }
 
 MigrationTelemetryFailureLatch =
   Clear {
@@ -3923,7 +4466,8 @@ MigrationTelemetryFailureLatch =
       controller_epoch,
       expected_marker_digest,
       telemetry_operation_class,
-      update_plan_digest
+      update_plan_digest,
+      telemetry_failure_alias
     }
   | Armed {
       arm_pending_fields,
@@ -3934,6 +4478,7 @@ MigrationTelemetryFailureLatch =
       controller_epoch,
       stable_marker_digest,
       normal_health_digest,
+      telemetry_failure_alias,
       closure_digest
     }
 
@@ -3948,7 +4493,6 @@ MigrationTelemetryHealthRecoverySlot =
       expected_marker_digest,
       expected_latch_digest,
       canonical_request_digest,
-      protected_operator_alias,
       owner_epoch,
       lease_until,
       deadline,
@@ -3974,13 +4518,27 @@ MigrationTelemetryHealthRecoverySlot =
       prepared_fields,
       audit_acknowledgement_digest
     }
+  | RecoveryFailed {
+      recovery_identity_alias,
+      source_failure_digest,
+      telemetry_failure_alias,
+      closed_failure_code,
+      failure_event_digest
+    }
 
-MigrationTelemetryHealthRecoveryLastResult = {
-  recovery_identity_alias,
-  source_failure_digest,
-  installed_stable_state,
-  recovery_event_digest
-}
+MigrationTelemetryHealthRecoveryLastResult =
+  Succeeded {
+    recovery_identity_alias,
+    source_failure_digest,
+    installed_stable_state,
+    recovery_event_digest
+  }
+  | Failed {
+      recovery_identity_alias,
+      source_failure_digest,
+      closed_failure_code,
+      failure_event_digest
+    }
 
 MigrationTelemetryHealthRecoveryEventId =
   digest(
@@ -3988,117 +4546,160 @@ MigrationTelemetryHealthRecoveryEventId =
     MigrationControllerEpoch,
     MigrationTelemetryHealthRecoveryIdentity
   )
+
+MigrationTelemetryHealthRecoveryEvent =
+  Unattributed {
+    recovery_event_id,
+    source_failure_digest,
+    probe_result_digest,
+    prepared_stable_state,
+    normal_health_digest
+  }
+  | DeploymentAttributed {
+      recovery_event_id,
+      source_failure_digest,
+      probe_result_digest,
+      prepared_stable_state,
+      normal_health_digest,
+      protected_operator_audit_digest: ProtectedOperatorAuditDigest
+    }
 ```
 
 The fixed current-and-shadow `MigrationTelemetryHealthMarkerReserve` is not
 the preflight signal, control-conflict signal, execution, control, integrity,
 status, or accepted-conflict reserve. Its failure latch is separately reserved
-controller core metadata, not a field hidden inside the marker. Before any
-fallible detailed, aggregate, summary, normal-health, or exporter write, the
-controller first fsyncs `ArmPending` with a fresh controller-issued 256-bit
-telemetry-write identity. It then durably writes and verifies
-`MigrationTelemetryFailureLatch::Armed`. Only an exact verified `Armed` value
-may proceed to install the preallocated `UpdatePending` barrier with the
-controller epoch, next monotonic marker sequence, expected prior sequence and
-digest, and exact update-plan digest. Only then may it touch a detailed signal,
-aggregate, summary, normal-health record, or exporter.
+controller core metadata, not a field hidden inside the marker. The current
+failure-alias record is a third independently sealed fixed record. It stores
+the controller-issued, non-capability alias for the exact current non-healthy
+cycle, including a corrupt marker that cannot safely carry its own alias.
+Startup reconciles this fixed record before status admission; when marker
+corruption has no trustworthy prior alias, it mints and fsyncs a fresh alias in
+the independent record without rewriting the marker. Thus even the corrupt
+marker observation has a current server-issued recovery alias. If that fixed
+record cannot be made durable, status admission fails closed before returning
+a telemetry observation; no non-healthy tag is ever emitted without its
+alias.
 
-Failure to write or verify `Armed` leaves `ArmPending` or makes latch integrity
-unverifiable, attempts no telemetry write, and makes all later status
-observations `HealthUnavailable`. A crash after `Armed` but before
-`UpdatePending`, including the no-telemetry-write case, remains
-`PreBarrierFailureLatched` after restart and can never reveal the old
-`Healthy`. Success writes and verifies the normal health value and digest,
-compare-and-swaps that exact `UpdatePending` marker to the matching `Stable`
-value, and atomically records `StableClosureProven` with the stable marker and
-normal-health digests. Normal closure proves the completed write but does not
-clear the latch record to `Clear`.
+The durable admission boundary for any fallible detailed, aggregate, summary,
+normal-health, or exporter write is the fsynced transaction that installs
+`ArmPending` and `MigrationTelemetryCurrentFailureAliasRecord::Current` with
+fresh controller-issued write and failure identities. Before that commit no
+telemetry operation is admitted and no telemetry write may be attempted. Once
+it commits, failure at every point before `UpdatePending`, including failure
+to advance or verify `Armed`, leaves `ArmPending`, `Armed`, or an integrity
+fault plus the independently durable current failure alias. Restart therefore
+returns `ArmedFailureLatch`, `CorruptMarker`, or `HealthUnavailable`; it can
+never return the old or shadow `Healthy`.
 
-Any crash or write failure after `UpdatePending`, including a failure before
-the first normal telemetry write, leaves `UpdatePending`, `Armed`, or an
-integrity mismatch durable. It never closes directly to a stale `Stable`
-degraded or healthy value. Startup treats `ArmPending`, `Armed`, every
-non-`Stable` marker, and every latch, marker, closure, or normal-health
-integrity mismatch as `HealthUnavailable`; it never rolls back to the shadow
-`Healthy` marker.
+Only an exact verified `Armed` value may install the preallocated
+`UpdatePending` marker with the same failure alias, controller epoch, next
+monotonic marker sequence, expected prior sequence and digest, and update-plan
+digest. Only then may normal telemetry bytes be touched. Successful normal
+closure writes and verifies normal health, compare-and-swaps that exact
+`UpdatePending` marker to one exact stable tag, and atomically records
+`StableClosureProven` with the same alias and stable and normal-health digests.
+Normal closure proves completion but does not clear the latch. A stable
+degraded tag therefore remains recoverable and cannot drift back to healthy
+through later ordinary telemetry success.
 
-Degraded or unavailable health is sticky. Ordinary later telemetry success
-cannot clear it. `RecoverMigrationTelemetryHealth` is the only explicit
-operation that may commit `RecoveryBarrier` and then a new `Stable` marker.
-It authenticates `ProtectedOperator` and uses only the separately sealed
-`MigrationTelemetryHealthRecoverySlot` and its fixed audit capacity. The
-request carries only the `TelemetryFailureAlias` returned by
-`HealthUnavailable`; the controller resolves that non-capability alias to the
-exact current epoch, marker digest, and latch digest. The first eligible
-request creates a controller-issued 256-bit recovery identity and enters
+The exact normal transitions are:
+
+```
+FailureLatch: Clear -> ArmPending -> Armed -> StableClosureProven
+Marker:       Stable* -> UpdatePending -> Stable*
+```
+
+There is no direct `ArmPending` or `Armed` to stable edge. Any crash or write
+failure after `UpdatePending` leaves `UpdatePending`, the armed latch, or an
+integrity mismatch durable. Startup never rolls back to a shadow healthy
+marker. `DetailedDegraded`, `AggregateDegraded`, `ExporterDegraded`,
+`HealthUnavailable`, `UpdatePending`, `RecoveryBarrier`, `CorruptMarker`, and
+`ArmedFailureLatch` each return the current server-issued
+`TelemetryFailureAlias` and the exact
+`Operator.RecoverMigrationTelemetryHealth` action. `Healthy` alone owns
+`NoFurtherAction`.
+
+`RecoverMigrationTelemetryHealth` authenticates `ProtectedOperator` and uses
+only the separately sealed `MigrationTelemetryHealthRecoverySlot` and its
+fixed audit capacity. Its request carries the current non-capability alias;
+the controller resolves it to the exact current epoch, marker, latch,
+normal-health, failure-alias record, and recovery-slot digests. The first
+eligible request creates a controller-issued recovery identity and enters
 `RecoveryRequested`. A byte-identical retry joins that identity and state. A
-stale alias or changed request bytes returns a typed preflight refusal and
-cannot replace the identity, barrier, probes, event, or result.
-Authentication, decoding, alias-resolution, or sealed-capacity failure creates
-no recovery identity, barrier, probe, event, or health change.
+stale alias or changed bytes cannot replace the identity, barrier, probes,
+event, or result. Authentication, decoding, alias-resolution, or sealed
+capacity failure creates no recovery identity or health change.
 
-Recovery compare-and-swaps the exact failed marker and latch to
-`RecoveryBarrierInstalled`, verifies both marker copies, latch and closure
-integrity, and the complete detailed, aggregate, summary, and exporter probe
-set, then freezes the prepared normal-health value, new `Stable` state, one
-recovery event id, and canonical event bytes in
-`ProbesVerifiedAuditOutboxPending`. The event contains the protected operator
-alias, source failure digest, probe-result digest, prepared stable state, and
-normal-health digest. Retry appends only those frozen bytes. The sink fsyncs
-before the controller enters `AuditAcknowledgedStableInstallPending`.
-Only then does one compare-and-swap install the prepared higher-sequence
-`Stable` marker, matching normal-health digest, and
-`MigrationTelemetryFailureLatch::Clear` with the recovery-event digest.
-The state is `Healthy` only when every probe passes; otherwise it is the exact
-stable degraded state proved by the probes.
+Recovery performs two separate compare-and-swaps. First it advances only the
+recovery slot to `RecoveryBarrierInstalled` and advances the marker to
+`RecoveryBarrier` with the same failure alias; the latch remains its exact
+source latch state. `RecoveryBarrierInstalled` is a recovery-slot variant
+only. It is not a marker or latch variant. The controller then verifies both
+marker copies, latch, closure, failure-alias record, and the complete detailed,
+aggregate, summary, and exporter probe set. It freezes the prepared
+normal-health value, exact stable tag, one recovery event id, and canonical
+event bytes in `ProbesVerifiedAuditOutboxPending`. Retry appends only those
+frozen bytes. The sink fsyncs before the controller enters
+`AuditAcknowledgedStableInstallPending`.
 
-A construction, probe, storage, append, acknowledgement, or install failure
-remains nonterminal under the same recovery identity and exact recorded
-substate. A crash after the recovery audit acknowledgement resumes stable
-install. A crash or failure before the final compare-and-swap leaves
-`RecoveryBarrierIncomplete` or `TelemetryRecoveryIncomplete` and cannot
-expose `Healthy`. Once installed, an identical request returns the fixed last
-result without another barrier or audit event; a later failed marker creates a
-new recovery identity. No other operation, automatic worker, rekey transition,
-normal telemetry closure, or startup path can clear the latch or commit
-`RecoveryBarrier` followed by `Stable`.
+Only the final compare-and-swap may install the prepared higher-sequence stable
+marker, matching normal-health digest, `FailureLatch::Clear`, and either
+`NoneHealthy` or a new current failure-alias record for a probed degraded
+result. Every probe passing installs `StableHealthy`; otherwise it installs
+the exact stable degraded tag and keeps recovery available under its new
+server-issued failure alias.
 
-The recovery event id is independent of marker sequence and is assigned once
-per recovery identity. `ProbesVerifiedAuditOutboxPending` freezes its one
-canonical byte string before append. The same id with different bytes is an
-integrity refusal and appends nothing. `HealthUnavailable` owns
-`RecoverMigrationTelemetryHealth`; stable health observations own no
-telemetry-recovery action. This nested diagnostic action never substitutes for
-the outer migration-state action, and the generated join rejects placing it in
-a stable health tag or placing another operator operation in
-`HealthUnavailable`.
+Retryable construction, probe, storage, append, acknowledgement, or install
+failure remains nonterminal under the same recovery identity. A closed failure
+instead enters `RecoveryFailed`, durably records its failure event, rotates to
+a fresh current failure alias, and releases the slot for a fresh
+`RecoveryRequested` cycle. Thus a failed recovery can start another recovery
+cycle rather than being permanently tied to the first identity. A crash after
+audit acknowledgement resumes stable install. A crash before final install
+returns `RecoveryBarrier` or `HealthUnavailable` and cannot expose healthy.
+Once success installs, an identical request returns the fixed success result
+without another event.
 
-Both normal closure and recovery closure compare controller epoch, expected
-prior marker sequence, marker digest, current marker tag, telemetry write or
-recovery identity, and exact latch tag and digest. A delayed barrier or closure
-is `migration-telemetry-health-barrier-stale` and changes neither marker,
-latch, nor normal telemetry. A stale normal closure cannot close a newer
-`Armed` latch, and a stale recovery closure cannot clear a latch for another
-failure. At marker sequence
-`u64::MAX - 1`, telemetry enters the controller-rekey-required status before
-another update; at `u64::MAX`, it reports `MarkerSequenceExhausted` and only
-the dedicated epoch-rekey state machine may reset it after telemetry
-quiescence.
+The recovery audit event omits `protected_operator_alias`. If deployment
+policy requires attribution, only the canonical audit bytes use the
+`DeploymentAttributed` variant and its deployment-keyed
+`ProtectedOperatorAuditDigest`; the authenticated request transaction places
+it directly in the preallocated canonical audit prefix, not in recovery-slot
+fields. All other surfaces use neither operator alias nor audit digest. The recovery event id is independent of marker sequence and
+is assigned once per recovery identity.
+`ProbesVerifiedAuditOutboxPending` freezes one canonical byte string; the same
+id with different bytes is refused before append.
 
-For simultaneous telemetry failures, observed precedence is
+Both normal and recovery closure compare controller epoch, expected prior
+marker sequence, marker digest and tag, write or recovery identity, exact latch
+digest and tag, and the current failure-alias record digest. A delayed
+`UpdatePending` or `RecoveryBarrier` closure is
+`migration-telemetry-health-barrier-stale` and changes no marker, latch,
+failure alias, normal telemetry, or recovery slot. It therefore cannot
+overwrite a newer detailed, aggregate, exporter, unavailable, or corrupt
+degradation. The generated telemetry threshold uses
+`REKEY_ADMISSION_THRESHOLD[TelemetryMarkerSequence]`; reaching it closes
+ordinary telemetry updates while budgeted closure or counter-independent
+barrier migration remains available. A legacy value above threshold is moved
+through the rekey continuation protocol rather than incremented.
+
+For simultaneous telemetry conditions, observed precedence is
+`CorruptMarker`, `ArmedFailureLatch`, `RecoveryBarrier`, `UpdatePending`,
 `HealthUnavailable`, `AggregateDegraded`, `DetailedDegraded`,
 `ExporterDegraded`, then `Healthy`. A detailed-capacity fallback may be
 committed as `DetailedDegraded`, an aggregate-capacity fallback as
 `AggregateDegraded`, and an exporter refusal as `ExporterDegraded` only when
-the complete barrier-protected update succeeds. An actual write failure leaves
-`UpdatePending` and is `HealthUnavailable` until explicit recovery. Marker or
-normal-health failure overrides every degraded observation as
-`HealthUnavailable`.
+the complete barrier-protected update succeeds. Marker or normal-health
+failure selects the applicable unavailable or corrupt tag and remains so
+until explicit recovery.
 `ReadRetentionRecoveryStatus`, `ReadRetentionRecoveryState`, and
 `ReadMigrationRecoveryStatus` derive the observation by verifying both marker
 slots and the matching normal-health digest. A read or verification failure
-substitutes only `HealthUnavailable`; it cannot fail the status read or alter
-blocker, integrity, migration, or refusal fields.
+selects `CorruptMarker` when marker integrity is classifiable and otherwise
+`HealthUnavailable`, always with the current independently stored failure
+alias and recovery action. After failure-alias reconciliation it cannot fail
+the status read or alter blocker, integrity, migration, or refusal fields; an
+unrecoverable alias record is the earlier fail-closed status-admission case.
 
 Metrics are
 `migration_preflight_replay_conflict_signals_total`,
@@ -4138,6 +4739,10 @@ MigrationTelemetryMetricLabel =
       | DetailedDegraded
       | AggregateDegraded
       | ExporterDegraded
+      | UpdatePending
+      | RecoveryBarrier
+      | CorruptMarker
+      | ArmedFailureLatch
       | HealthUnavailable
 ```
 
@@ -4171,7 +4776,9 @@ separate closed observation and is never inserted into or substituted for the
 original product. The transport makes the priority refusal frame available to
 the caller before the telemetry follow-up; telemetry has a bounded
 nonblocking attempt and otherwise supplies
-`HealthUnavailable { reason: TelemetryFollowupUnavailable }`. A blocked signal,
+`HealthUnavailable { reason: TelemetryFollowupUnavailable,
+telemetry_failure_alias, next: Operator.RecoverMigrationTelemetryHealth }`.
+A blocked signal,
 aggregate, marker, normal-health, or exporter path therefore proves that the
 original refusal returns first. Failure at any or all of those writes returns
 the same exact refusal. No telemetry failure consumes, delays, or refuses
@@ -4285,6 +4892,11 @@ closed identifiers, closed enums, safe aliases, or digests:
   logs, audit, status, `Debug`, and fixtures cannot add
   `ControllerNamespaceAlias`, a raw identity, namespace, handle, path, or
   deployment id;
+- migration-status-disclosure and telemetry-recovery audit events omit
+  `protected_operator_alias`. A deployment-keyed
+  `ProtectedOperatorAuditDigest` is permitted only in canonical audit event
+  bytes and is forbidden from logs, errors, status, refusal products,
+  reservations, metrics, `Debug`, and every other schema;
 - logs and errors do not render raw recommendations, rationales, legacy
   strings, paths, branch names, user identities, run handles, or evidence
   bytes; and
@@ -4349,7 +4961,7 @@ attempt's event. Event bytes are canonical and digest-only.
 Child-command event identity is instead
 `MigrationChildCommandAuditEventId` above; status access uses
 `MigrationStatusAccessAuditEvent`, revocation uses its assignment-bound event,
-rekey uses `MigrationEpochRekeyAuditEventId`, and telemetry recovery uses its
+rekey uses `MigrationEpochRekeyOutcomeEventId`, and telemetry recovery uses its
 recovery-slot event. None is an `AuditEventId` over a standalone
 `AttemptIdentity`.
 
@@ -4726,22 +5338,26 @@ PendingProtectedAttemptStatus =
     }
   | MigrationControllerRekeyRequired {
       migration_attempt_alias, controller_epoch, state_generation,
-      counter_kinds, current_counter_values, rekey_identity_alias,
-      action: Operator.RekeyMigrationControllerEpoch by ProtectedOperator
+      counter_kinds, current_counter_values, admission_thresholds,
+      remaining_counter_budgets,
+      action: initial Operator.RekeyMigrationControllerEpoch
+              by ProtectedOperator with no rekey identity or alias
               through the separately sealed non-child rekey record
     }
   | MigrationControllerCounterExhausted {
       migration_attempt_alias, controller_epoch, state_generation,
-      counter_kinds, current_counter_values, rekey_identity_alias,
+      counter_kinds, current_counter_values, admission_thresholds,
       integrity_reason,
-      action: Operator.RekeyMigrationControllerEpoch by ProtectedOperator
+      action: initial Operator.RekeyMigrationControllerEpoch
+              by ProtectedOperator with no rekey identity or alias
               through the separately sealed non-child rekey record
     }
   | MigrationControllerRekeyInProgress {
       migration_attempt_alias, controller_epoch, state_generation,
       state: MigrationControllerRekeySafeState,
-      action: Operator.RekeyMigrationControllerEpoch by ProtectedOperator
-              with the same identity through the separately sealed
+      action: Operator.RekeyMigrationControllerEpoch::Resume
+              by ProtectedOperator with only the server-resolved alias
+              through the separately sealed
               non-child rekey record
     }
 ```
@@ -4762,8 +5378,9 @@ remedy. At the bounded deadline, recovery may fence an expired worker epoch,
 but it preserves the same repair plan and cannot pretend an operator
 prerequisite cleared. `MigrationAuditRepair`,
 `ControlReserveIntegrityCorrupt`, and both counter-limit variants are
-dedicated status products with their full identity and only their fixed-slot
-or dedicated-record action. `MigrationControllerRekeyInProgress` is the
+dedicated status products with exact threshold and budget fields, no
+pre-request rekey identity or alias, and only their dedicated-record action.
+`MigrationControllerRekeyInProgress` is the
 dedicated status product for every requested, prepared, audit-pending, and
 acknowledged-install-pending rekey state. `ResumeProtectedAttempt` and
 `FenceProtectedAttempt` are
@@ -4819,10 +5436,12 @@ Crash handling is closed at every boundary:
 
 Startup and scheduled recovery scan every nonterminal prepare, journal,
 reservation binding, outbox row, conversion intent, invalidation proof, and
-rebind proof, every pending assignment revocation, all five reusable migration
+rebind proof, every pending assignment revocation or revocation-capacity
+release, all five reusable migration
 child slots and their fixed refusal subslots including every
 `PreparingAuditCapacity`, the status-disclosure slot, rekey record, telemetry
-failure latch, and telemetry-recovery slot, before the controller accepts
+failure latch, current failure-alias record, and telemetry-recovery slot,
+before the controller accepts
 normal work. Each ordinary
 attempt recovery
 transition is an epoch-and-generation compare-and-swap and consumes the
@@ -5228,7 +5847,11 @@ RemedyAction =
   | InvokeReturnedAssignmentRecoveryAction
   | RestoreAssignmentRevocationAuditCapacity
   | ResumeAssignmentRevocationAudit
-  | WaitForAssignmentRevocationAuditAndSettlement
+  | WaitForAssignmentRevocationSettlement
+  | FinalizeAssignmentRevoked
+  | ProofCancelUnusedAssignmentRevocationSinkCapacity
+  | ReleaseUnusedAssignmentRevocationControllerCapacity
+  | InstallAssignmentTerminalIntent
 ```
 
 Their generated protected command mapping is exact:
@@ -5238,11 +5861,14 @@ Their generated protected command mapping is exact:
 | `ReadCurrentMigrationRecoveryStatus` | `Operator.ReadMigrationRecoveryStatus` with the causing migration alias |
 | `InvokeReturnedMigrationOperation` | the one endpoint operation, caller class, reserve route, and identity owned by the returned status tag |
 | `SubmitStateCurrentMigrationChildCommand` | the one child operation and current epoch and state generation owned by the causing product |
-| `StartOrResumeMigrationControllerRekey` or `RetryMigrationControllerRekeySameIdentity` | `Operator.RekeyMigrationControllerEpoch` with the causing rekey identity |
+| `StartOrResumeMigrationControllerRekey` from a threshold or exhausted status | initial `Operator.RekeyMigrationControllerEpoch` with no rekey identity or alias |
+| `StartOrResumeMigrationControllerRekey` or `RetryMigrationControllerRekeySameIdentity` from an in-progress rekey product | `Operator.RekeyMigrationControllerEpoch::Resume` with only the server-resolved non-capability rekey alias |
 | `ReadCurrentMigrationTelemetryHealth` | the health projection nested in `Operator.ReadMigrationRecoveryStatus` |
 | `RecoverMigrationTelemetryHealth` or `RetryMigrationTelemetryRecoverySameIdentity` | `Operator.RecoverMigrationTelemetryHealth` with the causing `TelemetryFailureAlias`; the controller resolves current marker, latch, and existing recovery identity |
 | `ReadAssignmentRevocationRecovery` | `RecoveryRead.ReadAssignmentRecoveryState { context: RevocationRecovery }` with the causing assignment alias |
-| `ResumeAssignmentRevocationAudit` | the dedicated revocation state's exact append, query, invalidation, rebind, acknowledgement, or finalization action |
+| `ResumeAssignmentRevocationAudit` | the exact append, query, invalidation, rebind, or acknowledgement action owned only by `RevocationAuditWorkPending` |
+| `WaitForAssignmentRevocationSettlement` | wait and reread owned only by `RevocationAuditAcknowledgedUsesReserved` |
+| `FinalizeAssignmentRevoked` | atomic finalization owned only by `RevocationReadyToFinalize` |
 | every remaining value above | the named internal controller action with all parameters taken from the causing refusal product |
 
 No renderer accepts free-form command text or caller-supplied recovery
@@ -5277,22 +5903,27 @@ The refusal catalog and core plans are closed:
 | `migration-control-prerequisite-tuple-mismatch` | migration attempt alias, controller epoch, current state generation, child command, closed tuple kind `SinkRepair`, `AuditAcknowledgement`, `PauseRepair`, or `DestinationVerification`, current safe expected tuple, conflicting field codes, child audit digest | `CorrectMigrationControlTuple`, then `SubmitStateCurrentMigrationChildCommand` |
 | `migration-control-pause-prerequisite-unsatisfied` | migration attempt alias, controller epoch, state generation, exact generic `MigrationOperatorRepairPlanV1` variant, missing prerequisite code, child audit digest | `VerifyMigrationPausePrerequisite`, then `SubmitStateCurrentMigrationChildCommand` |
 | `migration-control-replay-conflict` | migration attempt alias, controller epoch, control-reserve incarnation, fixed-slot operation, current state generation, canonical and conflicting request digests, closed conflicting field codes, child audit digest | `ReturnAuditedMigrationChildRefusal`, then `AttemptMigrationControlConflictSignal { ChangedBytes }`, then `ReadCurrentMigrationRecoveryStatus` |
-| `migration-control-child-audit-capacity-unavailable` | migration attempt alias, controller epoch, command operation, prepare digest, fixed outbox or sink-capacity role and bounded required or available numerics | `ReconcileMigrationChildAuditPrepare`, then `RestoreMigrationChildAuditCapacity { causing_role }`, then `ReadCurrentMigrationRecoveryStatus`, then `SubmitStateCurrentMigrationChildCommand` |
-| `migration-control-child-worker-fenced` | migration attempt alias, controller epoch, command operation, command alias, presented and current owner aliases, slot record generation | `StopStaleMigrationChildWorker`, then `ReconcileMigrationChildAuditPrepare` |
+| `migration-control-child-audit-preprepare-capacity-unavailable` | exact `MigrationChildAuditCapacityRecovery::PrePrepareCapacityUnavailable`; no prepare id, alias, or digest | `RestoreMigrationChildAuditCapacity { causing_role }`, then `ReadCurrentMigrationRecoveryStatus`, then `InvokeReturnedMigrationOperation` |
+| `migration-control-child-audit-prepare-reconciliation-pending` | exact `MigrationChildAuditCapacityRecovery::PrepareReconciliationPending`, including immutable prepare alias and digest | `ReconcileMigrationChildAuditPrepare`, then `ReadCurrentMigrationRecoveryStatus`; invoke only the operation returned by current status |
+| `migration-control-child-audit-reconciled-and-available` | exact `MigrationChildAuditCapacityRecovery::ReconciledAndAvailable` | `ReadCurrentMigrationRecoveryStatus`, then `InvokeReturnedMigrationOperation`; never resubmit stale request bytes |
+| `migration-control-child-worker-fenced` | migration attempt alias, controller epoch, command operation, command alias, `PresentedWorkerSupersededByCurrentOwnership`, and current continuation digest | `StopStaleMigrationChildWorker`, then `ReadCurrentMigrationRecoveryStatus` |
 | `migration-control-reserve-integrity-corrupt` | migration attempt alias, controller epoch, state generation, source generation, quarantined reserve incarnation, epoch-and-incarnation-bound repair identity, closed reserve field codes and expected reserve digest | `ReadCurrentMigrationRecoveryStatus`, then `InvokeReturnedMigrationOperation` |
 | `migration-control-reserve-repair-failed` | migration attempt alias, controller epoch, state generation, quarantined reserve incarnation, unchanged repair identity, closed construction, verification, fsync, audit, or install failure code | `RetryMigrationControlReserveRepairSameIdentity` |
-| `migration-controller-rekey-required` | migration attempt alias, controller epoch, exact subset of the six counter kinds at `u64::MAX - 1`, current counter values, rekey identity alias | `StartOrResumeMigrationControllerRekey` |
-| `migration-controller-counter-exhausted` | migration attempt alias, controller epoch, exact subset of the six counter kinds at `u64::MAX`, current counter values, rekey identity alias, integrity reason | `StartOrResumeMigrationControllerRekey` |
+| `migration-controller-rekey-required` | migration attempt alias, controller epoch, exact subset of the six counter kinds at generated admission threshold, current values, thresholds, and remaining drain budgets; no rekey identity or alias | initial `StartOrResumeMigrationControllerRekey` |
+| `migration-controller-counter-exhausted` | migration attempt alias, controller epoch, exact subset of the six counter kinds above threshold or legacy/corrupt, current values, thresholds, and integrity reason; no rekey identity or alias | initial `StartOrResumeMigrationControllerRekey` through counter-independent continuation migration |
 | `migration-controller-rekey-quiescence-pending` | migration attempt alias, unchanged controller epoch, rekey identity alias, exact `MigrationControllerRekeyState` safe tag and quiescence blocker codes | `WaitForMigrationRekeyQuiescence`, then `StartOrResumeMigrationControllerRekey` |
-| `migration-controller-rekey-failed` | migration attempt alias, unchanged controller epoch, rekey identity alias and outcome-nonce alias, exact rekey state tag, closed construction, storage, fsync, audit, acknowledgement, or install failure code | `RetryMigrationControllerRekeySameIdentity` |
+| `migration-controller-rekey-request-conflict` | migration attempt alias, unchanged controller epoch, active rekey identity alias, immutable and conflicting request digests, distinct refusal event id and event digest | `RetryMigrationControllerRekeySameIdentity` with only the active server-resolved alias |
+| `migration-controller-rekey-failed` | migration attempt alias, unchanged controller epoch, rekey identity alias, exact nonterminal rekey state tag, closed construction, storage, fsync, audit, acknowledgement, or install failure code | `RetryMigrationControllerRekeySameIdentity` with only the server-resolved alias |
+| `migration-status-claim-closed-for-rekey` | migration attempt alias, unchanged controller epoch, active rekey identity alias, `DrainOnly` gate code | `StartOrResumeMigrationControllerRekey` with only the server-resolved alias |
 | `migration-status-audit-capacity-unavailable` | migration attempt alias, controller epoch, status-audit slot state, bounded required and available capacity | `WaitForMigrationStatusAuditSlot`, then `ReadCurrentMigrationRecoveryStatus` |
 | `migration-telemetry-health-barrier-stale` | controller epoch, presented and current marker sequences and digests, presented and current marker tags, presented and current latch tags and digests | `DiscardStaleMigrationTelemetryClosure`, then `ReadCurrentMigrationTelemetryHealth`, then `FollowCurrentMigrationTelemetryHealthRemedy` |
-| `migration-telemetry-health-unavailable` | controller epoch, exact `HealthUnavailable` reason, marker tag and digest, latch tag and digest, active recovery identity alias when present | `RecoverMigrationTelemetryHealth` |
-| `migration-telemetry-health-recovery-failed` | controller epoch, unchanged telemetry recovery identity alias, exact recovery slot state, marker and latch digests, closed construction, probe, storage, audit, acknowledgement, or install failure code | `RetryMigrationTelemetryRecoverySameIdentity` |
+| `migration-telemetry-health-recovery-required` | exact non-healthy `MigrationTelemetryHealthObservation`: degraded, unavailable, update pending, recovery barrier, corrupt marker, or armed latch, with its current server-issued failure alias | `RecoverMigrationTelemetryHealth` |
+| `migration-telemetry-health-recovery-retryable` | controller epoch, unchanged telemetry recovery identity alias, exact nonterminal recovery slot state, marker, latch, and failure-alias-record digests, and closed retryable failure code | `RetryMigrationTelemetryRecoverySameIdentity` |
+| `migration-telemetry-health-recovery-cycle-failed` | exact `RecoveryFailed`, closed failure code, failure event digest, and newly current server-issued failure alias | `RecoverMigrationTelemetryHealth` to start a fresh recovery cycle |
 | `idempotency-result-evicted` | attempt identity, endpoint, operation, closed outcome, safe result ids, response and event digests | `ReturnOperationSpecificProtectedAttemptRecovery` |
 | `protected-attempt-status-cross-peer` | attempt identity, presented peer safe alias | `UseOriginalAttemptPeerOrProtectedOperator` |
 | `protected-recovery-read-cross-peer` | attempt identity, recovery-read operation, presented peer safe alias | `UseOriginalAttemptPeerOrProtectedOperator` |
-| `risk-recovery-operator-authentication-required` | target attempt identity, safe risk state tag, presented original-peer alias | return only the caller-disjoint outer variant containing `RiskAttemptSafeState` and owning `AuthenticateAsProtectedOperatorThenReadRiskRecoveryState`; never serialize the raw handle |
+| `risk-recovery-operator-authentication-required` | target attempt identity, exact safe risk state tag, presented original-peer alias | return only the matching handle-free `OriginalPeerRiskRecovery` tag and its exact action; pending and closed-permitted reauthenticate, while live, effective-revocation, and closed-forbidden own `NoFurtherAction`; never serialize the raw handle |
 | `protected-status-budget-exhausted` | ordinary non-migration, non-marker status or recovery-read operation, safe target id, capacity generation, used and maximum status entries and bytes | `MigrateRetentionCapacity { VersionedBoundMigration }`, then retry the same authorized status operation |
 | `attempt-worker-fenced` | attempt identity, presented and current worker epochs and generations | `StopStaleAttemptWorker` |
 | `audit-sink-reservation-unavailable` | sink namespace alias, attempt identity, required entries and bytes | `RestoreProtectedAuditSinkCapacity`, then `RetryProtectedPreflight` |
@@ -5332,9 +5963,11 @@ The refusal catalog and core plans are closed:
 | `implementation-assignment-completion-evidence-conflict` | exact `AssignmentCompletionRefusalProduct::EvidenceConflict` | `RecoveryRead.ReadAssignmentRecoveryState` by `OriginalAttemptPeerOrProtectedOperator`, then follow only the returned `AssignmentRecoveryContext`; conflict never proves capability loss |
 | `implementation-assignment-revocation-unauthorized` | presented assignment alias and presented principal safe alias | `ReadAssignmentRevocationRecovery` |
 | `implementation-assignment-capability-unavailable` | presented assignment alias and caller declaration `CapabilityUnavailable` or `CapabilityAbandoned` | `ReadAssignmentRevocationRecovery`, then `InvokeReturnedAssignmentRecoveryAction` |
+| `implementation-assignment-revocation-reservation-unavailable` | assignment request id, issuance context, dedicated controller or sink role, bounded required and available capacity | restore the named dedicated capacity, then retry the same pending issuance; no assignment is created |
 | `implementation-assignment-revocation-audit-capacity-unavailable` | presented assignment alias, active assignment generation, dedicated controller or sink capacity role, bounded required and available capacity | `RestoreAssignmentRevocationAuditCapacity`, then `ReadAssignmentRevocationRecovery` |
-| `implementation-assignment-revocation-pending` | presented assignment alias, pending reason, revocation identity alias, event id, exact audit safe state, and reserved-use count | `ResumeAssignmentRevocationAudit`, then `WaitForAssignmentRevocationAuditAndSettlement`, then `ReadAssignmentRevocationRecovery` |
-| `implementation-assignment-revocation-audit-retry-failed` | presented assignment alias, revocation identity alias, unchanged event id and digest, exact audit safe state, and closed append, invalidation, rebind, acknowledgement, or storage failure code | `ResumeAssignmentRevocationAudit`, then `ReadAssignmentRevocationRecovery` |
+| `implementation-assignment-revocation-pending` | presented assignment alias, pending reason, revocation identity alias, event id, exact audit safe state, and reserved-use count | `ReadAssignmentRevocationRecovery`, then only the exact returned action: audit work resumes, acknowledged live uses wait and reread, or acknowledged zero uses finalize |
+| `implementation-assignment-revocation-audit-retry-failed` | presented assignment alias, revocation identity alias, unchanged event id and digest, exact `AssignmentRevocationAuditWorkSafeState`, and closed append, invalidation, rebind, acknowledgement, or storage failure code | `ResumeAssignmentRevocationAudit`, then `ReadAssignmentRevocationRecovery` |
+| `implementation-assignment-revocation-capacity-release-pending` | presented assignment alias, exact frozen terminal intent and `AssignmentRevocationCapacityReleaseState` | invoke only its proof-cancel, controller-release, or terminal-install action, then reread assignment recovery |
 | `implementation-assignment-replayed` | presented assignment alias and authenticated implementer peer or run safe alias | read `AssignmentRecoveryContext::StatusUse`; only `ActiveUsable` permits the bound `OriginalIssueReaderPeer` to use the existing capability, reserved uses wait, and no capability is issued |
 | `implementation-assignment-completed` | presented assignment alias and completion event id | read `AssignmentRecoveryContext::FreshAssignmentFlow`, then follow the predecessor's exact `AssignmentSuccessorEligibility` state |
 | `implementation-assignment-revoked` | presented assignment alias, revocation event id and reason code | read `AssignmentRecoveryContext::FreshAssignmentFlow`, then follow the predecessor's exact `AssignmentSuccessorEligibility` state |
@@ -5462,16 +6095,20 @@ minimum:
   products, recovery reserve and plan-id binding, exhaustive protected
   recovery, narrow recovery-read endpoint, pending protected status,
   caller-disjoint safe-facts and handle-bearing risk recovery, dedicated
-  assignment-revocation audit recovery, fixed reusable parent-migration
-  child-command slots, durable child-audit capacity prepare, child owner
-  fencing, redacted child progress, bounded child audit, controller epochs,
-  the exact six finite counters and counter-independent rekey state machine,
+  assignment-revocation audit recovery and unused-capacity release, fixed
+  reusable parent-migration child-command slots, durable immutable
+  child-audit capacity prepare, child owner fencing, closed tagged redacted
+  child progress, bounded child audit, controller epochs, the exact six finite
+  counters, generated drain headroom, and identity-free-initial
+  counter-independent rekey state machine,
   disjoint migration control and integrity reserves, observational direct
   tagged migration recovery status with one audit event per disclosure,
   migration-specific audit repair, bounded and expiring
   migration-preflight signals and summaries, fixed-cardinality telemetry
-  health, durable pre-barrier failure latch, protected telemetry-health
-  recovery, low-cardinality metric labels, re-entrant capacity migration,
+  health, durable pre-barrier failure latch and current failure alias,
+  protected recovery from every non-healthy telemetry state,
+  operator-redacted migration audit events, low-cardinality metric labels,
+  re-entrant capacity migration,
   retention, terminal metric, receipt, seal, shared selection-artifact
   validation, and typed remedy contracts;
 - `.github/skills/d2b-panel-round/` for automatic discovery, compatibility,
@@ -5607,7 +6244,12 @@ corpus separately exercises:
   `ImplementationAssignment` request, issue, complete, revoke and resolve
   operations;
 - atomic single consumption of both protected assignment evidence variants and
-  the complete `Available -> RequestPending -> IssuancePending -> Issued`
+  issuance-time sealing of the dedicated revocation controller reservation,
+  outbox, and sink reservation at the schema maximum. An undersized,
+  unavailable, or integrity-invalid controller or sink reservation refuses
+  issuance or new use as specified and cannot be repaired by borrowing
+  ordinary capacity. The complete
+  `Available -> RequestPending -> IssuancePending -> Issued`
   flow for every terminal predecessor. Concurrent requests, byte-identical
   retries, changed caller keys, and fresh caller keys all consume
   `Available` once and replay one `assignment_request_id`; issuance consumes
@@ -5639,7 +6281,8 @@ corpus separately exercises:
   interpretation.
   `ReadImplementerIssueView` followed by a state read returns the same active
   assignment when a use remains, a reserved-use wait while settlement is
-  pending, and `Exhausted` after final activation. Payload eviction alone
+  pending, `RevocationCapacityReleasePending` after final activation, and
+  `Exhausted` only after proof-backed release. Payload eviction alone
   never selects loss. An explicit unavailable or abandoned capability
   declaration permits only protected operator revocation. Unauthorized,
   malformed, unresolved, ineligible, or dedicated-capacity preflight failures
@@ -5653,10 +6296,22 @@ corpus separately exercises:
   revocation identity; definite-no-append never restores `Active` or creates a
   generic refusal. Separate races settle the last use before audit
   acknowledgement, acknowledge audit before the last use, and do both
-  concurrently. Only durable acknowledgement plus zero reserved uses enters
-  `Revoked` and exposes successor `Available`. Restart, completion, expiry,
+  concurrently. Audit-work states expose only resume-audit, acknowledged
+  nonzero-use state exposes only wait and reread, and acknowledged zero-use
+  state exposes only finalization. Only durable acknowledgement plus zero
+  reserved uses enters `Revoked` and exposes successor `Available`. Restart, completion, expiry,
   exhaustion, duplicate revocation, and use-settlement races never return it
   to `Active`;
+  completion, expiry, and exhaustion without revocation atomically enter each
+  exact `AssignmentRevocationCapacityReleaseState`, proof-cancel the sink
+  reservation, release the controller reservation, and install the frozen
+  terminal intent only afterward. Crashes before and after sink cancellation,
+  controller release, and terminal install resume without double release,
+  time-only clearing, premature cleanup, or early successor eligibility.
+  `CandidateChanged`, `MappingSuperseded`, and `LifecycleTerminated`
+  invalidations instead traverse the same audited `RevocationPending` graph as
+  operator revocation. Dedicated-capacity undersize and unavailability,
+  internal invalidation, and release-cancellation races are planted cases;
   absence of any alternate issuance or old-evidence eligibility surface;
   protected-operator revocation;
   refusal of resolver-only revocation; and only the closed candidate, mapping
@@ -5689,8 +6344,12 @@ corpus separately exercises:
   retry completion or revocation, while only
   `CompletionRecovery::ActiveCompletionRetry` or
   `RevocationRecovery::ActiveRevocationRequired` admits the applicable first
-  mutation, while `RevocationPendingAuditAndSettlement` admits only dedicated
-  audit recovery, wait, and reread. The
+  mutation, while `RevocationAuditWorkPending`,
+  `RevocationAuditAcknowledgedUsesReserved`, and
+  `RevocationReadyToFinalize` admit only their exact resume, wait-and-reread,
+  or finalize action. Every
+  `AssignmentRevocationCapacityReleaseRecovery` variant admits only its exact
+  proof-cancel, controller-release, or terminal-install action. The
   generated action-state eligibility matrix covers pending initial and
   successor request, pending issuance, active completion, active revocation,
   pending revocation, and every terminal successor action exactly, with
@@ -5873,28 +6532,44 @@ corpus separately exercises:
   the dedicated rekey operation, telemetry-health recovery, and migration
   status disclosure.
   Every primary and refusal child slot atomically enters
-  `PreparingAuditCapacity` with command identity, owner epoch, lease,
-  deadline, required capacity, and prepare digest before either controller or
-  sink reservation. Crashes before, between, and after those reservations
-  prove startup adoption of matching orphans and proof-backed cancellation of
-  non-adoptable orphans, including stale-worker attempts to reserve, adopt,
-  cancel, or promote. A planted sink or controller reservation without a
-  durable owning prepare fails integrity, and no time-only cancellation is
-  accepted. Every successful or refused privileged child effect then emits a
+  `PreparingAuditCapacity` with command identity, immutable fixed-slot prepare
+  identity, owner epoch, lease, deadline, required capacity, and prepare
+  digest before either controller or sink reservation. Reservations bind the
+  immutable command, slot role, prepare identity, and digest, never worker
+  epoch. Crashes before, between, and after those reservations prove startup
+  adoption of matching orphans and proof-backed cancellation of non-adoptable
+  orphans. Takeover changes execution ownership only, adopts the same
+  reservations through proof, and cannot make a reservation created by a
+  stale worker usable. Planted cases cover stale-worker reserve, adopt,
+  cancel, and promote attempts, a reservation without a durable owning
+  prepare, crash before takeover, crash during adoption, and crash after
+  rebind proof; no time-only cancellation is accepted. Every successful or refused privileged child effect then emits a
   distinct append-only
   sink audit event derived from migration attempt, controller epoch, reserve
   incarnation, operation, pre-state generation, child sequence, and audit
   sequence. Repeated cycles at the same semantic state produce distinct sink
   events while the controller reuses one slot and retains only current or last
-  result plus audit digest. Capacity-unavailable preflight admits no command
-  or effect. Response-loss recovery returns in-progress, already-applied,
+  result plus audit digest. The three child-audit capacity outcomes are
+  exhaustive: pre-prepare unavailable carries no prepare id, alias, or digest;
+  reconciliation-pending carries the immutable prepare alias and digest and
+  permits only adoption or proof-cancellation; reconciled-and-available first
+  reads current migration status and invokes only the operation returned
+  there. A planted renderer that resubmits stale bytes fails. Response-loss
+  recovery returns in-progress, already-applied,
   exact current refusal, or superseding current state, never generic attempt
-  replay. `InProgress` fixtures assert only the closed state tag, command
-  alias, safe operation, lease, deadline, state-generation direction, and
-  tag-eligible safe effect or audit digest. Planted negatives reject raw owner
+  replay. `InProgress` fixtures enumerate the six closed
+  `MigrationControlCommandProgressProjection` variants and assert only each
+  variant's owned command alias, safe operation, lease, deadline,
+  state-generation relation, and required effect or audit digest. Planted
+  cross-variant parse negatives reject a `state_tag`, every optional digest,
+  a missing owned digest, an effect digest outside
+  `ExternalEffectObserved`, an audit digest outside `AuditAppendPending` or
+  `AuditAcknowledged`, raw owner
   epoch, external-effect identity, controller or sink reservation, outbox,
   sink handle, fencing generation, slot record generation, an effect digest
-  on the wrong state, and an audit digest on the wrong state;
+  on the wrong state, and an audit digest on the wrong state. Worker-fenced
+  refusal fixtures admit only the safe superseded relation and current
+  continuation digest and reject owner epochs and slot record generation;
 - `round-input-store-full` fixtures for every closed blocker:
   active lifecycle, unresolved lifecycle, retryable partial dispatch,
   unavailable partial dispatch, resumable abandoned capsule, unexpired
@@ -5929,7 +6604,8 @@ corpus separately exercises:
   `MigrationExecutionReserve`, including every controller, sink, replay,
   conversion, migration audit-repair, child-command slot, child-audit outbox
   and sink reservation, per-disclosure status audit, non-resettable epoch
-  rekey record, telemetry marker, failure latch, telemetry-recovery slot,
+  rekey record and maximum continuation inventory, telemetry marker, failure
+  latch, current failure-alias record, telemetry-recovery slot,
   tombstone, and bounded work record plus disjoint sibling
   `MigrationControlReserve` and `MigrationIntegrityReserve`; all seven
   partitions, with partitions 5 and 6
@@ -5940,7 +6616,8 @@ corpus separately exercises:
   separate fixed-cardinality `MigrationControlConflictSignalReserve` with its
   overflow and summary ring; an independently integrity-checked fixed
   `MigrationTelemetryHealthMarkerReserve` with current, shadow, separately
-  reserved failure latch, and separately sealed recovery and audit workspace;
+  reserved failure latch, current failure-alias record, and separately sealed
+  recovery and audit workspace;
   and the distinct transient execution lane. Exact-bound fixtures
   consume every migration
   record class at its serialized maximum, reject a generation whose exclusive
@@ -5966,12 +6643,22 @@ corpus separately exercises:
   record, or replay schema. Two successful reads by the same operator in the
   same epoch append two distinct disclosure events; a second operator and a
   new epoch each append another distinct event. Every event contains the
-  protected operator alias and digest of the currently returned state.
+  digest of the currently returned state and omits
+  `protected_operator_alias`. Unattributed and deployment-attributed audit
+  variants are both covered; only the latter audit bytes may contain
+  `ProtectedOperatorAuditDigest`, and logs, status, errors, metrics, refusal
+  products, reservation bindings, and `Debug` reject it.
   Concurrent reads serialize on the one reusable slot or receive
   `migration-status-audit-capacity-unavailable` before disclosure. Capacity
   exhaustion, sink failure, and crashes at claim, response construction,
   outbox, fsync, acknowledgement, return, and clear disclose no unaudited
-  state; the slot retains no per-operator history. Corrupt
+  state. Controller and sink reservations bind immutable disclosure identity,
+  not operator or worker history. Crash recovery adopts only matching
+  reservations and proof-cancels every nonmatching or non-adoptable
+  reservation before clear; a planted time-only clear fails. Two operators
+  serialize and receive distinct events, and the same sequence after a new
+  controller epoch receives another distinct event. The slot retains no
+  per-operator history. Corrupt
   control-reserve fixtures leave status readable and execute
   `RepairMigrationControlReserve` entirely from
   `MigrationIntegrityReserve`. Construction, verification, fsync, and install
@@ -6004,30 +6691,66 @@ corpus separately exercises:
   success and exhaustion are both covered. The exact counter census is
   `MigrationStateGeneration`, `ControlReserveIncarnation`, `ChildSequence`,
   `ChildAuditSequence`, `SlotRecordGeneration`, and
-  `TelemetryMarkerSequence`. Separate limit fixtures place each of those six
-  at `u64::MAX - 1` and `u64::MAX`, prove no wrap and no seventh resettable
-  counter, invoke only the dedicated rekey operation, reset all and only those
-  six under a new controller-issued epoch, and reject every delayed old-epoch
-  request as stale without stranding the migration.
-  Rekey quiescence fixtures separately start with a live primary slot, live
-  refusal subslot, stale worker, `PreparingAuditCapacity`, external effect,
-  child or migration outbox, audit acknowledgement pending, migration audit
-  repair, active status-audit slot, verified degraded `Stable` without an
-  explicit migration proof, `UpdatePending`, `RecoveryBarrier`, armed failure
-  latch, and corrupt marker. Each prevents `NewEpochPrepared` or install until
-  it is settled, explicitly migrated where allowed, or recovered; corrupt,
-  `UpdatePending`, `RecoveryBarrier`, and armed-latch cases have no migration
-  shortcut. The rekey record itself never appears as its own blocker and is
-  not reset.
+  `TelemetryMarkerSequence`. Generation enumerates every legal live primary
+  and refusal child slot, status-audit slot, migration-audit repair and
+  activation, assignment revocation and capacity release, telemetry marker,
+  latch, barrier and recovery slot, semantic continuation, and rekey
+  preparation. It computes and pins each counter's exact
+  `REKEY_DRAIN_HEADROOM` and `REKEY_ADMISSION_THRESHOLD`; an omitted state,
+  unknown increment vector, changed inventory digest, wrong maximum, zero
+  required headroom, or seventh resettable counter fails. Boundary fixtures
+  run every counter immediately below, at, and above its own threshold and at
+  `u64::MAX`, prove the gate closes on reaching the threshold, permit only
+  vector-budgeted drain or rekey actions, and prove no wrap.
+
+  Rekey fixtures start with every live primary and refusal slot state,
+  stale-worker takeover, `PreparingAuditCapacity`, external effect, child or
+  migration outbox, acknowledgement pending, migration-audit repair and
+  activation, an active or racing status claim, every assignment-revocation
+  and capacity-release state, and every semantic continuation. After rekey is
+  requested, planted new child prepares, semantic transitions, telemetry
+  updates, and status claims are refused while existing disclosure and
+  command/audit work drains. Each blocker either settles within its generated
+  budget or moves through its typed counter-independent continuation record.
+  Legacy and corrupt above-threshold fixtures use only that continuation
+  route and never increment a resettable counter. Install is refused until
+  every blocker is quiescent or has exactly one verified continuation.
+
+  Telemetry rekey cases include stable detailed, aggregate, and exporter
+  degradation, `UpdatePending`, `RecoveryBarrier`, corrupt marker,
+  `ArmPending`, `Armed`, every recovery-slot state, and a closed failed
+  recovery cycle. Each migrates its exact non-healthy marker, latch,
+  failure-alias, and recovery continuation into the new epoch and remains
+  recoverable afterward; none is required to become healthy and none may be
+  reinterpreted as healthy. The rekey record itself never appears as its own
+  blocker and is not reset.
+
+  Initial request fixtures reject raw `RekeyIdentity`, any rekey alias, and
+  any generated command parameter for raw identity. Admission atomically
+  mints identity and primary outcome nonce. Later status and resume accept
+  only the server-resolved non-capability alias. Byte-identical initial retry
+  joins the record; changed bytes while it is active produce a separate
+  audited terminal refusal with a distinct counter-independent outcome nonce
+  and event id and leave the primary request unchanged. Every terminal outcome
+  has a unique nonce and event. Dedicated claim and audit schemas reject all
+  six resettable counters and every child, slot, reservation, and telemetry
+  identity. Two complete consecutive rekeys mint distinct identities,
+  primary nonces, epochs, and events, while delayed old-epoch requests remain
+  stale.
+
   Crash fixtures cover `RequestedQuiescencePending`, `NewEpochPrepared`,
   `RekeyAuditOutboxPending`, `AuditAcknowledgedInstallPending`, atomic install,
   and `Installed`. Construction, storage, fsync, audit, acknowledgement, and
-  install failures retry the same controller-issued 256-bit rekey identity
-  and independent outcome nonce. The success event id and canonical bytes
+  retryable install failures resume the same controller-issued 256-bit rekey
+  identity and primary outcome nonce through its alias. `Installed` is tested
+  only as `MigrationControllerRekeyTerminalResult`, never an in-progress safe
+  state. The success event id and canonical bytes
   remain identical on every retry, no same event id with changed bytes
   reaches the sink, success audit acknowledgement precedes install, and a
   crash after acknowledgement installs the prepared epoch without another
-  identity;
+  identity. Atomic install resets all and only the exact six counters,
+  restores continuation adapters, carries non-healthy telemetry, reopens all
+  admission gates, and cannot run before durable success audit;
 - refusal of every offline controller mutation, raw-capacity provisioning
   that cannot read or mutate controller records, and the only reviewed
   `MigrateRetentionCapacity` reasons for reserve repair and versioned bound
@@ -6064,45 +6787,60 @@ corpus separately exercises:
   write, marker transition, or metric; stale authenticated requests retain
   their separately required stale signal.
 
-  `MigrationTelemetryHealthMarker` fixtures cover `Healthy`,
-  `DetailedDegraded`, `AggregateDegraded`, `ExporterDegraded`, and every
-  `HealthUnavailable` reason. Every detailed, aggregate, summary,
-  normal-health, and exporter write has a positive proof that durable
-  `ArmPending` and then verified `MigrationTelemetryFailureLatch::Armed`
-  precede the write, plus a planted direct-write negative. They crash or fail
-  before and after arm intent, `Armed`, durable `UpdatePending`, normal-health
-  write, `StableClosureProven`, marker closure, `RecoveryBarrier`, probe
-  verification, recovery audit outbox, audit acknowledgement, and healthy
-  closure. A latch-write failure or a no-telemetry-write crash after `Armed`
-  but before `UpdatePending` remains `HealthUnavailable` after restart, never
-  the old or shadow `Healthy`. Normal-health and marker update failures do the
-  same in all three migration status products; later ordinary telemetry
-  success cannot return `Healthy`, and normal closure cannot clear the latch
-  to `Clear`.
+  `MigrationTelemetryHealthObservation` fixtures cover `Healthy`,
+  `DetailedDegraded`, `AggregateDegraded`, `ExporterDegraded`,
+  `HealthUnavailable`, `UpdatePending`, `RecoveryBarrier`, `CorruptMarker`,
+  and `ArmedFailureLatch`. `Healthy` alone owns `NoFurtherAction`; every other
+  tag carries a current server-issued `TelemetryFailureAlias` and only
+  `Operator.RecoverMigrationTelemetryHealth`. Cross-state action, missing
+  alias, stale alias, and healthy-with-recovery parse negatives fail.
+  Every detailed, aggregate, summary, normal-health, and exporter write proves
+  the durable atomic `ArmPending` plus current failure-alias record and then
+  verified `Armed` precede the write. Planted direct-write negatives and
+  crashes before and after admission, `ArmPending`, `Armed`,
+  `UpdatePending`, normal-health write, `StableClosureProven`, marker closure,
+  recovery-slot `RecoveryBarrierInstalled`, marker `RecoveryBarrier`, probe
+  verification, recovery audit outbox, acknowledgement, and final closure are
+  covered. A failure before `UpdatePending` can never be restart-visible
+  healthy; an untrustworthy marker receives a fresh alias in the independent
+  record without marker rewrite. Later ordinary telemetry success cannot
+  return healthy, and normal closure cannot clear the latch.
 
   Protected endpoint fixtures prove
   `RecoverMigrationTelemetryHealth` is the only operation that can install
-  `RecoveryBarrier`, verify marker, latch, detailed, aggregate, summary, and
+  recovery-slot `RecoveryBarrierInstalled` and marker `RecoveryBarrier`,
+  verify marker, latch, failure-alias record, detailed, aggregate, summary, and
   exporter integrity, append and fsync the protected-operator recovery event,
-  and atomically install a new `Stable` marker plus `Clear`. Byte-identical
+  and atomically install a new exact stable marker plus `Clear`.
+  `RecoveryBarrierInstalled` is rejected from marker and latch schemas.
+  Byte-identical
   retry joins one recovery identity, response loss returns its fixed last
   result, and changed bytes or a stale `TelemetryFailureAlias` cannot replace it,
   and crashes at every recovery-slot state resume the same identity and event
   bytes. A crash after audit acknowledgement recovers stable install. A same
-  event id with changed bytes is refused before append. Startup, rekey, normal
-  telemetry, and every other endpoint have planted negatives for committing
-  `RecoveryBarrier` followed by `Stable`.
+  event id with changed bytes is refused before append. A closed
+  `RecoveryFailed` result rotates to a fresh failure alias and permits a fresh
+  recovery identity and cycle; a planted implementation that permanently
+  retries only the failed identity is rejected. Startup, normal telemetry, and
+  every other endpoint have planted negatives for committing
+  `RecoveryBarrier` followed by a stable marker. Rekey may migrate, but not
+  clear, the exact barrier continuation.
 
   Stale normal and recovery closures race a newer marker or latch and are
   rejected by controller epoch, sequence, marker digest and tag, write or
-  recovery identity, and latch digest and tag compare-and-swap without
-  changing telemetry. Separate
+  recovery identity, latch digest and tag, and failure-alias-record digest
+  compare-and-swap without changing telemetry. They cannot overwrite a newer
+  degradation. Separate
   simultaneous-failure cases prove original-refusal precedence and
   `HealthUnavailable` over aggregate, detailed, exporter, and healthy
   observations. A deliberately blocked signal, aggregate, marker,
   normal-health, and exporter path proves the priority original-refusal frame
   is delivered first with unchanged bytes and the separate observation falls
   back to `TelemetryFollowupUnavailable`. Protected identifiers are absent.
+  Status-disclosure and telemetry-recovery events omit
+  `protected_operator_alias`; attribution fixtures permit
+  `ProtectedOperatorAuditDigest` only in canonical audit bytes and reject it
+  from logs, status, `Debug`, metrics, refusal products, and reservations.
   Metric schema fixtures
   admit only the closed operation-class, signal-outcome, health-state, and
   reserve-role labels, reject capacity generation and every unbounded label,
@@ -6220,11 +6958,16 @@ corpus separately exercises:
   accepted-conflict-budget exhaustion; every generic conversion source-state
   and migration audit-repair refusal; and every migration preflight and signal
   overflow reason. Risk replay conflict and risk conflict-budget exhaustion
-  first return exact current `RiskAttemptSafeState`; pending contexts reissue
-  only their same protected handle through
+  first return one exact handle-free `OriginalPeerRiskRecovery` tag; pending
+  protected contexts reissue only their same protected handle through
   `ProtectedOperatorRiskRecoveryContext`, and only
   `ClosedMutationPermitted` renders `RequestNewRiskOperationIntent`, while
-  only `CallerKeyOperation` renders a fresh caller key.
+  only `CallerKeyOperation` renders a fresh caller key. Generated compile and
+  parse negatives reject every risk safe-state, outer-action, caller-class,
+  handle, and protected-operation cross-variant substitution. The equivalent
+  full cross-product negatives for
+  `MigrationControlCommandProgressProjection` reject every tag, field, and
+  digest substitution rather than sampling one optional-field case.
   Remedy fixtures separately prove
   controller-unavailable orphan recovery restores the controller before
   requesting proof and retrying cancellation, invalid orphan proof repairs the
@@ -6241,7 +6984,9 @@ corpus separately exercises:
   and
 - a stale-contract absence check first discovers a sorted governed-input
   census of exact file paths, generated schema/type edges, refusal-catalog
-  rows, and renderer mappings from a versioned manifest. The test asserts the
+  rows, and renderer mappings from a versioned manifest. That checked-in
+  manifest is an exact enumerated inventory, not a glob, directory default, or
+  best-effort discovery rule. The test asserts the
   discovered list, count, and digest exactly equal the manifest and asserts
   `count > 0`; zero discovery fails with
   `stale-contract-governed-input-empty` rather than passing vacuously, while a
@@ -6250,13 +6995,21 @@ corpus separately exercises:
   removed by this decision: standalone-attempt treatment of child controls,
   child-command attempt identities, journals, replay payloads, or permanent
   tombstones, rekey as a child command or resettable slot, status-audit
-  coalescing, handle-bearing generic risk recovery, next actions inside
-  `RiskAttemptSafeState`, status-only assignment mutation actions, generic
-  conversion or unaudited terminalization of assignment revocation, automatic
-  resume of operator-repair pauses, telemetry write before the failure latch,
-  the two retired generic audit and integrity pause variants, the superseded
-  telemetry barrier tag, the old partition count, and controller-issued
-  per-state migration-control identities.
+  coalescing or operator-history reservation binding, handle-bearing generic
+  risk recovery, a broad serialized `RiskAttemptSafeState` beside one fixed
+  action, next actions inside `RiskAttemptSafeState`, optional progress
+  digests or `state_tag`, worker-fenced slot generation, child reservations
+  bound to worker epoch, status-only assignment mutation actions, generic
+  conversion, unaudited terminalization of assignment revocation, terminal
+  assignment cleanup before unused revocation-capacity cancellation,
+  universal revocation-audit resume, automatic resume of operator-repair
+  pauses, telemetry write before the failure latch, healthy-only telemetry
+  recovery, `RecoveryBarrierInstalled` as a marker or latch,
+  `protected_operator_alias` in status-disclosure or telemetry-recovery audit,
+  a one-step-from-overflow rekey sentinel, raw rekey identity input, `Installed` as an
+  in-progress rekey state, the two retired generic audit and integrity pause
+  variants, the old partition count, and controller-issued per-state
+  migration-control identities.
 
 Validation selection is derived at implementation time from
 `tests/layer1-jobs.json`; this ADR does not freeze today's job list. A result
@@ -6341,6 +7094,9 @@ audit state retries the unchanged event and never converts to a generic
 refusal; only audit acknowledgement plus zero reserved uses installs
 `Revoked`. Restart or a completion, expiry, exhaustion, audit, or use race
 therefore cannot reactivate authority or expose an unaudited successor.
+Unused issuance-time revocation capacity also cannot leak: completion, expiry,
+and exhaustion remain in proof-backed release state until sink cancellation,
+controller release, and terminal install reconcile.
 Completion and append
 refusals expose fixed domain-separated products, so an error path cannot leak
 the raw evidence identity, sink namespace, capability, handle, path, or
@@ -6352,7 +7108,8 @@ separate typed operation, exact candidate binding, mandatory expiry,
 revocation, and repeated validity checks make it attributable and
 non-transferable. Caller-disjoint recovery also prevents possession of an
 original attempt identity from recovering a raw risk handle without fresh
-protected-operator authentication. These controls do not make the accepted
+protected-operator authentication. Exact outer variants prevent a safe state
+from being paired with another state's action. These controls do not make the accepted
 risk smaller.
 
 The retention exception for active and unresolved work can fill the store.
@@ -6373,8 +7130,9 @@ success and rebind only its sink generation. Four fixed reusable mutation
 slots per reserve incarnation and one fixed integrity-repair command slot make
 caller keys nonsemantic, reject stale epochs and generations, and prevent
 repeated pause cycles or changed request bytes from allocating permanent
-control history. Durable `PreparingAuditCapacity` ownership prevents an
-orphan controller or sink reservation, and the closed progress projection
+control history. Durable immutable command-and-slot prepare ownership prevents
+an orphan controller or sink reservation across worker takeover, and the
+closed tagged progress projection
 keeps owner, effect, reservation, outbox, sink, and fencing identities private.
 Each admitted child success or refusal still emits a distinct bounded sink
 audit event, while owner epochs, leases, deadlines, recoverable
@@ -6383,11 +7141,16 @@ crashed slot claim from stranding control. The sibling integrity reserve keeps
 newly evaluated current-state status and epoch-and-incarnation-bound
 control-reserve repair reachable without using corrupt control capacity.
 Every successful status disclosure has its own audit event rather than a
-per-operator history in the reusable slot. Finite counters never wrap; the
-separate non-child rekey record is independent of all six counters, waits for
-complete quiescence, makes its success audit durable first, and resets all and
-only those six under a new controller-issued epoch without changing the
-semantic migration state or resetting its own recovery record. Separate
+per-operator history in the reusable slot. Its reservations bind disclosure
+identity, and neither it nor telemetry-recovery audit exposes the operator
+alias. Finite counters never wrap: generated per-counter drain headroom closes
+ordinary admission early, while budgeted drain and counter-independent
+continuation migration remain available. The separate non-child rekey record
+uses none of the six counters, requires every blocker to quiesce or migrate,
+makes its success audit durable first, and resets all and only those six under
+a new controller-issued epoch without changing semantic migration state or
+resetting its own recovery record. Non-healthy telemetry safely crosses the
+epoch and recovers afterward. Separate
 bounded preflight and migration-control
 conflict signals preserve conflict evidence without letting signal, status, or
 conflict traffic consume execution, control, or integrity capacity; hard TTLs
@@ -6396,8 +7159,10 @@ aggregate, marker, normal-health, and exporter failure still return the
 original refusal first. The separately reserved failure latch is durable
 before `UpdatePending` and before any telemetry write, so a latch failure or a
 crash before `UpdatePending` cannot reveal old healthy state. Only protected
-`RecoverMigrationTelemetryHealth` can commit `RecoveryBarrier`, audit the
-verified recovery, install a new `Stable` marker, and clear the latch. Metric
+`RecoverMigrationTelemetryHealth` can commit marker `RecoveryBarrier`, audit
+the verified recovery, install a new exact stable marker, and clear the latch.
+Every non-healthy state carries a current recovery alias, and a closed failed
+recovery can begin a fresh cycle. Metric
 labels contain no capacity generation.
 
 Ordinary accepted attempts gain reconciliable prepares, common base-or-conflict

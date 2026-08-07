@@ -29,7 +29,10 @@
   commands with durable audit-capacity prepare and migration recovery status
   as a serialized per-disclosure audited observational read,
   exactly six finite migration counters with a counter-independent dedicated
-  controller-epoch rekey state machine,
+  controller-epoch rekey state machine, mechanically generated per-counter
+  drain headroom, an identity-free initial rekey request and alias-only
+  resume, counter-independent migration of live continuations and non-healthy
+  telemetry across epoch install,
   migration-specific no-append audit repair, generic conversion from the exact
   ordinary sink-acknowledgement-pending tuple, distinct migration
   sink-acknowledgement and activation variants, and re-entrant online
@@ -54,9 +57,13 @@
   least-authority issue-reader, caller-disjoint risk recovery that keeps the
   opaque handle behind fresh protected-operator authentication, protected
   attempt-status and narrow recovery-read endpoints, while
-  protected-operator-only assignment revocation with dedicated audit recovery,
+  protected-operator-only assignment revocation with dedicated audit recovery
+  and proof-backed release of unused issuance-time controller and sink
+  capacity before non-revocation terminal cleanup,
   migration repair, migration-control integrity repair, telemetry-health
-  recovery, and attempt resume and fencing stay on the operator endpoint. It
+  recovery from every non-healthy state, operator-redacted status and
+  telemetry audit events, and attempt resume and fencing stay on the operator
+  endpoint. It
   assigns lifecycle, ledger proposal and correction, implementation-assignment
   issue, completion and revocation, severity, risk, inspection, recovery
   status and online capacity migration, publication, merge-completion and
