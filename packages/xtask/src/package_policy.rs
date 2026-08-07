@@ -13,8 +13,9 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     env,
     error::Error,
+    ffi::OsStr,
     fmt, fs,
-    path::{Path, PathBuf},
+    path::{Component, Path, PathBuf},
     process::{Command, Stdio},
 };
 
@@ -426,6 +427,406 @@ pub fn parse_metadata(document: &str) -> Result<MetadataView, PolicyError> {
     Ok(view)
 }
 
+/// Return Cargo metadata containing only the identities selected for one
+/// policy context.
+///
+/// Cargo metadata is resolved for the whole workspace even when a target is
+/// filtered.  The package-selected `cargo tree` traversal is therefore the
+/// authority for the identity set; this function only projects the already
+/// captured metadata onto that set.  It does not synthesize a manifest or
+/// resolve another graph.
+pub fn filter_selected_metadata(
+    document: &str,
+    selected: &BTreeSet<PackageIdentity>,
+    context: &SelectedContext,
+    root: &Path,
+) -> Result<Value, PolicyError> {
+    let mut metadata: Value = serde_json::from_str(document)
+        .map_err(|error| PolicyError::MalformedMetadata(error.to_string()))?;
+    let workspace_root = root.join("packages");
+    normalize_metadata_paths(&mut metadata, &workspace_root)?;
+
+    let metadata_object = metadata.as_object_mut().ok_or_else(|| {
+        PolicyError::MalformedMetadata("Cargo metadata is not an object".to_owned())
+    })?;
+    let package_values = metadata_object
+        .get("packages")
+        .and_then(Value::as_array)
+        .cloned()
+        .ok_or(PolicyError::MetadataPackagesMissing)?;
+
+    let mut package_ids = BTreeMap::<PackageIdentity, String>::new();
+    let mut all_ids = BTreeSet::new();
+    for package in &package_values {
+        let identity = package_identity(package)?;
+        let id = package_id(package)?;
+        if !all_ids.insert(id.clone()) {
+            return Err(PolicyError::IdentityMismatch(format!(
+                "duplicate package id {id}"
+            )));
+        }
+        if package_ids.insert(identity.clone(), id.clone()).is_some() {
+            return Err(PolicyError::IdentityMismatch(format!(
+                "duplicate package identity {}",
+                identity.key()
+            )));
+        }
+    }
+
+    let missing = selected
+        .iter()
+        .filter(|identity| !package_ids.contains_key(*identity))
+        .map(PackageIdentity::key)
+        .collect::<Vec<_>>();
+    if !missing.is_empty() {
+        return Err(PolicyError::SelectedPackageMissing(missing.join(", ")));
+    }
+
+    let root_identities = selected
+        .iter()
+        .filter(|identity| identity.name == context.package)
+        .collect::<Vec<_>>();
+    if root_identities.len() != 1 {
+        return Err(PolicyError::WrongRoot(context.package.clone()));
+    }
+    let root_identity = root_identities[0];
+    let root_id = package_ids
+        .get(root_identity)
+        .cloned()
+        .ok_or_else(|| PolicyError::SelectedPackageMissing(root_identity.key()))?;
+    let selected_ids = selected
+        .iter()
+        .map(|identity| {
+            package_ids
+                .get(identity)
+                .cloned()
+                .ok_or_else(|| PolicyError::SelectedPackageMissing(identity.key()))
+        })
+        .collect::<Result<BTreeSet<_>, _>>()?;
+
+    let mut selected_packages = package_values
+        .into_iter()
+        .filter(|package| {
+            package_identity(package)
+                .map(|identity| selected.contains(&identity))
+                .unwrap_or(false)
+        })
+        .collect::<Vec<_>>();
+    selected_packages.sort_by(|left, right| {
+        package_id(left)
+            .expect("normalized Cargo package id")
+            .cmp(&package_id(right).expect("normalized Cargo package id"))
+    });
+    metadata_object.insert("packages".to_owned(), Value::Array(selected_packages));
+
+    filter_workspace_ids(
+        metadata_object,
+        "workspace_members",
+        &selected_ids,
+        &package_ids,
+        true,
+    )?;
+    filter_workspace_ids(
+        metadata_object,
+        "workspace_default_members",
+        &selected_ids,
+        &package_ids,
+        false,
+    )?;
+
+    let resolve = metadata_object
+        .get_mut("resolve")
+        .and_then(Value::as_object_mut)
+        .ok_or_else(|| {
+            PolicyError::MalformedMetadata("Cargo metadata has no resolve object".to_owned())
+        })?;
+    let raw_root = resolve.get("root").cloned().ok_or_else(|| {
+        PolicyError::MalformedMetadata("Cargo resolve has no root field".to_owned())
+    })?;
+    if !raw_root.is_null() {
+        let raw_root = raw_root.as_str().ok_or_else(|| {
+            PolicyError::MalformedMetadata("Cargo resolve root is not a package id".to_owned())
+        })?;
+        if raw_root != root_id {
+            return Err(PolicyError::MetadataRootMismatch(raw_root.to_owned()));
+        }
+    }
+
+    let raw_nodes = resolve
+        .get("nodes")
+        .and_then(Value::as_array)
+        .cloned()
+        .ok_or_else(|| {
+            PolicyError::MalformedMetadata("Cargo resolve has no nodes array".to_owned())
+        })?;
+    let mut selected_nodes = Vec::new();
+    let mut node_ids = BTreeSet::new();
+    for mut node in raw_nodes {
+        let node_object = node.as_object_mut().ok_or_else(|| {
+            PolicyError::MalformedMetadata("Cargo resolve node is not an object".to_owned())
+        })?;
+        let node_id = node_object
+            .get("id")
+            .and_then(Value::as_str)
+            .ok_or_else(|| {
+                PolicyError::MalformedMetadata("Cargo resolve node has no id".to_owned())
+            })?
+            .to_owned();
+        if !all_ids.contains(&node_id) {
+            return Err(PolicyError::DanglingResolveEdge(node_id));
+        }
+        if !selected_ids.contains(&node_id) {
+            continue;
+        }
+        if !node_ids.insert(node_id.clone()) {
+            return Err(PolicyError::IdentityMismatch(format!(
+                "duplicate resolve node {node_id}"
+            )));
+        }
+
+        let dependencies = node_object
+            .get("dependencies")
+            .and_then(Value::as_array)
+            .cloned()
+            .ok_or_else(|| {
+                PolicyError::MalformedMetadata(format!(
+                    "resolve node {node_id} has no dependencies array"
+                ))
+            })?;
+        let mut filtered_dependencies = Vec::new();
+        for dependency in dependencies {
+            let dependency_id = dependency
+                .as_str()
+                .ok_or_else(|| {
+                    PolicyError::MalformedMetadata("resolve dependency is not an id".to_owned())
+                })?
+                .to_owned();
+            if !all_ids.contains(&dependency_id) {
+                return Err(PolicyError::DanglingResolveEdge(dependency_id));
+            }
+            if selected_ids.contains(&dependency_id) {
+                filtered_dependencies.push(Value::String(dependency_id));
+            }
+        }
+        filtered_dependencies.sort_by(|left, right| left.as_str().cmp(&right.as_str()));
+        node_object.insert(
+            "dependencies".to_owned(),
+            Value::Array(filtered_dependencies),
+        );
+
+        let deps = node_object
+            .get("deps")
+            .and_then(Value::as_array)
+            .cloned()
+            .ok_or_else(|| {
+                PolicyError::MalformedMetadata(format!("resolve node {node_id} has no deps array"))
+            })?;
+        let mut filtered_deps = Vec::new();
+        for dependency in deps {
+            let dependency_object = dependency.as_object().ok_or_else(|| {
+                PolicyError::MalformedMetadata(
+                    "resolve dependency detail is not an object".to_owned(),
+                )
+            })?;
+            let dependency_id = dependency_object
+                .get("pkg")
+                .and_then(Value::as_str)
+                .ok_or_else(|| {
+                    PolicyError::DanglingResolveEdge(format!(
+                        "{node_id} has a dependency without a package id"
+                    ))
+                })?
+                .to_owned();
+            if !all_ids.contains(&dependency_id) {
+                return Err(PolicyError::DanglingResolveEdge(dependency_id));
+            }
+            if selected_ids.contains(&dependency_id) {
+                filtered_deps.push(dependency);
+            }
+        }
+        filtered_deps.sort_by_key(dependency_sort_key);
+        node_object.insert("deps".to_owned(), Value::Array(filtered_deps));
+        selected_nodes.push(node);
+    }
+
+    let missing_nodes = selected_ids
+        .difference(&node_ids)
+        .cloned()
+        .collect::<Vec<_>>();
+    if !missing_nodes.is_empty() {
+        return Err(PolicyError::SelectedPackageMissing(
+            missing_nodes.join(", "),
+        ));
+    }
+    selected_nodes.sort_by(|left, right| {
+        left.get("id")
+            .and_then(Value::as_str)
+            .cmp(&right.get("id").and_then(Value::as_str))
+    });
+    resolve.insert("root".to_owned(), Value::String(root_id));
+    resolve.insert("nodes".to_owned(), Value::Array(selected_nodes));
+    Ok(metadata)
+}
+
+fn package_id(package: &Value) -> Result<String, PolicyError> {
+    package
+        .get("id")
+        .and_then(Value::as_str)
+        .map(str::to_owned)
+        .ok_or_else(|| PolicyError::MalformedMetadata("package has no id".to_owned()))
+}
+
+fn filter_workspace_ids(
+    metadata: &mut serde_json::Map<String, Value>,
+    field: &str,
+    selected_ids: &BTreeSet<String>,
+    package_ids: &BTreeMap<PackageIdentity, String>,
+    require_selected_workspace_members: bool,
+) -> Result<(), PolicyError> {
+    let values = metadata
+        .get(field)
+        .and_then(Value::as_array)
+        .cloned()
+        .ok_or_else(|| {
+            PolicyError::MalformedMetadata(format!("Cargo metadata has no {field} array"))
+        })?;
+    let mut members = BTreeSet::new();
+    for value in values {
+        let id = value
+            .as_str()
+            .ok_or_else(|| PolicyError::MalformedMetadata(format!("{field} contains a non-id")))?;
+        if selected_ids.contains(id) {
+            members.insert(id.to_owned());
+        }
+    }
+    if require_selected_workspace_members {
+        let missing = package_ids
+            .iter()
+            .filter(|(identity, id)| identity.source.is_none() && selected_ids.contains(*id))
+            .map(|(_, id)| id)
+            .filter(|id| !members.contains(*id))
+            .cloned()
+            .collect::<Vec<_>>();
+        if !missing.is_empty() {
+            return Err(PolicyError::SelectedPackageMissing(missing.join(", ")));
+        }
+    }
+    metadata.insert(
+        field.to_owned(),
+        Value::Array(members.into_iter().map(Value::String).collect()),
+    );
+    Ok(())
+}
+
+fn dependency_sort_key(value: &Value) -> String {
+    format!(
+        "{}\u{1f}{}\u{1f}{}",
+        value
+            .get("name")
+            .and_then(Value::as_str)
+            .unwrap_or_default(),
+        value.get("pkg").and_then(Value::as_str).unwrap_or_default(),
+        value
+            .get("dep_kinds")
+            .map(Value::to_string)
+            .unwrap_or_default()
+    )
+}
+
+fn normalize_metadata_paths(value: &mut Value, workspace_root: &Path) -> Result<(), PolicyError> {
+    match value {
+        Value::String(string) => {
+            *string = normalize_metadata_string(string, workspace_root)?;
+        }
+        Value::Array(values) => {
+            for value in values {
+                normalize_metadata_paths(value, workspace_root)?;
+            }
+        }
+        Value::Object(values) => {
+            for value in values.values_mut() {
+                normalize_metadata_paths(value, workspace_root)?;
+            }
+        }
+        Value::Null | Value::Bool(_) | Value::Number(_) => {}
+    }
+    Ok(())
+}
+
+fn normalize_metadata_string(value: &str, workspace_root: &Path) -> Result<String, PolicyError> {
+    for (prefix, uri_prefix) in [("path+file://", "path+file://"), ("file://", "file://")] {
+        if let Some(path_value) = value.strip_prefix(prefix) {
+            let (path, suffix) = path_value.split_once('#').unwrap_or((path_value, ""));
+            let normalized = normalize_absolute_path(path, workspace_root)?;
+            return Ok(if suffix.is_empty() {
+                format!("{uri_prefix}{normalized}")
+            } else {
+                format!("{uri_prefix}{normalized}#{suffix}")
+            });
+        }
+    }
+    if value.starts_with('/') {
+        return normalize_absolute_path(value, workspace_root);
+    }
+    Ok(value.to_owned())
+}
+
+fn normalize_absolute_path(value: &str, workspace_root: &Path) -> Result<String, PolicyError> {
+    let path = Path::new(value);
+    if path
+        .components()
+        .any(|component| matches!(component, Component::ParentDir | Component::CurDir))
+    {
+        return Err(PolicyError::UnrecognizedAbsolutePath(value.to_owned()));
+    }
+    if let Ok(relative) = path.strip_prefix(workspace_root) {
+        return Ok(canonical_workspace_path(relative));
+    }
+    if path.starts_with("/workspace/packages") {
+        return Ok(value.to_owned());
+    }
+    for cargo_root in ["registry", "git"] {
+        if let Some(relative) = cargo_path_after_marker(path, cargo_root) {
+            return Ok(if relative.is_empty() {
+                format!("/cargo/{cargo_root}")
+            } else {
+                format!("/cargo/{cargo_root}/{relative}")
+            });
+        }
+    }
+    if value.starts_with("/cargo/registry") || value.starts_with("/cargo/git") {
+        return Ok(value.to_owned());
+    }
+    Err(PolicyError::UnrecognizedAbsolutePath(value.to_owned()))
+}
+
+fn canonical_workspace_path(relative: &Path) -> String {
+    let relative = relative.to_string_lossy().replace('\\', "/");
+    if relative.is_empty() {
+        "/workspace/packages".to_owned()
+    } else {
+        format!("/workspace/packages/{relative}")
+    }
+}
+
+fn cargo_path_after_marker(path: &Path, cargo_root: &str) -> Option<String> {
+    let components = path.components().collect::<Vec<_>>();
+    components.windows(2).enumerate().find_map(|(index, pair)| {
+        if pair[0] == Component::Normal(OsStr::new(".cargo"))
+            && pair[1] == Component::Normal(OsStr::new(cargo_root))
+        {
+            let suffix = components[index + 2..]
+                .iter()
+                .map(|component| component.as_os_str().to_str())
+                .collect::<Option<Vec<_>>>()?
+                .join("/");
+            Some(suffix)
+        } else {
+            None
+        }
+    })
+}
+
 fn package_identity(package: &Value) -> Result<PackageIdentity, PolicyError> {
     let name = package
         .get("name")
@@ -590,6 +991,27 @@ pub fn selected_source_census(
         checksums,
         digest,
     })
+}
+
+pub fn validate_selected_identity_set(
+    selected: &BTreeSet<PackageIdentity>,
+    actual: &BTreeSet<PackageIdentity>,
+) -> Result<(), PolicyError> {
+    let missing = selected
+        .difference(actual)
+        .map(PackageIdentity::key)
+        .collect::<Vec<_>>();
+    if !missing.is_empty() {
+        return Err(PolicyError::SelectedPackageMissing(missing.join(", ")));
+    }
+    let extra = actual
+        .difference(selected)
+        .map(PackageIdentity::key)
+        .collect::<Vec<_>>();
+    if !extra.is_empty() {
+        return Err(PolicyError::SelectedPackageExtra(extra.join(", ")));
+    }
+    Ok(())
 }
 
 pub fn verify_git_archive_pin(
@@ -920,6 +1342,25 @@ impl PolicyInput {
             })).collect::<Vec<_>>(),
         })
     }
+
+    pub fn as_selected_metadata_json(
+        &self,
+        metadata_json: &str,
+        root: &Path,
+    ) -> Result<String, PolicyError> {
+        let selected = self.identities.iter().cloned().collect::<BTreeSet<_>>();
+        let metadata = filter_selected_metadata(metadata_json, &selected, &self.context, root)?;
+        let mut metadata = metadata.as_object().cloned().ok_or_else(|| {
+            PolicyError::MalformedMetadata("Cargo metadata is not an object".to_owned())
+        })?;
+        let context = self.as_json().as_object().cloned().ok_or_else(|| {
+            PolicyError::Serialization("policy context is not a JSON object".to_owned())
+        })?;
+        metadata.extend(context);
+        serde_json::to_string_pretty(&Value::Object(metadata))
+            .map(|json| json + "\n")
+            .map_err(|error| PolicyError::Serialization(error.to_string()))
+    }
 }
 
 pub fn package_policy_preview(root: &Path) -> Result<BTreeMap<String, String>, PolicyError> {
@@ -955,6 +1396,11 @@ pub fn package_policy_preview_with_executor(
             .cloned()
             .collect::<Vec<_>>();
         let census = selected_source_census(&selected, &filtered_lock, &BTreeSet::new())?;
+        let filtered_lock_identities = filtered_lock
+            .iter()
+            .map(|package| package.identity.clone())
+            .collect::<BTreeSet<_>>();
+        validate_selected_identity_set(&selected, &filtered_lock_identities)?;
         let production_input = PolicyInput {
             context: context.clone(),
             variant: "production",
@@ -989,9 +1435,7 @@ pub fn package_policy_preview_with_executor(
             &mut outputs,
             &context.preview_dir(),
             "policy/metadata.json",
-            serde_json::to_string_pretty(&policy_input.as_json())
-                .map_err(|error| PolicyError::Serialization(error.to_string()))?
-                + "\n",
+            policy_input.as_selected_metadata_json(&metadata_json, root)?,
         );
         insert_policy_output(
             &mut outputs,
@@ -1120,6 +1564,11 @@ pub enum PolicyError {
     MalformedMetadata(String),
     MetadataPackagesMissing,
     IdentityMismatch(String),
+    SelectedPackageMissing(String),
+    SelectedPackageExtra(String),
+    DanglingResolveEdge(String),
+    MetadataRootMismatch(String),
+    UnrecognizedAbsolutePath(String),
     MalformedLock(String),
     EmptyLock,
     EmptySourceCensus,
@@ -1163,6 +1612,36 @@ impl fmt::Display for PolicyError {
             }
             Self::IdentityMismatch(message) => {
                 write!(formatter, "metadata identity mismatch: {message}")
+            }
+            Self::SelectedPackageMissing(message) => {
+                write!(
+                    formatter,
+                    "selected package is missing from Cargo metadata: {message}"
+                )
+            }
+            Self::SelectedPackageExtra(message) => {
+                write!(
+                    formatter,
+                    "selected package set has an extra identity: {message}"
+                )
+            }
+            Self::DanglingResolveEdge(message) => {
+                write!(
+                    formatter,
+                    "Cargo resolve graph has a dangling edge: {message}"
+                )
+            }
+            Self::MetadataRootMismatch(root) => {
+                write!(
+                    formatter,
+                    "Cargo metadata resolve root is not selected: {root}"
+                )
+            }
+            Self::UnrecognizedAbsolutePath(path) => {
+                write!(
+                    formatter,
+                    "Cargo metadata contains an unrecognized absolute path: {path}"
+                )
             }
             Self::MalformedLock(message) => write!(formatter, "malformed Cargo.lock: {message}"),
             Self::EmptyLock => formatter.write_str("Cargo.lock has no package records"),
