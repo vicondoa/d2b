@@ -45,9 +45,10 @@ section 8.2 as well as the per-row cells:
 | `REPLACE` disposition rows | **32** |
 | `DELETE` + `REPLACE` rows, total | **48** |
 | `DELETE` rows carrying an explicit removal proof | **5** |
-| `REPLACE` rows carrying an explicit removal proof | **7** |
-| Rows carrying an explicit removal proof, total | **12** |
-| Rows scheduled for removal with **no** explicit proof | **36** |
+| `REPLACE` rows carrying an explicit removal proof | **9** |
+| Rows carrying an explicit removal proof, total | **14** |
+| Rows retired because they name no baseline path | **1** |
+| Rows scheduled for removal with **no** explicit proof | **33** |
 
 **The claim is correct on the denominator and understated on the numerator.**
 The DELETE denominator of 16 is correct. The proofed DELETE count is **5, not
@@ -58,13 +59,16 @@ naive per-row scan sees one proof where three rows are covered. Second, section
 row.
 
 The claim also stops at DELETE and does not account for the 32 REPLACE rows,
-which schedule removals just as DELETE rows do. Only 7 of those 32 carry a
-proof, which is where the bulk of the outstanding gap actually is.
+which schedule removals just as DELETE rows do. The map supplies proofs for 7
+of those rows and W5 proved 2 more. The current 48-row census therefore has 14
+proofed rows, 1 retired row that names no baseline path, and 33 outstanding
+DELETE/REPLACE rows.
 
-### The 12 rows that do carry a proof
+### The 12 rows for which the migration map supplies a proof
 
 Column `Source` records where the proof was found: `row` for a per-row
-disposition cell, `§8.2` for the migration map's removal-proof test table.
+disposition cell, `§8.2` for the migration map's removal-proof test table. The
+two additional W5-proved rows are recorded separately in section 3.5.
 
 | Line | Row | Disposition | Source | Proof recorded |
 | --- | --- | --- | --- | --- |
@@ -247,7 +251,7 @@ these rows:
 These are **coarse item-level preconditions**, not per-path removal proofs. Each
 states a condition in prose, but none names a specific executable check bound to
 a specific superseded path, and several govern dozens of rows at once. They do
-not discharge FR-023 for the 36 rows above, which is exactly why those rows are
+not discharge FR-023 for the 33 outstanding rows above, which is exactly why those rows are
 inventoried here.
 
 By contrast, the manifest does contain items whose `removalProof` is

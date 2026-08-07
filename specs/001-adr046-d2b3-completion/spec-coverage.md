@@ -964,8 +964,10 @@ For every `RETAIN`, `ADAPT`, `REPLACE`, or `DELETE` path:
 
 Migration-map dispositions: 94 `ADAPT`, 32 `REPLACE`, 19 `RETAIN`, 16 `DELETE`. Of the DELETE
 rows, 12 name a successor (parity-enforced, FR-041) and 4 do not (explicit retirement, FR-042).
-The map supplies explicit removal proofs for only 3 of the 16, so the remaining proofs are
-authored with the wave that removes each path.
+The current [`removal-proof-inventory.md`](./removal-proof-inventory.md) 48-row
+DELETE/REPLACE census records 5 proofed DELETE rows, 9 proofed REPLACE rows, 1 retired
+DELETE row that names no baseline path, and 33 outstanding rows. Each outstanding proof is
+authored with the wave that removes its path.
 
 ---
 
