@@ -593,19 +593,10 @@ fn fresh_hub_bootstrap(
         .map_err(|_| fresh_bootstrap_error(hub, "cannot create bootstrap workspace"))?;
     let generated = fresh_bootstrap_in_workspace(root, &workspace, hub, executor);
     let cleanup = fs::remove_dir_all(&workspace);
-    let result = if cleanup.is_ok() {
-        generated
-            .as_ref()
-            .ok()
-            .map(|bytes| install_fresh_lock(root, hub, bytes))
-            .transpose()
-    } else {
-        Ok(None)
-    };
-    let after = fresh_content_snapshot(root)
+    let after_child = fresh_content_snapshot(root)
         .map_err(|_| fresh_bootstrap_error(hub, "cannot inspect repository state"))?;
-    drop(guard);
-    if fresh_content_changed_outside_selected(&before, &after, hub) {
+    if fresh_content_changed_outside_selected(&before, &after_child, hub) {
+        drop(guard);
         return Err(
             bazel::adr0054_drift_message("D2B-BZL-UNEXPECTED-MUTATION")
                 .expect("mutation diagnostic is closed")
@@ -613,13 +604,25 @@ fn fresh_hub_bootstrap(
         );
     }
     if cleanup.is_err() {
+        drop(guard);
         return Err(fresh_bootstrap_error(
             hub,
             "fresh bootstrap cleanup failed; retry the selected hub command",
         ));
     }
-    generated?;
-    result
+    let generated = generated?;
+    let result = install_fresh_lock(root, hub, &generated);
+    let after_install = fresh_content_snapshot(root)
+        .map_err(|_| fresh_bootstrap_error(hub, "cannot inspect repository state"))?;
+    drop(guard);
+    if fresh_content_changed_outside_selected(&before, &after_install, hub) {
+        return Err(
+            bazel::adr0054_drift_message("D2B-BZL-UNEXPECTED-MUTATION")
+                .expect("mutation diagnostic is closed")
+                .into(),
+        );
+    }
+    Ok(Some(result?))
 }
 
 fn validate_fresh_directories(root: &Path, hub: &str) -> Result<(), Box<dyn std::error::Error>> {
