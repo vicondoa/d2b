@@ -6801,3 +6801,61 @@ fn panel_migrate_refusal_corpus_is_counted_and_non_empty() {
         "no refusal about a remote prints a repository path"
     );
 }
+
+const CI_POLICY_SURFACES: &[&str] = &[
+    "tests/layer1-jobs.json",
+    "tests/tools/layer1-jobs.py",
+    "tests/ci/layer1-workflow.template.yml",
+    "tests/tools/flake-check-classes.sh",
+    "tests/tools/gen-flake-check-matrix-pin.sh",
+    ".github/workflows/pr-l1-static-fast.yml",
+    ".github/workflows/release-host-binaries.yml",
+];
+
+fn ci_process_marker_violations(content: &str, rel: &str) -> Vec<String> {
+    let forbidden = [
+        r"\bW[0-9](?:fu[0-9]+|a(?:-[0-9]+)?|)\b",
+        r"\bP[0-9]+\b",
+        "autopilot_marker",
+        "WAVE_ID",
+        "PHASE_MARKER",
+        "fleet_execution",
+    ];
+    let patterns = forbidden
+        .iter()
+        .map(|pattern| Regex::new(pattern).expect("valid CI process-marker regex"))
+        .collect::<Vec<_>>();
+    let mut violations = Vec::new();
+    for (line_number, line) in content.lines().enumerate() {
+        if patterns.iter().any(|pattern| pattern.is_match(line)) {
+            violations.push(format!("{rel}:{}:{line}", line_number + 1));
+        }
+    }
+    violations
+}
+
+#[test]
+fn ci_workflow_and_renderer_surfaces_have_no_process_markers() {
+    let mut violations = Vec::new();
+    for rel in CI_POLICY_SURFACES {
+        assert!(
+            repo_path_exists(rel),
+            "CI process-marker policy input is missing: {rel}"
+        );
+        violations.extend(ci_process_marker_violations(&read_repo_file(rel), rel));
+    }
+    assert!(
+        violations.is_empty(),
+        "CI workflow and renderer surfaces contain process markers:\n{}",
+        violations.join("\n")
+    );
+}
+
+#[test]
+fn ci_process_marker_policy_reaches_a_planted_marker() {
+    let planted = "name: Advisory W3fu2\nstep: fleet_execution";
+    let violations = ci_process_marker_violations(planted, "fixture.yml");
+    assert_eq!(violations.len(), 2);
+    assert!(violations.iter().any(|line| line.contains("W3fu2")));
+    assert!(violations.iter().any(|line| line.contains("fleet_execution")));
+}

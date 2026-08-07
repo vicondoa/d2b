@@ -653,6 +653,21 @@ set -euo pipefail
         ):
             with self.assertRaises(AssertionError, msg=label):
                 assert_exact_policy_inventory(mutated)
+            fixture = self.scratch / f"policy-{label}-lib.sh"
+            fixture.write_text(mutated, encoding="utf-8")
+            result = subprocess.run(
+                ["bash", "-c", 'set -euo pipefail; source "$1"', "--", str(fixture)],
+                cwd=ROOT,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                check=False,
+            )
+            self.assertNotEqual(
+                result.returncode,
+                0,
+                msg=f"production policy inventory accepted {label} fixture",
+            )
 
         # Keep the fixture tied to the production declaration rather than
         # allowing this regression to become an orphaned unit test.
