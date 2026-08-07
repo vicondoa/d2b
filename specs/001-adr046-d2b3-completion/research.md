@@ -247,15 +247,24 @@ formatter, or overlay is introduced (Principle: constitution "Additional Constra
 
 ---
 
-## R8: Can unprivileged write-ahead publication link an unnamed inode?
+## R8: Can privilege-dropped publication link an exact unnamed inode?
 
-**Observed on 2026-08-07**: an unprivileged same-filesystem probe in the feature filesystem
-opened `O_TMPFILE|O_RDWR|O_CLOEXEC`, wrote and file-synced one byte, then called
-`linkat(AT_EMPTY_PATH)` into the already opened parent directory. It returned
-`linkat_rc=0 errno=0`; the probe link was removed in the same command.
+**Prior observation, non-authorizing**: the 2026-08-07 feature-filesystem probe reported
+success for `linkat(AT_EMPTY_PATH)`, but it did not bind the process effective capability
+set, user namespace, procfs mount, target mount, kernel, or production filesystem. Linux
+restricts `AT_EMPTY_PATH` linking to a caller with `CAP_DAC_READ_SEARCH`; that observation
+therefore cannot authorize the required zero-effective-capability target.
 
-**Decision**: The Wave 5 plan may require the unnamed-inode/file-sync/link protocol for
-incident preimage and request-output write-ahead publication on the validated target
-filesystem. T589 still must test unsupported-open and unsupported-link refusal and must not
-infer support on another filesystem from this observation. No named-partial fallback is
-allowed.
+**Decision**: Wave 5 forbids `AT_EMPTY_PATH` and create-and-unlink link probing. Preimage,
+candidate sidecar, and request-output publishers write, file-sync, and revalidate an
+`O_TMPFILE` inode, retain a validated procfs `/proc/self/fd` directory fd, and use
+`linkat(proc_self_fd_dirfd, decimal_fd, target_parent_fd, final_name,
+AT_SYMLINK_FOLLOW)` to capability-free link the exact opened inode directly to its final
+no-replace name. No linked temporary or name-consuming publication rename exists.
+
+T589 must run the production credential/kernel/mount/filesystem matrix with an empty
+effective capability set and independently inject unsupported-open, invalid-procfs/mount,
+and unsupported-link failures. Preimage link failure exposes no incident name or internal
+request. Request-output open/environment failure occurs before freeze/request creation;
+link failure occurs only after candidate-internal durability and retains that exact pair as
+an ordinary replayable output failure. No named-partial fallback is allowed.

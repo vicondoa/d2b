@@ -281,9 +281,12 @@ digest over the exact opened bytes before decoding, and derives
 `evidence-sidecars/sc002/sha256/<typed-digest>.json`. It decodes and validates from those same
 bytes, including the outer candidate/content/snapshot binding, before candidate publication.
 Through the already held candidate-directory fd it creates and verifies current-effective-uid
-`0700` namespace directories, creates a current-effective-uid `0600` temporary leaf with
-`O_CREAT|O_EXCL|O_CLOEXEC|O_NOFOLLOW`, writes the exact validated bytes, `fsync`s the leaf,
-and publishes with `renameat2(RENAME_NOREPLACE)`. Before publishing the `EvidenceRecord`
+`0700` namespace directories, opens an unnamed `O_TMPFILE|O_RDWR|O_CLOEXEC` inode in the
+final parent, sets and verifies current-effective-uid ownership and mode `0600`, writes the
+exact validated bytes, and `fsync`s and revalidates the opened inode. Through one validated
+procfs `/proc/self/fd` directory fd it capability-free links that exact opened inode directly
+to the final no-replace leaf with `linkat(..., AT_SYMLINK_FOLLOW)`. It uses no
+`AT_EMPTY_PATH`, linked temporary, or name-consuming publication rename. Before publishing the `EvidenceRecord`
 carrying the derived locator, it `fsync`s each held ancestor directory fd bottom-up:
 `sha256`, `sc002`, `evidence-sidecars`, then the candidate directory. Namespace creation is
 therefore durable, not only the final leaf rename. Before temp creation or recovery, every
@@ -306,6 +309,22 @@ count, digest, and bytes, and atomically moves the name into a unique reserved q
 name with `renameat2(RENAME_NOREPLACE)`. It then reopens the quarantine leaf. Cleanup never
 calls `unlinkat` on a sidecar data leaf: Linux has no inode-qualified unlink, so a final
 name check followed by `unlinkat` would retain a name/inode race.
+
+Every move of an existing sidecar name additionally requires a private
+`CandidateNamespaceWriteOwner<'guard>`. It can be borrowed only from the same
+`SidecarCleanupOwner<'guard>` after verifying that the source and destination directories
+are the expected single-link current-effective-uid `0700` directories on the expected
+mount, that their device/inode identities still match the held candidate-relative fds, and
+that the candidate lock excludes every d2b writer. This is the write-ownership boundary for
+name-consuming `renameat2`: the mover reopens the source immediately before the rename,
+matches it to the retained source fd, performs the no-replace rename, and reopens the
+destination before any further mutation. Loss of the directory boundary, a changed source
+name, or a destination reopen mismatch returns
+`sc002-namespace-write-ownership-unproven`, preserves every currently named leaf, and
+blocks without another rename or unlink. The owner has no public constructor, fields,
+accessors, serde, clone, copy, conversion, fd extraction, or lifetime independent of the
+candidate guard. Newly created complete records do not use this name-consuming exception:
+their exact opened inode is linked directly to its final no-replace name as specified below.
 
 The candidate lock serializes every cleanup worker, not only importer against cleanup.
 Cleanup of the same leaf, cleanup of different leaves under the same candidate, incident
@@ -605,24 +624,36 @@ the canonical JSON rules used by incident metadata.
 
 The exact bytes are the incident write-ahead record. Before any anchor, metadata, payload,
 residue, status, resolution, freeze, request, disposition, or admission publication, the
-publisher opens an unnamed `O_TMPFILE|O_RDWR|O_CLOEXEC` inode in the preimage directory,
-writes the complete canonical object, `fsync`s it, and only then links that fully synced
-inode with `linkat(AT_EMPTY_PATH)` at the deterministic same-directory temporary name. It
-`fsync`s the preimage directory after the link, publishes no-replace at
-`evidence-sidecars/sc002/incidents/preimages/<incident-kind>/sha256/<incident-id>.json`,
-then final-reopens and leaf/parent/every-ancestor syncs it. Unsupported `O_TMPFILE` or
-`linkat(AT_EMPTY_PATH)` refuses before any incident name or sidecar-data name changes; there
-is no named-partial fallback. A crash before the anonymous inode is linked exposes no
-incident and restart recensors the still-named source. A crash after the link can expose
-only the complete file-synced expected temporary; restart either completes its no-replace
-publication or classifies a nonidentical final leaf as `preimage-final-conflict`. Thus every
-fallible incident publication after the link has a complete durable preimage, and no
-classifier depends on process memory.
+publisher opens an unnamed `O_TMPFILE|O_RDWR|O_CLOEXEC` inode in the final preimage
+directory, writes the complete canonical object, and `fsync`s and revalidates that opened
+inode. The privilege-dropped target must have an empty effective capability set. It opens
+and validates `/proc/self/fd` once as procfs, retains that directory fd, and calls
+`linkat(proc_self_fd_dirfd, decimal_fd, preimage_parent_fd, final_name,
+AT_SYMLINK_FOLLOW)`. This capability-free procfs-fd form links the exact opened inode
+directly at
+`evidence-sidecars/sc002/incidents/preimages/<incident-kind>/sha256/<incident-id>.json`;
+it never uses `AT_EMPTY_PATH`, a deterministic temporary, or a name-consuming rename. The
+link is no-replace. The publisher then `fsync`s the preimage parent, final-reopens and
+matches the same device/inode, and leaf/parent/every-ancestor syncs it.
 
-Cleanup preflights this exact preimage-directory unnamed-inode/link capability immediately
-after acquiring the candidate lock and before quarantine or retirement rename. A filesystem
-that cannot support the protocol receives a typed refusal with zero sidecar namespace
-mutation; it cannot discover the limitation only after an identity mismatch.
+There is no create-and-unlink capability probe and no named-partial fallback. Unsupported
+`O_TMPFILE` or unsupported procfs-fd linking refuses with no incident name, sidecar-data
+mutation, freeze, or request. A crash before inode `fsync` or after inode `fsync` but before
+the direct link exposes no name. A crash after the direct link but before parent `fsync`
+may recover either no final name or the exact complete final inode; restart recensors and
+either retries from a new unnamed inode or reopens, verifies, and syncs that exact final.
+A nonidentical `EEXIST` is `preimage-final-conflict` and preserves the existing name. Thus
+every visible preimage is complete and file-synced, every replay decision is recoverable
+from namespace plus inode state, and no classifier depends on process memory.
+
+Immediately after acquiring the candidate lock and before any quarantine or retirement
+rename, cleanup validates the exact publication environment without creating a namespace
+entry: effective uid/gid and empty effective capabilities, procfs identity and
+`/proc/self/fd` magic-link semantics, target parent mount/device identity, `openat2`
+resolution support, and `O_TMPFILE` support on that target filesystem. The actual
+procfs-fd link is the first and only link support check and occurs only when a complete
+preimage must be published. Its failure has zero incident or sidecar namespace mutation;
+there is no probe link to remove.
 
 Every anchor, metadata, primary
 status, resolution, disposition request, disposition, successor freeze, and successor
@@ -816,13 +847,15 @@ Root-instance code is `0x00` for each of the first seven roots and is closed for
 therefore has exactly twelve ordered `(root-code, root-instance-code)` pairs; all-zero,
 top-level directory identities, or one generic source-slot row cannot collapse those roots.
 
-Node kind is total over every no-follow observation:
+Serialized node kind is total over every representable no-follow observation:
 `0x00 = absent`, `0x01 = directory`, `0x02 = regular-file`, `0x03 = symlink`,
 `0x04 = block-device`, `0x05 = character-device`, `0x06 = fifo`, `0x07 = socket`,
-`0x08 = mount`, `0x09 = other`, and `0xff = unavailable`. An absent root has an empty
-relative path and zero identity/payload fields. An unavailable node retains its root and
-canonical path but has every stat and payload field zero; no errno enters the encoding. A
-directory has a zero payload digest. A regular file carries
+`0x08 = mount`, and `0x09 = other`. Tag `0xff` is reserved and is rejected by every
+complete-body and bounded-failure-body decoder even when every following field is zero. An
+unavailable observation exists only as private
+`DeniedSc002PrimaryEvidenceScopeV1`; it has no canonical node bytes, locator, or digest and
+maps exclusively to denied scope. An absent root has an empty relative path and zero
+identity/payload fields. A directory has a zero payload digest. A regular file carries
 `Sc002PrimaryEvidenceLeafContentDigestV1` computed from its exact once-opened bytes.
 For a symlink, the same length-framed constructor hashes the exact `readlinkat` bytes and
 `node-kind` keeps that digest injectively distinct from a regular-file observation. Device
@@ -938,8 +971,10 @@ sequence embedded in the body. Raw filesystem identity is never rendered.
 The same cause enum classifies non-authorizing
 `DeniedSc002PrimaryEvidenceScopeV1`, but that private status value has no canonical census
 bytes, locator, or digest. `enumeration-unavailable`, `identity-unstable`, `depth-limit`, and
-record/byte overflow beyond the hard ceiling can occur only there. They cannot be copied
-into the serialized bounded-failure body.
+record/byte overflow beyond the hard ceiling can occur only there. In particular no
+all-zero `0xff` observation or failure-body prefix is serializable; an isolated decoder
+negative must reject it before incident or parked binding is considered. These private
+states cannot be copied into the serialized bounded-failure body.
 
 The bounded-failure form is admission-capable only when two complete locked recursive walks
 cover every descendant beneath every present root, yield the same ordered
@@ -1232,14 +1267,25 @@ all-ancestor-sync rules as primary status and is at most 32,768 bytes.
 `payload-present-status-absent`, `source-payload-conflict`, `incident-names-absent`,
 `payload-identity-mismatch`, `payload-destination-conflict`,
 `status-prefix-repairable`, `status-branch-conflict`, `residue-staging-pending`,
-`residue-status-absent`, and `evidence-census-conflict`. A verified-payload status keeps its
-incident kind as `cause`.
+`residue-status-absent`, `evidence-census-conflict`, and the bounded
+`primary-evidence-coverage:<failure-class>:<root-class>` family defined below. A
+verified-payload status keeps its incident kind as `cause`.
 A mismatch status freezes the recovery cause that selected external retention and carries a
 nonempty residue census. An irreconcilable resolution may instead carry an empty residue
 census only for `incident-names-absent`; its primary-evidence census proves the exact authenticated
 absence. A nonterminal CLI projection derives exactly one recovery class and one recovery
 cause from the locked census in the listed first-applicable order; it never accepts a caller
 class, cause, or free-form explanation.
+
+Coverage denial never collapses to the generic `evidence-census-conflict` cause. Its
+operator-safe cause is the bounded string
+`primary-evidence-coverage:<failure-class>:<root-class>`, where `failure-class` is exactly
+`enumeration-unavailable`, `identity-unstable`, `depth-limit`,
+`node-hard-ceiling`, or `byte-hard-ceiling`, and `root-class` is exactly `preimage`,
+`anchor`, `metadata`, `payload`, `residue-staging`, `residue`, `primary-status`, or
+`source-slot`. The root class intentionally omits the source-slot instance, relative path,
+identity, errno, count, and bytes. The private denied scope supplies both enum values; no
+caller or serialized bounded-failure body does.
 
 CLI JSON is deliberately a separate deterministic projection rather than the durable status
 envelope. `Sc002IncidentCliStatusV1` records, in order, `schemaVersion`,
@@ -1272,10 +1318,10 @@ identity-bearing bounded-failure commitment:
 
 | Validated state and census | `cause` | `remediation` |
 | --- | --- | --- |
-| exact `recovery-resumable` prefix: linked complete preimage temporary, incomplete anchor or metadata publication, source only, payload file/directory sync pending, exact payload without base status, exact residue prefix, or uniquely repairable status prefix | exact locked resumable cause | `resume-incident-recovery` |
+| exact `recovery-resumable` prefix: directly linked complete preimage final with interrupted parent durability, incomplete anchor or metadata publication, source only, payload file/directory sync pending, exact payload without base status, exact residue prefix, or uniquely repairable status prefix | exact locked resumable cause | `resume-incident-recovery` |
 | `recovery-irreconcilable`, including `evidence-census-conflict`, with no disposition matching the current complete census or bounded-failure commitment | exact locked irreconcilable cause | `obtain-incident-disposition` |
 | same `recovery-irreconcilable` state with an exact matching durable authenticated disposition | exact locked irreconcilable cause | `apply-incident-disposition` |
-| `recovery-irreconcilable` whose recursive scan is unreadable, unstable, depth 65, or beyond either hard work ceiling | `evidence-census-conflict` | `restore-primary-evidence-coverage` |
+| `recovery-irreconcilable` whose recursive scan is unreadable, unstable, depth 65, or beyond either hard work ceiling | exact `primary-evidence-coverage:<failure-class>:<root-class>` | `restore-primary-evidence-coverage` |
 | `parked`, null disposition/successor IDs, no matching durable authenticated disposition | incident kind | `obtain-incident-disposition` |
 | `parked`, null disposition/successor IDs, exact matching durable authenticated disposition present after a publication-before-status crash | incident kind | `apply-incident-disposition` |
 | `mismatch-retained`, null disposition/successor IDs | frozen recovery cause | `apply-incident-disposition` |
@@ -1311,7 +1357,7 @@ inspect/action/status/successor path:
 | `residue-staging-pending` | `recovery-resumable` | run incident recover | `mismatch-retained` | apply, then admit |
 | `residue-status-absent` | `recovery-resumable` | run incident recover | `mismatch-retained` | apply, then admit |
 | `evidence-census-conflict` with complete stable descendant coverage | `recovery-irreconcilable` | request/apply the complete census or admission-capable bounded commitment | resolution `disposition-validated` | admit only after full recursive replay |
-| `evidence-census-conflict` without complete stable descendant coverage | `recovery-irreconcilable` | follow `restore-primary-evidence-coverage`: restore read access, stop the changing writer, or move only an injected unrecognized over-ceiling entry outside the immutable candidate scope; then rerun disposition request | unchanged nonterminal projection with null resolution evidence until two complete equal walks fit the hard ceiling | request/apply/admit only after coverage; admission is denied before then |
+| exact `primary-evidence-coverage:<failure-class>:<root-class>` | `recovery-irreconcilable` | complete the exact coverage-repair procedure below, then rerun inspect; do not run disposition request while this cause remains | unchanged nonterminal projection with null resolution evidence until two complete equal walks fit the hard ceiling | request/apply/admit only after coverage; admission is denied before then |
 
 Every row is exercised independently. Inspect always exits `0` with the same stable human
 or JSON projection. The action column is selected only from the locked state: an absent
@@ -1323,12 +1369,30 @@ specific remediation above. No row ends at an uninspectable parked prefix, gener
 or terminal state without either successor admission or an explicit coverage guard that
 denies it.
 
+`restore-primary-evidence-coverage` is a procedure selector, not a signing command. The
+exact procedure is selected only by the bounded failure class:
+
+| Failure class | Exact repair procedure | Required completion check |
+| --- | --- | --- |
+| `enumeration-unavailable` | `restore-primary-evidence-access`: the registered owner of the projected root class restores the prior owner/mode/mount read and execute contract without editing recognized evidence | rerun `sc002-incident-inspect`; the same coverage cause must disappear |
+| `identity-unstable` | `quiesce-primary-evidence-writer`: the registered owner stops the non-d2b writer changing that root class and leaves recognized evidence byte-identical | rerun `sc002-incident-inspect`; two fresh walks must match |
+| `depth-limit` | `relocate-unrecognized-primary-evidence-subtree`: the registered owner moves only the injected unrecognized depth-65 subtree outside the immutable candidate root | rerun `sc002-incident-inspect`; every remaining descendant must fit depth 64 |
+| `node-hard-ceiling` | `relocate-unrecognized-primary-evidence-subtree`: the registered owner moves only injected unrecognized entries outside the immutable candidate root | rerun `sc002-incident-inspect`; the full walk must fit 4,096 nodes |
+| `byte-hard-ceiling` | `relocate-unrecognized-primary-evidence-subtree`: the registered owner moves only injected unrecognized entries outside the immutable candidate root | rerun `sc002-incident-inspect`; the full walk must fit 67,108,864 bytes |
+
+The incident CLI never performs these owner repairs and never removes, rewrites, or
+re-owns recognized evidence. If the registered owner cannot complete its named procedure,
+the operator escalates to that owner with the stable incident id and bounded root class;
+there is no force flag. Only a later inspect projection with
+`obtain-incident-disposition` may advertise or permit `sc002-disposition-request`.
+
 The `parked` row's cause is its incident kind. Every locked incident census maps to exactly
 one row. Invalid CLI syntax or a noncanonical caller-supplied ID exits `2`; an absent
 canonical stable id exits `3`. A partial metadata temporary is
 `metadata-publication-pending`; a partial anchor is `anchor-publication-pending`; a
-complete linked preimage temporary is `preimage-publication-pending`; a nonidentical final
-preimage is `preimage-final-conflict`; a nonidentical final anchor is
+complete directly linked preimage final whose parent durability was interrupted is
+`preimage-publication-pending`; a nonidentical final preimage is
+`preimage-final-conflict`; a nonidentical final anchor is
 `anchor-final-conflict`; a nonidentical final metadata leaf is `metadata-final-conflict`;
 individually exact status leaves with one uniquely
 reconstructible missing predecessor are `status-prefix-repairable`; mutually exclusive,
@@ -1374,8 +1438,8 @@ Nullable IDs render exactly `none`. `NEXT_COMMAND` is selected only by `remediat
 `resume-incident-recovery` renders `sc002-incident-recover`,
 `obtain-incident-disposition` renders `sc002-disposition-request`,
 `apply-incident-disposition` renders `sc002-incident-apply`, `admit-successor` renders
-`sc002-successor-admit`, `restore-primary-evidence-coverage` renders
-`sc002-disposition-request`, and `none` renders `none`. It never contains a path, flag, ID,
+`sc002-successor-admit`, `restore-primary-evidence-coverage` renders `none`, and `none`
+renders `none`. It never contains a path, flag, ID,
 argument, shell fragment, executable path, or free-form sentence. The JSON projection
 contains the same bounded values in the declared field order and no `nextCommand` or
 guidance field.
@@ -1499,46 +1563,53 @@ Sc002DispositionRequestDigestV1 =
   incident scope or successor triplet change yields a different request digest and requires a
   new signature.
 
-  Only after the candidate-internal request leaf and all changed candidate ancestors are
-  durable does the command publish the exact same request bytes to `--request-out PATH`.
-  `PATH` is resolved once from an `O_PATH|O_DIRECTORY|O_CLOEXEC` fd for `.` when relative or
-  `/` when absolute. Every parent is opened with
+  Request-output preparation begins before candidate-internal publication and creates no
+  output name. `PATH` is resolved once from an `O_PATH|O_DIRECTORY|O_CLOEXEC` fd for `.`
+  when relative or `/` when absolute. Every parent is opened with
   `openat2(RESOLVE_BENEATH|RESOLVE_NO_SYMLINKS|RESOLVE_NO_MAGICLINKS)` and
   `O_PATH|O_DIRECTORY|O_CLOEXEC`; the final component must be one canonical nonempty
   component, and `.`, `..`, repeated separators, NUL, symlink parents, and a symlink leaf
-  refuse. No joined path is reopened after resolution.
+  refuse. No joined path is reopened after resolution. The command verifies the exact
+  privilege-dropped credentials, requires an empty effective capability set, validates
+  `/proc/self/fd` as procfs through a retained directory fd, records the output parent
+  mount/device/inode, and opens `O_TMPFILE|O_RDWR|O_CLOEXEC` in that parent. It sets and
+  verifies current-effective-uid ownership and mode `0600`, writes the exact canonical
+  bytes, `fsync`s the unnamed inode, and revalidates its bytes and identity. Unsupported
+  open, invalid procfs, nonzero effective capabilities, or any prepublication mismatch
+  refuses with zero output namespace and zero freeze/request mutation.
 
-  Publication uses an unnamed write-ahead inode before the deterministic same-directory
-  temporary name `.d2b-sc002-request-<request-sha256>.tmp`. The command opens
-  `O_TMPFILE|O_RDWR|O_CLOEXEC` in the already anchored parent, sets and verifies
-  current-effective-uid ownership and mode `0600`, writes the exact canonical bytes, and
-  `fsync`s the file while it has no name. Only then does
-  `linkat(AT_EMPTY_PATH)` expose that complete file-synced inode at the deterministic
-  temporary name; it verifies link count one and `fsync`s the parent before publishing with
-  `renameat2(RENAME_NOREPLACE)`. Unsupported `O_TMPFILE` or
-  `linkat(AT_EMPTY_PATH)` refuses before the candidate-internal freeze/request is created,
-  and there is no named-partial fallback. It reopens the final leaf with
-  `O_RDONLY|O_CLOEXEC|O_NOFOLLOW`, requires the same device/inode as the still-open temporary
-  file description plus exact owner/mode/link/digest/bytes, then `fsync`s the parent
-  directory. Before returning, it re-resolves the canonical parent components from the same
-  root/cwd anchor with the same openat2 policy and requires the same parent device/inode; a
+  Only after that complete unnamed output inode exists does the command durably publish and
+  sync the candidate-internal successor freeze, request leaf, and every changed candidate
+  ancestor. It then performs the first and only link-support check by calling
+  `linkat(proc_self_fd_dirfd, decimal_fd, output_parent_fd, final_name,
+  AT_SYMLINK_FOLLOW)`. This capability-free procfs-fd form links the exact opened inode
+  directly to the final no-replace output name. It does not use `AT_EMPTY_PATH`, a linked
+  temporary, `renameat2`, or a create-and-unlink preflight. An unsupported-link result is an
+  ordinary idempotent output failure: it creates no output name, exits `4`, and retains the
+  already durable candidate-internal freeze/request unchanged. This ordering is deliberate;
+  an unsupported-link case cannot both occur after candidate durability and prove zero
+  freeze/request mutation.
+
+  After a successful direct link, the command `fsync`s the output parent, reopens the final
+  leaf with `O_RDONLY|O_CLOEXEC|O_NOFOLLOW`, requires the same device/inode as the still-open
+  unnamed file description plus exact owner/mode/link/digest/bytes, and `fsync`s the parent
+  again. Before returning, it re-resolves the canonical parent components from the same
+  root/cwd anchor with the same openat2 policy and requires the same mount/device/inode. A
   renamed or replaced parent is a conflict even though all data remains preserved. It never
-  truncates, replaces, or follows an existing output.
+  truncates, replaces, follows, or name-consumingly renames an output.
 
   Exact replay is crash-safe. An exact already-published final leaf returns `0` after reopen,
-  full verification, and parent `fsync`. If the final leaf is absent and the deterministic
-  temporary exists, replay reopens and fully verifies that exact temporary before completing
-  the no-replace rename. If neither exists it restarts with a new unnamed inode. A
-  nonidentical temporary
-  or final leaf, unexpected type/owner/mode/link count, output-parent replacement, or final
-  inode mismatch exits `4`, preserves both names, and directs the operator to choose a clean
-  output path or remove the foreign residue manually. A crash before anonymous file sync or
-  after anonymous file sync but before the link exposes no name. A crash after the linked
-  temporary's parent sync but before rename exposes only the complete exact temporary. A
-  crash after rename but before final parent `fsync` is resolved only by the exact replay
-  rules. Request-output failure never rolls back or edits the already durable
-  candidate-internal freeze/request, so rerunning the identical command can reproduce the
-  exact authority input without minting another request digest.
+  full verification, and parent `fsync`. If the final leaf is absent, replay prepares a new
+  unnamed inode and reuses the already durable candidate-internal freeze/request. A
+  nonidentical final leaf, unexpected type/owner/mode/link count, output-parent replacement,
+  or final inode mismatch exits `4` and preserves the existing name. A crash before unnamed
+  inode `fsync`, after that `fsync` but before candidate publication, or after candidate
+  publication but before the direct link exposes no output name. A crash after the direct
+  link but before parent `fsync` may recover either no final or the exact complete final;
+  replay handles both without changing the internal request digest. Request-output failure
+  never rolls back or edits an already durable candidate-internal freeze/request, so
+  rerunning the identical command reproduces the exact authority input without minting
+  another request digest.
 
 `Sc002IncidentDispositionV1` is the sole accepted disposition record. The accepted Version 2
 contract also pins two closed typed constructors:
@@ -1826,6 +1897,12 @@ a pre-lock namespace fd, inspecting a live owner's namespace, or constructing,
 serializing, cloning, returning beyond its guard, pairing with another guard, or
 reconstructing `SidecarCleanupOwner<'guard>` from an fd.
 
+The exact latch `incident-payload-file-synced-before-status-temp` fires only after the
+reopened payload fd has completed `fsync` and its identity still matches metadata, while the
+parked-status temporary namespace has been censused empty. Creating any parked-status
+temporary before that latch, firing the latch before payload `fsync` completes, or observing
+a parked-status temporary at the latch fails the ordering oracle.
+
 At every durable reopen, the validator resolves the locator beneath the already held
 candidate-directory fd with
 `openat2(RESOLVE_BENEATH|RESOLVE_NO_SYMLINKS|RESOLVE_NO_MAGICLINKS|RESOLVE_NO_XDEV)`, opens
@@ -1945,7 +2022,7 @@ production enumeration:
   receipt/failed-record-positive-receipt
   ```
 
-- `tests/golden/delivery/sc002-census-negative-case-ids.txt` contains exactly these 72
+-   `tests/golden/delivery/sc002-census-negative-case-ids.txt` contains exactly these 73
   newline-terminated ids in this order:
 
   ```text
@@ -2005,6 +2082,7 @@ production enumeration:
   primary-census/file-digest-zero
   primary-census/node-kind-tag
   primary-census/node-kind-mode-mismatch
+  primary-census/unavailable-node-tag
   primary-census/unavailable-node-fields
   primary-census/symlink-target-digest
   primary-census/device-rdev
@@ -2039,9 +2117,10 @@ oracle for this grammar. It contains exactly eight ordered vectors:
 `all-twelve-roots-absent`, `mixed-recursive-valid`, `all-invalid-node-kinds`,
 `stable-soft-bound-full-coverage`, `enumeration-unavailable-denied`,
 `identity-unstable-denied`, `depth-64-accepted`, and `depth-65-denied`. The invalid-node
-vector has distinct symlink, block-device, character-device, fifo, socket, mount, other, and
-unavailable observations; nonzero `st_uid`, `st_gid`, and both device `st_rdev` values; and
-a symlink-target payload digest. Each vector records semantic inputs, exact
+vector has distinct symlink, block-device, character-device, fifo, socket, mount, and other
+observations; nonzero `st_uid`, `st_gid`, and both device `st_rdev` values; and a
+symlink-target payload digest. The enumeration-unavailable vector has no serialized node or
+bounded body and must fail the isolated all-zero-`0xff` decoder poison. Each vector records semantic inputs, exact
 `RecursiveNodeObservation` bytes, the complete or bounded body when one is eligible, both
 scope identities, the framed typed digest when eligible, and an explicit
 `admissionCapable` boolean. The two denied vectors and depth-65 vector have no resolution
@@ -2056,7 +2135,7 @@ pass. Missing, duplicate, extra, reordered, unknown, dynamically skipped, or unv
 an early unrelated failure, or a generated expectation fails the enforcing runner. A
 separate post-resolution mutation case changes a primary name after a valid bounded-failure
 commitment and must block successor admission; it is a state-transition negative, not a
-malformed encoding and therefore is not conflated with the 72 malformed census ids.
+malformed encoding and therefore is not conflated with the 73 malformed census ids.
 
 `tests/golden/delivery/sc002-request-output-negative-case-ids.txt` contains exactly these 26
 newline-terminated ids in order:
@@ -2070,11 +2149,11 @@ request-output/path-nul
 request-output/parent-symlink
 request-output/parent-replaced
 request-output/leaf-symlink
-request-output/temp-type
-request-output/temp-owner
-request-output/temp-mode
-request-output/temp-hardlink
-request-output/temp-bytes
+preimage-publication/unsupported-open
+preimage-publication/unsupported-proc-fd-link
+request-output/unsupported-open
+request-output/unsupported-proc-fd-link
+request-output/proc-fd-mount-invalid
 request-output/final-type
 request-output/final-owner
 request-output/final-mode
@@ -2082,10 +2161,10 @@ request-output/final-hardlink
 request-output/final-bytes
 request-output/final-inode-mismatch
 request-output/foreign-eexist
-request-output/crash-before-temp-fsync
-request-output/crash-after-temp-fsync
-request-output/crash-after-temp-link-before-rename
-request-output/crash-after-rename-before-parent-fsync
+request-output/crash-before-inode-fsync
+request-output/crash-after-inode-fsync-before-internal-request
+request-output/crash-after-internal-request-before-final-link
+request-output/crash-after-final-link-before-parent-fsync
 request-output/exact-replay-after-parent-fsync
 request-output/descriptor-exec-leak
 ```
@@ -2098,8 +2177,16 @@ positive idempotence oracle and must perform zero writes after full final-leaf a
 durability verification. Missing, duplicate, reordered, skipped, early-failing, or
 production-derived cases fail the enforcing runner.
 
+The two preimage refusal cases prove no incident name, sidecar mutation, freeze, or request.
+The request-output unsupported-open and invalid-procfs cases run before internal
+publication and prove zero output namespace plus zero freeze/request mutation. The
+request-output unsupported-link case runs only after the candidate-internal freeze/request
+and all candidate ancestors are durable; it proves zero output namespace mutation and exact
+retention of that internal pair. Treating it as a zero-freeze/request case would contradict
+the candidate-first durability invariant and fails the crash matrix.
+
 `tests/golden/delivery/sc002-recovery-forbidden-values.tsv` is the independent closed
-redaction registry for the incident/request/output path. It contains exactly these
+redaction registry for the incident/request/output path. It contains exactly these seventeen
 tab-separated, newline-terminated rows and no header:
 
 ```text
@@ -2117,6 +2204,8 @@ filesystem-inode	828282
 filesystem-ctime-sec	838383
 filesystem-uid	848484
 filesystem-gid	858585
+filesystem-rdev	868686
+symlink-target-bytes	d2b-sc002-symlink-target-canary-v1
 canonical-request-body	d2b-sc002-canonical-request-body-canary-v1
 ```
 
@@ -2131,9 +2220,11 @@ allowed. Bounded incident/disposition/successor ids may appear only in their dec
 operator status fields. Metrics contain none of those ids and no recovery-state path. A
 missing visit, changed literal, duplicate row, omitted captured surface, unexpected
 projection, or production read of this fixture fails before evidence acceptance. Raw
-`st_uid` and `st_gid` therefore have no observability exception: they may enter only the
-typed internal census preimage and the private injection buffer, never a rendered or
-captured surface.
+`st_uid`, `st_gid`, `st_rdev`, and symlink-target bytes therefore have no observability
+exception: they may enter only the typed internal census preimage and the private injection
+buffer, never a rendered or captured surface. Each of the seventeen literals is injected
+separately into every captured surface named above; a generic stat or payload canary cannot
+stand in for either field-specific row.
 
 ---
 
@@ -2283,7 +2374,7 @@ generated from or read by the floor decoder, transition machine, schema, hash-ve
 consumer, poison generator, or 91-case role matrix. Each fixture recomputes every unaffected
 enclosing digest and signature and must reach only its named decoder, framing, transition,
 authority, or binding check. This registry, the independent 13-row role matrix, the 91-case
-semantic poison registry, the five-case copied-issuer registry, the 20-case
+semantic poison registry, the five-case copied-issuer registry, the 26-case
 issuer-authentication/capability registry, the 21-case hash-vector registry, and the
 15-digest/four-signature oracle are seven independent expectations; success in one cannot supply the
 expected ids, cardinality, bytes, or visits of another.
@@ -2327,7 +2418,7 @@ provenance. T589's independent expected-id file is
 production validator nor the poison generator may read it.
 
 `tests/golden/delivery/source-floor-v1/issuer-authentication-negative-case-ids.txt`
-closes every remaining issuer/capability negative. It contains exactly these 20
+closes every remaining issuer/capability negative. It contains exactly these 26
 newline-terminated ids in order:
 
 ```text
@@ -2347,19 +2438,28 @@ source-floor-auth/rebound/execution-commit
 source-floor-auth/rebound/feature-snapshot
 source-floor-auth/rebound/source-generation
 source-floor-auth/direct-decoded-chain
+source-floor-auth/protected-origin-serialize
+source-floor-auth/protected-origin-clone
+source-floor-auth/protected-origin-copy
+source-floor-auth/protected-origin-replay
 source-floor-auth/issuer-provenance-serialize
 source-floor-auth/issuer-provenance-clone
 source-floor-auth/validated-floor-serialize
 source-floor-auth/validated-floor-clone
+source-floor-auth/validated-floor-repeated-mint
+source-floor-auth/handoff-serialized-revalidation
 ```
 
-A separately authored literal 20-id constant must equal the file. The twelve
+A separately authored literal 26-id constant must equal the file. The twelve
 transition-specific cases retain canonical bytes, correct framing, and every unaffected
 proof; each reaches only its named pinned-key/domain check. The three rebound cases use a
 fully signed valid chain from another C, Q, or source generation and fail final binding.
-The final five are compile-fail/API-surface cases proving that direct decode cannot mint
-either private result and neither result can be serialized or cloned. Production validators,
-DTO decoders, poison builders, and API-surface discovery may not read the expected-id file.
+The final eleven are compile-fail/API-surface and state-machine cases proving that direct
+decode cannot mint any private authority, the protected origin cannot be serialized,
+cloned, copied, or replayed, neither later private result can be serialized or cloned, one
+origin cannot mint a second validated floor, and a handoff cannot revalidate serialized
+evidence. Production validators, DTO decoders, poison builders, and API-surface discovery
+may not read the expected-id file.
 
 `tests/golden/delivery/source-floor-v1/hash-vector-negative-case-ids.txt` closes the byte
 oracle negatives. It contains exactly these 21 newline-terminated ids in order:
@@ -2606,17 +2706,26 @@ approval, generated-manifest update, and Gate 0 receipt are external to this fea
 separate source-generation producer/installer and import/validation authorities implement
 and install objects conforming to those accepted schemas and vectors; they do not own or
 silently redefine the repository contract artifacts. T589 does not deserialize a floor and
-decide for itself. The exact disposition-pinned validator first authenticates all four
-issuer proofs against the keys selected only by the accepted disposition and returns one
-private `AuthenticatedSourceFloorIssuerProvenance` by value. That intermediate result has no
-public fields, constructor, accessor, serde implementation, `Clone`, `Copy`, `Default`,
-conversion, byte importer, or reconstruction from authority/key digests. It binds the exact
-manifest, installation, validation, and import canonical-byte digests, all four signature
-domains, the disposition, source generation, C, and Q. The semantic floor validator consumes
-it by value and only then may return one private, nonserializable
-`ValidatedSourceGenerationCompatibilityFloor` result by value. The final type has the same
-closed surface and additionally binds the validated aggregate floor digest and exact
-13-member census.
+decide for itself. The installed source coordinator first atomically consumes the one
+durable unclaimed origin record for the exact source generation, C, Q, and import-receipt
+identity into one private `ProtectedSourceFloorOrigin`. That owner holds the validated
+installed-generation fd anchors and the single-use origin claim. It has no public fields,
+constructor, accessor, serde implementation, `Clone`, `Copy`, `Default`, conversion, byte
+importer, fd extraction, or reconstruction from a digest or serialized chain. Reopening the
+same origin while its claim is live, replaying it after consumption, or copying its fields
+cannot produce another owner.
+
+The exact disposition-pinned validator consumes that protected origin by value while
+authenticating all four issuer proofs against the keys selected only by the accepted
+disposition and returns one private `AuthenticatedSourceFloorIssuerProvenance` by value.
+That intermediate result carries the consumed origin ownership forward and has the same
+closed surface. It binds the exact manifest, installation, validation, and import
+canonical-byte digests, all four signature domains, the disposition, source generation, C,
+and Q. The semantic floor validator consumes it by value and only then may return one
+private, nonserializable `ValidatedSourceGenerationCompatibilityFloor` result by value. The
+final type has the same closed surface and additionally binds the validated aggregate floor
+digest and exact 13-member census. One protected origin can therefore produce at most one
+validated-floor capability.
 
 Validation order is canonical/schema/framing and enclosing-digest reconstruction, then
 disposition/key selection and all four issuer signatures, then transition and member
@@ -2624,7 +2733,11 @@ semantics, then exact-C/Q aggregate acceptance. A proof carrying copied matching
 and verification-key digests but signed by any unpinned key never produces
 `AuthenticatedSourceFloorIssuerProvenance`, even when all outer objects are recomputed and
 legitimately re-signed. A serialized receipt chain, decoded DTO, copied digest tuple, or the
-intermediate issuer result is not a dispatch capability.
+intermediate issuer result is not a dispatch capability. Every later source-side handoff
+boundary borrows the one validated floor and may create only a lifetime-bound,
+operation-attenuated `SourceFloorBoundaryPermit<'floor>` that cannot outlive or be detached
+from that borrow. No later boundary reparses or revalidates serialized floor evidence, and
+no permit can mint a second validated floor.
 
 Acceptance is a closed append-only transition:
 
@@ -2641,7 +2754,8 @@ repeated transition refuses. Any changed disposition, source generation, member 
 authority binding, receipt, C, or Q makes the aggregate stale and requires a new external
 chain; no receipt is edited in place. T589 dispatch opens only from
 `imported-for-exact-C/Q` after the disposition-pinned validator returns the nonserializable
-typed result, and every later source-side handoff boundary revalidates the same aggregate.
+typed result. Every later source-side handoff boundary borrows and attenuates that exact
+result; it never revalidates the serialized aggregate or mints another capability.
 
 The member-census rejection list is closed and always means all seven classes: `missing`,
 `duplicate`, `extra`, `empty`, `stale-generation`, `stale-digest`, and
@@ -3077,24 +3191,117 @@ An absent current pointer exits `3`; human output is exactly
 `{"schemaVersion":1,"kind":"host-generation-handoff-error","error":"not-found","action":"begin-host-generation-deploy"}`.
 Invalid coordinator or incomplete rollback proof exits `4` with zero mutation; human output
 is exactly `host generation handoff coordinator invalid\n` followed by
-`action: restore-coordinator-from-immutable-audit\n`, and JSON is exactly
-`{"schemaVersion":1,"kind":"host-generation-handoff-error","error":"invalid-coordinator","action":"restore-coordinator-from-immutable-audit"}`.
+`action: repair-authorized-handoff\n`, and JSON is exactly
+`{"schemaVersion":1,"kind":"host-generation-handoff-error","error":"invalid-coordinator","action":"repair-authorized-handoff"}`.
 Apply or broker recovery encountering a valid concurrent or terminal state exits `4` and
 renders that same valid five-line or seven-field status rather than an error envelope.
 
+The action maps to the exact selector-free unprivileged command
+`d2b-host-generation-deploy --repair-authorized-handoff`. It traverses the existing public
+socket, acquires the coordinator lock, authenticates the current pointer or its absence and
+every immutable matrix member below, and may repair only a uniquely reconstructible
+authenticated `current-intent` pointer. It writes that pointer create-exclusive,
+file-syncs it, publishes no-replace, directory-syncs it, and returns the normal five-line
+status. It cannot rewrite an intent, audit member, service observation, profile, reference,
+or mutation outcome.
+
+If the immutable proof is missing, mismatched, unauthenticated, noncontiguous, or contains
+an unaudited extra mutation, repair exits `4` with zero mutation. Human output is exactly
+`host generation handoff immutable audit restoration required\n` followed by
+`action: restore-immutable-audit-backup\n`; JSON is exactly
+`{"schemaVersion":1,"kind":"host-generation-handoff-error","error":"audit-restoration-required","action":"restore-immutable-audit-backup"}`.
+That action is an escalation procedure, not a repository command: restore the exact
+matrix-identified immutable audit member through the accepted external backup owner, then
+rerun `--repair-authorized-handoff`. No generic filesystem copy, force flag, daemon-owned
+recovery path, new unit, or partial rollback is advertised.
+
 T589 owns the strict schema plus
 `tests/golden/delivery/host-generation-handoff-status-v1.{json,txt}` and the independent
-`host-generation-handoff-status-case-ids.txt`; T595 owns the private variant constructors,
-current-pointer classifier, shared renderer, focused hermetic tests, and the dedicated
-Type-10 `host-generation-handoff.nix` VM test that proves real service failure/restart and
-rollback effects. T604 later exercises the public handoff as part of exact-candidate operator
-acceptance without owning that dedicated test. The fixture and literal
-test constant cover every row, every allowed and forbidden edge, every forbidden inspect
-input, source/target active/failed partitions, transfer-pending failure, every incomplete
-rollback-proof member, terminal pointer selection and replacement, all four exits, terminal
-idempotence, and raw apply-peer canary absence in both forms.
+`host-generation-handoff-status-case-ids.txt`, plus the read-independent
+`host-generation-handoff-{rollback-members,audit-members,transition-edges}.tsv` fixtures;
+T595 owns the private variant constructors, current-pointer classifier, shared renderer,
+focused hermetic tests, and the dedicated Type-10 `host-generation-handoff.nix` VM test that
+proves real service failure/restart and rollback effects. T604 later exercises the public
+handoff as part of exact-candidate operator acceptance without owning that dedicated test.
+The fixture and literal test constant cover every row, every allowed and forbidden edge,
+every forbidden inspect input, source/target active/failed partitions, transfer-pending
+failure, every independently enumerated rollback-proof member and edge, terminal pointer
+selection and replacement, all four exits, terminal idempotence, and raw apply-peer canary
+absence in both forms.
 
-The case-id file contains exactly these 45 newline-terminated ids in order:
+Rollback proof expectations are pinned by three checked-in fixtures that are mutually
+read-independent from production, the status case file, and their separately authored test
+constants. `host-generation-handoff-rollback-members.tsv` contains exactly seven rows:
+
+```text
+prior-profile
+source-broker-service
+source-daemon-service
+target-broker-service
+target-daemon-service
+current-pointer
+current-reference
+```
+
+`host-generation-handoff-audit-members.tsv` contains exactly 30 rows, one independently
+enumerated pre-mutation/outcome pair member for each closed edge:
+
+```text
+source-bootstrap-publish/pre-mutation
+source-bootstrap-publish/outcome
+target-profile-publish/pre-mutation
+target-profile-publish/outcome
+target-broker-service-transition/pre-mutation
+target-broker-service-transition/outcome
+coordinator-transfer-to-target/pre-mutation
+coordinator-transfer-to-target/outcome
+target-daemon-service-transition/pre-mutation
+target-daemon-service-transition/outcome
+target-pointer-publish/pre-mutation
+target-pointer-publish/outcome
+target-reference-publish/pre-mutation
+target-reference-publish/outcome
+target-pointer-repair/pre-mutation
+target-pointer-repair/outcome
+target-reference-repair/pre-mutation
+target-reference-repair/outcome
+rollback-target-daemon-service/pre-mutation
+rollback-target-daemon-service/outcome
+rollback-pointer-restore/pre-mutation
+rollback-pointer-restore/outcome
+rollback-reference-restore/pre-mutation
+rollback-reference-restore/outcome
+rollback-profile-publish/pre-mutation
+rollback-profile-publish/outcome
+rollback-source-broker-service/pre-mutation
+rollback-source-broker-service/outcome
+rollback-source-daemon-service/pre-mutation
+rollback-source-daemon-service/outcome
+```
+
+`host-generation-handoff-transition-edges.tsv` contains exactly these 15 tab-separated rows.
+Column one is the edge id and column two is its required immediate predecessor; `origin`
+exists only for the first edge:
+
+```text
+source-bootstrap-publish	origin
+target-profile-publish	source-bootstrap-publish
+target-broker-service-transition	target-profile-publish
+coordinator-transfer-to-target	target-broker-service-transition
+target-daemon-service-transition	coordinator-transfer-to-target
+target-pointer-publish	target-daemon-service-transition
+target-reference-publish	target-pointer-publish
+target-pointer-repair	target-reference-publish
+target-reference-repair	target-pointer-repair
+rollback-target-daemon-service	target-reference-repair
+rollback-pointer-restore	rollback-target-daemon-service
+rollback-reference-restore	rollback-pointer-restore
+rollback-profile-publish	rollback-reference-restore
+rollback-source-broker-service	rollback-profile-publish
+rollback-source-daemon-service	rollback-source-broker-service
+```
+
+The case-id file contains exactly these 135 newline-terminated ids in order:
 
 ```text
 handoff-status/authorized-pending
@@ -3132,22 +3339,120 @@ handoff-status/selection-multiple-nonterminal
 handoff-status/selection-nonterminal-pointer-mismatch
 handoff-status/selection-stale-terminal-sequence
 handoff-status/selection-terminal-replaced
-handoff-status/rollback-missing-profile
-handoff-status/rollback-missing-source-service
-handoff-status/rollback-missing-target-service
-handoff-status/rollback-missing-pointer-proof
-handoff-status/rollback-missing-reference-proof
-handoff-status/rollback-missing-pre-mutation
-handoff-status/rollback-missing-outcome
+handoff-status/rollback-missing-member/prior-profile
+handoff-status/rollback-missing-member/source-broker-service
+handoff-status/rollback-missing-member/source-daemon-service
+handoff-status/rollback-missing-member/target-broker-service
+handoff-status/rollback-missing-member/target-daemon-service
+handoff-status/rollback-missing-member/current-pointer
+handoff-status/rollback-missing-member/current-reference
+handoff-status/rollback-mismatch-member/prior-profile
+handoff-status/rollback-mismatch-member/source-broker-service
+handoff-status/rollback-mismatch-member/source-daemon-service
+handoff-status/rollback-mismatch-member/target-broker-service
+handoff-status/rollback-mismatch-member/target-daemon-service
+handoff-status/rollback-mismatch-member/current-pointer
+handoff-status/rollback-mismatch-member/current-reference
+handoff-status/rollback-missing-audit/source-bootstrap-publish/pre-mutation
+handoff-status/rollback-missing-audit/source-bootstrap-publish/outcome
+handoff-status/rollback-missing-audit/target-profile-publish/pre-mutation
+handoff-status/rollback-missing-audit/target-profile-publish/outcome
+handoff-status/rollback-missing-audit/target-broker-service-transition/pre-mutation
+handoff-status/rollback-missing-audit/target-broker-service-transition/outcome
+handoff-status/rollback-missing-audit/coordinator-transfer-to-target/pre-mutation
+handoff-status/rollback-missing-audit/coordinator-transfer-to-target/outcome
+handoff-status/rollback-missing-audit/target-daemon-service-transition/pre-mutation
+handoff-status/rollback-missing-audit/target-daemon-service-transition/outcome
+handoff-status/rollback-missing-audit/target-pointer-publish/pre-mutation
+handoff-status/rollback-missing-audit/target-pointer-publish/outcome
+handoff-status/rollback-missing-audit/target-reference-publish/pre-mutation
+handoff-status/rollback-missing-audit/target-reference-publish/outcome
+handoff-status/rollback-missing-audit/target-pointer-repair/pre-mutation
+handoff-status/rollback-missing-audit/target-pointer-repair/outcome
+handoff-status/rollback-missing-audit/target-reference-repair/pre-mutation
+handoff-status/rollback-missing-audit/target-reference-repair/outcome
+handoff-status/rollback-missing-audit/rollback-target-daemon-service/pre-mutation
+handoff-status/rollback-missing-audit/rollback-target-daemon-service/outcome
+handoff-status/rollback-missing-audit/rollback-pointer-restore/pre-mutation
+handoff-status/rollback-missing-audit/rollback-pointer-restore/outcome
+handoff-status/rollback-missing-audit/rollback-reference-restore/pre-mutation
+handoff-status/rollback-missing-audit/rollback-reference-restore/outcome
+handoff-status/rollback-missing-audit/rollback-profile-publish/pre-mutation
+handoff-status/rollback-missing-audit/rollback-profile-publish/outcome
+handoff-status/rollback-missing-audit/rollback-source-broker-service/pre-mutation
+handoff-status/rollback-missing-audit/rollback-source-broker-service/outcome
+handoff-status/rollback-missing-audit/rollback-source-daemon-service/pre-mutation
+handoff-status/rollback-missing-audit/rollback-source-daemon-service/outcome
+handoff-status/rollback-mismatch-audit/source-bootstrap-publish/pre-mutation
+handoff-status/rollback-mismatch-audit/source-bootstrap-publish/outcome
+handoff-status/rollback-mismatch-audit/target-profile-publish/pre-mutation
+handoff-status/rollback-mismatch-audit/target-profile-publish/outcome
+handoff-status/rollback-mismatch-audit/target-broker-service-transition/pre-mutation
+handoff-status/rollback-mismatch-audit/target-broker-service-transition/outcome
+handoff-status/rollback-mismatch-audit/coordinator-transfer-to-target/pre-mutation
+handoff-status/rollback-mismatch-audit/coordinator-transfer-to-target/outcome
+handoff-status/rollback-mismatch-audit/target-daemon-service-transition/pre-mutation
+handoff-status/rollback-mismatch-audit/target-daemon-service-transition/outcome
+handoff-status/rollback-mismatch-audit/target-pointer-publish/pre-mutation
+handoff-status/rollback-mismatch-audit/target-pointer-publish/outcome
+handoff-status/rollback-mismatch-audit/target-reference-publish/pre-mutation
+handoff-status/rollback-mismatch-audit/target-reference-publish/outcome
+handoff-status/rollback-mismatch-audit/target-pointer-repair/pre-mutation
+handoff-status/rollback-mismatch-audit/target-pointer-repair/outcome
+handoff-status/rollback-mismatch-audit/target-reference-repair/pre-mutation
+handoff-status/rollback-mismatch-audit/target-reference-repair/outcome
+handoff-status/rollback-mismatch-audit/rollback-target-daemon-service/pre-mutation
+handoff-status/rollback-mismatch-audit/rollback-target-daemon-service/outcome
+handoff-status/rollback-mismatch-audit/rollback-pointer-restore/pre-mutation
+handoff-status/rollback-mismatch-audit/rollback-pointer-restore/outcome
+handoff-status/rollback-mismatch-audit/rollback-reference-restore/pre-mutation
+handoff-status/rollback-mismatch-audit/rollback-reference-restore/outcome
+handoff-status/rollback-mismatch-audit/rollback-profile-publish/pre-mutation
+handoff-status/rollback-mismatch-audit/rollback-profile-publish/outcome
+handoff-status/rollback-mismatch-audit/rollback-source-broker-service/pre-mutation
+handoff-status/rollback-mismatch-audit/rollback-source-broker-service/outcome
+handoff-status/rollback-mismatch-audit/rollback-source-daemon-service/pre-mutation
+handoff-status/rollback-mismatch-audit/rollback-source-daemon-service/outcome
+handoff-status/rollback-transition-mismatch/source-bootstrap-publish
+handoff-status/rollback-transition-mismatch/target-profile-publish
+handoff-status/rollback-transition-mismatch/target-broker-service-transition
+handoff-status/rollback-transition-mismatch/coordinator-transfer-to-target
+handoff-status/rollback-transition-mismatch/target-daemon-service-transition
+handoff-status/rollback-transition-mismatch/target-pointer-publish
+handoff-status/rollback-transition-mismatch/target-reference-publish
+handoff-status/rollback-transition-mismatch/target-pointer-repair
+handoff-status/rollback-transition-mismatch/target-reference-repair
+handoff-status/rollback-transition-mismatch/rollback-target-daemon-service
+handoff-status/rollback-transition-mismatch/rollback-pointer-restore
+handoff-status/rollback-transition-mismatch/rollback-reference-restore
+handoff-status/rollback-transition-mismatch/rollback-profile-publish
+handoff-status/rollback-transition-mismatch/rollback-source-broker-service
+handoff-status/rollback-transition-mismatch/rollback-source-daemon-service
 handoff-status/rollback-duplicate-audit
 handoff-status/rollback-reordered-audit
 handoff-status/rollback-noncontiguous
+handoff-status/rollback-unaudited-extra-mutation
+handoff-status/selection-pointer-unauthenticated
+handoff-status/repair-pointer-positive
+handoff-status/repair-audit-restoration-required
+handoff-status/meta-production-member-removed
+handoff-status/meta-fixture-member-removed
+handoff-status/meta-transition-edge-removed
+handoff-status/meta-poison-visitor-removed
 ```
 
-A separately authored literal 45-id test constant equals the file before any case runs.
+A separately authored literal 135-id test constant equals the file before any case runs.
 Production variant and pointer registries, the fixture, the human/JSON goldens, and the
-literal constant are mutually read-independent. Each poison reaches its named tuple,
-selection, input, or rollback-proof check; an early generic decode failure cannot count.
+literal constant are mutually read-independent. Each of the seven rollback members and each
+of the 30 audit members has independent missing and mismatch poison. Each transition edge
+has its own mismatch poison that changes its edge or predecessor cell while every other row
+remains exact. The unaudited-extra-mutation and unauthenticated-pointer cases
+are independent and require exit `4`, the exact invalid-coordinator or audit-restoration
+output, and zero mutation. The two repair cases prove the exact selector-free successful
+pointer repair and incomplete-audit escalation goldens. The four meta-negatives remove one production member, fixture
+member, transition edge, or poison visit independently; shrinking a shared registry or
+expected count cannot false-green. Each poison reaches its named tuple, selection, input, or
+rollback-proof check; an early generic decode failure cannot count.
 
 ---
 

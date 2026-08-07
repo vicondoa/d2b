@@ -315,8 +315,9 @@ merge-target registration, merge eligibility, and merge.
 
     An identity mismatch never unlinks or restores the suspect. It durably publishes the
     structured `Sc002IncidentPreimageV1` containing every applicable kind-specific
-    component as a complete unnamed-inode/file-synced write-ahead record before it links or
-    publishes any incident leaf. Only after durable no-replace preimage publication may it
+    component as a complete unnamed-inode/file-synced write-ahead record before it
+    capability-free procfs-fd links that exact opened inode directly to the final
+    no-replace preimage or publishes any other incident leaf. Only after durable preimage publication may it
     publish the kind-bearing incident anchor and complete metadata, then move the
     metadata-bound currently named inode to the
     typed incident payload address, reopens and verifies it, syncs the payload fd, both
@@ -329,8 +330,9 @@ merge-target registration, merge eligibility, and merge.
     enumerated frozen primary-evidence census or identity-bearing bounded-failure commitment,
     then appending
     the separate resolution. The one recursive grammar contains every absent root, directory,
-    regular-file, symlink, device, fifo, socket, mount, other, and unavailable member under
-    twelve exact root/root-instance pairs. It binds `st_uid`, `st_gid`, `st_rdev`, and
+    regular-file, symlink, device, fifo, socket, mount, and other member under twelve exact
+    root/root-instance pairs. Unavailable state is private denied scope only and all-zero
+    `0xff` serialized observations refuse. It binds `st_uid`, `st_gid`, `st_rdev`, and
     symlink-target identity internally without rendering them. An admission-capable bounded
     failure embeds every descendant in two equal stable walks within the hard ceiling;
     unreadable, unstable, incomplete, depth-65, or over-hard-ceiling scope has null evidence,
@@ -344,11 +346,12 @@ merge-target registration, merge eligibility, and merge.
     actionable through inspect `--json`, signed apply, and fresh-successor admission.
     Before signing, `sc002-disposition-request` durably freezes the clean successor triplet
     and emits the exact 19-field canonical authority request. The authority performs only
-    the closed 19-to-22 transformation in `data-model.md`. Candidate request durability
-    precedes anchored openat2, unnamed-inode file sync, linking of only a complete
-    deterministic temporary, parent sync, no-replace, final-inode verification, and final
-    parent-sync publication to `--request-out`; exact replay is crash-safe at every anonymous,
-    linked-temp, and final boundary, and every descriptor is CLOEXEC. Apply and admission rederive that same
+    the closed 19-to-22 transformation in `data-model.md`.     Unnamed output preparation precedes candidate publication; candidate request durability
+    precedes capability-free procfs-fd linking of that exact opened inode directly to the
+    final no-replace output name, final-inode verification, and parent sync. Unsupported open
+    has zero internal mutation; unsupported link retains the internal pair. Exact replay is
+    crash-safe at every anonymous and direct-final boundary, and every descriptor is
+    CLOEXEC. Apply and admission rederive that same
     snapshot triplet and require the same freeze, request, and signed disposition. Ordinary paths and terminal incidents leave both ephemeral namespaces empty; neither
     nonterminal variant claims a terminal empty census.
     T589's private `CandidateRetentionOwner` is a zero-mutation recursive whole-scope
@@ -366,28 +369,36 @@ merge-target registration, merge eligibility, and merge.
     over-budget, missing-sample, duplicate-sample, mixed-identity, effect/Ready-disagreeing,
     unrelated-sample, wrong-owner/mode, pre-durability record publication, or crash/race case.
     Independent literal fixtures pin the complete receipt, retired-census,
-    primary-evidence-census, source-floor 32-id receipt, 20-id issuer-authentication/
+    primary-evidence-census, source-floor 32-id receipt, 26-id issuer-authentication/
     capability, 21-id hash-vector, mutation-edge, 15-id post-mutation,
     15-id pre-start/root, 27-id unit-census, 26-id request-output, and both forbidden-value
-    registries. The SC-002 census set has 72 ids and includes root-instance injectivity,
+    registries. The SC-002 census set has 73 ids and includes root-instance injectivity,
     invalid-node totality, depth-64 acceptance, depth-65 denial, directory completeness, and
     full-descendant bounded-failure refusal. The request-output set has 26 ids, and the
-    recovery redaction set has fifteen rows including raw `st_uid` and `st_gid`.
+    recovery redaction set has seventeen rows including raw `st_uid`, `st_gid`, `st_rdev`,
+    and symlink-target bytes.
     Source-floor signature validation
-    returns private nonserializable `AuthenticatedSourceFloorIssuerProvenance` and consumes
-    it into the separate private validated-floor result; copied authority/key digests cannot
-    produce either. One shared nineteen-digest/one-signature SC-002 domain-hash
+    consumes one private non-clonable `ProtectedSourceFloorOrigin` through private
+    `AuthenticatedSourceFloorIssuerProvenance` into one validated-floor result. Later
+    boundaries borrow/attenuate it; copied authority/key digests, origin replay, repeated
+    mint, and serialized revalidation cannot produce authority. One shared
+    nineteen-digest/one-signature SC-002 domain-hash
     golden is the oracle for every typed locator, incident, resolution, and disposition
     digest; raw SHA-256 locator definitions are ineligible.
 16. **Recovery is never a status-only dead end.** Every closed SC-002 cause maps to one
     inspect/action/status/successor row. Incomplete descendant coverage remains inspectable
-    with the exact `restore-primary-evidence-coverage` action and null evidence, and denies
-    request/apply/admission until a fresh complete scan succeeds. The separate
+    with the exact bounded failure/root cause,
+    `restore-primary-evidence-coverage`, null evidence, and `next-command: none`. It maps to
+    one owner repair procedure and denies request/apply/admission until a fresh complete scan
+    succeeds. The separate
     selector-free `HostGenerationHandoffStatusV1` projection gives each
     active, transfer-pending, recovery, and terminal handoff variant one exact
     state/phase/owner/action/successor tuple. Active and failed broker owners, including
     transfer-pending and rollback, are distinct. Terminal selection uses the authenticated
-    current-intent pointer. Recovery uses only the existing broker unit.
+    current-intent pointer. Its 135 independent cases enumerate seven rollback members, 30
+    audit members, and 15 transition edges plus mismatch, extra-mutation, pointer-auth, and
+    shrinkage poisons. Selector-free pointer repair is distinct from immutable-audit
+    restoration escalation. Recovery uses only the existing broker unit.
     Human/JSON schemas and both redaction registries remain synchronized; no path, fd,
     generation, raw identity, request body, or free-form remediation enters logs, audit,
     metrics, spans, errors, panic, or `Debug`.

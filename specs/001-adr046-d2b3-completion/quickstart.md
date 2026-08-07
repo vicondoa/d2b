@@ -266,8 +266,9 @@ private `SidecarCleanupOwner<'guard>` exclusively borrows the exact
 the cleanup owner cannot outlive or be paired with another guard. A parked incident is success-shaped only after its
 immutable structured `Sc002IncidentPreimageV1` with every applicable kind-specific
 component is the complete write-ahead record. It is file-synced in an unnamed inode before
-that inode is linked as the deterministic temporary, and it is durably published before the
-kind-bearing anchor, preimage-complete metadata, exact typed content-addressed
+that exact opened inode is capability-free linked through a validated procfs fd directly to
+the final no-replace name, and it is durably published before the kind-bearing anchor,
+preimage-complete metadata, exact typed content-addressed
 payload, and append-only
 `parked` status are leaf-and-every-ancestor durable. A rename/reopen race is classified as
 exactly `recovery-resumable` or `recovery-irreconcilable`, preserves every still-named leaf,
@@ -282,10 +283,11 @@ representable currently named leaf by no-replace rename/reopen through durable i
 residue staging or binds the frozen primary-evidence scope through a complete census or an
 identity-bearing bounded-failure commitment. One byte grammar recursively records every
 required `(root-code, root-instance-code)` pair and every descendant. It encodes absent,
-directory, regular-file, symlink, block-device, character-device, fifo, socket, mount,
-other, and unavailable observations injectively, including owner, group, `st_rdev`, and
-symlink-target payload identity. Invalid kinds remain evidence and never masquerade as
-absent. The failure form embeds the full stable ordered node sequence plus the fixed
+directory, regular-file, symlink, block-device, character-device, fifo, socket, mount, and
+other observations injectively, including owner, group, `st_rdev`, and symlink-target
+payload identity. Invalid representable kinds remain evidence and never masquerade as
+absent. Unavailable observations are private denied scope only; all-zero `0xff` is rejected
+from every serialized body. The failure form embeds the full stable ordered node sequence plus the fixed
 root-instance, canonical failing-path digest, saturated counts, and equal before/after
 recursive identities. That scope excludes every resolution,
 resolution-evidence, successor-freeze, disposition-request, and disposition leaf. A raw `01ff` sentinel never authorizes apply or
@@ -346,15 +348,20 @@ The request file is the exact 19-field `Sc002IncidentDispositionRequestV1`, not 
 and not a caller-written disposition prefix. The authority substitutes only the envelope
 kind, copies the semantic fields and freeze digest, omits the verified embedded freeze,
 derives the request digest, inserts the pinned authority/key fields, and signs the exact
-22-field disposition. Candidate-internal freeze/request durability completes first.
-`--request-out` then resolves the output parent with anchored openat2, writes and file-syncs
-an unnamed `O_TMPFILE` inode, links only that complete inode at the deterministic
-same-directory temporary, syncs the parent, renames no-replace, verifies the final inode and
-bytes, and syncs the parent again. Every fd is CLOEXEC. A crash before the link exposes no
-name; a crash after the link exposes only the complete expected temporary. Exact replay
-completes or revalidates every pre-link, linked-temp, or post-rename crash without truncating
-or replacing any foreign leaf. Unsupported unnamed-inode publication refuses before the
-candidate-internal freeze/request is created.
+22-field disposition. Before candidate publication, `--request-out` resolves the output parent with anchored
+openat2, verifies the privilege-dropped caller has no effective capabilities, validates a
+retained procfs `/proc/self/fd` directory fd plus the exact target mount/filesystem, and
+writes, file-syncs, and revalidates an unnamed `O_TMPFILE` inode. Unsupported open or an
+invalid procfs/mount environment refuses with zero output name and zero freeze/request
+mutation. Candidate-internal freeze/request durability then completes. The command links
+the exact opened inode directly to the final no-replace name with capability-free
+fd-relative `linkat(..., AT_SYMLINK_FOLLOW)`, verifies the final inode and bytes, and syncs
+the parent. It never uses `AT_EMPTY_PATH`, a linked temporary, a name-consuming rename, or a
+create-and-unlink preflight. Every fd is CLOEXEC. Unsupported linking after internal
+durability is an ordinary replayable output failure: no output name is created and the
+internal freeze/request remains. A crash before the direct link exposes no output name; a
+crash after it may expose only the complete final inode. Exact replay revalidates or
+recreates that final without truncating or replacing a foreign leaf.
 
 The transition is closed and operational:
 
@@ -362,7 +369,7 @@ The transition is closed and operational:
 | --- | --- | --- |
 | `recovery-resumable` | run `sc002-incident-recover` | `parked`, `mismatch-retained`, `disposition-validated`, or `successor-admitted`, whichever is the maximal uniquely reconstructible contiguous branch |
 | `recovery-irreconcilable`, including `evidence-census-conflict`, without a disposition matching the current typed evidence digest | run inspect with `--json`, run `sc002-disposition-request` with the clean successor snapshot, submit that exact request, then run `sc002-incident-apply` with the same snapshot | `disposition-validated` |
-| `recovery-irreconcilable` whose recursive scan cannot cover every descendant stably within the hard ceiling | follow `restore-primary-evidence-coverage`, then rerun `sc002-disposition-request`; no request is emitted before complete coverage | unchanged with null evidence until two complete equal walks yield the request, then `disposition-validated` |
+| exact `primary-evidence-coverage:<failure-class>:<root-class>` | run the mapped owner repair procedure, then rerun `sc002-incident-inspect`; do not run disposition request while this cause remains | unchanged with null evidence until two complete equal walks succeed; only a later `obtain-incident-disposition` projection permits the request |
 | `recovery-irreconcilable` with the matching signed disposition already durable | rerun `sc002-incident-apply` with the freeze-bound successor snapshot | `disposition-validated` |
 | `parked` without a matching disposition | freeze the successor and create/submit the canonical request, then run `sc002-incident-apply` with that same successor snapshot | `disposition-validated` |
 | `mismatch-retained` or a crash after disposition publication | rerun `sc002-incident-apply` with the freeze-bound successor snapshot | `disposition-validated` |
@@ -373,8 +380,8 @@ If the locked primary-evidence digest changes between inspect and apply, apply e
 returns the new inspect projection, and requires a newly bound disposition. No generic retry,
 force flag, deletion selector, or alternate path is accepted.
 The test contract compares independently authored literal expectations with all 61 receipt,
-72 malformed retired/primary-census, and 26 request-output ids from `data-model.md`, scans all
-fifteen SC-002 recovery redaction canaries, and uses the shared
+73 malformed retired/primary-census, and 26 request-output ids from `data-model.md`, scans all
+seventeen SC-002 recovery redaction canaries, and uses the shared
 nineteen-digest/one-signature SC-002 golden. A generated expected set or a digest copied from
 production is not evidence.
 
@@ -411,11 +418,15 @@ The bracketed forms above denote bounded values. Null IDs render exactly `none`.
 `STATE` is exactly `recovery-resumable`, `recovery-irreconcilable`, `parked`,
 `mismatch-retained`, `disposition-validated`, or `successor-admitted`. `CAUSE` is one closed
 `Sc002IncidentCauseV1` from `data-model.md`; it is never a path, errno, or free-form
-sentence.
+sentence. Coverage denial uses the exact bounded
+`primary-evidence-coverage:<failure-class>:<root-class>` cause, so unreadable, unstable,
+depth, node-ceiling, and byte-ceiling failures are not collapsed. The root class is one
+closed non-path class and exposes no source-slot instance or raw identity.
 `NEXT_COMMAND` is static: `sc002-disposition-request` when a disposition must be obtained,
 `sc002-incident-apply` when a matching signed disposition is already durable,
 `sc002-incident-recover` for `resume-incident-recovery`,
-`sc002-successor-admit` for successor admission, and `none` after admission. It never
+`sc002-successor-admit` for successor admission, and `none` after admission or while
+primary-evidence coverage repair is required. It never
 contains flags, IDs, paths, argv, an executable path, a shell fragment, or free-form
 guidance. The equivalent `--json` output is the distinct version-1
 `sc002-incident-cli-status` projection, not the persisted `sc002-incident-status` envelope.
@@ -423,8 +434,8 @@ JSON contains no `nextCommand` or guidance field. Its required final `remediatio
 derived from the validated metadata/source/payload/residue prefix, durable status, and locked
 disposition census and is exactly one of
 `resume-incident-recovery`, `obtain-incident-disposition`,
-`apply-incident-disposition`, `admit-successor`, or `none`; there is no free-form guidance
-field. For an irreconcilable state it also carries nullable
+`restore-primary-evidence-coverage`, `apply-incident-disposition`, `admit-successor`, or
+`none`; there is no free-form guidance field. For an irreconcilable state it also carries nullable
 `resolutionEvidenceKind` and `resolutionEvidenceSha256`; these are bounded typed values, not
 a raw locator or evidence bytes. Persisted status has no remediation field but does persist
 the complete incident-id preimage; CLI output does not expose that preimage.
@@ -445,6 +456,22 @@ incident residue and publishes `mismatch-retained`, or publishes the complete ce
 bounded-failure commitment and the separate resolution status; it never unlinks.
 `admit-successor` means run `sc002-successor-admit` with the disposition id and the same
 freeze/request-bound successor snapshot. These are the only operator actions.
+
+`restore-primary-evidence-coverage` is not permission to request a disposition. It exits
+`4`, emits null resolution evidence and `next-command: none`, and selects one exact
+owner-run repair procedure from the failure class:
+
+| Failure class | Required procedure | Recheck |
+| --- | --- | --- |
+| `enumeration-unavailable` | registered root owner runs `restore-primary-evidence-access` and restores the prior owner/mode/mount read and execute contract without editing recognized evidence | rerun `sc002-incident-inspect` |
+| `identity-unstable` | registered root owner runs `quiesce-primary-evidence-writer` and stops the non-d2b writer while leaving recognized evidence byte-identical | rerun `sc002-incident-inspect` |
+| `depth-limit` | registered root owner runs `relocate-unrecognized-primary-evidence-subtree` for only the injected depth-65 subtree | rerun `sc002-incident-inspect` |
+| `node-hard-ceiling` | registered root owner runs `relocate-unrecognized-primary-evidence-subtree` for only injected unrecognized entries until the complete walk fits 4,096 nodes | rerun `sc002-incident-inspect` |
+| `byte-hard-ceiling` | registered root owner runs `relocate-unrecognized-primary-evidence-subtree` for only injected unrecognized entries until the complete walk fits 67,108,864 bytes | rerun `sc002-incident-inspect` |
+
+If the named owner cannot complete the procedure, escalate to that owner with the stable
+incident id and bounded root class. Do not run `sc002-disposition-request` until a later
+inspect projection changes to `obtain-incident-disposition`.
 
 The disposition's only action is `abandon-candidate-admit-successor`. It cannot delete the
 incident, make the parked candidate eligible, reuse its receipt/evidence, release a binding
@@ -534,16 +561,20 @@ no fixed illustrative target.
 > `ADR-046-validation-and-delivery` Version 2 amendment owns the canonical encoding, complete
 > digest/domain/framing registry, strict source-floor schemas, and exact
 > `hash-vectors-v1.json` with 15 digest and four signature vectors. The 13 role/artifact
-> rows, 91 member poisons, five copied-issuer poisons, 20 issuer-authentication/capability
+> rows, 91 member poisons, five copied-issuer poisons, 26 issuer-authentication/capability
 > negatives, 21 hash-vector negatives, and 32 receipt/transition negatives are
 > independently pinned. A proof is authority only when its authority digest, key digest,
 > actual verifier key, signature domain, and signature all match the accepted disposition;
 > copying expected digests into a chain signed by another valid key refuses after enclosing
-> hashes and unaffected proofs validate and cannot produce private
-> `AuthenticatedSourceFloorIssuerProvenance`. The disposition-pinned validator consumes that
-> private nonserializable result by value to create the separate private
+> hashes and unaffected proofs validate and cannot produce private authority. The installed
+> source coordinator atomically consumes the exact origin record into one nonserializable,
+> non-clonable `ProtectedSourceFloorOrigin`. The disposition-pinned validator consumes that
+> owner while creating private `AuthenticatedSourceFloorIssuerProvenance`, then consumes the
+> intermediate by value to create the separate private
 > `ValidatedSourceGenerationCompatibilityFloor`; direct DTO decode, copied digest tuples,
-> serialization, or clone cannot create either result.
+> serialization, clone/copy, origin replay, or a repeated validator call cannot create
+> another result. Later handoff boundaries borrow and attenuate that one result and never
+> revalidate serialized floor evidence.
 > The source producer/installer and typed import/validation authority must conform to those
 > artifacts; they may not redefine them in the compatibility disposition. The source
 > broker's ordinary `serve` process under the existing
@@ -675,13 +706,33 @@ state exits `4` with the same valid five-line or seven-field status through the 
 renderer. Neither projection exposes an intent, generation, pid, uid, store path, or
 apply-peer identity.
 
+An invalid coordinator projects `action: repair-authorized-handoff`. Run the exact
+selector-free unprivileged command:
+
+```bash
+"$D2B_DEPLOY_EXE" --repair-authorized-handoff
+```
+
+It uses the existing public socket and broker coordinator. It may durably repair only a
+uniquely reconstructible authenticated current-intent pointer and then prints the normal
+five-line status. If any immutable rollback member, audit pair, transition edge, or pointer
+authentication is absent or mismatched, it exits `4` with
+`action: restore-immutable-audit-backup` and zero mutation. That is an escalation to the
+accepted external backup owner for the exact matrix member; after restoration, rerun the
+same command. There is no force flag, generic copy procedure, new unit, or daemon recovery
+owner.
+
 The host acceptance must race two authorization commands and two apply commands, inject an
 otherwise impossible two-pending-intent census, disconnect before and after the first
 mutation, and invoke apply after terminal completion. Exactly one contender may win only
 when one pending intent exists. Every refusal has zero selected and successor mutations, and
 post-mutation recovery resumes only the same durable intent. Hermetic Rust tests own tuple
 validation, exact human/JSON/error goldens, forbidden inspect inputs, pointer selection, and
-each missing/duplicate/reordered rollback-proof member. The Type-1 Nix case proves only
+the exact independent seven-member, 30-audit-member, 15-transition-edge rollback matrices.
+Their 135-case registry covers every missing and mismatched member, each changed transition
+edge, unaudited extra mutation, unauthenticated pointer, and all four shrinkage
+meta-negatives, plus exact successful pointer-repair and audit-restoration-escalation
+goldens. The Type-1 Nix case proves only
 rebuild-reference option grammar and cannot satisfy runtime recovery. The Type-10
 `host-generation-handoff.nix` VM test alone proves real broker service failure/restart,
 ownership transfer, mutation, rollback, and terminal selection.

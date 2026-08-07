@@ -572,8 +572,16 @@ artifacts, complete Story 1, and exercise each desktop companion against it.
   profile/service/pointer/reference tuple, every applied pre-mutation/outcome pair, and one
   contiguous reverse plan validate; an incomplete proof is invalid coordinator state with
   zero mutation. Inspect MUST use the exact five-line/seven-field valid projection and
-  exact error/exit contract from `data-model.md`. Root, selectors, paths, tokens, extra
-  positionals, daemon recovery ownership, and a new unit remain forbidden.
+  exact error/exit contract from `data-model.md`. The seven rollback members, 30
+  pre-mutation/outcome audit members, and 15 transition edges MUST be independently pinned;
+  every member has missing and mismatch coverage, and unaudited extra mutation,
+  unauthenticated pointer, and four independent registry-shrinkage poisons MUST exit `4`
+  with zero mutation. `action: repair-authorized-handoff` MUST map to the selector-free
+  unprivileged `--repair-authorized-handoff` command. It may repair only one uniquely
+  reconstructed authenticated pointer; incomplete immutable audit MUST instead escalate as
+  `restore-immutable-audit-backup` and advertise no force or generic copy path. Root,
+  selectors, paths, tokens, extra positionals, daemon recovery ownership, and a new unit
+  remain forbidden.
 
   **Installed 3/1 bootstrap prerequisite (unresolved and blocking):** committed protocol 4
   has no host-generation handoff operation, and the installed
@@ -598,15 +606,20 @@ artifacts, complete Story 1, and exercise each desktop companion against it.
   authority defined by `SourceGenerationCompatibilityFloorV1` in `data-model.md`. That
   external owner MUST emit the versioned manifest and atomically install it in the source
   generation; the external validator MUST produce the chained installation, validation, and
-  exact-C/Q import receipts. It MUST first authenticate all four issuer proofs under
-  disposition-selected keys into private nonserializable
-  `AuthenticatedSourceFloorIssuerProvenance`, then consume that result by value into private
-  `ValidatedSourceGenerationCompatibilityFloor`. Neither type has public construction,
-  fields, accessors, serde, clone/copy/default, conversion, or byte import. Copied matching
+  exact-C/Q import receipts. The installed coordinator MUST atomically consume the one
+  durable origin record into private nonserializable, non-clonable
+  `ProtectedSourceFloorOrigin`. The validator MUST consume that owner while authenticating
+  all four issuer proofs under disposition-selected keys into private
+  `AuthenticatedSourceFloorIssuerProvenance`, then consume the intermediate by value into
+  one private `ValidatedSourceGenerationCompatibilityFloor`. All three types have no public
+  construction, fields, accessors, serde, clone/copy/default, conversion, byte import, or
+  reconstruction from serialized evidence. Later handoff boundaries MUST borrow and
+  attenuate that one result and MUST NOT revalidate the serialized chain. Copied matching
   authority/key digests signed by an unpinned key MUST produce neither result even when all
   enclosing hashes and unaffected proofs are valid. T589 dispatch requires the final
   `imported-for-exact-C/Q` transition and consumes only the validated-floor result read-only.
-  The exact five copied-proof, 20 issuer-authentication/capability, 21 hash-vector, 32
+  Origin copy/replay, repeated mint, and later serialized revalidation MUST refuse. The
+  exact five copied-proof, 26 issuer-authentication/capability, 21 hash-vector, 32
   receipt/transition, 91 member-semantic, and four matrix-meta negative registries are
   mutually read-independent from production. No T589-T605 task may
   produce, repair, import, or self-accept a source-floor member or receipt. The separately
@@ -1466,8 +1479,10 @@ carries the object verbatim rather than copying selected fields into the task ro
   regular single-link file owned by the current effective uid with mode exactly `0600`, hashes
   before decode, derives the locator, and publishes the exact bytes beneath the held candidate
   dirfd. Candidate directories are current-effective-uid `0700`; the sidecar leaf is
-  current-effective-uid `0600`. Publication uses create-exclusive temporary state, file
-  `fsync` and `renameat2(RENAME_NOREPLACE)`. Before the ordinary `EvidenceRecord` may be
+  current-effective-uid `0600`. Publication file-syncs an unnamed inode and capability-free
+  links that exact opened inode through a validated procfs fd directly to the final
+  no-replace name. It MUST NOT use `AT_EMPTY_PATH`, a linked temporary, or a
+  name-consuming publication rename. Before the ordinary `EvidenceRecord` may be
   published, the importer `fsync`s every held ancestor directory fd from `sha256` through
   `sc002`, `evidence-sidecars`, and the candidate directory. Creation, publication, and
   cleanup MUST hold the same verified candidate-scoped exclusive OFD write lock through
@@ -1477,7 +1492,10 @@ carries the object verbatim rather than copying selected fields into the task ro
   after acquiring the released lock. Under the lock, cleanup MUST atomically move the opened
   temp into a reserved quarantine name with `renameat2(RENAME_NOREPLACE)`, reopen it, require
   the same device/inode, owner, mode, link count, digest, and bytes as the pre-move fd, and
-  MUST NOT call `unlinkat` on a sidecar data leaf. A verified orphan MUST move with
+  MUST NOT call `unlinkat` on a sidecar data leaf. Every existing-name move MUST additionally
+  hold the private candidate-namespace write owner, verify both current-effective-uid `0700`
+  parent directory identities and the source immediately before the move, and block without
+  another mutation if that boundary or the post-move reopen changes. A verified orphan MUST move with
   `renameat2(RENAME_NOREPLACE)` into
   `evidence-sidecars/sc002/retired/sha256/<content-digest>/<retirement-id>.bin`, where the
   fixed domain-separated retirement id binds the candidate triplet, content digest, and
@@ -1511,9 +1529,11 @@ carries the object verbatim rather than copying selected fields into the task ro
   iteration order, errno, or partial over-bound prefix enters `C`. Raw inode identity is
   never rendered. Every incident first creates one structured
   `Sc002IncidentPreimageV1` carrying the parked triplet, content digest, and every applicable
-  collision, census/count, or ambiguity component as its complete write-ahead record. It
-  MUST file-sync an unnamed inode before linking the deterministic temporary, sync that
-  link's parent, and durably no-replace publish and reopen the final preimage before any
+  collision, census/count, or ambiguity component as its complete write-ahead record. The
+  privilege-dropped target MUST have no effective capabilities. It MUST file-sync an unnamed
+  inode before capability-free linking that exact opened inode through a validated procfs fd
+  directly to the final no-replace name, sync that link's parent, and reopen the final
+  preimage before any
   anchor, metadata, payload, residue, status, resolution, freeze, request, disposition, or
   admission publication. A pre-link crash exposes no incident name; a post-link crash
   exposes only a complete preimage and has the exact resumable/conflict classifier in
@@ -1533,14 +1553,19 @@ carries the object verbatim rather than copying selected fields into the task ro
   identity-bearing bounded-failure commitment outside that scope. The scanner uses one
   total, injective recursive grammar for the twelve required root/root-instance pairs and
   every absent, directory, regular-file, symlink, block-device, character-device, fifo,
-  socket, mount, other, or unavailable observation. It binds raw path bytes, `st_uid`,
+  socket, mount, or other observation. Unavailable state MUST map only to private denied
+  scope; every serialized all-zero `0xff` observation MUST refuse. The grammar binds raw path bytes, `st_uid`,
   `st_gid`, `st_rdev`, and symlink-target identity only inside the typed commitment.
   Admission-capable bounded failure embeds the complete stable ordered node sequence,
   fixed root-instance, canonical failing-path digest, saturated counts, and equal
   before/after recursive identities. Unreadable, unstable, depth-65, node-hard-ceiling, or
   byte-hard-ceiling scope exposes null evidence plus
   `restore-primary-evidence-coverage` and MUST deny request, apply, and admission until two
-  complete equal walks fit the hard ceiling. The primary-evidence scope excludes every
+  complete equal walks fit the hard ceiling. It MUST expose the bounded
+  `primary-evidence-coverage:<failure-class>:<root-class>` cause, render
+  `next-command: none`, and map only to the exact owner-run access, writer-quiescence, or
+  unrecognized-subtree relocation procedure in `data-model.md`. It MUST NOT advertise or
+  permit `sc002-disposition-request` until a later inspect proves complete coverage. The primary-evidence scope excludes every
   resolution, resolution-evidence, successor-freeze, disposition-request, and disposition leaf, so a resolution digest never
   contains itself. A raw `0x01 0xff` sentinel cannot authorize disposition or successor
   admission. Missing, unknown, duplicate, noncontiguous, cross-kind, or mismatched incident
@@ -1591,13 +1616,17 @@ carries the object verbatim rather than copying selected fields into the task ro
   Before signing, `sc002-disposition-request` derives one clean successor triplet from an
   immutable snapshot, durably publishes `Sc002SuccessorFreezeV1`, and emits the exact
   canonical unsigned authority request. Inspect output or a caller-written triplet is not a
-  signing request. Before creating those candidate-internal records it preflights the
-  anchored output parent for unnamed-inode publication. It writes and file-syncs an
-  `O_TMPFILE` inode before linking the deterministic output temporary, syncs that link,
-  renames no-replace, reopens the final inode, and syncs the parent again. A pre-link crash
-  exposes no name; a post-link crash exposes only the complete expected temporary; every
-  boundary replays atomically. Unsupported unnamed-inode publication refuses before the
-  freeze/request and has no named-partial fallback. `sc002-incident-apply` accepts only the
+  signing request.   Before creating those candidate-internal records it validates the anchored output parent,
+  zero-effective-capability credentials, procfs fd directory, mount/filesystem, and
+  `O_TMPFILE`, then writes and file-syncs the unnamed output inode without creating a name.
+  Unsupported open or invalid environment refuses with zero freeze/request mutation. Only
+  after candidate-internal durability does it capability-free link that exact opened inode
+  through procfs directly to the final no-replace name, reopen it, and sync the parent.
+  Unsupported link is an ordinary replayable output failure with no output name and the
+  internal freeze/request retained. A pre-link crash exposes no output name; a post-link
+  crash exposes only the complete final. `AT_EMPTY_PATH`, linked temporaries,
+  create-and-unlink preflight, and name-consuming publication rename are forbidden.
+  `sc002-incident-apply` accepts only the
   closed canonically encoded and Ed25519-authenticated
   `Sc002IncidentDispositionV1` from `data-model.md`. It binds the incident, complete
   structured preimage, parked triplet, successor freeze/request, distinct successor
@@ -1621,19 +1650,21 @@ carries the object verbatim rather than copying selected fields into the task ro
   preimage/anchor/metadata/status/resolution/freeze/request/disposition/CLI schemas,
   file-and-every-ancestor-directory durable publication/recovery protocol,
   disposition/signature/schema/golden/negative contract, retirement identity,
-  private nonserializable sidecar-cleanup owner, bounded zero-mutation
+  private nonserializable sidecar-cleanup owner plus lifetime-bound existing-name namespace
+  write owner, bounded zero-mutation
   candidate-retention owner, recursive whole-scope retention guard, and validator
   authority. It also owns the shared
   `tests/golden/delivery/sc002-domain-hash-vectors-v1.json` oracle, the exact 61 receipt,
-  72 malformed-census, and 26 request-output negative registries, the fifteen-row recovery
-  redaction registry including raw `st_uid` and `st_gid`, the eight-vector recursive-census
+  73 malformed-census, and 26 request-output negative registries, the seventeen-row recovery
+  redaction registry including raw `st_uid`, `st_gid`, `st_rdev`, and symlink-target bytes,
+  the eight-vector recursive-census
   oracle, nineteen-digest SC-002 oracle, and the no-raw-hash
   receipt locator. The same Version
   2 amendment owns the source-floor canonical JSON policy,
   `SourceGenerationIdentityV1`, complete digest/domain/length-framing and signature registry,
   strict schemas, checked-in golden vectors, private nonserializable authenticated issuer
   provenance consumed into the private validated-floor result, copied-digest rejection, and
-  exact 32/20/21 negative registries; compatibility authorities implement but do not
+  exact 32/26/21 negative registries; compatibility authorities implement but do not
   redefine them. It must receive the parent ADR's
   required approvals, regenerate the spec-set/work-item/implementation-graph artifacts, and
   pass Gate 0 on a commit that is an ancestor of T589's base. T589 MUST NOT own or perform

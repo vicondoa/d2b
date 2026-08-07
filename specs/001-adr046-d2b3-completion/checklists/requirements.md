@@ -30,21 +30,25 @@
 - [x] SC-002 recovery has closed inspect/recover/request/apply/successor transitions for parked,
   resumable, irreconcilable, and `evidence-census-conflict` states; its frozen primary scope
   uses one total injective root-instance/node grammar and recursively binds every absent,
-  directory, file, symlink, device, fifo, socket, mount, other, and unavailable descendant;
+  directory, file, symlink, device, fifo, socket, mount, and other descendant; unavailable
+  state is private denied scope and an all-zero `0xff` serialized observation refuses;
   an incomplete, unstable, unreadable, depth-65, or over-hard-ceiling scan exposes null
-  evidence plus `restore-primary-evidence-coverage` and denies admission; the scope excludes
+  evidence, an exact bounded failure/root class, and
+  `restore-primary-evidence-coverage` with no next command until its owner repair procedure
+  restores coverage; it denies admission; the scope excludes
   resolution/request/disposition/freeze leaves, and raw `01ff` cannot authorize
 - [x] SC-002 persists one structured incident preimage with every kind-specific component
-  as a complete unnamed-inode/file-synced/linked write-ahead record before every other
+  as a complete unnamed-inode/file-synced/procfs-fd direct-final-linked write-ahead record before every other
   incident publication, repeats it byte-identically in preimage/anchor/metadata/status/
   resolution/freeze/request/disposition/admission records, and classifies every crash boundary
 - [x] Successor selection is durably frozen before signing; the canonical authority request,
   signed disposition, apply, and admit all bind the same successor triplet
 - [x] The request has an exact 19-field schema and closed 19-to-22 disposition transform;
-  `--request-out` uses anchored openat2, unnamed-inode file sync, linking only a complete
-  deterministic temporary, parent sync, no-replace publication, final inode verification,
-  exact replay, and
-  CLOEXEC on every descriptor
+  `--request-out` uses anchored openat2, zero-capability/procfs validation, unnamed-inode
+  file sync before candidate publication, exact-inode direct-final no-replace linking after
+  candidate durability, final inode verification, parent sync, and exact replay; unsupported
+  open has zero internal mutation and unsupported link retains the internal pair; every
+  descriptor is CLOEXEC
 - [x] Cleanup authority is `SidecarCleanupOwner<'guard>` borrowing the exact private
   `CandidateSidecarGuard`, and compile/API seals prevent stale-owner lifetime, fd
   reconstruction, duplication, transfer, serialization, or cross-guard use
@@ -53,19 +57,23 @@
   restart variants, terminal selection uses the authenticated current pointer, and there is
   no daemon recovery owner or new unit
 - [x] Literal expectations pin the 15 mutation edges, all 90 apply-peer ids, all 91
-  source-floor poison ids, 15 pre-start/root ids, 27 unit ids, 72 census ids, 26
-  request-output ids, and fifteen recovery redaction rows independently from production
+  source-floor poison ids, 15 pre-start/root ids, 27 unit ids, 73 census ids, 26
+  request-output ids, and seventeen recovery redaction rows independently from production
 - [x] Recursive census goldens cover depth 64 success, depth 65 denial, every invalid node
   kind, unstable denial, `st_uid`/`st_gid`/`st_rdev`, and symlink-target identity
 - [x] Handoff goldens and independent cases pin every valid tuple, exact human/JSON/errors,
-  exits `0|2|3|4`, forbidden inspect inputs, current/terminal pointer selection, and every
-  incomplete rollback-proof member; Type-1 option eval cannot substitute for Type-10 VM proof
+  exits `0|2|3|4`, forbidden inspect inputs, current/terminal pointer selection, selector-free
+  pointer repair and immutable-audit escalation, and the exact 135 cases over seven rollback
+  members, 30 audit members, 15 transition edges, mismatches, extra mutation, pointer
+  authentication, and shrinkage; Type-1 option eval cannot substitute for Type-10 VM proof
 - [x] Cleanup is serialized against every importer, cleanup, incident, successor, and
   retention live owner before namespace access, and namespace operations require the private
   lifetime-bound `SidecarCleanupOwner<'guard>`
 - [x] Source-floor issuer validation returns private nonserializable authenticated
-  provenance before the final validated-floor result; copied digests cannot mint either
-- [x] Source-floor 32/20/21 and 91-case, mutation-edge 15/90 plus post-mutation,
+  provenance only after consuming one non-clonable protected origin into one final
+  validated-floor result; copied digests, origin replay, repeated mint, and serialized
+  revalidation cannot mint authority
+- [x] Source-floor 32/26/21 and 91-case, mutation-edge 15/90 plus post-mutation,
   pre-start/root, unit-census, SC-002 output/census, and both forbidden-value expectations
   are independently pinned
 - [x] Host-generation recovery is broker-coordinator-owned before first mutation, transfers

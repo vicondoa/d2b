@@ -1106,8 +1106,9 @@ contracts. Accepted external delivery Version 2 owns source-floor canonical enco
 digest/domain/framing, strict schemas, and exact 15-digest/four-signature vectors; the
 compatibility authorities only produce and validate conforming objects. The independent
 13-row role/artifact fixture, exact 91-id class/role poison product, five copied-issuer
-cases, private nonserializable authenticated issuer provenance consumed into the private
-validated-floor result, and exact 32-id receipt/transition, 20-id
+cases, one non-clonable protected origin consumed through private authenticated issuer
+provenance into one validated-floor result with later borrow-only attenuation, and exact
+32-id receipt/transition, 26-id
 issuer-authentication/capability, and 21-id hash-vector negative registries require valid
 cardinality, enclosing hashes, and unaffected signatures before their semantic or pinned-key
 refusals. Copied authority/key digests cannot produce either private result. Apply-peer
@@ -1117,12 +1118,15 @@ with six pre-first and 84 post-first cases. A separate 15-case pre-start/root re
 SC-002 ambiguity keeps every state inspectable by stable id, cause, deterministic
 human/JSON remediation, and closed exits. The remediation enum has six values, including
 `restore-primary-evidence-coverage` with null evidence for unreadable, unstable, incomplete,
-depth-65, or hard-ceiling scans. A verified payload reaches `parked`; an
+depth-65, or hard-ceiling scans. Those states expose the bounded failure/root class, map to
+one exact owner repair procedure, and render no disposition-request command until a later
+inspect proves coverage. A verified payload reaches `parked`; an
 authenticated no-unlink residue census reaches `mismatch-retained` outside ephemeral
 namespaces; and a raced rename is exactly `recovery-resumable` or
 `recovery-irreconcilable` with every name preserved. One recursive grammar includes twelve
 root/root-instance pairs and total absent, directory, regular-file, symlink, device, fifo,
-socket, mount, other, and unavailable observations. An irreconcilable bounded failure can
+socket, mount, and other observations. Unavailable state is private denied scope only and an
+all-zero `0xff` serialized observation refuses. An irreconcilable bounded failure can
 authorize only after two equal stable walks cover every descendant and embeds the complete
 ordered node sequence within the hard ceiling; unreadable, unstable, incomplete, depth-65,
 or over-hard-ceiling scope remains inspectable but denies request, apply, and admission. The
@@ -1130,19 +1134,24 @@ scope binds the canonical failing-path digest and excludes
 resolution/request/disposition/freeze leaves; raw `01ff`, copied
 commitments, and post-resolution primary changes block admission. One structured incident
 preimage carries every kind-specific component and is file-synced in an unnamed inode,
-linked, parent-synced, and final-published as the complete write-ahead record before any
+capability-free procfs-fd linked as the exact opened inode directly to its final no-replace
+name, parent-synced, and published as the complete write-ahead record before any
 other incident publication; it is repeated by all durable status/path records.
 `SidecarCleanupOwner<'guard>` exclusively borrows the private guard owning the OFD
 lock, so stale authority cannot survive release. The successor triplet is durably frozen
 before the exact 19-field request; the authority performs only the closed 19-to-22
-transformation, and apply/admit preserve it. Request output uses unnamed-inode file sync,
-links only a complete temporary, and is anchored, atomic, crash-safe, and CLOEXEC. The
-shared nineteen-digest typed hash oracle, exact 61 receipt, 72 malformed-census, 26
-request-output, and fifteen-row recovery redaction registries prohibit
+transformation, and apply/admit preserve it. Request output prepares and file-syncs the unnamed inode before candidate publication, then
+procfs-fd links the exact inode directly to the final no-replace name after candidate
+durability. Unsupported open has zero internal mutation and unsupported link retains the
+internal pair. The shared nineteen-digest typed hash oracle, exact 61 receipt, 73
+malformed-census, 26 request-output, and seventeen-row recovery redaction registries prohibit
 a raw locator hash, self-referential resolution digest, or output leak. Every SC-002 cause
 and handoff active/terminal variant has an exact state/phase/owner/action/successor tuple.
 Handoff terminal selection uses the authenticated current pointer; failed transfer and
-rollback owners are partitioned; incomplete rollback proof is never recovery-capable.
+rollback owners are partitioned. Its 135-case fixture independently covers seven rollback
+members, 30 audit members, 15 transition edges, unaudited extra mutation, unauthenticated
+pointer, and four shrinkage poisons. Selector-free pointer repair is distinct from immutable
+audit restoration escalation; incomplete rollback proof is never recovery-capable.
 These refinements add no work-item or task id.
 
 A reviewer checking upstream fidelity should expect these rows to have no one-to-one
