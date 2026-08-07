@@ -1,7 +1,9 @@
 use std::{
+    collections::BTreeSet,
     env,
     fs::{self, OpenOptions},
     io::Write,
+    os::fd::AsRawFd,
     path::{Path, PathBuf},
     process::{Command, Stdio},
     time::{SystemTime, UNIX_EPOCH},
@@ -12,6 +14,10 @@ use clap_complete::{
     shells::{Bash, Fish, Zsh},
 };
 use clap_mangen::Man;
+use nix::{
+    fcntl::{FcntlArg, fcntl},
+    libc,
+};
 use d2b_contracts::guest_wire::GuestControlSchema;
 use d2b_contracts::unsafe_local_wire::UnsafeLocalHelperWireSchema;
 use d2b_contracts::{
@@ -494,8 +500,12 @@ fn fresh_hub_bootstrap(
     root: &Path,
     hub: &str,
 ) -> Result<Option<Vec<PathBuf>>, Box<dyn std::error::Error>> {
-    if root.join("MODULE.bazel.lock").is_file() {
-        return Ok(None);
+    let module_lock = root.join("MODULE.bazel.lock");
+    match fs::symlink_metadata(&module_lock) {
+        Ok(metadata) if metadata.file_type().is_file() => return Ok(None),
+        Ok(_) => return Err(fresh_bootstrap_error(hub, "module lock path is not a regular file")),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(_) => return Err(fresh_bootstrap_error(hub, "module lock path cannot be inspected")),
     }
     let peer = match hub {
         "product" => "walker",
@@ -529,40 +539,52 @@ fn fresh_hub_bootstrap(
     if selected_exists && !peer_missing {
         return Ok(None);
     }
+    let before = git_status_snapshot(root)
+        .map_err(|_| fresh_bootstrap_error(hub, "cannot inspect repository state"))?;
 
     let scratch = root.join(".scratch/bazel");
     fs::create_dir_all(&scratch)
         .map_err(|_| fresh_bootstrap_error(hub, "cannot create bootstrap scratch space"))?;
     let guard_path = scratch.join("fresh-bootstrap.guard");
-    let guard = OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&guard_path)
-        .map_err(|error| {
-            if error.kind() == std::io::ErrorKind::AlreadyExists {
-                fresh_bootstrap_error(hub, "another fresh bootstrap is active or stale")
-            } else {
-                fresh_bootstrap_error(hub, "cannot acquire the fresh bootstrap guard")
-            }
-        })?;
-    drop(guard);
-
-    let workspace = create_exclusive_scratch_dir(root, "fresh-bootstrap")
+    let guard = acquire_fresh_bootstrap_guard(&guard_path)
+        .map_err(|_| fresh_bootstrap_error(hub, "another fresh bootstrap is active"))?;
+    let workspace = scratch.join("fresh-bootstrap-workspace");
+    match fs::symlink_metadata(&workspace) {
+        Ok(metadata) if metadata.file_type().is_dir() => {
+            fs::remove_dir_all(&workspace)
+                .map_err(|_| fresh_bootstrap_error(hub, "cannot reclaim bootstrap workspace"))?;
+        }
+        Ok(_) => return Err(fresh_bootstrap_error(hub, "bootstrap workspace is not a directory")),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(_) => return Err(fresh_bootstrap_error(hub, "bootstrap workspace cannot be inspected")),
+    }
+    fs::create_dir_all(&workspace)
         .map_err(|_| fresh_bootstrap_error(hub, "cannot create bootstrap workspace"))?;
-    let result = fresh_bootstrap_in_workspace(root, &workspace, hub)
+    let generated = fresh_bootstrap_in_workspace(root, &workspace, hub)
         .map_err(|_| fresh_bootstrap_error(hub, "pinned Bazel bootstrap failed"))
-        .and_then(|bytes| install_fresh_lock(root, hub, &bytes));
+        ;
     let cleanup = fs::remove_dir_all(&workspace);
-    let guard_cleanup = fs::remove_file(&guard_path);
-    if result.is_err() || cleanup.is_err() || guard_cleanup.is_err() {
+    if generated.is_err() || cleanup.is_err() {
+        drop(guard);
         return Err(fresh_bootstrap_error(
             hub,
-            if cleanup.is_err() || guard_cleanup.is_err() {
-                "fresh bootstrap cleanup failed; remove the scratch residue and retry"
+            if cleanup.is_err() {
+                "fresh bootstrap cleanup failed; retry the selected hub command"
             } else {
                 "fresh bootstrap failed; retry the selected hub command"
             },
         ));
+    }
+    let result = install_fresh_lock(root, hub, &generated.expect("checked above"));
+    let after = git_status_snapshot(root)
+        .map_err(|_| fresh_bootstrap_error(hub, "cannot inspect repository state"))?;
+    drop(guard);
+    if fresh_status_changed_outside_selected(&before, &after, hub) {
+        return Err(
+            bazel::adr0054_drift_message("D2B-BZL-UNEXPECTED-MUTATION")
+                .expect("mutation diagnostic is closed")
+                .into(),
+        );
     }
     result.map(Some)
 }
@@ -623,13 +645,22 @@ fn install_fresh_lock(
     bytes: &[u8],
 ) -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {
     let destination = root.join(format!("bazel/cargo/{hub}.lock"));
-    if let Ok(metadata) = fs::symlink_metadata(&destination)
-        && !metadata.file_type().is_file()
-    {
-        return Err(fresh_bootstrap_error(
-            hub,
-            "selected lock path became occupied during bootstrap",
-        ));
+    match fs::symlink_metadata(&destination) {
+        Ok(metadata) if metadata.file_type().is_file() => {
+            let existing = fs::read(&destination)
+                .map_err(|_| fresh_bootstrap_error(hub, "cannot read selected lock"))?;
+            if existing == bytes {
+                return Ok(Vec::new());
+            }
+        }
+        Ok(_) => {
+            return Err(fresh_bootstrap_error(
+                hub,
+                "selected lock path became occupied during bootstrap",
+            ));
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(_) => return Err(fresh_bootstrap_error(hub, "selected lock path cannot be inspected")),
     }
     let nonce = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -659,22 +690,49 @@ fn fresh_bootstrap_error(hub: &str, reason: &str) -> Box<dyn std::error::Error> 
     .into()
 }
 
-fn create_exclusive_scratch_dir(
-    root: &Path,
-    prefix: &str,
-) -> Result<PathBuf, Box<dyn std::error::Error>> {
-    let base = root.join(".scratch/bazel");
-    fs::create_dir_all(&base)?;
-    for attempt in 0..100_u32 {
-        let nonce = SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos();
-        let path = base.join(format!("{prefix}-{nonce}-{attempt}"));
-        match fs::create_dir(&path) {
-            Ok(()) => return Ok(path),
-            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
-            Err(error) => return Err(error.into()),
-        }
+fn acquire_fresh_bootstrap_guard(path: &Path) -> Result<std::fs::File, Box<dyn std::error::Error>> {
+    let file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .open(path)?;
+    let lock = libc::flock {
+        l_type: libc::F_WRLCK as libc::c_short,
+        l_whence: libc::SEEK_SET as libc::c_short,
+        l_start: 0,
+        l_len: 0,
+        l_pid: 0,
+    };
+    fcntl(file.as_raw_fd(), FcntlArg::F_OFD_SETLK(&lock))
+        .map_err(|error| format!("fresh bootstrap guard unavailable: {error}"))?;
+    Ok(file)
+}
+
+fn git_status_snapshot(root: &Path) -> Result<BTreeSet<String>, Box<dyn std::error::Error>> {
+    let output = Command::new("git")
+        .current_dir(root)
+        .args(["status", "--porcelain=v1", "--untracked-files=all"])
+        .output()?;
+    if !output.status.success() {
+        return Err("git status failed".into());
     }
-    Err("could not create an exclusive fresh bootstrap workspace".into())
+    Ok(String::from_utf8(output.stdout)?
+        .lines()
+        .map(str::to_owned)
+        .collect())
+}
+
+fn fresh_status_changed_outside_selected(
+    before: &BTreeSet<String>,
+    after: &BTreeSet<String>,
+    hub: &str,
+) -> bool {
+    let selected = format!("bazel/cargo/{hub}.lock");
+    before
+        .symmetric_difference(after)
+        .filter_map(|line| line.get(3..))
+        .map(str::trim)
+        .any(|path| path != selected)
 }
 
 fn prepare_fresh_workspace(
