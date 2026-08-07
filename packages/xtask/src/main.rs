@@ -1,11 +1,11 @@
 use std::{
-    env, fs,
+    env,
+    fs::{self, OpenOptions},
+    io::Write,
     path::{Path, PathBuf},
     process::{Command, Stdio},
     time::{SystemTime, UNIX_EPOCH},
 };
-#[cfg(unix)]
-use std::os::unix::fs::symlink;
 
 use clap_complete::{
     generate,
@@ -468,119 +468,190 @@ fn bazel_repin_with_executable_target(
     } else {
         repo_root()?.to_path_buf()
     };
-    let peer_bootstrap = prepare_peer_bootstrap(&root, hub)?;
-    let mut executor = ExecutableBazelExecutor { peer_bootstrap };
+    reject_ambient_repin_before_bootstrap()?;
+    if let Some(output) = fresh_hub_bootstrap(&root, hub)? {
+        return Ok(output);
+    }
+    let mut executor = ExecutableBazelExecutor;
     bazel::bazel_repin_with_executor(&root, hub, &mut executor)
 }
 
-struct PeerBootstrap {
-    workspace: PathBuf,
-    lockfile: PathBuf,
-    root_lockfile: PathBuf,
-}
-
-impl Drop for PeerBootstrap {
-    fn drop(&mut self) {
-        if fs::symlink_metadata(&self.root_lockfile)
-            .map(|metadata| metadata.file_type().is_symlink())
-            .unwrap_or(false)
-        {
-            let _ = fs::remove_file(&self.root_lockfile);
-        }
-        let _ = fs::remove_dir_all(&self.workspace);
+fn reject_ambient_repin_before_bootstrap() -> Result<(), Box<dyn std::error::Error>> {
+    if ["CARGO_BAZEL_REPIN", "REPIN", "CARGO_BAZEL_REPIN_ONLY"]
+        .iter()
+        .any(|name| env::var_os(name).is_some())
+    {
+        return Err(
+            bazel::adr0054_drift_message("D2B-BZL-AMBIENT-REPIN")
+                .expect("ambient repin diagnostic is closed")
+                .into(),
+        );
     }
+    Ok(())
 }
 
-fn prepare_peer_bootstrap(
+fn fresh_hub_bootstrap(
     root: &Path,
     hub: &str,
-) -> Result<Option<PeerBootstrap>, Box<dyn std::error::Error>> {
+) -> Result<Option<Vec<PathBuf>>, Box<dyn std::error::Error>> {
     if root.join("MODULE.bazel.lock").is_file() {
         return Ok(None);
     }
-    let peer = match hub {
-        "product" => "walker",
-        "walker" => "product",
-        _ => return Ok(None),
-    };
-    let root_lockfile = root.join(format!("bazel/cargo/{peer}.lock"));
-    if root_lockfile.is_file() {
-        return Ok(None);
+    let root_lockfile = root.join(format!("bazel/cargo/{hub}.lock"));
+    match fs::symlink_metadata(&root_lockfile) {
+        Ok(metadata) if metadata.file_type().is_file() => return Ok(None),
+        Ok(_) => return Err(fresh_bootstrap_error(hub, "selected lock path is not a regular file")),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(_) => return Err(fresh_bootstrap_error(hub, "selected lock path cannot be inspected")),
     }
 
-    #[cfg(not(unix))]
-    {
-        let _ = (root, hub, peer, root_lockfile);
-        return Err("fresh Bazel hub bootstrap requires Unix symlink support".into());
-    }
+    let guard_path = root.join(".scratch/bazel/fresh-bootstrap.guard");
+    let guard = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&guard_path)
+        .map_err(|error| {
+            if error.kind() == std::io::ErrorKind::AlreadyExists {
+                fresh_bootstrap_error(hub, "another fresh bootstrap is active or stale")
+            } else {
+                fresh_bootstrap_error(hub, "cannot acquire the fresh bootstrap guard")
+            }
+        })?;
+    drop(guard);
 
-    #[cfg(unix)]
-    {
-        let workspace = create_exclusive_temp_dir("d2b-bazel-peer-bootstrap")?;
-        let result = (|| {
-            prepare_peer_workspace(root, &workspace, peer)?;
-            let output_user_root = workspace.join("bazel-output-user-root");
-            let output_base = workspace.join("bazel-output-base");
-            let executable = env::var_os("BAZEL").unwrap_or_else(|| "bazel".into());
-            let status = Command::new(executable)
-                .current_dir(&workspace)
-                .arg(format!("--output_user_root={}", output_user_root.display()))
-                .arg(format!("--output_base={}", output_base.display()))
-                .args(["mod", "deps", "--lockfile_mode=off"])
-                .env("CARGO_BAZEL_REPIN", "1")
-                .env("CARGO_BAZEL_REPIN_ONLY", peer)
-                .stdin(Stdio::null())
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .status()
-                .map_err(|error| {
-                    format!("could not start the fresh {peer} Bazel bootstrap: {error}")
-                })?;
-            if !status.success() {
-                return Err(format!(
-                    "fresh {peer} Bazel bootstrap failed with status {}",
-                    status
-                        .code()
-                        .map(|code| code.to_string())
-                        .unwrap_or_else(|| "signal".to_owned())
-                )
-                .into());
-            }
-            if workspace.join("MODULE.bazel.lock").exists() {
-                return Err(
-                    "fresh Bazel hub bootstrap unexpectedly created MODULE.bazel.lock".into(),
-                );
-            }
-            let lockfile = workspace.join(format!("bazel/cargo/{peer}.lock"));
-            if !lockfile.is_file() {
-                return Err(format!(
-                    "fresh {peer} Bazel bootstrap did not create {}",
-                    lockfile.display()
-                )
-                .into());
-            }
-            Ok(PeerBootstrap {
-                workspace: workspace.clone(),
-                lockfile,
-                root_lockfile,
-            })
-        })();
-        if result.is_err() {
-            let _ = fs::remove_dir_all(&workspace);
-        }
-        result.map(Some)
+    let workspace = create_exclusive_scratch_dir(root, "fresh-bootstrap")?;
+    let result = fresh_bootstrap_in_workspace(root, &workspace, hub)
+        .and_then(|bytes| install_fresh_lock(root, hub, &bytes));
+    let cleanup = fs::remove_dir_all(&workspace);
+    let guard_cleanup = fs::remove_file(&guard_path);
+    if result.is_err() || cleanup.is_err() || guard_cleanup.is_err() {
+        return Err(fresh_bootstrap_error(
+            hub,
+            if cleanup.is_err() || guard_cleanup.is_err() {
+                "fresh bootstrap cleanup failed; remove the scratch residue and retry"
+            } else {
+                "fresh bootstrap failed; retry the selected hub command"
+            },
+        ));
     }
+    result.map(Some)
 }
 
-#[cfg(unix)]
-fn prepare_peer_workspace(
+fn fresh_bootstrap_in_workspace(
     root: &Path,
     workspace: &Path,
-    peer: &str,
+    hub: &str,
+) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+    prepare_fresh_workspace(root, workspace, hub)?;
+    let output_user_root = workspace.join("bazel-output-user-root");
+    let output_base = workspace.join("bazel-output-base");
+    let executable = env::var_os("BAZEL").unwrap_or_else(|| "bazel".into());
+    let mut command = Command::new(executable);
+    command
+        .env_clear()
+        .current_dir(workspace)
+        .args([
+            "--batch",
+            &format!("--output_user_root={}", output_user_root.display()),
+            &format!("--output_base={}", output_base.display()),
+            "mod",
+            "deps",
+            "--lockfile_mode=off",
+        ])
+        .env("CARGO_BAZEL_REPIN", "1")
+        .env("CARGO_BAZEL_REPIN_ONLY", hub)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    for name in [
+        "PATH", "HOME", "USER", "LOGNAME", "TMPDIR", "TMP", "TEMP", "LANG", "LC_ALL", "TZ",
+    ] {
+        if let Some(value) = env::var_os(name) {
+            command.env(name, value);
+        }
+    }
+    let status = command
+        .status()
+        .map_err(|_| fresh_bootstrap_error(hub, "cannot start pinned Bazel"))?;
+    if !status.success() {
+        return Err(fresh_bootstrap_error(hub, "pinned Bazel bootstrap failed"));
+    }
+    if workspace.join("MODULE.bazel.lock").exists() {
+        return Err(fresh_bootstrap_error(
+            hub,
+            "bootstrap unexpectedly created the module lock",
+        ));
+    }
+    let lockfile = workspace.join(format!("bazel/cargo/{hub}.lock"));
+    fs::read(&lockfile).map_err(|_| fresh_bootstrap_error(hub, "selected lock was not generated"))
+}
+
+fn install_fresh_lock(
+    root: &Path,
+    hub: &str,
+    bytes: &[u8],
+) -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {
+    let destination = root.join(format!("bazel/cargo/{hub}.lock"));
+    if fs::symlink_metadata(&destination).is_ok() {
+        return Err(fresh_bootstrap_error(
+            hub,
+            "selected lock path became occupied during bootstrap",
+        ));
+    }
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|_| fresh_bootstrap_error(hub, "clock is before the Unix epoch"))?
+        .as_nanos();
+    let temporary = root.join(format!("bazel/cargo/.{hub}.lock.bootstrap-{nonce}"));
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&temporary)
+        .map_err(|_| fresh_bootstrap_error(hub, "cannot stage selected lock"))?;
+    if file.write_all(bytes).is_err() || file.sync_all().is_err() {
+        let _ = fs::remove_file(&temporary);
+        return Err(fresh_bootstrap_error(hub, "cannot persist selected lock"));
+    }
+    if fs::rename(&temporary, &destination).is_err() {
+        let _ = fs::remove_file(&temporary);
+        return Err(fresh_bootstrap_error(hub, "cannot install selected lock"));
+    }
+    Ok(vec![PathBuf::from(format!("bazel/cargo/{hub}.lock"))])
+}
+
+fn fresh_bootstrap_error(hub: &str, reason: &str) -> Box<dyn std::error::Error> {
+    format!(
+        "D2B-BZL-FRESH-BOOTSTRAP: {hub} bootstrap {reason}; retry cargo xtask bazel-repin --hub {hub}"
+    )
+    .into()
+}
+
+fn create_exclusive_scratch_dir(
+    root: &Path,
+    prefix: &str,
+) -> Result<PathBuf, Box<dyn std::error::Error>> {
+    let base = root.join(".scratch/bazel");
+    fs::create_dir_all(&base)?;
+    for attempt in 0..100_u32 {
+        let nonce = SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos();
+        let path = base.join(format!("{prefix}-{nonce}-{attempt}"));
+        match fs::create_dir(&path) {
+            Ok(()) => return Ok(path),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(error.into()),
+        }
+    }
+    Err("could not create an exclusive fresh bootstrap workspace".into())
+}
+
+fn prepare_fresh_workspace(
+    root: &Path,
+    workspace: &Path,
+    hub: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
     fs::create_dir_all(workspace.join("bazel/cargo"))?;
-    for name in [".bazelrc", ".bazelversion", "BUILD.bazel", "packages", "tests"] {
-        symlink(root.join(name), workspace.join(name))?;
+    for name in [".bazelrc", ".bazelversion", "BUILD.bazel", "MODULE.bazel"] {
+        fs::copy(root.join(name), workspace.join(name))?;
     }
     fs::copy(
         root.join("bazel/cargo/BUILD.bazel"),
@@ -589,6 +660,11 @@ fn prepare_peer_workspace(
     fs::copy(
         root.join("bazel/cargo/cargo_bazel.bzl"),
         workspace.join("bazel/cargo/cargo_bazel.bzl"),
+    )?;
+    copy_tree_without_build_outputs(&root.join("packages"), &workspace.join("packages"))?;
+    copy_tree_without_build_outputs(
+        &root.join("tests/tools/no-bash-ast-walker"),
+        &workspace.join("tests/tools/no-bash-ast-walker"),
     )?;
 
     let source = fs::read_to_string(root.join("MODULE.bazel"))?;
@@ -608,27 +684,40 @@ fn prepare_peer_workspace(
     skip_cargo_lockfile_overwrite = True,
 )
 "#;
-    let (remove, keep) = match peer {
-        "product" => (walker, "product"),
-        "walker" => (product, "walker"),
-        _ => return Err(format!("unknown peer hub {peer}").into()),
-    };
+    let remove = if hub == "product" { walker } else { product };
     if source.matches(remove).count() != 1 {
-        return Err(format!("MODULE.bazel does not contain exactly one {peer} peer block").into());
+        return Err(fresh_bootstrap_error(hub, "module hub shape is not recognized"));
     }
     let mut module = source.replacen(remove, "", 1);
     let repos = r#"use_repo(crate, "product", "walker")"#;
     if module.matches(repos).count() != 1 {
-        return Err("MODULE.bazel does not contain the two-hub use_repo call".into());
+        return Err(fresh_bootstrap_error(hub, "module hub imports are not recognized"));
     }
-    module = module.replacen(repos, &format!(r#"use_repo(crate, "{keep}")"#), 1);
+    module = module.replacen(repos, &format!(r#"use_repo(crate, "{hub}")"#), 1);
     fs::write(workspace.join("MODULE.bazel"), module)?;
     Ok(())
 }
 
-struct ExecutableBazelExecutor {
-    peer_bootstrap: Option<PeerBootstrap>,
+fn copy_tree_without_build_outputs(source: &Path, destination: &Path) -> std::io::Result<()> {
+    fs::create_dir_all(destination)?;
+    for entry in fs::read_dir(source)? {
+        let entry = entry?;
+        let name = entry.file_name();
+        if name == "target" || name == ".scratch" {
+            continue;
+        }
+        let source_path = entry.path();
+        let destination_path = destination.join(name);
+        if entry.file_type()?.is_dir() {
+            copy_tree_without_build_outputs(&source_path, &destination_path)?;
+        } else if entry.file_type()?.is_file() {
+            fs::copy(source_path, destination_path)?;
+        }
+    }
+    Ok(())
 }
+
+struct ExecutableBazelExecutor;
 
 impl bazel::BazelExecutor for ExecutableBazelExecutor {
     fn run(
@@ -638,21 +727,6 @@ impl bazel::BazelExecutor for ExecutableBazelExecutor {
         command_args: &[String],
         environment: &[(&str, &str)],
     ) -> Result<std::process::ExitStatus, Box<dyn std::error::Error>> {
-        #[cfg(unix)]
-        let root_link = if let Some(peer_bootstrap) = &self.peer_bootstrap {
-            if fs::symlink_metadata(&peer_bootstrap.root_lockfile).is_ok() {
-                return Err(format!(
-                    "cannot install temporary peer lock over {}",
-                    peer_bootstrap.root_lockfile.display()
-                )
-                .into());
-            }
-            symlink(&peer_bootstrap.lockfile, &peer_bootstrap.root_lockfile)?;
-            Some(peer_bootstrap.root_lockfile.clone())
-        } else {
-            None
-        };
-
         let executable = env::var_os("BAZEL").unwrap_or_else(|| "bazel".into());
         let mut command = Command::new(executable);
         command
