@@ -578,22 +578,23 @@ fn fresh_hub_bootstrap(
     }
     fs::create_dir_all(&workspace)
         .map_err(|_| fresh_bootstrap_error(hub, "cannot create bootstrap workspace"))?;
-    let generated = fresh_bootstrap_in_workspace(root, &workspace, hub, executor)
-        .map_err(|_| fresh_bootstrap_error(hub, "pinned Bazel bootstrap failed"))
-        ;
+    let generated = fresh_bootstrap_in_workspace(root, &workspace, hub, executor);
     let cleanup = fs::remove_dir_all(&workspace);
-    if generated.is_err() || cleanup.is_err() {
+    if cleanup.is_err() {
         drop(guard);
         return Err(fresh_bootstrap_error(
             hub,
-            if cleanup.is_err() {
-                "fresh bootstrap cleanup failed; retry the selected hub command"
-            } else {
-                "fresh bootstrap failed; retry the selected hub command"
-            },
+            "fresh bootstrap cleanup failed; retry the selected hub command",
         ));
     }
-    let result = install_fresh_lock(root, hub, &generated.expect("checked above"));
+    let generated = match generated {
+        Ok(generated) => generated,
+        Err(error) => {
+            drop(guard);
+            return Err(error);
+        }
+    };
+    let result = install_fresh_lock(root, hub, &generated);
     let after = fresh_content_snapshot(root)
         .map_err(|_| fresh_bootstrap_error(hub, "cannot inspect repository state"))?;
     drop(guard);
@@ -698,9 +699,7 @@ fn fresh_bootstrap_in_workspace(
 ) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
     prepare_fresh_workspace(root, workspace, hub)
         .map_err(|_| fresh_bootstrap_error(hub, "cannot prepare isolated workspace"))?;
-    let status = executor
-        .run(workspace, hub)
-        .map_err(|_| fresh_bootstrap_error(hub, "cannot start pinned Bazel"))?;
+    let status = executor.run(workspace, hub)?;
     if !status.success() {
         return Err(fresh_bootstrap_error(hub, "pinned Bazel bootstrap failed"));
     }
