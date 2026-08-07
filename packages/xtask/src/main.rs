@@ -560,7 +560,7 @@ fn prepare_peer_bootstrap(
                 .into());
             }
             Ok(PeerBootstrap {
-                workspace,
+                workspace: workspace.clone(),
                 lockfile,
                 root_lockfile,
             })
