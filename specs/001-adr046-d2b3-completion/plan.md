@@ -167,8 +167,9 @@ schema-v2 `EvidenceRecord` remains unchanged and references the receipt through 
 `locator` as the candidate-relative content address
 `evidence-sidecars/sc002/sha256/<digest>.json`. The receipt repeats the record's actual
 `candidate_id`/`content_id`/`snapshot_sha256` triplet. Every stage resolves the locator
-beneath the held candidate dirfd, verifies the exact byte digest before decode from the same
-fd, and refuses replacement, traversal, absolute, URL, symlink, or hard-link inputs. The
+beneath the held candidate dirfd, verifies the exact typed domain-separated,
+length-framed digest of the canonical bytes before decode from the same fd, and refuses
+replacement, traversal, absolute, URL, symlink, or hard-link inputs. The
 receipt is schema version 1, at most 16,384 encoded bytes,
 fixed-redacted under `Debug`, uses one `CLOCK_MONOTONIC` start tick, and contains the exact
 three-sample census
@@ -184,7 +185,9 @@ satisfy any close stage; only a passing record must resolve exactly one matching
 T604 emits the receipt only as an external current-effective-uid `0600` validation output.
 T600 imports the exact-F result only in `operator-nix-activation-cleanup` and supplies that
 output through the T589-owned explicit `--sc002-receipt PATH` input; it may not supply
-`--locator`. T589 hashes and validates the once-opened source before deriving the locator,
+`--locator`. T589 computes the exact typed, domain-separated, length-framed
+`Sc002ActivationReceiptContentSha256V1` over the canonical once-opened receipt before
+decoding or deriving the locator,
 then installs the exact bytes as a current-effective-uid `0600` leaf beneath current-effective-
 uid `0700` candidate directories using held dirfds, a create-exclusive temp, file `fsync`,
 and `renameat2(RENAME_NOREPLACE)`. Before publishing the `EvidenceRecord`, it `fsync`s every
@@ -193,15 +196,18 @@ directory. Creation, publication, loser cleanup, and restart cleanup all acquire
 verified candidate-scoped exclusive OFD write lock, held through parent `fsync`, the
 applicable census, and record publication or return. There is no second cleanup lock or
 lock-free path. A live importer retains that lock, so cleanup cannot inspect, rename, or
-remove its temp; restart cleanup proceeds only after acquiring the released lock. Under the lock,
+remove its temp; every same-leaf or different-leaf cleanup, incident command, and retention
+guard is serialized by that same lock before namespace access, and restart cleanup proceeds
+only after acquiring the released lock with fresh fds and a fresh census. Under the lock,
 cleanup moves the opened temp with `renameat2(RENAME_NOREPLACE)` into a reserved quarantine
 name, reopens it, requires the same device/inode plus owner/mode/link/digest identity, then
 never calls `unlinkat` on a sidecar data leaf. An identity-preserving orphan moves
 no-replace into
 `evidence-sidecars/sc002/retired/sha256/<content-digest>/<retirement-id>.bin`, where the
 domain-separated retirement id binds the candidate triplet, content digest, and recorded
-device/inode without rendering raw inode identity. Cleanup reopens and revalidates the
-retired leaf and syncs the leaf plus both directories. Two identical orphan leaves with
+device/inode without rendering raw inode identity. Cleanup durably precreates every
+retirement ancestor, reopens and revalidates the retired leaf, syncs the payload fd, both
+parents, and every changed ancestor bottom-up through the candidate directory. Two identical orphan leaves with
 distinct inodes receive distinct names. A destination `EEXIST`, a 65th retired leaf, more
 than 1,048,576 retired bytes, or an invalid retired census routes the source to the incident
 transition instead of overwriting, reusing, deleting, or growing the set. An identity
@@ -211,29 +217,32 @@ reopen, and bottom-up sync of every changed ancestor. It moves the metadata-boun
 named suspect no-replace into
 `evidence-sidecars/sc002/incidents/payload/sha256/<incident-id>.bin`, syncs the old
 parent, payload parent, and every changed ancestor, reopens and verifies the moved inode, and
-then append-only publishes and syncs `parked` status. Only that fully verified quarantine
+`fsync`s that reopened payload fd before append-only publishing and syncing `parked` status.
+Only that fully verified and payload-durable quarantine
 may enter the verified-payload terminal branch. A replacement, `ENOENT`, nonidentical `EEXIST`, or post-move
-identity mismatch remains recovery-pending, preserves every name, publishes no parked
-status, and blocks record publication and every close stage. Inspect always returns its
-stable incident id, closed cause, deterministic remediation, exact human/JSON projection,
-and stable exit contract. Restart or T589's owned `sc002-incident-recover` command completes
-only a recoverable metadata-bound prefix. For a nonrecoverable prefix, the same authenticated
-external disposition may move every currently named sidecar leaf by no-replace rename and
-reopen through durable incident residue staging into a path derived from the reopened
-identity. It never restores or unlinks a suspect. Only an empty ephemeral/staging census and
-a fully synced exact residue census permit append-only `mismatch-retained`; that is the
-second terminal incident entry state outside the ephemeral namespaces. Both `parked` and
-`mismatch-retained` then advance through `disposition-validated` and fresh
-`successor-admitted`. Recovery-pending is a validated nonterminal prefix, never a durable
-status or successful cleanup result. Ordinary winners/losers/refusals and both terminal
-incident entry states leave both ephemeral namespaces empty; recovery-pending is not
-reported as terminal.
+identity mismatch is classified as exactly `recovery-resumable` or
+`recovery-irreconcilable`, preserves every name, publishes no parked status, and blocks
+record publication and every close stage. Inspect always returns its stable incident id,
+closed cause, state variant, deterministic remediation, exact human/JSON projection, and
+stable exit contract. T589's owned `sc002-incident-recover` is advertised only for a
+uniquely resumable metadata/source/payload/residue/status prefix and replays payload plus
+every ancestor sync. For an irreconcilable prefix, the authenticated disposition either
+moves each representable named leaf through the closed temporary, cleanup-quarantine,
+payload, retired-source, or retired-existing-destination slot into durable residue, or binds
+the canonical zero/mixed evidence census when names are absent or metadata/status is
+unusable. It never restores, unlinks, fabricates residue, or edits a conflicting primary
+branch. The latter cases publish a separate append-only resolution
+`disposition-validated` record, and every primary or resolution branch reaches fresh
+`successor-admitted`. Ordinary terminals leave ephemeral namespaces empty; nonterminal
+variants never claim that predicate.
 T589's private `CandidateRetentionOwner` is a zero-mutation whole-scope retention guard. With
 the shared lock held, it proves the candidate is terminal, every delivery transition is
-terminal, every incident is absent or `successor-admitted`, every retained external
+terminal, every incident is absent or has exact primary or resolution
+`successor-admitted`, every retained external
 reference remains resolvable, both ephemeral namespaces are empty, the exact durable census
 is valid and bounded, and the canonical candidate root plus all request, panel-record,
-evidence-record, receipt, seal, eligibility, merge, incident, disposition, and status
+evidence-record, receipt, seal, eligibility, merge, incident, disposition, status, and
+resolution
 history remain immutable. Verified orphans remain in the separately owned bounded
 `evidence-sidecars/sc002/retired` subtree. No candidate descendant is automatically unlinked,
 and the candidate root is never renamed, tombstoned, or deleted.
@@ -748,17 +757,24 @@ checkpoint, and commit-tag instruction for this graph uses qualified lowercase `
    the closed registry from `quickstart.md`. The literal expected set has 84 post-first
    cases and is independent of production enumeration. Separate literal fixtures pin the
    ordered 15 mutation ids and the 90 pre/post case ids; production reads neither, and tests
-   reject missing, duplicate, unknown, reordered, or unvisited edge/transition cases before
-   accepting evidence. The prior mutation remains committed and audited; the refused edge and
+   compare both against a separately authored literal 15-id test constant, never
+   `mutation_edge_count` or another discovered count. Exact meta-poisons remove one production
+   edge, one expected edge, and one pre-mutation verification hook; all must fail before
+   evidence acceptance. Tests reject missing, duplicate, unknown, reordered, or unvisited
+   edge/transition cases before accepting evidence. The prior mutation remains committed and audited; the refused edge and
    every successor have zero mutation count. The pidfd and executable fds are closed with the
    connection and are never serialized or persisted. Raw apply-peer PID/start identity and
    raw executable store path, derivation, NAR identity/hash, and executable content digest are
-   internal comparison inputs only. The closed seven-row literal forbidden-value registry in
-   `data-model.md` injects each canary independently and scans coordinator state,
+   internal comparison inputs only. The closed nine-row literal forbidden-value registry in
+   `data-model.md` covers pidfd number, PID, start identity, proc path, store path,
+   derivation, NAR identity/hash, and executable content digest. It injects each canary
+   independently and scans coordinator state,
    receipts/evidence, human, JSON, wire, error/`Display`, log, tracing event/span, metric
    name/help/label/value/exemplar, audit, panic, and `Debug`. Only the registry and private
-   injection buffer are excluded. Where correlation is required, tests require the expected
-   typed fixed domain-separated digest; metrics omit both raw and digested peer identity.
+   injection buffer are excluded. Where correlation is required, tests independently
+   reconstruct only the exact fixed-binary process-instance or executable-identity digest
+   preimage from `data-model.md`; wrong tag, framing, endian, order, or cross-class
+   substitution refuses. Metrics omit both raw and digested peer identity.
    Because `--apply-authorized-handoff` carries neither an intent selector nor an authority
    token, the source broker keeps exactly zero or one durable nonterminal handoff intent per
    source generation. Authorization and apply selection share the coordinator's exclusive
@@ -783,9 +799,13 @@ checkpoint, and commit-tag instruction for this graph uses qualified lowercase `
    13-member `SourceGenerationCompatibilityFloorV1` census from `data-model.md` must contain
    one of every closed role, no extra or duplicate role, and one common accepted disposition
    and source generation. Missing, empty, stale-generation, stale-digest, or
-   cross-disposition members refuse. The independent 13-row role/artifact fixture, 91 poison
-   ids, and five issuer-proof poison ids must match their separately authored production and
-   test registries exactly. Each manifest, installation, validation, and import proof
+   cross-disposition members refuse. A separately literal 13-row test constant, the
+   independent role/artifact fixture, production registry, and poison visitor must agree
+   exactly without deriving a count from another. The 91 poison ids, four matrix-meta
+   negatives, and five issuer-proof poison ids must match their separately authored
+   registries exactly. All 39 missing/stale-digest/cross-disposition cases preserve
+   cardinality 13 and recompute every enclosing receipt and signature before the named
+   semantic refusal. Each manifest, installation, validation, and import proof
    verifies with the transition key pinned by the accepted disposition; copied authority/key
    digests signed by an unpinned valid key refuse after canonical, framing, enclosing-hash,
    and unaffected-proof validation. The installed source receiver derives
@@ -856,21 +876,31 @@ pointer/reference repair, and the six rollback/service-restore edges. With the c
 peer-transition ids, the post-first expected set is exactly 84
 `apply-peer/post-first/<edge>/<transition>` cases, plus the separate six pre-first cases.
 Independent literal fixtures own the ordered 15 edge ids, the 90 case ids, and the negative
-matrix. Unknown, duplicate, missing, reordered, dynamically skipped, unvisited, selected-edge
+matrix. A separately authored literal 15-id test constant must equal both the fixture and
+production order; neither cardinality nor expected visits may read a discovered registry
+count. The three mutation-edge meta-poisons remove one production edge, one expected edge,
+or one verification hook, and the 13 post-first negatives include an explicit missing-hook
+case. Unknown, duplicate, missing, reordered, dynamically skipped, unvisited, selected-edge
 mutation, successor mutation, durable-prefix change, or missing first audit fails before any
 evidence is accepted. T589 freezes the independent flat expected-set files
 `tests/golden/delivery/host-generation-mutation-edge-ids.txt`,
 `tests/golden/delivery/host-generation-apply-peer-case-ids.txt`,
+`tests/golden/delivery/host-generation-mutation-edge-meta-negative-case-ids.txt`,
 `tests/golden/delivery/host-generation-post-first-negative-case-ids.txt`,
 `tests/golden/delivery/host-generation-apply-peer-forbidden-values.tsv`,
 `tests/golden/delivery/source-floor-v1/role-artifact-matrix.tsv`,
 `tests/golden/delivery/source-floor-v1/poison-case-ids.txt`, and
+`tests/golden/delivery/source-floor-v1/matrix-meta-negative-case-ids.txt`,
 `tests/golden/delivery/source-floor-v1/issuer-proof-negative-case-ids.txt`, and
 `tests/golden/delivery/sc002-sidecar-lock-case-ids.txt`; production enumerators and poison
 generators may consume none of them. The forbidden-value registry is input only to test
 injection and captured-surface comparison, never to production filtering. T604 separately
-owns `tests/golden/delivery/host-generation-unit-census-case-ids.txt`. `tasks.md` pins every
-literal axis, row, negative id, ordering rule, and cardinality for these files. A generated
+owns `tests/golden/delivery/host-generation-unit-census-case-ids.txt`; its independent
+literal 15-case constant and the fixture must agree before the host test can run. The source
+floor and hermetic matrix-meta negatives run through
+`D2B_ENABLE_FIXTURE_BUILD=1 make test-fixture-contracts`; the mutation and unit cases are
+also required in T604's no-skip `make test-host-integration` result. `tasks.md` pins every
+literal axis, row, negative id, ordering rule, runner, and cardinality for these files. A generated
 expected set, runtime count, fixture that imports the production registry, or filter that
 learns its forbidden values from production is ineligible.
 
@@ -878,7 +908,7 @@ learns its forbidden values from production is ineligible.
 
 | Stage | Task(s) | Ownership and concurrency |
 | --- | --- | --- |
-| External Version 2 delivery-contract amendment | no feature task | Before T589 dispatch, a separate external specification-amendment workflow bumps accepted `ADR-046-validation-and-delivery` from Version 1 to Version 2. It normatively owns both contracts that T589 consumes: (1) the four incident commands, every inspectable recovery cause, exact thirteen-line human projection, distinct closed JSON projection, five closed remediation values, stable IDs/exits, `Sc002IncidentDispositionV1` canonical encoding and Ed25519 authority/key/signature binding, immutable preimage-complete incident metadata, the `parked` and no-unlink `mismatch-retained` terminal entry branches outside ephemeral namespaces, append-only status paths, temporary-write/file-sync/no-replace/reopen/parent-and-ancestor-sync publication and idempotent recovery, residue staging/finalization, separate durable-status and CLI-status schemas, fresh-successor disposition, the complete `CanonicalRetiredCensusV1` framing/tag/unavailable/sentinel/ordering contract and vectors, collision-safe retirement identity, private zero-mutation candidate-retention owner, and typed validator; and (2) the source-floor canonical JSON policy, `SourceGenerationIdentityV1`, complete typed digest/domain/length-framing and exact 15-digest/four-signature `hash-vectors-v1.json`, ordering, integer/text, disposition-pinned issuer signatures, copied-digest rejection, unknown-field/tag/version refusal, strict schemas, and independently recomputed checked-in golden vectors. The amendment must receive the parent ADR's required pre-panel and post-panel approvals, regenerate `docs/specs/ADR-046-spec-set.json`, `ADR-046-work-items.json`, and `ADR-046-implementation-graph.{json,md}`, pass Gate 0 and drift validation on the exact amendment commit, and be an ancestor of T589's base. This row owns no feature artifact or implementation file. T589 cannot author, approve, regenerate, or substitute for it. |
+| External Version 2 delivery-contract amendment | no feature task | Before T589 dispatch, a separate external specification-amendment workflow bumps accepted `ADR-046-validation-and-delivery` from Version 1 to Version 2. It normatively owns both contracts that T589 consumes: (1) the four incident commands; every inspectable cause; distinct `recovery-resumable` and `recovery-irreconcilable` states; exact thirteen-line human and closed JSON projections; five closed remediation values; stable IDs/exits and command convergence; typed domain-separated, length-framed SC-002 receipt content hashing; `Sc002IncidentDispositionV1` canonical encoding and Ed25519 authority/key/signature binding; immutable metadata containing the complete incident-id preimage and exact metadata/source/payload locators; payload-file sync before `parked`; durable precreation and bottom-up sync of every changed retirement, incident, status, and resolution ancestor; the `parked`, no-unlink `mismatch-retained`, and separate evidence-census-bound irreconcilable resolution branches; the canonical zero-residue path for `incident-names-absent`; retired source/destination residue slots; branch-aware status-prefix repair; append-only status and resolution paths; temporary-write/file-sync/no-replace/reopen/parent-and-ancestor-sync publication and idempotent recovery; residue staging/finalization; separate metadata, durable-status, resolution, and CLI-status schemas; fresh-successor disposition; the complete `CanonicalRetiredCensusV1` and `CanonicalIncidentEvidenceCensusV1` framing/tag/unavailable/sentinel/ordering contracts and vectors; collision-safe retirement identity; one candidate lock excluding all cleanup overlap; private zero-mutation candidate-retention owner; and typed validator; and (2) the source-floor canonical JSON policy, `SourceGenerationIdentityV1`, complete typed digest/domain/length-framing and exact 15-digest/four-signature `hash-vectors-v1.json`, ordering, integer/text, disposition-pinned issuer signatures, copied-digest rejection, unknown-field/tag/version refusal, strict schemas, independently authored literal 13-role expectations, and independently recomputed checked-in golden vectors. The amendment must receive the parent ADR's required pre-panel and post-panel approvals, regenerate `docs/specs/ADR-046-spec-set.json`, `ADR-046-work-items.json`, and `ADR-046-implementation-graph.{json,md}`, pass Gate 0 and drift validation on the exact amendment commit, and be an ancestor of T589's base. This row owns no feature artifact or implementation file. T589 cannot author, approve, regenerate, or substitute for it. |
 | External source-floor prerequisite | no feature task | The accepted external compatibility disposition must name and deliver the `SourceGenerationCompatibilityFloorV1` producer/installer and typed import/validation authority. Its immutable four-record chain must reach `imported-for-exact-C/Q` for the exact source generation before T589 is ready. Those authorities produce, install, and validate objects against the already accepted Version 2 schemas and vectors; they do not own or redefine the repository encoding, digest, schema, or golden contract. This row owns no feature, source, test, Nix, normative, or changelog file and makes no implementation claim. |
 | External retained-request disposition | no feature task | The external delivery-contract/tooling owner must land the contract and typed validator for `Wave5RetainedRequestDispositionV1`. T219 may consume its validated output only after F freezes. This row owns no repository file in this feature and cannot supply panel sign-off. |
 | Resume reconciliation | T603 | FR-036's external constitution amendment is the first prerequisite and must be an ancestor of A. Exactly one valid T072 disposition is then required: exact historical attestation, or unchecked T072 plus one current `historical-entry-remediation-t072` record bound to A/P0 that claims no implementation completion. Fresh descendant-base analysis and plan panel at A/P0 then authorize exactly three repository paths: the two Rust files `packages/xtask/src/delivery/mod.rs` and `packages/xtask/src/delivery/resume.rs`, plus mandatory `changelog.d/delivery-resume-reconciliation.md`. T603 lands dedicated validator-and-fragment commit V with sole parent A and exactly those three paths; a missing or differently named fragment refuses. It freezes B exactly at V and P byte-identical to P0, revalidates the external prerequisite and T072 disposition, reruns analysis and the plan panel at B/P, then and only then writes the immutable authorization receipt at `.scratch/autopilot/adr046w5/reconciliation.json` and routes the sole receipt-bound checkbox transition through `/d2b-spec-edit`. It writes no feature prose; the Wave 5 integrator alone owns dedicated checkbox commit C. |
@@ -923,10 +953,12 @@ source/destination identities; the census kinds bind one source identity plus bo
 evidence without fabricating a second tuple; ambiguity binds the closed reopen stage and
 ordered before/after identities. The same golden has exactly three census vectors:
 normal-empty, normal-sorted-mixed, and exact over-bound `01ff`. T220 independently encodes
-and verifies all three census vectors, all four incident vectors, both strict status schemas,
-the cause/remediation projection table, one-to-one payload-or-residue/status/id kind
-agreement, every temporary-leaf/file/no-replace/reopen/parent/ancestor sync boundary, and
-idempotent recovery before F may freeze.
+and verifies all retired and incident-evidence census vectors, all four incident vectors,
+the strict metadata, primary-status, resolution, and CLI-status schemas, both nonterminal
+state variants, the cause/remediation projection table, one-to-one
+payload-or-residue/status-or-resolution/id kind agreement, every
+temporary-leaf/file/no-replace/reopen/payload-file/parent/ancestor sync boundary, and
+idempotent recovery or resolution before F may freeze.
 
 The external source-floor row now requires issuer-authenticated canonical receipts, strict
 schemas/golden vectors at the external-owner paths in `data-model.md`, and a
@@ -934,28 +966,34 @@ disposition-pinned validator that returns T589 a nonserializable typed result. T
 15-digest/four-signature vector file independently reconstructs every domain byte, length
 frame, payload, preimage, digest, verifier key, and signature. The independent 13-row
 role/artifact matrix and 91-case poison matrix visit all roles for all seven classes with
-cardinality 13, recomputed enclosing hashes, and valid test signatures. The five-case copied
+cardinality 13, recomputed enclosing hashes, and valid test signatures. A separately authored
+literal 13-row constant must equal the fixture, production registry, and visitor; four
+matrix-meta poisons prove none can shrink or skip enclosing receipt recomputation. The five-case copied
 issuer matrix attacks manifest, installation, validation, import, and all proofs while
 preserving canonical envelopes, enclosing hashes, and unaffected proofs; each refuses under
 the disposition-pinned verifier. Within
 T589's SC-002 cleanup, the fixed stable OFD-lock inode and live-owner refusal precede all
 namespace access. Verified orphans move under distinct retirement ids into the bounded
 durable census. Incidents use immutable preimage-complete metadata; a no-replace moved and
-revalidated payload reaches `parked`; and a nonrecoverable mismatch reaches
+revalidated, file-synced payload reaches `parked`; and an irreconcilable mismatch reaches
 `mismatch-retained` only after authenticated disposition moves each current name through
 durable staging/reopen into an identity-derived residue path and empties ephemeral/staging
-namespaces. A raced rename/reopen remains inspectable recovery-pending with every still-named
-leaf preserved until recovery or disposition completes. No sidecar data leaf is unlinked.
+namespaces. Zero-residue, malformed-metadata, and conflicting-status cases instead bind the
+canonical evidence census in the append-only resolution branch. A raced rename/reopen remains
+inspectable as exactly one nonterminal variant with every still-named leaf preserved until
+its advertised recovery or disposition completes. No sidecar data leaf is unlinked.
 The private retention owner performs only the
 whole-scope retention guard and proves the canonical candidate root plus every permanent
 delivery-history namespace remains immutable. Overlap tests latch both orderings for
 same/different importer, cleanup, and retention actors and recover two identical orphan
 leaves without collision. T595/T604 own the independent closed 15-edge registry, six
 pre-first transition cases, exact 84-case post-first cross-product, and closed mutation
-negative matrix after the first durable mutation. The seven-row literal forbidden-value
-fixture covers PID, start identity, store path, derivation, NAR identity/hash, and executable
-content digest over every state/output surface with class-specific digests only where
-allowed and no peer identity in metrics. These refinements make retirement
+negative matrix after the first durable mutation. A literal 15-id constant plus three
+edge-shrink/hook meta-poisons prevents shared-enumerator false greens. The nine-row literal
+forbidden-value fixture covers pidfd number, PID, start identity, proc path, store path,
+derivation, NAR identity/hash, and executable content digest over every state/output surface
+with only the two canonical fixed-binary typed digests where allowed and no peer identity in
+metrics. These refinements make retirement
 identity-bound and collision-safe, name the sole retention owner, keep successor admission
 closed, and remove the former cleanup-by-deletion and output-only identity shorthand without
 changing feature-task dependencies.
@@ -1321,19 +1359,26 @@ that an amendment has release treatment is not a substitute.
 The T589 ownership-table row's older incident-path shorthand is superseded by
 `data-model.md` and `tasks.md`: incident metadata is preimage-complete and every immutable
 publication uses temporary write, leaf sync, no-replace rename, final reopen, parent sync,
-and sync of every changed ancestor through the candidate directory. A revalidated expected
-payload reaches `parked`. A rename/reopen race remains inspectable
-`recovery-pending`, with the same stable incident id, one closed cause, deterministic
-human/JSON remediation, and exit behavior. Recovery either completes `parked` or preserves
-every name and directs the authenticated disposition path. That disposition may retain each
-currently named leaf by rename/reopen through durable incident residue staging, never
-`unlinkat`, and publishes `mismatch-retained` only after the ephemeral and staging
-namespaces are empty and the residue census is durable. Both terminal entry states then
-share disposition validation and fresh-successor admission while the incident candidate
-remains ineligible. The same correction expands the overlap matrix to importer, cleanup, and
-retention-guard actor pairs; pins the source-floor role/artifact and issuer matrices; and
-replaces every dynamic mutation-edge count with independent edge, case, negative, and
-forbidden-value fixtures. No task dependency or file owner changes.
+and sync of every changed ancestor through the candidate directory. The receipt address uses
+the exact typed domain-separated, length-framed canonical receipt hash. A revalidated and
+file-synced expected payload reaches `parked`. Every nonterminal census is exactly
+`recovery-resumable` or `recovery-irreconcilable`, with the same stable incident id, one
+closed cause, deterministic human/JSON remediation, and exit behavior. Recover is offered
+only for a uniquely resumable prefix. Authenticated apply either retains each representable
+name through the closed residue slots and publishes `mismatch-retained`, or binds the
+canonical zero/mixed evidence census in a separate append-only resolution branch when names,
+metadata, or primary status are irreconcilable. Every branch reaches fresh-successor
+admission without overwrite, restoration, fabricated residue, or `unlinkat`. The same
+correction expands the overlap matrix to importer, cleanup, and retention-guard actor pairs;
+pins literal source-floor and mutation-edge constants independently from fixtures and
+production; adds shrink/hook meta-poisons; and closes the nine-row apply-peer raw-value
+registry. No task dependency changes; T589's owned fixture and schema lists expand as stated
+in `tasks.md`.
+The T589 table row's older "eight fixtures" shorthand is superseded by the exact ten-file
+T589 list above: the original eight plus
+`host-generation-mutation-edge-meta-negative-case-ids.txt` and
+`source-floor-v1/matrix-meta-negative-case-ids.txt`. T604 retains sole ownership of the
+separate unit-census fixture. No other file owner changes.
 
 #### Wave 5 validation and evidence
 
@@ -1530,7 +1575,8 @@ For SC-002, T602 and T219 must reopen that sole passed operator record and its r
 `EvidenceRecord` `candidate_id`/`content_id`/`snapshot_sha256` triplet for F. Its
 candidate-relative locator must be the canonical
 `evidence-sidecars/sc002/sha256/<digest>.json` content address; each stage resolves beneath
-the held candidate dirfd and verifies the exact byte digest before decode from the same fd.
+the held candidate dirfd and verifies the exact domain-separated, length-framed
+`Sc002ActivationReceiptContentSha256V1` over canonical bytes before decode from the same fd.
 Replacement, traversal, absolute-path, URL, symlink, hard-link, and stale-triplet cases refuse.
 The validator also revalidates unchanged schema-v2 decoding, receipt
 schema/kind/size/content-digest bounds, the exact
@@ -1590,12 +1636,12 @@ immutable.
 | Earlier handoff prose treated a broker-derived daemon principal and bootstrap euid 0 as independent authorization. | The existing lifecycle authorization chain is public-socket `SO_PEERCRED` plus current `d2b` group classification; broker-socket identity and root execution are not substitute operator authority. | Initial handoff admission transfers the accepted public-socket evidence only after the installed source peers negotiate numeric protocol 4 plus the exact `source-handoff-v1` catalogue fingerprint, then consumes that attachment into one nonfabricable intent-bound capability. No serialized caller/root/provenance/role claim substitutes. Every source or target broker phase consumes the capability or a phase attenuation; daemon identity, Hello, target-closure provenance, and euid 0 are integrity/eligibility checks only. |
 | Earlier handoff prose claimed the target closure's compatibility broker could run under the existing broker service before profile publication and allowed the caller-flake target executable to run under `sudo`. | Committed `d2b_contracts::PROTOCOL_VERSION` is 4 and its `BrokerRequest` and operation-catalogue fingerprint have no host-generation handoff operation. Committed `nixos-modules/host-broker.nix` makes `d2b-priv-broker.service` execute the installed generation's `brokerPackage`, not a target-closure binary. Immutability does not make caller-selected executable code a trusted root entrypoint. | No executable authorized source actor exists at this base. T589 and downstream Wave 5 implementation are blocked on an accepted external source-generation compatibility disposition that atomically installs the exact nonempty 13-member `SourceGenerationCompatibilityFloorV1` census before migration. That external owner is outside this feature. T592 consumes the census and owns only target protocol-5 adoption and target artifacts; T595 owns target-generation behavior. The caller-flake target entrypoint runs only unprivileged. Only the separately pinned installed apply object runs under `sudo`, and its live connection peer pidfd/executable identity must match the pin before every mutation. Target/apply/GC-root substitution and peer exit/exec/PID reuse/mismatch/ambiguity refuse. Target-only code, a new unit or override, an entrypoint child or mutation path, daemon recovery, and a synthetic starting image are not accepted substitutes. |
 | Earlier follow-up prose called the new source handoff row simply "protocol 4", assigned its compatibility artifacts to T592, and described the external source set with open-ended plurals. | The committed numeric protocol-4 peers negotiate a closed catalogue that does not contain the row; silently changing that catalogue under the same undifferentiated handshake is incompatible. | External scope escalation: the accepted source-generation disposition must install the exact nonempty 13-member `SourceGenerationCompatibilityFloorV1` census from `data-model.md`. Every role occurs once and every member binds the same disposition and source generation; `missing`, `duplicate`, `extra`, `empty`, `stale-generation`, `stale-digest`, and `cross-disposition` poison cases refuse. That external owner adds actual two-peer Hello negotiation whose `operation_catalogue_sha256` equals the exact `source-handoff-v1` catalogue fingerprint. Bare protocol 4 refuses. T592 consumes the census read-only and changes only target-v5 adoption and target outputs. No external source artifact, normative spec, source test, or implementation is edited by this batch. |
-| Earlier SC-002 cleanup prose required an identity-mismatched inode to be restored while also requiring both reserved namespaces to be empty on every return. | The fail-closed rule forbids unlinking an inode whose identity is not proven; restoration makes the universal empty-census terminal state unattainable, and Linux has no inode-qualified unlink that could safely remove a checked name later. | The temporary and cleanup-quarantine namespaces are ephemeral. A verified expected payload reaches `parked`. Every rename/reopen mismatch remains inspectable recovery-pending under the same stable incident id and a closed cause/remediation/exit projection. Recovery either completes the exact payload or preserves every name. The authenticated disposition path may instead move each currently named leaf no-replace through durable incident residue staging, reopen it, derive its residue id from the moved identity, sync every parent and changed ancestor, and publish `mismatch-retained` only after ephemeral/staging emptiness and exact residue durability. Both terminal entry states remain outside ephemeral namespaces, retain all data, block parked-candidate publication, and require the same external disposition plus fresh successor. No SC-002 data leaf is unlinked. Import, cleanup, and the retention guard share one exclusive candidate OFD lock; a live cleanup owner excludes every same- or different-leaf cleanup before namespace access, and the sole retry recensors with fresh fds after release. The command/schema/hash/status/residue contract and exact 15-digest/four-signature source-floor vectors still require the separately accepted Version 2 normative amendment; this feature-only batch records that escalation and does not edit it. |
+| Earlier SC-002 cleanup prose required an identity-mismatched inode to be restored while also requiring both reserved namespaces to be empty on every return. | The fail-closed rule forbids unlinking an inode whose identity is not proven; restoration makes the universal empty-census terminal state unattainable, and Linux has no inode-qualified unlink that could safely remove a checked name later. | The temporary and cleanup-quarantine namespaces are ephemeral. A verified, payload-file-synced expected payload reaches `parked`. Every nonterminal census is inspectable as exactly `recovery-resumable` or `recovery-irreconcilable` under the same stable incident id and closed cause/remediation/exit projection. Recover is offered only for a unique exact continuation. Authenticated apply moves representable names no-replace through the closed temporary/quarantine/payload/retired source slots and publishes `mismatch-retained`, or binds the canonical zero/mixed evidence census in a separate resolution branch when names, metadata, or primary status are irreconcilable. Every branch reaches fresh-successor admission without restoration, fabricated residue, primary-branch repair, or unlink. Import, every same- or different-leaf cleanup, incident commands, and the retention guard share one exclusive candidate OFD lock; a live cleanup owner excludes all overlap before namespace access, and the sole retry recensors with fresh fds after release. The canonical receipt hash, complete metadata/preimage/path, payload and all-ancestor durability, resolution schema, command/state contract, and exact source-floor/apply-peer matrices still require the separately accepted Version 2 normative amendment; this feature-only batch records that escalation and does not edit it. |
 | Earlier SC-002 retention prose allowed the private owner to tombstone and delete the whole candidate after terminal-state checks. | Delivery requests, panel records, evidence records, seals, and eligibility history are permanent delivery history; SC-020 requires each applicable wave seal to remain available, and incident evidence is never automatically removed. Deleting the candidate root would erase those retained proofs. | `CandidateRetentionOwner` is a zero-mutation whole-scope guard. Verified orphans remain in the separately owned bounded `evidence-sidecars/sc002/retired` subtree; incident evidence and every request/record/receipt/seal/eligibility/merge artifact remain under the canonical candidate root. No candidate descendant is automatically unlinked, and the root is never renamed, tombstoned, or deleted. Tests poison candidate-root removal and any permanent-history mutation. |
 | `ADR-046-provider-device-tpm` section 11.2 names the finalizer `device-tpm/cleanup`. | Committed `packages/d2b-provider-device-tpm/src/lib.rs` and `packages/d2b-contracts/src/v3/device.rs` both expose `device-tpm.d2bus.org/state-preserved`. | Existing code is canon. The exact T604 fixture uses `device-tpm.d2bus.org/state-preserved` while retaining the dossier's stop/wait/delete-process/delete-flush/retain-Volume/clear sequencing. Correcting the upstream dossier is external to this feature-only batch. |
 | Feature-local prose treated the W0/W1 record and W2-W4 late remediation as authority to continue despite Constitution Principle VI, while T072 omitted Wave 5's contemporaneous plan-panel predicate. | The committed constitution permits no artifact-local waiver for these gaps, and existing Wave 5 implementation does not prove its historical entry gate. | FR-036 now makes a separate accepted Principle VI constitution amendment that expressly dispositions the W2-W5 plan-panel gap an external prerequisite for every implementation, resume, fix, close, merge, and advance path. T072 requires the exact retained Wave 5 plan-panel receipt to check; no current receipt is claimed, and current remediation remains evidence only. |
 | Feature-local Wave 5 recovery prose allowed one binding delivery panel per candidate and a second request after a failed or content-invalidated binding result. | `ADR-046-validation-and-delivery` section 12.3 and `docs/contributing/panel-review.md` require the binding ten-role panel exactly once per wave. Delivery state already retains a Wave 5 `panel-request.json`; content invalidation does not reclassify or erase it. Iterative findings belong only to the nonbinding phase-plan surface. | T220 uses repeatable `/d2b-panel-round plan` phase reviews for scoped pre-close convergence; those rounds create no delivery request or reservation. T219 is non-authorizing until the external owner lands and validates one `Wave5RetainedRequestDispositionV1`. Only `recover-panel-without-new-request` can reach close, and only after a separate complete unanimous ten-role exact-F panel; the disposition cannot waive or supply that result. This feature batch does not authorize another request, seal, or merge; the contract/tooling owner remains external scope. |
-| The untouched feature `spec.md` and `contracts/README.md` still describe the earlier twelve-line, verified-payload-only SC-002 incident projection. | This batch is planning-only and is forbidden to edit a normative feature specification or contract. The accepted external delivery contract is still Version 1, so no implementation may treat the planning refinement as already normative. | External scope escalation: the separate accepted `ADR-046-validation-and-delivery` Version 2 amendment must pin the thirteen-line cause/remediation projection, residue-backed `mismatch-retained` branch, complete publication/recovery sync protocol, and exact source-floor hash/issuer vectors. Its approvals, generated manifests, Gate 0 receipt, and ancestor binding remain pre-T589 prerequisites. Until that lands, the old normative prose is recorded drift, not implementation authority. |
+| The untouched feature `spec.md` and `contracts/README.md` still describe the earlier twelve-line, verified-payload-only SC-002 incident projection and do not contain the closed apply-peer raw-value registry. | This batch is planning-only and is forbidden to edit a normative feature specification or contract. The accepted external delivery contract is still Version 1, so no implementation may treat the planning refinement as already normative. | External scope escalation: the separate accepted `ADR-046-validation-and-delivery` Version 2 amendment must pin the thirteen-line cause/remediation projection; distinct resumable/irreconcilable variants; zero-residue and malformed/status-conflict resolution; complete metadata/preimage/path and receipt-hash encoding; payload-file plus all-ancestor durability; one-lock cleanup exclusion; residue-backed `mismatch-retained` and evidence-census resolution branches; exact source-floor hash/issuer matrices; and the closed nine-row apply-peer registry with cross-surface canaries and canonical typed correlation digests. Its approvals, generated manifests, Gate 0 receipt, and ancestor binding remain pre-T589 prerequisites. Until that lands, the old normative prose is recorded drift, not implementation authority. |
 
 ### Recorded drift
 
