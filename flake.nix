@@ -852,13 +852,13 @@
         artifactLinkageShapeOk = row:
           builtins.isString row.elfType
           && builtins.isString row.elfMachine
-          && if row.artifact == "broker-host-artifact-contract" then
+          && (if row.artifact == "broker-host-artifact-contract" then
             builtins.isString row.interpreter
             && builtins.isList row.needed
             && row.needed == lib.sort builtins.lessThan row.needed
           else
             (!(row ? interpreter) || row.interpreter == null)
-            && (row.needed or [ ]) == [ ];
+            && (row.needed or [ ]) == [ ]);
         artifactBaselineShapeOk =
           artifactBaselines != null
           && builtins.isAttrs artifactBaselines
