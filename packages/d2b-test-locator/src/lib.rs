@@ -6,13 +6,16 @@ use std::{
     path::{Component, Path, PathBuf},
 };
 
-use d2b_bazel_exec::{ProviderError, VerifiedExecutable, provider::verify_provider};
+use d2b_bazel_exec::{provider::verify_provider, ProviderError, VerifiedExecutable};
 use d2b_bazel_support::runfiles::RunfilesLookup;
+
+mod mode;
 
 pub use d2b_bazel_support::{
     fsops::{FileSystem, OpenFlags, ResolvePolicy},
     runfiles::{RunfilesMode, RunfilesView},
 };
+pub use mode::ModeSelection;
 
 /// Errors from one selected provider arm. A Bazel miss never falls back to
 /// Cargo.
