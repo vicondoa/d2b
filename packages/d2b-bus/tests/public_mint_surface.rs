@@ -180,6 +180,21 @@ fn workspace_capability_source_globs_are_classified() {
     }
 }
 
+#[test]
+fn standard_library_module_aliases_are_external() {
+    let inventory = source_capability_inventory_from_text(
+        "fixture",
+        r#"
+use std::io;
+
+trait Local {}
+impl Local for io::Error {}
+"#,
+        "standard-library-module-alias.rs",
+    );
+    assert!(inventory.trait_impls.is_empty());
+}
+
 fn assert_mutation_fixture(workspace_docs: &[DocumentedCrate]) {
     let crate_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let repository_root = crate_root.parent().unwrap().parent().unwrap();
@@ -2531,6 +2546,12 @@ fn finish_source_capability_inventory(
     facts: SourceCapabilityFacts,
     external_crates: &BTreeSet<String>,
 ) -> SourceCapabilityInventory {
+    let mut external_crates = external_crates.clone();
+    external_crates.extend(
+        ["alloc", "core", "proc_macro", "std"]
+            .into_iter()
+            .map(str::to_owned),
+    );
     let mut inventory = SourceCapabilityInventory::default();
     let mut resolved = BTreeMap::<SourceBinding, String>::new();
     let mut capability_visibility = BTreeMap::<SourceBinding, BTreeSet<Vec<String>>>::new();
@@ -2568,7 +2589,7 @@ fn finish_source_capability_inventory(
         &facts.module_aliases,
         &facts.globs,
         &facts.module_paths,
-        external_crates,
+        &external_crates,
         crate_name,
     );
     let alias_bindings = facts
