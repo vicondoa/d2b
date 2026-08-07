@@ -404,7 +404,9 @@ start/status/stop, an explicit `Ready` observation before restart, guest reachab
 continued reachability, and an explicit `Stopped` observation after stop. It must query
 `systemctl list-units --all` over the complete loaded `d2b*`/`microvm*` namespace, exclude
 exactly the canonical `d2b.slice`, sort every remaining unit name, and require exact set
-equality with `d2bd.service`,
+equality. A nonzero listing result is fatal before filtering; no
+downstream pipeline stage may convert failed enumeration into an empty or successful census.
+The required set is `d2bd.service`,
 `d2b-priv-broker.socket`, and `d2b-priv-broker.service`. A query containing only those
 expected names is ineligible because it cannot observe an unexpected lifecycle unit. No
 other slice, target, service, socket, timer, path, or template is filtered. Separate negative

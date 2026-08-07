@@ -106,8 +106,10 @@ prove public `d2b vm` start/status/stop, an explicit `Ready` state before restar
 reachability, `d2bd.service` restart, same runner PID/start-time adoption through a newly
 acquired pidfd, continued reachability, and an explicit `Stopped` state after stop. It must query the complete loaded `d2b*`/`microvm*` namespace, exclude exactly the canonical
 `d2b.slice`, and require the remaining set to be exactly `d2bd.service`,
-`d2b-priv-broker.socket`, and `d2b-priv-broker.service`. No other slice, target, service,
-socket, timer, path, or template is excluded; every unexpected lifecycle unit refuses.
+`d2b-priv-broker.socket`, and `d2b-priv-broker.service`. A nonzero
+`systemctl list-units --all` result is fatal before filtering and cannot be masked by a later
+pipeline stage. No other slice, target, service, socket, timer, path, or template is excluded;
+every unexpected lifecycle unit refuses.
 The negative matrix injects one unexpected loaded `d2b-unexpected.slice` and, separately, one
 unexpected loaded `d2b-unexpected.service`; both remain after the sole `d2b.slice` exclusion
 and must fail the exact-set comparison.
@@ -1420,7 +1422,9 @@ table before the operation exists.
   provenance, daemon identity, broker credentials, and caller claims never substitute. For
   FR-075, enumerate the complete loaded `d2b*`/`microvm*` namespace, exclude
   exactly canonical `d2b.slice`, and compare the sorted remainder with the required three
-  units. No other slice, target, service, socket, timer, path, or template is filtered.
+  units. A nonzero `systemctl list-units --all` result is fatal before filtering; no later
+  pipeline stage may convert failed enumeration into an empty or successful census. No other
+  slice, target, service, socket, timer, path, or template is filtered.
   Inject an unexpected loaded `d2b-unexpected.slice` and, separately, an unexpected loaded
   `d2b-unexpected.service`; each survives the sole exclusion and must fail the comparison.
   Every NixOS test setup exception, missing prerequisite, unsupported host result, empty

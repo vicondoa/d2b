@@ -512,8 +512,17 @@ D2B_EXPECTED_UNITS="$(printf '%s\n' \
   d2bd.service \
   d2b-priv-broker.service \
   d2b-priv-broker.socket | sort -u)"
-D2B_ACTUAL_UNITS="$(systemctl list-units --all --plain --no-legend --no-pager \
-  'd2b*' 'microvm*' | awk '$1 != "d2b.slice" { print $1 }' | sort -u)"
+if ! D2B_LOADED_UNITS="$(systemctl list-units --all --plain --no-legend --no-pager \
+  'd2b*' 'microvm*')"; then
+  fail 'failed to enumerate the loaded d2b/microvm unit namespace; repair systemd and retry'
+fi
+if ! D2B_FILTERED_UNITS="$(printf '%s\n' "$D2B_LOADED_UNITS" |
+  awk '$1 != "d2b.slice" { print $1 }')"; then
+  fail 'failed to filter the loaded d2b/microvm unit namespace'
+fi
+if ! D2B_ACTUAL_UNITS="$(printf '%s\n' "$D2B_FILTERED_UNITS" | sort -u)"; then
+  fail 'failed to sort the loaded d2b/microvm unit namespace'
+fi
 [ "$D2B_ACTUAL_UNITS" = "$D2B_EXPECTED_UNITS" ] ||
   fail 'unexpected d2b/microvm lifecycle unit set after excluding d2b.slice; restore the required three-unit generation'
 d2b vm status acceptance-vm

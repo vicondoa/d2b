@@ -143,4 +143,9 @@ controller-owned effect, and declared-resource removal cleanup.
   absent values fail without rendering their contents. Independent target-executable,
   apply-object, installed-symlink, and GC-root substitutions refuse before mutation. T592's
   evidence owns only target-v5 adoption and target artifacts; the source peer and source
-  artifact atomicity is evidence of the independently accepted external floor.
+  artifact atomicity is evidence of the independently accepted external floor. The host case
+  also checks the complete loaded `d2b*`/`microvm*` unit namespace: a nonzero
+  `systemctl list-units --all` result fails before filtering, exactly `d2b.slice` is excluded,
+  and the sorted remainder must equal `d2bd.service`, `d2b-priv-broker.socket`, and
+  `d2b-priv-broker.service`. Separate unexpected-slice and unexpected-service poison cases
+  survive that sole exclusion and fail exact equality.

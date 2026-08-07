@@ -729,9 +729,11 @@ artifacts, complete Story 1, and exercise each desktop companion against it.
   framework unit. Enumeration MUST query the complete loaded `d2b*` and `microvm*` namespace
   with `systemctl list-units --all`, extract every returned unit name, exclude exactly the
   canonical `d2b.slice`, sort the remainder, and compare that set for exact equality with the
-  required three. No other slice, target, service, socket, timer, path, or template is
-  excluded. Querying only those three names is not enumeration and cannot detect an
-  unexpected lifecycle unit. The negative matrix MUST inject an unexpected loaded
+  required three. A nonzero `systemctl list-units --all` result MUST refuse before filtering;
+  a later pipeline stage may not turn failed enumeration into an empty or successful census.
+  No other slice, target, service, socket, timer, path, or template is excluded. Querying only
+  those three names is not enumeration and cannot detect an unexpected lifecycle unit. The
+  negative matrix MUST inject an unexpected loaded
   `d2b-unexpected.slice` and, separately, an unexpected loaded
   `d2b-unexpected.service`; both survive the sole `d2b.slice` exclusion and MUST fail exact
   equality. PID reuse, pidfd/start-identity mismatch, and multiple-plausible-runner
