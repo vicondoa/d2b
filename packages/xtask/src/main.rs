@@ -18,6 +18,7 @@ use clap_complete::{
 };
 use clap_mangen::Man;
 use nix::{
+    errno::Errno,
     fcntl::{FcntlArg, fcntl},
     libc,
 };
@@ -551,7 +552,7 @@ fn fresh_hub_bootstrap(
         .map_err(|_| fresh_bootstrap_error(hub, "cannot create bootstrap scratch space"))?;
     let guard_path = scratch.join("fresh-bootstrap.guard");
     let guard = acquire_fresh_bootstrap_guard(&guard_path)
-        .map_err(|_| fresh_bootstrap_error(hub, "another fresh bootstrap is active"))?;
+        .map_err(|reason| fresh_bootstrap_error(hub, reason))?;
     reclaim_fresh_staging(root, hub)?;
     let before = fresh_content_snapshot(root)
         .map_err(|_| fresh_bootstrap_error(hub, "cannot inspect repository state"))?;
@@ -770,13 +771,14 @@ fn fresh_bootstrap_error(hub: &str, reason: &str) -> Box<dyn std::error::Error> 
     .into()
 }
 
-fn acquire_fresh_bootstrap_guard(path: &Path) -> Result<std::fs::File, Box<dyn std::error::Error>> {
+fn acquire_fresh_bootstrap_guard(path: &Path) -> Result<std::fs::File, &'static str> {
     let file = OpenOptions::new()
         .read(true)
         .write(true)
         .create(true)
         .truncate(false)
-        .open(path)?;
+        .open(path)
+        .map_err(|_| "cannot open fresh bootstrap guard")?;
     let lock = libc::flock {
         l_type: libc::F_WRLCK as libc::c_short,
         l_whence: libc::SEEK_SET as libc::c_short,
@@ -784,8 +786,13 @@ fn acquire_fresh_bootstrap_guard(path: &Path) -> Result<std::fs::File, Box<dyn s
         l_len: 0,
         l_pid: 0,
     };
-    fcntl(file.as_raw_fd(), FcntlArg::F_OFD_SETLK(&lock))
-        .map_err(|error| format!("fresh bootstrap guard unavailable: {error}"))?;
+    fcntl(file.as_raw_fd(), FcntlArg::F_OFD_SETLK(&lock)).map_err(|error| {
+        if matches!(error, Errno::EACCES | Errno::EAGAIN) {
+            "another fresh bootstrap is active"
+        } else {
+            "cannot lock fresh bootstrap guard"
+        }
+    })?;
     Ok(file)
 }
 
